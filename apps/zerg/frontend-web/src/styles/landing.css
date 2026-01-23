@@ -237,6 +237,24 @@
     transform: translateY(-2px);
   }
 
+  .landing-cta-text {
+    color: var(--color-text-secondary);
+    background: transparent;
+  }
+
+  .landing-cta-text:hover {
+    color: var(--color-text-primary);
+  }
+
+  .landing-cta-arrow {
+    display: inline-block;
+    transition: transform var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .landing-cta-text:hover .landing-cta-arrow {
+    transform: translateY(2px);
+  }
+
   .landing-hero-visual {
     display: flex;
     justify-content: center;
@@ -1240,7 +1258,7 @@
       margin: 0 auto;
     }
 
-    .landing-hero-ctas .btn-lg {
+    .landing-hero-ctas .ui-button--lg {
       width: 100%;
       align-self: stretch;
     }
@@ -1271,7 +1289,7 @@
       font-size: var(--font-size-2xl);
     }
 
-    .landing-footer-cta .btn-lg {
+    .landing-footer-cta .ui-button--lg {
       width: 100%;
       max-width: 320px;
     }
