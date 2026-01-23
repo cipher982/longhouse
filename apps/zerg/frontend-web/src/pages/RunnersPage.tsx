@@ -9,7 +9,8 @@ import {
   Card,
   SectionHeader,
   EmptyState,
-  PageShell
+  PageShell,
+  Spinner
 } from "../components/ui";
 import { PlusIcon } from "../components/icons";
 import { useConfirm } from "../components/confirm";
@@ -85,7 +86,7 @@ export default function RunnersPage() {
     return (
       <div className="runners-page-container">
         <EmptyState
-          icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
+          icon={<Spinner size="lg" />}
           title="Loading runners..."
           description="Fetching your connected infrastructure."
         />

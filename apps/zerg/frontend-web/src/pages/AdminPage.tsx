@@ -12,7 +12,8 @@ import {
   EmptyState,
   Table,
   Badge,
-  PageShell
+  PageShell,
+  Spinner
 } from "../components/ui";
 
 // Types for admin user usage data
@@ -725,7 +726,7 @@ function AdminPage() {
 
       {summaryLoading ? (
         <EmptyState
-          icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
+          icon={<Spinner size="lg" />}
           title="Loading operations data..."
           description="Fetching real-time metrics."
         />

@@ -17,7 +17,7 @@ import {
   useDeletePhoneContact,
 } from "../hooks/useContacts";
 import type { EmailContact, PhoneContact } from "../services/api/contacts";
-import { SectionHeader, EmptyState, Button, PageShell } from "../components/ui";
+import { SectionHeader, EmptyState, Button, PageShell, Spinner } from "../components/ui";
 import { useConfirm } from "../components/confirm";
 import "./ContactsPage.css";
 
@@ -198,7 +198,7 @@ export default function ContactsPage() {
       <div className="contacts-content">
         {isLoading ? (
           <EmptyState
-            icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
+            icon={<Spinner size="lg" />}
             title="Loading contacts..."
             description="Fetching your approved contacts."
           />

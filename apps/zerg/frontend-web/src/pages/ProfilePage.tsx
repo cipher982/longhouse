@@ -8,7 +8,8 @@ import {
   SectionHeader,
   EmptyState,
   Input,
-  PageShell
+  PageShell,
+  Spinner
 } from "../components/ui";
 
 interface UserUpdatePayload {
@@ -142,7 +143,7 @@ export default function ProfilePage() {
     return (
       <div className="profile-page-container">
         <EmptyState
-          icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
+          icon={<Spinner size="lg" />}
           title="Loading profile..."
           description="Fetching your account details."
         />

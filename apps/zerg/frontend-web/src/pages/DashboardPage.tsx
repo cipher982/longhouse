@@ -25,7 +25,8 @@ import {
   Badge,
   Table,
   SectionHeader,
-  EmptyState
+  EmptyState,
+  Spinner
 } from "../components/ui";
 import { useConfirm } from "../components/confirm";
 
@@ -709,7 +710,7 @@ export default function DashboardPage() {
     return (
       <div id="dashboard-container" className="dashboard-page">
         <EmptyState
-          icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
+          icon={<Spinner size="lg" />}
           title="Loading agents..."
           description="Fetching your autonomous workforce."
         />

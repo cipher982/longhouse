@@ -8,7 +8,8 @@ import {
   SectionHeader,
   EmptyState,
   Input,
-  PageShell
+  PageShell,
+  Spinner
 } from "../components/ui";
 import { PlusIcon } from "../components/icons";
 
@@ -164,7 +165,7 @@ export default function SettingsPage() {
     return (
       <div className="settings-page-container">
         <EmptyState
-          icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
+          icon={<Spinner size="lg" />}
           title="Loading settings..."
           description="Fetching your personal context."
         />
