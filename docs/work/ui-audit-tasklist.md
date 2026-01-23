@@ -74,7 +74,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
 ## Phase 3 — Automated UI QA
 - [x] Add baseline visual snapshots for key pages (dashboard/chat/canvas/settings).
   - [x] Added public-page baseline spec (`ui_baseline_public.spec.ts`).
-  - [x] Added app-page baseline spec (`ui_baseline_app.spec.ts`).
+  - [x] Added app-page baseline spec (`ui_baseline_app.spec.ts`) with core + settings/runners pages.
 - [x] Add Makefile helpers for baseline runs (`qa-ui-baseline`, `qa-ui-baseline-update`).
 - [x] Document snapshot update tip (`PWUPDATE=1`) in testing guide.
 - [x] Settings page: add `data-ready` signal to align readiness contract for QA.

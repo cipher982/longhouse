@@ -8,6 +8,11 @@ const APP_PAGES = [
   { name: 'chat', path: `/chat?${BASE_QUERY}`, ready: 'page' },
   { name: 'canvas', path: `/canvas?${BASE_QUERY}`, ready: 'page' },
   { name: 'settings', path: `/settings?${BASE_QUERY}`, ready: 'settings' },
+  { name: 'profile', path: `/profile?${BASE_QUERY}`, ready: 'page' },
+  { name: 'runners', path: `/runners?${BASE_QUERY}`, ready: 'page' },
+  { name: 'integrations', path: `/settings/integrations?${BASE_QUERY}`, ready: 'page' },
+  { name: 'knowledge', path: `/settings/knowledge?${BASE_QUERY}`, ready: 'page' },
+  { name: 'contacts', path: `/settings/contacts?${BASE_QUERY}`, ready: 'page' },
 ];
 
 async function waitForAppReady(page: Page, mode: string) {
