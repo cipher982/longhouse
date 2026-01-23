@@ -63,3 +63,16 @@ On failure:
 - **WebRTC tests**: Skip at describe-level when `SKIP_WEBRTC_TESTS=true`
 - **Deterministic UI tests**: Emit events via `window.__jarvis.eventBus` (DEV only)
 - **Test isolation issues**: Try `make test-e2e-reset`
+
+## UI / Design QA (Quick Checks)
+
+| Command | What | When |
+|---------|------|------|
+| `make qa-ui` | Accessibility + UX heuristics (axe + custom) | Every UI change |
+| `make qa-ui-visual` | Visual analysis screenshots + AI notes | Before merging UI work |
+| `make test-e2e-ui` | Interactive Playwright UI runner | Debugging layout/flows |
+| `make test-e2e-single TEST=tests/<spec>.ts` | Targeted flow check | Focused iteration |
+
+**Tips**
+- Run `make qa-ui-visual ARGS="--pages=dashboard,chat --headed"` to watch captures live.
+- Visual analysis writes reports to `apps/zerg/e2e/visual-reports/` and screenshots in `apps/zerg/e2e/test-results/`.
