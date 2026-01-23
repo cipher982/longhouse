@@ -6,6 +6,12 @@
     max-width: 1200px;
     margin: 0 auto;
 
+    .knowledge-sources-actions {
+      display: flex;
+      gap: var(--space-2);
+      flex-wrap: wrap;
+    }
+
     /* Card Styles */
     .knowledge-source-card .source-header-left {
       display: flex;

@@ -102,7 +102,7 @@ export default function KnowledgeSourcesPage() {
         title="Knowledge Sources"
         description="Connect knowledge sources to give your agents context about your codebase, documentation, and more."
         actions={
-          <div style={{ display: "flex", gap: "0.5rem" }}>
+          <div className="knowledge-sources-actions">
             <Button variant="secondary" onClick={() => setIsContextModalOpen(true)} data-testid="add-context-btn">
               <PlusIcon /> Add Context
             </Button>
