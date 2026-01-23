@@ -93,6 +93,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
 ## Phase 4 — Mobile Responsiveness (after desktop is locked)
 - [~] Define breakpoints and layout rules per page.
   - [x] Added mobile stacking for shared `SectionHeader` actions at <=768px.
+  - [x] Runner detail sections: reduce padding + stack grids on mobile.
 - [ ] Mobile nav: refine drawer + header behavior.
 - [ ] Chat layout: sidebar behavior + composer sizing.
 - [ ] Canvas: layout rules + minimal mode.
