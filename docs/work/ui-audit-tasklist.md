@@ -64,6 +64,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
   - [x] Canvas controls + run button: replace disabled/toggle/status hex values with tokens.
   - [x] Profile/Admin upload button: replace gradient hex values with tokens.
   - [x] Tool config modal: replace light theme hex colors with tokens.
+  - [x] Chat code blocks: replace background hex with token.
 - [ ] Normalize type scale and heading rhythm across pages.
 
 ## Phase 3 — Automated UI QA
