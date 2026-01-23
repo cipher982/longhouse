@@ -256,6 +256,11 @@ def register_all_jobs(scheduler: AsyncIOScheduler | None = None, use_queue: bool
     except ImportError as e:
         logger.warning("Could not import qa jobs: %s", e)
 
+    try:
+        from zerg.jobs.life_hub import gmail_sync  # noqa: F401
+    except ImportError as e:
+        logger.warning("Could not import life_hub jobs: %s", e)
+
     if scheduler:
         return job_registry.schedule_all(scheduler, use_queue=use_queue)
 
