@@ -68,24 +68,24 @@
 }
 
 .results-panel-status.running {
-  background: color-mix(in srgb, #3b82f6 20%, transparent);
-  color: #3b82f6;
+  background: color-mix(in srgb, var(--color-brand-primary) 20%, transparent);
+  color: var(--color-brand-primary);
   animation: pulse 2s infinite;
 }
 
 .results-panel-status.success {
-  background: color-mix(in srgb, #22c55e 20%, transparent);
-  color: #22c55e;
+  background: color-mix(in srgb, var(--color-intent-success) 20%, transparent);
+  color: var(--color-intent-success);
 }
 
 .results-panel-status.failed {
-  background: color-mix(in srgb, #ef4444 20%, transparent);
-  color: #ef4444;
+  background: color-mix(in srgb, var(--color-intent-error) 20%, transparent);
+  color: var(--color-intent-error);
 }
 
 .results-panel-status.starting {
-  background: color-mix(in srgb, #a855f7 20%, transparent);
-  color: #a855f7;
+  background: color-mix(in srgb, var(--color-neon-secondary) 20%, transparent);
+  color: var(--color-neon-secondary);
 }
 
 /* Content Area with Modern Scrollbar */

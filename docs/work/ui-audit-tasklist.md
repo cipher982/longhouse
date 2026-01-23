@@ -59,6 +59,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
   - [x] Settings + Profile/Admin: replace status/error hex values with tokens.
   - [x] Confirm dialog: replace warning/danger hover hex values with tokens.
   - [x] Info pages: replace changelog badge hex colors with tokens.
+  - [x] Execution results: replace status badge hex colors with tokens.
 - [ ] Normalize type scale and heading rhythm across pages.
 
 ## Phase 3 — Automated UI QA
