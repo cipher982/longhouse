@@ -1,3 +1,4 @@
+# Cache bust: 2026-01-23-asyncpg
 [project]
 name = "zerg"
 version = "0.1.0"
