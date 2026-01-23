@@ -40,11 +40,11 @@ export default function ChangelogPage() {
           Track our progress as we build Swarmlet.
         </p>
 
-        <div className="docs-section" style={{ textAlign: "center", padding: "var(--space-16) 0" }}>
-          <p style={{ fontSize: "1.125rem", color: "var(--text-secondary)" }}>
+        <div className="docs-section changelog-empty-state">
+          <p className="changelog-empty-text">
             We're currently in beta. A detailed changelog will be available once we reach our first stable release.
           </p>
-          <p style={{ marginTop: "var(--space-6)" }}>
+          <p className="changelog-empty-links">
             Follow development on{" "}
             <a href="https://github.com/cipher982/zerg" target="_blank" rel="noopener noreferrer">
               GitHub
