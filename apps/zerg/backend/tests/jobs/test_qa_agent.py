@@ -41,8 +41,9 @@ Here is my analysis:
 
 Done.
 '''
-        result = _parse_agent_state(stdout)
+        result, parse_ok = _parse_agent_state(stdout)
 
+        assert parse_ok is True
         assert result["version"] == 1
         assert result["checks_passed"] == 5
         assert result["checks_total"] == 6
@@ -52,34 +53,38 @@ Done.
         """Should parse raw JSON output."""
         stdout = '{"version": 1, "checks_passed": 3, "issues": {}}'
 
-        result = _parse_agent_state(stdout)
+        result, parse_ok = _parse_agent_state(stdout)
 
+        assert parse_ok is True
         assert result["version"] == 1
         assert result["checks_passed"] == 3
 
     def test_empty_output_returns_default(self):
-        """Should return default state for empty output."""
-        result = _parse_agent_state("")
+        """Should return default state and parse_ok=False for empty output."""
+        result, parse_ok = _parse_agent_state("")
 
+        assert parse_ok is False
         assert result["version"] == config.STATE_VERSION
         assert result["issues"] == {}
         assert result["checks_passed"] == 0
 
     def test_invalid_json_returns_default(self):
-        """Should return default state for invalid JSON."""
-        result = _parse_agent_state("This is not JSON at all")
+        """Should return default state and parse_ok=False for invalid JSON."""
+        result, parse_ok = _parse_agent_state("This is not JSON at all")
 
+        assert parse_ok is False
         assert result["version"] == config.STATE_VERSION
         assert result["issues"] == {}
 
     def test_preserves_default_fields(self):
         """Should preserve default fields when not in agent output."""
-        stdout = '{"checks_passed": 10}'
+        stdout = '{"version": 1, "checks_passed": 10, "issues": {}}'
 
-        result = _parse_agent_state(stdout)
+        result, parse_ok = _parse_agent_state(stdout)
 
+        assert parse_ok is True
         assert result["checks_passed"] == 10
-        assert result["version"] == config.STATE_VERSION  # Default preserved
+        assert result["version"] == 1
         assert "issues" in result
         assert "baseline" in result
 

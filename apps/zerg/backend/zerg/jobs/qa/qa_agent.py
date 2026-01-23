@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 from datetime import UTC
 from datetime import datetime
@@ -36,6 +37,42 @@ def _default_state() -> dict[str, Any]:
     }
 
 
+async def _send_alerts_for_chronic_issues(
+    new_state: dict[str, Any],
+    previous_state: dict[str, Any] | None,
+) -> bool:
+    """Send Discord alerts for newly chronic issues.
+
+    Only alerts on issues that just became chronic (weren't chronic before).
+    Returns True if any alert was sent.
+    """
+    from zerg.services.ops_discord import send_qa_alert
+
+    previous_issues = (previous_state or {}).get("issues", {})
+    current_issues = new_state.get("issues", {})
+
+    alerts_sent = 0
+    for fingerprint, issue in current_issues.items():
+        # Only alert on open, chronic issues
+        if issue.get("status") != "open" or not issue.get("chronic"):
+            continue
+
+        # Check if this issue was already chronic before
+        prev_issue = previous_issues.get(fingerprint, {})
+        was_chronic = prev_issue.get("chronic", False)
+
+        if not was_chronic:
+            # Newly chronic - send alert
+            logger.info("Sending alert for newly chronic issue: %s", fingerprint)
+            await send_qa_alert(issue)
+            alerts_sent += 1
+
+    if alerts_sent > 0:
+        logger.info("Sent %d QA alert(s)", alerts_sent)
+
+    return alerts_sent > 0
+
+
 async def run() -> dict[str, Any]:
     """QA agent job - collect data, run agent, persist state.
 
@@ -45,7 +82,9 @@ async def run() -> dict[str, Any]:
     run_dir = Path(config.RUN_DIR)
     job_dir = Path(__file__).parent
 
-    # 1. Setup run directory
+    # 1. Setup run directory (clear any stale data from previous runs)
+    if run_dir.exists():
+        shutil.rmtree(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
 
     # 2. Fetch previous QA state from last successful run
@@ -62,16 +101,26 @@ async def run() -> dict[str, Any]:
     agent_result = await _run_agent_analysis(job_dir, run_dir)
 
     # 5. Parse agent output for new state
-    # IMPORTANT: If agent fails, preserve previous state to avoid false "all clear"
+    # IMPORTANT: If agent fails OR parse fails, preserve previous state to avoid false "all clear"
     if agent_result.get("success"):
-        new_state = _parse_agent_state(agent_result.get("stdout", ""))
+        new_state, parse_ok = _parse_agent_state(agent_result.get("stdout", ""))
+        if not parse_ok:
+            logger.warning("Agent output parse failed, preserving previous state")
+            new_state = previous_state or _default_state()
+            new_state["agent_error"] = "parse_failed"
+            new_state["updated_at"] = datetime.now(UTC).isoformat()
     else:
         logger.warning("Agent analysis failed, preserving previous state")
         new_state = previous_state or _default_state()
         new_state["agent_error"] = agent_result.get("error") or agent_result.get("status", "unknown")
         new_state["updated_at"] = datetime.now(UTC).isoformat()
 
-    # 6. Calculate summary
+    # 6. Send Discord alerts for new chronic issues
+    alert_sent = False
+    if new_state.get("alert_sent") and agent_result.get("success"):
+        alert_sent = await _send_alerts_for_chronic_issues(new_state, previous_state)
+
+    # 7. Calculate summary
     ended_at = datetime.now(UTC)
     duration_ms = int((ended_at - started_at).total_seconds() * 1000)
 
@@ -85,7 +134,7 @@ async def run() -> dict[str, Any]:
         "checks_total": new_state.get("checks_total", 0),
         "issues_found": len(open_issues),
         "chronic_issues": len(chronic_issues),
-        "alert_sent": new_state.get("alert_sent", False),
+        "alert_sent": alert_sent,  # Actual send result, not agent's suggestion
         "collect_status": collect_result.get("status", "unknown"),
         "agent_status": agent_result.get("status", "unknown"),
         "duration_ms": duration_ms,
@@ -255,48 +304,48 @@ async def _run_agent_analysis(job_dir: Path, run_dir: Path) -> dict[str, Any]:
         return {"success": False, "status": "error", "error": str(e)}
 
 
-def _parse_agent_state(stdout: str) -> dict[str, Any]:
+def _parse_agent_state(stdout: str) -> tuple[dict[str, Any], bool]:
     """Parse JSON state from agent output.
 
     Expects the agent to output a JSON block with the new QA state.
-    Falls back to default state if parsing fails.
+    Returns (state, parse_ok) tuple. On failure, returns (default_state, False).
     """
     default_state = _default_state()
 
     if not stdout:
-        logger.warning("Empty agent output, using default state")
-        return default_state
+        logger.warning("Empty agent output")
+        return default_state, False
 
     # Look for JSON block in output (agent should output ```json ... ```)
     json_match = re.search(r"```json\s*\n(.*?)\n```", stdout, re.DOTALL)
     if json_match:
         try:
             parsed = json.loads(json_match.group(1))
-            if isinstance(parsed, dict):
-                return {**default_state, **parsed}
+            if isinstance(parsed, dict) and "issues" in parsed:
+                return {**default_state, **parsed}, True
         except json.JSONDecodeError as e:
-            logger.warning("Failed to parse agent JSON: %s", e)
+            logger.warning("Failed to parse agent JSON block: %s", e)
 
     # Try parsing the entire output as JSON
     try:
         parsed = json.loads(stdout.strip())
-        if isinstance(parsed, dict):
-            return {**default_state, **parsed}
+        if isinstance(parsed, dict) and "issues" in parsed:
+            return {**default_state, **parsed}, True
     except json.JSONDecodeError:
         pass
 
-    # Look for inline JSON object
-    json_obj_match = re.search(r'\{[^{}]*"version"[^{}]*\}', stdout)
+    # Look for inline JSON object (more permissive regex for nested objects)
+    json_obj_match = re.search(r'\{.*"version".*"issues".*\}', stdout, re.DOTALL)
     if json_obj_match:
         try:
             parsed = json.loads(json_obj_match.group(0))
-            if isinstance(parsed, dict):
-                return {**default_state, **parsed}
+            if isinstance(parsed, dict) and "issues" in parsed:
+                return {**default_state, **parsed}, True
         except json.JSONDecodeError:
             pass
 
-    logger.warning("Could not parse agent state from output, using defaults")
-    return default_state
+    logger.warning("Could not parse valid QA state from agent output")
+    return default_state, False
 
 
 async def collect_health_data() -> dict[str, Any]:
