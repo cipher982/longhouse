@@ -299,14 +299,14 @@ export default function ReliabilityPage() {
         {/* Recent Errors */}
         <Card>
           <Card.Header>
-            <h3 className="reliability-section-title">Recent Errors (24h)</h3>
+            <h3 className="reliability-section-title ui-section-title">Recent Errors (24h)</h3>
           </Card.Header>
           <Card.Body>
             {errors && (errors.total_run_errors > 0 || errors.total_worker_errors > 0) ? (
               <div className="reliability-section-stack">
                 {errors.run_errors.length > 0 && (
                   <div>
-                    <h4 className="reliability-subsection-title">
+                    <h4 className="reliability-subsection-title ui-subsection-title">
                       Run Errors ({errors.total_run_errors})
                     </h4>
                     <Table>
@@ -342,7 +342,7 @@ export default function ReliabilityPage() {
 
                 {errors.worker_errors.length > 0 && (
                   <div>
-                    <h4 className="reliability-subsection-title reliability-subsection-title--spaced">
+                    <h4 className="reliability-subsection-title reliability-subsection-title--spaced ui-subsection-title">
                       Worker Errors ({errors.total_worker_errors})
                     </h4>
                     <Table>
@@ -416,7 +416,7 @@ export default function ReliabilityPage() {
         {/* Runners */}
         <Card>
           <Card.Header>
-            <h3 className="reliability-section-title">Runners ({runners?.total ?? 0})</h3>
+            <h3 className="reliability-section-title ui-section-title">Runners ({runners?.total ?? 0})</h3>
           </Card.Header>
           <Card.Body>
             {runners && runners.runners.length > 0 ? (

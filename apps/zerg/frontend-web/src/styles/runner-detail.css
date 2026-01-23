@@ -32,10 +32,7 @@
     }
 
     .detail-section h2 {
-      font-size: 1.25rem;
-      font-weight: 600;
-      margin: 0 0 1.5rem 0;
-      color: var(--color-text-primary);
+      margin: 0 0 var(--space-6) 0;
     }
 
     .section-header {

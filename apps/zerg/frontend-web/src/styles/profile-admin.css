@@ -321,12 +321,13 @@
   .admin-section {
 
   .admin-section h3 {
-    color: var(--text, #fff);
-    font-size: 18px;
-    font-weight: 600;
-    margin: 0 0 16px;
-    border-bottom: 1px solid var(--border-color, #3d3d5c);
-    padding-bottom: 8px;
+    color: var(--color-text-primary);
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: var(--font-tracking-tight);
+    margin: 0 0 var(--space-4);
+    border-bottom: 1px solid var(--color-border-primary);
+    padding-bottom: var(--space-2);
   }
 
   .admin-stack {
