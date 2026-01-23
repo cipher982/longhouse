@@ -198,7 +198,7 @@ function MetricCard({
   title,
   value,
   subtitle,
-  color = "#10b981"
+  color = "var(--color-intent-success)"
 }: {
   title: string;
   value: string | number;
@@ -594,6 +594,14 @@ function UserDetailModal({
 
 function AdminPage() {
   const { user } = useAuth();
+  const metricColors = {
+    success: "var(--color-intent-success)",
+    warning: "var(--color-intent-warning)",
+    error: "var(--color-intent-error)",
+    primary: "var(--color-brand-primary)",
+    accent: "var(--color-neon-secondary)",
+    muted: "var(--color-text-muted)",
+  };
   const [selectedWindow, setSelectedWindow] = useState<"today" | "7d" | "30d">("today");
   const [modalState, setModalState] = useState<{
     isOpen: boolean;
@@ -758,19 +766,19 @@ function AdminPage() {
               title="Runs Today"
               value={summary.runs_today}
               subtitle="Total executions"
-              color="#3b82f6"
+              color={metricColors.primary}
             />
             <MetricCard
               title="Errors (1h)"
               value={summary.errors_last_hour}
               subtitle="Failed runs"
-              color="#ef4444"
+              color={metricColors.error}
             />
             <MetricCard
               title="Cost Today"
               value={summary.cost_today_usd !== null ? formatCurrency(summary.cost_today_usd) : "N/A"}
               subtitle="USD spent"
-              color="#10b981"
+              color={metricColors.success}
             />
             <MetricCard
               title="User Budget"
@@ -785,9 +793,9 @@ function AdminPage() {
                   : "Unlimited"
               }
               color={
-                summary.budget_user.percent === null ? "#6b7280" :
-                summary.budget_user.percent > 80 ? "#ef4444" :
-                summary.budget_user.percent > 60 ? "#f59e0b" : "#10b981"
+                summary.budget_user.percent === null ? metricColors.muted :
+                summary.budget_user.percent > 80 ? metricColors.error :
+                summary.budget_user.percent > 60 ? metricColors.warning : metricColors.success
               }
             />
             <MetricCard
@@ -803,16 +811,16 @@ function AdminPage() {
                   : "Unlimited"
               }
               color={
-                summary.budget_global.percent === null ? "#6b7280" :
-                summary.budget_global.percent > 80 ? "#ef4444" :
-                summary.budget_global.percent > 60 ? "#f59e0b" : "#10b981"
+                summary.budget_global.percent === null ? metricColors.muted :
+                summary.budget_global.percent > 80 ? metricColors.error :
+                summary.budget_global.percent > 60 ? metricColors.warning : metricColors.success
               }
             />
             <MetricCard
               title="Latency P95"
               value={`${summary.latency_ms.p95}ms`}
               subtitle={`P50: ${summary.latency_ms.p50}ms`}
-              color="#8b5cf6"
+              color={metricColors.accent}
             />
           </div>
 
