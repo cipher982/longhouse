@@ -67,6 +67,9 @@ apps/zerg/backend/data/
 .DS_Store
 Thumbs.db
 
+# Test stubs (shadow real packages in production)
+apps/zerg/backend/apscheduler/
+
 # Docker files (prevent recursive copying)
 **/Dockerfile*
 **/docker-compose*.yml
