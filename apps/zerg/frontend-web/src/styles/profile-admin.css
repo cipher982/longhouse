@@ -321,6 +321,7 @@
   }
 
   .metric-card {
+    --metric-accent: var(--color-text-secondary);
     background: var(--dark-card, #2a2a3a);
     border: 1px solid var(--border-color, #3d3d5c);
     border-radius: var(--radius-lg, 8px);
@@ -334,16 +335,17 @@
     box-shadow: 0 4px 12px rgb(0 0 0 / 30%);
   }
 
-  .metric-header h4 {
-    font-size: 14px;
+  .metric-title {
+    font-size: 0.8rem;
     font-weight: 600;
-    margin: 0 0 8px;
+    margin: 0;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.05em;
+    color: var(--metric-accent);
   }
 
   .metric-value {
-    font-size: 28px;
+    font-size: 1.8rem;
     font-weight: 700;
     color: var(--text, #fff);
     margin: 8px 0;
@@ -351,13 +353,13 @@
   }
 
   .metric-subtitle {
-    font-size: 12px;
-    color: var(--text-secondary, #e0e0e0);
-    margin-top: 4px;
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+    margin-top: var(--space-1);
   }
 
     /* Admin Sections */
-    .admin-section {
+  .admin-section {
 
   .admin-section h3 {
     color: var(--text, #fff);
@@ -366,6 +368,148 @@
     margin: 0 0 16px;
     border-bottom: 1px solid var(--border-color, #3d3d5c);
     padding-bottom: 8px;
+  }
+
+  .admin-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-8);
+  }
+
+  .admin-section-title {
+    margin: 0;
+  }
+
+  .admin-section-description {
+    margin-top: 0;
+  }
+
+  .admin-empty-state {
+    padding: var(--space-8);
+    text-align: center;
+  }
+
+  .admin-window-label {
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+    margin-right: var(--space-2);
+  }
+
+  .admin-window-select {
+    width: auto;
+    height: 32px;
+  }
+
+  .admin-table-header {
+    cursor: pointer;
+  }
+
+  .admin-table-header--numeric {
+    text-align: right;
+  }
+
+  .admin-table-cell--numeric {
+    text-align: right;
+  }
+
+  .admin-confirm-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.85);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    padding: var(--space-4);
+  }
+
+  .admin-confirm-card {
+    max-width: 500px;
+    width: 100%;
+    margin: auto;
+    animation: modalFadeIn 0.2s ease-out;
+  }
+
+  .admin-confirm-title {
+    margin: 0;
+  }
+
+  .admin-confirm-field {
+    margin-top: 16px;
+  }
+
+  .admin-confirm-actions {
+    display: flex;
+    gap: var(--space-3);
+    justify-content: flex-end;
+    margin-top: var(--space-6);
+  }
+
+  .admin-devtools-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: var(--space-4);
+  }
+
+  .admin-devtools-link {
+    text-decoration: none;
+  }
+
+  .admin-devtool-card {
+    background: var(--color-surface-card);
+    border: 1px solid var(--border-glass-1);
+    border-radius: var(--radius-md);
+    padding: var(--space-4);
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .admin-devtool-card:hover {
+    border-color: var(--color-brand-primary);
+    box-shadow: var(--shadow-glow);
+    transform: translateY(-1px);
+  }
+
+  .admin-devtool-card--trace {
+    background-color: rgba(168, 85, 247, 0.05);
+    border-color: var(--color-border);
+  }
+
+  .admin-devtool-card--trace:hover {
+    background-color: rgba(168, 85, 247, 0.1);
+    border-color: rgba(168, 85, 247, 0.3);
+  }
+
+  .admin-devtool-card--reliability {
+    background-color: rgba(16, 185, 129, 0.05);
+    border-color: var(--color-border);
+  }
+
+  .admin-devtool-card--reliability:hover {
+    background-color: rgba(16, 185, 129, 0.1);
+    border-color: rgba(16, 185, 129, 0.3);
+  }
+
+  .admin-devtool-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-bottom: var(--space-2);
+  }
+
+  .admin-devtool-icon {
+    font-size: 1.25rem;
+  }
+
+  .admin-devtool-title {
+    font-weight: 600;
+    color: var(--color-text);
+  }
+
+  .admin-devtool-desc {
+    margin: 0;
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
   }
 
   /* Top Agents Table */
