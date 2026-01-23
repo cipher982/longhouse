@@ -51,7 +51,8 @@ Principle: this doc is the source of truth for UI work. Update after every meani
 - [~] Reduce legacy CSS overrides; move to layered, scoped styles.
   - [x] Removed unused legacy `.btn-*` overrides from `profile-admin.css`.
   - [x] Removed unused legacy `.btn-*` styles from `settings.css`.
-- [x] Runner detail: replace hard-coded colors with design tokens.
+  - [x] Runner detail: replace hard-coded colors with design tokens.
+  - [x] Knowledge Sources: replace hard-coded colors with design tokens.
 - [ ] Normalize type scale and heading rhythm across pages.
 
 ## Phase 3 — Automated UI QA
