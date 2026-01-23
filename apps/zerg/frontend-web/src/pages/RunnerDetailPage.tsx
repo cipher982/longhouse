@@ -196,7 +196,7 @@ export default function RunnerDetailPage() {
 
         <div className="runner-detail-sections">
           <section className="detail-section">
-            <h2>Information</h2>
+            <h2 className="ui-section-title">Information</h2>
             <div className="detail-grid">
               <div className="detail-item">
                 <span className="detail-label">Runner ID:</span>
@@ -237,7 +237,7 @@ export default function RunnerDetailPage() {
 
           <section className="detail-section">
             <div className="section-header">
-              <h2>Capabilities</h2>
+              <h2 className="ui-section-title">Capabilities</h2>
               {!isEditingCapabilities && runner.status !== "revoked" && (
                 <Button variant="secondary" size="sm" onClick={handleEditCapabilities}>
                   Edit
@@ -293,7 +293,7 @@ export default function RunnerDetailPage() {
 
           {runner.status !== "revoked" && (
             <section className="detail-section danger-section">
-              <h2>Danger Zone</h2>
+              <h2 className="ui-section-title">Danger Zone</h2>
 
               {/* Rotate Secret */}
               <div className="danger-item">
