@@ -82,3 +82,4 @@ On failure:
 **Tips**
 - Run `make qa-ui-visual ARGS="--pages=dashboard,chat --headed"` to watch captures live.
 - Visual analysis writes reports to `apps/zerg/e2e/visual-reports/` and screenshots in `apps/zerg/e2e/test-results/`.
+- Use `PWUPDATE=1` when you intentionally change UI and want to refresh snapshot baselines.
