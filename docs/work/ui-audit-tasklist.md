@@ -37,6 +37,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
 - [x] Knowledge Sources: replace inline header actions styling with CSS class.
 - [x] Runner detail page: adopt PageShell + SectionHeader + standardized Button usage.
 - [x] Modal actions: migrate Add Runner / Add Context / Add Knowledge Source buttons to `Button` + `Spinner`.
+- [x] Integrations + Knowledge Sources: adopt PageShell for consistent width/padding.
 - [x] Consolidate header/section patterns (SectionHeader everywhere).
 
 ## Phase 2 — Styling & Tokens

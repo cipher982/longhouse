@@ -17,7 +17,7 @@ import type { AccountConnectorStatus } from "../types/connectors";
 import { ConnectorConfigModal, type ConfigModalState } from "../components/agent-settings/ConnectorConfigModal";
 import { ConnectorCard, isOAuthConnector } from "../components/connectors/ConnectorCard";
 import { useOAuthFlow } from "../hooks/useOAuthFlow";
-import { SectionHeader, EmptyState, Spinner } from "../components/ui";
+import { SectionHeader, EmptyState, Spinner, PageShell } from "../components/ui";
 import { useConfirm } from "../components/confirm";
 
 export default function IntegrationsPage() {
@@ -127,18 +127,18 @@ export default function IntegrationsPage() {
 
   if (error) {
     return (
-      <div className="integrations-page-container">
+      <PageShell size="narrow" className="integrations-page-container">
         <EmptyState
           variant="error"
           title="Error loading integrations"
           description={String(error)}
         />
-      </div>
+      </PageShell>
     );
   }
 
   return (
-    <div className="integrations-page-container">
+    <PageShell size="narrow" className="integrations-page-container">
       <SectionHeader
         title="Integrations"
         description="Configure credentials for external services. These integrations are shared across all your agents."
@@ -248,6 +248,6 @@ export default function IntegrationsPage() {
         isSaving={configureConnector.isPending}
         isTesting={testBeforeSave.isPending}
       />
-    </div>
+    </PageShell>
   );
 }
