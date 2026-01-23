@@ -48,9 +48,9 @@ SYNTHETIC_TIMEOUT_MS = 30000
 # Agent settings
 AGENT_TIMEOUT_SECONDS = 480  # 8 minutes for Claude analysis
 
-# z.ai API settings (Anthropic SDK compatible)
-# Note: Claude Code CLI was attempted but doesn't work with z.ai due to
-# streaming/extended protocol features. Using SDK directly instead.
-ZAI_API_KEY = os.getenv("ZAI_API_KEY")
+# z.ai API settings (Claude Code CLI compatible)
+# The CLI works with z.ai when prompt is sent via stdin (not -p flag).
+# Using ANTHROPIC_AUTH_TOKEN (not API_KEY) to avoid detection prompt.
+ZAI_API_KEY = os.getenv("ZAI_API_KEY")  # Used as ANTHROPIC_AUTH_TOKEN
 ZAI_BASE_URL = os.getenv("ZAI_BASE_URL", "https://api.z.ai/api/anthropic")
 ZAI_MODEL = os.getenv("ZAI_MODEL", "glm-4.7")
