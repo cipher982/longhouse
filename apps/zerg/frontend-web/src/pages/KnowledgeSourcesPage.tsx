@@ -12,7 +12,8 @@ import { KnowledgeSearchPanel } from "../components/KnowledgeSearchPanel";
 import {
   Button,
   SectionHeader,
-  EmptyState
+  EmptyState,
+  Spinner
 } from "../components/ui";
 import { PlusIcon } from "../components/icons";
 import { useConfirm } from "../components/confirm";
@@ -75,7 +76,7 @@ export default function KnowledgeSourcesPage() {
     return (
       <div className="knowledge-sources-page-container">
         <EmptyState
-          icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
+          icon={<Spinner size="lg" />}
           title="Loading knowledge sources..."
           description="Fetching your connected documentation and codebases."
         />

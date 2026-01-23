@@ -9,7 +9,8 @@ import {
   EmptyState,
   Table,
   Badge,
-  PageShell
+  PageShell,
+  Spinner
 } from "../components/ui";
 
 // Types for reliability data
@@ -207,7 +208,7 @@ export default function ReliabilityPage() {
       <PageShell size="wide" className="reliability-page-container">
         <SectionHeader title="Reliability Dashboard" description="Monitor system health and performance." />
         <EmptyState
-          icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
+          icon={<Spinner size="lg" />}
           title="Loading..."
           description="Fetching reliability metrics."
         />
