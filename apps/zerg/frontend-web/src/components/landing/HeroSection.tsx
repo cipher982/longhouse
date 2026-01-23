@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { SwarmLogo } from "../SwarmLogo";
+import { Button } from "../ui";
 import { useAuth } from "../../lib/auth";
 import config from "../../lib/config";
 import { AppScreenshotFrame } from "./AppScreenshotFrame";
@@ -94,12 +95,12 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
           </p>
 
           <div className="landing-hero-ctas">
-            <button className="btn-primary btn-lg landing-cta-main" onClick={handleGetStarted}>
+            <Button variant="primary" size="lg" className="landing-cta-main" onClick={handleGetStarted}>
               Get My AI Assistant
-            </button>
-            <button className="btn-text btn-lg" onClick={onScrollToHowItWorks}>
-              See How It Works <span className="btn-text-arrow">↓</span>
-            </button>
+            </Button>
+            <Button variant="ghost" size="lg" className="landing-cta-text" onClick={onScrollToHowItWorks}>
+              See How It Works <span className="landing-cta-arrow">↓</span>
+            </Button>
           </div>
         </div>
 
@@ -135,13 +136,15 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
                   <div className="landing-login-divider">
                     <span>or</span>
                   </div>
-                  <button
-                    className="btn-secondary btn-lg landing-dev-login"
+                  <Button
+                    variant="success"
+                    size="lg"
+                    className="landing-dev-login"
                     onClick={handleDevLogin}
                     disabled={isDevLoginLoading}
                   >
                     {isDevLoginLoading ? 'Signing in...' : 'Dev Login (Local Only)'}
-                  </button>
+                  </Button>
                 </>
               )}
             </div>
