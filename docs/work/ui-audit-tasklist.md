@@ -23,7 +23,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
   - [x] Settings page: replace inline layout styles with scoped classes.
   - [x] Profile page: replace inline layout styles with scoped classes.
   - [x] Runners page: replace inline layout styles with scoped classes.
-  - [~] Admin page: replace inline layout styles with scoped classes (metrics, tables, dev tools).
+  - [x] Admin page: replace inline layout styles with scoped classes (metrics, tables, dev tools).
   - [x] Reliability page: replace inline layout styles with scoped classes.
   - [x] Trace Explorer page: replace inline layout styles with scoped classes.
 - [ ] Replace legacy button usage in active pages with `components/ui/Button`.
