@@ -30,6 +30,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
   - [x] Contacts page: swapped legacy `.btn-*` usage to `Button` component.
   - [x] Pricing page: swapped legacy CTA button to `Button` component.
   - [x] Connector config modal: swapped legacy `.btn-*` usage to `Button` component.
+  - [x] Connector credentials panel: swapped legacy `.btn-*` usage to `Button` component.
 - [ ] Consolidate header/section patterns (SectionHeader everywhere).
 
 ## Phase 2 — Styling & Tokens
