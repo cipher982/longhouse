@@ -17,7 +17,7 @@ import type { AccountConnectorStatus } from "../types/connectors";
 import { ConnectorConfigModal, type ConfigModalState } from "../components/agent-settings/ConnectorConfigModal";
 import { ConnectorCard, isOAuthConnector } from "../components/connectors/ConnectorCard";
 import { useOAuthFlow } from "../hooks/useOAuthFlow";
-import { SectionHeader, EmptyState } from "../components/ui";
+import { SectionHeader, EmptyState, Spinner } from "../components/ui";
 import { useConfirm } from "../components/confirm";
 
 export default function IntegrationsPage() {
@@ -147,7 +147,7 @@ export default function IntegrationsPage() {
       <div className="integrations-content">
         {isLoading ? (
           <EmptyState
-            icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
+            icon={<Spinner size="lg" />}
             title="Loading integrations..."
             description="Fetching your connected services."
           />
