@@ -157,11 +157,11 @@ export default function ProfilePage() {
       />
 
       <form onSubmit={handleSubmit} className="profile-form">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
+        <div className="profile-stack profile-stack--lg">
           {/* Avatar Section */}
           <Card>
             <Card.Header>
-              <h3 style={{ margin: 0 }}>Avatar</h3>
+              <h3 className="profile-section-title">Avatar</h3>
             </Card.Header>
             <Card.Body>
               <div className="avatar-section">
@@ -203,17 +203,17 @@ export default function ProfilePage() {
           {/* Profile Information */}
           <Card>
             <Card.Header>
-              <h3 style={{ margin: 0 }}>Profile Information</h3>
+              <h3 className="profile-section-title">Profile Information</h3>
             </Card.Header>
             <Card.Body>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+              <div className="profile-stack profile-stack--md">
                 <div className="form-group">
                   <label htmlFor="email" className="form-label">Email Address</label>
                   <Input
                     id="email"
                     value={user.email}
                     disabled
-                    style={{ opacity: 0.6, cursor: 'not-allowed' }}
+                    className="profile-input-disabled"
                   />
                   <small>Email cannot be changed</small>
                 </div>
@@ -246,7 +246,7 @@ export default function ProfilePage() {
           {/* Account Information */}
           <Card>
             <Card.Header>
-              <h3 style={{ margin: 0 }}>Account Information</h3>
+              <h3 className="profile-section-title">Account Information</h3>
             </Card.Header>
             <Card.Body>
               <div className="info-grid">
@@ -274,7 +274,7 @@ export default function ProfilePage() {
           </Card>
 
           {/* Form Actions */}
-          <div className="form-actions" style={{ display: 'flex', gap: 'var(--space-4)', justifyContent: 'flex-end', padding: 'var(--space-6) 0' }}>
+          <div className="form-actions profile-form-actions">
             <Button
               type="button"
               variant="ghost"
