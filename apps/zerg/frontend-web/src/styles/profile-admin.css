@@ -14,11 +14,40 @@
       margin: 0 auto;
     }
 
-    .profile-form {
-      display: flex;
-      flex-direction: column;
-      gap: 32px;
-    }
+  .profile-form {
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+  }
+
+  .profile-stack {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .profile-stack--md {
+    gap: var(--space-4);
+  }
+
+  .profile-stack--lg {
+    gap: var(--space-6);
+  }
+
+  .profile-section-title {
+    margin: 0;
+  }
+
+  .profile-input-disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .profile-form-actions {
+    display: flex;
+    gap: var(--space-4);
+    justify-content: flex-end;
+    padding: var(--space-6) 0;
+  }
   }
 
   /* Avatar Section */
