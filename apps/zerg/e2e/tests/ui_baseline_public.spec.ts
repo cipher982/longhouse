@@ -1,12 +1,14 @@
 import { test, expect, type Page } from './fixtures';
 
+const BASE_QUERY = 'clock=frozen&effects=off&seed=ui-baseline';
+
 const PUBLIC_PAGES = [
-  { name: 'landing', path: '/landing?clock=frozen&fx=none' },
-  { name: 'pricing', path: '/pricing?clock=frozen' },
-  { name: 'docs', path: '/docs?clock=frozen' },
-  { name: 'changelog', path: '/changelog?clock=frozen' },
-  { name: 'privacy', path: '/privacy?clock=frozen' },
-  { name: 'security', path: '/security?clock=frozen' },
+  { name: 'landing', path: `/landing?${BASE_QUERY}&fx=none` },
+  { name: 'pricing', path: `/pricing?${BASE_QUERY}` },
+  { name: 'docs', path: `/docs?${BASE_QUERY}` },
+  { name: 'changelog', path: `/changelog?${BASE_QUERY}` },
+  { name: 'privacy', path: `/privacy?${BASE_QUERY}` },
+  { name: 'security', path: `/security?${BASE_QUERY}` },
 ];
 
 async function captureBaseline(page: Page, path: string, name: string) {
