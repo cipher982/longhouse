@@ -1,21 +1,13 @@
-import { test, expect, type Page } from './fixtures';
-import { waitForPageReady } from './helpers/ready-signals';
+import { test, expect, type Page } from '../fixtures';
+import { waitForPageReady } from '../helpers/ready-signals';
 
 const BASE_QUERY = 'clock=frozen&effects=off&seed=ui-baseline';
 
-const APP_PAGES = [
+const MOBILE_PAGES = [
   { name: 'dashboard', path: `/dashboard?${BASE_QUERY}`, ready: 'page' },
   { name: 'chat', path: `/chat?${BASE_QUERY}`, ready: 'page' },
   { name: 'canvas', path: `/canvas?${BASE_QUERY}`, ready: 'page' },
   { name: 'settings', path: `/settings?${BASE_QUERY}`, ready: 'settings' },
-  { name: 'profile', path: `/profile?${BASE_QUERY}`, ready: 'page' },
-  { name: 'runners', path: `/runners?${BASE_QUERY}`, ready: 'page' },
-  { name: 'integrations', path: `/settings/integrations?${BASE_QUERY}`, ready: 'page' },
-  { name: 'knowledge', path: `/settings/knowledge?${BASE_QUERY}`, ready: 'page' },
-  { name: 'contacts', path: `/settings/contacts?${BASE_QUERY}`, ready: 'page' },
-  { name: 'admin', path: `/admin?${BASE_QUERY}`, ready: 'page' },
-  { name: 'traces', path: `/traces?${BASE_QUERY}`, ready: 'page' },
-  { name: 'reliability', path: `/reliability?${BASE_QUERY}`, ready: 'page' },
 ];
 
 async function waitForAppReady(page: Page, mode: string) {
@@ -40,8 +32,8 @@ async function captureBaseline(page: Page, path: string, name: string, ready: st
   });
 }
 
-test.describe('UI baseline: app pages', () => {
-  for (const pageDef of APP_PAGES) {
+test.describe('UI baseline: mobile pages', () => {
+  for (const pageDef of MOBILE_PAGES) {
     test(`baseline: ${pageDef.name}`, async ({ page }) => {
       await captureBaseline(page, pageDef.path, pageDef.name, pageDef.ready);
     });
