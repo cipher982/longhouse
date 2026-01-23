@@ -57,6 +57,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
   - [x] Runners page: replace hard-coded colors with design tokens.
   - [x] Dashboard + Trace Explorer + Reliability: replace warning/error hex values with tokens.
   - [x] Settings + Profile/Admin: replace status/error hex values with tokens.
+  - [x] Confirm dialog: replace warning/danger hover hex values with tokens.
 - [ ] Normalize type scale and heading rhythm across pages.
 
 ## Phase 3 — Automated UI QA
