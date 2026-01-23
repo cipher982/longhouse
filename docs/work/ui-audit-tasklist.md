@@ -40,6 +40,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
 - [x] Integrations + Knowledge Sources: adopt PageShell for consistent width/padding.
 - [x] Consolidate header/section patterns (SectionHeader everywhere).
 - [x] Info pages: remove inline styles from Docs/Changelog.
+- [x] Dashboard: swap create-agent loading spinner to shared `Spinner`.
 
 ## Phase 2 — Styling & Tokens
 - [ ] Audit token usage (replace raw colors/spacing with tokens).
