@@ -33,6 +33,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
   - [x] Connector credentials panel: swapped legacy `.btn-*` usage to `Button` component.
   - [x] Agent settings drawer: swapped legacy `.btn-*` usage to `Button` component (incl. custom tool action).
   - [x] Landing hero/HowItWorks/Pricing/Footer: swapped CTA buttons to `Button` component.
+  - [x] Knowledge source card actions: swapped legacy buttons to `Button` component.
 - [x] Add `Spinner` UI primitive; replace inline spinner sizing in EmptyState loaders.
 - [x] Knowledge Sources: replace inline header actions styling with CSS class.
 - [x] Runner detail page: adopt PageShell + SectionHeader + standardized Button usage.
