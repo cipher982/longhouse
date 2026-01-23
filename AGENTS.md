@@ -138,3 +138,7 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-22) [pattern] Personal tooling MVP: prioritize delegation flow and async completion over enterprise resiliency concerns.
 - (2026-01-22) [pattern] QA agent job at `jobs/qa/`: hybrid determinism pattern - bash collects data, Claude CLI analyzes. State persists in ops.runs.metadata. Always preserve previous state on agent failure.
 - (2026-01-22) [gotcha] Claude Code CLI with z.ai DOES work, but needs: 1) ANTHROPIC_AUTH_TOKEN not ANTHROPIC_API_KEY, 2) unset CLAUDE_CODE_USE_BEDROCK, 3) HOME=/tmp in read-only containers (CLI writes .claude.json config).
+- (2026-01-23) [gotcha] Cloud worker completion emits/resume happen inside main try; if emit/resume raises, job flips to failed after a successful run. Make SSE/resume best-effort.
+- (2026-01-23) [gotcha] Sauron migration is partial: Zerg jobs only include backup_sentinel/disk_health/qa; email-commands + several scheduled jobs still live in sauron.
+- (2026-01-23) [tool] `zerg/libs/agent_runner/` superseded by standalone `~/git/hatch/` package. Use `uv tool install -e ~/git/hatch` for global `hatch` CLI. Zerg's copy kept for in-process use but new features go to standalone.
+- (2026-01-23) [tool] Codex CLI non-interactive mode: `codex exec -` reads prompt from stdin; `--full-auto` enables automatic execution.
