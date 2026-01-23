@@ -64,6 +64,8 @@ def _mock_settings_with_allowlist(allowed_model: str):
         discord_daily_digest_cron=real_settings.discord_daily_digest_cron,
         db_reset_password=real_settings.db_reset_password,
         jarvis_device_secret=real_settings.jarvis_device_secret,
+        jarvis_workspace_path=real_settings.jarvis_workspace_path,
+        notification_webhook=real_settings.notification_webhook,
         smoke_test_secret=real_settings.smoke_test_secret,
         job_queue_enabled=real_settings.job_queue_enabled,
         bootstrap_token=real_settings.bootstrap_token,

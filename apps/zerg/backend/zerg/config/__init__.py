@@ -101,6 +101,10 @@ class Settings:  # noqa: D401 – simple data container
 
     # Jarvis integration ------------------------------------------------
     jarvis_device_secret: str | None
+    jarvis_workspace_path: str  # Base path for cloud workspaces
+
+    # Completion notifications ------------------------------------------
+    notification_webhook: str | None  # Discord/Slack webhook for run completion
 
     # Smoke testing -----------------------------------------------------
     smoke_test_secret: str | None  # Service account login for smoke tests
@@ -270,6 +274,8 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         discord_daily_digest_cron=os.getenv("DISCORD_DAILY_DIGEST_CRON", "0 8 * * *"),
         db_reset_password=os.getenv("DB_RESET_PASSWORD"),
         jarvis_device_secret=os.getenv("JARVIS_DEVICE_SECRET"),
+        jarvis_workspace_path=os.getenv("JARVIS_WORKSPACE_PATH", "/var/jarvis/workspaces"),
+        notification_webhook=os.getenv("NOTIFICATION_WEBHOOK"),
         smoke_test_secret=os.getenv("SMOKE_TEST_SECRET"),
         job_queue_enabled=_truthy(os.getenv("JOB_QUEUE_ENABLED")),
         # Container runner defaults

@@ -938,6 +938,16 @@ class SupervisorService:
                 trace_id=str(run.trace_id) if run.trace_id else None,
             )
 
+            # Cloud execution notification (best-effort)
+            from zerg.services.ops_discord import send_run_completion_notification
+
+            await send_run_completion_notification(
+                run_id=run.id,
+                status="success",
+                summary=result_text[:500] if result_text else None,
+                run_url=f"https://swarmlet.com/runs/{run.id}",
+            )
+
             logger.info(f"Supervisor run {run.id} completed in {duration_ms}ms", extra={"tag": "AGENT"})
 
             return SupervisorRunResult(
@@ -1042,6 +1052,16 @@ class SupervisorService:
                 },
             )
             reset_seq(run.id)
+
+            # Cloud execution notification (best-effort)
+            from zerg.services.ops_discord import send_run_completion_notification
+
+            await send_run_completion_notification(
+                run_id=run.id,
+                status="failed",
+                error=str(e),
+                run_url=f"https://swarmlet.com/runs/{run.id}",
+            )
 
             logger.exception(f"Supervisor run {run.id} failed: {e}")
 
