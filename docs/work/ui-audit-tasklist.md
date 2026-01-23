@@ -18,7 +18,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
 
 ## Phase 1 — Structure & Consistency (Desktop Lock)
 - [x] Centralize navigation items (single source shared by header + mobile drawer).
-- [ ] Introduce page shell/layout primitives (max width, padding, title/description).
+- [x] Introduce page shell/layout primitives (max width, padding, title/description).
 - [~] Remove inline layout styles in Settings/Profile/Admin/TraceExplorer.
   - [x] Settings page: replace inline layout styles with scoped classes.
   - [x] Profile page: replace inline layout styles with scoped classes.

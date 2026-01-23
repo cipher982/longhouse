@@ -1,6 +1,6 @@
 @layer pages {
   .trace-explorer-container {
-    padding: var(--space-6);
+    width: 100%;
   }
 
   .trace-explorer-section-title {
