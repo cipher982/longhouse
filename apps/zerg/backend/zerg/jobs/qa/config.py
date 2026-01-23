@@ -47,3 +47,8 @@ SYNTHETIC_TIMEOUT_MS = 30000
 
 # Agent settings
 AGENT_TIMEOUT_SECONDS = 480  # 8 minutes for Claude analysis
+
+# z.ai API settings (Anthropic SDK compatible)
+ZAI_API_KEY = os.getenv("ZAI_API_KEY")
+ZAI_BASE_URL = os.getenv("ZAI_BASE_URL", "https://api.z.ai/api/anthropic")
+ZAI_MODEL = os.getenv("ZAI_MODEL", "glm-4.7")
