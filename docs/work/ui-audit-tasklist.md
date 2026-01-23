@@ -65,6 +65,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
   - [x] Profile/Admin upload button: replace gradient hex values with tokens.
   - [x] Tool config modal: replace light theme hex colors with tokens.
   - [x] Chat code blocks: replace background hex with token.
+  - [x] Ops HUD: replace text/border hex values with tokens.
 - [ ] Normalize type scale and heading rhythm across pages.
 
 ## Phase 3 — Automated UI QA
