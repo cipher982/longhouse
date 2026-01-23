@@ -48,7 +48,8 @@ Principle: this doc is the source of truth for UI work. Update after every meani
 - [x] Landing perf HUD: move inline styles into landing CSS.
 
 ## Phase 2 — Styling & Tokens
-- [ ] Audit token usage (replace raw colors/spacing with tokens).
+- [x] Audit token usage (replace raw colors/spacing with tokens).
+  - [x] Execution log stream: keep explicit neon palette (intentional cyberpunk look).
 - [~] Reduce legacy CSS overrides; move to layered, scoped styles.
   - [x] Removed unused legacy `.btn-*` overrides from `profile-admin.css`.
   - [x] Removed unused legacy `.btn-*` styles from `settings.css`.
