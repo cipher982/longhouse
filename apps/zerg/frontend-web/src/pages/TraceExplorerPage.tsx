@@ -99,14 +99,30 @@ async function fetchTraceDetail(traceId: string, level: string = "summary"): Pro
 
 // Source color scheme
 const sourceStyles: Record<string, { color: string; bg: string; label: string }> = {
-  run: { color: "#3b82f6", bg: "rgba(59, 130, 246, 0.15)", label: "RUN" },
-  worker: { color: "#10b981", bg: "rgba(16, 185, 129, 0.15)", label: "WORKER" },
-  llm: { color: "#a855f7", bg: "rgba(168, 85, 247, 0.15)", label: "LLM" },
+  run: {
+    color: "var(--color-brand-primary)",
+    bg: "color-mix(in srgb, var(--color-brand-primary) 15%, transparent)",
+    label: "RUN",
+  },
+  worker: {
+    color: "var(--color-intent-success)",
+    bg: "var(--color-intent-success-muted)",
+    label: "WORKER",
+  },
+  llm: {
+    color: "var(--color-neon-secondary)",
+    bg: "color-mix(in srgb, var(--color-neon-secondary) 15%, transparent)",
+    label: "LLM",
+  },
 };
 
 // Timeline event component
 function TimelineEventRow({ event, isLast }: { event: TimelineEvent; isLast: boolean }) {
-  const style = sourceStyles[event.source] || { color: "#6b7280", bg: "rgba(107, 114, 128, 0.15)", label: event.source };
+  const style = sourceStyles[event.source] || {
+    color: "var(--color-text-muted)",
+    bg: "color-mix(in srgb, var(--color-text-muted) 15%, transparent)",
+    label: event.source,
+  };
 
   const formatTime = (timestamp: string) => {
     return new Date(timestamp).toLocaleTimeString("en-US", {
