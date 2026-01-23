@@ -53,6 +53,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
   - [x] Removed unused legacy `.btn-*` styles from `settings.css`.
   - [x] Runner detail: replace hard-coded colors with design tokens.
   - [x] Knowledge Sources: replace hard-coded colors with design tokens.
+  - [x] Runners page: replace hard-coded colors with design tokens.
 - [ ] Normalize type scale and heading rhythm across pages.
 
 ## Phase 3 — Automated UI QA
