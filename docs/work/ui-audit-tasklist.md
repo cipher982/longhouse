@@ -75,6 +75,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
   - [x] Added public-page baseline spec (`ui_baseline_public.spec.ts`).
   - [x] Added app-page baseline spec (`ui_baseline_app.spec.ts`).
 - [x] Add Makefile helpers for baseline runs (`qa-ui-baseline`, `qa-ui-baseline-update`).
+- [x] Document snapshot update tip (`PWUPDATE=1`) in testing guide.
 - [x] Settings page: add `data-ready` signal to align readiness contract for QA.
 - [x] Profile/Admin pages: add `data-ready` signals to align readiness contract for QA.
 - [ ] Add a focused mobile viewport test project in Playwright (after design lock).
