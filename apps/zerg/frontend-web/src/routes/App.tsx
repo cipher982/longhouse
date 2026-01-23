@@ -18,6 +18,7 @@ import RunnersPage from "../pages/RunnersPage";
 import RunnerDetailPage from "../pages/RunnerDetailPage";
 import TraceExplorerPage from "../pages/TraceExplorerPage";
 import ReliabilityPage from "../pages/ReliabilityPage";
+import { Spinner } from "../components/ui";
 import { AuthGuard } from "../lib/auth";
 
 // Lazy-loaded pages (heavy dependencies - reduces initial bundle by ~700KB)
@@ -33,7 +34,7 @@ import config from "../lib/config";
 function PageLoader() {
   return (
     <div className="page-loader">
-      <div className="page-loader-spinner" />
+      <Spinner size="lg" className="page-loader-spinner" />
     </div>
   );
 }
