@@ -83,7 +83,7 @@
     }
 
     .no-capabilities {
-      color: #a1a1aa;
+      color: var(--color-text-secondary);
       font-size: 0.875rem;
       font-style: italic;
       margin: 0;
