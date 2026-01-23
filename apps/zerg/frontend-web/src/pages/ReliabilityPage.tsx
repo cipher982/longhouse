@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../lib/auth";
 import config from "../lib/config";
@@ -205,6 +205,19 @@ export default function ReliabilityPage() {
     refetchInterval: 30000,
     enabled: !!user,
   });
+
+  useEffect(() => {
+    if (!user || healthLoading) {
+      document.body.removeAttribute("data-ready");
+      return;
+    }
+
+    document.body.setAttribute("data-ready", "true");
+
+    return () => {
+      document.body.removeAttribute("data-ready");
+    };
+  }, [user, healthLoading]);
 
   if (!user) {
     return <div>Loading...</div>;
