@@ -137,4 +137,4 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-22) [gotcha] Life Hub triggers hindsight via /api/hindsight/session-ended but Zerg repo currently has no handler; integration gap to resolve.
 - (2026-01-22) [pattern] Personal tooling MVP: prioritize delegation flow and async completion over enterprise resiliency concerns.
 - (2026-01-22) [pattern] QA agent job at `jobs/qa/`: hybrid determinism pattern - bash collects data, Claude CLI analyzes. State persists in ops.runs.metadata. Always preserve previous state on agent failure.
-- (2026-01-22) [gotcha] Claude Code CLI doesn't work with z.ai backend - hangs indefinitely. Use Anthropic SDK with z.ai base_url instead. CLI uses streaming/extended protocol features z.ai doesn't support.
+- (2026-01-22) [gotcha] Claude Code CLI with z.ai DOES work, but needs: 1) ANTHROPIC_AUTH_TOKEN not ANTHROPIC_API_KEY, 2) unset CLAUDE_CODE_USE_BEDROCK, 3) HOME=/tmp in read-only containers (CLI writes .claude.json config).
