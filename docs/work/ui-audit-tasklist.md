@@ -70,7 +70,8 @@ Principle: this doc is the source of truth for UI work. Update after every meani
 - [x] UI + legacy buttons: replace hard-coded white text with tokens.
 - [x] Reliability + Trace Explorer: replace inline status/source hex values with tokens.
 - [x] Admin metrics: replace inline metric hex values with tokens.
-- [ ] Normalize type scale and heading rhythm across pages.
+- [x] Normalize type scale and heading rhythm across pages.
+  - [x] Added shared `ui-section-title` / `ui-subsection-title` styles and applied across app pages.
 
 ## Phase 3 — Automated UI QA
 - [x] Add baseline visual snapshots for key pages (dashboard/chat/canvas/settings).

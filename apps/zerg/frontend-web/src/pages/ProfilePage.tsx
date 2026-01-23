@@ -170,7 +170,7 @@ export default function ProfilePage() {
           {/* Avatar Section */}
           <Card>
             <Card.Header>
-              <h3 className="profile-section-title">Avatar</h3>
+              <h3 className="profile-section-title ui-section-title">Avatar</h3>
             </Card.Header>
             <Card.Body>
               <div className="avatar-section">
@@ -212,7 +212,7 @@ export default function ProfilePage() {
           {/* Profile Information */}
           <Card>
             <Card.Header>
-              <h3 className="profile-section-title">Profile Information</h3>
+              <h3 className="profile-section-title ui-section-title">Profile Information</h3>
             </Card.Header>
             <Card.Body>
               <div className="profile-stack profile-stack--md">
@@ -255,7 +255,7 @@ export default function ProfilePage() {
           {/* Account Information */}
           <Card>
             <Card.Header>
-              <h3 className="profile-section-title">Account Information</h3>
+              <h3 className="profile-section-title ui-section-title">Account Information</h3>
             </Card.Header>
             <Card.Body>
               <div className="info-grid">

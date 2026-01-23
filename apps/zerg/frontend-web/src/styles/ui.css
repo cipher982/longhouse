@@ -444,4 +444,20 @@
     align-items: center;
     gap: var(--space-3);
   }
+
+  .ui-section-title {
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: var(--font-tracking-tight);
+    color: var(--color-text-primary);
+    margin: 0;
+  }
+
+  .ui-subsection-title {
+    font-size: var(--font-size-md);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: var(--font-tracking-tight);
+    color: var(--color-text-primary);
+    margin: 0;
+  }
 }

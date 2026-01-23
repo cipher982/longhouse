@@ -210,7 +210,7 @@ export default function SettingsPage() {
           {/* Basic Information */}
           <Card>
             <Card.Header>
-              <h3 className="settings-section-title">Basic Information</h3>
+              <h3 className="settings-section-title ui-section-title">Basic Information</h3>
             </Card.Header>
             <Card.Body>
               <div className="settings-stack settings-stack--md">
@@ -266,7 +266,7 @@ export default function SettingsPage() {
           {/* Servers */}
           <Card>
             <Card.Header>
-              <h3 className="settings-section-title">Servers</h3>
+              <h3 className="settings-section-title ui-section-title">Servers</h3>
               <Button type="button" onClick={addServer}>
                 <PlusIcon /> Add Server
               </Button>
@@ -357,7 +357,7 @@ export default function SettingsPage() {
           {/* Integrations */}
           <Card>
             <Card.Header>
-              <h3 className="settings-section-title">Integrations</h3>
+              <h3 className="settings-section-title ui-section-title">Integrations</h3>
             </Card.Header>
             <Card.Body>
               <p className="section-description">
@@ -415,7 +415,7 @@ export default function SettingsPage() {
           {/* Jarvis Tools */}
           <Card>
             <Card.Header>
-              <h3 className="settings-section-title">Jarvis Tools</h3>
+              <h3 className="settings-section-title ui-section-title">Jarvis Tools</h3>
             </Card.Header>
             <Card.Body>
               <p className="section-description">
@@ -451,7 +451,7 @@ export default function SettingsPage() {
           {/* Custom Instructions */}
           <Card>
             <Card.Header>
-              <h3 className="settings-section-title">Custom Instructions</h3>
+              <h3 className="settings-section-title ui-section-title">Custom Instructions</h3>
             </Card.Header>
             <Card.Body>
               <p className="section-description">

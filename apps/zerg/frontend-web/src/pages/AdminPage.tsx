@@ -827,7 +827,7 @@ function AdminPage() {
           {/* Top Agents Section - using data from summary */}
           <Card>
             <Card.Header>
-              <h3 className="admin-section-title">Top Performing Agents (Today)</h3>
+              <h3 className="admin-section-title ui-section-title">Top Performing Agents (Today)</h3>
             </Card.Header>
             <Card.Body>
               <TopAgentsTable agents={summary.top_agents_today} />
@@ -837,7 +837,7 @@ function AdminPage() {
           {/* Users Usage Section */}
           <Card>
             <Card.Header>
-              <h3 className="admin-section-title">User LLM Usage</h3>
+              <h3 className="admin-section-title ui-section-title">User LLM Usage</h3>
             </Card.Header>
             <Card.Body>
               <p className="section-description admin-section-description">
@@ -862,7 +862,7 @@ function AdminPage() {
           {/* System Information - using real backend data */}
           <Card>
             <Card.Header>
-              <h3 className="admin-section-title">System Information</h3>
+              <h3 className="admin-section-title ui-section-title">System Information</h3>
             </Card.Header>
             <Card.Body>
               <div className="system-info">
@@ -909,7 +909,7 @@ function AdminPage() {
           {/* Developer Tools */}
           <Card>
             <Card.Header>
-              <h3 className="admin-section-title">Developer Tools</h3>
+              <h3 className="admin-section-title ui-section-title">Developer Tools</h3>
             </Card.Header>
             <Card.Body>
               <div className="admin-devtools-grid">
@@ -943,7 +943,7 @@ function AdminPage() {
           {/* Admin Actions */}
           <Card>
             <Card.Header>
-              <h3 className="admin-section-title">Database Management</h3>
+              <h3 className="admin-section-title ui-section-title">Database Management</h3>
             </Card.Header>
             <Card.Body>
               <div className="admin-actions">

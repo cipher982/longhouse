@@ -409,7 +409,7 @@ export default function TraceExplorerPage() {
       ) : (
         <Card>
           <Card.Header>
-            <h3 className="trace-explorer-section-title">Recent Traces</h3>
+            <h3 className="trace-explorer-section-title ui-section-title">Recent Traces</h3>
           </Card.Header>
           <Card.Body>
             {isLoading ? (
