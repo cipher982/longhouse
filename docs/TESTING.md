@@ -70,6 +70,8 @@ On failure:
 |---------|------|------|
 | `make qa-ui` | Accessibility + UX heuristics (axe + custom) | Every UI change |
 | `make qa-ui-visual` | Visual analysis screenshots + AI notes | Before merging UI work |
+| `make qa-ui-baseline` | Run public + app baseline screenshots | Desktop UI lock |
+| `make qa-ui-baseline-update` | Update public + app baseline screenshots | After intentional UI updates |
 | `make test-e2e-ui` | Interactive Playwright UI runner | Debugging layout/flows |
 | `make test-e2e-single TEST=tests/<spec>.ts` | Targeted flow check | Focused iteration |
 | `make test-e2e-single TEST=tests/ui_baseline_public.spec.ts` | Public page visual baselines | Smoke visual diffs |
