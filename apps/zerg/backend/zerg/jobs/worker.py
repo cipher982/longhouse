@@ -90,7 +90,7 @@ async def enqueue_missed_runs(now: datetime | None = None) -> None:
 
         from apscheduler.triggers.cron import CronTrigger
 
-        trigger = CronTrigger.from_crontab(job.cron, timezone="UTC")
+        trigger = CronTrigger.from_crontab(job.cron)
 
         # Find the most recent missed fire time (not all of them)
         prev = None
@@ -132,7 +132,7 @@ async def enqueue_scheduled_run(job_id: str, scheduled_at: datetime | None = Non
     if scheduled_at is None:
         from apscheduler.triggers.cron import CronTrigger
 
-        trigger = CronTrigger.from_crontab(job.cron, timezone="UTC")
+        trigger = CronTrigger.from_crontab(job.cron)
         window_start = now - timedelta(hours=2)
         prev = None
         candidate = trigger.get_next_fire_time(prev, window_start)
