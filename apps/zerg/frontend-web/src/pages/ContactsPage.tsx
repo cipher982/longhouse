@@ -17,7 +17,7 @@ import {
   useDeletePhoneContact,
 } from "../hooks/useContacts";
 import type { EmailContact, PhoneContact } from "../services/api/contacts";
-import { SectionHeader, EmptyState } from "../components/ui";
+import { SectionHeader, EmptyState, Button, PageShell } from "../components/ui";
 import { useConfirm } from "../components/confirm";
 import "./ContactsPage.css";
 
@@ -161,14 +161,14 @@ export default function ContactsPage() {
 
   if (error) {
     return (
-      <div className="contacts-page-container">
+      <PageShell size="narrow" className="contacts-page-container">
         <EmptyState variant="error" title="Error loading contacts" description={String(error)} />
-      </div>
+      </PageShell>
     );
   }
 
   return (
-    <div className="contacts-page-container">
+    <PageShell size="narrow" className="contacts-page-container">
       <SectionHeader
         title="Approved Contacts"
         description="Manage contacts that your agents can send emails or SMS to. Agents can only contact people on this list."
@@ -205,9 +205,9 @@ export default function ContactsPage() {
         ) : activeTab === "email" ? (
           <div className="contacts-section">
             <div className="contacts-toolbar">
-              <button className="btn btn-primary" onClick={() => openCreateModal("email")}>
+              <Button variant="primary" onClick={() => openCreateModal("email")}>
                 + Add Email Contact
-              </button>
+              </Button>
             </div>
 
             {emailContacts && emailContacts.length > 0 ? (
@@ -227,18 +227,20 @@ export default function ContactsPage() {
                       <td className="contact-value">{contact.email}</td>
                       <td className="contact-notes">{contact.notes || "-"}</td>
                       <td className="contact-actions">
-                        <button
-                          className="btn btn-ghost btn-sm"
+                        <Button
+                          variant="ghost"
+                          size="sm"
                           onClick={() => openEditModal(contact, "email")}
                         >
                           Edit
-                        </button>
-                        <button
-                          className="btn btn-ghost btn-sm btn-danger"
+                        </Button>
+                        <Button
+                          variant="danger"
+                          size="sm"
                           onClick={() => handleDelete(contact, "email")}
                         >
                           Remove
-                        </button>
+                        </Button>
                       </td>
                     </tr>
                   ))}
@@ -254,9 +256,9 @@ export default function ContactsPage() {
         ) : (
           <div className="contacts-section">
             <div className="contacts-toolbar">
-              <button className="btn btn-primary" onClick={() => openCreateModal("phone")}>
+              <Button variant="primary" onClick={() => openCreateModal("phone")}>
                 + Add Phone Contact
-              </button>
+              </Button>
             </div>
 
             {phoneContacts && phoneContacts.length > 0 ? (
@@ -276,18 +278,20 @@ export default function ContactsPage() {
                       <td className="contact-value">{contact.phone}</td>
                       <td className="contact-notes">{contact.notes || "-"}</td>
                       <td className="contact-actions">
-                        <button
-                          className="btn btn-ghost btn-sm"
+                        <Button
+                          variant="ghost"
+                          size="sm"
                           onClick={() => openEditModal(contact, "phone")}
                         >
                           Edit
-                        </button>
-                        <button
-                          className="btn btn-ghost btn-sm btn-danger"
+                        </Button>
+                        <Button
+                          variant="danger"
+                          size="sm"
                           onClick={() => handleDelete(contact, "phone")}
                         >
                           Remove
-                        </button>
+                        </Button>
                       </td>
                     </tr>
                   ))}
@@ -367,12 +371,12 @@ export default function ContactsPage() {
               </div>
 
               <div className="modal-footer">
-                <button type="button" className="btn btn-ghost" onClick={closeModal}>
+                <Button type="button" variant="ghost" onClick={closeModal}>
                   Cancel
-                </button>
-                <button
+                </Button>
+                <Button
                   type="submit"
-                  className="btn btn-primary"
+                  variant="primary"
                   disabled={
                     createEmail.isPending ||
                     updateEmail.isPending ||
@@ -381,12 +385,12 @@ export default function ContactsPage() {
                   }
                 >
                   {modal.mode === "create" ? "Add Contact" : "Save Changes"}
-                </button>
+                </Button>
               </div>
             </form>
           </div>
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }
