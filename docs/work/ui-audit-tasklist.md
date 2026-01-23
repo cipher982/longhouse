@@ -61,6 +61,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
   - [x] Info pages: replace changelog badge hex colors with tokens.
   - [x] Execution results: replace status badge hex colors with tokens.
   - [x] UI error banners + Trace Explorer anomaly accents: replace hex values with tokens.
+  - [x] Canvas controls + run button: replace disabled/toggle/status hex values with tokens.
 - [ ] Normalize type scale and heading rhythm across pages.
 
 ## Phase 3 — Automated UI QA

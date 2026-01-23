@@ -6,11 +6,11 @@
 }
 
 .run-btn.success {
-  color: #6bff92;
+  color: var(--color-intent-success);
 }
 
 .run-btn.failed {
-  color: #ff4e4e;
+  color: var(--color-intent-error);
 }
 
 @keyframes spin {
