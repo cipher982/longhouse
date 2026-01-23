@@ -116,11 +116,11 @@ async def run() -> dict:
     return result
 
 
-# Register job with 1-minute schedule for testing (change to */30 for production)
+# Register job - runs every 30 minutes as backup to Pub/Sub
 job_registry.register(
     JobConfig(
         id="gmail-sync",
-        cron="* * * * *",  # Every minute for testing - change to "*/30 * * * *" for prod
+        cron="*/30 * * * *",  # Every 30 minutes
         func=run,
         timeout_seconds=60,
         tags=["life-hub", "emails", "sync"],
