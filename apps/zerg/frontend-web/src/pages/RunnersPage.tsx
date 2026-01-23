@@ -8,7 +8,8 @@ import {
   Badge,
   Card,
   SectionHeader,
-  EmptyState
+  EmptyState,
+  PageShell
 } from "../components/ui";
 import { PlusIcon } from "../components/icons";
 import { useConfirm } from "../components/confirm";
@@ -105,7 +106,7 @@ export default function RunnersPage() {
   }
 
   return (
-    <div className="runners-page-container">
+    <PageShell size="wide" className="runners-page-container">
       <div className="runners-page">
         <SectionHeader
           title="Runners"
@@ -209,6 +210,6 @@ export default function RunnersPage() {
           onClose={() => setShowAddModal(false)}
         />
       )}
-    </div>
+    </PageShell>
   );
 }
