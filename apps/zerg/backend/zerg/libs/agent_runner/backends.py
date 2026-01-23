@@ -62,6 +62,8 @@ def configure_zai(
 
     Key insight: z.ai uses ANTHROPIC_AUTH_TOKEN (not ANTHROPIC_API_KEY),
     and requires CLAUDE_CODE_USE_BEDROCK to be unset.
+
+    Prompt passed via stdin to avoid ARG_MAX limits on large prompts.
     """
     ctx = ctx or detect_context()
 
@@ -79,10 +81,11 @@ def configure_zai(
     if ctx.in_container and not ctx.home_writable:
         env["HOME"] = "/tmp"
 
+    # Use stdin for prompt to avoid ARG_MAX (--print reads from stdin with -)
     cmd = [
         "claude",
-        "-p",
-        prompt,
+        "--print",
+        "-",  # Read prompt from stdin
         "--output-format",
         "text",
         "--dangerously-skip-permissions",
@@ -92,6 +95,7 @@ def configure_zai(
         cmd=cmd,
         env=env,
         env_unset=["CLAUDE_CODE_USE_BEDROCK", "ANTHROPIC_API_KEY"],
+        stdin_data=prompt.encode("utf-8"),
     )
 
 
@@ -104,7 +108,10 @@ def configure_bedrock(
     aws_region: str = "us-east-1",
     **_: Any,
 ) -> BackendConfig:
-    """Configure Bedrock backend (Claude Code CLI with AWS Bedrock)."""
+    """Configure Bedrock backend (Claude Code CLI with AWS Bedrock).
+
+    Prompt passed via stdin to avoid ARG_MAX limits on large prompts.
+    """
     ctx = ctx or detect_context()
 
     env = {
@@ -118,16 +125,17 @@ def configure_bedrock(
     if ctx.in_container and not ctx.home_writable:
         env["HOME"] = "/tmp"
 
+    # Use stdin for prompt to avoid ARG_MAX (--print reads from stdin with -)
     cmd = [
         "claude",
-        "-p",
-        prompt,
+        "--print",
+        "-",  # Read prompt from stdin
         "--output-format",
         "text",
         "--dangerously-skip-permissions",
     ]
 
-    return BackendConfig(cmd=cmd, env=env)
+    return BackendConfig(cmd=cmd, env=env, stdin_data=prompt.encode("utf-8"))
 
 
 def configure_codex(
@@ -138,8 +146,11 @@ def configure_codex(
     reasoning_effort: str = "low",
     **_: Any,
 ) -> BackendConfig:
-    """Configure Codex backend (OpenAI Codex CLI)."""
-    _ = ctx  # Codex doesn't have container-specific config
+    """Configure Codex backend (OpenAI Codex CLI).
+
+    Prompt passed via stdin to avoid ARG_MAX limits on large prompts.
+    """
+    ctx = ctx or detect_context()
 
     key = api_key or os.environ.get("OPENAI_API_KEY")
     if not key:
@@ -149,10 +160,13 @@ def configure_codex(
         "OPENAI_API_KEY": key,
     }
 
+    # Set HOME for containers (Codex writes to ~/.codex)
+    if ctx.in_container and not ctx.home_writable:
+        env["HOME"] = ctx.effective_home
+
+    # Codex reads prompt from stdin when passed without -p arg
     cmd = [
         "codex",
-        "-p",
-        prompt,
         "--approval-mode",
         "full-auto",
     ]
@@ -161,7 +175,7 @@ def configure_codex(
     if reasoning_effort != "low":
         cmd.extend(["--reasoning-effort", reasoning_effort])
 
-    return BackendConfig(cmd=cmd, env=env)
+    return BackendConfig(cmd=cmd, env=env, stdin_data=prompt.encode("utf-8"))
 
 
 def configure_gemini(
@@ -172,16 +186,24 @@ def configure_gemini(
     """Configure Gemini backend (Google Gemini CLI).
 
     Uses OAuth - no API key needed.
+    Prompt passed via stdin to avoid ARG_MAX limits on large prompts.
     """
-    _ = ctx  # Gemini doesn't have special container config
+    ctx = ctx or detect_context()
 
+    env: dict[str, str] = {}
+
+    # Set HOME for containers (Gemini writes to ~/.config)
+    if ctx.in_container and not ctx.home_writable:
+        env["HOME"] = ctx.effective_home
+
+    # Gemini CLI reads from stdin when given -p -
     cmd = [
         "gemini",
         "-p",
-        prompt,
+        "-",  # Read prompt from stdin
     ]
 
-    return BackendConfig(cmd=cmd, env={})
+    return BackendConfig(cmd=cmd, env=env, stdin_data=prompt.encode("utf-8"))
 
 
 # Backend to configure function mapping
