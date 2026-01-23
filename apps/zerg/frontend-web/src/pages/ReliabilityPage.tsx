@@ -122,7 +122,7 @@ function MetricCard({
   title,
   value,
   subtitle,
-  color = "#10b981",
+  color = "var(--color-intent-success)",
 }: {
   title: string;
   value: string | number;
@@ -145,9 +145,9 @@ function MetricCard({
 // Status indicator component
 function StatusIndicator({ status }: { status: "healthy" | "degraded" | "unhealthy" }) {
   const colors = {
-    healthy: "#10b981",
-    degraded: "#f59e0b",
-    unhealthy: "#ef4444",
+    healthy: "var(--color-intent-success)",
+    degraded: "var(--color-intent-warning)",
+    unhealthy: "var(--color-intent-error)",
   };
 
   return (
@@ -162,6 +162,13 @@ function StatusIndicator({ status }: { status: "healthy" | "degraded" | "unhealt
 
 export default function ReliabilityPage() {
   const { user } = useAuth();
+  const metricColors = {
+    success: "var(--color-intent-success)",
+    warning: "var(--color-intent-warning)",
+    error: "var(--color-intent-error)",
+    primary: "var(--color-brand-primary)",
+    accent: "var(--color-neon-secondary)",
+  };
 
   // Queries
   const { data: health, isLoading: healthLoading, error: healthError } = useQuery({
@@ -244,35 +251,35 @@ export default function ReliabilityPage() {
           <MetricCard
             title="Run Errors (1h)"
             value={health?.recent_run_errors ?? 0}
-            color={health && health.recent_run_errors > 5 ? "#ef4444" : "#10b981"}
+            color={health && health.recent_run_errors > 5 ? metricColors.error : metricColors.success}
           />
           <MetricCard
             title="Worker Errors (1h)"
             value={health?.recent_worker_errors ?? 0}
-            color={health && health.recent_worker_errors > 5 ? "#ef4444" : "#10b981"}
+            color={health && health.recent_worker_errors > 5 ? metricColors.error : metricColors.success}
           />
           <MetricCard
             title="P50 Latency"
             value={performance?.p50 ? `${performance.p50}ms` : "N/A"}
-            color="#3b82f6"
+            color={metricColors.primary}
           />
           <MetricCard
             title="P95 Latency"
             value={performance?.p95 ? `${performance.p95}ms` : "N/A"}
             subtitle={performance?.p99 ? `P99: ${performance.p99}ms` : undefined}
-            color="#8b5cf6"
+            color={metricColors.accent}
           />
           <MetricCard
             title="Runners Online"
             value={health?.workers?.online ?? 0}
             subtitle={`${health?.workers?.offline ?? 0} offline`}
-            color="#10b981"
+            color={metricColors.success}
           />
           <MetricCard
             title="Stuck Workers"
             value={stuckWorkers?.stuck_count ?? 0}
             subtitle={`>${stuckWorkers?.threshold_mins ?? 10}min threshold`}
-            color={stuckWorkers && stuckWorkers.stuck_count > 0 ? "#f59e0b" : "#10b981"}
+            color={stuckWorkers && stuckWorkers.stuck_count > 0 ? metricColors.warning : metricColors.success}
           />
         </div>
 
