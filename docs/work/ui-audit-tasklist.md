@@ -26,7 +26,8 @@ Principle: this doc is the source of truth for UI work. Update after every meani
   - [x] Admin page: replace inline layout styles with scoped classes (metrics, tables, dev tools).
   - [x] Reliability page: replace inline layout styles with scoped classes.
   - [x] Trace Explorer page: replace inline layout styles with scoped classes.
-- [ ] Replace legacy button usage in active pages with `components/ui/Button`.
+- [~] Replace legacy button usage in active pages with `components/ui/Button`.
+  - [x] Contacts page: swapped legacy `.btn-*` usage to `Button` component.
 - [ ] Consolidate header/section patterns (SectionHeader everywhere).
 
 ## Phase 2 — Styling & Tokens
