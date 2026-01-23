@@ -56,7 +56,8 @@ Principle: this doc is the source of truth for UI work. Update after every meani
 - [ ] Normalize type scale and heading rhythm across pages.
 
 ## Phase 3 — Automated UI QA
-- [ ] Add baseline visual snapshots for key pages (dashboard/chat/canvas/settings).
+- [~] Add baseline visual snapshots for key pages (dashboard/chat/canvas/settings).
+  - [x] Added public-page baseline spec (`ui_baseline_public.spec.ts`).
 - [ ] Add a focused mobile viewport test project in Playwright (after design lock).
 - [ ] Add a11y regression gate (axe + color contrast) to CI.
 
