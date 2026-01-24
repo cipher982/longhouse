@@ -1,5 +1,6 @@
 # React Frontend Dockerfile
 # Simple single-app build - no workspace complexity
+# Cache bust: 2026-01-24 - force rebuild for mobile CSS fix
 
 # Builder stage - build frontend for production
 FROM oven/bun:alpine AS builder
