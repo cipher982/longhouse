@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from zerg.jobs.qa import config
+from zerg.libs.agent_runner import Backend
+from zerg.libs.agent_runner import run as run_agent
 
 logger = logging.getLogger(__name__)
 
@@ -229,14 +231,8 @@ async def _run_collect_script(job_dir: Path, run_dir: Path) -> dict[str, Any]:
 async def _run_agent_analysis(job_dir: Path, run_dir: Path) -> dict[str, Any]:
     """Run AI analysis via Claude Code CLI with z.ai backend (GLM-4.7).
 
-    Uses the full Claude Code agent with tools and agentic capabilities,
-    configured to use z.ai's Anthropic-compatible API endpoint.
-
-    Environment setup:
-    - ANTHROPIC_BASE_URL: z.ai's Anthropic-compatible endpoint
-    - ANTHROPIC_AUTH_TOKEN: API key (NOT ANTHROPIC_API_KEY)
-    - ANTHROPIC_MODEL: GLM-4.7 model
-    - Unset CLAUDE_CODE_USE_BEDROCK and ANTHROPIC_API_KEY
+    Uses the unified agent_runner library which handles env var configuration,
+    container detection, and subprocess execution.
     """
     prompt_file = job_dir / "prompt.md"
 
@@ -279,72 +275,32 @@ async def _run_agent_analysis(job_dir: Path, run_dir: Path) -> dict[str, Any]:
         # Combine base prompt with data
         full_prompt = f"{base_prompt}\n\n---\n\n# Collected Data\n\n" + "\n\n".join(file_contents)
 
-        # Set up environment for Claude Code CLI with z.ai backend
-        # Key: use AUTH_TOKEN not API_KEY, and unset Bedrock flags
-        # Also set HOME=/tmp for read-only container filesystems (.claude.json needs write access)
-        env = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_CODE_USE_BEDROCK", "ANTHROPIC_API_KEY")}
-        env.update(
-            {
-                "ANTHROPIC_BASE_URL": config.ZAI_BASE_URL,
-                "ANTHROPIC_AUTH_TOKEN": config.ZAI_API_KEY,
-                "ANTHROPIC_MODEL": config.ZAI_MODEL,
-                "HOME": "/tmp",  # Claude CLI needs writable HOME for config files
-            }
-        )
-
-        # Run Claude Code CLI
-        cmd = [
-            "claude",
-            "-p",
-            full_prompt,
-            "--output-format",
-            "text",
-            "--dangerously-skip-permissions",
-        ]
-
         logger.info("Running Claude Code CLI with z.ai backend (model: %s)", config.ZAI_MODEL)
 
-        result = await asyncio.wait_for(
-            asyncio.to_thread(
-                subprocess.run,
-                cmd,
-                capture_output=True,
-                text=True,
-                env=env,
-                cwd=str(run_dir),
-            ),
-            timeout=config.AGENT_TIMEOUT_SECONDS,
+        # Use unified agent_runner library
+        result = await run_agent(
+            prompt=full_prompt,
+            backend=Backend.ZAI,
+            cwd=run_dir,
+            timeout_s=config.AGENT_TIMEOUT_SECONDS,
+            api_key=config.ZAI_API_KEY,
+            base_url=config.ZAI_BASE_URL,
+            model=config.ZAI_MODEL,
         )
 
-        if result.returncode != 0:
-            logger.error("Claude CLI failed with code %d: %s", result.returncode, result.stderr[:500])
+        if not result.ok:
+            logger.error("Claude CLI failed: %s", result.error)
             return {
                 "success": False,
-                "status": "cli_error",
-                "error": result.stderr[:1000] or f"Exit code {result.returncode}",
-                "stdout": result.stdout[:1000],
+                "status": result.status,
+                "error": result.error,
+                "stdout": result.output[:1000] if result.output else "",
             }
 
-        stdout = result.stdout
-        if not stdout.strip():
-            logger.warning("Claude CLI returned empty output")
-            return {
-                "success": False,
-                "status": "empty_output",
-                "error": "Claude CLI returned empty output",
-                "stderr": result.stderr[:500],
-            }
+        return {"success": True, "status": "ok", "stdout": result.output, "stderr": result.stderr}
 
-        return {"success": True, "status": "ok", "stdout": stdout, "stderr": result.stderr}
-
-    except asyncio.TimeoutError:
-        logger.error("Claude CLI timed out after %ds", config.AGENT_TIMEOUT_SECONDS)
-        return {"success": False, "status": "timeout", "error": "Agent timed out"}
-    except FileNotFoundError:
-        logger.error("Claude CLI not found - is @anthropic-ai/claude-code installed?")
-        return {"success": False, "status": "cli_not_found", "error": "claude command not found"}
     except Exception as e:
-        logger.exception("Claude CLI call failed: %s", e)
+        logger.exception("Agent analysis failed: %s", e)
         return {"success": False, "status": "error", "error": str(e)}
 
 

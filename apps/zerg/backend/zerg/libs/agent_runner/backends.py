@@ -143,12 +143,14 @@ def configure_codex(
     ctx: ExecutionContext | None = None,
     *,
     api_key: str | None = None,
-    reasoning_effort: str = "low",
+    model: str | None = None,
+    full_auto: bool = True,
     **_: Any,
 ) -> BackendConfig:
     """Configure Codex backend (OpenAI Codex CLI).
 
-    Prompt passed via stdin to avoid ARG_MAX limits on large prompts.
+    Uses `codex exec` subcommand for non-interactive mode.
+    Prompt passed via stdin (using `-` as prompt arg) to avoid ARG_MAX limits.
     """
     ctx = ctx or detect_context()
 
@@ -164,16 +166,21 @@ def configure_codex(
     if ctx.in_container and not ctx.home_writable:
         env["HOME"] = ctx.effective_home
 
-    # Codex reads prompt from stdin when passed without -p arg
+    # Codex exec subcommand for non-interactive mode
+    # `-` means read prompt from stdin
     cmd = [
         "codex",
-        "--approval-mode",
-        "full-auto",
+        "exec",
+        "-",  # Read prompt from stdin
     ]
 
-    # Add reasoning effort if not default
-    if reasoning_effort != "low":
-        cmd.extend(["--reasoning-effort", reasoning_effort])
+    # Full auto mode for automatic execution without prompts
+    if full_auto:
+        cmd.append("--full-auto")
+
+    # Model override if specified
+    if model:
+        cmd.extend(["-m", model])
 
     return BackendConfig(cmd=cmd, env=env, stdin_data=prompt.encode("utf-8"))
 

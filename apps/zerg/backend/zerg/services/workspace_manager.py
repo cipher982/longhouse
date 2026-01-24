@@ -18,14 +18,156 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import shutil
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
+from urllib.parse import unquote
 
 logger = logging.getLogger(__name__)
+
+# Allowed URL schemes for git clone (security)
+ALLOWED_GIT_SCHEMES = ("https://", "ssh://", "git@")
+
+# Regex for validating git branch names
+# Allows: alphanumeric, hyphen, underscore, forward slash, dot
+# Disallows: starting with hyphen/dot, consecutive dots (..), ending with .lock
+BRANCH_NAME_PATTERN = re.compile(r"^(?![-.]|.*\.\.)[a-zA-Z0-9/_.-]+(?<!\.lock)$")
+
+
+def validate_git_repo_url(repo_url: str) -> None:
+    """Validate git repository URL for security.
+
+    Prevents:
+    - URLs starting with '-' (flag injection)
+    - file:// URLs (local filesystem access)
+    - Other dangerous schemes
+    - SSH option injection via host portion starting with '-'
+
+    Raises
+    ------
+    ValueError
+        If URL is invalid or uses a disallowed scheme
+    """
+    if not repo_url:
+        raise ValueError("Repository URL cannot be empty")
+
+    # Prevent flag injection (URL starting with hyphen)
+    if repo_url.startswith("-"):
+        raise ValueError("Repository URL cannot start with '-'")
+
+    # Check for allowed schemes
+    if not any(repo_url.startswith(scheme) for scheme in ALLOWED_GIT_SCHEMES):
+        raise ValueError(f"Repository URL must use one of: {', '.join(ALLOWED_GIT_SCHEMES)}. " f"Got: {repo_url[:50]}...")
+
+    # Prevent SSH option injection via host or user portion
+    # The '--' in git clone only protects git's CLI parsing, not SSH's argument parsing
+    # URLs like 'ssh://-oProxyCommand=...' or 'git@-oHost:...' can inject SSH options
+    # Also: 'ssh://-oProxyCommand=...@github.com/repo' injects via user portion
+    if repo_url.startswith("ssh://"):
+        # ssh://[user@]host[:port]/path - extract user and host
+        # Remove scheme
+        without_scheme = repo_url[6:]  # len("ssh://")
+        # Check for user@ portion
+        if "@" in without_scheme:
+            user_part = without_scheme.split("@", 1)[0]
+            host_part = without_scheme.split("@", 1)[1]
+            # URL-decode to catch percent-encoded bypass attempts (e.g., %2D = '-')
+            user_part = unquote(user_part)
+            # User portion starting with '-' can inject SSH options
+            if user_part.startswith("-"):
+                raise ValueError("Repository URL user cannot start with '-' (SSH option injection)")
+        else:
+            host_part = without_scheme
+        # Extract host (before : or /)
+        host = host_part.split(":")[0].split("/")[0]
+        # URL-decode to catch percent-encoded bypass attempts (e.g., %2D = '-')
+        host = unquote(host)
+        if not host:
+            raise ValueError("Repository URL host cannot be empty")
+        if host.startswith("-"):
+            raise ValueError("Repository URL host cannot start with '-' (SSH option injection)")
+
+    elif repo_url.startswith("git@"):
+        # git@host:path or git@host/path format - extract host
+        after_at = repo_url[4:]  # After "git@"
+        # URL-decode FIRST to catch percent-encoded bypass attempts (e.g., %2D = '-', %3A = ':')
+        after_at = unquote(after_at)
+
+        # Host is everything before ':' or '/' (whichever comes first)
+        colon_idx = after_at.find(":")
+        slash_idx = after_at.find("/")
+
+        if colon_idx == -1 and slash_idx == -1:
+            raise ValueError("Invalid git@ URL format: missing path separator")
+
+        # Find the earliest separator
+        if colon_idx == -1:
+            sep_idx = slash_idx
+        elif slash_idx == -1:
+            sep_idx = colon_idx
+        else:
+            sep_idx = min(colon_idx, slash_idx)
+
+        host = after_at[:sep_idx]
+        if not host:
+            raise ValueError("Repository URL host cannot be empty")
+        if host.startswith("-"):
+            raise ValueError("Repository URL host cannot start with '-' (SSH option injection)")
+
+
+def validate_branch_name(branch: str) -> None:
+    """Validate git branch name for security.
+
+    Prevents:
+    - Names starting with '-' (flag injection)
+    - Invalid characters that could be exploited
+    - Names that look like git options
+
+    Raises
+    ------
+    ValueError
+        If branch name is invalid
+    """
+    if not branch:
+        raise ValueError("Branch name cannot be empty")
+
+    # Prevent flag injection
+    if branch.startswith("-"):
+        raise ValueError("Branch name cannot start with '-'")
+
+    # Validate against pattern
+    if not BRANCH_NAME_PATTERN.match(branch):
+        raise ValueError(
+            f"Invalid branch name: {branch}. " "Must contain only alphanumeric characters, hyphens, underscores, forward slashes, and dots."
+        )
+
+
+# Pattern for valid run_id: alphanumeric, hyphens, underscores only
+# This prevents git argument injection via malicious run_id
+_VALID_RUN_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
+def validate_run_id(run_id: str) -> None:
+    """Validate run_id for security.
+
+    The run_id is used in branch names (jarvis/{run_id}) and directory paths,
+    so it must be alphanumeric with hyphens/underscores only.
+
+    Raises
+    ------
+    ValueError
+        If run_id is invalid
+    """
+    if not run_id:
+        raise ValueError("run_id cannot be empty")
+
+    if not _VALID_RUN_ID_PATTERN.match(run_id):
+        raise ValueError(f"Invalid run_id: {run_id}. " "Must contain only alphanumeric characters, hyphens, and underscores.")
+
 
 # Default workspace base path (overridable via env var)
 DEFAULT_WORKSPACE_PATH = "/var/jarvis/workspaces"
@@ -97,7 +239,14 @@ class WorkspaceManager:
         ------
         RuntimeError
             If git operations fail
+        ValueError
+            If repo_url or base_branch are invalid (security validation)
         """
+        # Security: Validate inputs before any git operations
+        validate_git_repo_url(repo_url)
+        validate_branch_name(base_branch)
+        validate_run_id(run_id)  # Also validates jarvis/{run_id} branch name
+
         # Create unique workspace directory
         workspace_dir = self.base_path / run_id
         branch_name = f"jarvis/{run_id}"
@@ -321,11 +470,15 @@ class WorkspaceManager:
         return stdout.decode() if stdout else ""
 
     async def _git_clone(self, repo_url: str, dest: Path) -> None:
-        """Clone a repository."""
+        """Clone a repository.
+
+        Note: Uses '--' before repo_url to prevent flag injection attacks.
+        """
         proc = await asyncio.create_subprocess_exec(
             "git",
             "clone",
             "--depth=1",
+            "--",  # End of options - prevents repo_url from being parsed as flags
             repo_url,
             str(dest),
             stdout=asyncio.subprocess.PIPE,
@@ -348,23 +501,28 @@ class WorkspaceManager:
         await self._run_git(cwd, ["fetch", "origin"])
 
     async def _git_checkout(self, cwd: Path, branch: str) -> None:
-        """Checkout a branch."""
-        await self._run_git(cwd, ["checkout", branch])
+        """Checkout a branch using git switch.
+
+        Security: Branch names are validated by validate_branch_name() before
+        reaching this method. Using 'git switch' instead of 'git checkout'
+        avoids the ambiguity between branches and file paths.
+        """
+        await self._run_git(cwd, ["switch", branch])
 
     async def _git_reset_hard(self, cwd: Path, ref: str) -> None:
         """Hard reset to a ref."""
         await self._run_git(cwd, ["reset", "--hard", ref])
 
     async def _git_create_branch(self, cwd: Path, branch_name: str) -> None:
-        """Create and checkout a new branch."""
+        """Create and checkout a new branch using git switch."""
         # Check if branch already exists
         try:
             await self._run_git(cwd, ["rev-parse", "--verify", branch_name])
-            # Branch exists, just checkout
-            await self._run_git(cwd, ["checkout", branch_name])
+            # Branch exists, just switch to it
+            await self._run_git(cwd, ["switch", branch_name])
         except RuntimeError:
             # Branch doesn't exist, create it
-            await self._run_git(cwd, ["checkout", "-b", branch_name])
+            await self._run_git(cwd, ["switch", "-c", branch_name])
 
     async def _git_add_all(self, cwd: Path) -> None:
         """Stage all changes."""
