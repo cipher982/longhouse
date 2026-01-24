@@ -36,6 +36,12 @@ def credential_context(db_session, test_user):
     set_credential_resolver(None)
 
 
+def _count_worker_jobs(db_session) -> int:
+    from zerg.models.models import WorkerJob
+
+    return db_session.query(WorkerJob).count()
+
+
 def test_spawn_worker_success(credential_context, temp_artifact_path, db_session):
     """Test spawning a worker job that gets queued."""
     result = spawn_worker(task="What is 2+2?", model=TEST_WORKER_MODEL)
@@ -162,37 +168,81 @@ def test_spawn_workspace_worker_ssh_url(credential_context, temp_artifact_path, 
     assert job.config.get("execution_mode") == "workspace"
 
 
-def test_spawn_workspace_worker_rejects_file_url(credential_context, temp_artifact_path):
+def test_spawn_workspace_worker_rejects_file_url(credential_context, temp_artifact_path, db_session):
     """Test that file:// URLs are rejected early (security)."""
+    before_count = _count_worker_jobs(db_session)
     result = spawn_workspace_worker(
         task="Test task",
         git_repo="file:///etc/passwd",
     )
 
     assert "Error" in result
-    assert "https://" in result or "git@" in result
+    assert "Repository URL must use one of" in result
+    assert _count_worker_jobs(db_session) == before_count
 
 
-def test_spawn_workspace_worker_rejects_flag_injection(credential_context, temp_artifact_path):
+def test_spawn_workspace_worker_rejects_flag_injection(credential_context, temp_artifact_path, db_session):
     """Test that URLs starting with '-' are rejected (flag injection)."""
+    before_count = _count_worker_jobs(db_session)
     result = spawn_workspace_worker(
         task="Test task",
         git_repo="-o ProxyCommand=whoami",
     )
 
     assert "Error" in result
-    assert "flag injection" in result.lower() or "cannot start with" in result
+    assert "cannot start with '-'" in result
+    assert _count_worker_jobs(db_session) == before_count
 
 
-def test_spawn_workspace_worker_rejects_empty_repo(credential_context, temp_artifact_path):
+def test_spawn_workspace_worker_rejects_empty_repo(credential_context, temp_artifact_path, db_session):
     """Test that empty git_repo is rejected."""
+    before_count = _count_worker_jobs(db_session)
     result = spawn_workspace_worker(
         task="Test task",
         git_repo="",
     )
 
     assert "Error" in result
-    assert "required" in result
+    assert "cannot be empty" in result
+    assert _count_worker_jobs(db_session) == before_count
+
+
+def test_spawn_workspace_worker_ssh_scheme_url(credential_context, temp_artifact_path, db_session):
+    """Test spawning workspace worker with ssh:// git URL."""
+    result = spawn_workspace_worker(
+        task="Audit README via ssh scheme",
+        git_repo="ssh://git@github.com/cipher982/zerg.git",
+        model=TEST_WORKER_MODEL,
+    )
+
+    assert "Worker job" in result
+    assert "queued successfully" in result
+
+    import re
+
+    job_id_match = re.search(r"Worker job (\d+)", result)
+    job_id = int(job_id_match.group(1))
+
+    from zerg.models.models import WorkerJob
+
+    job = db_session.query(WorkerJob).filter(WorkerJob.id == job_id).first()
+    assert job.config.get("git_repo") == "ssh://git@github.com/cipher982/zerg.git"
+    assert job.config.get("execution_mode") == "workspace"
+
+
+def test_spawn_workspace_worker_rejects_ssh_option_injection(
+    credential_context, temp_artifact_path, db_session
+):
+    """Test ssh:// URLs with option injection are rejected."""
+    before_count = _count_worker_jobs(db_session)
+    result = spawn_workspace_worker(
+        task="Test task",
+        git_repo="ssh://-oProxyCommand=whoami@github.com/repo.git",
+    )
+
+    assert "Error" in result
+    assert "SSH option injection" in result or "cannot start with '-'" in result
+    assert _count_worker_jobs(db_session) == before_count
 
 
 def test_spawn_workspace_worker_security_filtering(
