@@ -62,9 +62,12 @@ class JobRegistry:
         self._scheduler: AsyncIOScheduler | None = None
 
     def register(self, config: JobConfig) -> None:
-        """Register a job configuration."""
+        """Register a job configuration.
+
+        Raises ValueError on duplicate job IDs (fail-fast policy).
+        """
         if config.id in self._jobs:
-            logger.warning("Job %s already registered, overwriting", config.id)
+            raise ValueError(f"Job id already registered: {config.id}")
         self._jobs[config.id] = config
         logger.info("Registered job: %s (cron=%s, enabled=%s)", config.id, config.cron, config.enabled)
 
@@ -230,8 +233,9 @@ def register_all_jobs(scheduler: AsyncIOScheduler | None = None, use_queue: bool
     """Register and schedule all jobs.
 
     Call this during startup to:
-    1. Import job modules (which register their configs)
-    2. Optionally schedule all enabled jobs
+    1. Import builtin job modules (which register their configs)
+    2. Load external jobs from git manifest (if configured)
+    3. Optionally schedule all enabled jobs
 
     Args:
         scheduler: APScheduler instance (if None, only registers jobs without scheduling)
@@ -239,7 +243,7 @@ def register_all_jobs(scheduler: AsyncIOScheduler | None = None, use_queue: bool
 
     Returns count of jobs scheduled.
     """
-    # Import job modules to trigger registration
+    # Import builtin job modules to trigger registration
     # pylint: disable=import-outside-toplevel,unused-import
     try:
         from zerg.jobs.backups import backup_sentinel  # noqa: F401
@@ -260,6 +264,15 @@ def register_all_jobs(scheduler: AsyncIOScheduler | None = None, use_queue: bool
         from zerg.jobs.life_hub import gmail_sync  # noqa: F401
     except ImportError as e:
         logger.warning("Could not import life_hub jobs: %s", e)
+
+    # Load external jobs from git manifest (if configured)
+    # Wrapped in try/except so manifest failures don't block builtin jobs
+    try:
+        from zerg.jobs.loader import load_jobs_manifest
+
+        load_jobs_manifest()
+    except Exception as e:
+        logger.exception("Manifest load failed (builtin jobs remain active): %s", e)
 
     if scheduler:
         return job_registry.schedule_all(scheduler, use_queue=use_queue)
