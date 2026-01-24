@@ -34,6 +34,12 @@ export interface JarvisRunSummary {
   agent_name: string;
   status: string;
   summary?: string;
+  signal?: string;
+  signal_source?: string;
+  error?: string;
+  last_event_type?: string;
+  last_event_message?: string;
+  last_event_at?: string;
   continuation_of_run_id?: number;
   created_at: string;
   updated_at: string;
