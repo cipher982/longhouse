@@ -3,6 +3,9 @@ name: Smoke Test After Deploy
 on:
   push:
     branches: [main]
+  schedule:
+    # Run every 6 hours to catch issues between deploys
+    - cron: '0 */6 * * *'
   workflow_dispatch:
     inputs:
       skip_wait:
@@ -26,7 +29,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Wait for deployments
-        if: ${{ github.event.inputs.skip_wait != 'true' }}
+        if: ${{ github.event_name == 'push' }}
         run: |
           echo "Waiting 90s for Coolify deployments to complete..."
           sleep 90
