@@ -97,6 +97,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
 - [~] Mobile nav: refine drawer + header behavior.
   - [x] Added safe-area padding for mobile header + nav drawer.
   - [x] Tightened header control sizing for narrow screens.
+  - [x] Added safe-area padding for status bar on mobile.
 - [~] Chat layout: sidebar behavior + composer sizing.
   - [x] Added mobile thread scrim + tightened composer layout and safe-area spacing.
   - [x] Updated thread sidebar to slide with transform + responsive width.
