@@ -635,6 +635,120 @@
   }
 
   /* ------------------------------------------------------------------
+   Integration Cards - Compact Grid Layout
+   ------------------------------------------------------------------ */
+
+  .integrations-content .connector-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: var(--space-3);
+  }
+
+  .integration-card {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background: var(--color-surface-elevated);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-lg);
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+
+  .integration-card:hover {
+    border-color: var(--color-border-default);
+  }
+
+  .integration-card.configured {
+    border-color: color-mix(in srgb, var(--color-intent-success) 30%, transparent);
+  }
+
+  .integration-card-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-md);
+    flex-shrink: 0;
+    color: white;
+  }
+
+  .integration-card-content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .integration-card-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .integration-name {
+    font-weight: 600;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-primary);
+  }
+
+  .integration-status {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+  }
+
+  .integration-status.connected {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--color-intent-success);
+  }
+
+  .integration-label {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .integration-meta {
+    display: flex;
+    gap: var(--space-2);
+  }
+
+  .integration-meta-value {
+    font-size: 10px;
+    color: var(--color-text-muted);
+    background: var(--color-surface-sunken);
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+  }
+
+  .integration-card-actions {
+    display: flex;
+    gap: var(--space-1);
+    flex-shrink: 0;
+  }
+
+  .integration-card-actions .ui-button {
+    padding: var(--space-2);
+  }
+
+  .integration-card-actions .danger-hover:hover {
+    color: var(--color-intent-error);
+  }
+
+  /* Mobile: stack vertically */
+  @media (width <= 640px) {
+    .integrations-content .connector-cards {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  /* ------------------------------------------------------------------
    Integration Status Badges
    ------------------------------------------------------------------ */
 
