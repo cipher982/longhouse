@@ -82,6 +82,7 @@ components:
         - send_slack_webhook
         - send_sms
         - spawn_worker
+        - spawn_workspace_worker
         - ssh_exec
         - task_create
         - task_delete
@@ -292,6 +293,8 @@ components:
               const: sms
             spawn_worker:
               const: supervisor
+            spawn_workspace_worker:
+              const: supervisor
             ssh_exec:
               const: ssh
             task_create:
@@ -369,6 +372,7 @@ components:
             - send_slack_webhook
             - send_sms
             - spawn_worker
+            - spawn_workspace_worker
             - ssh_exec
             - task_create
             - task_delete
