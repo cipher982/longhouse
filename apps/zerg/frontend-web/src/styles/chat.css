@@ -945,15 +945,18 @@
 
       .thread-sidebar {
         position: absolute;
-        left: -300px;
+        left: 0;
         top: 0;
         bottom: 0;
+        width: min(280px, 85vw);
         z-index: 30;
         box-shadow: var(--shadow-xl);
+        transform: translateX(-100%);
+        transition: transform var(--motion-duration-normal) var(--motion-easing-standard);
       }
 
       .thread-sidebar.active {
-        left: 0;
+        transform: translateX(0);
       }
 
       .thread-scrim {
