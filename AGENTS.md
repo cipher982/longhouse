@@ -150,6 +150,7 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-23) [gotcha] Workspace workers bypass WorkerRunner (no worker_started/tool events); only worker_complete is emitted and diffs live in artifacts, not the supervisor summary.
 - (2026-01-23) [pattern] Repo tasks should be routed by tool/interface (separate tool or auto-routing); prompt-only enforcement leads to runner_exec misuse.
 - (2026-01-24) [gotcha] Tool contracts live in `schemas/tools.yml`; regenerate `apps/zerg/backend/zerg/tools/generated/tool_definitions.py` via `scripts/generate_tool_types.py` instead of editing the generated file.
+- (2026-01-24) [gotcha] Supervisor tool registration is centralized: add tools in `supervisor_tools.py`; `CORE_TOOLS` pulls `SUPERVISOR_TOOL_NAMES`; `supervisor_service.py` uses `get_supervisor_allowed_tools()`. Tests in `test_core_tools.py` catch drift.
 - (2026-01-24) [pattern] External jobs loader simplified: `zerg/jobs/loader.py` uses `runpy.run_path()` on `manifest.py` from git repo. Duplicates skip (not fatal), sys.path cleaned after load, git SHA tracked in metadata. Updates require restart.
 - (2026-01-24) [pattern] UX needs multi-level alerting: auto-ack obvious “continue?” prompts, hard-stop attention for risky/ambiguous states; keep “fun” vibe without sacrificing triage speed.
 - (2026-01-24) [gotcha] Jarvis is no longer a separate app; it’s just the chat page, so unify its styles with the main frontend when refactoring.
@@ -163,4 +164,3 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-25) [gotcha] Tests patch `zerg.services.openai_realtime.httpx.AsyncClient`; keep `httpx` imported in the compatibility wrapper after moving realtime helpers.
 - (2026-01-25) [pattern] SupervisorService enforces a single ThreadType.SUPER thread per user (“one brain”); each Jarvis message creates an AgentRun tied to that thread.
 - (2026-01-25) [gotcha] Skills loader/registry must use `skill.name` (SkillEntry has no `.name`); `e.name` raises AttributeError during load/sort.
-- (2026-01-25) [gotcha] Deployment no longer triggers on `onboard-sauron`; remove that line from AGENTS.md.
