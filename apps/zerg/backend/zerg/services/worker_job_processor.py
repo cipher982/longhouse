@@ -344,6 +344,7 @@ class WorkerJobProcessor:
             job_trace_id = str(job.trace_id) if job.trace_id else None
             job_config = job.config or {}
             git_repo = job_config.get("git_repo")
+            resume_session_id = job_config.get("resume_session_id")
 
             if not git_repo:
                 job.status = "failed"
@@ -404,15 +405,31 @@ class WorkerJobProcessor:
                     logger.warning(f"Failed to set up artifact store for job {job_id}, continuing without it: {artifact_error}")
                     artifact_store = None  # Disable further artifact operations
 
-            # 3. Run agent in workspace (LONG-RUNNING - no DB session held!)
+            # 3. Prepare session for resume if resume_session_id provided
+            prepared_resume_id = None
+            if resume_session_id:
+                try:
+                    from zerg.services.session_continuity import prepare_session_for_resume
+
+                    prepared_resume_id = await prepare_session_for_resume(
+                        session_id=resume_session_id,
+                        workspace_path=workspace.path,
+                    )
+                    logger.info(f"Prepared session {resume_session_id} for resume as {prepared_resume_id}")
+                except Exception as resume_error:
+                    logger.warning(f"Failed to prepare session for resume: {resume_error}")
+                    # Continue without resume - treat as new session
+
+            # 4. Run agent in workspace (LONG-RUNNING - no DB session held!)
             logger.info(f"Running workspace agent for job {job_id} in {workspace.path}")
             result = await cloud_executor.run_agent(
                 task=job_task,
                 workspace_path=workspace.path,
                 model=job_model,
+                resume_session_id=prepared_resume_id,
             )
 
-            # 4. Capture git diff (best-effort, don't fail job on diff errors)
+            # 5. Capture git diff (best-effort, don't fail job on diff errors)
             try:
                 diff = await workspace_manager.capture_diff(workspace)
                 if diff:
@@ -422,6 +439,18 @@ class WorkerJobProcessor:
             except Exception as diff_error:
                 logger.warning(f"Failed to capture diff for job {job_id}: {diff_error}")
                 diff = ""  # Ensure diff is empty on error
+
+            # 6. Ship session to Life Hub (best-effort, for future resumption)
+            if result and result.status == "success":
+                try:
+                    from zerg.services.session_continuity import ship_session_to_life_hub
+
+                    await ship_session_to_life_hub(
+                        workspace_path=workspace.path,
+                        worker_id=worker_id,
+                    )
+                except Exception as ship_error:
+                    logger.warning(f"Failed to ship session for job {job_id}: {ship_error}")
 
         except Exception as e:
             logger.exception(f"Cloud execution failed for job {job_id}")
@@ -433,7 +462,7 @@ class WorkerJobProcessor:
                 except Exception:
                     pass
 
-        # 5. Open NEW short-lived session to update final job status
+        # 7. Open NEW short-lived session to update final job status
         with db_session() as update_db:
             update_job = update_db.query(crud.WorkerJob).filter(crud.WorkerJob.id == job_id).first()
             if not update_job:
@@ -458,7 +487,7 @@ class WorkerJobProcessor:
             final_error = update_job.error if update_job.status == "failed" else None
             update_db.commit()
 
-        # 6. Save artifacts (best-effort - failures should NOT change job status)
+        # 8. Save artifacts (best-effort - failures should NOT change job status)
         if result and artifact_store:
             try:
                 artifact_store.save_result(worker_id, result.output or "(No output)")
@@ -474,7 +503,7 @@ class WorkerJobProcessor:
             except Exception as complete_error:
                 logger.warning(f"Failed to complete artifact worker for job {job_id}: {complete_error}")
 
-        # 7. Emit completion event for SSE (if supervisor run exists)
+        # 9. Emit completion event for SSE (if supervisor run exists)
         # IMPORTANT: These are best-effort operations. Failures here should NOT
         # change the job status - the job already succeeded/failed above.
         if supervisor_run_id:
