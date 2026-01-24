@@ -132,12 +132,13 @@ class TestCollectHealthData:
 class TestJobRegistration:
     """Tests for job registration."""
 
-    def test_job_registered(self):
+    @pytest.mark.asyncio
+    async def test_job_registered(self):
         """Should register the zerg-qa job."""
         from zerg.jobs.registry import job_registry
         from zerg.jobs.registry import register_all_jobs
 
-        register_all_jobs()
+        await register_all_jobs()
 
         job = job_registry.get("zerg-qa")
         assert job is not None
