@@ -80,6 +80,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
 - [x] Baseline specs use deterministic query flags (`clock`, `effects=off`, `seed`).
 - [x] Add Makefile helpers for baseline runs (`qa-ui-baseline`, `qa-ui-baseline-update`).
 - [x] Document snapshot update tip (`PWUPDATE=1`) in testing guide.
+- [x] Add `qa-ui-full` Makefile helper for a one-command UI regression sweep.
 - [x] Settings page: add `data-ready` signal to align readiness contract for QA.
 - [x] Profile/Admin pages: add `data-ready` signals to align readiness contract for QA.
 - [x] Reliability/Trace Explorer pages: add `data-ready` signals to align readiness contract for QA.
