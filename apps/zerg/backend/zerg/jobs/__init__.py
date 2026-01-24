@@ -11,9 +11,21 @@ Job Categories:
 - maintenance: Cleanup and maintenance tasks
 
 Job Sources:
-- builtin: Jobs in this package (zerg.jobs.*)
-- git: Jobs loaded from private repo at runtime
-- http: Declarative HTTP DSL jobs (no Python code)
+- builtin: Jobs in this package (zerg.jobs.*) that self-register on import
+- manifest: External jobs from private git repo via manifest.py
+
+External jobs are loaded from a git repo configured via JOBS_GIT_REPO_URL.
+The repo should contain a manifest.py that imports JobConfig and job_registry
+from zerg and registers jobs:
+
+    from zerg.jobs import job_registry, JobConfig
+    from jobs.backup_sentinel import run as backup_run
+
+    job_registry.register(JobConfig(
+        id="backup-sentinel",
+        cron="0 10 * * *",
+        func=backup_run,
+    ))
 
 Usage:
     from zerg.jobs import register_all_jobs
@@ -27,10 +39,7 @@ from .git_sync import GitSyncService
 from .git_sync import get_git_sync_service
 from .git_sync import run_git_sync_loop
 from .git_sync import set_git_sync_service
-from .http_dsl import HTTPJobError
-from .http_dsl import create_http_executor
-from .loader import JobLoadError
-from .loader import load_job_func
+from .loader import load_jobs_manifest
 from .registry import JobConfig
 from .registry import JobRegistry
 from .registry import job_registry
@@ -48,10 +57,6 @@ __all__ = [
     "get_git_sync_service",
     "run_git_sync_loop",
     "set_git_sync_service",
-    # Loader
-    "JobLoadError",
-    "load_job_func",
-    # HTTP DSL
-    "HTTPJobError",
-    "create_http_executor",
+    # Manifest loader
+    "load_jobs_manifest",
 ]
