@@ -9,9 +9,11 @@
   background-color: transparent;
 }
 
-/* When debug panel is present, make room for it */
-.jarvis-container .app-container:has(.debug-panel) {
-  grid-template-columns: 280px 1fr;
+/* When debug panel is present on desktop, make room for it */
+@media (width >= 769px) {
+  .jarvis-container .app-container:has(.debug-panel) {
+    grid-template-columns: 280px 1fr;
+  }
 }
 
 /* Living Void Layer 2: Perspective grid floor (Tron-style)
@@ -628,18 +630,24 @@
 
 /* Responsive */
 @media (width <= 768px) {
-  .jarvis-container .app-container {
-    grid-template-columns: 1fr;
+  .jarvis-container .sidebar,
+  .jarvis-container #sidebarToggle {
+    position: fixed;
   }
 
   .jarvis-container .sidebar {
-    position: fixed;
     transform: translateX(-100%);
+    transition: transform 0.3s ease;
     z-index: 100;
   }
 
   .jarvis-container .sidebar.open {
     transform: translateX(0);
+  }
+
+  /* Fixed elements don't participate in grid flow, so main-content must be explicitly placed */
+  .jarvis-container .main-content {
+    grid-column: 1;
   }
 
   .jarvis-container .main-header {
