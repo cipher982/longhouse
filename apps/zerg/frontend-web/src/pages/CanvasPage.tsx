@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import clsx from "clsx";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { usePointerDrag } from "../hooks/usePointerDrag";
@@ -86,6 +87,7 @@ function CanvasPageContent() {
 
   const [snapToGridEnabled, setSnapToGridEnabled] = useState(true);
   const [guidesVisible, setGuidesVisible] = useState(true);
+  const [minimalModeEnabled, setMinimalModeEnabled] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
   const [showShortcutHelp, setShowShortcutHelp] = useState(false);
 
@@ -943,7 +945,7 @@ const handleToolPointerDown = useCallback(
       <div
         id="canvas-container"
         data-testid="canvas-container"
-        className="canvas-container"
+        className={clsx("canvas-container", { "canvas-container--minimal": minimalModeEnabled })}
       >
         <div className="main-content-area">
           <ExecutionControls
@@ -953,12 +955,14 @@ const handleToolPointerDown = useCallback(
             showLogs={showLogs}
             snapToGridEnabled={snapToGridEnabled}
             guidesVisible={guidesVisible}
+            minimalModeEnabled={minimalModeEnabled}
             isPending={executeWorkflowMutation.isPending || cancelExecutionMutation.isPending}
             onRun={() => executeWorkflowMutation.mutate()}
             onCancel={() => cancelExecutionMutation.mutate()}
             onToggleLogs={() => setShowLogs(!showLogs)}
             onToggleSnapToGrid={() => setSnapToGridEnabled((prev) => !prev)}
             onToggleGuides={() => setGuidesVisible((prev) => !prev)}
+            onToggleMinimalMode={() => setMinimalModeEnabled((prev) => !prev)}
           />
 
           <div
