@@ -361,7 +361,7 @@
 .mobile-nav-links {
   display: flex;
   flex-direction: column;
-  padding: var(--space-4) var(--space-3) calc(var(--space-6) + env(safe-area-inset-bottom));
+  padding: var(--space-4) var(--space-3);
   gap: var(--space-1);
 }
 
@@ -391,6 +391,84 @@
 .mobile-nav-link--active {
   background: rgba(99, 102, 241, 0.15);
   color: var(--color-brand-primary);
+}
+
+.mobile-nav-footer {
+  margin-top: auto;
+  padding: var(--space-4) var(--space-4) calc(var(--space-5) + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--color-border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.mobile-nav-user {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.mobile-nav-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border-subtle);
+  color: var(--color-text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-family: var(--font-family-display);
+  overflow: hidden;
+}
+
+.mobile-nav-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.mobile-nav-user-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mobile-nav-user-name {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mobile-nav-user-email {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mobile-nav-logout {
+  border: 1px solid var(--color-border-muted);
+  background: transparent;
+  color: var(--color-text-secondary);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  text-align: left;
+}
+
+.mobile-nav-logout:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-brand-primary);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 /* Scrim overlay */
@@ -427,6 +505,10 @@
       calc(var(--space-4) + env(safe-area-inset-left));
     height: auto;
     min-height: 64px;
+  }
+
+  .user-menu-container {
+    display: none;
   }
 
   /* Simplify brand on mobile */

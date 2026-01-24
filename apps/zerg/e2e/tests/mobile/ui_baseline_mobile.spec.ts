@@ -8,6 +8,10 @@ const MOBILE_PAGES = [
   { name: 'chat', path: `/chat?${BASE_QUERY}`, ready: 'page' },
   { name: 'canvas', path: `/canvas?${BASE_QUERY}`, ready: 'page' },
   { name: 'settings', path: `/settings?${BASE_QUERY}`, ready: 'settings' },
+  { name: 'profile', path: `/profile?${BASE_QUERY}`, ready: 'page' },
+  { name: 'admin', path: `/admin?${BASE_QUERY}`, ready: 'page' },
+  { name: 'traces', path: `/traces?${BASE_QUERY}`, ready: 'page' },
+  { name: 'reliability', path: `/reliability?${BASE_QUERY}`, ready: 'page' },
 ];
 
 async function waitForAppReady(page: Page, mode: string) {

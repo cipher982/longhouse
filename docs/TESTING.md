@@ -80,7 +80,7 @@ On failure:
 | `PWUPDATE=1 make test-e2e-single TEST=tests/ui_baseline_public.spec.ts` | Update public page baselines | When UI changes |
 | `make test-e2e-single TEST=tests/ui_baseline_app.spec.ts` | App page visual baselines (dashboard/chat/canvas/settings/profile/etc) | Desktop UI lock |
 | `PWUPDATE=1 make test-e2e-single TEST=tests/ui_baseline_app.spec.ts` | Update app baselines | When app UI changes |
-| `make test-e2e-single TEST="--project=mobile tests/mobile/ui_baseline_mobile.spec.ts"` | Mobile viewport baselines (dashboard/chat/canvas/settings) | Mobile lock |
+| `make test-e2e-single TEST="--project=mobile tests/mobile/ui_baseline_mobile.spec.ts"` | Mobile viewport baselines (dashboard/chat/canvas/settings/profile/admin/traces/reliability) | Mobile lock |
 | `PWUPDATE=1 make test-e2e-single TEST="--project=mobile tests/mobile/ui_baseline_mobile.spec.ts"` | Update mobile baselines | When mobile UI changes |
 
 **Tips**
