@@ -72,16 +72,18 @@ On failure:
 | `make qa-ui-visual` | Visual analysis screenshots + AI notes | Before merging UI work |
 | `make qa-ui-baseline` | Run public + app baseline screenshots | Desktop UI lock |
 | `make qa-ui-baseline-update` | Update public + app baseline screenshots | After intentional UI updates |
-| `make qa-ui-baseline-mobile` | Run mobile viewport baseline screenshots | Mobile layout check |
-| `make qa-ui-baseline-mobile-update` | Update mobile viewport baseline screenshots | After mobile UI updates |
+| `make qa-ui-baseline-mobile` | Run mobile viewport baselines (iPhone 13 + iPhone SE) | Mobile layout check |
+| `make qa-ui-baseline-mobile-update` | Update mobile viewport baselines (iPhone 13 + iPhone SE) | After mobile UI updates |
 | `make test-e2e-ui` | Interactive Playwright UI runner | Debugging layout/flows |
 | `make test-e2e-single TEST=tests/<spec>.ts` | Targeted flow check | Focused iteration |
 | `make test-e2e-single TEST=tests/ui_baseline_public.spec.ts` | Public page visual baselines | Smoke visual diffs |
 | `PWUPDATE=1 make test-e2e-single TEST=tests/ui_baseline_public.spec.ts` | Update public page baselines | When UI changes |
 | `make test-e2e-single TEST=tests/ui_baseline_app.spec.ts` | App page visual baselines (dashboard/chat/canvas/settings/profile/etc) | Desktop UI lock |
 | `PWUPDATE=1 make test-e2e-single TEST=tests/ui_baseline_app.spec.ts` | Update app baselines | When app UI changes |
-| `make test-e2e-single TEST="--project=mobile tests/mobile/ui_baseline_mobile.spec.ts"` | Mobile viewport baselines (dashboard/chat/canvas/settings/profile/admin/traces/reliability) | Mobile lock |
-| `PWUPDATE=1 make test-e2e-single TEST="--project=mobile tests/mobile/ui_baseline_mobile.spec.ts"` | Update mobile baselines | When mobile UI changes |
+| `make test-e2e-single TEST="--project=mobile tests/mobile/ui_baseline_mobile.spec.ts"` | Mobile baselines (iPhone 13) | Mobile lock |
+| `PWUPDATE=1 make test-e2e-single TEST="--project=mobile tests/mobile/ui_baseline_mobile.spec.ts"` | Update mobile baselines (iPhone 13) | When mobile UI changes |
+| `make test-e2e-single TEST="--project=mobile-small tests/mobile/ui_baseline_mobile.spec.ts"` | Mobile baselines (iPhone SE) | Small-screen check |
+| `PWUPDATE=1 make test-e2e-single TEST="--project=mobile-small tests/mobile/ui_baseline_mobile.spec.ts"` | Update mobile baselines (iPhone SE) | When mobile UI changes |
 
 **Tips**
 - Run `make qa-ui-visual ARGS="--pages=dashboard,chat --headed"` to watch captures live.
