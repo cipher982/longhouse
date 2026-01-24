@@ -245,7 +245,7 @@ function WelcomeHeader() {
             </div>
             <div className="mobile-nav-user-info">
               <span className="mobile-nav-user-name">{user.display_name || user.email}</span>
-              {user.email && (
+              {user.display_name && user.email && user.display_name !== user.email && (
                 <span className="mobile-nav-user-email">{user.email}</span>
               )}
             </div>
