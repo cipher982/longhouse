@@ -261,12 +261,20 @@ class WorkspaceManager:
                 # Workspace exists - fetch and reset
                 logger.debug(f"Workspace exists, fetching latest for {run_id}")
                 await self._git_fetch(workspace_dir)
+                # Auto-detect default branch if using default "main"
+                if base_branch == "main":
+                    base_branch = await self._git_detect_default_branch(workspace_dir)
+                    logger.debug(f"Detected default branch: {base_branch}")
                 await self._git_checkout(workspace_dir, base_branch)
                 await self._git_reset_hard(workspace_dir, f"origin/{base_branch}")
             else:
                 # Clone fresh
                 logger.debug(f"Cloning {repo_url} to {workspace_dir}")
                 await self._git_clone(repo_url, workspace_dir)
+                # Auto-detect default branch if using default "main"
+                if base_branch == "main":
+                    base_branch = await self._git_detect_default_branch(workspace_dir)
+                    logger.debug(f"Detected default branch: {base_branch}")
                 await self._git_checkout(workspace_dir, base_branch)
 
             # Create the jarvis branch
@@ -499,6 +507,35 @@ class WorkspaceManager:
     async def _git_fetch(self, cwd: Path) -> None:
         """Fetch latest from origin."""
         await self._run_git(cwd, ["fetch", "origin"])
+
+    async def _git_detect_default_branch(self, cwd: Path) -> str:
+        """Detect the default branch from origin.
+
+        Tries to get the default branch from origin/HEAD symbolic ref.
+        Falls back to checking for common branch names (main, master).
+
+        Returns:
+            The default branch name (e.g., "main" or "master")
+        """
+        try:
+            # Try to get the default branch from symbolic ref
+            output = await self._run_git(cwd, ["symbolic-ref", "refs/remotes/origin/HEAD"])
+            # Output format: refs/remotes/origin/main
+            if output.strip():
+                return output.strip().replace("refs/remotes/origin/", "")
+        except RuntimeError:
+            pass
+
+        # Fallback: check which common branches exist
+        for branch in ["main", "master"]:
+            try:
+                await self._run_git(cwd, ["rev-parse", "--verify", f"origin/{branch}"])
+                return branch
+            except RuntimeError:
+                continue
+
+        # Last resort - use "main" and let it fail with a clear error
+        return "main"
 
     async def _git_checkout(self, cwd: Path, branch: str) -> None:
         """Checkout a branch using git switch.
