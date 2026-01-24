@@ -31,7 +31,9 @@ def pytest_addoption(parser):
 import zerg.database as _db_mod
 import zerg.routers.websocket as _ws_router
 from zerg.database import Base
+from zerg.database import DB_SCHEMA
 from zerg.database import get_db
+from zerg.database import _apply_search_path
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.events import EventType
@@ -152,6 +154,8 @@ atexit.register(_cleanup_pg_container)
 
 # Prefer psycopg v3 driver in SQLAlchemy URL
 SQLALCHEMY_DATABASE_URL = _pg_container.get_connection_url().replace("psycopg2", "psycopg")
+# Ensure unqualified SQL (TRUNCATE, SELECT, etc.) hits the zerg schema.
+SQLALCHEMY_DATABASE_URL = _apply_search_path(SQLALCHEMY_DATABASE_URL, DB_SCHEMA)
 
 # Create test engine and session factory bound to Postgres
 from sqlalchemy.pool import NullPool
@@ -496,6 +500,12 @@ def cleanup_global_resources(request):
 @pytest.fixture(scope="session")
 def _db_schema():
     """Create database schema once for the entire test session."""
+    if test_engine.dialect.name == "postgresql":
+        from sqlalchemy import text
+
+        with test_engine.connect() as conn:
+            conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {DB_SCHEMA}"))
+            conn.commit()
     Base.metadata.create_all(bind=test_engine)
     yield
     Base.metadata.drop_all(bind=test_engine)

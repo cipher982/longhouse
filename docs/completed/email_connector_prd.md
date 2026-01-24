@@ -1,8 +1,6 @@
-# ⚠️ PARTIALLY COMPLETE / HISTORICAL REFERENCE
+# COMPLETED (2026-01-22)
 
-> **Note:** Core pieces are implemented, but several production-critical items remain. Implementation details may have evolved since this document was written.
-> For current documentation, see the root `docs/` directory.
-> **Status update (2026-01-19):** The status tracker below still lists open TODOs (Pub/Sub flow, watch renewal, observability). Treat this as *partially complete* until those items are closed.
+> **Status update:** All production-critical items (Pub/Sub flow, watch renewal, observability, test hygiene, legacy cleanup) have been implemented and verified.
 
 ---
 
@@ -75,13 +73,13 @@ Status tracker:
 - Connector uniqueness + updated_at: DONE
 - Connect endpoint hardening: DONE
 - Frontend trigger payloads + connector_id handling: DONE
-- Minimal connectors API: IN PROGRESS (GET/DELETE done; POST/PATCH later)
-- Pub/Sub-correct Gmail flow: TODO
-- Watch renewal at connector level: TODO
-- Observability metrics/gauges: TODO
-- Test hygiene (scoping raise_server_exceptions=False; connectors API tests): TODO
-- Clean legacy EmailTriggerService (delete or clearly fallback): TODO
-- Docs and configs updates (.env.example, retry semantics): TODO
+- Minimal connectors API: DONE
+- Pub/Sub-correct Gmail flow: DONE
+- Watch renewal at connector level: DONE
+- Observability metrics/gauges: DONE
+- Test hygiene: DONE
+- Clean legacy EmailTriggerService: DONE
+- Docs and configs updates: DONE
 
 ## Remaining Work (Prioritized)
 

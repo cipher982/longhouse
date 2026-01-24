@@ -8,6 +8,7 @@ Seeding sources (checked in order):
 2. ~/.config/zerg/*.json (prod/personal)
 """
 
+import copy
 import json
 import logging
 import os
@@ -51,6 +52,9 @@ def _find_config_file(paths: list[Path]) -> Path | None:
 def _seed_user_context() -> bool:
     """Seed user context from local config file.
 
+    Seeds context for all ADMIN users (not just first user), since in production
+    there may be a dev@local placeholder user created before the real admin.
+
     Returns:
         True if seeding succeeded or was skipped (idempotent), False on error.
     """
@@ -70,25 +74,30 @@ def _seed_user_context() -> bool:
 
     db = default_session_factory()
     try:
-        # Find first user
-        result = db.execute(select(User).order_by(User.id).limit(1))
-        user = result.scalar_one_or_none()
+        # Find all admin users (real admins, not just first user)
+        admin_users = db.query(User).filter(User.role == "ADMIN").all()
 
-        if not user:
-            logger.debug("No users in database yet - skipping context seed")
+        if not admin_users:
+            logger.debug("No admin users in database yet - skipping context seed")
             return True
 
-        # Idempotent: skip if already has meaningful context
-        if user.context and user.context.get("display_name"):
-            logger.debug(f"User {user.email} already has context - skipping")
-            return True
+        seeded_count = 0
+        for user in admin_users:
+            # Idempotent: skip if already has meaningful context
+            if user.context and user.context.get("display_name"):
+                logger.debug(f"User {user.email} already has context - skipping")
+                continue
 
-        # Seed the context
-        user.context = context
-        db.commit()
+            # Seed the context (deep copy to avoid shared reference between users)
+            user.context = copy.deepcopy(context)
+            seeded_count += 1
+            logger.info(f"Seeded user context for {user.email}")
 
-        server_count = len(context.get("servers", []))
-        logger.info(f"Seeded user context for {user.email}: {server_count} servers configured")
+        if seeded_count > 0:
+            db.commit()
+            server_count = len(context.get("servers", []))
+            logger.info(f"Seeded context for {seeded_count} admin user(s): {server_count} servers configured")
+
         return True
 
     except Exception as e:
@@ -101,6 +110,8 @@ def _seed_user_context() -> bool:
 
 def _seed_personal_credentials() -> bool:
     """Seed personal tool credentials from local config file.
+
+    Seeds for all admin users (consistent with _seed_user_context).
 
     Returns:
         True if seeding succeeded or was skipped (idempotent), False on error.
@@ -125,23 +136,29 @@ def _seed_personal_credentials() -> bool:
 
         db = default_session_factory()
         try:
-            result = db.execute(select(User).order_by(User.id).limit(1))
-            user = result.scalar_one_or_none()
+            # Seed for all admin users (consistent with _seed_user_context)
+            admin_users = db.query(User).filter(User.role == "ADMIN").all()
 
-            if not user:
-                logger.debug("No users in database yet - skipping credentials seed")
+            if not admin_users:
+                logger.debug("No admin users in database yet - skipping credentials seed")
                 return True
 
             # Load credentials
             with open(config_path) as f:
                 creds = json.load(f)
 
-            # Seed (idempotent - won't overwrite existing)
-            seeded = seed_credentials_for_user(db, user.id, creds, force=False)
-            if seeded:
-                logger.info(f"Seeded personal credentials for {user.email}")
-            else:
-                logger.debug(f"Personal credentials already exist for {user.email}")
+            seeded_count = 0
+            for user in admin_users:
+                # Seed (idempotent - won't overwrite existing)
+                seeded = seed_credentials_for_user(db, user.id, creds, force=False, merge=True)
+                if seeded:
+                    logger.info(f"Seeded personal credentials for {user.email}")
+                    seeded_count += 1
+                else:
+                    logger.debug(f"Personal credentials already exist for {user.email}")
+
+            if seeded_count > 0:
+                logger.info(f"Seeded credentials for {seeded_count} admin user(s)")
             return True
 
         except Exception as e:
@@ -175,9 +192,10 @@ def _seed_runners() -> bool:
     from zerg.crud import runner_crud
 
     current_env = (os.getenv("ENVIRONMENT") or "").strip().lower()
-    if current_env == "production":
-        # Runner seeding is meant for dev DX; avoid silently creating runners in production.
-        logger.debug("Skipping runners auto-seed in production environment")
+    seed_runners_enabled = os.getenv("SEED_RUNNERS", "0").strip() == "1"
+    if current_env == "production" and not seed_runners_enabled:
+        # Runner seeding is opt-in in production via SEED_RUNNERS=1
+        logger.debug("Skipping runners auto-seed in production (set SEED_RUNNERS=1 to enable)")
         return True
 
     config_path = _find_config_file(RUNNERS_PATHS)
@@ -199,12 +217,11 @@ def _seed_runners() -> bool:
 
     db = default_session_factory()
     try:
-        # Find first user
-        result = db.execute(select(User).order_by(User.id).limit(1))
-        user = result.scalar_one_or_none()
+        # Find first admin user (runners have single owner, but should be admin not dev@local)
+        user = db.query(User).filter(User.role == "ADMIN").order_by(User.id).first()
 
         if not user:
-            logger.debug("No users in database yet - skipping runners seed")
+            logger.debug("No admin users in database yet - skipping runners seed")
             return True
 
         seeded_count = 0
@@ -256,6 +273,8 @@ def _seed_server_knowledge() -> bool:
     This makes knowledge_search("What servers do I have?") work by indexing
     the server info from user.context into a KnowledgeDocument.
 
+    Seeds for all admin users with server context.
+
     Returns:
         True if seeding succeeded or was skipped (idempotent), False on error.
     """
@@ -264,67 +283,67 @@ def _seed_server_knowledge() -> bool:
 
     db = default_session_factory()
     try:
-        # Find first user with context
-        result = db.execute(select(User).order_by(User.id).limit(1))
-        user = result.scalar_one_or_none()
+        # Find all admin users with context
+        admin_users = db.query(User).filter(User.role == "ADMIN").all()
 
-        if not user:
-            logger.debug("No users in database yet - skipping server knowledge seed")
+        if not admin_users:
+            logger.debug("No admin users in database yet - skipping server knowledge seed")
             return True
 
-        # Check if user has servers in context
-        context = user.context or {}
-        servers = context.get("servers", [])
-        if not servers:
-            logger.debug("No servers in user context - skipping knowledge seed")
-            return True
+        seeded_count = 0
+        for user in admin_users:
+            # Check if user has servers in context
+            context = user.context or {}
+            servers = context.get("servers", [])
+            if not servers:
+                continue
 
-        # Check if we already have this knowledge source (idempotent)
-        existing_source = db.query(KnowledgeSource).filter_by(owner_id=user.id, name="User Context - Servers").first()
+            # Check if we already have this knowledge source (idempotent)
+            existing_source = db.query(KnowledgeSource).filter_by(owner_id=user.id, name="User Context - Servers").first()
 
-        if existing_source:
-            # Source exists, but update the document content in case servers changed
-            pass
-        else:
-            # Create the knowledge source
-            existing_source = knowledge_crud.create_knowledge_source(
+            if not existing_source:
+                # Create the knowledge source
+                existing_source = knowledge_crud.create_knowledge_source(
+                    db,
+                    owner_id=user.id,
+                    name="User Context - Servers",
+                    source_type="user_context",
+                    config={"auto_seeded": True},
+                )
+                logger.info(f"Created knowledge source 'User Context - Servers' for {user.email}")
+
+            # Format servers as searchable markdown
+            lines = ["# My Servers\n"]
+            for srv in servers:
+                name = srv.get("name", "Unknown")
+                ip = srv.get("ip", "")
+                purpose = srv.get("purpose", "")
+                ssh_user = srv.get("ssh_user", "")
+
+                lines.append(f"## {name}")
+                if ip:
+                    lines.append(f"- **IP Address:** {ip}")
+                if purpose:
+                    lines.append(f"- **Purpose:** {purpose}")
+                if ssh_user:
+                    lines.append(f"- **SSH User:** {ssh_user}")
+                lines.append("")  # Blank line between servers
+
+            content = "\n".join(lines)
+
+            # Upsert the document (creates or updates)
+            knowledge_crud.upsert_knowledge_document(
                 db,
+                source_id=existing_source.id,
                 owner_id=user.id,
-                name="User Context - Servers",
-                source_type="user_context",
-                config={"auto_seeded": True},
+                path="user_context/servers.md",
+                content_text=content,
+                title="My Servers",
             )
-            logger.info(f"Created knowledge source 'User Context - Servers' for {user.email}")
+            seeded_count += 1
 
-        # Format servers as searchable markdown
-        lines = ["# My Servers\n"]
-        for srv in servers:
-            name = srv.get("name", "Unknown")
-            ip = srv.get("ip", "")
-            purpose = srv.get("purpose", "")
-            ssh_user = srv.get("ssh_user", "")
-
-            lines.append(f"## {name}")
-            if ip:
-                lines.append(f"- **IP Address:** {ip}")
-            if purpose:
-                lines.append(f"- **Purpose:** {purpose}")
-            if ssh_user:
-                lines.append(f"- **SSH User:** {ssh_user}")
-            lines.append("")  # Blank line between servers
-
-        content = "\n".join(lines)
-
-        # Upsert the document (creates or updates)
-        knowledge_crud.upsert_knowledge_document(
-            db,
-            source_id=existing_source.id,
-            owner_id=user.id,
-            path="user_context/servers.md",
-            content_text=content,
-            title="My Servers",
-        )
-        logger.info(f"Seeded {len(servers)} servers into knowledge base for {user.email}")
+        if seeded_count > 0:
+            logger.info(f"Seeded server knowledge for {seeded_count} admin user(s)")
         return True
 
     except Exception as e:
@@ -343,6 +362,10 @@ def run_auto_seed() -> dict:
     Returns:
         Dict with seeding results for logging.
     """
+    from zerg.config import get_settings
+
+    settings = get_settings()
+
     # In dev mode (AUTH_DISABLED=1), many subsystems (runners, user-context, credentials)
     # assume at least one deterministic "dev@local" user exists. Most request paths
     # create it lazily via the auth layer, but runner websockets can connect before
@@ -350,9 +373,6 @@ def run_auto_seed() -> dict:
     #
     # Creating the dev user here makes startup behavior deterministic and reduces log spam.
     try:
-        from zerg.config import get_settings
-
-        settings = get_settings()
         node_env = (os.getenv("NODE_ENV") or "").strip().lower()
         # Unit tests use NODE_ENV=test but don't always set TESTING=1; avoid mutating
         # the database state during tests.

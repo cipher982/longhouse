@@ -8,7 +8,6 @@ interface ConfirmContextValue {
   confirm: ConfirmFn;
 }
 
-// eslint-disable-next-line react-refresh/only-export-components
 export const ConfirmContext = createContext<ConfirmContextValue | null>(null);
 
 interface DialogState {

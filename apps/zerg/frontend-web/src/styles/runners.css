@@ -3,9 +3,6 @@
 @layer pages {
   .runners-page-container {
     width: 100%;
-    max-width: 1400px;
-    margin: 0 auto;
-    padding: var(--space-8);
   }
 
   .runners-page {
@@ -25,7 +22,7 @@
       font-size: 2rem;
       font-weight: 600;
       margin: 0;
-      color: #fafafa;
+      color: var(--color-text-primary);
     }
 
     /* Runners Grid */
@@ -37,8 +34,8 @@
   }
 
   .runner-card {
-    background: #27272a;
-    border: 1px solid #3f3f46;
+    background: var(--color-surface-card);
+    border: 1px solid var(--color-border-primary);
     border-radius: 12px;
     padding: 1.5rem;
     cursor: pointer;
@@ -46,9 +43,9 @@
   }
 
   .runner-card:hover {
-    border-color: #52525b;
+    border-color: var(--color-border-subtle);
     transform: translateY(-2px);
-    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+    box-shadow: var(--shadow-lg);
   }
 
   .runner-card-header {
@@ -57,15 +54,15 @@
     align-items: center;
     margin-bottom: 1rem;
     padding-bottom: 1rem;
-    border-bottom: 1px solid #3f3f46;
+    border-bottom: 1px solid var(--color-border-subtle);
   }
 
-    .runner-card-header h3 {
-      font-size: 1.25rem;
-      font-weight: 600;
-      margin: 0;
-      color: #fafafa;
-    }
+  .runner-card-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin: 0;
+    color: var(--color-text-primary);
+  }
 
     .runner-card-details {
     display: flex;
@@ -82,14 +79,14 @@
   }
 
   .runner-detail-label {
-    color: #a1a1aa;
+    color: var(--color-text-secondary);
     font-size: 0.875rem;
     font-weight: 500;
     flex-shrink: 0;
   }
 
   .runner-detail-value {
-    color: #fafafa;
+    color: var(--color-text-primary);
     font-size: 0.875rem;
     text-align: right;
   }
@@ -103,9 +100,9 @@
 
   .capability-chip {
     padding: 0.25rem 0.75rem;
-    background: rgba(59, 130, 246, 0.2);
-    color: #60a5fa;
-    border: 1px solid rgba(59, 130, 246, 0.3);
+    background: color-mix(in srgb, var(--color-brand-primary) 18%, transparent);
+    color: var(--color-brand-secondary);
+    border: 1px solid color-mix(in srgb, var(--color-brand-primary) 35%, transparent);
     border-radius: 12px;
     font-size: 0.75rem;
     font-weight: 500;
@@ -114,36 +111,17 @@
   .runner-card-actions {
     display: flex;
     gap: 0.75rem;
-    margin-top: 1rem;
-    padding-top: 1rem;
-    border-top: 1px solid #3f3f46;
+    margin-top: var(--space-4);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--border-glass-1);
   }
 
-  .runner-action-button {
+  .runner-card-actions .ui-button {
     flex: 1;
-    padding: 0.5rem 1rem;
-    border: 1px solid #3f3f46;
-    border-radius: 6px;
-    background: transparent;
-    color: #fafafa;
-    font-size: 0.875rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
-  .runner-action-button:hover {
-    background: #3f3f46;
-  }
-
-  .revoke-button {
-    color: #ef4444;
-    border-color: rgba(239, 68, 68, 0.3);
-  }
-
-  .revoke-button:hover {
-    background: rgba(239, 68, 68, 0.1);
-    border-color: rgba(239, 68, 68, 0.5);
+  .runner-action-full {
+    width: 100%;
   }
 
   /* Responsive */

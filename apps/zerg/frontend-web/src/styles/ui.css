@@ -54,7 +54,7 @@
   /* Variants */
   .ui-button--primary {
     background: var(--color-brand-primary);
-    color: #fff;
+    color: var(--color-text-primary);
     box-shadow: 0 0 0 rgba(99, 102, 241, 0);
   }
 
@@ -83,7 +83,7 @@
 
   .ui-button--success:hover:not(:disabled) {
     background: var(--color-intent-success);
-    color: #fff;
+    color: var(--color-text-primary);
     box-shadow: 0 0 15px rgba(34, 197, 94, 0.3);
   }
 
@@ -105,7 +105,7 @@
 
   .ui-button--danger:hover:not(:disabled) {
     background: var(--color-intent-error);
-    color: #fff;
+    color: var(--color-text-primary);
   }
 
   .ui-button--tertiary {
@@ -136,6 +136,41 @@
     height: 44px;
     padding: 0 var(--space-5);
     font-size: var(--font-size-lg);
+  }
+
+  /* --- Spinner --- */
+  @keyframes ui-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .ui-spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid var(--color-border-subtle);
+    border-top-color: var(--color-brand-primary);
+    animation: ui-spin 0.8s linear infinite;
+  }
+
+  .ui-spinner--sm {
+    width: 14px;
+    height: 14px;
+    border-width: 2px;
+  }
+
+  .ui-spinner--md {
+    width: 24px;
+    height: 24px;
+    border-width: 2px;
+  }
+
+  .ui-spinner--lg {
+    width: 40px;
+    height: 40px;
+    border-width: 3px;
   }
 
   /* --- Icon Button --- */
@@ -354,20 +389,20 @@
     justify-content: space-between;
     gap: var(--space-4);
     padding: var(--space-3) var(--space-4);
-    background: rgba(239, 68, 68, 0.1);
-    border: 1px solid rgba(239, 68, 68, 0.3);
+    background: var(--color-intent-error-muted);
+    border: 1px solid color-mix(in srgb, var(--color-intent-error) 30%, transparent);
     border-radius: var(--radius-md);
-    color: #fca5a5;
+    color: var(--color-intent-error);
     font-size: 0.875rem;
     margin-bottom: var(--space-4);
   }
 
   .ui-action-error-dismiss {
     background: transparent;
-    border: 1px solid rgba(239, 68, 68, 0.3);
+    border: 1px solid color-mix(in srgb, var(--color-intent-error) 30%, transparent);
     border-radius: var(--radius-sm);
     padding: var(--space-1) var(--space-2);
-    color: #fca5a5;
+    color: var(--color-intent-error);
     font-size: 0.75rem;
     cursor: pointer;
     transition: all var(--motion-duration-fast) var(--motion-easing-standard);
@@ -375,8 +410,8 @@
   }
 
   .ui-action-error-dismiss:hover {
-    background: rgba(239, 68, 68, 0.2);
-    border-color: rgba(239, 68, 68, 0.5);
+    background: color-mix(in srgb, var(--color-intent-error) 20%, transparent);
+    border-color: color-mix(in srgb, var(--color-intent-error) 50%, transparent);
   }
 
   /* --- Section Header --- */
@@ -408,5 +443,35 @@
     display: flex;
     align-items: center;
     gap: var(--space-3);
+  }
+
+  .ui-section-title {
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: var(--font-tracking-tight);
+    color: var(--color-text-primary);
+    margin: 0;
+  }
+
+  .ui-subsection-title {
+    font-size: var(--font-size-md);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: var(--font-tracking-tight);
+    color: var(--color-text-primary);
+    margin: 0;
+  }
+
+  @media (width <= 768px) {
+    .ui-section-header {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: var(--space-3);
+    }
+
+    .ui-section-header__actions {
+      width: 100%;
+      flex-wrap: wrap;
+      justify-content: flex-start;
+    }
   }
 }

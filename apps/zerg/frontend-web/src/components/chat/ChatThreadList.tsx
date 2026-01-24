@@ -39,7 +39,7 @@ export function ChatThreadList({
   const [isAutomationCollapsed, setIsAutomationCollapsed] = useState(true);
 
   return (
-    <aside className={clsx("thread-sidebar", { active: isShelfOpen })}>
+    <aside id="thread-sidebar" className={clsx("thread-sidebar", { active: isShelfOpen })}>
       <div className="sidebar-header">
         <h3>Threads</h3>
         <button

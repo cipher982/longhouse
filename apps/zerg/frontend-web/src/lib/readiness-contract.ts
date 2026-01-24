@@ -28,6 +28,18 @@
  *   - data-ready: Set when chatReady flag is true (app mounted, EventBus ready)
  *   - data-screenshot-ready: Set when messages.length > 0 (content visible for screenshots)
  *
+ * Settings & Profile:
+ *   - /settings: data-ready when user context has loaded
+ *   - /profile: data-ready on mount (simple client-side form)
+ *
+ * Ops & Management:
+ *   - /admin: data-ready when summary + users are loaded
+ *   - /runners, /settings/integrations, /settings/knowledge, /settings/contacts:
+ *     data-ready when primary query resolves (empty state still interactive)
+ *
+ * Observability:
+ *   - /traces, /reliability: data-ready once primary query completes (error state is still interactive)
+ *
  * == E2E TESTING ==
  *
  * Prefer waitForPageReady() from helpers/ready-signals.ts which checks data-ready.

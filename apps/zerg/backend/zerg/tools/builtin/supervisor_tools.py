@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 async def spawn_worker_async(
     task: str,
     model: str | None = None,
+    execution_mode: str = "standard",
+    git_repo: str | None = None,
     *,
     _tool_call_id: str | None = None,  # Internal: passed by _call_tool_async for idempotency
     _skip_interrupt: bool = False,  # Internal: legacy param, now ignored
@@ -47,6 +49,11 @@ async def spawn_worker_async(
     Args:
         task: Natural language description of what the worker should do
         model: LLM model for the worker (default: gpt-5-mini)
+        execution_mode: "standard" (default) runs via WebSocket runner, "workspace"
+            runs headless on the server in a git workspace. Accepts "local" and
+            "cloud" for backward compatibility.
+        git_repo: Git repository URL (required if execution_mode="workspace").
+            The repo is cloned, agent makes changes, and diff is captured.
 
     Returns:
         The worker's result after completion
@@ -54,8 +61,19 @@ async def spawn_worker_async(
     Example:
         spawn_worker("Check disk usage on prod-web server via SSH")
         spawn_worker("Research vacuums and recommend the best one")
+        spawn_worker("Fix typo in README", execution_mode="workspace", git_repo="git@github.com:user/repo.git")
     """
     from zerg.models.models import WorkerJob
+
+    # Validate execution_mode and git_repo combination
+    # Accept both old names (local, cloud) and new names (standard, workspace) for backward compat
+    valid_modes = {"local", "cloud", "standard", "workspace"}
+    if execution_mode not in valid_modes:
+        return f"Error: execution_mode must be 'standard' or 'workspace', got '{execution_mode}'"
+
+    # Workspace mode (cloud is alias) requires git_repo
+    if execution_mode in ("cloud", "workspace") and not git_repo:
+        return "Error: git_repo is required when execution_mode='workspace'"
 
     # Get database session from credential resolver context
     resolver = get_credential_resolver()
@@ -74,6 +92,14 @@ async def spawn_worker_async(
     # Priority: explicit arg > supervisor context > default
     worker_model = model or (ctx.model if ctx else None) or DEFAULT_WORKER_MODEL_ID
     worker_reasoning_effort = (ctx.reasoning_effort if ctx else None) or "none"
+
+    # Build execution config for workspace mode (cloud is alias for backward compat)
+    job_config = None
+    if execution_mode in ("cloud", "workspace"):
+        job_config = {
+            "execution_mode": "workspace",  # Normalize to new name
+            "git_repo": git_repo,
+        }
 
     try:
         # IDEMPOTENCY: Prevent duplicate workers on retry/resume.
@@ -175,6 +201,7 @@ async def spawn_worker_async(
                 model=worker_model,
                 reasoning_effort=worker_reasoning_effort,  # Inherit from supervisor
                 status="queued",
+                config=job_config,  # Cloud execution config (execution_mode, git_repo)
             )
             db.add(worker_job)
             db.commit()
@@ -216,11 +243,13 @@ async def spawn_worker_async(
 def spawn_worker(
     task: str,
     model: str | None = None,
+    execution_mode: str = "standard",
+    git_repo: str | None = None,
 ) -> str:
     """Sync wrapper for spawn_worker_async. Used for CLI/tests."""
     from zerg.utils.async_utils import run_async_safely
 
-    return run_async_safely(spawn_worker_async(task, model))
+    return run_async_safely(spawn_worker_async(task, model, execution_mode, git_repo))
 
 
 async def list_workers_async(
@@ -813,7 +842,8 @@ TOOLS: List[StructuredTool] = [
         name="spawn_worker",
         description="Spawn a worker agent to execute a task and wait for completion. "
         "The worker runs in the background and this tool returns when the worker finishes. "
-        "Use this to delegate complex tasks that require tool use or research.",
+        "Use this to delegate complex tasks that require tool use or research. "
+        "For workspace execution (code changes), set execution_mode='workspace' and provide git_repo URL.",
     ),
     StructuredTool.from_function(
         func=list_workers,

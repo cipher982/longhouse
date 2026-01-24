@@ -7,6 +7,7 @@
 
 import config from "../../lib/config";
 import { PlugIcon, BrainIcon, ZapIcon } from "../icons";
+import { Button } from "../ui";
 
 interface Step {
   icon: React.ReactNode;
@@ -72,9 +73,9 @@ export function HowItWorksSection() {
         </div>
 
         <div className="landing-steps-cta">
-          <button className="btn-primary btn-lg" onClick={handleGetStarted}>
+          <Button variant="primary" size="lg" onClick={handleGetStarted}>
             Get Started Free
-          </button>
+          </Button>
         </div>
       </div>
     </section>

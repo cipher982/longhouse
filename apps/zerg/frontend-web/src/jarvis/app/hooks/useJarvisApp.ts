@@ -443,6 +443,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
       initStartedRef.current = false
       optionsRef.current.onError?.(error as Error)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- setupVoiceListeners defined below, circular dep intentional
   }, [state.initialized, initializeJarvisClient, fetchBootstrap, initializeContext, loadSupervisorHistory, checkForActiveRun, reconnectToRun, updateState])
 
   // Set up voice controller event listeners
@@ -489,6 +490,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
 
     voiceController.addListener(handleVoiceEvent)
     return () => voiceController.removeListener(handleVoiceEvent)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- handleUserTranscript defined below, circular dep intentional
   }, [dispatch, setVoiceStatus])
 
   // Set up stateManager listeners for streaming events from supervisor-chat-controller
@@ -550,6 +552,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
     } catch (error) {
       logger.error('[useJarvisApp] Failed to send voice transcript:', error)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sendText defined below, stable
   }, [])
 
   // ============= Connection =============
@@ -628,6 +631,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
       feedbackSystem.playErrorTone()
       optionsRef.current.onError?.(error as Error)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- setupSessionEvents defined below, circular dep intentional
   }, [state.connecting, state.connected, state.currentContext, dispatch, updateState, setVoiceStatus, loadSupervisorHistory])
 
   const disconnect = useCallback(async () => {

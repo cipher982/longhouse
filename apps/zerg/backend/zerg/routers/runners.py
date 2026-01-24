@@ -607,8 +607,13 @@ async def runner_websocket(
             runner = runner_crud.get_runner(db, runner_id)
         elif runner_name:
             # Name-based auth: names are only unique per-owner, so we bind name+secret.
+            # Note: if two owners have runners with same name AND same secret hash,
+            # this returns the first match. This is a config error but shouldn't crash.
             stmt = select(RunnerModel).where(RunnerModel.name == runner_name, RunnerModel.auth_secret_hash == computed_hash)
-            runner = db.execute(stmt).scalar_one_or_none()
+            results = db.execute(stmt).scalars().all()
+            if len(results) > 1:
+                logger.warning(f"Multiple runners found with name '{runner_name}' and same secret hash - using first match")
+            runner = results[0] if results else None
             if not runner:
                 logger.warning(f"Runner not found by name: {runner_name}")
                 await websocket.close(code=1008, reason="Invalid runner_name or secret")

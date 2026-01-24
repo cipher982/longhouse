@@ -7,7 +7,7 @@
   padding: 6px 10px;
   border-radius: var(--radius-sm);
   background: rgb(255 255 255 / 12%);
-  color: #fff;
+  color: var(--color-text-primary);
   font:
     500 12px/1.2 system-ui,
     -apple-system,
@@ -367,7 +367,7 @@
 }
 
 #ops-ticker .tick.gray {
-  border-left: 4px solid #94a3b8;
+  border-left: 4px solid var(--color-text-muted);
 }
 
 /* TV mode: larger, cleaner */

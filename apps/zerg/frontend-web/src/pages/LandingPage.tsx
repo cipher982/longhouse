@@ -91,27 +91,11 @@ function LandingPerfHud({
   const fxText = Array.from(fxEnabled).sort().join(", ") || "none";
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        right: 12,
-        bottom: 12,
-        zIndex: 9999,
-        padding: "10px 12px",
-        borderRadius: 10,
-        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-        fontSize: 12,
-        lineHeight: 1.3,
-        color: "rgba(255,255,255,0.9)",
-        background: "rgba(0,0,0,0.8)",
-        border: "1px solid rgba(255,255,255,0.12)",
-        pointerEvents: "none",
-      }}
-    >
+    <div className="landing-perf-hud">
       <div>{`fps ~ ${stats.fps.toFixed(0)}`}</div>
       <div>{`avg ${stats.avgMs.toFixed(1)}ms`}</div>
       <div>{`p95 ${stats.p95Ms.toFixed(1)}ms`}</div>
-      <div style={{ marginTop: 6, opacity: 0.8 }}>{`fx: ${fxText}`}</div>
+      <div className="landing-perf-hud-fx">{`fx: ${fxText}`}</div>
     </div>
   );
 }

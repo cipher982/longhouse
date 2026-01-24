@@ -1,0 +1,309 @@
+@layer pages {
+  .trace-explorer-container {
+    width: 100%;
+  }
+
+  .trace-explorer-section-title {
+    margin: 0;
+  }
+
+  .trace-explorer-loading {
+    text-align: center;
+    padding: var(--space-8);
+  }
+
+  .trace-explorer-pagination {
+    display: flex;
+    justify-content: center;
+    gap: var(--space-2);
+    margin-top: var(--space-4);
+  }
+
+  .trace-explorer-pagination-label {
+    padding: var(--space-2);
+    color: var(--color-text-muted);
+  }
+
+  .trace-explorer-trace-row {
+    cursor: pointer;
+  }
+
+  .trace-explorer-trace-id {
+    font-size: 0.75rem;
+  }
+
+  /* Timeline row */
+  .trace-timeline-row {
+    display: flex;
+    gap: var(--space-4);
+    min-height: 60px;
+  }
+
+  .trace-time-col {
+    width: 110px;
+    flex-shrink: 0;
+    padding-top: 2px;
+    font-size: 0.8rem;
+    font-family: var(--font-mono, monospace);
+    color: var(--color-text-muted);
+    letter-spacing: -0.02em;
+  }
+
+  .trace-indicator {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 20px;
+    flex-shrink: 0;
+  }
+
+  .trace-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background-color: var(--trace-color);
+    box-shadow: 0 0 0 3px var(--trace-bg);
+    flex-shrink: 0;
+  }
+
+  .trace-timeline-row.is-error .trace-dot {
+    background-color: var(--color-intent-error);
+    box-shadow: 0 0 0 3px var(--color-intent-error-muted);
+  }
+
+  .trace-line {
+    width: 2px;
+    flex: 1;
+    background-color: var(--color-border);
+    margin-top: 4px;
+  }
+
+  .trace-content {
+    flex: 1;
+    padding-bottom: var(--space-4);
+  }
+
+  .trace-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+
+  .trace-event-type {
+    font-weight: 600;
+    font-size: 0.9rem;
+  }
+
+  .trace-source-badge {
+    font-size: 0.65rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background-color: var(--trace-bg);
+    color: var(--trace-color);
+    letter-spacing: 0.03em;
+  }
+
+  .trace-duration {
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+    font-family: var(--font-mono, monospace);
+  }
+
+  .trace-error-badge {
+    font-size: 0.65rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background-color: var(--color-intent-error-muted);
+    color: var(--color-intent-error);
+  }
+
+  .trace-detail-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: var(--space-2);
+  }
+
+  .trace-detail-pill {
+    font-size: 0.75rem;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background-color: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--color-border);
+    color: var(--color-text-muted);
+  }
+
+  .trace-detail-pill-key {
+    color: var(--color-text-secondary);
+  }
+
+  .trace-detail-pill-sep {
+    opacity: 0.5;
+    margin: 0 4px;
+  }
+
+  .trace-detail-pill-value {
+    color: var(--color-text);
+  }
+
+  /* Trace detail view */
+  .trace-detail-frame {
+    margin: calc(-1 * var(--space-4));
+  }
+
+  .trace-detail-header {
+    padding: var(--space-5) var(--space-6);
+    border-bottom: 1px solid var(--color-border);
+    background: linear-gradient(to bottom, rgba(255, 255, 255, 0.02), transparent);
+  }
+
+  .trace-detail-header-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+  }
+
+  .trace-detail-title-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-bottom: var(--space-2);
+  }
+
+  .trace-detail-title {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+  }
+
+  .trace-detail-id {
+    font-family: var(--font-mono, monospace);
+    font-size: 0.95rem;
+  }
+
+  .trace-detail-status {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 12px;
+    background-color: var(--status-bg);
+    color: var(--status-color);
+    letter-spacing: 0.03em;
+  }
+
+  .trace-detail-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+  }
+
+  .trace-detail-meta-dot {
+    opacity: 0.3;
+  }
+
+  .trace-detail-duration {
+    font-family: var(--font-mono, monospace);
+  }
+
+  .trace-detail-controls {
+    display: flex;
+    gap: var(--space-2);
+    align-items: center;
+  }
+
+  .trace-detail-select {
+    width: auto;
+    height: 32px;
+    font-size: 0.8rem;
+    background-color: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    padding: 0 var(--space-3);
+  }
+
+  .trace-detail-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background-color: var(--color-border);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .trace-detail-stat {
+    padding: var(--space-4) var(--space-5);
+    background-color: var(--color-bg-secondary);
+    text-align: center;
+  }
+
+  .trace-detail-stat-label {
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: var(--space-1);
+  }
+
+  .trace-detail-stat-value {
+    font-size: 1.75rem;
+    font-weight: 700;
+    font-family: var(--font-mono, monospace);
+    color: var(--stat-color);
+  }
+
+  .trace-detail-anomalies {
+    padding: var(--space-4) var(--space-6);
+    border-bottom: 1px solid var(--color-border);
+    background-color: color-mix(in srgb, var(--color-intent-error) 6%, transparent);
+  }
+
+  .trace-detail-anomalies-title {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--color-intent-error);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: var(--space-2);
+  }
+
+  .trace-detail-anomalies-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .trace-detail-anomaly {
+    font-size: 0.85rem;
+    color: var(--color-text-primary);
+  }
+
+  .trace-detail-timeline {
+    padding: var(--space-5) var(--space-6);
+  }
+
+  .trace-detail-timeline-title {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: var(--space-4);
+  }
+
+  .trace-detail-timeline-scroll {
+    max-height: 450px;
+    overflow-y: auto;
+    padding-right: var(--space-2);
+  }
+
+  .trace-detail-empty {
+    text-align: center;
+    color: var(--color-text-muted);
+    padding: var(--space-8);
+  }
+}

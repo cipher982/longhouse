@@ -6,6 +6,7 @@ import {
   ClipboardListIcon,
   GridIcon,
   HashIcon,
+  EyeIcon,
   ChevronDownIcon,
   ChevronRightIcon
 } from "../../components/icons";
@@ -18,12 +19,14 @@ interface ExecutionControlsProps {
   showLogs: boolean;
   snapToGridEnabled: boolean;
   guidesVisible: boolean;
+  minimalModeEnabled: boolean;
   isPending: boolean;
   onRun: () => void;
   onCancel: () => void;
   onToggleLogs: () => void;
   onToggleSnapToGrid: () => void;
   onToggleGuides: () => void;
+  onToggleMinimalMode: () => void;
 }
 
 export function ExecutionControls({
@@ -33,12 +36,14 @@ export function ExecutionControls({
   showLogs,
   snapToGridEnabled,
   guidesVisible,
+  minimalModeEnabled,
   isPending,
   onRun,
   onCancel,
   onToggleLogs,
   onToggleSnapToGrid,
   onToggleGuides,
+  onToggleMinimalMode,
 }: ExecutionControlsProps) {
   return (
     <div className="execution-controls">
@@ -98,7 +103,7 @@ export function ExecutionControls({
         <div className="canvas-mode-toggles" role="group" aria-label="Canvas display toggles">
           <IconButton
             type="button"
-            className={`canvas-toggle-btn ${snapToGridEnabled ? 'active' : ''}`}
+            className={`canvas-toggle-btn canvas-toggle-btn--snap ${snapToGridEnabled ? 'active' : ''}`}
             onClick={onToggleSnapToGrid}
             aria-pressed={snapToGridEnabled}
             aria-label={snapToGridEnabled ? 'Disable snap to grid (Shift+S)' : 'Enable snap to grid (Shift+S)'}
@@ -108,13 +113,23 @@ export function ExecutionControls({
           </IconButton>
           <IconButton
             type="button"
-            className={`canvas-toggle-btn ${guidesVisible ? 'active' : ''}`}
+            className={`canvas-toggle-btn canvas-toggle-btn--guides ${guidesVisible ? 'active' : ''}`}
             onClick={onToggleGuides}
             aria-pressed={guidesVisible}
             aria-label={guidesVisible ? 'Hide guides (Shift+G)' : 'Show guides (Shift+G)'}
             title={`Guides ${guidesVisible ? 'visible' : 'hidden'} (Shift+G)`}
           >
             <HashIcon width={16} height={16} />
+          </IconButton>
+          <IconButton
+            type="button"
+            className={`canvas-toggle-btn canvas-toggle-btn--minimal ${minimalModeEnabled ? 'active' : ''}`}
+            onClick={onToggleMinimalMode}
+            aria-pressed={minimalModeEnabled}
+            aria-label={minimalModeEnabled ? 'Disable minimal mode' : 'Enable minimal mode'}
+            title={`Minimal mode ${minimalModeEnabled ? 'on' : 'off'}`}
+          >
+            <EyeIcon width={16} height={16} />
           </IconButton>
         </div>
       </div>
