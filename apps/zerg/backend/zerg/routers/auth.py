@@ -289,30 +289,51 @@ def service_login(request: Request, response: Response, db: Session = Depends(ge
     """Service account login for automated testing.
 
     Requires X-Service-Secret header matching SMOKE_TEST_SECRET env var.
+    Optional X-Smoke-Run-Id header creates an isolated per-run user/thread.
     Hidden from OpenAPI docs for reduced discoverability.
     """
+    import re
+
     secret = request.headers.get("X-Service-Secret") or ""
     expected = _settings.smoke_test_secret or ""
+    run_id = (request.headers.get("X-Smoke-Run-Id") or "").strip()
 
     # Fail closed + constant-time comparison to prevent timing attacks
     if not expected or not hmac.compare_digest(secret, expected):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
+    def _smoke_user_for_run(run_id_value: str) -> tuple[str, str, str]:
+        """Return (email, provider_user_id, display_name) for a smoke run."""
+        if not run_id_value:
+            return ("smoke@service.local", "smoke-test-1", "Smoke Test")
+
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "-", run_id_value).strip("-_.")
+        if not safe:
+            return ("smoke@service.local", "smoke-test-1", "Smoke Test")
+
+        safe = safe[:48]
+        email = f"smoke+{safe}@service.local"
+        provider_user_id = f"smoke-test-{safe}"
+        display_name = f"Smoke Test ({safe})"
+        return (email, provider_user_id, display_name)
+
+    email, provider_user_id, display_name = _smoke_user_for_run(run_id)
+
     # Get or create service user (handles race condition)
-    user = crud.get_user_by_email(db, "smoke@service.local")
+    user = crud.get_user_by_email(db, email)
     if not user:
         try:
             user = crud.create_user(
                 db,
-                email="smoke@service.local",
+                email=email,
                 provider="service",
-                provider_user_id="smoke-test-1",
+                provider_user_id=provider_user_id,
                 role="USER",
             )
         except Exception:
             # Race condition - another request created it
             db.rollback()
-            user = crud.get_user_by_email(db, "smoke@service.local")
+            user = crud.get_user_by_email(db, email)
             if not user:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -320,7 +341,7 @@ def service_login(request: Request, response: Response, db: Session = Depends(ge
                 )
 
     expires_in = 30 * 60  # 30 min session
-    access_token = _issue_access_token(user.id, user.email, display_name="Smoke Test")
+    access_token = _issue_access_token(user.id, user.email, display_name=display_name)
     _set_session_cookie(response, access_token, expires_in)
     return TokenOut(access_token=access_token, expires_in=expires_in)
 
