@@ -96,7 +96,9 @@ Principle: this doc is the source of truth for UI work. Update after every meani
   - [x] Runner detail sections: reduce padding + stack grids on mobile.
 - [~] Mobile nav: refine drawer + header behavior.
   - [x] Added safe-area padding for mobile header + nav drawer.
+  - [x] Tightened header control sizing for narrow screens.
 - [~] Chat layout: sidebar behavior + composer sizing.
   - [x] Added mobile thread scrim + tightened composer layout and safe-area spacing.
+  - [x] Updated thread sidebar to slide with transform + responsive width.
 - [~] Canvas: layout rules + minimal mode.
   - [x] Mobile logs panel: bottom sheet layout + safe-area padding.
