@@ -245,9 +245,11 @@ qa-ui-baseline-update: ## Update visual baselines for app + public pages
 
 qa-ui-baseline-mobile: ## Visual baselines for mobile viewport pages
 	$(MAKE) test-e2e-single TEST="--project=mobile tests/mobile/ui_baseline_mobile.spec.ts"
+	$(MAKE) test-e2e-single TEST="--project=mobile-small tests/mobile/ui_baseline_mobile.spec.ts"
 
 qa-ui-baseline-mobile-update: ## Update visual baselines for mobile viewport pages
 	PWUPDATE=1 $(MAKE) test-e2e-single TEST="--project=mobile tests/mobile/ui_baseline_mobile.spec.ts"
+	PWUPDATE=1 $(MAKE) test-e2e-single TEST="--project=mobile-small tests/mobile/ui_baseline_mobile.spec.ts"
 
 test-perf: ## Run performance evaluation tests (chat latency profiling)
 	@echo "🧪 Running performance evaluation tests..."
