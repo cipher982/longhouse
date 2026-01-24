@@ -35,6 +35,7 @@ class JarvisRunSummary(BaseModel):
 
     id: int
     agent_id: int
+    thread_id: Optional[int] = None
     agent_name: str
     status: str
     summary: Optional[str] = None
@@ -93,6 +94,7 @@ def list_jarvis_runs(
             JarvisRunSummary(
                 id=run.id,
                 agent_id=run.agent_id,
+                thread_id=run.thread_id,
                 agent_name=agent_name,
                 status=run.status.value if hasattr(run.status, "value") else str(run.status),
                 summary=summary,
