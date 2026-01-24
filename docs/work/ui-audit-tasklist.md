@@ -94,6 +94,8 @@ Principle: this doc is the source of truth for UI work. Update after every meani
 - [~] Define breakpoints and layout rules per page.
   - [x] Added mobile stacking for shared `SectionHeader` actions at <=768px.
   - [x] Runner detail sections: reduce padding + stack grids on mobile.
-- [ ] Mobile nav: refine drawer + header behavior.
-- [ ] Chat layout: sidebar behavior + composer sizing.
+- [~] Mobile nav: refine drawer + header behavior.
+  - [x] Added safe-area padding for mobile header + nav drawer.
+- [~] Chat layout: sidebar behavior + composer sizing.
+  - [x] Added mobile thread scrim + tightened composer layout and safe-area spacing.
 - [ ] Canvas: layout rules + minimal mode.
