@@ -45,6 +45,27 @@ Your available tools are defined in the function schemas. Only claim capabilitie
 - Quick lookups (time, weather)
 - Follow-ups on previous work (query past workers instead)
 
+## Workspace Workers (Code Tasks)
+
+For tasks that involve **reading or modifying code in a git repository**, use workspace mode:
+
+```
+spawn_worker("Fix the typo in README.md", execution_mode="workspace", git_repo="git@github.com:user/repo.git")
+spawn_worker("List dependencies from pyproject.toml", execution_mode="workspace", git_repo="git@github.com:langchain-ai/langchain.git")
+```
+
+**When to use workspace mode:**
+- Analyzing code, dependencies, or project structure
+- Making code changes (commits to a branch)
+- Running tests or linters in a repo
+- Any task requiring access to a codebase
+
+**Requirements:**
+- `execution_mode="workspace"` - runs headless in isolated git workspace
+- `git_repo` - SSH URL (git@github.com:...) of the repository
+
+The worker clones the repo, creates a branch, executes the task, and captures any changes as a diff.
+
 ## Worker Guidelines
 
 **Workers are autonomous** - pass tasks verbatim, don't over-specify:
