@@ -47,3 +47,56 @@ test.describe('UI baseline: app pages', () => {
     });
   }
 });
+
+/**
+ * Smoke test: ensure no 404s or console errors on page load.
+ * This catches issues like missing assets, broken imports, etc.
+ */
+test.describe('Console error check', () => {
+  test('no 404 errors or console errors on app pages', async ({ page }) => {
+    const errors: string[] = [];
+    const notFoundUrls: string[] = [];
+
+    // Capture console errors
+    page.on('console', msg => {
+      if (msg.type() === 'error') {
+        errors.push(msg.text());
+      }
+    });
+
+    // Capture 404 responses
+    page.on('response', response => {
+      if (response.status() === 404) {
+        notFoundUrls.push(response.url());
+      }
+    });
+
+    // Visit each page and check for errors
+    for (const pageDef of APP_PAGES) {
+      errors.length = 0;
+      notFoundUrls.length = 0;
+
+      await page.goto(pageDef.path);
+      await waitForAppReady(page, pageDef.ready);
+
+      // Filter out known acceptable errors (e.g., expected 404s for missing data)
+      const criticalErrors = errors.filter(e =>
+        !e.includes('favicon') && // favicon 404 is common
+        !e.includes('ResizeObserver') // React ResizeObserver warnings
+      );
+
+      const critical404s = notFoundUrls.filter(url =>
+        !url.includes('favicon') &&
+        !url.includes('/api/') // API 404s might be expected (no data)
+      );
+
+      if (criticalErrors.length > 0) {
+        throw new Error(`Console errors on ${pageDef.name}:\n${criticalErrors.join('\n')}`);
+      }
+
+      if (critical404s.length > 0) {
+        throw new Error(`404 errors on ${pageDef.name}:\n${critical404s.join('\n')}`);
+      }
+    }
+  });
+});
