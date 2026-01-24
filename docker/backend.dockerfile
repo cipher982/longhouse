@@ -7,6 +7,10 @@
 # Dependencies stage - cache Python packages efficiently
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS dependencies
 
+# Install git for cloning git-based dependencies (hatch-agent)
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 # uv environment variables for optimization
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
@@ -46,14 +50,21 @@ RUN uv sync --frozen --no-dev
 # Production stage - minimal distroless-style runtime
 FROM python:3.12-slim-bookworm AS production
 
-# Install only essential runtime dependencies
+# Install only essential runtime dependencies (including Node.js for Claude CLI)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     libpq5 \
     ca-certificates \
     openssh-client \
+    git \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
+
+# Install Claude Code CLI globally for QA agent
+RUN npm install -g @anthropic-ai/claude-code@2.1.17 \
+    && npm cache clean --force
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash --uid 1000 zerg

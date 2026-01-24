@@ -8,7 +8,9 @@ import {
   Badge,
   Card,
   SectionHeader,
-  EmptyState
+  EmptyState,
+  PageShell,
+  Spinner
 } from "../components/ui";
 import { PlusIcon } from "../components/icons";
 import { useConfirm } from "../components/confirm";
@@ -84,7 +86,7 @@ export default function RunnersPage() {
     return (
       <div className="runners-page-container">
         <EmptyState
-          icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
+          icon={<Spinner size="lg" />}
           title="Loading runners..."
           description="Fetching your connected infrastructure."
         />
@@ -105,7 +107,7 @@ export default function RunnersPage() {
   }
 
   return (
-    <div className="runners-page-container">
+    <PageShell size="wide" className="runners-page-container">
       <div className="runners-page">
         <SectionHeader
           title="Runners"
@@ -145,8 +147,8 @@ export default function RunnersPage() {
                 className="runner-card"
                 onClick={() => navigate(`/runners/${runner.id}`)}
               >
-                <Card.Header>
-                  <h3 style={{ margin: 0, fontSize: '1.1rem' }}>{runner.name}</h3>
+                <Card.Header className="runner-card-header">
+                  <h3 className="runner-card-title">{runner.name}</h3>
                   <Badge variant={getStatusVariant(runner.status)}>
                     {runner.status}
                   </Badge>
@@ -183,14 +185,14 @@ export default function RunnersPage() {
                   </div>
 
                   {runner.status !== "revoked" && (
-                    <div className="runner-card-actions" style={{ marginTop: 'var(--space-4)', paddingTop: 'var(--space-4)', borderTop: '1px solid var(--border-glass-1)' }}>
+                    <div className="runner-card-actions">
                       <Button
                         variant="danger"
                         onClick={(e) => {
                           e.stopPropagation();
                           handleRevoke(runner);
                         }}
-                        style={{ width: '100%' }}
+                        className="runner-action-full"
                       >
                         Revoke
                       </Button>
@@ -209,6 +211,6 @@ export default function RunnersPage() {
           onClose={() => setShowAddModal(false)}
         />
       )}
-    </div>
+    </PageShell>
   );
 }

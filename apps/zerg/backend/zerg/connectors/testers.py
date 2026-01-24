@@ -7,6 +7,9 @@ and optional metadata (e.g., username, scopes discovered during test).
 
 from __future__ import annotations
 
+# Pytest collects modules matching "test*.py"; prevent accidental test discovery here.
+__test__ = False
+
 import logging
 from typing import Any
 
@@ -51,6 +54,9 @@ def test_connector(connector_type: ConnectorType | str, credentials: dict[str, A
         ConnectorType.LINEAR: _test_linear,
         ConnectorType.NOTION: _test_notion,
         ConnectorType.IMESSAGE: _test_imessage,
+        ConnectorType.TRACCAR: _test_traccar,
+        ConnectorType.WHOOP: _test_whoop,
+        ConnectorType.OBSIDIAN: _test_obsidian,
     }
 
     tester = testers.get(connector_type)
@@ -66,6 +72,10 @@ def test_connector(connector_type: ConnectorType | str, credentials: dict[str, A
     except Exception as e:
         logger.exception("Connector test failed for %s", connector_type.value)
         return {"success": False, "message": f"Test failed: {str(e)}"}
+
+
+# Prevent pytest from collecting this helper as a test function.
+test_connector.__test__ = False
 
 
 def _test_slack(creds: dict[str, Any]) -> dict[str, Any]:
@@ -407,4 +417,139 @@ def _test_imessage(creds: dict[str, Any]) -> dict[str, Any]:
         "success": True,
         "message": "iMessage configured (requires macOS host at runtime)",
         "metadata": {"enabled": True},
+    }
+
+
+def _test_traccar(creds: dict[str, Any]) -> dict[str, Any]:
+    """Validate Traccar credentials by fetching session info.
+
+    Authenticates with the Traccar server and retrieves the current session
+    to verify credentials are valid and discover user information.
+    """
+    url = creds.get("url")
+    username = creds.get("username")
+    password = creds.get("password")
+    device_id = creds.get("device_id")
+
+    if not url:
+        return {"success": False, "message": "Missing url"}
+    if not username:
+        return {"success": False, "message": "Missing username"}
+    if not password:
+        return {"success": False, "message": "Missing password"}
+
+    # Normalize URL
+    url = url.rstrip("/")
+
+    # Authenticate and get session info
+    response = httpx.post(
+        f"{url}/api/session",
+        data={"email": username, "password": password},
+        timeout=TEST_TIMEOUT,
+    )
+
+    if response.status_code == 200:
+        try:
+            data = response.json()
+            user_name = data.get("name") or data.get("email", username)
+
+            metadata: dict[str, Any] = {
+                "user": user_name,
+                "server": url,
+            }
+
+            # If device_id provided, verify it exists
+            if device_id:
+                cookies = response.cookies
+                devices_response = httpx.get(
+                    f"{url}/api/devices",
+                    cookies=cookies,
+                    timeout=TEST_TIMEOUT,
+                )
+                if devices_response.status_code == 200:
+                    devices = devices_response.json()
+                    device = next((d for d in devices if str(d.get("id")) == str(device_id)), None)
+                    if device:
+                        metadata["device"] = device.get("name", f"Device {device_id}")
+                    else:
+                        return {"success": False, "message": f"Device ID {device_id} not found"}
+
+            return {
+                "success": True,
+                "message": f"Connected as {user_name}",
+                "metadata": metadata,
+            }
+        except Exception:
+            return {"success": True, "message": "Traccar credentials valid"}
+
+    if response.status_code == 401:
+        return {"success": False, "message": "Invalid username or password"}
+    return {"success": False, "message": f"Traccar returned {response.status_code}"}
+
+
+def _test_whoop(creds: dict[str, Any]) -> dict[str, Any]:
+    """Validate WHOOP credentials by fetching user profile.
+
+    Uses the access token to fetch user profile info. If refresh_token is
+    provided, we could refresh the token, but for a simple test we just
+    verify the current token works.
+    """
+    access_token = creds.get("access_token")
+
+    if not access_token:
+        return {"success": False, "message": "Missing access_token"}
+
+    response = httpx.get(
+        "https://api.prod.whoop.com/developer/v1/user/profile/basic",
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=TEST_TIMEOUT,
+    )
+
+    if response.status_code == 200:
+        try:
+            data = response.json()
+            first_name = data.get("first_name", "")
+            last_name = data.get("last_name", "")
+            name = f"{first_name} {last_name}".strip() or "WHOOP User"
+
+            return {
+                "success": True,
+                "message": f"Connected as {name}",
+                "metadata": {
+                    "user_id": data.get("user_id"),
+                    "name": name,
+                },
+            }
+        except Exception:
+            return {"success": True, "message": "WHOOP token valid"}
+
+    if response.status_code == 401:
+        return {"success": False, "message": "Invalid or expired access token"}
+    if response.status_code == 403:
+        return {"success": False, "message": "Token lacks required scopes"}
+    return {"success": False, "message": f"WHOOP returned {response.status_code}"}
+
+
+def _test_obsidian(creds: dict[str, Any]) -> dict[str, Any]:
+    """Validate Obsidian configuration.
+
+    Obsidian access happens via a Runner that has filesystem access to the vault.
+    We can only verify the configuration is set - actual access depends on the
+    Runner being online and having the vault path accessible.
+    """
+    vault_path = creds.get("vault_path")
+    runner_name = creds.get("runner_name")
+
+    if not vault_path:
+        return {"success": False, "message": "Missing vault_path"}
+    if not runner_name:
+        return {"success": False, "message": "Missing runner_name"}
+
+    return {
+        "success": True,
+        "message": f"Configured for runner '{runner_name}'",
+        "metadata": {
+            "vault_path": vault_path,
+            "runner_name": runner_name,
+        },
     }

@@ -77,3 +77,6 @@ debug_*.py
 test_*.py
 cleanup_*.py
 cleanup_*.sh
+
+# Test stubs (shadow real packages in production)
+apscheduler/

@@ -115,7 +115,7 @@
   }
 
   .ui-confirm-dialog__button--warning:hover {
-    background: #d97706;
+    background: color-mix(in srgb, var(--color-intent-warning) 85%, #000);
   }
 
   .ui-confirm-dialog__button--danger {
@@ -123,7 +123,7 @@
   }
 
   .ui-confirm-dialog__button--danger:hover {
-    background: #dc2626;
+    background: color-mix(in srgb, var(--color-intent-error) 85%, #000);
   }
 
   /* Dialog variant accents - subtle top border */

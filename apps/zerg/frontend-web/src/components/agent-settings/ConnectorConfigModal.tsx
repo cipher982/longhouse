@@ -1,5 +1,6 @@
 import type { FormEvent } from "react";
 import type { ConnectorStatus, CredentialField } from "../../types/connectors";
+import { Button } from "../ui";
 
 export type ConfigModalState = {
   isOpen: boolean;
@@ -77,24 +78,24 @@ export function ConnectorConfigModal({
           </div>
 
           <footer className="connector-modal-footer">
-            <button type="button" className="btn-secondary" onClick={onClose}>
+            <Button type="button" variant="ghost" onClick={onClose}>
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="btn-tertiary"
+              variant="tertiary"
               onClick={onTest}
               disabled={isTesting}
             >
               {isTesting ? "Testing…" : "Test"}
-            </button>
-            <button
+            </Button>
+            <Button
               type="submit"
-              className="btn-primary"
+              variant="primary"
               disabled={isSaving}
             >
               {isSaving ? "Saving…" : "Save"}
-            </button>
+            </Button>
           </footer>
         </form>
       </div>

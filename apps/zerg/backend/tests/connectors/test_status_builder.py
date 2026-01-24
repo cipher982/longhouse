@@ -21,6 +21,14 @@ from zerg.connectors.status_builder import get_unavailable_tools
 from zerg.models.models import User
 
 
+@pytest.fixture(autouse=True)
+def _clear_platform_email_env(monkeypatch):
+    """Ensure platform-level email creds don't affect connector status tests."""
+    monkeypatch.delenv("AWS_SES_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("AWS_SES_SECRET_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("FROM_EMAIL", raising=False)
+
+
 def test_get_tools_for_connector_github():
     """Test that get_tools_for_connector returns correct tool list for GitHub."""
     tools = get_tools_for_connector(ConnectorType.GITHUB)
@@ -110,6 +118,9 @@ def test_get_capabilities_for_connector_all_connectors():
         (ConnectorType.LINEAR, "linear_create_issue"),
         (ConnectorType.NOTION, "notion_query_database"),
         (ConnectorType.IMESSAGE, "send_imessage"),
+        (ConnectorType.TRACCAR, "get_current_location"),
+        (ConnectorType.WHOOP, "get_whoop_data"),
+        (ConnectorType.OBSIDIAN, "search_notes"),
     ],
 )
 def test_get_tools_for_connector_all_types(connector_type, expected_in_tools):

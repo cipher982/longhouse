@@ -11,10 +11,14 @@ import DashboardPage from "../pages/DashboardPage";
 import ProfilePage from "../pages/ProfilePage";
 import SettingsPage from "../pages/SettingsPage";
 import IntegrationsPage from "../pages/IntegrationsPage";
+import ContactsPage from "../pages/ContactsPage";
 import KnowledgeSourcesPage from "../pages/KnowledgeSourcesPage";
 import AdminPage from "../pages/AdminPage";
 import RunnersPage from "../pages/RunnersPage";
 import RunnerDetailPage from "../pages/RunnerDetailPage";
+import TraceExplorerPage from "../pages/TraceExplorerPage";
+import ReliabilityPage from "../pages/ReliabilityPage";
+import { Spinner } from "../components/ui";
 import { AuthGuard } from "../lib/auth";
 
 // Lazy-loaded pages (heavy dependencies - reduces initial bundle by ~700KB)
@@ -30,7 +34,7 @@ import config from "../lib/config";
 function PageLoader() {
   return (
     <div className="page-loader">
-      <div className="page-loader-spinner" />
+      <Spinner size="lg" className="page-loader-spinner" />
     </div>
   );
 }
@@ -199,6 +203,14 @@ export default function App() {
           )
         },
         {
+          path: "/settings/contacts",
+          element: (
+            <ErrorBoundary>
+              <ContactsPage />
+            </ErrorBoundary>
+          )
+        },
+        {
           path: "/admin",
           element: (
             <ErrorBoundary>
@@ -219,6 +231,30 @@ export default function App() {
           element: (
             <ErrorBoundary>
               <RunnerDetailPage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/traces",
+          element: (
+            <ErrorBoundary>
+              <TraceExplorerPage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/traces/:traceId",
+          element: (
+            <ErrorBoundary>
+              <TraceExplorerPage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/reliability",
+          element: (
+            <ErrorBoundary>
+              <ReliabilityPage />
             </ErrorBoundary>
           )
         },

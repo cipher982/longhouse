@@ -78,9 +78,9 @@ class WorkerRunner:
         Parameters
         ----------
         artifact_store
-            Optional artifact store instance. If None, creates a default one.
+            Optional artifact store instance. If None, worker runs without artifact storage.
         """
-        self.artifact_store = artifact_store or WorkerArtifactStore()
+        self.artifact_store = artifact_store
 
     async def run_worker(
         self,
@@ -141,7 +141,15 @@ class WorkerRunner:
         if agent:
             config.setdefault("agent_id", agent.id)
             config.setdefault("model", agent.model)
-        worker_id = self.artifact_store.create_worker(task, config=config)
+
+        # Create worker - artifact store is optional
+        if self.artifact_store:
+            worker_id = self.artifact_store.create_worker(task, config=config)
+        else:
+            # Generate worker_id without artifact storage
+            import uuid
+
+            worker_id = f"worker-{uuid.uuid4().hex[:12]}"
         logger.info(f"Created worker {worker_id} for task: {task[:50]}...")
 
         # Set up worker context for tool event emission
@@ -182,7 +190,8 @@ class WorkerRunner:
         temp_agent = False  # Track temporary agent for cleanup on failure
         try:
             # Start worker (marks as running)
-            self.artifact_store.start_worker(worker_id)
+            if self.artifact_store:
+                self.artifact_store.start_worker(worker_id)
             if event_context is not None and event_ctx.get("run_id"):
                 await self._emit_event(
                     db=db,
@@ -261,10 +270,12 @@ class WorkerRunner:
 
                 # Save the error message as result
                 error_result = result_text or worker_context.critical_error_message or "(Critical error)"
-                self.artifact_store.save_result(worker_id, error_result)
+                if self.artifact_store:
+                    self.artifact_store.save_result(worker_id, error_result)
 
                 # Mark worker failed
-                self.artifact_store.complete_worker(worker_id, status="failed", error=worker_context.critical_error_message)
+                if self.artifact_store:
+                    self.artifact_store.complete_worker(worker_id, status="failed", error=worker_context.critical_error_message)
 
                 if event_context is not None and event_ctx.get("run_id"):
                     await self._emit_event(
@@ -303,19 +314,22 @@ class WorkerRunner:
 
             # Always save result, even if empty (for consistency)
             saved_result = result_text or "(No result generated)"
-            self.artifact_store.save_result(worker_id, saved_result)
+            if self.artifact_store:
+                self.artifact_store.save_result(worker_id, saved_result)
 
             # Calculate duration
             end_time = datetime.now(timezone.utc)
             duration_ms = int((end_time - start_time).total_seconds() * 1000)
 
             # Mark worker complete (system status - BEFORE summary extraction)
-            self.artifact_store.complete_worker(worker_id, status="success")
+            if self.artifact_store:
+                self.artifact_store.complete_worker(worker_id, status="success")
 
             # Extract summary (post-completion, safe to fail)
             result_for_summary = result_text or "(No result generated)"
             summary, summary_meta = await self._extract_summary(task, result_for_summary)
-            self.artifact_store.update_summary(worker_id, summary, summary_meta)
+            if self.artifact_store:
+                self.artifact_store.update_summary(worker_id, summary, summary_meta)
 
             if event_context is not None and event_ctx.get("run_id"):
                 await self._emit_event(
@@ -386,7 +400,8 @@ class WorkerRunner:
 
             # Mark worker failed
             error_msg = str(e)
-            self.artifact_store.complete_worker(worker_id, status="failed", error=error_msg)
+            if self.artifact_store:
+                self.artifact_store.complete_worker(worker_id, status="failed", error=error_msg)
 
             logger.exception(f"Worker {worker_id} failed after {duration_ms}ms")
 
@@ -425,7 +440,8 @@ class WorkerRunner:
         finally:
             # Flush metrics to disk (best-effort)
             try:
-                metrics_collector.flush(self.artifact_store)
+                if self.artifact_store:
+                    metrics_collector.flush(self.artifact_store)
             except Exception:
                 logger.warning("Failed to flush metrics for worker %s", worker_id, exc_info=True)
             finally:
@@ -552,6 +568,10 @@ class WorkerRunner:
         agent_id
             Agent ID used for runtime system prompt injection
         """
+        # Skip if no artifact store
+        if not self.artifact_store:
+            return
+
         # Include runtime-injected system/context messages for debugging.
         # These are NOT stored in the DB (see AgentRunner.run_thread), but they
         # are critical for understanding worker behavior post-hoc.
@@ -622,6 +642,10 @@ class WorkerRunner:
         messages
             List of LangChain messages (assistant + tool messages)
         """
+        # Skip if no artifact store
+        if not self.artifact_store:
+            return
+
         sequence = 1
 
         for msg in messages:

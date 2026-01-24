@@ -1,0 +1,29 @@
+@layer pages {
+  .page-shell {
+    width: 100%;
+    margin: 0 auto;
+    padding: var(--space-6);
+  }
+
+  .page-shell--narrow {
+    max-width: 1000px;
+  }
+
+  .page-shell--normal {
+    max-width: 1200px;
+  }
+
+  .page-shell--wide {
+    max-width: 1400px;
+  }
+
+  .page-shell--full {
+    max-width: none;
+  }
+
+  @media (width <= 768px) {
+    .page-shell {
+      padding: var(--space-4);
+    }
+  }
+}

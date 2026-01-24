@@ -1,5 +1,6 @@
 import React from "react";
 import type { KnowledgeSource } from "../services/api";
+import { Button } from "./ui";
 
 interface KnowledgeSourceCardProps {
   source: KnowledgeSource;
@@ -117,20 +118,22 @@ export function KnowledgeSourceCard({
       </div>
 
       <div className="runner-card-actions">
-        <button
-          className="runner-action-button"
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={() => onSync(source.id)}
           disabled={isSyncing || source.sync_status === "syncing"}
           data-testid={`sync-source-${source.id}`}
         >
           {isSyncing || source.sync_status === "syncing" ? "Syncing..." : "Sync Now"}
-        </button>
-        <button
-          className="runner-action-button runner-action-button-danger"
+        </Button>
+        <Button
+          variant="danger"
+          size="sm"
           onClick={() => onDelete(source.id)}
         >
           Delete
-        </button>
+        </Button>
       </div>
     </div>
   );

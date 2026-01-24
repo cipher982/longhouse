@@ -77,6 +77,8 @@ class EventType(str, Enum):
     SUPERVISOR_HEARTBEAT = "supervisor_heartbeat"
     WORKER_HEARTBEAT = "worker_heartbeat"
 
+    SESSION_ENDED = "session_ended"  # External session (Claude Code, Codex, etc.) ended
+
 
 class EventBus:
     """Central event bus for publishing and subscribing to events."""

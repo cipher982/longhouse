@@ -24,7 +24,7 @@
   font-size: var(--component-button-font-size);
   font-weight: var(--component-button-font-weight);
   border-radius: var(--radius-md);
-  color: #fff;
+  color: var(--color-text-primary);
   cursor: pointer;
   transition:
     background-color var(--motion-duration-fast) var(--motion-easing-standard),
@@ -179,7 +179,7 @@
 
 .btn-danger:hover:not(:disabled) {
   background: var(--color-intent-error);
-  color: #fff;
+  color: var(--color-text-primary);
   transform: translateY(-1px);
 }
 

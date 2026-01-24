@@ -282,6 +282,11 @@
     color: var(--color-text-secondary);
   }
 
+  .docs-inline-icon {
+    vertical-align: middle;
+    margin-right: var(--space-2);
+  }
+
   .docs-code {
     background: var(--color-surface-section);
     border: 1px solid var(--color-border-subtle);
@@ -300,6 +305,20 @@
   /* --------------------------------------------------------
    Changelog Page Specific
    -------------------------------------------------------- */
+
+  .changelog-empty-state {
+    text-align: center;
+    padding: var(--space-16) 0;
+  }
+
+  .changelog-empty-text {
+    font-size: var(--font-size-lg);
+    color: var(--color-text-secondary);
+  }
+
+  .changelog-empty-links {
+    margin-top: var(--space-6);
+  }
 
   .changelog-list {
     max-width: 700px;
@@ -377,18 +396,18 @@
   }
 
   .changelog-badge.new {
-    background: rgb(34 197 94 / 15%);
+    background: color-mix(in srgb, var(--color-intent-success) 15%, transparent);
     color: var(--color-intent-success);
   }
 
   .changelog-badge.improved {
-    background: rgb(99 102 241 / 15%);
+    background: color-mix(in srgb, var(--color-brand-primary) 15%, transparent);
     color: var(--color-brand-primary);
   }
 
   .changelog-badge.fixed {
-    background: rgb(251 191 36 / 15%);
-    color: #fbbf24;
+    background: color-mix(in srgb, var(--color-intent-warning) 15%, transparent);
+    color: var(--color-intent-warning);
   }
 
   /* --------------------------------------------------------

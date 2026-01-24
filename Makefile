@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-e2e-core test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-runner-unit test-install-runner test-prompts eval eval-live eval-compare eval-critical eval-fast eval-all eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod smoke-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage
+.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-e2e-core test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-runner-unit test-install-runner test-prompts eval eval-live eval-compare eval-critical eval-fast eval-all eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod smoke-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +224,37 @@ test-e2e-query: ## Query last E2E results (usage: make test-e2e-query Q='.failed
 test-e2e-grep: ## Run E2E tests by name (usage: make test-e2e-grep GREP="test name")
 	@test -n "$(GREP)" || (echo "❌ Usage: make test-e2e-grep GREP='test name'" && exit 1)
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium --grep "$(GREP)"
+
+test-e2e-a11y: ## Run accessibility UI/UX checks (axe + heuristics)
+	@echo "🧪 Running accessibility UI/UX checks..."
+	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/accessibility.spec.ts tests/accessibility_ui_ux.spec.ts
+
+qa-ui: ## Quick UI QA (accessibility checks)
+	$(MAKE) test-e2e-a11y
+
+qa-ui-visual: ## Visual UI analysis (screenshots + AI) (usage: make qa-ui-visual ARGS="--pages=dashboard,chat")
+	@./scripts/run-visual-analysis.sh $(ARGS)
+
+qa-ui-baseline: ## Visual baselines for app + public pages
+	$(MAKE) test-e2e-single TEST=tests/ui_baseline_public.spec.ts
+	$(MAKE) test-e2e-single TEST=tests/ui_baseline_app.spec.ts
+
+qa-ui-baseline-update: ## Update visual baselines for app + public pages
+	PWUPDATE=1 $(MAKE) test-e2e-single TEST=tests/ui_baseline_public.spec.ts
+	PWUPDATE=1 $(MAKE) test-e2e-single TEST=tests/ui_baseline_app.spec.ts
+
+qa-ui-baseline-mobile: ## Visual baselines for mobile viewport pages
+	$(MAKE) test-e2e-single TEST="--project=mobile tests/mobile/ui_baseline_mobile.spec.ts"
+	$(MAKE) test-e2e-single TEST="--project=mobile-small tests/mobile/ui_baseline_mobile.spec.ts"
+
+qa-ui-baseline-mobile-update: ## Update visual baselines for mobile viewport pages
+	PWUPDATE=1 $(MAKE) test-e2e-single TEST="--project=mobile tests/mobile/ui_baseline_mobile.spec.ts"
+	PWUPDATE=1 $(MAKE) test-e2e-single TEST="--project=mobile-small tests/mobile/ui_baseline_mobile.spec.ts"
+
+qa-ui-full: ## Full UI regression sweep (a11y + desktop + mobile baselines)
+	$(MAKE) qa-ui
+	$(MAKE) qa-ui-baseline
+	$(MAKE) qa-ui-baseline-mobile
 
 test-perf: ## Run performance evaluation tests (chat latency profiling)
 	@echo "🧪 Running performance evaluation tests..."

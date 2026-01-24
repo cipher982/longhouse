@@ -7,6 +7,7 @@
 import { useState } from "react";
 import config from "../../lib/config";
 import { CheckCircleIcon } from "../icons";
+import { Button } from "../ui";
 
 interface PricingTier {
   name: string;
@@ -62,9 +63,9 @@ function WaitlistModal({ onClose }: WaitlistModalProps) {
               {result.success ? "✓" : "!"}
             </div>
             <p className="waitlist-result-message">{result.message}</p>
-            <button className="btn-primary btn-lg" onClick={onClose}>
+            <Button variant="primary" size="lg" onClick={onClose}>
               Got it
-            </button>
+            </Button>
           </div>
         ) : (
           <>
@@ -84,9 +85,9 @@ function WaitlistModal({ onClose }: WaitlistModalProps) {
                 required
                 autoFocus
               />
-              <button type="submit" className="btn-primary btn-lg" disabled={isSubmitting}>
+              <Button type="submit" variant="primary" size="lg" disabled={isSubmitting}>
                 {isSubmitting ? "Joining..." : "Join Waitlist"}
-              </button>
+              </Button>
             </form>
 
             <p className="waitlist-privacy">No spam, ever. Unsubscribe anytime.</p>
@@ -176,12 +177,14 @@ export function PricingSection() {
                 ))}
               </ul>
 
-              <button
-                className={`btn-lg landing-pricing-cta ${tier.highlighted ? "btn-primary" : "btn-secondary"}`}
+              <Button
+                variant={tier.highlighted ? "primary" : "secondary"}
+                size="lg"
+                className="landing-pricing-cta"
                 onClick={tier.ctaAction}
               >
                 {tier.ctaText}
-              </button>
+              </Button>
             </div>
           ))}
         </div>

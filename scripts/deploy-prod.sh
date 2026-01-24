@@ -12,7 +12,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_UUID="mosksc0ogk0cssokckw0c8sc"  # Swarmlet application UUID in Coolify
+APP_UUID="a08o0s4k0s4kwswswg0008o0"  # zerg-api application UUID in Coolify
 SKIP_SMOKE=false
 POLL_INTERVAL=10
 MAX_WAIT=300  # 5 minutes
