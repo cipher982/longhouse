@@ -104,6 +104,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
   - [x] Added safe-area padding for status bar on mobile.
   - [x] Added iOS scroll smoothing and overscroll containment for nav drawer.
   - [x] Deduped mobile drawer user identity display (no double email).
+  - [x] Close mobile drawer before logout prompt.
 - [x] Chat layout: sidebar behavior + composer sizing.
   - [x] Added mobile thread scrim + tightened composer layout and safe-area spacing.
   - [x] Updated thread sidebar to slide with transform + responsive width.
