@@ -501,6 +501,7 @@
   justify-content: space-between;
   z-index: var(--z-toolbar);
   min-height: 28px;
+  padding-bottom: calc(6px + env(safe-area-inset-bottom));
 }
 
 /* User menu / avatar (top-right) */
