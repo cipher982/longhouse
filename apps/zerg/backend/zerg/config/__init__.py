@@ -112,6 +112,13 @@ class Settings:  # noqa: D401 – simple data container
     # Job queue settings -----------------------------------------------
     job_queue_enabled: bool  # Enable durable job queue (uses DATABASE_URL)
 
+    # Git sync settings (for runtime job loading from private repo) ----
+    jobs_git_repo_url: str | None  # e.g., https://github.com/user/sauron-jobs.git
+    jobs_git_branch: str  # Branch to clone (default: main)
+    jobs_git_token: str | None  # GitHub PAT for private repo
+    jobs_dir: str  # Local path for cloned repo (default: /opt/sauron-jobs)
+    jobs_refresh_interval_seconds: int  # Polling interval (0 = disabled)
+
     # Container runner settings ----------------------------------------
     container_default_image: str | None
     container_network_enabled: bool
@@ -278,6 +285,12 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         notification_webhook=os.getenv("NOTIFICATION_WEBHOOK"),
         smoke_test_secret=os.getenv("SMOKE_TEST_SECRET"),
         job_queue_enabled=_truthy(os.getenv("JOB_QUEUE_ENABLED")),
+        # Git sync settings
+        jobs_git_repo_url=os.getenv("JOBS_GIT_REPO_URL"),
+        jobs_git_branch=os.getenv("JOBS_GIT_BRANCH", "main"),
+        jobs_git_token=os.getenv("JOBS_GIT_TOKEN"),
+        jobs_dir=os.getenv("JOBS_DIR", "/opt/sauron-jobs"),
+        jobs_refresh_interval_seconds=int(os.getenv("JOBS_REFRESH_INTERVAL_SECONDS", "60")),
         # Container runner defaults
         container_default_image=os.getenv("CONTAINER_DEFAULT_IMAGE", "python:3.11-slim"),
         container_network_enabled=_truthy(os.getenv("CONTAINER_NETWORK_ENABLED")),
