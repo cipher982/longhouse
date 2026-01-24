@@ -96,16 +96,16 @@ Principle: this doc is the source of truth for UI work. Update after every meani
 - [~] Define breakpoints and layout rules per page.
   - [x] Added mobile stacking for shared `SectionHeader` actions at <=768px.
   - [x] Runner detail sections: reduce padding + stack grids on mobile.
-- [~] Mobile nav: refine drawer + header behavior.
+- [x] Mobile nav: refine drawer + header behavior.
   - [x] Added safe-area padding for mobile header + nav drawer.
   - [x] Tightened header control sizing for narrow screens.
   - [x] Added safe-area padding for status bar on mobile.
   - [x] Added iOS scroll smoothing and overscroll containment for nav drawer.
   - [x] Deduped mobile drawer user identity display (no double email).
-- [~] Chat layout: sidebar behavior + composer sizing.
+- [x] Chat layout: sidebar behavior + composer sizing.
   - [x] Added mobile thread scrim + tightened composer layout and safe-area spacing.
   - [x] Updated thread sidebar to slide with transform + responsive width.
   - [x] Added iOS scroll smoothing for threads/messages.
-- [~] Canvas: layout rules + minimal mode.
+- [x] Canvas: layout rules + minimal mode.
   - [x] Mobile logs panel: bottom sheet layout + safe-area padding.
   - [x] Added mobile minimal mode toggle (hides snap/guides + tightens controls).
