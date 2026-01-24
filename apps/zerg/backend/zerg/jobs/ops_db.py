@@ -255,3 +255,89 @@ async def close_pool() -> None:
     if _pool is not None:
         await _pool.close()
         _pool = None
+
+
+async def get_job_definition(job_id: str, scheduler: str = "zerg") -> dict | None:
+    """Load job definition from ops.jobs table.
+
+    Returns dict with job definition fields, or None if not found.
+    """
+    if not is_job_queue_db_enabled():
+        return None
+
+    try:
+        pool = await get_pool()
+        job_key = _job_key(job_id, scheduler)
+
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT job_id, cron, enabled, timeout_seconds, tags, project,
+                       script_source, entrypoint, config
+                FROM ops.jobs
+                WHERE job_key = $1
+                """,
+                job_key,
+            )
+
+            if not row:
+                return None
+
+            return {
+                "job_id": row["job_id"],
+                "cron": row["cron"],
+                "enabled": row["enabled"],
+                "timeout_seconds": row["timeout_seconds"],
+                "tags": row["tags"] or [],
+                "project": row["project"],
+                "script_source": row["script_source"] or "builtin",
+                "entrypoint": row["entrypoint"],
+                "config": json.loads(row["config"]) if row["config"] else {},
+            }
+
+    except Exception as e:
+        logger.error(f"Failed to get job definition: {e}")
+        return None
+
+
+async def list_job_definitions(scheduler: str = "zerg", enabled_only: bool = True) -> list[dict]:
+    """Load all job definitions from ops.jobs table.
+
+    Returns list of job definition dicts.
+    """
+    if not is_job_queue_db_enabled():
+        return []
+
+    try:
+        pool = await get_pool()
+
+        async with pool.acquire() as conn:
+            query = """
+                SELECT job_id, cron, enabled, timeout_seconds, tags, project,
+                       script_source, entrypoint, config
+                FROM ops.jobs
+                WHERE scheduler = $1
+            """
+            if enabled_only:
+                query += " AND enabled = true"
+
+            rows = await conn.fetch(query, scheduler)
+
+            return [
+                {
+                    "job_id": row["job_id"],
+                    "cron": row["cron"],
+                    "enabled": row["enabled"],
+                    "timeout_seconds": row["timeout_seconds"],
+                    "tags": row["tags"] or [],
+                    "project": row["project"],
+                    "script_source": row["script_source"] or "builtin",
+                    "entrypoint": row["entrypoint"],
+                    "config": json.loads(row["config"]) if row["config"] else {},
+                }
+                for row in rows
+            ]
+
+    except Exception as e:
+        logger.error(f"Failed to list job definitions: {e}")
+        return []

@@ -23,15 +23,18 @@
   --glow-primary: 0 0 20px rgb(99 102 241 / 30%);
   --glow-cyan: 0 0 20px rgb(6 182 212 / 30%);
 
-  /* Replaces html/body styles */
-  height: 100%;
+  /* Flex container - fills parent, enables single scroll */
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
   width: 100%;
   font-family: var(--font-family-base);
   background-color: transparent;
   color: var(--color-text-primary);
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
-  position: relative; /* For the ::before overlay */
+  position: relative; /* For the ::before overlay and fixed debug panel */
 }
 
 /* Global Reset & Base - scoped */

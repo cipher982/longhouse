@@ -16,7 +16,12 @@ from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 
+from zerg.jobs.git_sync import get_git_sync_service
+from zerg.jobs.loader import JobLoadError
+from zerg.jobs.loader import JobRow
+from zerg.jobs.loader import load_job_func
 from zerg.jobs.ops_db import emit_job_run
+from zerg.jobs.ops_db import get_job_definition
 from zerg.jobs.ops_db import is_job_queue_db_enabled
 from zerg.jobs.queue import DEFAULT_POLL_SECONDS
 from zerg.jobs.queue import QueueJob
@@ -190,14 +195,54 @@ async def run_queue_job(queue_id: str, owner: QueueOwner | None = None) -> RunRe
 
 
 async def _run_job(queue_job: QueueJob, owner: QueueOwner) -> None:
-    """Execute a single job with heartbeat and error handling."""
+    """Execute a single job with heartbeat and error handling.
+
+    Supports multi-source job loading:
+    1. Check registry first (builtin jobs that self-registered)
+    2. Fall back to database lookup (git/http jobs)
+    3. Use loader for git/http jobs to get function
+    """
+    # Try registry first (builtin jobs)
     job_def = job_registry.get(queue_job.job_id)
-    if not job_def or not job_def.enabled:
-        await complete_job(queue_job.id, "dead", "Job disabled or missing", owner=owner)
-        return
+    db_job = None
+    script_metadata: dict = {}
+
+    if job_def and job_def.enabled:
+        # Builtin job from registry
+        job_func = job_def.func
+        timeout_seconds = job_def.timeout_seconds
+        tags = job_def.tags
+        project = job_def.project
+        script_metadata = {"script_source": "builtin", "entrypoint": f"zerg.jobs.{queue_job.job_id}"}
+    else:
+        # Try loading from database
+        db_job = await get_job_definition(queue_job.job_id)
+
+        if not db_job or not db_job.get("enabled", True):
+            await complete_job(queue_job.id, "dead", "Job disabled or missing", owner=owner)
+            return
+
+        timeout_seconds = db_job.get("timeout_seconds") or 300
+        tags = db_job.get("tags") or []
+        project = db_job.get("project")
+
+        # Load job function using multi-source loader
+        try:
+            job_row = JobRow(
+                job_id=db_job["job_id"],
+                script_source=db_job.get("script_source", "builtin"),
+                entrypoint=db_job.get("entrypoint"),
+                config=db_job.get("config"),
+            )
+            git_service = get_git_sync_service()
+            job_func, script_metadata = await load_job_func(job_row, git_service)
+        except JobLoadError as e:
+            logger.error("Failed to load job %s: %s", queue_job.job_id, e)
+            await complete_job(queue_job.id, "dead", f"Job load error: {e}", owner=owner)
+            return
 
     started_at = datetime.now(UTC)
-    lease_seconds = _lease_seconds(job_def.timeout_seconds)
+    lease_seconds = _lease_seconds(timeout_seconds)
 
     # Extend lease before execution
     if not await extend_lease(queue_job.id, owner, lease_seconds):
@@ -227,13 +272,13 @@ async def _run_job(queue_job: QueueJob, owner: QueueOwner) -> None:
     try:
         # Execute the job function with timeout
         await asyncio.wait_for(
-            job_def.func(),
-            timeout=job_def.timeout_seconds,
+            job_func(),
+            timeout=timeout_seconds,
         )
         status = "success"
     except asyncio.TimeoutError:
         status = "failure"
-        error_text = f"Job timed out after {job_def.timeout_seconds}s"
+        error_text = f"Job timed out after {timeout_seconds}s"
         logger.error("Job %s timed out", queue_job.job_id)
     except Exception as e:
         status = "failure"
@@ -246,7 +291,7 @@ async def _run_job(queue_job: QueueJob, owner: QueueOwner) -> None:
     ended_at = datetime.now(UTC)
     duration_ms = int((ended_at - started_at).total_seconds() * 1000)
 
-    # Emit to ops.runs
+    # Emit to ops.runs with script metadata
     try:
         await emit_job_run(
             job_id=queue_job.job_id,
@@ -255,9 +300,10 @@ async def _run_job(queue_job: QueueJob, owner: QueueOwner) -> None:
             ended_at=ended_at,
             duration_ms=duration_ms,
             error_message=error_text,
-            tags=job_def.tags,
-            project=job_def.project,
+            tags=tags,
+            project=project,
             scheduler="zerg",
+            metadata=script_metadata,  # Include script source, SHA, etc.
         )
     except Exception as e:
         logger.error("Failed to emit job run: %s", e)

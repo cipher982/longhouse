@@ -155,15 +155,16 @@ export default function App({ embedded = false }: AppProps) {
   return (
     <>
       <OfflineBanner />
-      <div className="app-container">
-        {showDebugPanel && (
-          <DebugPanel
-            isOpen={state.sidebarOpen}
-            onToggle={handleToggleDebugPanel}
-            onReset={handleReset}
-            isResetting={isResetting}
-          />
-        )}
+
+      {/* Debug panel - now renders as fixed overlay */}
+      {showDebugPanel && (
+        <DebugPanel
+          isOpen={state.sidebarOpen}
+          onToggle={handleToggleDebugPanel}
+          onReset={handleReset}
+          isResetting={isResetting}
+        />
+      )}
 
       <div className="main-content">
         {!embedded && (
@@ -203,7 +204,6 @@ export default function App({ embedded = false }: AppProps) {
 
       {/* Trace ID display for debugging - shows in dev mode only */}
       <TraceIdDisplay devOnly={true} />
-      </div>
     </>
   )
 }

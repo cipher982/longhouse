@@ -127,14 +127,13 @@
     z-index: 10;
   }
 
-  /* Content area - main scrollable viewport */
+  /* Content area - pass-through container (no scroll here) */
   #app-container {
     grid-row: 2;
     min-height: 0; /* required for grid children to respect overflow */
     display: flex;
     flex-direction: column;
-    overflow-x: hidden; /* prevent page-level horizontal scroll */
-    overflow-y: auto;
+    overflow: hidden; /* pass-through, no scroll at this level */
     position: relative;
     z-index: 1;
     /* Glass panel - safe because ambient backgrounds are now static */

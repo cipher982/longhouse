@@ -240,16 +240,92 @@ async def spawn_worker_async(
         return f"Error spawning worker: {e}"
 
 
+async def spawn_standard_worker_async(
+    task: str,
+    model: str | None = None,
+    *,
+    _tool_call_id: str | None = None,
+    _return_structured: bool = False,
+) -> str | dict:
+    """Spawn a worker for general tasks (server commands, research, etc).
+
+    For repository/code tasks, use spawn_workspace_worker instead.
+
+    Args:
+        task: Natural language description of what the worker should do
+        model: LLM model for the worker (optional)
+
+    Returns:
+        The worker's result after completion
+    """
+    return await spawn_worker_async(
+        task=task,
+        model=model,
+        execution_mode="standard",
+        git_repo=None,
+        _tool_call_id=_tool_call_id,
+        _return_structured=_return_structured,
+    )
+
+
 def spawn_worker(
     task: str,
     model: str | None = None,
-    execution_mode: str = "standard",
-    git_repo: str | None = None,
 ) -> str:
-    """Sync wrapper for spawn_worker_async. Used for CLI/tests."""
+    """Spawn a worker for general tasks (server commands, research, etc).
+
+    For repository/code tasks, use spawn_workspace_worker instead.
+    """
     from zerg.utils.async_utils import run_async_safely
 
-    return run_async_safely(spawn_worker_async(task, model, execution_mode, git_repo))
+    return run_async_safely(spawn_standard_worker_async(task, model))
+
+
+async def spawn_workspace_worker_async(
+    task: str,
+    git_repo: str,
+    model: str | None = None,
+    *,
+    _tool_call_id: str | None = None,
+    _return_structured: bool = False,
+) -> str | dict:
+    """Spawn a worker to execute a task in a git repository workspace.
+
+    The repository is cloned to an isolated workspace, the agent runs
+    headlessly, and any changes are captured as a diff.
+
+    Args:
+        task: What to do in the repository (analyze code, fix bug, etc)
+        git_repo: Repository URL (https://github.com/org/repo.git or git@github.com:org/repo.git)
+        model: LLM model for the worker (optional)
+
+    Returns:
+        The worker's result after completion
+
+    Example:
+        spawn_workspace_worker("List dependencies from pyproject.toml", "https://github.com/langchain-ai/langchain.git")
+        spawn_workspace_worker("Fix the typo in README.md", "git@github.com:user/repo.git")
+    """
+    # Delegate to the core implementation with workspace mode forced
+    return await spawn_worker_async(
+        task=task,
+        model=model,
+        execution_mode="workspace",
+        git_repo=git_repo,
+        _tool_call_id=_tool_call_id,
+        _return_structured=_return_structured,
+    )
+
+
+def spawn_workspace_worker(
+    task: str,
+    git_repo: str,
+    model: str | None = None,
+) -> str:
+    """Sync wrapper for spawn_workspace_worker_async."""
+    from zerg.utils.async_utils import run_async_safely
+
+    return run_async_safely(spawn_workspace_worker_async(task, git_repo, model))
 
 
 async def list_workers_async(
@@ -838,12 +914,19 @@ def get_worker_metadata(job_id: str) -> str:
 TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
         func=spawn_worker,
-        coroutine=spawn_worker_async,
+        coroutine=spawn_standard_worker_async,
         name="spawn_worker",
-        description="Spawn a worker agent to execute a task. "
-        "IMPORTANT: For ANY task involving a git repository (cloning, reading files, analyzing code), "
-        "you MUST set execution_mode='workspace' and git_repo='https://github.com/org/repo.git'. "
-        "Do NOT use runner_exec to clone repos. Workspace mode clones automatically.",
+        description="Spawn a worker for server tasks, research, or investigations. "
+        "Workers can run commands on servers via runner_exec. "
+        "For repository/code tasks, use spawn_workspace_worker instead.",
+    ),
+    StructuredTool.from_function(
+        func=spawn_workspace_worker,
+        coroutine=spawn_workspace_worker_async,
+        name="spawn_workspace_worker",
+        description="Spawn a worker to work in a git repository. "
+        "Clones the repo, runs the agent in an isolated workspace, and captures any changes. "
+        "Use this for: reading code, analyzing dependencies, making changes, running tests.",
     ),
     StructuredTool.from_function(
         func=list_workers,
