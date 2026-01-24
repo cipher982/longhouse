@@ -6,6 +6,8 @@
     <title>External Jobs - Swarmlet Documentation</title>
     <meta name="description" content="Run your own scheduled jobs on Swarmlet's infrastructure. Keep code private, hot-reload changes, track versions.">
     <link rel="icon" href="/favicon.ico">
+    <!-- Marked.js for markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         :root {
             --bg: #0a0a0a;
@@ -16,7 +18,6 @@
             --accent: #3b82f6;
             --accent-hover: #60a5fa;
             --green: #22c55e;
-            --yellow: #eab308;
             --border: #262626;
             --code-bg: #1e1e1e;
         }
@@ -41,12 +42,6 @@
             padding: 2rem;
         }
 
-        header {
-            border-bottom: 1px solid var(--border);
-            padding-bottom: 2rem;
-            margin-bottom: 3rem;
-        }
-
         .back-link {
             color: var(--text-muted);
             text-decoration: none;
@@ -54,14 +49,15 @@
             display: inline-flex;
             align-items: center;
             gap: 0.5rem;
-            margin-bottom: 1rem;
+            margin-bottom: 2rem;
         }
 
         .back-link:hover {
             color: var(--accent);
         }
 
-        h1 {
+        /* Markdown content styling */
+        #content h1 {
             font-size: 2.5rem;
             font-weight: 700;
             margin-bottom: 1rem;
@@ -71,12 +67,7 @@
             background-clip: text;
         }
 
-        .subtitle {
-            font-size: 1.25rem;
-            color: var(--text-muted);
-        }
-
-        h2 {
+        #content h2 {
             font-size: 1.75rem;
             font-weight: 600;
             margin: 3rem 0 1.5rem;
@@ -84,49 +75,29 @@
             border-bottom: 1px solid var(--border);
         }
 
-        h3 {
+        #content h3 {
             font-size: 1.25rem;
             font-weight: 600;
             margin: 2rem 0 1rem;
             color: var(--text);
         }
 
-        p {
+        #content p {
             margin-bottom: 1rem;
             color: var(--text-muted);
         }
 
-        .benefits {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 1rem;
-            margin: 2rem 0;
+        #content ul, #content ol {
+            margin: 1rem 0;
+            padding-left: 1.5rem;
+            color: var(--text-muted);
         }
 
-        .benefit {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 1.25rem;
+        #content li {
+            margin: 0.5rem 0;
         }
 
-        .benefit-icon {
-            font-size: 1.5rem;
-            margin-bottom: 0.5rem;
-        }
-
-        .benefit h4 {
-            font-size: 1rem;
-            font-weight: 600;
-            margin-bottom: 0.5rem;
-        }
-
-        .benefit p {
-            font-size: 0.875rem;
-            margin: 0;
-        }
-
-        pre {
+        #content pre {
             background: var(--code-bg);
             border: 1px solid var(--border);
             border-radius: 8px;
@@ -136,7 +107,7 @@
             font-size: 0.875rem;
         }
 
-        code {
+        #content code {
             font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
             background: var(--bg-tertiary);
             padding: 0.2rem 0.4rem;
@@ -144,156 +115,77 @@
             font-size: 0.875em;
         }
 
-        pre code {
+        #content pre code {
             background: none;
             padding: 0;
         }
 
-        .file-tree {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 1rem 1.5rem;
-            font-family: 'SF Mono', Monaco, monospace;
-            font-size: 0.875rem;
-            line-height: 1.8;
-        }
-
-        .file-tree .folder {
-            color: var(--accent);
-        }
-
-        .file-tree .file {
-            color: var(--text-muted);
-        }
-
-        .file-tree .comment {
-            color: #6b7280;
-        }
-
-        table {
+        #content table {
             width: 100%;
             border-collapse: collapse;
             margin: 1rem 0;
             font-size: 0.875rem;
         }
 
-        th, td {
+        #content th, #content td {
             text-align: left;
             padding: 0.75rem 1rem;
             border: 1px solid var(--border);
         }
 
-        th {
+        #content th {
             background: var(--bg-secondary);
             font-weight: 600;
             color: var(--text);
         }
 
-        td {
+        #content td {
             color: var(--text-muted);
         }
 
-        td code {
+        #content td code, #content th code {
             color: var(--green);
         }
 
-        .diagram {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 2rem;
-            margin: 2rem 0;
-            font-family: 'SF Mono', Monaco, monospace;
-            font-size: 0.75rem;
-            overflow-x: auto;
-            white-space: pre;
-            line-height: 1.4;
-            color: var(--text-muted);
-        }
-
-        .step {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 1.5rem;
+        #content blockquote {
+            border-left: 3px solid var(--accent);
+            padding-left: 1rem;
             margin: 1rem 0;
-        }
-
-        .step-number {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 28px;
-            height: 28px;
-            background: var(--accent);
-            color: white;
-            border-radius: 50%;
-            font-weight: 600;
-            font-size: 0.875rem;
-            margin-right: 0.75rem;
-        }
-
-        .step h4 {
-            display: inline;
-            font-weight: 600;
-        }
-
-        .feature-list {
-            list-style: none;
-            margin: 1rem 0;
-        }
-
-        .feature-list li {
-            padding: 0.5rem 0;
-            padding-left: 1.5rem;
-            position: relative;
             color: var(--text-muted);
+            font-style: italic;
         }
 
-        .feature-list li::before {
-            content: "";
-            position: absolute;
-            left: 0;
-            top: 0.85rem;
-            width: 6px;
-            height: 6px;
-            background: var(--green);
-            border-radius: 50%;
-        }
-
-        .cta {
-            background: linear-gradient(135deg, var(--accent) 0%, #8b5cf6 100%);
-            border-radius: 12px;
-            padding: 2rem;
-            margin: 3rem 0;
-            text-align: center;
-        }
-
-        .cta h3 {
-            color: white;
-            margin-bottom: 0.5rem;
-        }
-
-        .cta p {
-            color: rgba(255,255,255,0.8);
-            margin-bottom: 1.5rem;
-        }
-
-        .cta-button {
-            display: inline-block;
-            background: white;
+        #content a {
             color: var(--accent);
-            padding: 0.75rem 2rem;
-            border-radius: 8px;
             text-decoration: none;
-            font-weight: 600;
-            transition: transform 0.2s, box-shadow 0.2s;
         }
 
-        .cta-button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        #content a:hover {
+            text-decoration: underline;
+        }
+
+        #content hr {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 2rem 0;
+        }
+
+        #content strong {
+            color: var(--text);
+        }
+
+        .loading {
+            text-align: center;
+            padding: 4rem;
+            color: var(--text-muted);
+        }
+
+        .error {
+            background: #7f1d1d;
+            border: 1px solid #dc2626;
+            border-radius: 8px;
+            padding: 1rem;
+            color: #fecaca;
         }
 
         footer {
@@ -310,319 +202,76 @@
             text-decoration: none;
         }
 
-        .syntax-keyword { color: #c586c0; }
-        .syntax-string { color: #ce9178; }
-        .syntax-comment { color: #6a9955; }
-        .syntax-function { color: #dcdcaa; }
-        .syntax-number { color: #b5cea8; }
-        .syntax-class { color: #4ec9b0; }
-
         @media (max-width: 640px) {
             .container {
                 padding: 1rem;
             }
 
-            h1 {
+            #content h1 {
                 font-size: 2rem;
             }
 
-            h2 {
+            #content h2 {
                 font-size: 1.5rem;
-            }
-
-            .benefits {
-                grid-template-columns: 1fr;
             }
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <header>
-            <a href="/" class="back-link">&larr; Back to Swarmlet</a>
-            <h1>External Jobs</h1>
-            <p class="subtitle">Run your own scheduled jobs on Swarmlet's infrastructure without modifying the core codebase.</p>
-        </header>
+        <a href="/" class="back-link">&larr; Back to Swarmlet</a>
 
-        <section>
-            <div class="benefits">
-                <div class="benefit">
-                    <div class="benefit-icon">🔒</div>
-                    <h4>Keep Code Private</h4>
-                    <p>Store proprietary job logic in your own git repository</p>
-                </div>
-                <div class="benefit">
-                    <div class="benefit-icon">⚡</div>
-                    <h4>Hot Reload</h4>
-                    <p>Push to git and jobs update automatically&mdash;no redeploy</p>
-                </div>
-                <div class="benefit">
-                    <div class="benefit-icon">📊</div>
-                    <h4>Version Tracking</h4>
-                    <p>Every run records which git SHA was executing</p>
-                </div>
-                <div class="benefit">
-                    <div class="benefit-icon">🔄</div>
-                    <h4>Independent Updates</h4>
-                    <p>Your jobs, your repo, your release schedule</p>
-                </div>
-            </div>
-        </section>
-
-        <h2>Quick Start</h2>
-
-        <div class="step">
-            <span class="step-number">1</span>
-            <h4>Create Your Jobs Repository</h4>
-            <div class="file-tree">
-<span class="folder">my-jobs/</span>
-├── <span class="file">manifest.py</span>          <span class="comment"># Required: registers your jobs</span>
-├── <span class="folder">jobs/</span>
-│   ├── <span class="file">__init__.py</span>
-│   └── <span class="file">daily_report.py</span>  <span class="comment"># Your job implementations</span>
-└── <span class="file">requirements.txt</span>     <span class="comment"># Optional: extra dependencies</span>
-            </div>
-        </div>
-
-        <div class="step">
-            <span class="step-number">2</span>
-            <h4>Write Your First Job</h4>
-            <pre><code><span class="syntax-comment"># jobs/daily_report.py</span>
-<span class="syntax-keyword">import</span> logging
-
-logger = logging.getLogger(__name__)
-
-<span class="syntax-keyword">async def</span> <span class="syntax-function">run</span>() -> dict:
-    <span class="syntax-string">"""Generate daily report. Must be async, must return dict."""</span>
-    logger.info(<span class="syntax-string">"Generating daily report..."</span>)
-
-    <span class="syntax-comment"># Your logic here</span>
-    report_data = <span class="syntax-keyword">await</span> generate_report()
-
-    <span class="syntax-keyword">return</span> {
-        <span class="syntax-string">"status"</span>: <span class="syntax-string">"success"</span>,
-        <span class="syntax-string">"rows_processed"</span>: len(report_data),
-    }</code></pre>
-        </div>
-
-        <div class="step">
-            <span class="step-number">3</span>
-            <h4>Register in manifest.py</h4>
-            <pre><code><span class="syntax-comment"># manifest.py</span>
-<span class="syntax-keyword">from</span> zerg.jobs <span class="syntax-keyword">import</span> job_registry, <span class="syntax-class">JobConfig</span>
-<span class="syntax-keyword">from</span> jobs.daily_report <span class="syntax-keyword">import</span> run <span class="syntax-keyword">as</span> daily_report
-
-job_registry.register(<span class="syntax-class">JobConfig</span>(
-    id=<span class="syntax-string">"daily-report"</span>,
-    cron=<span class="syntax-string">"0 8 * * *"</span>,           <span class="syntax-comment"># 8 AM UTC daily</span>
-    func=daily_report,
-    timeout_seconds=<span class="syntax-number">300</span>,        <span class="syntax-comment"># 5 minute timeout</span>
-    max_attempts=<span class="syntax-number">3</span>,             <span class="syntax-comment"># Retry up to 3 times</span>
-    tags=[<span class="syntax-string">"reports"</span>],
-    project=<span class="syntax-string">"my-project"</span>,
-    description=<span class="syntax-string">"Daily performance report"</span>,
-))</code></pre>
-        </div>
-
-        <div class="step">
-            <span class="step-number">4</span>
-            <h4>Configure Environment</h4>
-            <pre><code>JOBS_GIT_REPO_URL=https://github.com/your-org/my-jobs.git
-JOBS_GIT_TOKEN=ghp_xxxxxxxxxxxx    <span class="syntax-comment"># GitHub PAT for private repos</span>
-JOB_QUEUE_ENABLED=1                <span class="syntax-comment"># Required for external jobs</span></code></pre>
-        </div>
-
-        <h2>How It Works</h2>
-
-        <div class="diagram">                    YOUR GIT REPO
-            ┌─────────────────────────────────────────┐
-            │  manifest.py + jobs/*.py                │
-            └─────────────────────────────────────────┘
-                              │
-                              │ git clone/pull (hourly)
-                              ▼
-            ┌─────────────────────────────────────────┐
-            │               SWARMLET                  │
-            │                                         │
-            │  Git Sync ──▶ Manifest ──▶ Registry    │
-            │                               │         │
-            │                               ▼         │
-            │  ops.runs ◀── Worker ◀── APScheduler   │
-            │  (tracking)   (execute)    (cron)       │
-            └─────────────────────────────────────────┘</div>
-
-        <ul class="feature-list">
-            <li><strong>Git Sync</strong> clones your repo on startup, pulls periodically</li>
-            <li><strong>Manifest Loader</strong> executes manifest.py to register jobs</li>
-            <li><strong>APScheduler</strong> triggers jobs based on cron expressions</li>
-            <li><strong>Queue Worker</strong> executes with retries, timeout, heartbeat</li>
-            <li><strong>ops.runs</strong> records every execution with git SHA</li>
-        </ul>
-
-        <h2>JobConfig Reference</h2>
-
-        <table>
-            <thead>
-                <tr>
-                    <th>Field</th>
-                    <th>Type</th>
-                    <th>Default</th>
-                    <th>Description</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td><code>id</code></td>
-                    <td>str</td>
-                    <td>required</td>
-                    <td>Unique job identifier</td>
-                </tr>
-                <tr>
-                    <td><code>cron</code></td>
-                    <td>str</td>
-                    <td>required</td>
-                    <td>Cron expression (UTC)</td>
-                </tr>
-                <tr>
-                    <td><code>func</code></td>
-                    <td>async callable</td>
-                    <td>required</td>
-                    <td>async def run() -> dict</td>
-                </tr>
-                <tr>
-                    <td><code>timeout_seconds</code></td>
-                    <td>int</td>
-                    <td>300</td>
-                    <td>Max execution time</td>
-                </tr>
-                <tr>
-                    <td><code>max_attempts</code></td>
-                    <td>int</td>
-                    <td>3</td>
-                    <td>Retry count on failure</td>
-                </tr>
-                <tr>
-                    <td><code>tags</code></td>
-                    <td>list[str]</td>
-                    <td>[]</td>
-                    <td>For filtering/organization</td>
-                </tr>
-                <tr>
-                    <td><code>project</code></td>
-                    <td>str</td>
-                    <td>None</td>
-                    <td>Project association</td>
-                </tr>
-            </tbody>
-        </table>
-
-        <h2>Cron Examples</h2>
-
-        <table>
-            <thead>
-                <tr>
-                    <th>Expression</th>
-                    <th>Schedule</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td><code>0 * * * *</code></td>
-                    <td>Every hour</td>
-                </tr>
-                <tr>
-                    <td><code>*/15 * * * *</code></td>
-                    <td>Every 15 minutes</td>
-                </tr>
-                <tr>
-                    <td><code>0 8 * * *</code></td>
-                    <td>Daily at 8 AM UTC</td>
-                </tr>
-                <tr>
-                    <td><code>0 0 * * 1</code></td>
-                    <td>Mondays at midnight UTC</td>
-                </tr>
-                <tr>
-                    <td><code>0 6 1 * *</code></td>
-                    <td>First of month at 6 AM UTC</td>
-                </tr>
-            </tbody>
-        </table>
-
-        <h2>Key Features</h2>
-
-        <h3>Durable Queue</h3>
-        <p>Jobs are stored in a database queue. If Swarmlet restarts mid-execution, incomplete jobs are automatically retried. No duplicate runs thanks to deduplication by job_id + scheduled_time.</p>
-
-        <h3>Automatic Retries</h3>
-        <p>Failed jobs retry with exponential backoff: immediate, +1min, +2min, +4min... capped at 1 hour between retries.</p>
-
-        <h3>Version Tracking</h3>
-        <p>Every job run records the git SHA that was executing, so you always know exactly which code version ran.</p>
-
-        <pre><code>{
-  <span class="syntax-string">"job_id"</span>: <span class="syntax-string">"daily-report"</span>,
-  <span class="syntax-string">"status"</span>: <span class="syntax-string">"success"</span>,
-  <span class="syntax-string">"metadata"</span>: {
-    <span class="syntax-string">"git_sha"</span>: <span class="syntax-string">"abc123def456..."</span>,
-    <span class="syntax-string">"loaded_at"</span>: <span class="syntax-string">"2026-01-24T07:00:00Z"</span>
-  }
-}</code></pre>
-
-        <h2>Environment Variables</h2>
-
-        <table>
-            <thead>
-                <tr>
-                    <th>Variable</th>
-                    <th>Required</th>
-                    <th>Description</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td><code>JOBS_GIT_REPO_URL</code></td>
-                    <td>Yes*</td>
-                    <td>Git repository URL</td>
-                </tr>
-                <tr>
-                    <td><code>JOBS_GIT_TOKEN</code></td>
-                    <td>No</td>
-                    <td>GitHub PAT (for private repos)</td>
-                </tr>
-                <tr>
-                    <td><code>JOBS_GIT_BRANCH</code></td>
-                    <td>No</td>
-                    <td>Branch to use (default: main)</td>
-                </tr>
-                <tr>
-                    <td><code>JOBS_REFRESH_INTERVAL_SECONDS</code></td>
-                    <td>No</td>
-                    <td>Sync interval (default: 3600)</td>
-                </tr>
-                <tr>
-                    <td><code>JOB_QUEUE_ENABLED</code></td>
-                    <td>Yes</td>
-                    <td>Must be 1 for external jobs</td>
-                </tr>
-            </tbody>
-        </table>
-        <p style="font-size: 0.875rem;">*Only required if using external jobs</p>
-
-        <div class="cta">
-            <h3>Ready to automate?</h3>
-            <p>Start running your scheduled jobs on Swarmlet today.</p>
-            <a href="/dashboard" class="cta-button">Get Started</a>
+        <div id="content">
+            <div class="loading">Loading documentation...</div>
         </div>
 
         <footer>
             <p>
                 <a href="/">Swarmlet</a> &middot;
                 <a href="https://github.com/cipher982/zerg">GitHub</a> &middot;
-                <a href="/docs/external-jobs.md">View as Markdown</a>
+                <a href="https://github.com/cipher982/zerg/blob/main/docs/external-jobs.md">View Source</a>
             </p>
             <p style="margin-top: 0.5rem;">Built for developers who automate everything.</p>
         </footer>
     </div>
+
+    <script>
+        // Fetch and render the markdown file
+        const MD_URL = 'https://raw.githubusercontent.com/cipher982/zerg/main/docs/external-jobs.md';
+
+        async function loadMarkdown() {
+            const content = document.getElementById('content');
+
+            try {
+                const response = await fetch(MD_URL);
+
+                if (!response.ok) {
+                    throw new Error(`Failed to fetch: ${response.status}`);
+                }
+
+                const markdown = await response.text();
+
+                // Configure marked for GitHub-flavored markdown
+                marked.setOptions({
+                    gfm: true,
+                    breaks: false,
+                    headerIds: true,
+                });
+
+                content.innerHTML = marked.parse(markdown);
+
+            } catch (error) {
+                content.innerHTML = `
+                    <div class="error">
+                        <strong>Failed to load documentation</strong>
+                        <p>${error.message}</p>
+                        <p>View directly on <a href="https://github.com/cipher982/zerg/blob/main/docs/external-jobs.md">GitHub</a></p>
+                    </div>
+                `;
+            }
+        }
+
+        loadMarkdown();
+    </script>
 </body>
 </html>
