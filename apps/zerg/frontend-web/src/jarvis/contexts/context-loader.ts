@@ -38,7 +38,6 @@ export class ContextLoader {
             name: 'personal',
             description: 'Personal AI assistant context',
             configFile: 'config.ts',
-            themeFile: 'theme.css',
             requiredEnvVars: [],
           });
           logger.context(`Discovered context: ${contextName} (fallback manifest)`);
@@ -95,7 +94,7 @@ export class ContextLoader {
         }
       }
 
-      // Theme CSS is now imported statically in JarvisChatPage.tsx
+      // Theme CSS is now part of the global app styles
       // Dynamic loading removed to avoid 404s in production builds
 
       this.currentContext = contextName;
