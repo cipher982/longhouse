@@ -380,7 +380,12 @@ if [[ -n "$SMOKE_TEST_SECRET" ]]; then
             fi
         fi
 
-        # Chat test (requires LLM - costs money but validates full flow)
+        # Basic chat test - always runs (minimal cost: ~$0.001 per run)
+        echo ""
+        echo "--- Chat (LLM) ---"
+        test_chat "Basic chat (2+2)" "$COOKIE_JAR" "What is 2+2? Reply with just the number." 30
+
+        # Extended chat + email tests (--chat flag)
         if [[ $CHAT -eq 1 ]]; then
             test_chat "Chat sends/receives" "$COOKIE_JAR" "Say hello in exactly 3 words" 30
 
@@ -414,7 +419,7 @@ if [[ -n "$SMOKE_TEST_SECRET" ]]; then
                 warn "Email tool test inconclusive"
             fi
         else
-            warn "Chat tests disabled (pass --chat to enable; costs money)"
+            info "Extended chat tests skipped (pass --chat to enable)"
         fi
     else
         fail "Service login (got $LOGIN_STATUS)"
