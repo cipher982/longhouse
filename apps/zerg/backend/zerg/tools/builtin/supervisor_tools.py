@@ -36,6 +36,7 @@ async def spawn_worker_async(
     model: str | None = None,
     execution_mode: str = "standard",
     git_repo: str | None = None,
+    resume_session_id: str | None = None,
     *,
     _tool_call_id: str | None = None,  # Internal: passed by _call_tool_async for idempotency
     _skip_interrupt: bool = False,  # Internal: legacy param, now ignored
@@ -54,6 +55,8 @@ async def spawn_worker_async(
             "cloud" for backward compatibility.
         git_repo: Git repository URL (required if execution_mode="workspace").
             The repo is cloned, agent makes changes, and diff is captured.
+        resume_session_id: Life Hub session UUID to resume (workspace mode only).
+            Enables cross-environment session continuity.
 
     Returns:
         The worker's result after completion
@@ -62,6 +65,7 @@ async def spawn_worker_async(
         spawn_worker("Check disk usage on prod-web server via SSH")
         spawn_worker("Research vacuums and recommend the best one")
         spawn_worker("Fix typo in README", execution_mode="workspace", git_repo="git@github.com:user/repo.git")
+        spawn_worker("Continue work", execution_mode="workspace", git_repo="...", resume_session_id="abc-123")
     """
     from zerg.models.models import WorkerJob
 
@@ -100,6 +104,8 @@ async def spawn_worker_async(
             "execution_mode": "workspace",  # Normalize to new name
             "git_repo": git_repo,
         }
+        if resume_session_id:
+            job_config["resume_session_id"] = resume_session_id
 
     try:
         # IDEMPOTENCY: Prevent duplicate workers on retry/resume.
@@ -285,6 +291,7 @@ async def spawn_workspace_worker_async(
     task: str,
     git_repo: str,
     model: str | None = None,
+    resume_session_id: str | None = None,
     *,
     _tool_call_id: str | None = None,
     _return_structured: bool = False,
@@ -298,6 +305,7 @@ async def spawn_workspace_worker_async(
         task: What to do in the repository (analyze code, fix bug, etc)
         git_repo: Repository URL (https://github.com/org/repo.git or git@github.com:org/repo.git)
         model: LLM model for the worker (optional)
+        resume_session_id: Life Hub session UUID to resume (for session continuity)
 
     Returns:
         The worker's result after completion
@@ -305,6 +313,7 @@ async def spawn_workspace_worker_async(
     Example:
         spawn_workspace_worker("List dependencies from pyproject.toml", "https://github.com/langchain-ai/langchain.git")
         spawn_workspace_worker("Fix the typo in README.md", "git@github.com:user/repo.git")
+        spawn_workspace_worker("Continue the work", "git@...", resume_session_id="abc-123")
     """
     # Early validation: reject dangerous URLs before job creation (defense in depth)
     # Delegate to shared validator to stay consistent with workspace_manager rules.
@@ -321,6 +330,7 @@ async def spawn_workspace_worker_async(
         model=model,
         execution_mode="workspace",
         git_repo=git_repo,
+        resume_session_id=resume_session_id,
         _tool_call_id=_tool_call_id,
         _return_structured=_return_structured,
     )
@@ -330,11 +340,12 @@ def spawn_workspace_worker(
     task: str,
     git_repo: str,
     model: str | None = None,
+    resume_session_id: str | None = None,
 ) -> str:
     """Sync wrapper for spawn_workspace_worker_async."""
     from zerg.utils.async_utils import run_async_safely
 
-    return run_async_safely(spawn_workspace_worker_async(task, git_repo, model))
+    return run_async_safely(spawn_workspace_worker_async(task, git_repo, model, resume_session_id))
 
 
 async def list_workers_async(

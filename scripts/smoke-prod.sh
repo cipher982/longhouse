@@ -12,6 +12,7 @@
 # Environment:
 #   SMOKE_TEST_SECRET  - Service account secret for authenticated tests
 #   SMOKE_TEST_EMAIL   - Email target for email tool test (default: david010@gmail.com)
+#   SMOKE_RUN_ID       - Optional run id for isolated smoke user/thread
 
 set -e
 
@@ -20,6 +21,7 @@ FRONTEND_URL="${FRONTEND_URL:-https://swarmlet.com}"
 API_URL="${API_URL:-https://api.swarmlet.com}"
 WAIT_SECS="${WAIT_SECS:-90}"
 SMOKE_TEST_EMAIL="${SMOKE_TEST_EMAIL:-david010@gmail.com}"
+SMOKE_RUN_ID="${SMOKE_RUN_ID:-}"
 
 # Counters
 PASSED=0
@@ -42,6 +44,10 @@ else
     # Fallback: no timeout (warn user)
     TIMEOUT_CMD=""
 fi
+
+gen_id() {
+    uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "smoke-$(date +%s)"
+}
 
 pass() { echo -e "  ${GREEN}✓${NC} $1"; PASSED=$((PASSED + 1)); }
 fail() { echo -e "  ${RED}✗${NC} $1"; FAILED=$((FAILED + 1)); }
@@ -458,9 +464,15 @@ run_auth_gate_checks
 if [[ -n "$SMOKE_TEST_SECRET" ]]; then
     section "Authenticated"
 
+    if [[ -z "$SMOKE_RUN_ID" ]]; then
+        SMOKE_RUN_ID="smoke-$(gen_id)"
+    fi
+    info "Smoke run id: $SMOKE_RUN_ID"
+
     COOKIE_JAR=$(mktemp)
     LOGIN_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_URL/api/auth/service-login" \
         -H "X-Service-Secret: $SMOKE_TEST_SECRET" \
+        -H "X-Smoke-Run-Id: $SMOKE_RUN_ID" \
         -c "$COOKIE_JAR")
 
     if [[ "$LOGIN_STATUS" == "200" ]]; then
@@ -487,8 +499,6 @@ if [[ -n "$SMOKE_TEST_SECRET" ]]; then
             info "Full tests skipped (pass --full to enable CRUD/email/infra)"
         fi
 
-        section "Ephemeral cleanup"
-        run_test test_http_auth "Jarvis history clear (authed)" "$API_URL/api/jarvis/history" "204" "$COOKIE_JAR" "DELETE"
     else
         fail "Service login (got $LOGIN_STATUS)"
     fi

@@ -113,6 +113,7 @@ class CloudExecutor:
         model: str | None = None,
         timeout: int = DEFAULT_TIMEOUT_SECONDS,
         env_vars: dict[str, str] | None = None,
+        resume_session_id: str | None = None,
     ) -> CloudExecutionResult:
         """Execute a task using hatch in the given workspace.
 
@@ -134,6 +135,8 @@ class CloudExecutor:
             Maximum execution time in seconds (default: 3600 = 1 hour)
         env_vars
             Additional environment variables for the subprocess
+        resume_session_id
+            Claude Code session ID to resume (passed to hatch --resume)
 
         Returns
         -------
@@ -155,7 +158,7 @@ class CloudExecutor:
         logger.debug(f"Task: {task[:200]}...")
 
         # Build command for hatch CLI
-        # hatch -b <backend> --model <model> -C <workspace> "<prompt>"
+        # hatch -b <backend> --model <model> -C <workspace> [--resume <id>] "<prompt>"
         cmd = [
             self.hatch_path,
             "-b",
@@ -164,8 +167,13 @@ class CloudExecutor:
             model_name,
             "-C",
             str(workspace),
-            task,
         ]
+
+        # Add resume flag for session continuity (Claude backends only)
+        if resume_session_id:
+            cmd.extend(["--resume", resume_session_id])
+
+        cmd.append(task)
 
         # Prepare environment
         env = os.environ.copy()
