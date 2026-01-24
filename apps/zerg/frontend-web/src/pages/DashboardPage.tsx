@@ -1,5 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactElement } from "react";
-import clsx from "clsx";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactElement } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
@@ -15,52 +14,26 @@ import {
 import { buildUrl } from "../services/api";
 import { ConnectionStatus, useWebSocket } from "../lib/useWebSocket";
 import { useAuth } from "../lib/auth";
-import { MessageCircleIcon, PlayIcon, SettingsIcon, TrashIcon, PlusIcon, InfoCircleIcon, CheckCircleIcon, XCircleIcon, CircleIcon, CircleDotIcon, LoaderIcon, AlertTriangleIcon } from "../components/icons";
+import { PlusIcon } from "../components/icons";
 import AgentSettingsDrawer from "../components/agent-settings/AgentSettingsDrawer";
 import UsageWidget from "../components/UsageWidget";
 import type { WebSocketMessage } from "../generated/ws-messages";
 import {
   Button,
-  IconButton,
-  Badge,
   Table,
   SectionHeader,
   EmptyState,
   Spinner
 } from "../components/ui";
 import { useConfirm } from "../components/confirm";
+import { AgentTableRow } from "./dashboard/AgentTableRow";
+import { sortAgents, loadSortConfig, persistSortConfig, type SortKey, type SortConfig, type AgentRunsState } from "./dashboard/sorting";
 
 // App logo (served from public folder)
 const appLogo = "/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png";
 
 type Scope = "my" | "all";
-type SortKey = "name" | "status" | "created_at" | "last_run" | "next_run" | "success";
 
-type SortConfig = {
-  key: SortKey;
-  ascending: boolean;
-};
-
-type AgentRunsState = Record<number, AgentRun[]>;
-
-type LegacyAgentRow = {
-  agent: AgentSummary;
-  createdDisplay: string;
-  lastRunDisplay: string;
-  nextRunDisplay: string;
-};
-
-const STATUS_ORDER: Record<string, number> = {
-  running: 0,
-  processing: 1,
-  idle: 2,
-  error: 3,
-};
-
-const NBSP = "\u00A0";
-
-const STORAGE_KEY_SORT = "dashboard_sort_key";
-const STORAGE_KEY_ASC = "dashboard_sort_asc";
 const RUNS_LIMIT = 50;
 
 export default function DashboardPage() {
@@ -697,13 +670,8 @@ export default function DashboardPage() {
     setEditingName("");
   }
 
-  const sortedRows: LegacyAgentRow[] = useMemo(() => {
-    return sortAgents(agents, runsByAgent, sortConfig).map((agent) => ({
-      agent,
-      createdDisplay: formatDateTimeShort(agent.created_at ?? null),
-      lastRunDisplay: formatDateTimeShort(agent.last_run_at ?? null),
-      nextRunDisplay: formatDateTimeShort(agent.next_run_at ?? null),
-    }));
+  const sortedAgents = useMemo(() => {
+    return sortAgents(agents, runsByAgent, sortConfig);
   }, [agents, runsByAgent, sortConfig]);
 
   if (isLoading) {
@@ -799,203 +767,32 @@ export default function DashboardPage() {
             </Table.Cell>
           </Table.Header>
           <Table.Body id="agents-table-body">
-            {sortedRows.map(({ agent, createdDisplay, lastRunDisplay, nextRunDisplay }) => {
-              const runs = runsByAgent[agent.id];
-              const isExpanded = expandedAgentId === agent.id;
-              const isRunHistoryExpanded = expandedRunHistory.has(agent.id);
-              const successStats = computeSuccessStats(runs);
-              const lastRunIndicator = determineLastRunIndicator(runs);
-              const isRunning = agent.status === "running";
-              // Check if this specific agent is being mutated
-              const isPendingRun = runAgentMutation.isPending && runAgentMutation.variables === agent.id;
-
-              return (
-                <Fragment key={agent.id}>
-                  <Table.Row
-                    data-agent-id={agent.id}
-                    aria-expanded={isExpanded}
-                    className={clsx('agent-row', agent.status === "error" && "error-row")}
-                    onClick={() => toggleAgentRow(agent.id)}
-                    onKeyDown={(event: ReactKeyboardEvent<HTMLTableRowElement>) => handleRowKeyDown(event, agent.id)}
-                  >
-                    <Table.Cell data-label="Name" className="name-cell">
-                      {editingAgentId === agent.id ? (
-                        <input
-                          className="inline-edit-input"
-                          value={editingName}
-                          onChange={(e) => setEditingName(e.target.value)}
-                          onBlur={() => saveNameAndExit(agent.id)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.stopPropagation();
-                              saveNameAndExit(agent.id);
-                            }
-                            if (e.key === "Escape") {
-                              e.stopPropagation();
-                              cancelEditing();
-                            }
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                          onMouseDown={(e) => e.stopPropagation()}
-                          autoFocus
-                        />
-                      ) : (
-                        <span
-                          className="editable-name"
-                          onClick={() => startEditingName(agent.id, agent.name)}
-                          title="Click to rename"
-                        >
-                          {agent.name}
-                        </span>
-                      )}
-                    </Table.Cell>
-                    {includeOwner && (
-                      <Table.Cell className="owner-cell" data-label="Owner">
-                        {renderOwnerCell(agent)}
-                      </Table.Cell>
-                    )}
-                    <Table.Cell data-label="Status">
-                      <Badge variant={agent.status === 'error' ? 'error' : agent.status === 'running' || agent.status === 'processing' ? 'warning' : 'success'}>
-                        {formatStatus(agent.status)}
-                      </Badge>
-                      {agent.last_error && agent.last_error.trim() && (
-                        <span className="info-icon" title={agent.last_error}>
-                          <InfoCircleIcon width={14} height={14} />
-                        </span>
-                      )}
-                      {lastRunIndicator !== null && (
-                        <span
-                          className={lastRunIndicator ? "last-run-indicator last-run-success" : "last-run-indicator last-run-failure"}
-                        >
-                          {lastRunIndicator
-                            ? <> (Last: <CheckCircleIcon width={12} height={12} />)</>
-                            : <> (Last: <XCircleIcon width={12} height={12} />)</>}
-                        </span>
-                      )}
-                    </Table.Cell>
-                    <Table.Cell data-label="Created">{createdDisplay}</Table.Cell>
-                    <Table.Cell data-label="Last Run">{lastRunDisplay}</Table.Cell>
-                    <Table.Cell data-label="Next Run">{nextRunDisplay}</Table.Cell>
-                    <Table.Cell data-label="Success Rate">{successStats.display}</Table.Cell>
-                    <Table.Cell className="actions-cell" data-label="Actions">
-                      <div className="actions-cell-inner">
-                        <IconButton
-                          className={clsx("run-btn", (isRunning || isPendingRun) && "disabled")}
-                          data-testid={`run-agent-${agent.id}`}
-                          disabled={isRunning || isPendingRun}
-                          title={isRunning ? "Agent is already running" : "Run Agent"}
-                          onClick={(event) => handleRunAgent(event, agent.id, agent.status)}
-                        >
-                          <PlayIcon />
-                        </IconButton>
-                        <IconButton
-                          className="chat-btn"
-                          data-testid={`chat-agent-${agent.id}`}
-                          title="Chat with Agent"
-                          onClick={(event) => handleChatAgent(event, agent.id, agent.name)}
-                        >
-                          <MessageCircleIcon />
-                        </IconButton>
-                        <IconButton
-                          className="debug-btn"
-                          data-testid={`debug-agent-${agent.id}`}
-                          title="Debug / Info"
-                          onClick={(event) => handleDebugAgent(event, agent.id)}
-                        >
-                          <SettingsIcon />
-                        </IconButton>
-                        <IconButton
-                          className="delete-btn"
-                          data-testid={`delete-agent-${agent.id}`}
-                          title="Delete Agent"
-                          onClick={(event) => handleDeleteAgent(event, agent.id, agent.name)}
-                        >
-                          <TrashIcon />
-                        </IconButton>
-                      </div>
-                    </Table.Cell>
-                  </Table.Row>
-                  {isExpanded && (
-                    <tr className="agent-detail-row" key={`detail-${agent.id}`}>
-                      <td colSpan={emptyColspan}>
-                        <div className="agent-detail-container">
-                          {runsDataLoading && <span>Loading run history...</span>}
-                          {!runsDataLoading && runs && runs.length === 0 && (
-                            <span>No runs recorded yet.</span>
-                          )}
-                          {!runsDataLoading && runs && runs.length > 0 && (
-                            <>
-                              <table className="run-history-table">
-                                <thead>
-                                  <tr>
-                                    <th>Status</th>
-                                    <th>Started</th>
-                                    <th>Duration</th>
-                                    <th>Trigger</th>
-                                    <th>Tokens</th>
-                                    <th>Cost</th>
-                                    <th />
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {runs
-                                    .slice(0, isRunHistoryExpanded ? runs.length : Math.min(runs.length, 5))
-                                    .map((run) => (
-                                      <tr key={run.id}>
-                                        <td>{formatRunStatusIcon(run.status)}</td>
-                                        <td>{formatDateTimeShort(run.started_at ?? null)}</td>
-                                        <td>{formatDuration(run.duration_ms)}</td>
-                                        <td>{capitaliseFirst(run.trigger)}</td>
-                                        <td>{formatTokens(run.total_tokens)}</td>
-                                        <td>{formatCost(run.total_cost_usd)}</td>
-                                        <td className="run-kebab-cell">
-                                          <span
-                                            className="kebab-menu-btn"
-                                            role="button"
-                                            tabIndex={0}
-                                            onClick={(event) => {
-                                              event.preventDefault();
-                                              event.stopPropagation();
-                                              dispatchDashboardEvent("run-actions", agent.id, run.id);
-                                            }}
-                                            onKeyDown={(event) => {
-                                              if (event.key === "Enter" || event.key === " ") {
-                                                event.preventDefault();
-                                                event.stopPropagation();
-                                                dispatchDashboardEvent("run-actions", agent.id, run.id);
-                                              }
-                                            }}
-                                          >
-                                            ⋮
-                                          </span>
-                                        </td>
-                                      </tr>
-                                    ))}
-                                </tbody>
-                              </table>
-                              {runs.length > 5 && (
-                                <a
-                                  href="#"
-                                  className="run-toggle-link"
-                                  aria-expanded={isRunHistoryExpanded ? "true" : "false"}
-                                  onClick={(event) => {
-                                    event.preventDefault();
-                                    toggleRunHistory(agent.id);
-                                  }}
-                                >
-                                  {isRunHistoryExpanded ? "Show less" : `Show all (${runs.length})`}
-                                </a>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              );
-            })}
-            {sortedRows.length === 0 && (
+            {sortedAgents.map((agent) => (
+              <AgentTableRow
+                key={agent.id}
+                agent={agent}
+                runs={runsByAgent[agent.id] || []}
+                includeOwner={includeOwner}
+                isExpanded={expandedAgentId === agent.id}
+                isRunHistoryExpanded={expandedRunHistory.has(agent.id)}
+                isPendingRun={runAgentMutation.isPending && runAgentMutation.variables === agent.id}
+                runsDataLoading={runsDataLoading}
+                editingAgentId={editingAgentId}
+                editingName={editingName}
+                onToggleRow={toggleAgentRow}
+                onToggleRunHistory={toggleRunHistory}
+                onRunAgent={handleRunAgent}
+                onChatAgent={handleChatAgent}
+                onDebugAgent={handleDebugAgent}
+                onDeleteAgent={handleDeleteAgent}
+                onStartEditingName={startEditingName}
+                onSaveNameAndExit={saveNameAndExit}
+                onCancelEditing={cancelEditing}
+                onEditingNameChange={setEditingName}
+                onRunActionsClick={dispatchDashboardEvent.bind(null, "run-actions")}
+              />
+            ))}
+            {sortedAgents.length === 0 && (
               <Table.Row>
                 <Table.Cell isHeader colSpan={emptyColspan}>
                   <EmptyState
@@ -1043,33 +840,6 @@ export default function DashboardPage() {
       }
       return { key, ascending: true };
     });
-  }
-
-  function handleRowKeyDown(event: ReactKeyboardEvent<HTMLTableRowElement>, agentId: number) {
-    const key = event.key;
-    if (key === "Enter") {
-      event.preventDefault();
-      toggleAgentRow(agentId);
-      return;
-    }
-
-    if (key !== "ArrowDown" && key !== "ArrowUp") {
-      return;
-    }
-
-    event.preventDefault();
-    const current = event.currentTarget;
-    const tbody = current.closest("tbody");
-    if (!tbody) {
-      return;
-    }
-    const rows = Array.from(tbody.querySelectorAll<HTMLTableRowElement>("tr[data-agent-id]"));
-    const index = rows.indexOf(current);
-    if (index === -1) {
-      return;
-    }
-    const nextIndex = key === "ArrowDown" ? Math.min(rows.length - 1, index + 1) : Math.max(0, index - 1);
-    rows[nextIndex]?.focus();
   }
 
   function handleRunAgent(event: ReactMouseEvent<HTMLButtonElement>, agentId: number, status: string) {
@@ -1135,218 +905,6 @@ const renderHeaderCell: HeaderRenderer = (label, sortKey, sortConfig, onSort, so
     </th>
   );
 };
-
-function renderOwnerCell(agent: AgentSummary) {
-  if (!agent.owner) {
-    return <span>-</span>;
-  }
-
-  const label = agent.owner.display_name?.trim() || agent.owner.email;
-  if (!label) {
-    return <span>-</span>;
-  }
-
-  return (
-    <div className="owner-wrapper">
-      {agent.owner.avatar_url && <img src={agent.owner.avatar_url} alt="" className="owner-avatar" aria-hidden="true" />}
-      <span>{label}</span>
-    </div>
-  );
-}
-
-function sortAgents(agents: AgentSummary[], runsByAgent: AgentRunsState, sortConfig: SortConfig): AgentSummary[] {
-  const sorted = [...agents];
-  sorted.sort((left, right) => {
-    const comparison = compareAgents(left, right, runsByAgent, sortConfig.key);
-    if (comparison !== 0) {
-      return sortConfig.ascending ? comparison : -comparison;
-    }
-    const fallback = left.name.toLowerCase().localeCompare(right.name.toLowerCase());
-    return sortConfig.ascending ? fallback : -fallback;
-  });
-  return sorted;
-}
-
-function compareAgents(
-  left: AgentSummary,
-  right: AgentSummary,
-  runsByAgent: AgentRunsState,
-  sortKey: SortKey
-): number {
-  switch (sortKey) {
-    case "name":
-      return left.name.toLowerCase().localeCompare(right.name.toLowerCase());
-    case "status":
-      return (STATUS_ORDER[left.status] ?? 99) - (STATUS_ORDER[right.status] ?? 99);
-    case "created_at":
-      return formatDateTimeShort(left.created_at ?? null).localeCompare(
-        formatDateTimeShort(right.created_at ?? null)
-      );
-    case "last_run":
-      return formatDateTimeShort(left.last_run_at ?? null).localeCompare(
-        formatDateTimeShort(right.last_run_at ?? null)
-      );
-    case "next_run":
-      return formatDateTimeShort(left.next_run_at ?? null).localeCompare(
-        formatDateTimeShort(right.next_run_at ?? null)
-      );
-    case "success": {
-      const leftStats = computeSuccessStats(runsByAgent[left.id]);
-      const rightStats = computeSuccessStats(runsByAgent[right.id]);
-      if (leftStats.rate === rightStats.rate) {
-        return leftStats.count - rightStats.count;
-      }
-      return leftStats.rate - rightStats.rate;
-    }
-    default:
-      return 0;
-  }
-}
-
-function computeSuccessStats(runs?: AgentRun[]): { display: string; rate: number; count: number } {
-  if (!runs || runs.length === 0) {
-    return { display: "0.0% (0)", rate: 0, count: 0 };
-  }
-
-  const successCount = runs.filter((run) => run.status === "success").length;
-  const successRate = runs.length === 0 ? 0 : (successCount / runs.length) * 100;
-  return {
-    display: `${successRate.toFixed(1)}% (${runs.length})`,
-    rate: successRate,
-    count: runs.length,
-  };
-}
-
-function determineLastRunIndicator(runs?: AgentRun[]): boolean | null {
-  if (!runs || runs.length === 0) {
-    return null;
-  }
-  const status = runs[0]?.status;
-  if (status === "success") {
-    return true;
-  }
-  if (status === "failed") {
-    return false;
-  }
-  return null;
-}
-
-function formatDateTimeShort(iso: string | null | undefined): string {
-  if (!iso) {
-    return "-";
-  }
-
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) {
-    return "-";
-  }
-
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(date.getUTCDate()).padStart(2, "0");
-  const hours = String(date.getUTCHours()).padStart(2, "0");
-  const minutes = String(date.getUTCMinutes()).padStart(2, "0");
-  return `${year}-${month}-${day}${NBSP}${hours}:${minutes}`;
-}
-
-function formatStatus(status: string): ReactElement {
-  switch (status) {
-    case "running":
-      return <><CircleDotIcon width={12} height={12} /> Running</>;
-    case "processing":
-      return <><LoaderIcon width={12} height={12} /> Processing</>;
-    case "error":
-      return <><AlertTriangleIcon width={12} height={12} /> Error</>;
-    case "idle":
-    default:
-      return <><CircleIcon width={12} height={12} /> Idle</>;
-  }
-}
-
-function formatDuration(durationMs?: number | null): string {
-  if (!durationMs) {
-    return "-";
-  }
-  const secondsTotal = Math.floor(durationMs / 1000);
-  const minutes = Math.floor(secondsTotal / 60);
-  const seconds = secondsTotal % 60;
-  if (minutes > 0) {
-    return `${minutes} m ${String(seconds).padStart(2, "0")} s`;
-  }
-  return `${seconds} s`;
-}
-
-function capitaliseFirst(value: string): string {
-  if (!value) {
-    return "";
-  }
-  return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function formatTokens(tokens?: number | null): string {
-  if (tokens === null || tokens === undefined) {
-    return "—";
-  }
-  return tokens.toString();
-}
-
-function formatCost(cost?: number | null): string {
-  if (cost === null || cost === undefined) {
-    return "—";
-  }
-  if (cost >= 0.1) {
-    return `$${cost.toFixed(2)}`;
-  }
-  if (cost >= 0.01) {
-    return `$${cost.toFixed(3)}`;
-  }
-  return `$${cost.toFixed(4)}`;
-}
-
-function formatRunStatusIcon(status: AgentRun["status"]): ReactElement {
-  switch (status) {
-    case "running":
-      return <PlayIcon width={12} height={12} />;
-    case "deferred":
-      return <LoaderIcon width={12} height={12} className="animate-spin" />;
-    case "success":
-      return <CheckCircleIcon width={12} height={12} />;
-    case "failed":
-      return <XCircleIcon width={12} height={12} />;
-    default:
-      return <CircleDotIcon width={12} height={12} />;
-  }
-}
-
-function loadSortConfig(): SortConfig {
-  if (typeof window === "undefined") {
-    return { key: "name", ascending: true };
-  }
-
-  const storedKey = window.localStorage.getItem(STORAGE_KEY_SORT) ?? "name";
-  const storedAsc = window.localStorage.getItem(STORAGE_KEY_ASC);
-
-  const keyMap: Record<string, SortKey> = {
-    name: "name",
-    status: "status",
-    created_at: "created_at",
-    last_run: "last_run",
-    next_run: "next_run",
-    success: "success",
-  };
-
-  const key = keyMap[storedKey] ?? "name";
-  const ascending = storedAsc === null ? true : storedAsc !== "0";
-  return { key, ascending };
-}
-
-function persistSortConfig(config: SortConfig) {
-  if (typeof window === "undefined") {
-    return;
-  }
-  window.localStorage.setItem(STORAGE_KEY_SORT, config.key);
-  window.localStorage.setItem(STORAGE_KEY_ASC, config.ascending ? "1" : "0");
-}
 
 type DashboardEventType = "run" | "edit" | "debug" | "delete" | "run-actions";
 
