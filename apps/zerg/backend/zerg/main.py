@@ -339,11 +339,38 @@ async def lifespan(app: FastAPI):
             # Job queue worker (durable job execution)
             if _settings.job_queue_enabled:
                 try:
+                    from pathlib import Path
+
                     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+                    from zerg.jobs.git_sync import GitSyncService
+                    from zerg.jobs.git_sync import run_git_sync_loop
+                    from zerg.jobs.git_sync import set_git_sync_service
                     from zerg.jobs.registry import register_all_jobs
                     from zerg.jobs.worker import enqueue_missed_runs
                     from zerg.jobs.worker import run_queue_worker
+
+                    # Initialize git sync service if configured
+                    if _settings.jobs_git_repo_url:
+                        git_service = GitSyncService(
+                            repo_url=_settings.jobs_git_repo_url,
+                            local_path=Path(_settings.jobs_dir),
+                            branch=_settings.jobs_git_branch,
+                            token=_settings.jobs_git_token,
+                        )
+
+                        # Clone repo (blocking - required for git jobs)
+                        await git_service.ensure_cloned()
+                        set_git_sync_service(git_service)
+
+                        # Start background sync loop
+                        if _settings.jobs_refresh_interval_seconds > 0:
+                            asyncio.create_task(run_git_sync_loop(git_service, _settings.jobs_refresh_interval_seconds))
+
+                        started.append("git_sync")
+                        logger.info(
+                            "Git sync service initialized: %s", git_service.current_sha[:8] if git_service.current_sha else "unknown"
+                        )
 
                     # Create scheduler for job cron triggers
                     job_scheduler = AsyncIOScheduler()

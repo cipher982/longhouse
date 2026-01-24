@@ -1,21 +1,7 @@
 /* Advanced Layout - GPU Accelerated & Glassmorphic */
-/* Build: 2026-01-24T04:17:00Z - Mobile layout fix */
+/* Build: 2026-01-24T05:00:00Z - Mobile layout refactor (overlay debug panel) */
 
-.jarvis-container .app-container {
-  display: grid;
-  grid-template-columns: 1fr;
-  height: 100%;
-  position: relative;
-  overflow: hidden;
-  background-color: transparent;
-}
-
-/* When debug panel is present on desktop, make room for it */
-@media (width >= 769px) {
-  .jarvis-container .app-container:has(.debug-panel) {
-    grid-template-columns: 280px 1fr;
-  }
-}
+/* app-container wrapper removed - main-content is now direct child of jarvis-container */
 
 /* Living Void Layer 2: Perspective grid floor (Tron-style)
    - Only shown when heavy effects are ON
@@ -43,17 +29,12 @@
   will-change: transform;
 }
 
-/* Living Void Layer 3: Ambient Glows (Optimized)
-   - REDUNDANT: Moved to global #react-root::after
-   - Keeping this selector empty to avoid breaking legacy code if any */
-#react-root[data-ui-effects="on"] .jarvis-container .app-container::after {
-  display: none;
-}
-
+/* Main content area - fills jarvis-container, single scroll container */
 .jarvis-container .main-content {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1;
+  min-height: 0; /* Critical for flex child to scroll */
   overflow: hidden;
   position: relative;
   z-index: 1;
@@ -629,28 +610,8 @@
   }
 }
 
-/* Responsive */
+/* Responsive - Mobile adjustments */
 @media (width <= 768px) {
-  .jarvis-container .sidebar,
-  .jarvis-container #sidebarToggle {
-    position: fixed;
-  }
-
-  .jarvis-container .sidebar {
-    transform: translateX(-100%);
-    transition: transform 0.3s ease;
-    z-index: 100;
-  }
-
-  .jarvis-container .sidebar.open {
-    transform: translateX(0);
-  }
-
-  /* Fixed elements don't participate in grid flow, so main-content must be explicitly placed */
-  .jarvis-container .main-content {
-    grid-column: 1;
-  }
-
   .jarvis-container .main-header {
     padding: var(--space-3) var(--space-4);
     height: 60px;
@@ -674,16 +635,14 @@
    ============================ */
 
 /* Pause animations when window loses focus (toggled via JS) */
-.jarvis-container.animations-paused .app-container::before,
-.jarvis-container.animations-paused .app-container::after,
+.jarvis-container.animations-paused .main-content::before,
 .jarvis-container.animations-paused .brand-logo-glow {
   animation-play-state: paused !important;
 }
 
 /* Respect user's reduced motion preference */
 @media (prefers-reduced-motion: reduce) {
-  .jarvis-container .app-container::before,
-  .jarvis-container .app-container::after,
+  .jarvis-container .main-content::before,
   .jarvis-container .brand-logo-glow {
     animation: none !important;
   }
