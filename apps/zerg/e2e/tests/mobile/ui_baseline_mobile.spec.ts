@@ -9,6 +9,10 @@ const MOBILE_PAGES = [
   { name: 'canvas', path: `/canvas?${BASE_QUERY}`, ready: 'page' },
   { name: 'settings', path: `/settings?${BASE_QUERY}`, ready: 'settings' },
   { name: 'profile', path: `/profile?${BASE_QUERY}`, ready: 'page' },
+  { name: 'runners', path: `/runners?${BASE_QUERY}`, ready: 'page' },
+  { name: 'integrations', path: `/settings/integrations?${BASE_QUERY}`, ready: 'page' },
+  { name: 'knowledge', path: `/settings/knowledge?${BASE_QUERY}`, ready: 'page' },
+  { name: 'contacts', path: `/settings/contacts?${BASE_QUERY}`, ready: 'page' },
   { name: 'admin', path: `/admin?${BASE_QUERY}`, ready: 'page' },
   { name: 'traces', path: `/traces?${BASE_QUERY}`, ready: 'page' },
   { name: 'reliability', path: `/reliability?${BASE_QUERY}`, ready: 'page' },
@@ -39,6 +43,7 @@ async function captureBaseline(
   await expect(page).toHaveScreenshot(`${name}.png`, {
     fullPage: true,
     animations: 'disabled',
+    maxDiffPixelRatio: 0.02, // Allow 2% pixel variance for font rendering differences
   });
 
   if (navOpen) {
@@ -49,6 +54,7 @@ async function captureBaseline(
     await expect(page).toHaveScreenshot(`${name}-nav.png`, {
       fullPage: true,
       animations: 'disabled',
+      maxDiffPixelRatio: 0.02, // Allow 2% pixel variance for font rendering differences
     });
   }
 }

@@ -51,9 +51,10 @@ import {
   createTransparentDragImage,
 } from "./canvas/dragDropUtils";
 import { SNAP_GRID_SIZE, debounce } from "./canvas/utils";
+import { ShortcutHelpOverlay } from "./canvas/ShortcutHelpOverlay";
+import { CanvasContextMenu } from "./canvas/CanvasContextMenu";
 
 import { getNodeIcon } from "../lib/iconUtils";
-import { XIcon } from "../components/icons";
 
 function CanvasPageContent() {
   const queryClient = useQueryClient();
@@ -69,7 +70,6 @@ function CanvasPageContent() {
   const canvasInitializedRef = useRef<boolean>(false);
   const initialFitDoneRef = useRef<boolean>(false);
   const toastIdRef = useRef<string | null>(null);
-  const contextMenuRef = useRef<HTMLDivElement | null>(null);
 
   // Pointer/touch drag handler (cross-platform support)
   const { startDrag, updateDragPosition, endDrag, getDragData } = usePointerDrag();
@@ -851,42 +851,6 @@ const handleToolPointerDown = useCallback(
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [showShortcutHelp]);
 
-  // Context menu handlers
-  useEffect(() => {
-    if (!contextMenu) {
-      return;
-    }
-
-    const handlePointer = (event: MouseEvent) => {
-      if (contextMenuRef.current?.contains(event.target as Node)) {
-        return;
-      }
-      setContextMenu(null);
-    };
-
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setContextMenu(null);
-      }
-    };
-
-    window.addEventListener("mousedown", handlePointer);
-    window.addEventListener("contextmenu", handlePointer);
-    window.addEventListener("keydown", handleEscape);
-
-    return () => {
-      window.removeEventListener("mousedown", handlePointer);
-      window.removeEventListener("contextmenu", handlePointer);
-      window.removeEventListener("keydown", handleEscape);
-    };
-  }, [contextMenu]);
-
-  useEffect(() => {
-    if (contextMenu && contextMenuRef.current) {
-      contextMenuRef.current.focus();
-    }
-  }, [contextMenu]);
-
   const handleNodeContextMenu = useCallback((event: React.MouseEvent, node: FlowNode) => {
     event.preventDefault();
     event.stopPropagation();
@@ -1066,44 +1030,18 @@ const handleToolPointerDown = useCallback(
       </div>
 
       {showShortcutHelp && (
-        <div className="shortcut-help-overlay" role="dialog" aria-modal="true" aria-labelledby="shortcut-help-title">
-          <div className="shortcut-help-panel">
-            <div className="shortcut-help-header">
-              <h3 id="shortcut-help-title">Canvas Shortcuts</h3>
-              <button
-                type="button"
-                className="close-logs"
-                onClick={() => setShowShortcutHelp(false)}
-                title="Close shortcuts"
-              >
-                <XIcon width={14} height={14} />
-              </button>
-            </div>
-            <ul className="shortcut-help-list">
-              <li><kbd>Shift</kbd> + <kbd>S</kbd> Toggle snap to grid</li>
-              <li><kbd>Shift</kbd> + <kbd>G</kbd> Toggle guides</li>
-              <li><kbd>Shift</kbd> + <kbd>/</kbd> Show this panel</li>
-            </ul>
-            <p className="shortcut-help-hint">Press Esc to close.</p>
-          </div>
-        </div>
+        <ShortcutHelpOverlay onClose={() => setShowShortcutHelp(false)} />
       )}
 
       {contextMenu && (
-        <div
-          ref={contextMenuRef}
-          className="canvas-context-menu"
-          role="menu"
-          tabIndex={-1}
-          style={{ top: contextMenu.y, left: contextMenu.x }}
-        >
-          <button type="button" role="menuitem" onClick={handleDuplicateNode}>
-            Duplicate node
-          </button>
-          <button type="button" role="menuitem" onClick={handleDeleteNode}>
-            Delete node
-          </button>
-        </div>
+        <CanvasContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          nodeId={contextMenu.nodeId}
+          onDuplicate={handleDuplicateNode}
+          onDelete={handleDeleteNode}
+          onClose={() => setContextMenu(null)}
+        />
       )}
     </>
   );

@@ -1,7 +1,21 @@
-import { Fragment, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { PlayIcon, MessageCircleIcon, SettingsIcon, TrashIcon, ChevronRightIcon, ChevronDownIcon } from "../../components/icons";
+import React, { Fragment, memo, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactElement } from "react";
+import clsx from "clsx";
+import {
+  PlayIcon,
+  MessageCircleIcon,
+  SettingsIcon,
+  TrashIcon,
+  InfoCircleIcon,
+  CheckCircleIcon,
+  XCircleIcon,
+  CircleIcon,
+  CircleDotIcon,
+  LoaderIcon,
+  AlertTriangleIcon,
+} from "../../components/icons";
 import type { AgentSummary, AgentRun } from "../../services/api";
-import { formatDateTimeShort, formatStatus, formatDuration, capitaliseFirst, formatTokens, formatCost, formatRunStatusIcon } from "./formatters";
+import { Table, Badge, IconButton } from "../../components/ui";
+import { formatDateTimeShort, formatDuration, capitaliseFirst, formatTokens, formatCost } from "./formatters";
 import { computeSuccessStats, determineLastRunIndicator } from "./sorting";
 
 interface AgentTableRowProps {
@@ -27,7 +41,54 @@ interface AgentTableRowProps {
   onRunActionsClick: (agentId: number, runId: number) => void;
 }
 
-export function AgentTableRow({
+function formatStatus(status: string): ReactElement {
+  switch (status) {
+    case "running":
+      return <><CircleDotIcon width={12} height={12} /> Running</>;
+    case "processing":
+      return <><LoaderIcon width={12} height={12} /> Processing</>;
+    case "error":
+      return <><AlertTriangleIcon width={12} height={12} /> Error</>;
+    case "idle":
+    default:
+      return <><CircleIcon width={12} height={12} /> Idle</>;
+  }
+}
+
+function formatRunStatusIcon(status: AgentRun["status"]): ReactElement {
+  switch (status) {
+    case "running":
+      return <PlayIcon width={12} height={12} />;
+    case "deferred":
+      return <LoaderIcon width={12} height={12} className="animate-spin" />;
+    case "success":
+      return <CheckCircleIcon width={12} height={12} />;
+    case "failed":
+      return <XCircleIcon width={12} height={12} />;
+    default:
+      return <CircleDotIcon width={12} height={12} />;
+  }
+}
+
+function renderOwnerCell(agent: AgentSummary) {
+  if (!agent.owner) {
+    return <span>-</span>;
+  }
+
+  const label = agent.owner.display_name?.trim() || agent.owner.email;
+  if (!label) {
+    return <span>-</span>;
+  }
+
+  return (
+    <div className="owner-wrapper">
+      {agent.owner.avatar_url && <img src={agent.owner.avatar_url} alt="" className="owner-avatar" aria-hidden="true" />}
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function AgentTableRowComponent({
   agent,
   runs,
   includeOwner,
@@ -84,31 +145,16 @@ export function AgentTableRow({
     rows[nextIndex]?.focus();
   };
 
-  const detailRowId = `agent-detail-${agent.id}`;
-
   return (
-    <Fragment key={agent.id}>
-      <tr
+    <Fragment>
+      <Table.Row
         data-agent-id={agent.id}
-        className={`agent-row ${agent.status === "error" ? "error-row" : ""}`}
-        tabIndex={0}
+        aria-expanded={isExpanded}
+        className={clsx('agent-row', agent.status === "error" && "error-row")}
         onClick={() => onToggleRow(agent.id)}
         onKeyDown={handleRowKeyDown}
       >
-        <td data-label="Name" className="name-cell">
-          <button
-            type="button"
-            className="expand-toggle-btn"
-            aria-expanded={isExpanded}
-            aria-controls={detailRowId}
-            aria-label={isExpanded ? `Collapse ${agent.name} details` : `Expand ${agent.name} details`}
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleRow(agent.id);
-            }}
-          >
-            {isExpanded ? <ChevronDownIcon /> : <ChevronRightIcon />}
-          </button>
+        <Table.Cell data-label="Name" className="name-cell">
           {editingAgentId === agent.id ? (
             <input
               className="inline-edit-input"
@@ -138,81 +184,75 @@ export function AgentTableRow({
               {agent.name}
             </span>
           )}
-        </td>
+        </Table.Cell>
         {includeOwner && (
-          <td className="owner-cell" data-label="Owner">
+          <Table.Cell className="owner-cell" data-label="Owner">
             {renderOwnerCell(agent)}
-          </td>
+          </Table.Cell>
         )}
-        <td data-label="Status">
-          <span className={`status-indicator status-${agent.status.toLowerCase()}`}>
+        <Table.Cell data-label="Status">
+          <Badge variant={agent.status === 'error' ? 'error' : agent.status === 'running' || agent.status === 'processing' ? 'warning' : 'success'}>
             {formatStatus(agent.status)}
-          </span>
+          </Badge>
           {agent.last_error && agent.last_error.trim() && (
             <span className="info-icon" title={agent.last_error}>
-              ℹ
+              <InfoCircleIcon width={14} height={14} />
             </span>
           )}
           {lastRunIndicator !== null && (
             <span
               className={lastRunIndicator ? "last-run-indicator last-run-success" : "last-run-indicator last-run-failure"}
             >
-              {lastRunIndicator ? " (Last: ✓)" : " (Last: ✗)"}
+              {lastRunIndicator
+                ? <> (Last: <CheckCircleIcon width={12} height={12} />)</>
+                : <> (Last: <XCircleIcon width={12} height={12} />)</>}
             </span>
           )}
-        </td>
-        <td data-label="Created">{createdDisplay}</td>
-        <td data-label="Last Run">{lastRunDisplay}</td>
-        <td data-label="Next Run">{nextRunDisplay}</td>
-        <td data-label="Success Rate">{successStats.display}</td>
-        <td className="actions-cell" data-label="Actions">
+        </Table.Cell>
+        <Table.Cell data-label="Created">{createdDisplay}</Table.Cell>
+        <Table.Cell data-label="Last Run">{lastRunDisplay}</Table.Cell>
+        <Table.Cell data-label="Next Run">{nextRunDisplay}</Table.Cell>
+        <Table.Cell data-label="Success Rate">{successStats.display}</Table.Cell>
+        <Table.Cell className="actions-cell" data-label="Actions">
           <div className="actions-cell-inner">
-            <button
-              type="button"
-              className={`action-btn run-btn${isRunning || isPendingRun ? " disabled" : ""}`}
+            <IconButton
+              className={clsx("run-btn", (isRunning || isPendingRun) && "disabled")}
               data-testid={`run-agent-${agent.id}`}
               disabled={isRunning || isPendingRun}
               title={isRunning ? "Agent is already running" : "Run Agent"}
-              aria-label={isRunning ? "Agent is already running" : "Run Agent"}
               onClick={(event) => onRunAgent(event, agent.id, agent.status)}
             >
               <PlayIcon />
-            </button>
-            <button
-              type="button"
-              className="action-btn chat-btn"
+            </IconButton>
+            <IconButton
+              className="chat-btn"
               data-testid={`chat-agent-${agent.id}`}
               title="Chat with Agent"
-              aria-label="Chat with Agent"
               onClick={(event) => onChatAgent(event, agent.id, agent.name)}
             >
               <MessageCircleIcon />
-            </button>
-            <button
-              type="button"
-              className="action-btn debug-btn"
+            </IconButton>
+            <IconButton
+              className="debug-btn"
               data-testid={`debug-agent-${agent.id}`}
               title="Debug / Info"
-              aria-label="Debug / Info"
               onClick={(event) => onDebugAgent(event, agent.id)}
             >
               <SettingsIcon />
-            </button>
-            <button
-              type="button"
-              className="action-btn delete-btn"
+            </IconButton>
+            <IconButton
+              className="delete-btn"
               data-testid={`delete-agent-${agent.id}`}
               title="Delete Agent"
-              aria-label="Delete Agent"
               onClick={(event) => onDeleteAgent(event, agent.id, agent.name)}
             >
               <TrashIcon />
-            </button>
+            </IconButton>
           </div>
-        </td>
-      </tr>
+        </Table.Cell>
+      </Table.Row>
       {isExpanded && (
-        <tr id={detailRowId} className="agent-detail-row" key={`detail-${agent.id}`}>
+        <tr className="agent-detail-row" key={`detail-${agent.id}`}>
           <td colSpan={emptyColspan}>
             <div className="agent-detail-container">
               {runsDataLoading && <span>Loading run history...</span>}
@@ -292,20 +332,6 @@ export function AgentTableRow({
   );
 }
 
-function renderOwnerCell(agent: AgentSummary) {
-  if (!agent.owner) {
-    return <span>-</span>;
-  }
-
-  const label = agent.owner.display_name?.trim() || agent.owner.email;
-  if (!label) {
-    return <span>-</span>;
-  }
-
-  return (
-    <div className="owner-wrapper">
-      {agent.owner.avatar_url && <img src={agent.owner.avatar_url} alt="" className="owner-avatar" aria-hidden="true" />}
-      <span>{label}</span>
-    </div>
-  );
-}
+// Wrap with React.memo for performance optimization
+// The component will only re-render when its props change
+export const AgentTableRow = memo(AgentTableRowComponent);
