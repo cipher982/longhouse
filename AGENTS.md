@@ -39,6 +39,8 @@ make regen-sse        # Regenerate SSE types
 User → nginx:30080 → FastAPI backend (47300) + React frontend (47200)
 ```
 
+**Database:** Zerg DB is a schema inside Life Hub's Postgres (same server). No separate sync needed for structured data.
+
 **Supervisor/Worker Flow:**
 User message → `SupervisorService` → `supervisor_react_engine` → (spawn_worker) → `AgentInterrupted` → WAITING → worker runs → `worker_resume` → response
 
@@ -150,3 +152,4 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-24) [pattern] UX needs multi-level alerting: auto-ack obvious “continue?” prompts, hard-stop attention for risky/ambiguous states; keep “fun” vibe without sacrificing triage speed.
 - (2026-01-24) [gotcha] Jarvis is no longer a separate app; it’s just the chat page, so unify its styles with the main frontend when refactoring.
 - (2026-01-24) [gotcha] Repo policy: work only on main, no worktrees; confirm `git -C /Users/davidrose/git/zerg status -sb` before changes; no stashing unless explicitly requested.
+- (2026-01-24) [tool] Claude Code sessions are stored at `~/.claude/projects/{encoded-cwd}/{sessionId}.jsonl`; `--resume` requires the file locally.
