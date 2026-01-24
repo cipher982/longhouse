@@ -87,6 +87,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
 - [x] Add a focused mobile viewport test project in Playwright (after design lock).
   - [x] Added `mobile` Playwright project + baseline spec (`tests/mobile/ui_baseline_mobile.spec.ts`).
   - [x] Added Makefile helpers for mobile baseline runs.
+  - [x] Expanded mobile baseline coverage (profile/admin/traces/reliability).
 - [!] Add a11y regression gate (axe + color contrast) to CI.
   - [!] Blocked: CI doesn’t install Playwright + backend deps (`uv`, Postgres) yet.
 
