@@ -15,6 +15,16 @@
   position: relative; /* For the ::before overlay and fixed debug panel */
 }
 
+/* Loading state for chat hydration */
+.jarvis-container.jarvis-loading {
+  align-items: center;
+  justify-content: center;
+}
+
+.jarvis-loading-text {
+  color: var(--color-text-secondary);
+}
+
 /* Global Reset & Base - scoped */
 .jarvis-container * {
   box-sizing: border-box;
