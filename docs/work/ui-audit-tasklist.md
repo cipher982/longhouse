@@ -98,4 +98,5 @@ Principle: this doc is the source of truth for UI work. Update after every meani
   - [x] Added safe-area padding for mobile header + nav drawer.
 - [~] Chat layout: sidebar behavior + composer sizing.
   - [x] Added mobile thread scrim + tightened composer layout and safe-area spacing.
-- [ ] Canvas: layout rules + minimal mode.
+- [~] Canvas: layout rules + minimal mode.
+  - [x] Mobile logs panel: bottom sheet layout + safe-area padding.
