@@ -840,10 +840,10 @@ TOOLS: List[StructuredTool] = [
         func=spawn_worker,
         coroutine=spawn_worker_async,
         name="spawn_worker",
-        description="Spawn a worker agent to execute a task and wait for completion. "
-        "The worker runs in the background and this tool returns when the worker finishes. "
-        "Use this to delegate complex tasks that require tool use or research. "
-        "For workspace execution (code changes), set execution_mode='workspace' and provide git_repo URL.",
+        description="Spawn a worker agent to execute a task. "
+        "IMPORTANT: For ANY task involving a git repository (cloning, reading files, analyzing code), "
+        "you MUST set execution_mode='workspace' and git_repo='https://github.com/org/repo.git'. "
+        "Do NOT use runner_exec to clone repos. Workspace mode clones automatically.",
     ),
     StructuredTool.from_function(
         func=list_workers,
