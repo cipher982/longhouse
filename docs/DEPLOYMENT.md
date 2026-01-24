@@ -272,24 +272,33 @@ SSE endpoints are authenticated and tied to an active run. The easiest verificat
 After deployment, run the smoke test script to validate all critical endpoints:
 
 ```bash
-# Test production
+# Test production (default: public + auth + basic LLM)
 ./scripts/smoke-prod.sh
 
 # Wait 90s after deploy, then test
 ./scripts/smoke-prod.sh --wait
 
-# Test custom URL
-BASE_URL=https://staging.swarmlet.com ./scripts/smoke-prod.sh
+# Quick public health only
+./scripts/smoke-prod.sh --quick
+
+# Full (CRUD + email + infra)
+./scripts/smoke-prod.sh --full
+
+# Test custom URLs
+FRONTEND_URL=https://staging.swarmlet.com \
+API_URL=https://api-staging.swarmlet.com \
+./scripts/smoke-prod.sh
 ```
 
 The smoke test validates:
 
-- Landing page (GET /)
-- Health endpoint (GET /health)
-- Dashboard auth redirect (GET /dashboard)
-- Funnel batch origin check (POST /api/funnel/batch → 403 without Origin header)
-- Auth verify returns 401 without session (GET /api/auth/verify)
-- API proxy works (GET /api/users/me → 401)
+- Health + readiness (GET /health + checks)
+- Frontend routes (/, /chat, /dashboard) + runtime config API URL
+- CORS preflight for auth + chat endpoints
+- Auth gates (401s for protected endpoints when unauthenticated)
+- Authenticated checks when `SMOKE_TEST_SECRET` is set
+- Basic LLM chat checks (2+2, capital of France) when `SMOKE_TEST_SECRET` is set
+- Optional `--full`: contacts CRUD + email tool + infra/Caddy check
 
 ## Monitoring
 
