@@ -3,6 +3,9 @@
     width: 100%;
     margin: 0 auto;
     padding: var(--space-6);
+    padding-bottom: var(--space-8); /* Extra space so content clears status bar */
+    overflow-y: auto;
+    min-height: 0; /* Required for flex children to respect overflow */
   }
 
   .page-shell--narrow {
