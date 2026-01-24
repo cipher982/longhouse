@@ -30,8 +30,8 @@ from zerg and registers jobs:
 Usage:
     from zerg.jobs import register_all_jobs
 
-    # In scheduler startup:
-    register_all_jobs(scheduler)
+    # In scheduler startup (async):
+    await register_all_jobs(scheduler)
 """
 
 from .git_sync import GitSyncError
@@ -39,6 +39,7 @@ from .git_sync import GitSyncService
 from .git_sync import get_git_sync_service
 from .git_sync import run_git_sync_loop
 from .git_sync import set_git_sync_service
+from .loader import get_manifest_metadata
 from .loader import load_jobs_manifest
 from .registry import JobConfig
 from .registry import JobRegistry
@@ -59,4 +60,5 @@ __all__ = [
     "set_git_sync_service",
     # Manifest loader
     "load_jobs_manifest",
+    "get_manifest_metadata",
 ]
