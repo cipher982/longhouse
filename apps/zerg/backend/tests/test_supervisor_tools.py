@@ -16,6 +16,7 @@ from zerg.tools.builtin.supervisor_tools import list_workers
 from zerg.tools.builtin.supervisor_tools import read_worker_file
 from zerg.tools.builtin.supervisor_tools import read_worker_result
 from zerg.tools.builtin.supervisor_tools import spawn_worker
+from zerg.tools.builtin.supervisor_tools import spawn_workspace_worker
 
 
 @pytest.fixture
@@ -69,6 +70,173 @@ def test_spawn_worker_no_context():
 
     assert "Error" in result
     assert "no credential context" in result
+
+
+def test_spawn_workspace_worker_success(credential_context, temp_artifact_path, db_session):
+    """Test spawning a workspace worker with git_repo creates correct job config."""
+    result = spawn_workspace_worker(
+        task="List dependencies from pyproject.toml",
+        git_repo="https://github.com/langchain-ai/langchain.git",
+        model=TEST_WORKER_MODEL,
+    )
+
+    # Verify result format - job queued
+    assert "Worker job" in result
+    assert "queued successfully" in result
+    assert "Working on:" in result
+
+    # Extract job_id from result
+    import re
+
+    job_id_match = re.search(r"Worker job (\d+)", result)
+    assert job_id_match, f"Could not find job ID in result: {result}"
+    job_id = int(job_id_match.group(1))
+    assert job_id > 0
+
+    # Verify job record has workspace execution config
+    from zerg.models.models import WorkerJob
+
+    job = db_session.query(WorkerJob).filter(WorkerJob.id == job_id).first()
+    assert job is not None
+    assert job.status == "queued"
+    assert job.config is not None
+    assert job.config.get("execution_mode") == "workspace"
+    assert job.config.get("git_repo") == "https://github.com/langchain-ai/langchain.git"
+
+
+def test_spawn_workspace_worker_no_context():
+    """Test spawning workspace worker without credential context fails gracefully."""
+    result = spawn_workspace_worker(
+        task="Test task",
+        git_repo="https://github.com/test/repo.git",
+    )
+
+    assert "Error" in result
+    assert "no credential context" in result
+
+
+def test_spawn_worker_has_no_config(credential_context, temp_artifact_path, db_session):
+    """Test that standard spawn_worker creates job WITHOUT execution config."""
+    result = spawn_worker(task="Check disk space", model=TEST_WORKER_MODEL)
+
+    # Verify result format
+    assert "Worker job" in result
+    assert "queued successfully" in result
+
+    # Extract job_id
+    import re
+
+    job_id_match = re.search(r"Worker job (\d+)", result)
+    assert job_id_match
+    job_id = int(job_id_match.group(1))
+
+    # Verify job record has NO config (standard mode)
+    from zerg.models.models import WorkerJob
+
+    job = db_session.query(WorkerJob).filter(WorkerJob.id == job_id).first()
+    assert job is not None
+    assert job.config is None  # Standard worker has no special config
+
+
+def test_spawn_workspace_worker_ssh_url(credential_context, temp_artifact_path, db_session):
+    """Test spawning workspace worker with SSH git URL."""
+    result = spawn_workspace_worker(
+        task="Fix typo in README.md",
+        git_repo="git@github.com:cipher982/zerg.git",
+        model=TEST_WORKER_MODEL,
+    )
+
+    assert "Worker job" in result
+    assert "queued successfully" in result
+
+    # Extract job_id and verify config
+    import re
+
+    job_id_match = re.search(r"Worker job (\d+)", result)
+    job_id = int(job_id_match.group(1))
+
+    from zerg.models.models import WorkerJob
+
+    job = db_session.query(WorkerJob).filter(WorkerJob.id == job_id).first()
+    assert job.config.get("git_repo") == "git@github.com:cipher982/zerg.git"
+    assert job.config.get("execution_mode") == "workspace"
+
+
+def test_spawn_workspace_worker_rejects_file_url(credential_context, temp_artifact_path):
+    """Test that file:// URLs are rejected early (security)."""
+    result = spawn_workspace_worker(
+        task="Test task",
+        git_repo="file:///etc/passwd",
+    )
+
+    assert "Error" in result
+    assert "https://" in result or "git@" in result
+
+
+def test_spawn_workspace_worker_rejects_flag_injection(credential_context, temp_artifact_path):
+    """Test that URLs starting with '-' are rejected (flag injection)."""
+    result = spawn_workspace_worker(
+        task="Test task",
+        git_repo="-o ProxyCommand=whoami",
+    )
+
+    assert "Error" in result
+    assert "flag injection" in result.lower() or "cannot start with" in result
+
+
+def test_spawn_workspace_worker_rejects_empty_repo(credential_context, temp_artifact_path):
+    """Test that empty git_repo is rejected."""
+    result = spawn_workspace_worker(
+        task="Test task",
+        git_repo="",
+    )
+
+    assert "Error" in result
+    assert "required" in result
+
+
+def test_spawn_workspace_worker_security_filtering(
+    credential_context, temp_artifact_path, db_session, test_user
+):
+    """Test that workspace workers respect owner isolation."""
+    from zerg.connectors.resolver import CredentialResolver
+    from zerg.crud import crud
+
+    # 1. Create workspace worker as User A
+    spawn_workspace_worker(
+        task="User A repo task",
+        git_repo="https://github.com/user-a/repo.git",
+        model=TEST_WORKER_MODEL,
+    )
+
+    # Verify User A can see it
+    result_a = list_workers()
+    assert "User A repo task" in result_a
+
+    # 2. Create User B
+    user_b = crud.create_user(db=db_session, email="userb_workspace@test.com")
+
+    # Switch to User B context
+    resolver_b = CredentialResolver(agent_id=2, db=db_session, owner_id=user_b.id)
+    set_credential_resolver(resolver_b)
+
+    # User B CANNOT see User A's workspace worker
+    result_b = list_workers()
+    assert "User A repo task" not in result_b
+
+    # 3. User B creates their own workspace worker
+    spawn_workspace_worker(
+        task="User B repo task",
+        git_repo="https://github.com/user-b/repo.git",
+        model=TEST_WORKER_MODEL,
+    )
+
+    result_b_2 = list_workers()
+    assert "User B repo task" in result_b_2
+    assert "User A repo task" not in result_b_2
+
+    # Restore User A context
+    set_credential_resolver(credential_context)
 
 
 def test_list_workers_empty(temp_artifact_path):

@@ -306,6 +306,15 @@ async def spawn_workspace_worker_async(
         spawn_workspace_worker("List dependencies from pyproject.toml", "https://github.com/langchain-ai/langchain.git")
         spawn_workspace_worker("Fix the typo in README.md", "git@github.com:user/repo.git")
     """
+    # Early validation: reject dangerous URLs before job creation (defense in depth)
+    # workspace_manager also validates, but early rejection gives better error messages
+    if not git_repo or not git_repo.strip():
+        return "Error: git_repo is required"
+    if git_repo.startswith("-"):
+        return "Error: git_repo cannot start with '-' (flag injection)"
+    if not (git_repo.startswith("https://") or git_repo.startswith("git@")):
+        return f"Error: git_repo must use https:// or git@ protocol, got: {git_repo[:50]}"
+
     # Delegate to the core implementation with workspace mode forced
     return await spawn_worker_async(
         task=task,
