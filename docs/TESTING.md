@@ -74,6 +74,7 @@ On failure:
 | `make qa-ui-baseline-update` | Update public + app baseline screenshots | After intentional UI updates |
 | `make qa-ui-baseline-mobile` | Run mobile viewport baselines (iPhone 13 + iPhone SE) | Mobile layout check |
 | `make qa-ui-baseline-mobile-update` | Update mobile viewport baselines (iPhone 13 + iPhone SE) | After mobile UI updates |
+| `make qa-ui-full` | Full UI regression sweep (a11y + desktop + mobile baselines) | Pre-merge UI validation |
 | `make test-e2e-ui` | Interactive Playwright UI runner | Debugging layout/flows |
 | `make test-e2e-single TEST=tests/<spec>.ts` | Targeted flow check | Focused iteration |
 | `make test-e2e-single TEST=tests/ui_baseline_public.spec.ts` | Public page visual baselines | Smoke visual diffs |
