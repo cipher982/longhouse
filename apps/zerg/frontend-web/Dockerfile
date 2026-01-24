@@ -5,6 +5,10 @@
 # Builder stage - build frontend for production
 FROM oven/bun:alpine AS builder
 
+# Cache-bust arg - change value to force full rebuild
+ARG CACHE_BUST=20260124-v2
+RUN echo "Cache bust: $CACHE_BUST"
+
 WORKDIR /app
 
 # Copy package files first for better caching
