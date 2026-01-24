@@ -176,4 +176,4 @@ class TestCloudExecutor:
         # We can't easily test the exact command without running it,
         # but we can verify the executor has correct attributes
         assert executor.hatch_path == "hatch"
-        assert executor.default_model == "bedrock/claude-sonnet"
+        assert executor.default_model == "zai/glm-4.7"
