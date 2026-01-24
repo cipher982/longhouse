@@ -151,6 +151,16 @@ const config = {
       testIgnore: ['**/core/**'],
       use: { ...devices['Desktop Chrome'] },
     },
+    {
+      name: 'mobile',
+      testDir: './tests/mobile',
+      use: { ...devices['iPhone 13'] },
+    },
+    {
+      name: 'mobile-small',
+      testDir: './tests/mobile',
+      use: { ...devices['iPhone SE'] },
+    },
   ],
 
   webServer: [

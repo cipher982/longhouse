@@ -20,11 +20,13 @@ def test_seed_credentials_script_imports():
     from scripts.seed_personal_credentials import load_credentials
     from scripts.seed_personal_credentials import main
     from scripts.seed_personal_credentials import seed_credential
+    from scripts.seed_personal_credentials import seed_credentials_for_user
 
     assert callable(main)
     assert callable(load_credentials)
     assert callable(find_user)
     assert callable(seed_credential)
+    assert callable(seed_credentials_for_user)
 
 
 def test_seed_credential_creates_new(db_session: Session, test_user: User):
@@ -104,6 +106,46 @@ def test_seed_credential_overwrites_with_force(db_session: Session, test_user: U
     # Decrypt and verify it was updated
     decrypted = json.loads(decrypt(credential.encrypted_value))
     assert decrypted["url"] == "https://new.com"
+
+
+def test_seed_credential_merge_fills_missing_keys(db_session: Session, test_user: User):
+    """Test merge mode fills missing credential keys without overwriting existing ones."""
+    from scripts.seed_personal_credentials import seed_credential
+
+    existing = AccountConnectorCredential(
+        owner_id=test_user.id,
+        connector_type="whoop",
+        encrypted_value=encrypt(json.dumps({"access_token": "old-token", "client_id": "cid"})),
+    )
+    db_session.add(existing)
+    db_session.commit()
+
+    incoming = {
+        "access_token": "new-token",
+        "refresh_token": "refresh-token",
+        "client_id": "cid",
+        "client_secret": "secret",
+    }
+
+    result = seed_credential(db_session, test_user, "whoop", incoming, merge=True)
+    assert result is True
+    db_session.commit()
+
+    credential = (
+        db_session.query(AccountConnectorCredential)
+        .filter(
+            AccountConnectorCredential.owner_id == test_user.id,
+            AccountConnectorCredential.connector_type == "whoop",
+        )
+        .first()
+    )
+
+    assert credential is not None
+    decrypted = json.loads(decrypt(credential.encrypted_value))
+    assert decrypted["access_token"] == "old-token"
+    assert decrypted["refresh_token"] == "refresh-token"
+    assert decrypted["client_id"] == "cid"
+    assert decrypted["client_secret"] == "secret"
 
 
 def test_seed_all_personal_connectors(db_session: Session, test_user: User):

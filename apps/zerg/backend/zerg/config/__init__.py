@@ -101,11 +101,16 @@ class Settings:  # noqa: D401 – simple data container
 
     # Jarvis integration ------------------------------------------------
     jarvis_device_secret: str | None
+    jarvis_workspace_path: str  # Base path for cloud workspaces
 
-    # Life Hub integration ---------------------------------------------
-    lifehub_shipping_enabled: bool
-    lifehub_url: str
-    lifehub_api_key: str | None
+    # Completion notifications ------------------------------------------
+    notification_webhook: str | None  # Discord/Slack webhook for run completion
+
+    # Smoke testing -----------------------------------------------------
+    smoke_test_secret: str | None  # Service account login for smoke tests
+
+    # Job queue settings -----------------------------------------------
+    job_queue_enabled: bool  # Enable durable job queue (uses DATABASE_URL)
 
     # Container runner settings ----------------------------------------
     container_default_image: str | None
@@ -120,6 +125,9 @@ class Settings:  # noqa: D401 – simple data container
     # Roundabout LLM decider settings ----------------------------------
     roundabout_routing_model: str | None  # Override routing model (default: use_case lookup)
     roundabout_llm_timeout: float  # Timeout for LLM routing calls (default: 1.5s)
+
+    # Bootstrap API settings -------------------------------------------
+    bootstrap_token: str | None  # Token for CLI-based bootstrap API auth
 
     # Supervisor tool output storage -----------------------------------
     supervisor_tool_output_max_chars: int  # Max tool output chars before storing (0 = disabled)
@@ -219,7 +227,9 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
             ]:
                 preserved[key] = os.getenv(key)
 
-        load_dotenv(env_path, override=True)  # Project .env is authoritative for development
+        # In tests, avoid overriding runtime env vars (monkeypatch/fixtures).
+        # In dev/prod, .env remains authoritative.
+        load_dotenv(env_path, override=not testing)
 
         # Restore E2E test environment variables if they were explicitly set
         if is_e2e_test_env:
@@ -264,9 +274,10 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         discord_daily_digest_cron=os.getenv("DISCORD_DAILY_DIGEST_CRON", "0 8 * * *"),
         db_reset_password=os.getenv("DB_RESET_PASSWORD"),
         jarvis_device_secret=os.getenv("JARVIS_DEVICE_SECRET"),
-        lifehub_shipping_enabled=_truthy(os.getenv("LIFE_HUB_SHIPPING_ENABLED")),
-        lifehub_url=os.getenv("LIFE_HUB_URL", "https://data.drose.io"),
-        lifehub_api_key=os.getenv("LIFE_HUB_API_KEY"),
+        jarvis_workspace_path=os.getenv("JARVIS_WORKSPACE_PATH", "/var/jarvis/workspaces"),
+        notification_webhook=os.getenv("NOTIFICATION_WEBHOOK"),
+        smoke_test_secret=os.getenv("SMOKE_TEST_SECRET"),
+        job_queue_enabled=_truthy(os.getenv("JOB_QUEUE_ENABLED")),
         # Container runner defaults
         container_default_image=os.getenv("CONTAINER_DEFAULT_IMAGE", "python:3.11-slim"),
         container_network_enabled=_truthy(os.getenv("CONTAINER_NETWORK_ENABLED")),
@@ -279,6 +290,8 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         # Roundabout settings
         roundabout_routing_model=os.getenv("ROUNDABOUT_ROUTING_MODEL"),  # None = use default
         roundabout_llm_timeout=float(os.getenv("ROUNDABOUT_LLM_TIMEOUT", "1.5")),
+        # Bootstrap API settings
+        bootstrap_token=os.getenv("BOOTSTRAP_TOKEN"),
         # Supervisor tool output storage
         supervisor_tool_output_max_chars=int(os.getenv("SUPERVISOR_TOOL_OUTPUT_MAX_CHARS", "8000")),
         supervisor_tool_output_preview_chars=int(os.getenv("SUPERVISOR_TOOL_OUTPUT_PREVIEW_CHARS", "1200")),

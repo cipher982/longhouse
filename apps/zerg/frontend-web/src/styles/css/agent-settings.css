@@ -202,35 +202,15 @@
     border-color: var(--color-brand-primary);
   }
 
-  .custom-tool-input button {
-    padding: var(--space-2) var(--space-4);
-    border-radius: var(--radius-md);
-    border: none;
-    background: var(--color-surface-elevated);
-    color: inherit;
-    cursor: pointer;
-    font-family: var(--font-family-base);
-    font-size: var(--font-size-sm);
-    transition: background-color var(--motion-duration-fast)
-      var(--motion-easing-standard);
-  }
-
-  .custom-tool-input button:hover {
-    background: var(--color-border-primary);
-  }
-
   .tool-actions {
     display: flex;
     gap: var(--space-3);
     flex-wrap: wrap;
   }
 
-  /* Button styles now inherit from buttons.css (legacy) and ui.css (new system) */
+  /* Button styles now inherit from ui.css (new system) */
   /* Scoped overrides for agent-settings context */
-  .agent-settings-drawer .btn-primary,
-  .agent-settings-drawer .btn-secondary,
-  .agent-settings-drawer .btn-tertiary,
-  .agent-settings-drawer .btn-danger {
+  .agent-settings-drawer .ui-button {
     font-family: var(--font-family-base);
     font-weight: 600;
   }
@@ -618,9 +598,7 @@
    ------------------------------------------------------------------ */
 
   .integrations-page-container {
-    padding: var(--space-8);
-    max-width: 1000px;
-    margin: 0 auto;
+    width: 100%;
   }
 
   .integrations-content {

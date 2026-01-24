@@ -117,8 +117,8 @@ export default function JarvisChatPage() {
   // Show loading state while fetching thread
   if (loading) {
     return (
-      <div className="jarvis-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ color: '#9ca3af' }}>Loading conversation...</div>
+      <div className="jarvis-container jarvis-loading">
+        <div className="jarvis-loading-text">Loading conversation...</div>
       </div>
     );
   }

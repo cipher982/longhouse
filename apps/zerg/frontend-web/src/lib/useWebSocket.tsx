@@ -129,7 +129,7 @@ export function useWebSocket(
   }, [invalidateQueries]);
 
   const buildWebSocketUrl = useCallback(() => {
-    const base = resolveWsBase();
+    const base = resolveWsBase().replace(/\/+$/, ''); // Strip trailing slashes
     const url = new URL("/api/ws", base);
 
     // Auth is handled via HttpOnly cookie (swarmlet_session)
@@ -188,6 +188,7 @@ export function useWebSocket(
         queryClient.invalidateQueries({ queryKey });
       });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sendMessage is stable (defined via useCallback below)
   }, [queryClient]);
 
   const handleConnect = useCallback(() => {

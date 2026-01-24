@@ -16,6 +16,7 @@ if _settings.e2e_log_suppress:
     silence_info_logs()
 
 # --- TOP: Force silence for E2E or CLI if LOG_LEVEL=WARNING is set ---
+import asyncio
 import logging
 
 # ---------------------------------------------------------------------
@@ -46,17 +47,20 @@ from zerg.constants import THREADS_PREFIX
 from zerg.database import initialize_database
 from zerg.routers.account_connectors import router as account_connectors_router
 from zerg.routers.admin import router as admin_router
+from zerg.routers.admin_bootstrap import router as admin_bootstrap_router
 from zerg.routers.agent_config import router as agent_config_router
 from zerg.routers.agent_connectors import router as agent_connectors_router
 from zerg.routers.agents import router as agents_router
 from zerg.routers.auth import router as auth_router
 from zerg.routers.connectors import router as connectors_router
+from zerg.routers.contacts import router as contacts_router
 from zerg.routers.email_webhooks import router as email_webhook_router
 from zerg.routers.email_webhooks_pubsub import router as pubsub_webhook_router
 from zerg.routers.funnel import router as funnel_router
 from zerg.routers.graph_layout import router as graph_router
 from zerg.routers.jarvis import router as jarvis_router
 from zerg.routers.jarvis_internal import router as jarvis_internal_router
+from zerg.routers.jobs import router as jobs_router
 from zerg.routers.knowledge import router as knowledge_router
 from zerg.routers.mcp_servers import router as mcp_servers_router
 from zerg.routers.metrics import router as metrics_router
@@ -64,6 +68,7 @@ from zerg.routers.models import router as models_router
 from zerg.routers.oauth import router as oauth_router
 from zerg.routers.ops import beacon_router as ops_beacon_router
 from zerg.routers.ops import router as ops_router
+from zerg.routers.reliability import router as reliability_router
 from zerg.routers.runners import router as runners_router
 from zerg.routers.runs import router as runs_router
 from zerg.routers.stream import router as stream_router
@@ -71,6 +76,7 @@ from zerg.routers.sync import router as sync_router
 from zerg.routers.system import router as system_router
 from zerg.routers.templates import router as templates_router
 from zerg.routers.threads import router as threads_router
+from zerg.routers.traces import router as traces_router
 from zerg.routers.triggers import router as triggers_router
 from zerg.routers.users import router as users_router
 from zerg.routers.waitlist import router as waitlist_router
@@ -330,6 +336,31 @@ async def lifespan(app: FastAPI):
                 failed.append(f"worker_job_processor ({e})")
                 logger.exception("Failed to start worker_job_processor")
 
+            # Job queue worker (durable job execution)
+            if _settings.job_queue_enabled:
+                try:
+                    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+                    from zerg.jobs.registry import register_all_jobs
+                    from zerg.jobs.worker import enqueue_missed_runs
+                    from zerg.jobs.worker import run_queue_worker
+
+                    # Create scheduler for job cron triggers
+                    job_scheduler = AsyncIOScheduler()
+
+                    # Register and schedule job modules (use_queue=True enqueues to durable queue)
+                    scheduled_count = register_all_jobs(scheduler=job_scheduler, use_queue=True)
+                    logger.info("Scheduled %d jobs with APScheduler", scheduled_count)
+
+                    await enqueue_missed_runs()  # Backfill missed runs
+                    job_scheduler.start()  # Start cron triggers
+                    asyncio.create_task(run_queue_worker())  # Background worker loop
+                    started.append("job_queue_worker")
+                    logger.info("Job queue worker started (queue mode)")
+                except Exception as e:  # noqa: BLE001
+                    failed.append(f"job_queue_worker ({e})")
+                    logger.exception("Failed to start job_queue_worker")
+
             if failed:
                 logger.warning(
                     "Background services partial startup: started=%s failed=%s",
@@ -384,6 +415,15 @@ async def lifespan(app: FastAPI):
                 await worker_job_processor.stop()
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to stop worker_job_processor")
+
+            # Close DB pool (job queue)
+            if _settings.job_queue_enabled:
+                try:
+                    from zerg.jobs.ops_db import close_pool
+
+                    await close_pool()
+                except Exception:  # noqa: BLE001
+                    logger.exception("Failed to close DB pool")
 
             # Shutdown MCP stdio processes (subprocess-based MCP servers)
             try:
@@ -478,13 +518,18 @@ app.openapi = custom_openapi
 
 # Add CORS middleware with all necessary headers
 # ------------------------------------------------------------------
-# CORS – open wildcard in dev/tests, restricted in production unless env
-# overrides it.  `ALLOWED_CORS_ORIGINS` can contain a comma-separated list.
+# CORS – if ALLOWED_CORS_ORIGINS is explicitly set, use it (supports testing
+# with auth disabled on production domains). Otherwise fall back to defaults.
 # ------------------------------------------------------------------
 
-if _settings.auth_disabled:
-    # Dev mode: Allow localhost and 127.0.0.1 origins for development/e2e tests
-    # Include both http and https variants for flexibility
+cors_origins_env = _settings.allowed_cors_origins.strip()
+
+if cors_origins_env:
+    # Explicit CORS origins set - use them (works with auth enabled or disabled)
+    cors_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+    logger.info(f"CORS configured with explicit origins: {cors_origins}")
+elif _settings.auth_disabled:
+    # Dev mode with no explicit origins: Allow localhost variants for local development
     cors_origins = [
         # localhost variants
         "http://localhost:30080",
@@ -497,17 +542,13 @@ if _settings.auth_disabled:
         "http://127.0.0.1:5173",
     ]
 else:
-    cors_origins_env = _settings.allowed_cors_origins
-    if cors_origins_env.strip():
-        cors_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
-    else:
-        # Prod with no explicit ALLOWED_CORS_ORIGINS - warn and use restrictive default
-        logger.warning(
-            "ALLOWED_CORS_ORIGINS is not set with auth enabled. "
-            "CORS will only allow http://localhost:30080. "
-            "Set ALLOWED_CORS_ORIGINS=https://your-domain.com for production."
-        )
-        cors_origins = ["http://localhost:30080"]
+    # Prod with auth enabled but no explicit ALLOWED_CORS_ORIGINS - warn and use restrictive default
+    logger.warning(
+        "ALLOWED_CORS_ORIGINS is not set with auth enabled. "
+        "CORS will only allow http://localhost:30080. "
+        "Set ALLOWED_CORS_ORIGINS=https://your-domain.com for production."
+    )
+    cors_origins = ["http://localhost:30080"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -559,6 +600,7 @@ app.include_router(threads_router, prefix=f"{API_PREFIX}{THREADS_PREFIX}")
 app.include_router(models_router, prefix=f"{API_PREFIX}{MODELS_PREFIX}")
 app.include_router(websocket_router, prefix=API_PREFIX)
 app.include_router(admin_router, prefix=API_PREFIX)
+app.include_router(admin_bootstrap_router, prefix=API_PREFIX)  # Bootstrap API for config seeding
 app.include_router(email_webhook_router, prefix=f"{API_PREFIX}")
 app.include_router(pubsub_webhook_router, prefix=f"{API_PREFIX}")
 app.include_router(connectors_router, prefix=f"{API_PREFIX}")
@@ -571,6 +613,7 @@ app.include_router(workflow_executions_router, prefix=f"{API_PREFIX}")
 app.include_router(auth_router, prefix=f"{API_PREFIX}")
 app.include_router(oauth_router, prefix=f"{API_PREFIX}")  # OAuth for third-party connectors
 app.include_router(users_router, prefix=f"{API_PREFIX}")
+app.include_router(contacts_router, prefix=f"{API_PREFIX}")  # User approved contacts for email/SMS
 app.include_router(templates_router, prefix=f"{API_PREFIX}")
 app.include_router(graph_router, prefix=f"{API_PREFIX}")
 app.include_router(jarvis_router)  # Jarvis integration - includes /api/jarvis prefix
@@ -586,6 +629,9 @@ app.include_router(agent_connectors_router, prefix=f"{API_PREFIX}")  # Agent con
 app.include_router(account_connectors_router, prefix=f"{API_PREFIX}")  # Account-level connector credentials
 app.include_router(funnel_router, prefix=f"{API_PREFIX}")  # Funnel tracking
 app.include_router(waitlist_router, prefix=f"{API_PREFIX}")  # Public waitlist signup
+app.include_router(jobs_router, prefix=f"{API_PREFIX}")  # Scheduled jobs management
+app.include_router(traces_router, prefix=f"{API_PREFIX}")  # Trace Explorer (admin only)
+app.include_router(reliability_router, prefix=f"{API_PREFIX}")  # Reliability Dashboard (admin only)
 
 # ---------------------------------------------------------------------------
 # Legacy admin routes without /api prefix – keep at very end so they override

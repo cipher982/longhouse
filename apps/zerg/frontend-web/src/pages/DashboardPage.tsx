@@ -25,7 +25,8 @@ import {
   Badge,
   Table,
   SectionHeader,
-  EmptyState
+  EmptyState,
+  Spinner
 } from "../components/ui";
 import { useConfirm } from "../components/confirm";
 
@@ -586,28 +587,35 @@ export default function DashboardPage() {
     subscribedAgentIdsRef.current.clear();
   }, [isAuthenticated, generateMessageId]);
 
+  // Cleanup effect - runs only on unmount to unsubscribe from all agents
+  /* eslint-disable react-hooks/exhaustive-deps -- Intentional: cleanup reads current values at unmount time */
   useEffect(() => {
+    // Capture refs for cleanup (ESLint wants this pattern)
+    const pendingSubscriptions = pendingSubscriptionsRef.current;
+    const subscribedAgentIds = subscribedAgentIdsRef.current;
+    const sendMessage = sendMessageRef.current;
+    const msgId = generateMessageId; // Capture for cleanup
+
     return () => {
       // Clear pending subscription timeouts
-      pendingSubscriptionsRef.current.forEach((pending) => {
+      pendingSubscriptions.forEach((pending) => {
         clearTimeout(pending.timeoutId);
       });
-      pendingSubscriptionsRef.current.clear();
+      pendingSubscriptions.clear();
 
-      if (subscribedAgentIdsRef.current.size === 0) {
+      if (subscribedAgentIds.size === 0) {
         return;
       }
-      const topics = Array.from(subscribedAgentIdsRef.current).map((id) => `agent:${id}`);
-      // Use ref to avoid cleanup re-registration on every render
-      sendMessageRef.current?.({
+      const topics = Array.from(subscribedAgentIds).map((id) => `agent:${id}`);
+      sendMessage?.({
         type: "unsubscribe",
         topics,
-        message_id: generateMessageId(),
+        message_id: msgId(),
       });
-      subscribedAgentIdsRef.current.clear();
+      subscribedAgentIds.clear();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Intentionally empty - cleanup runs only on unmount, uses refs for stable access // Empty deps - cleanup only runs on unmount
+  }, []);
+  /* eslint-enable react-hooks/exhaustive-deps */
 
   // Generate idempotency key per mutation to prevent double-creates
   const idempotencyKeyRef = useRef<string | null>(null);
@@ -702,7 +710,7 @@ export default function DashboardPage() {
     return (
       <div id="dashboard-container" className="dashboard-page">
         <EmptyState
-          icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
+          icon={<Spinner size="lg" />}
           title="Loading agents..."
           description="Fetching your autonomous workforce."
         />
@@ -761,7 +769,7 @@ export default function DashboardPage() {
               data-testid="create-agent-btn"
             >
               {createAgentMutation.isPending ? (
-                <span className="spinner" />
+                <Spinner size="sm" />
               ) : (
                 <>
                   <PlusIcon />
@@ -991,7 +999,7 @@ export default function DashboardPage() {
               <Table.Row>
                 <Table.Cell isHeader colSpan={emptyColspan}>
                   <EmptyState
-                    icon={<img src={appLogo} alt="Swarmlet Logo" style={{ width: 160, height: 160, opacity: 0.8 }} />}
+                    icon={<img src={appLogo} alt="Swarmlet Logo" className="dashboard-empty-logo" />}
                     title="No agents found"
                     description="Click 'Create Agent' to get started."
                   />

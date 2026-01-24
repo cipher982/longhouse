@@ -1,7 +1,12 @@
-"""SMS-related tools for sending text messages via Twilio."""
+"""SMS-related tools for sending text messages via Twilio.
+
+Includes approved contacts validation and rate limiting.
+"""
 
 import base64
 import logging
+import os
+import re
 from typing import Any
 from typing import Dict
 from typing import Optional
@@ -11,6 +16,11 @@ from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.connectors.registry import ConnectorType
+from zerg.context import get_worker_context
+from zerg.database import db_session
+from zerg.models.models import User
+from zerg.models.models import UserDailySmsCounter
+from zerg.models.models import UserPhoneContact
 from zerg.tools.error_envelope import ErrorType
 from zerg.tools.error_envelope import connector_not_configured_error
 from zerg.tools.error_envelope import invalid_credentials_error
@@ -18,6 +28,137 @@ from zerg.tools.error_envelope import tool_error
 from zerg.tools.error_envelope import tool_success
 
 logger = logging.getLogger(__name__)
+
+# Default daily SMS limit
+DEFAULT_DAILY_SMS_LIMIT = 10
+
+
+def _get_user_id() -> int | None:
+    """Get user_id from context.
+
+    Try multiple sources:
+    1. Worker context (for background workers)
+    2. Credential resolver (for agent execution)
+
+    Returns:
+        User ID if found, None otherwise
+    """
+    # Try worker context first
+    worker_ctx = get_worker_context()
+    if worker_ctx and worker_ctx.owner_id:
+        return worker_ctx.owner_id
+
+    # Try credential resolver
+    resolver = get_credential_resolver()
+    if resolver and resolver.owner_id:
+        return resolver.owner_id
+
+    return None
+
+
+def _normalize_phone(phone: str) -> str:
+    """Normalize phone number to E.164 format.
+
+    Strips non-digit characters except leading +.
+    """
+    phone = phone.strip()
+    if phone.startswith("+"):
+        # Keep + prefix, strip everything else except digits
+        return "+" + re.sub(r"[^\d]", "", phone[1:])
+    else:
+        # No + prefix, just strip non-digits
+        digits = re.sub(r"[^\d]", "", phone)
+        # Assume US if 10 digits without +
+        if len(digits) == 10:
+            return "+1" + digits
+        return "+" + digits
+
+
+def _validate_phone_format(phone: str) -> bool:
+    """Validate phone number is in E.164 format."""
+    pattern = r"^\+\d{10,15}$"
+    return bool(re.match(pattern, phone))
+
+
+def _is_approved_recipient(user_id: int, phone: str, db) -> bool:
+    """Check if normalized phone is user's own or in approved contacts.
+
+    Args:
+        user_id: User ID to check contacts for
+        phone: Phone number to check
+        db: Database session
+
+    Returns:
+        True if approved, False otherwise
+    """
+    normalized = _normalize_phone(phone)
+
+    # Check user's own phone (if stored in user profile - for future support)
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        # Note: User model may not have phone field yet - this is future-proofed
+        user_phone = getattr(user, "phone", None)
+        if user_phone and _normalize_phone(user_phone) == normalized:
+            return True
+
+    # Check approved contacts (stored normalized)
+    contact = (
+        db.query(UserPhoneContact)
+        .filter(
+            UserPhoneContact.owner_id == user_id,
+            UserPhoneContact.phone_normalized == normalized,
+        )
+        .first()
+    )
+    return contact is not None
+
+
+def _reserve_rate_limit(user_id: int, db) -> tuple[bool, str]:
+    """Atomically check and reserve rate limit BEFORE sending.
+
+    Uses SELECT FOR UPDATE to prevent race conditions.
+    Uses INSERT ON CONFLICT to handle concurrent counter creation.
+    Returns (allowed, error_message).
+    """
+    from datetime import datetime
+    from datetime import timezone
+
+    from sqlalchemy.dialects.postgresql import insert
+
+    today = datetime.now(timezone.utc).date()
+
+    # Upsert counter to handle race condition on creation
+    stmt = (
+        insert(UserDailySmsCounter)
+        .values(
+            user_id=user_id,
+            date=today,
+            count=0,
+        )
+        .on_conflict_do_nothing(index_elements=["user_id", "date"])
+    )
+    db.execute(stmt)
+    db.flush()
+
+    # Now get with lock - guaranteed to exist
+    counter = (
+        db.query(UserDailySmsCounter)
+        .filter(
+            UserDailySmsCounter.user_id == user_id,
+            UserDailySmsCounter.date == today,
+        )
+        .with_for_update()
+        .first()
+    )
+
+    limit = int(os.getenv("DAILY_SMS_LIMIT", str(DEFAULT_DAILY_SMS_LIMIT)))
+    if counter.count + 1 > limit:
+        return False, f"Daily SMS limit reached ({counter.count}/{limit}). Resets at midnight UTC."
+
+    # Reserve the slot
+    counter.count += 1
+    db.flush()  # Holds lock until commit
+    return True, ""
 
 
 def send_sms(
@@ -29,6 +170,9 @@ def send_sms(
     status_callback: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Send an SMS message via Twilio API.
+
+    Recipients must be in your approved contacts list (Settings → Contacts).
+    Subject to daily rate limits.
 
     This tool uses the Twilio Programmable Messaging API to send SMS messages.
     Phone numbers must be in E.164 format (+[country code][number], e.g., +14155552671).
@@ -78,6 +222,9 @@ def send_sms(
         - Status callback requires a publicly accessible HTTPS endpoint
     """
     try:
+        # Get user context for contact validation and rate limiting
+        user_id = _get_user_id()
+
         # Try to get credentials from context if not provided
         resolved_account_sid = account_sid
         resolved_auth_token = auth_token
@@ -161,6 +308,40 @@ def send_sms(
                 user_message="Status callback URL must start with http:// or https://",
                 connector="sms",
             )
+
+        # Contact validation and rate limiting (requires user context)
+        # SECURITY: Fail closed - require user context for all sends
+        if not user_id:
+            logger.error("No user context for SMS send - rejecting for security")
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message="Unable to verify sender identity. Please try again.",
+                connector="sms",
+            )
+
+        # Normalize to_number for contact lookup (handles display formats)
+        normalized_to = _normalize_phone(to_number)
+
+        with db_session() as db:
+            # Validate recipient is approved (use normalized form)
+            if not _is_approved_recipient(user_id, normalized_to, db):
+                return tool_error(
+                    error_type=ErrorType.VALIDATION_ERROR,
+                    user_message=(f"'{to_number}' is not in your approved contacts. " "Add them in Settings → Contacts before sending."),
+                    connector="sms",
+                )
+
+            # Atomic rate limit check
+            allowed, msg = _reserve_rate_limit(user_id, db)
+            if not allowed:
+                return tool_error(
+                    error_type=ErrorType.RATE_LIMITED,
+                    user_message=msg,
+                    connector="sms",
+                )
+
+            # Commit to release lock
+            db.commit()
 
         # Build Twilio API URL
         api_url = f"https://api.twilio.com/2010-04-01/Accounts/{resolved_account_sid}/Messages.json"
@@ -285,8 +466,9 @@ TOOLS = [
         func=send_sms,
         name="send_sms",
         description=(
-            "Send an SMS message via Twilio. Credentials can be provided as parameters "
-            "or configured in Agent Settings -> Connectors (SMS). "
+            "Send an SMS message via Twilio. "
+            "Recipients must be in your approved contacts (Settings → Contacts). "
+            "Credentials can be provided as parameters or configured in Settings → Integrations (SMS). "
             "Phone numbers must be in E.164 format (+[country code][number]). "
             "Returns message SID and status if successful."
         ),

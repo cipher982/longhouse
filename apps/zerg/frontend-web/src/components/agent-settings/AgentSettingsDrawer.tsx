@@ -24,6 +24,7 @@ import { ConnectorConfigModal, type ConfigModalState } from "./ConnectorConfigMo
 import type { ConnectorStatus } from "../../types/connectors";
 import { Link } from "react-router-dom";
 import { PlugIcon } from "../icons";
+import { Button } from "../ui";
 
 type AgentSettingsDrawerProps = {
   agentId: number;
@@ -478,28 +479,33 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
                     </div>
                   </div>
                   <div className="integration-actions">
-                     {isEnabled && isOwner && !hasAccountCreds && !hasAgentOverride && (
-                      <Link to="/settings/integrations" className="btn-sm btn-primary-outline">
+                    {isEnabled && isOwner && !hasAccountCreds && !hasAgentOverride && (
+                      <Link
+                        to="/settings/integrations"
+                        className={clsx("ui-button", "ui-button--secondary", "ui-button--sm")}
+                      >
                         Configure
                       </Link>
                     )}
                     {isEnabled && !isOwner && !hasAgentOverride && (
-                      <button
+                      <Button
                         type="button"
-                        className="btn-sm btn-primary-outline"
+                        variant="secondary"
+                        size="sm"
                         onClick={() => openConnectorModal(connector)}
                       >
                         Setup Override
-                      </button>
+                      </Button>
                     )}
                     {isEnabled && hasAgentOverride && (
-                      <button
+                      <Button
                         type="button"
-                        className="btn-sm btn-secondary"
+                        variant="secondary"
+                        size="sm"
                         onClick={() => openConnectorModal(connector)}
                       >
                         Edit Override
-                      </button>
+                      </Button>
                     )}
                     <label className="switch">
                       <input
@@ -567,9 +573,9 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
                   value={customTool}
                   onChange={(event) => setCustomTool(event.target.value)}
                 />
-                <button type="button" onClick={handleAddCustomTool}>
+                <Button type="button" variant="secondary" size="md" onClick={handleAddCustomTool}>
                   Add
-                </button>
+                </Button>
               </div>
           </details>
 
@@ -583,15 +589,15 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
                 Connect Model Context Protocol servers to expose additional tools to this agent.
               </p>
             </div>
-            <button
+            <Button
               type="button"
-              className="btn-primary"
+              variant="primary"
               onClick={() => {
                 setShowAddForm(true);
               }}
             >
               Add server
-            </button>
+            </Button>
           </header>
 
           {loadingServers && <p className="muted">Loading servers…</p>}
@@ -620,9 +626,9 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
                     </div>
                   )}
                   <div className="server-actions">
-                    <button type="button" className="btn-secondary" onClick={() => handleRemoveServer(server)}>
+                    <Button type="button" variant="secondary" size="sm" onClick={() => handleRemoveServer(server)}>
                       Remove
-                    </button>
+                    </Button>
                   </div>
                 </li>
               ))}
@@ -709,39 +715,39 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
               </label>
 
               <div className="form-actions">
-                <button
+                <Button
                   type="button"
-                  className="btn-secondary"
+                  variant="ghost"
                   onClick={() => {
                     resetForm();
                   }}
                 >
                   Cancel
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
-                  className="btn-tertiary"
+                  variant="tertiary"
                   onClick={handleTestServer}
                   disabled={isTesting}
                 >
                   {isTesting ? "Testing…" : "Test connection"}
-                </button>
-                <button
+                </Button>
+                <Button
                   type="submit"
-                  className="btn-primary"
+                  variant="primary"
                   disabled={addMcpServer.isPending}
                 >
                   {addMcpServer.isPending ? "Adding…" : "Add server"}
-                </button>
+                </Button>
               </div>
             </form>
           )}
         </section>
 
         <footer className="agent-settings-footer">
-          <button type="button" className="btn-primary" onClick={handleClose}>
+          <Button type="button" variant="primary" onClick={handleClose}>
             Close
-          </button>
+          </Button>
         </footer>
       </aside>
 

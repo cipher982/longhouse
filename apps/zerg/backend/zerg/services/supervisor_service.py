@@ -67,7 +67,7 @@ class SupervisorService:
     """Service for managing supervisor agent execution."""
 
     # Bump this whenever BASE_SUPERVISOR_PROMPT meaningfully changes.
-    SUPERVISOR_PROMPT_VERSION = 1
+    SUPERVISOR_PROMPT_VERSION = 2
 
     def __init__(self, db: Session):
         """Initialize the supervisor service.
@@ -937,9 +937,16 @@ class SupervisorService:
                 result_text=result_text or "",
                 trace_id=str(run.trace_id) if run.trace_id else None,
             )
-            from zerg.services.lifehub_shipper import schedule_lifehub_shipping
 
-            schedule_lifehub_shipping(run.id, str(run.trace_id) if run.trace_id else None)
+            # Cloud execution notification (best-effort)
+            from zerg.services.ops_discord import send_run_completion_notification
+
+            await send_run_completion_notification(
+                run_id=run.id,
+                status="success",
+                summary=result_text[:500] if result_text else None,
+                run_url=f"https://swarmlet.com/runs/{run.id}",
+            )
 
             logger.info(f"Supervisor run {run.id} completed in {duration_ms}ms", extra={"tag": "AGENT"})
 
@@ -992,10 +999,6 @@ class SupervisorService:
                     "owner_id": owner_id,
                 },
             )
-
-            from zerg.services.lifehub_shipper import schedule_lifehub_shipping
-
-            schedule_lifehub_shipping(run.id, str(run.trace_id) if run.trace_id else None)
 
         except Exception as e:
             # Calculate duration
@@ -1050,9 +1053,15 @@ class SupervisorService:
             )
             reset_seq(run.id)
 
-            from zerg.services.lifehub_shipper import schedule_lifehub_shipping
+            # Cloud execution notification (best-effort)
+            from zerg.services.ops_discord import send_run_completion_notification
 
-            schedule_lifehub_shipping(run.id, str(run.trace_id) if run.trace_id else None)
+            await send_run_completion_notification(
+                run_id=run.id,
+                status="failed",
+                error=str(e),
+                run_url=f"https://swarmlet.com/runs/{run.id}",
+            )
 
             logger.exception(f"Supervisor run {run.id} failed: {e}")
 

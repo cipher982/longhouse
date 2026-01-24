@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
+import { Link } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { useAuth } from "../lib/auth";
@@ -10,7 +11,9 @@ import {
   SectionHeader,
   EmptyState,
   Table,
-  Badge
+  Badge,
+  PageShell,
+  Spinner
 } from "../components/ui";
 
 // Types for admin user usage data
@@ -195,7 +198,7 @@ function MetricCard({
   title,
   value,
   subtitle,
-  color = "#10b981"
+  color = "var(--color-intent-success)"
 }: {
   title: string;
   value: string | number;
@@ -203,13 +206,13 @@ function MetricCard({
   color?: string;
 }) {
   return (
-    <Card className="metric-card">
+    <Card className="metric-card" style={{ "--metric-accent": color } as React.CSSProperties}>
       <Card.Header>
-        <h4 style={{ color, margin: 0, fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{title}</h4>
+        <h4 className="metric-title">{title}</h4>
       </Card.Header>
       <Card.Body>
-        <div className="metric-value" style={{ fontSize: '1.8rem', fontWeight: 700 }}>{value}</div>
-        {subtitle && <div className="metric-subtitle" style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', marginTop: 'var(--space-1)' }}>{subtitle}</div>}
+        <div className="metric-value">{value}</div>
+        {subtitle && <div className="metric-subtitle">{subtitle}</div>}
       </Card.Body>
     </Card>
   );
@@ -277,36 +280,20 @@ function ConfirmationModal({
 
   const modalContent = (
     <div
-      className="modal-overlay"
+      className="admin-confirm-overlay"
       onClick={handleBackdropClick}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0, 0, 0, 0.85)',
-        backdropFilter: 'blur(4px)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 9999,
-        padding: 'var(--space-4)'
-      }}
     >
       <Card
-        style={{
-          maxWidth: '500px',
-          width: '100%',
-          margin: 'auto',
-          animation: 'modalFadeIn 0.2s ease-out'
-        }}
+        className="admin-confirm-card"
         onClick={(e: React.MouseEvent) => e.stopPropagation()}
       >
         <Card.Header>
-          <h3 style={{ margin: 0 }}>{title}</h3>
+          <h3 className="admin-confirm-title">{title}</h3>
         </Card.Header>
         <Card.Body>
           <p>{message}</p>
           {requirePassword && (
-            <div className="form-group" style={{ marginTop: "16px" }}>
+            <div className="form-group admin-confirm-field">
               <input
                 type="password"
                 className="ui-input"
@@ -322,7 +309,7 @@ function ConfirmationModal({
               />
             </div>
           )}
-          <div className="modal-actions" style={{ display: 'flex', gap: 'var(--space-3)', justifyContent: 'flex-end', marginTop: 'var(--space-6)' }}>
+          <div className="modal-actions admin-confirm-actions">
             <Button variant="ghost" onClick={onClose}>
               Cancel
             </Button>
@@ -418,22 +405,22 @@ function UsersTable({
   }
 
   return (
-    <Table>
+    <Table className="users-table">
       <Table.Header>
-        <Table.Cell isHeader onClick={() => onSort("email")} style={{ cursor: 'pointer' }}>
+        <Table.Cell isHeader onClick={() => onSort("email")} className="admin-table-header">
           User {renderSortArrow("email")}
         </Table.Cell>
         <Table.Cell isHeader>Role</Table.Cell>
-        <Table.Cell isHeader onClick={() => onSort("cost_today")} style={{ cursor: 'pointer', textAlign: 'right' }}>
+        <Table.Cell isHeader onClick={() => onSort("cost_today")} className="admin-table-header admin-table-header--numeric">
           Today {renderSortArrow("cost_today")}
         </Table.Cell>
-        <Table.Cell isHeader onClick={() => onSort("cost_7d")} style={{ cursor: 'pointer', textAlign: 'right' }}>
+        <Table.Cell isHeader onClick={() => onSort("cost_7d")} className="admin-table-header admin-table-header--numeric">
           7 Days {renderSortArrow("cost_7d")}
         </Table.Cell>
-        <Table.Cell isHeader onClick={() => onSort("cost_30d")} style={{ cursor: 'pointer', textAlign: 'right' }}>
+        <Table.Cell isHeader onClick={() => onSort("cost_30d")} className="admin-table-header admin-table-header--numeric">
           30 Days {renderSortArrow("cost_30d")}
         </Table.Cell>
-        <Table.Cell isHeader onClick={() => onSort("created_at")} style={{ cursor: 'pointer' }}>
+        <Table.Cell isHeader onClick={() => onSort("created_at")} className="admin-table-header">
           Joined {renderSortArrow("created_at")}
         </Table.Cell>
       </Table.Header>
@@ -442,13 +429,13 @@ function UsersTable({
           <Table.Row
             key={user.id}
             onClick={() => onUserClick(user.id)}
-            style={{ cursor: 'pointer' }}
+            className="clickable-row"
           >
             <Table.Cell className="user-cell">
               <div className="user-info">
                 <span className="user-email">{user.email}</span>
                 {user.display_name && (
-                  <span className="user-display-name" style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>{user.display_name}</span>
+                  <span className="user-display-name">{user.display_name}</span>
                 )}
               </div>
             </Table.Cell>
@@ -457,9 +444,9 @@ function UsersTable({
                 {user.role}
               </Badge>
             </Table.Cell>
-            <Table.Cell style={{ textAlign: 'right' }}>{formatCost(user.usage.today.cost_usd)}</Table.Cell>
-            <Table.Cell style={{ textAlign: 'right' }}>{formatCost(user.usage.seven_days.cost_usd)}</Table.Cell>
-            <Table.Cell style={{ textAlign: 'right' }}>{formatCost(user.usage.thirty_days.cost_usd)}</Table.Cell>
+            <Table.Cell className="admin-table-cell--numeric">{formatCost(user.usage.today.cost_usd)}</Table.Cell>
+            <Table.Cell className="admin-table-cell--numeric">{formatCost(user.usage.seven_days.cost_usd)}</Table.Cell>
+            <Table.Cell className="admin-table-cell--numeric">{formatCost(user.usage.thirty_days.cost_usd)}</Table.Cell>
             <Table.Cell>
               {user.created_at
                 ? new Date(user.created_at).toLocaleDateString()
@@ -607,6 +594,14 @@ function UserDetailModal({
 
 function AdminPage() {
   const { user } = useAuth();
+  const metricColors = {
+    success: "var(--color-intent-success)",
+    warning: "var(--color-intent-warning)",
+    error: "var(--color-intent-error)",
+    primary: "var(--color-brand-primary)",
+    accent: "var(--color-neon-secondary)",
+    muted: "var(--color-text-muted)",
+  };
   const [selectedWindow, setSelectedWindow] = useState<"today" | "7d" | "30d">("today");
   const [modalState, setModalState] = useState<{
     isOpen: boolean;
@@ -646,6 +641,19 @@ function AdminPage() {
     enabled: !!user,
     refetchInterval: 60000, // Refresh every minute
   });
+
+  useEffect(() => {
+    if (summaryLoading || usersLoading) {
+      document.body.removeAttribute("data-ready");
+      return;
+    }
+
+    document.body.setAttribute("data-ready", "true");
+
+    return () => {
+      document.body.removeAttribute("data-ready");
+    };
+  }, [summaryLoading, usersLoading]);
 
   // Database reset mutation
   const resetMutation = useMutation({
@@ -717,16 +725,15 @@ function AdminPage() {
   };
 
   return (
-    <div className="admin-page-container">
+    <PageShell size="wide" className="admin-page-container">
       <SectionHeader
         title="Operations Dashboard"
         description="Monitor system-wide activity, budgets, and user usage."
         actions={
           <div className="window-selector">
-            <label style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', marginRight: 'var(--space-2)' }}>Time Window:</label>
+            <label className="admin-window-label">Time Window:</label>
             <select
-              className="ui-input"
-              style={{ width: 'auto', height: '32px' }}
+              className="ui-input admin-window-select"
               value={selectedWindow}
               onChange={(e) => setSelectedWindow(e.target.value as "today" | "7d" | "30d")}
             >
@@ -740,7 +747,7 @@ function AdminPage() {
 
       {summaryLoading ? (
         <EmptyState
-          icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
+          icon={<Spinner size="lg" />}
           title="Loading operations data..."
           description="Fetching real-time metrics."
         />
@@ -752,26 +759,26 @@ function AdminPage() {
           action={<Button onClick={() => window.location.reload()}>Retry</Button>}
         />
       ) : summary ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-8)' }}>
+        <div className="admin-stack">
           {/* Key Metrics - using real backend data */}
           <div className="metrics-grid">
             <MetricCard
               title="Runs Today"
               value={summary.runs_today}
               subtitle="Total executions"
-              color="#3b82f6"
+              color={metricColors.primary}
             />
             <MetricCard
               title="Errors (1h)"
               value={summary.errors_last_hour}
               subtitle="Failed runs"
-              color="#ef4444"
+              color={metricColors.error}
             />
             <MetricCard
               title="Cost Today"
               value={summary.cost_today_usd !== null ? formatCurrency(summary.cost_today_usd) : "N/A"}
               subtitle="USD spent"
-              color="#10b981"
+              color={metricColors.success}
             />
             <MetricCard
               title="User Budget"
@@ -786,9 +793,9 @@ function AdminPage() {
                   : "Unlimited"
               }
               color={
-                summary.budget_user.percent === null ? "#6b7280" :
-                summary.budget_user.percent > 80 ? "#ef4444" :
-                summary.budget_user.percent > 60 ? "#f59e0b" : "#10b981"
+                summary.budget_user.percent === null ? metricColors.muted :
+                summary.budget_user.percent > 80 ? metricColors.error :
+                summary.budget_user.percent > 60 ? metricColors.warning : metricColors.success
               }
             />
             <MetricCard
@@ -804,23 +811,23 @@ function AdminPage() {
                   : "Unlimited"
               }
               color={
-                summary.budget_global.percent === null ? "#6b7280" :
-                summary.budget_global.percent > 80 ? "#ef4444" :
-                summary.budget_global.percent > 60 ? "#f59e0b" : "#10b981"
+                summary.budget_global.percent === null ? metricColors.muted :
+                summary.budget_global.percent > 80 ? metricColors.error :
+                summary.budget_global.percent > 60 ? metricColors.warning : metricColors.success
               }
             />
             <MetricCard
               title="Latency P95"
               value={`${summary.latency_ms.p95}ms`}
               subtitle={`P50: ${summary.latency_ms.p50}ms`}
-              color="#8b5cf6"
+              color={metricColors.accent}
             />
           </div>
 
           {/* Top Agents Section - using data from summary */}
           <Card>
             <Card.Header>
-              <h3 style={{ margin: 0 }}>Top Performing Agents (Today)</h3>
+              <h3 className="admin-section-title ui-section-title">Top Performing Agents (Today)</h3>
             </Card.Header>
             <Card.Body>
               <TopAgentsTable agents={summary.top_agents_today} />
@@ -830,14 +837,14 @@ function AdminPage() {
           {/* Users Usage Section */}
           <Card>
             <Card.Header>
-              <h3 style={{ margin: 0 }}>User LLM Usage</h3>
+              <h3 className="admin-section-title ui-section-title">User LLM Usage</h3>
             </Card.Header>
             <Card.Body>
-              <p className="section-description" style={{ marginTop: 0 }}>
+              <p className="section-description admin-section-description">
                 Click on a user to see detailed usage breakdown
               </p>
               {usersLoading ? (
-                <div style={{ padding: 'var(--space-8)', textAlign: 'center' }}>Loading users...</div>
+                <div className="admin-empty-state">Loading users...</div>
               ) : usersData?.users ? (
                 <UsersTable
                   users={usersData.users}
@@ -847,7 +854,7 @@ function AdminPage() {
                   onUserClick={handleUserClick}
                 />
               ) : (
-                <div style={{ padding: 'var(--space-8)', textAlign: 'center' }}>No users found</div>
+                <div className="admin-empty-state">No users found</div>
               )}
             </Card.Body>
           </Card>
@@ -855,7 +862,7 @@ function AdminPage() {
           {/* System Information - using real backend data */}
           <Card>
             <Card.Header>
-              <h3 style={{ margin: 0 }}>System Information</h3>
+              <h3 className="admin-section-title ui-section-title">System Information</h3>
             </Card.Header>
             <Card.Body>
               <div className="system-info">
@@ -899,10 +906,44 @@ function AdminPage() {
             </Card.Body>
           </Card>
 
+          {/* Developer Tools */}
+          <Card>
+            <Card.Header>
+              <h3 className="admin-section-title ui-section-title">Developer Tools</h3>
+            </Card.Header>
+            <Card.Body>
+              <div className="admin-devtools-grid">
+                <Link to="/traces" className="admin-devtools-link">
+                  <div className="admin-devtool-card admin-devtool-card--trace">
+                    <div className="admin-devtool-header">
+                      <span className="admin-devtool-icon">🔍</span>
+                      <span className="admin-devtool-title">Trace Explorer</span>
+                    </div>
+                    <p className="admin-devtool-desc">
+                      Debug supervisor runs, workers, and LLM calls with unified trace timelines.
+                    </p>
+                  </div>
+                </Link>
+
+                <Link to="/reliability" className="admin-devtools-link">
+                  <div className="admin-devtool-card admin-devtool-card--reliability">
+                    <div className="admin-devtool-header">
+                      <span className="admin-devtool-icon">📊</span>
+                      <span className="admin-devtool-title">Reliability Dashboard</span>
+                    </div>
+                    <p className="admin-devtool-desc">
+                      Monitor system reliability metrics, error rates, and performance trends.
+                    </p>
+                  </div>
+                </Link>
+              </div>
+            </Card.Body>
+          </Card>
+
           {/* Admin Actions */}
           <Card>
             <Card.Header>
-              <h3 style={{ margin: 0 }}>Database Management</h3>
+              <h3 className="admin-section-title ui-section-title">Database Management</h3>
             </Card.Header>
             <Card.Body>
               <div className="admin-actions">
@@ -965,7 +1006,7 @@ function AdminPage() {
           setSelectedUserId(null);
         }}
       />
-    </div>
+    </PageShell>
   );
 }
 

@@ -16,6 +16,7 @@ import {
 import type { ConnectorStatus } from "../../types/connectors";
 import { ConnectorConfigModal, type ConfigModalState } from "./ConnectorConfigModal";
 import { useConfirm } from "../confirm";
+import { Button } from "../ui";
 
 // Connectors that support OAuth flow instead of manual credential entry
 const OAUTH_CONNECTORS = ["github"] as const;
@@ -322,39 +323,39 @@ function ConnectorCard({
         {connector.configured ? (
           <>
             {connectedViaOAuth && onOAuthConnect ? (
-              <button
+              <Button
                 type="button"
-                className="btn-secondary"
+                variant="secondary"
                 onClick={onOAuthConnect}
                 disabled={isOAuthPending}
               >
                 {isOAuthPending ? "Connecting..." : "Reconnect"}
-              </button>
+              </Button>
             ) : (
-              <button type="button" className="btn-secondary" onClick={onConfigure}>
+              <Button type="button" variant="secondary" onClick={onConfigure}>
                 Edit
-              </button>
+              </Button>
             )}
-            <button type="button" className="btn-tertiary" onClick={onTest} disabled={isTesting}>
+            <Button type="button" variant="tertiary" onClick={onTest} disabled={isTesting}>
               Test
-            </button>
-            <button type="button" className="btn-danger" onClick={onDelete}>
+            </Button>
+            <Button type="button" variant="danger" onClick={onDelete}>
               Remove
-            </button>
+            </Button>
           </>
         ) : onOAuthConnect ? (
-          <button
+          <Button
             type="button"
-            className="btn-primary btn-oauth"
+            variant="primary"
             onClick={onOAuthConnect}
             disabled={isOAuthPending}
           >
             {isOAuthPending ? "Connecting..." : `Connect ${connector.name}`}
-          </button>
+          </Button>
         ) : (
-          <button type="button" className="btn-primary" onClick={onConfigure}>
+          <Button type="button" variant="primary" onClick={onConfigure}>
             Configure
-          </button>
+          </Button>
         )}
       </div>
     </div>

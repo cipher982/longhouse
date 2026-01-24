@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { useAuth } from "../lib/auth";
@@ -7,7 +7,9 @@ import {
   Card,
   SectionHeader,
   EmptyState,
-  Input
+  Input,
+  PageShell,
+  Spinner
 } from "../components/ui";
 
 interface UserUpdatePayload {
@@ -57,6 +59,13 @@ async function uploadAvatar(file: File): Promise<{ id: number; email: string; di
 export default function ProfilePage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    document.body.setAttribute("data-ready", "true");
+    return () => {
+      document.body.removeAttribute("data-ready");
+    };
+  }, []);
 
   // Form state
   const [displayName, setDisplayName] = useState(user?.display_name || "");
@@ -141,7 +150,7 @@ export default function ProfilePage() {
     return (
       <div className="profile-page-container">
         <EmptyState
-          icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
+          icon={<Spinner size="lg" />}
           title="Loading profile..."
           description="Fetching your account details."
         />
@@ -150,18 +159,18 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="profile-page-container">
+    <PageShell size="wide" className="profile-page-container">
       <SectionHeader
         title="User Profile"
         description="Manage your account settings and preferences."
       />
 
       <form onSubmit={handleSubmit} className="profile-form">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
+        <div className="profile-stack profile-stack--lg">
           {/* Avatar Section */}
           <Card>
             <Card.Header>
-              <h3 style={{ margin: 0 }}>Avatar</h3>
+              <h3 className="profile-section-title ui-section-title">Avatar</h3>
             </Card.Header>
             <Card.Body>
               <div className="avatar-section">
@@ -203,17 +212,17 @@ export default function ProfilePage() {
           {/* Profile Information */}
           <Card>
             <Card.Header>
-              <h3 style={{ margin: 0 }}>Profile Information</h3>
+              <h3 className="profile-section-title ui-section-title">Profile Information</h3>
             </Card.Header>
             <Card.Body>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+              <div className="profile-stack profile-stack--md">
                 <div className="form-group">
                   <label htmlFor="email" className="form-label">Email Address</label>
                   <Input
                     id="email"
                     value={user.email}
                     disabled
-                    style={{ opacity: 0.6, cursor: 'not-allowed' }}
+                    className="profile-input-disabled"
                   />
                   <small>Email cannot be changed</small>
                 </div>
@@ -246,7 +255,7 @@ export default function ProfilePage() {
           {/* Account Information */}
           <Card>
             <Card.Header>
-              <h3 style={{ margin: 0 }}>Account Information</h3>
+              <h3 className="profile-section-title ui-section-title">Account Information</h3>
             </Card.Header>
             <Card.Body>
               <div className="info-grid">
@@ -274,7 +283,7 @@ export default function ProfilePage() {
           </Card>
 
           {/* Form Actions */}
-          <div className="form-actions" style={{ display: 'flex', gap: 'var(--space-4)', justifyContent: 'flex-end', padding: 'var(--space-6) 0' }}>
+          <div className="form-actions profile-form-actions">
             <Button
               type="button"
               variant="ghost"
@@ -294,6 +303,6 @@ export default function ProfilePage() {
           </div>
         </div>
       </form>
-    </div>
+    </PageShell>
   );
 }

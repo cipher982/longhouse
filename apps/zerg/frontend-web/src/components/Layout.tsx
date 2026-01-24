@@ -7,6 +7,7 @@ import { useWebSocket, ConnectionStatusIndicator } from "../lib/useWebSocket";
 import { useConfirm } from "./confirm";
 import "../styles/layout.css";
 import { SidebarIcon, XIcon } from "./icons";
+import { getNavItems } from "./navigation/navItems";
 
 function WelcomeHeader() {
   const { user, logout } = useAuth();
@@ -89,17 +90,7 @@ function WelcomeHeader() {
     }
   };
 
-  const navItems = [
-    { label: 'Chat', href: '/chat' },
-    { label: 'Dashboard', href: '/dashboard' },
-    { label: 'Canvas', href: '/canvas' },
-    { label: 'Integrations', href: '/settings/integrations' },
-    { label: 'Runners', href: '/runners' },
-  ];
-
-  if (user?.role === 'ADMIN') {
-    navItems.push({ label: 'Admin', href: '/admin' });
-  }
+  const navItems = getNavItems(user?.role);
 
   return (
     <>
@@ -136,13 +127,10 @@ function WelcomeHeader() {
       </div>
 
       <nav className="header-nav" aria-label="Main navigation">
-        {navItems.map(({ label, href }) => {
+        {navItems.map(({ label, href, testId }) => {
           const isActive =
             location.pathname === href ||
             (href !== '/' && location.pathname.startsWith(href))
-
-          // Generate testid from label, e.g., "Canvas" -> "global-canvas-tab"
-          const testId = `global-${label.toLowerCase()}-tab`;
 
           return (
             <button
@@ -245,6 +233,35 @@ function WelcomeHeader() {
           );
         })}
       </div>
+      {user && (
+        <div className="mobile-nav-footer">
+          <div className="mobile-nav-user">
+            <div className="mobile-nav-avatar">
+              {user?.avatar_url ? (
+                <img src={user.avatar_url} alt="User avatar" />
+              ) : (
+                <span>{userInitials}</span>
+              )}
+            </div>
+            <div className="mobile-nav-user-info">
+              <span className="mobile-nav-user-name">{user.display_name || user.email}</span>
+              {user.display_name && user.email && user.display_name !== user.email && (
+                <span className="mobile-nav-user-email">{user.email}</span>
+              )}
+            </div>
+          </div>
+          <button
+            type="button"
+            className="mobile-nav-logout"
+            onClick={async () => {
+              closeMobileNav();
+              await handleAvatarClick();
+            }}
+          >
+            Log out
+          </button>
+        </div>
+      )}
     </nav>
 
     {/* Scrim overlay */}

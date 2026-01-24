@@ -17,7 +17,7 @@ import type { AccountConnectorStatus } from "../types/connectors";
 import { ConnectorConfigModal, type ConfigModalState } from "../components/agent-settings/ConnectorConfigModal";
 import { ConnectorCard, isOAuthConnector } from "../components/connectors/ConnectorCard";
 import { useOAuthFlow } from "../hooks/useOAuthFlow";
-import { SectionHeader, EmptyState } from "../components/ui";
+import { SectionHeader, EmptyState, Spinner, PageShell } from "../components/ui";
 import { useConfirm } from "../components/confirm";
 
 export default function IntegrationsPage() {
@@ -114,6 +114,8 @@ export default function IntegrationsPage() {
   // Group connectors by category
   const notifications = connectors?.filter((c) => c.category === "notifications") ?? [];
   const projectManagement = connectors?.filter((c) => c.category === "project_management") ?? [];
+  const personal = connectors?.filter((c) => c.category === "personal") ?? [];
+  const advanced = connectors?.filter((c) => c.category === "advanced") ?? [];
 
   // Ready signal - indicates page is interactive (even if empty)
   useEffect(() => {
@@ -125,18 +127,18 @@ export default function IntegrationsPage() {
 
   if (error) {
     return (
-      <div className="integrations-page-container">
+      <PageShell size="narrow" className="integrations-page-container">
         <EmptyState
           variant="error"
           title="Error loading integrations"
           description={String(error)}
         />
-      </div>
+      </PageShell>
     );
   }
 
   return (
-    <div className="integrations-page-container">
+    <PageShell size="narrow" className="integrations-page-container">
       <SectionHeader
         title="Integrations"
         description="Configure credentials for external services. These integrations are shared across all your agents."
@@ -145,7 +147,7 @@ export default function IntegrationsPage() {
       <div className="integrations-content">
         {isLoading ? (
           <EmptyState
-            icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
+            icon={<Spinner size="lg" />}
             title="Loading integrations..."
             description="Fetching your connected services."
           />
@@ -154,7 +156,7 @@ export default function IntegrationsPage() {
             <div className="connector-group">
               <h3>Notifications</h3>
               <p className="section-description">
-                Configure webhooks and API keys for notification tools (Slack, Discord, Email, SMS).
+                Configure webhooks and API keys for notification tools (Slack, Discord, SMS).
               </p>
               <div className="connector-cards">
                 {notifications.map((connector) => (
@@ -192,6 +194,46 @@ export default function IntegrationsPage() {
                 ))}
               </div>
             </div>
+
+            <div className="connector-group">
+              <h3>Personal Tools</h3>
+              <p className="section-description">
+                Connect personal services like GPS tracking, health data, and notes.
+              </p>
+              <div className="connector-cards">
+                {personal.map((connector) => (
+                  <ConnectorCard
+                    key={connector.type}
+                    connector={connector}
+                    onConfigure={() => openConfigModal(connector)}
+                    onTest={() => handleTest(connector)}
+                    onDelete={() => handleDelete(connector)}
+                    isTesting={testConnector.isPending}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {advanced.length > 0 && (
+              <div className="connector-group">
+                <h3>Advanced</h3>
+                <p className="section-description">
+                  Optional integrations for power users. Configure your own credentials to use custom senders.
+                </p>
+                <div className="connector-cards">
+                  {advanced.map((connector) => (
+                    <ConnectorCard
+                      key={connector.type}
+                      connector={connector}
+                      onConfigure={() => openConfigModal(connector)}
+                      onTest={() => handleTest(connector)}
+                      onDelete={() => handleDelete(connector)}
+                      isTesting={testConnector.isPending}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -206,6 +248,6 @@ export default function IntegrationsPage() {
         isSaving={configureConnector.isPending}
         isTesting={testBeforeSave.isPending}
       />
-    </div>
+    </PageShell>
   );
 }

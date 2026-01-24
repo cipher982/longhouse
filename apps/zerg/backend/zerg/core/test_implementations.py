@@ -22,6 +22,7 @@ from zerg.core.interfaces import Database
 from zerg.core.interfaces import EventBus
 from zerg.core.interfaces import ModelRegistry
 from zerg.crud import crud
+from zerg.database import DB_SCHEMA
 from zerg.database import Base
 from zerg.database import db_session
 from zerg.models.models import Agent
@@ -46,11 +47,12 @@ class IsolatedSQLiteDatabase(Database):
             self.db_path = temp_dir / f"test_worker_{worker_id}.db"
 
         # Create engine and session factory
-        self.engine = create_engine(
+        base_engine = create_engine(
             f"sqlite:///{self.db_path}",
             connect_args={"check_same_thread": False},
             echo=False,
         )
+        self.engine = base_engine.execution_options(schema_translate_map={DB_SCHEMA: None})
         self.session_factory = sessionmaker(
             autocommit=False,
             autoflush=False,

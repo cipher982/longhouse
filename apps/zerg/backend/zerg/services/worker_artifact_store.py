@@ -245,6 +245,7 @@ class WorkerArtifactStore:
         task: str,
         config: dict[str, Any] | None = None,
         owner_id: int | None = None,
+        worker_id: str | None = None,
     ) -> str:
         """Create a new worker directory structure.
 
@@ -256,6 +257,8 @@ class WorkerArtifactStore:
             Optional configuration dict (e.g., model, tools, timeout)
         owner_id
             Optional ID of the user who owns this worker (for security filtering)
+        worker_id
+            Optional custom worker_id (auto-generated if not provided)
 
         Returns
         -------
@@ -267,7 +270,8 @@ class WorkerArtifactStore:
         ValueError
             If worker_id already exists (collision)
         """
-        worker_id = self._generate_worker_id(task)
+        if worker_id is None:
+            worker_id = self._generate_worker_id(task)
         worker_dir = self._get_worker_dir(worker_id)
 
         # Check for collision (shouldn't happen with timestamp)
@@ -376,6 +380,35 @@ class WorkerArtifactStore:
             f.write(result)
 
         logger.info(f"Saved worker result: {worker_id}")
+
+    def save_artifact(self, worker_id: str, filename: str, content: str) -> Path:
+        """Save an arbitrary artifact file.
+
+        Parameters
+        ----------
+        worker_id
+            Unique worker identifier
+        filename
+            Name for the artifact file (e.g., "diff.patch", "output.log")
+        content
+            Content to save
+
+        Returns
+        -------
+        Path
+            Path to the saved artifact file
+        """
+        worker_dir = self._get_worker_dir(worker_id)
+        artifact_path = worker_dir / filename
+
+        # Ensure parent directories exist for nested paths
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(artifact_path, "w") as f:
+            f.write(content)
+
+        logger.info(f"Saved artifact {filename} for worker {worker_id}")
+        return artifact_path
 
     def complete_worker(self, worker_id: str, status: str = "success", error: str | None = None) -> None:
         """Mark worker as complete and update metadata.

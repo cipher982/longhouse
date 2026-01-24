@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { SwarmLogo } from "../components/SwarmLogo";
+import { Button } from "../components/ui";
 import { usePublicPageScroll } from "../hooks/usePublicPageScroll";
 import "../styles/info-pages.css";
 
@@ -64,9 +65,9 @@ export default function PricingPage() {
               <li>Available integrations</li>
               <li>Powered by OpenAI</li>
             </ul>
-            <button className="btn-primary pricing-tier-cta" onClick={handleGetStarted}>
+            <Button variant="primary" size="lg" className="pricing-tier-cta" onClick={handleGetStarted}>
               Get Started Free
-            </button>
+            </Button>
           </div>
         </div>
 

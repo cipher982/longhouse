@@ -39,7 +39,7 @@ import time
 from pathlib import Path
 
 import yaml
-from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import Page, sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -157,11 +157,11 @@ def execute_step(
         logger.info(f"  Typing into {selector}: {text[:30]}...")
 
         if frame_recorder:
-            # Capture frames while typing (one frame per character roughly)
+            # Capture frames while typing (align delays to video time)
+            per_char_delay = max(1, int(delay))
             for char in text:
                 page.type(selector, char, delay=0)
-                frame_recorder.capture_frame()
-                time.sleep(delay / 1000.0)
+                frame_recorder.capture_for_duration(per_char_delay)
         else:
             page.type(selector, text, delay=delay)
 
@@ -177,8 +177,15 @@ def execute_step(
     elif action == "wait":
         selector = step["selector"]
         timeout = step.get("timeout_ms", 30000)
+        optional = step.get("optional", False)
         logger.info(f"  Waiting for: {selector}")
-        page.wait_for_selector(selector, timeout=timeout)
+        try:
+            page.wait_for_selector(selector, timeout=timeout)
+        except PlaywrightTimeoutError:
+            if optional:
+                logger.warning(f"  Optional wait timed out: {selector}")
+            else:
+                raise
         if frame_recorder:
             frame_recorder.capture_frame()
 
@@ -373,6 +380,9 @@ class FrameCaptureRecorder:
 
     def start(self, page: Page) -> None:
         """Initialize ffmpeg process for receiving frames."""
+        if not shutil.which("ffmpeg"):
+            raise RuntimeError("ffmpeg not found. Install with: brew install ffmpeg")
+
         self.page = page
         self._frame_count = 0
 
@@ -422,7 +432,7 @@ class FrameCaptureRecorder:
             return
 
         duration_sec = duration_ms / 1000.0
-        frames_needed = int(duration_sec * self.fps)
+        frames_needed = max(1, int(duration_sec * self.fps))
 
         for _ in range(frames_needed):
             start = time.monotonic()
@@ -497,6 +507,7 @@ def record_scene(
 
     recorder = None
     frame_recorder = None
+    pre_nav_step = None
     output_path = None
 
     try:
@@ -515,12 +526,12 @@ def record_scene(
             output_path = output_dir / f"{scene_id}.mov"
             frame_recorder = FrameCaptureRecorder(output_path, fps, VIEWPORT)
             # Navigate to first page before starting capture (ensures page is ready)
-            first_nav = next((s for s in scene["steps"] if s["action"] == "navigate"), None)
-            if first_nav:
-                url = first_nav["url"]
+            if scene["steps"] and scene["steps"][0].get("action") == "navigate":
+                pre_nav_step = scene["steps"][0]
+                url = pre_nav_step["url"]
                 full_url = f"{BASE_URL}{url}" if url.startswith("/") else url
                 page.goto(full_url)
-                if wait_for := first_nav.get("wait_for"):
+                if wait_for := pre_nav_step.get("wait_for"):
                     page.wait_for_selector(wait_for, timeout=15000)
             frame_recorder.start(page)
 
@@ -534,7 +545,7 @@ def record_scene(
 
         for step in scene["steps"]:
             # Skip the first navigate if we already did it for frames mode
-            if record_mode == "frames" and step["action"] == "navigate" and step == scene["steps"][0]:
+            if record_mode == "frames" and pre_nav_step is not None and step is pre_nav_step:
                 continue
             execute_step(page, step, audio_duration, frame_recorder)
 

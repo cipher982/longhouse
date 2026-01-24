@@ -2,15 +2,15 @@
 
 .jarvis-container .chat-wrapper {
   flex: 1;
-  display: flex;
-  flex-direction: column;
-  /* Constrain height so child can scroll */
+  /* Constrain height so this container can scroll */
   min-height: 0;
-  overflow: hidden;
+  /* Make the entire chat area scrollable - not just the centered transcript */
+  overflow-y: auto;
+  /* Smooth scrolling for auto-scroll behavior */
+  scroll-behavior: smooth;
 }
 
 .jarvis-container .transcript {
-  flex: 1;
   padding: var(--space-4);
   display: flex;
   flex-direction: column;
@@ -18,9 +18,7 @@
   max-width: 960px;
   margin: 0 auto;
   width: 100%;
-  overflow-y: auto;
-  /* Smooth scrolling for auto-scroll behavior */
-  scroll-behavior: smooth;
+  /* Let parent handle scrolling - transcript just centers content */
 }
 
 /* Status Message (Empty State) */

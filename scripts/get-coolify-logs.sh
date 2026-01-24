@@ -3,7 +3,7 @@
 # Usage: ./scripts/get-coolify-logs.sh [limit] [app_id]
 
 LIMIT=${1:-1}
-APP_ID="${2:-${APP_ID:-30}}"
+APP_ID="${2:-${APP_ID:-48}}"
 
 set -euo pipefail
 
