@@ -34,6 +34,7 @@ from zerg.prompts import build_supervisor_prompt
 from zerg.services.supervisor_context import reset_seq
 from zerg.services.thread_service import ThreadService
 from zerg.services.worker_artifact_store import WorkerArtifactStore
+from zerg.tools.builtin.supervisor_tools import get_supervisor_allowed_tools
 
 logger = logging.getLogger(__name__)
 
@@ -108,29 +109,8 @@ class SupervisorService:
                         agent.system_instructions = desired_prompt
                         changed = True
 
-                supervisor_tools = [
-                    "spawn_worker",
-                    "spawn_workspace_worker",
-                    "list_workers",
-                    "read_worker_result",
-                    "get_worker_evidence",
-                    "get_tool_output",
-                    "read_worker_file",
-                    "grep_workers",
-                    "get_worker_metadata",
-                    "get_current_time",
-                    "http_request",
-                    "runner_list",
-                    "runner_create_enroll_token",
-                    "send_email",
-                    "knowledge_search",
-                    "web_search",
-                    "web_fetch",
-                    # Personal tools (Phase 4 v2.1)
-                    "get_current_location",
-                    "get_whoop_data",
-                    "search_notes",
-                ]
+                # Use centralized tool list from supervisor_tools.py (single source of truth)
+                supervisor_tools = get_supervisor_allowed_tools()
                 if agent.allowed_tools != supervisor_tools:
                     agent.allowed_tools = supervisor_tools
                     changed = True
@@ -164,31 +144,8 @@ class SupervisorService:
             "reasoning_effort": "none",  # Disable reasoning for fast responses
         }
 
-        supervisor_tools = [
-            "spawn_worker",
-            "spawn_workspace_worker",
-            "list_workers",
-            "read_worker_result",
-            "get_worker_evidence",
-            "get_tool_output",
-            "read_worker_file",
-            "grep_workers",
-            "get_worker_metadata",
-            "get_current_time",
-            "http_request",
-            "runner_list",
-            "runner_create_enroll_token",
-            "send_email",
-            # V1.1: knowledge base search for user context
-            "knowledge_search",
-            # V1.2: web research capabilities
-            "web_search",
-            "web_fetch",
-            # V2.1 Phase 4: Personal tools (location, health, notes)
-            "get_current_location",
-            "get_whoop_data",
-            "search_notes",
-        ]
+        # Use centralized tool list from supervisor_tools.py (single source of truth)
+        supervisor_tools = get_supervisor_allowed_tools()
 
         agent = crud.create_agent(
             db=self.db,
