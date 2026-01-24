@@ -156,6 +156,11 @@ const config = {
       testDir: './tests/mobile',
       use: { ...devices['iPhone 13'] },
     },
+    {
+      name: 'mobile-small',
+      testDir: './tests/mobile',
+      use: { ...devices['iPhone SE'] },
+    },
   ],
 
   webServer: [

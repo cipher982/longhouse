@@ -89,6 +89,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
   - [x] Added Makefile helpers for mobile baseline runs.
   - [x] Expanded mobile baseline coverage (profile/admin/traces/reliability).
   - [x] Added mobile nav-open baseline for dashboard.
+  - [x] Added small-screen mobile project (`iPhone SE`) for baseline coverage.
 - [!] Add a11y regression gate (axe + color contrast) to CI.
   - [!] Blocked: CI doesn’t install Playwright + backend deps (`uv`, Postgres) yet.
 
