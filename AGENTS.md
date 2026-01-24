@@ -75,7 +75,7 @@ User message → `SupervisorService` → `supervisor_react_engine` → (spawn_wo
 
 ## Deployment
 
-**Product**: Swarmlet | **Branch**: `onboard-sauron` | **Server**: zerg (Hetzner)
+**Product**: Swarmlet | **Server**: zerg (Hetzner)
 
 | Service | URL |
 |---------|-----|
