@@ -1,28 +1,6 @@
 /* Base styles - Cyber/Holographic Theme */
 
-/* Import design tokens (glass theme applied via .jarvis-container) */
-@import "../../styles/tokens.css";
-
 .jarvis-container {
-  /* Jarvis-specific overrides and aliases */
-
-  /* Legacy mappings for backward compatibility */
-  --bg-primary: var(--color-void);
-  --bg-secondary: var(--color-surface-secondary);
-  --bg-elevated: var(--color-surface-elevated);
-  --text-primary: var(--color-text-primary);
-  --text-secondary: var(--color-text-secondary);
-  --text-muted: var(--color-text-muted);
-  --accent-purple: var(--color-neon-primary);
-  --accent-blue: var(--color-neon-cyan);
-  --glass-bg: var(--color-glass);
-  --glass-border: var(--color-glass-border);
-  --font-mono: var(--font-family-mono);
-
-  /* Glow effects (Jarvis-specific) */
-  --glow-primary: 0 0 20px rgb(99 102 241 / 30%);
-  --glow-cyan: 0 0 20px rgb(6 182 212 / 30%);
-
   /* Flex container - fills parent, enables single scroll */
   display: flex;
   flex-direction: column;

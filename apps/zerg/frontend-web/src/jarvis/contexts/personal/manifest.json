@@ -3,6 +3,5 @@
   "name": "personal",
   "description": "Personal AI assistant context for Jarvis",
   "configFile": "config.ts",
-  "themeFile": "theme.css",
   "requiredEnvVars": []
 }
