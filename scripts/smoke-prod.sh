@@ -385,10 +385,8 @@ if [[ -n "$SMOKE_TEST_SECRET" ]]; then
         echo "--- Chat (LLM) ---"
         test_chat "Basic chat (2+2)" "$COOKIE_JAR" "What is 2+2? Reply with just the number." 30
 
-        # Extended chat + email tests (--chat flag)
+        # Extended email test (--chat flag)
         if [[ $CHAT -eq 1 ]]; then
-            test_chat "Chat sends/receives" "$COOKIE_JAR" "Say hello in exactly 3 words" 30
-
             # Email tool test (tests full email flow via Jarvis)
             echo ""
             echo "--- Email Tool Test (via Jarvis) ---"
