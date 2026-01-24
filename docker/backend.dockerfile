@@ -7,6 +7,10 @@
 # Dependencies stage - cache Python packages efficiently
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS dependencies
 
+# Install git for cloning git-based dependencies (hatch-agent)
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 # uv environment variables for optimization
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
