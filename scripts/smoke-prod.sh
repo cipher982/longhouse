@@ -1,16 +1,17 @@
 #!/bin/bash
 
-# Production Smoke Test for Swarmlet (Split Deployment)
-# Tests frontend (swarmlet.com) and backend (api.swarmlet.com) separately
+# Production Smoke Test for Swarmlet (split frontend/backend)
 #
 # Usage:
-#   ./scripts/smoke-prod.sh              # Full test
-#   ./scripts/smoke-prod.sh --wait       # Wait 90s then test (for post-deploy)
-#   ./scripts/smoke-prod.sh --quick      # Quick health check only
-#   ./scripts/smoke-prod.sh --chat       # Include chat + email tool tests (costs money)
+#   ./scripts/smoke-prod.sh           # default: public + auth + basic LLM
+#   ./scripts/smoke-prod.sh --quick   # public health only
+#   ./scripts/smoke-prod.sh --full    # default + CRUD + email + infra
+#   ./scripts/smoke-prod.sh --no-llm  # skip LLM chat test
+#   ./scripts/smoke-prod.sh --wait    # wait 90s then test (post-deploy)
 #
 # Environment:
 #   SMOKE_TEST_SECRET  - Service account secret for authenticated tests
+#   SMOKE_TEST_EMAIL   - Email target for email tool test (default: david010@gmail.com)
 
 set -e
 
@@ -18,6 +19,7 @@ set -e
 FRONTEND_URL="${FRONTEND_URL:-https://swarmlet.com}"
 API_URL="${API_URL:-https://api.swarmlet.com}"
 WAIT_SECS="${WAIT_SECS:-90}"
+SMOKE_TEST_EMAIL="${SMOKE_TEST_EMAIL:-david010@gmail.com}"
 
 # Counters
 PASSED=0
@@ -45,6 +47,16 @@ pass() { echo -e "  ${GREEN}✓${NC} $1"; PASSED=$((PASSED + 1)); }
 fail() { echo -e "  ${RED}✗${NC} $1"; FAILED=$((FAILED + 1)); }
 warn() { echo -e "  ${YELLOW}⚠${NC} $1"; WARNINGS=$((WARNINGS + 1)); }
 info() { echo -e "  ${BLUE}ℹ${NC} $1"; }
+
+section() {
+    echo ""
+    echo "--- $1 ---"
+}
+
+# Run a test and keep going even if it fails (so we can report a full summary).
+run_test() {
+    "$@" || true
+}
 
 # Test HTTP endpoint
 test_http() {
@@ -76,9 +88,15 @@ test_http_auth() {
     local url="$2"
     local expected="$3"
     local cookie_jar="$4"
+    local method="${5:-GET}"
+    local data="${6:-}"
+
+    local args="-s -o /dev/null -w %{http_code} -b $cookie_jar"
+    [[ "$method" != "GET" ]] && args="$args -X $method"
+    [[ -n "$data" ]] && args="$args -H 'Content-Type: application/json' -d '$data'"
 
     local status
-    status=$(curl -s -o /dev/null -w "%{http_code}" -b "$cookie_jar" "$url" 2>/dev/null || echo "000")
+    status=$(eval "curl $args '$url'" 2>/dev/null || echo "000")
 
     if [[ "$status" == "$expected" ]]; then
         pass "$name ($status)"
@@ -93,8 +111,9 @@ test_http_auth() {
 test_chat() {
     local name="$1"
     local cookie_jar="$2"
-    local message="${3:-Say hello in exactly 3 words}"
+    local message="${3:-Reply with the single word OK.}"
     local timeout_secs="${4:-30}"
+    local expected_regex="${5:-}"
 
     local msg_id
     msg_id=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "smoke-$(date +%s)")
@@ -143,6 +162,13 @@ test_chat() {
     if [[ -z "$result" ]]; then
         fail "$name (empty result)"
         return 1
+    fi
+
+    if [[ -n "$expected_regex" ]]; then
+        if ! echo "$result" | grep -E -i -q "$expected_regex"; then
+            fail "$name (unexpected response)"
+            return 1
+        fi
     fi
 
     # Show truncated response
@@ -200,7 +226,12 @@ test_config() {
     local api_url
     api_url=$(echo "$config" | grep -o 'API_BASE_URL = "[^"]*"' | sed 's/.*"\([^"]*\)".*/\1/')
 
-    if [[ "$api_url" == *"api.swarmlet.com"* ]]; then
+    local api_expected
+    local api_expected_with_suffix
+    api_expected="${API_URL%/}"
+    api_expected_with_suffix="${api_expected}/api"
+
+    if [[ "$api_url" == "$api_expected" || "$api_url" == "$api_expected_with_suffix" ]]; then
         pass "Runtime config: API_BASE_URL = $api_url"
         return 0
     else
@@ -229,18 +260,158 @@ test_caddy() {
     fi
 }
 
+run_health_checks() {
+    run_test test_http "API health" "$API_URL/health" "200"
+    run_test test_json "Health status" "$API_URL/health" ".status" "healthy"
+    run_test test_json "Auth enabled" "$API_URL/health" ".checks.environment.auth_enabled" "true"
+    run_test test_json "DB connected" "$API_URL/health" ".checks.database.status" "pass"
+}
+
+run_frontend_checks() {
+    run_test test_http "Landing page" "$FRONTEND_URL" "200"
+    run_test test_http "Chat page" "$FRONTEND_URL/chat" "200"
+    run_test test_http "Dashboard" "$FRONTEND_URL/dashboard" "200"
+    run_test test_config
+}
+
+run_cors_checks() {
+    run_test test_cors "Auth endpoint" "$API_URL/api/auth/google" "$FRONTEND_URL"
+    run_test test_cors "Jarvis endpoint" "$API_URL/api/jarvis/chat" "$FRONTEND_URL"
+}
+
+run_auth_gate_checks() {
+    run_test test_http "Auth verify (no session)" "$API_URL/api/auth/verify" "401"
+    run_test test_http "Users/me (no auth)" "$API_URL/api/users/me" "401"
+    run_test test_http "Jarvis bootstrap (no auth)" "$API_URL/api/jarvis/bootstrap" "401"
+    run_test test_http "Jarvis history (no auth)" "$API_URL/api/jarvis/history" "401"
+    run_test test_http "Jarvis agents (no auth)" "$API_URL/api/jarvis/agents" "401"
+    run_test test_http "Email contacts (no auth)" "$API_URL/api/user/contacts/email" "401"
+    run_test test_http "Phone contacts (no auth)" "$API_URL/api/user/contacts/phone" "401"
+}
+
+run_contacts_crud() {
+    local cookie_jar="$1"
+
+    run_test test_http_auth "List email contacts" "$API_URL/api/user/contacts/email" "200" "$cookie_jar"
+    run_test test_http_auth "List phone contacts" "$API_URL/api/user/contacts/phone" "200" "$cookie_jar"
+
+    local email_response
+    local email_id
+    email_response=$(curl -s -X POST "$API_URL/api/user/contacts/email" \
+        -b "$cookie_jar" \
+        -H "Content-Type: application/json" \
+        -d '{"name": "Smoke Test", "email": "smoke-test@example.com", "notes": "Created by smoke test"}' 2>/dev/null)
+    email_id=$(echo "$email_response" | jq -r '.id // empty' 2>/dev/null)
+    if [[ -n "$email_id" && "$email_id" != "null" ]]; then
+        pass "Create email contact (id: $email_id)"
+    else
+        fail "Create email contact (no id returned)"
+    fi
+
+    local phone_response
+    local phone_id
+    phone_response=$(curl -s -X POST "$API_URL/api/user/contacts/phone" \
+        -b "$cookie_jar" \
+        -H "Content-Type: application/json" \
+        -d '{"name": "Smoke Test Phone", "phone": "+15551234567", "notes": "Created by smoke test"}' 2>/dev/null)
+    phone_id=$(echo "$phone_response" | jq -r '.id // empty' 2>/dev/null)
+    if [[ -n "$phone_id" && "$phone_id" != "null" ]]; then
+        pass "Create phone contact (id: $phone_id)"
+    else
+        fail "Create phone contact (no id returned)"
+    fi
+
+    if [[ -n "$email_id" && "$email_id" != "null" ]]; then
+        local delete_status
+        delete_status=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+            "$API_URL/api/user/contacts/email/$email_id" -b "$cookie_jar" 2>/dev/null)
+        if [[ "$delete_status" == "204" ]]; then
+            pass "Delete email contact (204)"
+        else
+            fail "Delete email contact (expected 204, got $delete_status)"
+        fi
+    fi
+
+    if [[ -n "$phone_id" && "$phone_id" != "null" ]]; then
+        local delete_status
+        delete_status=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+            "$API_URL/api/user/contacts/phone/$phone_id" -b "$cookie_jar" 2>/dev/null)
+        if [[ "$delete_status" == "204" ]]; then
+            pass "Delete phone contact (204)"
+        else
+            fail "Delete phone contact (expected 204, got $delete_status)"
+        fi
+    fi
+}
+
+run_email_tool_test() {
+    local cookie_jar="$1"
+    local timestamp
+    timestamp=$(date +%s)
+
+    # Ensure the target email is an approved contact
+    curl -s -X POST "$API_URL/api/user/contacts/email" \
+        -b "$cookie_jar" \
+        -H "Content-Type: application/json" \
+        -d '{"name": "Smoke Test Email", "email": "'$SMOKE_TEST_EMAIL'"}' > /dev/null 2>&1 || true
+
+    local payload
+    payload="{\"message\": \"send_email to $SMOKE_TEST_EMAIL subject SmokeTest-$timestamp text Automated smoke test\", \"message_id\": \"smoke-email-$timestamp\"}"
+
+    local response
+    if [[ -n "$TIMEOUT_CMD" ]]; then
+        response=$($TIMEOUT_CMD 60 curl -s -N -X POST "$API_URL/api/jarvis/chat" \
+            -b "$cookie_jar" \
+            -H "Content-Type: application/json" \
+            -d "$payload" 2>/dev/null) || true
+    else
+        warn "timeout command not found - email test may hang (install: brew install coreutils)"
+        response=$(curl -s -N -X POST "$API_URL/api/jarvis/chat" \
+            -b "$cookie_jar" \
+            -H "Content-Type: application/json" \
+            -d "$payload" 2>/dev/null) || true
+    fi
+
+    if echo "$response" | grep -q "supervisor_tool_completed"; then
+        if echo "$response" | grep -q "Message ID:"; then
+            pass "Email tool sent successfully"
+        else
+            fail "Email tool completed but no message ID"
+        fi
+    elif echo "$response" | grep -q "supervisor_tool_failed"; then
+        local error
+        error=$(echo "$response" | grep -o '"error": "[^"]*"' | head -1)
+        fail "Email tool failed: $error"
+    else
+        warn "Email tool test inconclusive"
+    fi
+}
+
 # Parse args
+MODE="default" # quick | default | full
 QUICK=0
+FULL=0
 WAIT=0
-CHAT=0
+RUN_LLM=1
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --quick) QUICK=1; shift ;;
+        --quick) QUICK=1; MODE="quick"; shift ;;
+        --full) FULL=1; MODE="full"; shift ;;
+        --no-llm) RUN_LLM=0; shift ;;
         --wait) WAIT=1; shift ;;
-        --chat) CHAT=1; shift ;;
+        --chat) FULL=1; MODE="full"; info "--chat is deprecated; use --full"; shift ;;
+        -h|--help)
+            echo "Usage: ./scripts/smoke-prod.sh [--quick] [--full] [--no-llm] [--wait]"
+            exit 0
+            ;;
         *) shift ;;
     esac
 done
+
+if [[ $QUICK -eq 1 && $FULL -eq 1 ]]; then
+    info "--quick ignores --full"
+    MODE="quick"
+fi
 
 echo ""
 echo "================================================"
@@ -259,10 +430,10 @@ if [[ $WAIT -eq 1 ]]; then
 fi
 
 # === Quick mode: just health checks ===
-if [[ $QUICK -eq 1 ]]; then
-    echo "--- Quick Health Check ---"
-    test_http "API health" "$API_URL/health" "200"
-    test_http "Frontend" "$FRONTEND_URL" "200"
+if [[ "$MODE" == "quick" ]]; then
+    section "Health (quick)"
+    run_test test_http "API health" "$API_URL/health" "200"
+    run_test test_http "Frontend" "$FRONTEND_URL" "200"
     echo ""
     echo "================================================"
     echo -e "  Quick: ${GREEN}$PASSED passed${NC}, ${RED}$FAILED failed${NC}"
@@ -270,155 +441,54 @@ if [[ $QUICK -eq 1 ]]; then
     exit $FAILED
 fi
 
-# === Full test suite ===
+# === Default smoke ===
+section "Health"
+run_health_checks
 
-echo "--- Backend API ($API_URL) ---"
-test_http "Health endpoint" "$API_URL/health" "200"
-test_json "Health status" "$API_URL/health" ".status" "healthy"
-test_json "Auth enabled" "$API_URL/health" ".checks.environment.auth_enabled" "true"
-test_json "DB connected" "$API_URL/health" ".checks.database.status" "pass"
+section "Frontend"
+run_frontend_checks
 
-echo ""
-echo "--- CORS (cross-origin from frontend) ---"
-test_cors "Auth endpoint" "$API_URL/api/auth/google" "$FRONTEND_URL"
-test_cors "Jarvis endpoint" "$API_URL/api/jarvis/chat" "$FRONTEND_URL"
+section "CORS"
+run_cors_checks
 
-echo ""
-echo "--- Auth (should require login) ---"
-test_http "Auth verify (no session)" "$API_URL/api/auth/verify" "401"
-test_http "Users/me (no auth)" "$API_URL/api/users/me" "401"
-
-echo ""
-echo "--- Jarvis API (should require auth) ---"
-test_http "Jarvis bootstrap" "$API_URL/api/jarvis/bootstrap" "401"
-test_http "Jarvis agents" "$API_URL/api/jarvis/agents" "401"
-test_http "Jarvis history" "$API_URL/api/jarvis/history" "401"
-
-echo ""
-echo "--- Contacts API (should require auth) ---"
-test_http "Email contacts (no auth)" "$API_URL/api/user/contacts/email" "401"
-test_http "Phone contacts (no auth)" "$API_URL/api/user/contacts/phone" "401"
-
-echo ""
-echo "--- Frontend ($FRONTEND_URL) ---"
-test_http "Landing page" "$FRONTEND_URL" "200"
-test_http "Chat page" "$FRONTEND_URL/chat" "200"
-test_http "Dashboard" "$FRONTEND_URL/dashboard" "200"
-test_config
-
-echo ""
-echo "--- Infrastructure ---"
-test_caddy
+section "Auth gates (unauthenticated)"
+run_auth_gate_checks
 
 # Authenticated tests (requires SMOKE_TEST_SECRET)
 if [[ -n "$SMOKE_TEST_SECRET" ]]; then
-    echo ""
-    echo "--- Authenticated Flow ---"
-    COOKIE_JAR=$(mktemp)
+    section "Authenticated"
 
-    # Get session - verify login succeeded
+    COOKIE_JAR=$(mktemp)
     LOGIN_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_URL/api/auth/service-login" \
         -H "X-Service-Secret: $SMOKE_TEST_SECRET" \
         -c "$COOKIE_JAR")
 
     if [[ "$LOGIN_STATUS" == "200" ]]; then
         pass "Service login ($LOGIN_STATUS)"
-        test_http_auth "Jarvis bootstrap (authed)" "$API_URL/api/jarvis/bootstrap" "200" "$COOKIE_JAR"
-        test_http_auth "Jarvis history (authed)" "$API_URL/api/jarvis/history" "200" "$COOKIE_JAR"
-        test_http_auth "User profile (authed)" "$API_URL/api/users/me" "200" "$COOKIE_JAR"
+        run_test test_http_auth "Jarvis bootstrap (authed)" "$API_URL/api/jarvis/bootstrap" "200" "$COOKIE_JAR"
+        run_test test_http_auth "Jarvis history (authed)" "$API_URL/api/jarvis/history" "200" "$COOKIE_JAR"
+        run_test test_http_auth "User profile (authed)" "$API_URL/api/users/me" "200" "$COOKIE_JAR"
 
-        # Contacts CRUD test
-        echo ""
-        echo "--- Contacts API (authed) ---"
-
-        # List contacts (should be empty or existing)
-        test_http_auth "List email contacts" "$API_URL/api/user/contacts/email" "200" "$COOKIE_JAR"
-        test_http_auth "List phone contacts" "$API_URL/api/user/contacts/phone" "200" "$COOKIE_JAR"
-
-        # Create email contact
-        EMAIL_CONTACT_RESPONSE=$(curl -s -X POST "$API_URL/api/user/contacts/email" \
-            -b "$COOKIE_JAR" \
-            -H "Content-Type: application/json" \
-            -d '{"name": "Smoke Test", "email": "smoke-test@example.com", "notes": "Created by smoke test"}' 2>/dev/null)
-        EMAIL_CONTACT_ID=$(echo "$EMAIL_CONTACT_RESPONSE" | jq -r '.id // empty' 2>/dev/null)
-        if [[ -n "$EMAIL_CONTACT_ID" && "$EMAIL_CONTACT_ID" != "null" ]]; then
-            pass "Create email contact (id: $EMAIL_CONTACT_ID)"
+        if [[ $RUN_LLM -eq 1 ]]; then
+            section "LLM"
+            run_test test_chat "Basic chat (2+2)" "$COOKIE_JAR" "What is 2+2? Reply with just the number." 30 '(^|[^0-9])4($|[^0-9])'
+            run_test test_chat "Basic chat (France capital)" "$COOKIE_JAR" "What is the capital of France? Reply with just the city." 30 '(^|[^A-Za-z])Paris($|[^A-Za-z])'
         else
-            fail "Create email contact (no id returned)"
+            info "LLM test skipped (--no-llm)"
         fi
 
-        # Create phone contact
-        PHONE_CONTACT_RESPONSE=$(curl -s -X POST "$API_URL/api/user/contacts/phone" \
-            -b "$COOKIE_JAR" \
-            -H "Content-Type: application/json" \
-            -d '{"name": "Smoke Test Phone", "phone": "+15551234567", "notes": "Created by smoke test"}' 2>/dev/null)
-        PHONE_CONTACT_ID=$(echo "$PHONE_CONTACT_RESPONSE" | jq -r '.id // empty' 2>/dev/null)
-        if [[ -n "$PHONE_CONTACT_ID" && "$PHONE_CONTACT_ID" != "null" ]]; then
-            pass "Create phone contact (id: $PHONE_CONTACT_ID)"
+        if [[ "$MODE" == "full" ]]; then
+            section "Contacts CRUD"
+            run_contacts_crud "$COOKIE_JAR"
+
+            section "Email tool"
+            run_email_tool_test "$COOKIE_JAR"
         else
-            fail "Create phone contact (no id returned)"
+            info "Full tests skipped (pass --full to enable CRUD/email/infra)"
         fi
 
-        # Cleanup - delete created contacts
-        if [[ -n "$EMAIL_CONTACT_ID" && "$EMAIL_CONTACT_ID" != "null" ]]; then
-            DELETE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
-                "$API_URL/api/user/contacts/email/$EMAIL_CONTACT_ID" -b "$COOKIE_JAR" 2>/dev/null)
-            if [[ "$DELETE_STATUS" == "204" ]]; then
-                pass "Delete email contact (204)"
-            else
-                fail "Delete email contact (expected 204, got $DELETE_STATUS)"
-            fi
-        fi
-
-        if [[ -n "$PHONE_CONTACT_ID" && "$PHONE_CONTACT_ID" != "null" ]]; then
-            DELETE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
-                "$API_URL/api/user/contacts/phone/$PHONE_CONTACT_ID" -b "$COOKIE_JAR" 2>/dev/null)
-            if [[ "$DELETE_STATUS" == "204" ]]; then
-                pass "Delete phone contact (204)"
-            else
-                fail "Delete phone contact (expected 204, got $DELETE_STATUS)"
-            fi
-        fi
-
-        # Basic chat test - always runs (minimal cost: ~$0.001 per run)
-        echo ""
-        echo "--- Chat (LLM) ---"
-        test_chat "Basic chat (2+2)" "$COOKIE_JAR" "What is 2+2? Reply with just the number." 30
-
-        # Extended email test (--chat flag)
-        if [[ $CHAT -eq 1 ]]; then
-            # Email tool test (tests full email flow via Jarvis)
-            echo ""
-            echo "--- Email Tool Test (via Jarvis) ---"
-
-            # Ensure david010@gmail.com is an approved contact
-            curl -s -X POST "$API_URL/api/user/contacts/email" \
-                -b "$COOKIE_JAR" \
-                -H "Content-Type: application/json" \
-                -d '{"name": "Smoke Test Email", "email": "david010@gmail.com"}' > /dev/null 2>&1 || true
-
-            # Send email via Jarvis and check for success
-            EMAIL_RESPONSE=$(timeout 60 curl -s -N -X POST "$API_URL/api/jarvis/chat" \
-                -b "$COOKIE_JAR" \
-                -H "Content-Type: application/json" \
-                -d "{\"message\": \"send_email to david010@gmail.com subject SmokeTest-$(date +%s) text Automated smoke test\", \"message_id\": \"smoke-email-$(date +%s)\"}" 2>/dev/null) || true
-
-            if echo "$EMAIL_RESPONSE" | grep -q "supervisor_tool_completed"; then
-                # Check if it contains a message_id (SES success)
-                if echo "$EMAIL_RESPONSE" | grep -q "Message ID:"; then
-                    pass "Email tool sent successfully"
-                else
-                    fail "Email tool completed but no message ID"
-                fi
-            elif echo "$EMAIL_RESPONSE" | grep -q "supervisor_tool_failed"; then
-                ERROR=$(echo "$EMAIL_RESPONSE" | grep -o '"error": "[^"]*"' | head -1)
-                fail "Email tool failed: $ERROR"
-            else
-                warn "Email tool test inconclusive"
-            fi
-        else
-            info "Extended chat tests skipped (pass --chat to enable)"
-        fi
+        section "Ephemeral cleanup"
+        run_test test_http_auth "Jarvis history clear (authed)" "$API_URL/api/jarvis/history" "204" "$COOKIE_JAR" "DELETE"
     else
         fail "Service login (got $LOGIN_STATUS)"
     fi
@@ -426,7 +496,12 @@ if [[ -n "$SMOKE_TEST_SECRET" ]]; then
     rm -f "$COOKIE_JAR"
 else
     echo ""
-    warn "SMOKE_TEST_SECRET not set - skipping authenticated tests"
+    warn "SMOKE_TEST_SECRET not set - skipping authenticated + LLM tests"
+fi
+
+if [[ "$MODE" == "full" ]]; then
+    section "Infrastructure"
+    run_test test_caddy
 fi
 
 # Summary
