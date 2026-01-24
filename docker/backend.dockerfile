@@ -56,6 +56,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     ca-certificates \
     openssh-client \
+    git \
     nodejs \
     npm \
     && rm -rf /var/lib/apt/lists/* \
