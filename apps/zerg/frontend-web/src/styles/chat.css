@@ -127,6 +127,16 @@
       transition: all var(--motion-duration-fast) var(--motion-easing-standard);
     }
 
+    .chat-thread-toggle {
+      display: none;
+    }
+
+    .chat-thread-toggle--active {
+      border-color: var(--color-brand-primary);
+      color: var(--color-brand-primary);
+      background: rgba(99, 102, 241, 0.12);
+    }
+
     .chat-settings-btn:hover {
       background-color: var(--color-surface-overlay);
       color: var(--color-text-primary);
@@ -944,6 +954,10 @@
 
       .chat-settings-btn span {
         display: none;
+      }
+
+      .chat-thread-toggle {
+        display: inline-flex;
       }
 
       .thread-sidebar {

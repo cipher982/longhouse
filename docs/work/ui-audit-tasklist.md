@@ -108,6 +108,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
   - [x] Added mobile thread scrim + tightened composer layout and safe-area spacing.
   - [x] Updated thread sidebar to slide with transform + responsive width.
   - [x] Added iOS scroll smoothing for threads/messages.
+  - [x] Added mobile thread toggle button in chat header.
 - [x] Canvas: layout rules + minimal mode.
   - [x] Mobile logs panel: bottom sheet layout + safe-area padding.
   - [x] Added mobile minimal mode toggle (hides snap/guides + tightens controls).
