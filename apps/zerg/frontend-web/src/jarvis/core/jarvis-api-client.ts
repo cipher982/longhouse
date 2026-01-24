@@ -30,9 +30,11 @@ export interface JarvisAgentSummary {
 export interface JarvisRunSummary {
   id: number;
   agent_id: number;
+  thread_id?: number;
   agent_name: string;
   status: string;
   summary?: string;
+  continuation_of_run_id?: number;
   created_at: string;
   updated_at: string;
   completed_at?: string;

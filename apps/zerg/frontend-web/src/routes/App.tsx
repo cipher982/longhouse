@@ -25,6 +25,7 @@ import { AuthGuard } from "../lib/auth";
 const ChatPage = lazy(() => import("../pages/ChatPage"));
 const CanvasPage = lazy(() => import("../pages/CanvasPage"));
 const JarvisChatPage = lazy(() => import("../pages/JarvisChatPage"));
+const SwarmOpsPage = lazy(() => import("../pages/SwarmOpsPage"));
 import { ShelfProvider } from "../lib/useShelfState";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { usePerformanceMonitoring, useBundleSizeWarning } from "../lib/usePerformance";
@@ -156,6 +157,16 @@ export default function App() {
             <ErrorBoundary>
               <Suspense fallback={<PageLoader />}>
                 <CanvasPage />
+              </Suspense>
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/swarm",
+          element: (
+            <ErrorBoundary>
+              <Suspense fallback={<PageLoader />}>
+                <SwarmOpsPage />
               </Suspense>
             </ErrorBoundary>
           )
