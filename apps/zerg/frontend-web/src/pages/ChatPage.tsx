@@ -4,7 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import clsx from "clsx";
 import { useShelf } from "../lib/useShelfState";
-import { SettingsIcon } from "../components/icons";
+import { SettingsIcon, SidebarIcon } from "../components/icons";
 import AgentSettingsDrawer from "../components/agent-settings/AgentSettingsDrawer";
 import { ChatThreadList } from "../components/chat/ChatThreadList";
 import { ChatMessageList } from "../components/chat/ChatMessageList";
@@ -24,7 +24,7 @@ export default function ChatPage() {
   const params = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { isShelfOpen, closeShelf } = useShelf();
+  const { isShelfOpen, closeShelf, toggleShelf } = useShelf();
   const creatingThreadRef = useRef(false);
 
   const agentId = useRequiredNumber(params.agentId);
@@ -315,6 +315,19 @@ export default function ChatPage() {
           </div>
           {agentId != null && (
             <div className="chat-actions">
+              <button
+                type="button"
+                className={clsx("chat-settings-btn", "chat-thread-toggle", {
+                  "chat-thread-toggle--active": isShelfOpen,
+                })}
+                onClick={toggleShelf}
+                title={isShelfOpen ? "Hide threads" : "Show threads"}
+                aria-expanded={isShelfOpen}
+                aria-controls="thread-sidebar"
+              >
+                <SidebarIcon />
+                <span>Threads</span>
+              </button>
               <button
                 type="button"
                 className="chat-settings-btn"
