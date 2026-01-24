@@ -61,15 +61,21 @@ class JobRegistry:
         self._jobs: dict[str, JobConfig] = {}
         self._scheduler: AsyncIOScheduler | None = None
 
-    def register(self, config: JobConfig) -> None:
+    def register(self, config: JobConfig) -> bool:
         """Register a job configuration.
 
-        Raises ValueError on duplicate job IDs (fail-fast policy).
+        Duplicate job IDs are skipped with a warning (not fatal).
+        This allows manifest reloads and prevents partial registration failures.
+
+        Returns:
+            True if registered, False if skipped (duplicate).
         """
         if config.id in self._jobs:
-            raise ValueError(f"Job id already registered: {config.id}")
+            logger.warning("Job %s already registered, skipping duplicate", config.id)
+            return False
         self._jobs[config.id] = config
         logger.info("Registered job: %s (cron=%s, enabled=%s)", config.id, config.cron, config.enabled)
+        return True
 
     def get(self, job_id: str) -> JobConfig | None:
         """Get a job configuration by ID."""
@@ -229,7 +235,7 @@ class JobRegistry:
 job_registry = JobRegistry()
 
 
-def register_all_jobs(scheduler: AsyncIOScheduler | None = None, use_queue: bool = False) -> int:
+async def register_all_jobs(scheduler: AsyncIOScheduler | None = None, use_queue: bool = False) -> int:
     """Register and schedule all jobs.
 
     Call this during startup to:
@@ -270,7 +276,7 @@ def register_all_jobs(scheduler: AsyncIOScheduler | None = None, use_queue: bool
     try:
         from zerg.jobs.loader import load_jobs_manifest
 
-        load_jobs_manifest()
+        await load_jobs_manifest()
     except Exception as e:
         logger.exception("Manifest load failed (builtin jobs remain active): %s", e)
 

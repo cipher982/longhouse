@@ -194,6 +194,8 @@ async def _run_job(queue_job: QueueJob, owner: QueueOwner) -> None:
 
     Jobs must be registered in job_registry (via builtin or manifest).
     """
+    from zerg.jobs.loader import get_manifest_metadata
+
     job_def = job_registry.get(queue_job.job_id)
 
     if not job_def or not job_def.enabled:
@@ -204,10 +206,23 @@ async def _run_job(queue_job: QueueJob, owner: QueueOwner) -> None:
     timeout_seconds = job_def.timeout_seconds
     tags = job_def.tags
     project = job_def.project
-    script_metadata = {
-        "script_source": "registry",
-        "entrypoint": f"{job_def.func.__module__}.{job_def.func.__name__}",
-    }
+
+    # Build metadata - include git SHA for manifest jobs
+    manifest_meta = get_manifest_metadata(queue_job.job_id)
+    if manifest_meta:
+        # Manifest job - include git SHA and loaded_at
+        script_metadata = {
+            "script_source": "manifest",
+            "entrypoint": f"{job_def.func.__module__}.{job_def.func.__name__}",
+            "git_sha": manifest_meta.get("git_sha"),
+            "loaded_at": manifest_meta.get("loaded_at"),
+        }
+    else:
+        # Builtin job
+        script_metadata = {
+            "script_source": "builtin",
+            "entrypoint": f"{job_def.func.__module__}.{job_def.func.__name__}",
+        }
 
     started_at = datetime.now(UTC)
     lease_seconds = _lease_seconds(timeout_seconds)

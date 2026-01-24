@@ -376,7 +376,7 @@ async def lifespan(app: FastAPI):
                     job_scheduler = AsyncIOScheduler()
 
                     # Register and schedule job modules (use_queue=True enqueues to durable queue)
-                    scheduled_count = register_all_jobs(scheduler=job_scheduler, use_queue=True)
+                    scheduled_count = await register_all_jobs(scheduler=job_scheduler, use_queue=True)
                     logger.info("Scheduled %d jobs with APScheduler", scheduled_count)
 
                     await enqueue_missed_runs()  # Backfill missed runs

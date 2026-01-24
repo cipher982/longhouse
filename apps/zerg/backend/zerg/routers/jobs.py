@@ -68,16 +68,16 @@ router = APIRouter(
 _registered = False
 
 
-def _ensure_jobs_registered() -> None:
+async def _ensure_jobs_registered() -> None:
     """Ensure job modules are imported and jobs registered."""
     global _registered
     if not _registered:
-        register_all_jobs(scheduler=None)
+        await register_all_jobs(scheduler=None)
         _registered = True
 
 
 @router.get("/", response_model=JobListResponse)
-def list_jobs(
+async def list_jobs(
     enabled_only: bool = False,
     current_user: UserModel = Depends(require_admin),
 ):
@@ -86,7 +86,7 @@ def list_jobs(
     Args:
         enabled_only: If True, only return enabled jobs
     """
-    _ensure_jobs_registered()
+    await _ensure_jobs_registered()
 
     jobs = job_registry.list_jobs(enabled_only=enabled_only)
     job_infos = [
@@ -107,12 +107,12 @@ def list_jobs(
 
 
 @router.get("/{job_id}", response_model=JobInfo)
-def get_job(
+async def get_job(
     job_id: str,
     current_user: UserModel = Depends(require_admin),
 ):
     """Get details for a specific job."""
-    _ensure_jobs_registered()
+    await _ensure_jobs_registered()
 
     config = job_registry.get(job_id)
     if not config:
@@ -145,7 +145,7 @@ async def run_job(
 
     The job runs with full retry support and timeout enforcement.
     """
-    _ensure_jobs_registered()
+    await _ensure_jobs_registered()
 
     config = job_registry.get(job_id)
     if not config:
@@ -166,12 +166,12 @@ async def run_job(
 
 
 @router.post("/{job_id}/enable", response_model=JobInfo)
-def enable_job(
+async def enable_job(
     job_id: str,
     current_user: UserModel = Depends(require_admin),
 ):
     """Enable a job for scheduled execution."""
-    _ensure_jobs_registered()
+    await _ensure_jobs_registered()
 
     if not job_registry.enable(job_id):
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
@@ -192,12 +192,12 @@ def enable_job(
 
 
 @router.post("/{job_id}/disable", response_model=JobInfo)
-def disable_job(
+async def disable_job(
     job_id: str,
     current_user: UserModel = Depends(require_admin),
 ):
     """Disable a job from scheduled execution."""
-    _ensure_jobs_registered()
+    await _ensure_jobs_registered()
 
     if not job_registry.disable(job_id):
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
