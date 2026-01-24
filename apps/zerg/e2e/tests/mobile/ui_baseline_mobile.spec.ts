@@ -4,7 +4,7 @@ import { waitForPageReady } from '../helpers/ready-signals';
 const BASE_QUERY = 'clock=frozen&effects=off&seed=ui-baseline';
 
 const MOBILE_PAGES = [
-  { name: 'dashboard', path: `/dashboard?${BASE_QUERY}`, ready: 'page' },
+  { name: 'dashboard', path: `/dashboard?${BASE_QUERY}`, ready: 'page', navOpen: true },
   { name: 'chat', path: `/chat?${BASE_QUERY}`, ready: 'page' },
   { name: 'canvas', path: `/canvas?${BASE_QUERY}`, ready: 'page' },
   { name: 'settings', path: `/settings?${BASE_QUERY}`, ready: 'settings' },
@@ -27,19 +27,36 @@ async function waitForAppReady(page: Page, mode: string) {
   }
 }
 
-async function captureBaseline(page: Page, path: string, name: string, ready: string) {
+async function captureBaseline(
+  page: Page,
+  path: string,
+  name: string,
+  ready: string,
+  navOpen?: boolean
+) {
   await page.goto(path);
   await waitForAppReady(page, ready);
   await expect(page).toHaveScreenshot(`${name}.png`, {
     fullPage: true,
     animations: 'disabled',
   });
+
+  if (navOpen) {
+    const toggle = page.locator('.mobile-menu-toggle');
+    await toggle.waitFor({ state: 'visible', timeout: 5000 });
+    await toggle.click();
+    await expect(page.locator('.mobile-nav-drawer')).toHaveClass(/open/);
+    await expect(page).toHaveScreenshot(`${name}-nav.png`, {
+      fullPage: true,
+      animations: 'disabled',
+    });
+  }
 }
 
 test.describe('UI baseline: mobile pages', () => {
   for (const pageDef of MOBILE_PAGES) {
     test(`baseline: ${pageDef.name}`, async ({ page }) => {
-      await captureBaseline(page, pageDef.path, pageDef.name, pageDef.ready);
+      await captureBaseline(page, pageDef.path, pageDef.name, pageDef.ready, pageDef.navOpen);
     });
   }
 });
