@@ -52,3 +52,51 @@ def test_non_core_exemptions_are_valid():
     supervisor_names = {t.name for t in SUPERVISOR_TOOLS}
     invalid = sorted(NON_CORE_SUPERVISOR_TOOLS - supervisor_names)
     assert not invalid, f"NON_CORE_SUPERVISOR_TOOLS contains non-existent tools: {invalid}"
+
+
+def test_supervisor_service_allowlist_includes_supervisor_tools():
+    """supervisor_service.py allowlist must include all SUPERVISOR_TOOLS.
+
+    This catches the bug where a tool is added to supervisor_tools.py but not
+    to supervisor_service.py's hardcoded allowlist, causing "tool not in request.tools"
+    errors at runtime.
+
+    The supervisor agent's allowed_tools are stored in the database and loaded from
+    supervisor_service.py. If a tool isn't in this list, the LLM can't use it.
+    """
+    import ast
+    from pathlib import Path
+
+    # Parse supervisor_service.py to extract tool lists
+    service_path = Path(__file__).parent.parent.parent / "services" / "supervisor_service.py"
+    source = service_path.read_text()
+    tree = ast.parse(source)
+
+    # Find all list assignments named "supervisor_tools"
+    allowlists: list[set[str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "supervisor_tools":
+                    if isinstance(node.value, ast.List):
+                        tools = set()
+                        for elt in node.value.elts:
+                            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                                tools.add(elt.value)
+                        allowlists.append(tools)
+
+    assert len(allowlists) >= 2, (
+        f"Expected at least 2 supervisor_tools lists in supervisor_service.py, found {len(allowlists)}. "
+        "There should be one for existing supervisors and one for new supervisors."
+    )
+
+    # All SUPERVISOR_TOOLS should be in every allowlist (except exempted ones)
+    supervisor_names = {t.name for t in SUPERVISOR_TOOLS}
+    required_tools = supervisor_names - NON_CORE_SUPERVISOR_TOOLS
+
+    for i, allowlist in enumerate(allowlists):
+        missing = sorted(required_tools - allowlist)
+        assert not missing, (
+            f"supervisor_service.py allowlist #{i+1} missing supervisor tools: {missing}. "
+            "Add them to the supervisor_tools list in supervisor_service.py"
+        )

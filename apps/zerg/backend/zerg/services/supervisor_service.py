@@ -110,6 +110,7 @@ class SupervisorService:
 
                 supervisor_tools = [
                     "spawn_worker",
+                    "spawn_workspace_worker",
                     "list_workers",
                     "read_worker_result",
                     "get_worker_evidence",
@@ -165,6 +166,7 @@ class SupervisorService:
 
         supervisor_tools = [
             "spawn_worker",
+            "spawn_workspace_worker",
             "list_workers",
             "read_worker_result",
             "get_worker_evidence",
