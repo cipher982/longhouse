@@ -917,7 +917,10 @@ def get_worker_metadata(job_id: str) -> str:
     return run_async_safely(get_worker_metadata_async(job_id))
 
 
-# Export tools list for registration
+# ---------------------------------------------------------------------------
+# Tool registration and exports
+# ---------------------------------------------------------------------------
+
 # Note: We provide both func (sync) and coroutine (async) so LangChain
 # can use whichever invocation method is appropriate for the runtime.
 TOOLS: List[StructuredTool] = [
@@ -993,3 +996,47 @@ TOOLS: List[StructuredTool] = [
         "Provide the job ID (integer) to inspect job details.",
     ),
 ]
+
+# ---------------------------------------------------------------------------
+# Single source of truth for supervisor tool names
+# ---------------------------------------------------------------------------
+
+# Tool names derived from TOOLS list - this is the canonical source
+SUPERVISOR_TOOL_NAMES: frozenset[str] = frozenset(t.name for t in TOOLS)
+
+# Additional utility tools that supervisors need access to.
+# These are NOT supervisor-specific but are commonly used by the supervisor agent.
+# Organized by category for clarity.
+SUPERVISOR_UTILITY_TOOLS: frozenset[str] = frozenset(
+    [
+        # Time/scheduling
+        "get_current_time",
+        # Web/HTTP
+        "http_request",
+        "web_search",
+        "web_fetch",
+        # Infrastructure
+        "runner_list",
+        "runner_create_enroll_token",
+        # Communication
+        "send_email",
+        # Knowledge
+        "knowledge_search",
+        # Personal context (v2.1 Phase 4)
+        "get_current_location",
+        "get_whoop_data",
+        "search_notes",
+    ]
+)
+
+
+def get_supervisor_allowed_tools() -> list[str]:
+    """Get the complete list of tools a supervisor agent should have access to.
+
+    This is the SINGLE SOURCE OF TRUTH for supervisor tool allowlists.
+    Used by supervisor_service.py when creating/updating supervisor agents.
+
+    Returns:
+        Sorted list of tool names (supervisor tools + utility tools)
+    """
+    return sorted(SUPERVISOR_TOOL_NAMES | SUPERVISOR_UTILITY_TOOLS)

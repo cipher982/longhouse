@@ -17,6 +17,9 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
+# Import supervisor tool names from the single source of truth
+from zerg.tools.builtin.supervisor_tools import SUPERVISOR_TOOL_NAMES
+
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
 
@@ -26,17 +29,15 @@ logger = logging.getLogger(__name__)
 # Core tools - always loaded with full schemas
 # ---------------------------------------------------------------------------
 
-CORE_TOOLS: frozenset[str] = frozenset(
+# Core tools are pre-loaded for all agents. This includes:
+# - All supervisor tools (for worker coordination)
+# - Tool discovery tools (for lazy loading)
+# - Common utilities
+#
+# NOTE: SUPERVISOR_TOOL_NAMES is imported from supervisor_tools.py
+# which is the single source of truth. Do NOT duplicate tool names here.
+CORE_TOOLS: frozenset[str] = SUPERVISOR_TOOL_NAMES | frozenset(
     [
-        # Worker coordination
-        "spawn_worker",
-        "spawn_workspace_worker",
-        "list_workers",
-        "read_worker_result",
-        "get_worker_evidence",
-        "get_tool_output",
-        "grep_workers",
-        "get_worker_metadata",
         # User interaction
         "contact_user",
         # Tool discovery (for lazy loading)
