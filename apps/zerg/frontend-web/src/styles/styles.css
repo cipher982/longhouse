@@ -4,8 +4,7 @@
 
 /* ------------------------------------------------------------------ */
 
-/* Design tokens & utilities */
-@import url("layout.css");
+/* Base rules only (layout imported via app.css) */
 
 @layer base {
   /* ------------------------------------------------------------------ */

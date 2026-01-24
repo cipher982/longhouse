@@ -147,3 +147,6 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-23) [pattern] Repo tasks should be routed by tool/interface (separate tool or auto-routing); prompt-only enforcement leads to runner_exec misuse.
 - (2026-01-24) [gotcha] Tool contracts live in `schemas/tools.yml`; regenerate `apps/zerg/backend/zerg/tools/generated/tool_definitions.py` via `scripts/generate_tool_types.py` instead of editing the generated file.
 - (2026-01-24) [pattern] External jobs loader simplified: `zerg/jobs/loader.py` uses `runpy.run_path()` on `manifest.py` from git repo. Duplicates skip (not fatal), sys.path cleaned after load, git SHA tracked in metadata. Updates require restart.
+- (2026-01-24) [pattern] UX needs multi-level alerting: auto-ack obvious “continue?” prompts, hard-stop attention for risky/ambiguous states; keep “fun” vibe without sacrificing triage speed.
+- (2026-01-24) [gotcha] Jarvis is no longer a separate app; it’s just the chat page, so unify its styles with the main frontend when refactoring.
+- (2026-01-24) [gotcha] Repo policy: work only on main, no worktrees; confirm `git -C /Users/davidrose/git/zerg status -sb` before changes; no stashing unless explicitly requested.

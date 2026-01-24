@@ -6,27 +6,8 @@ import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "./lib/auth";
 import { ConfirmProvider } from "./components/confirm";
 
-// CSS Layer order declaration (MUST be first)
-import "./styles/layers.css";
-
-// Core styles (tokens defined in legacy.css via styles/tokens.css)
-import "./styles/legacy.css";
-
-// Shared UI primitives (@layer components)
-import "./styles/ui.css";
-
-// Component styles (@layer components)
-import "./styles/modal.css";
-import "./styles/chat.css";
-
-// Page styles (@layer pages)
-import "./styles/profile-admin.css";
-import "./styles/settings.css";
-import "./styles/css/agent-settings.css";
-import "./styles/marketing-mode.css";
-import "./styles/reliability.css";
-import "./styles/trace-explorer.css";
-import "./styles/page-shell.css";
+// Global stylesheet entrypoint
+import "./styles/app.css";
 import App from "./routes/App";
 
 // Umami Analytics - env-configurable via Vite (VITE_UMAMI_*)

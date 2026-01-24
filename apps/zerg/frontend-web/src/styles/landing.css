@@ -3,7 +3,7 @@
    A beautiful, conversion-optimized landing page for Swarmlet
    ============================================================ */
 
-/* Note: particle.css and buttons.css are imported via legacy.css */
+/* Note: particle.css and buttons.css are imported via app.css */
 
 @layer pages {
   /* --------------------------------------------------------

@@ -1,0 +1,48 @@
+/* Global stylesheet entrypoint (glass-only) */
+@layer tokens, base, system, navigation, components, pages;
+
+/* Tokens */
+@import url("./tokens.css") layer(tokens);
+
+/* Base */
+@import url("./layout.css");
+@import url("./styles.css");
+
+/* System (formerly legacy) */
+@import url("./run_button.css") layer(system);
+@import url("./css/util.css") layer(system);
+@import url("./css/buttons.css") layer(system);
+@import url("./css/forms.css") layer(system);
+@import url("./css/agent_shelf.css") layer(system);
+@import url("./css/canvas.css") layer(system);
+@import url("./css/dashboard.css") layer(system);
+@import url("./css/toast.css") layer(system);
+@import url("./css/status.css") layer(system);
+@import url("./css/ops.css") layer(system);
+@import url("./css/modal.css") layer(system);
+@import url("./css/tool_config_modal.css") layer(system);
+@import url("./css/mcp.css") layer(system);
+@import url("./css/particle.css") layer(system);
+@import url("./css/components/disclosure.css") layer(system);
+@import url("./css/components/execution-results.css") layer(system);
+
+/* Navigation */
+@import url("./css/nav.css") layer(navigation);
+
+/* Components */
+@import url("./ui.css");
+@import url("./modal.css");
+@import url("./chat.css");
+@import url("./execution-log-stream.css");
+
+/* Jarvis chat (now part of main app) */
+@import url("../jarvis/styles/index.css") layer(components);
+
+/* Pages */
+@import url("./profile-admin.css");
+@import url("./settings.css");
+@import url("./css/agent-settings.css");
+@import url("./marketing-mode.css");
+@import url("./reliability.css");
+@import url("./trace-explorer.css");
+@import url("./page-shell.css");
