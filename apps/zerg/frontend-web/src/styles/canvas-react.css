@@ -730,6 +730,27 @@
       padding: 8px 10px;
       width: 100%;
     }
+
+    .execution-logs-draggable {
+      position: fixed;
+      left: 0 !important;
+      right: 0;
+      bottom: 0;
+      top: auto !important;
+      width: 100%;
+      max-height: min(70vh, 520px);
+      border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+      transform: none !important;
+    }
+
+    .execution-logs-draggable .logs-header {
+      cursor: default;
+    }
+
+    .execution-logs-draggable .logs-content {
+      max-height: none;
+      padding-bottom: calc(var(--space-4) + env(safe-area-inset-bottom));
+    }
   }
 
   /* ========== TABLET/LANDSCAPE ADJUSTMENTS (max-width: 1024px) ========== */
