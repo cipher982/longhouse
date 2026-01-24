@@ -233,6 +233,28 @@ function WelcomeHeader() {
           );
         })}
       </div>
+      {user && (
+        <div className="mobile-nav-footer">
+          <div className="mobile-nav-user">
+            <div className="mobile-nav-avatar">
+              {user?.avatar_url ? (
+                <img src={user.avatar_url} alt="User avatar" />
+              ) : (
+                <span>{userInitials}</span>
+              )}
+            </div>
+            <div className="mobile-nav-user-info">
+              <span className="mobile-nav-user-name">{user.display_name || user.email}</span>
+              {user.email && (
+                <span className="mobile-nav-user-email">{user.email}</span>
+              )}
+            </div>
+          </div>
+          <button type="button" className="mobile-nav-logout" onClick={handleAvatarClick}>
+            Log out
+          </button>
+        </div>
+      )}
     </nav>
 
     {/* Scrim overlay */}
