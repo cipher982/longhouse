@@ -26,7 +26,10 @@ from zerg.tools.builtin.runner_tools import TOOLS as RUNNER_TOOLS
 from zerg.tools.builtin.slack_tools import TOOLS as SLACK_TOOLS
 from zerg.tools.builtin.sms_tools import TOOLS as SMS_TOOLS
 from zerg.tools.builtin.ssh_tools import TOOLS as SSH_TOOLS
+from zerg.tools.builtin.supervisor_tools import SUPERVISOR_TOOL_NAMES
+from zerg.tools.builtin.supervisor_tools import SUPERVISOR_UTILITY_TOOLS
 from zerg.tools.builtin.supervisor_tools import TOOLS as SUPERVISOR_TOOLS
+from zerg.tools.builtin.supervisor_tools import get_supervisor_allowed_tools
 from zerg.tools.builtin.task_tools import TOOLS as TASK_TOOLS
 from zerg.tools.builtin.tool_discovery import TOOLS as TOOL_DISCOVERY_TOOLS
 from zerg.tools.builtin.uuid_tools import TOOLS as UUID_TOOLS
@@ -67,6 +70,9 @@ BUILTIN_TOOLS = (
 
 __all__ = [
     "BUILTIN_TOOLS",
+    "SUPERVISOR_TOOL_NAMES",
+    "SUPERVISOR_UTILITY_TOOLS",
+    "get_supervisor_allowed_tools",
 ]
 
 # ---------------------------------------------------------------------------
