@@ -104,3 +104,4 @@ Principle: this doc is the source of truth for UI work. Update after every meani
   - [x] Updated thread sidebar to slide with transform + responsive width.
 - [~] Canvas: layout rules + minimal mode.
   - [x] Mobile logs panel: bottom sheet layout + safe-area padding.
+  - [x] Added mobile minimal mode toggle (hides snap/guides + tightens controls).

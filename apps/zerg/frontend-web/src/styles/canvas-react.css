@@ -345,6 +345,10 @@
     box-shadow: var(--shadow-glow);
   }
 
+  .canvas-toggle-btn--minimal {
+    display: none;
+  }
+
   .run-button {
     gap: var(--space-2);
     min-width: 90px;
@@ -729,6 +733,26 @@
       font-size: 13px;
       padding: 8px 10px;
       width: 100%;
+    }
+
+    .canvas-toggle-btn--minimal {
+      display: inline-flex;
+    }
+
+    .canvas-container--minimal .canvas-mode-toggles {
+      border-left: none;
+      margin-left: 0;
+      padding-left: 0;
+    }
+
+    .canvas-container--minimal .canvas-toggle-btn--snap,
+    .canvas-container--minimal .canvas-toggle-btn--guides {
+      display: none;
+    }
+
+    .canvas-container--minimal .execution-controls {
+      padding: var(--space-2) var(--space-3);
+      gap: var(--space-3);
     }
 
     .execution-logs-draggable {
