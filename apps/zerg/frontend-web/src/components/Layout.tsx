@@ -250,7 +250,14 @@ function WelcomeHeader() {
               )}
             </div>
           </div>
-          <button type="button" className="mobile-nav-logout" onClick={handleAvatarClick}>
+          <button
+            type="button"
+            className="mobile-nav-logout"
+            onClick={async () => {
+              closeMobileNav();
+              await handleAvatarClick();
+            }}
+          >
             Log out
           </button>
         </div>
