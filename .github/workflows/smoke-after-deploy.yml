@@ -1,0 +1,64 @@
+name: Smoke Test After Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      skip_wait:
+        description: 'Skip waiting for deploy (run immediately)'
+        required: false
+        default: 'false'
+        type: boolean
+
+# Only one smoke test at a time
+concurrency:
+  group: smoke-test
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: "🧪 Post-Deploy Smoke Test"
+    runs-on: arc-runner-set
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wait for deployments
+        if: ${{ github.event.inputs.skip_wait != 'true' }}
+        run: |
+          echo "Waiting 90s for Coolify deployments to complete..."
+          sleep 90
+
+      - name: Health check (quick)
+        run: |
+          echo "Checking API health..."
+          for i in {1..10}; do
+            if curl -sf https://api.swarmlet.com/health > /dev/null; then
+              echo "✓ API is healthy"
+              break
+            fi
+            echo "Attempt $i: API not ready, waiting 10s..."
+            sleep 10
+          done
+
+          echo "Checking frontend..."
+          curl -sf https://swarmlet.com > /dev/null && echo "✓ Frontend is up"
+
+      - name: Run smoke tests
+        env:
+          SMOKE_TEST_SECRET: ${{ secrets.SMOKE_TEST_SECRET }}
+        run: |
+          chmod +x scripts/smoke-prod.sh
+          ./scripts/smoke-prod.sh
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Smoke Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Frontend:** https://swarmlet.com" >> $GITHUB_STEP_SUMMARY
+          echo "- **API:** https://api.swarmlet.com" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
