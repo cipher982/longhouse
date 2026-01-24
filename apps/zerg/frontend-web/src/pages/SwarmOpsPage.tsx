@@ -16,6 +16,12 @@ type JarvisRunSummary = {
   agent_name: string;
   status: string;
   summary?: string | null;
+  signal?: string | null;
+  signal_source?: string | null;
+  error?: string | null;
+  last_event_type?: string | null;
+  last_event_message?: string | null;
+  last_event_at?: string | null;
   continuation_of_run_id?: number | null;
   created_at: string;
   updated_at: string;
@@ -54,6 +60,13 @@ const LEVEL_LABEL: Record<AttentionLevel, string> = {
   hard: "Hard Stop",
 };
 
+const SIGNAL_SOURCE_LABEL: Record<string, string> = {
+  summary: "Summary",
+  error: "Error",
+  last_message: "Last message",
+  last_event: "Last event",
+};
+
 const STATUS_BADGE_VARIANT: Record<string, "neutral" | "success" | "warning" | "error"> = {
   queued: "neutral",
   running: "warning",
@@ -82,24 +95,28 @@ function formatRelativeTime(timestamp: string): string {
 
 function classifyAttention(run: JarvisRunSummary): AttentionLevel {
   const status = (run.status || "").toLowerCase();
-  const summary = (run.summary || "").toLowerCase();
+  const signalText = (run.signal || run.summary || "").toLowerCase();
 
   if (status === "failed" || status === "cancelled") {
     return "hard";
   }
 
+  if (run.error) {
+    return "hard";
+  }
+
   const hardSignals = /(broke|broken|rollback|incident|outage|data loss|corrupt|security|permission|prod|production|panic|crash|exception)/i;
-  if (hardSignals.test(summary)) {
+  if (hardSignals.test(signalText)) {
     return "hard";
   }
 
   const needsSignals = /(need your input|your call|decide|choice|pick one|which one|approve|sign off|confirm path)/i;
-  if (needsSignals.test(summary)) {
+  if (needsSignals.test(signalText)) {
     return "needs";
   }
 
   const softSignals = /(should i|do you want|want me to|ok to|proceed|continue|next step|shall i)\b/i;
-  if (softSignals.test(summary) || summary.trim().endsWith("?")) {
+  if (softSignals.test(signalText) || signalText.trim().endsWith("?")) {
     return "soft";
   }
 
@@ -306,6 +323,11 @@ export default function SwarmOpsPage() {
                 {visibleRuns.map((run) => {
                   const statusVariant = STATUS_BADGE_VARIANT[run.status] ?? "neutral";
                   const isSelected = run.id === selectedRunId;
+                  const signalText = run.signal || run.summary || "No signal yet";
+                  const signalSourceLabel = run.signal_source ? SIGNAL_SOURCE_LABEL[run.signal_source] ?? "Signal" : null;
+                  const lastEventLine = run.last_event_type
+                    ? `Last: ${run.last_event_type}${run.last_event_at ? ` · ${formatRelativeTime(run.last_event_at)}` : ""}`
+                    : null;
 
                   return (
                     <button
@@ -323,8 +345,14 @@ export default function SwarmOpsPage() {
                           <Badge variant={statusVariant}>{run.status}</Badge>
                         </div>
                         <div className="swarm-ops-item-summary">
-                          {run.summary || "No summary yet"}
+                          {signalText}
                         </div>
+                        {(signalSourceLabel || lastEventLine) && (
+                          <div className="swarm-ops-item-signal">
+                            {signalSourceLabel ? `Signal: ${signalSourceLabel}` : "Signal"}
+                            {lastEventLine ? ` · ${lastEventLine}` : ""}
+                          </div>
+                        )}
                       </div>
                       <div className="swarm-ops-item-meta">
                         <span className={clsx("swarm-ops-attention-pill", `swarm-ops-attention-pill--${run.attention}`)}>
@@ -355,11 +383,36 @@ export default function SwarmOpsPage() {
 
                   <Card.Body>
                     <div className="swarm-ops-detail-section">
-                      <div className="swarm-ops-detail-label">Summary</div>
+                      <div className="swarm-ops-detail-label">Signal</div>
                       <p className="swarm-ops-detail-summary">
-                        {selectedRun.summary || "No summary recorded yet."}
+                        {selectedRun.signal || selectedRun.summary || "No signal recorded yet."}
                       </p>
+                      {selectedRun.signal_source && (
+                        <div className="swarm-ops-detail-meta">
+                          Source: {SIGNAL_SOURCE_LABEL[selectedRun.signal_source] ?? selectedRun.signal_source}
+                        </div>
+                      )}
                     </div>
+
+                    {selectedRun.error && (
+                      <div className="swarm-ops-detail-section">
+                        <div className="swarm-ops-detail-label">Error</div>
+                        <p className="swarm-ops-detail-error">{selectedRun.error}</p>
+                      </div>
+                    )}
+
+                    {(selectedRun.last_event_type || selectedRun.last_event_message) && (
+                      <div className="swarm-ops-detail-section">
+                        <div className="swarm-ops-detail-label">Last event</div>
+                        <div className="swarm-ops-detail-meta">
+                          {selectedRun.last_event_type ?? "event"}
+                          {selectedRun.last_event_at ? ` · ${formatRelativeTime(selectedRun.last_event_at)}` : ""}
+                        </div>
+                        {selectedRun.last_event_message && (
+                          <p className="swarm-ops-detail-summary">{selectedRun.last_event_message}</p>
+                        )}
+                      </div>
+                    )}
 
                     <div className="swarm-ops-detail-actions">
                       <Button

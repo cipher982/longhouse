@@ -13,6 +13,7 @@ from fastapi import Depends
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import selectinload
 from sse_starlette.sse import EventSourceResponse
@@ -39,6 +40,12 @@ class JarvisRunSummary(BaseModel):
     agent_name: str
     status: str
     summary: Optional[str] = None
+    signal: Optional[str] = None
+    signal_source: Optional[str] = None
+    error: Optional[str] = None
+    last_event_type: Optional[str] = None
+    last_event_message: Optional[str] = None
+    last_event_at: Optional[datetime] = None
     continuation_of_run_id: Optional[int] = None
     created_at: datetime
     updated_at: datetime
@@ -83,12 +90,44 @@ def list_jarvis_runs(
 
     runs = query.order_by(AgentRun.created_at.desc()).limit(limit).all()
 
+    run_ids = [run.id for run in runs]
+    thread_ids = [run.thread_id for run in runs if run.thread_id]
+
+    last_events_by_run = _get_latest_run_events(db, run_ids)
+    last_messages_by_thread = _get_latest_assistant_messages(db, thread_ids)
+
     summaries = []
     for run in runs:
         agent_name = run.agent.name if run.agent else f"Agent {run.agent_id}"
 
         # Extract summary from run (will be populated in Phase 2.3)
         summary = getattr(run, "summary", None)
+
+        last_event = last_events_by_run.get(run.id)
+        last_event_type = getattr(last_event, "event_type", None) if last_event else None
+        last_event_at = getattr(last_event, "created_at", None) if last_event else None
+        last_event_message = _extract_event_message(getattr(last_event, "payload", None)) if last_event else None
+
+        signal = summary if summary else None
+        signal_source = "summary" if summary else None
+
+        if not signal:
+            run_error = getattr(run, "error", None)
+            if run_error:
+                signal = run_error
+                signal_source = "error"
+
+        if not signal and run.thread_id:
+            last_message = last_messages_by_thread.get(run.thread_id)
+            if last_message:
+                signal = last_message
+                signal_source = "last_message"
+
+        if not signal and last_event_message:
+            signal = last_event_message
+            signal_source = "last_event"
+
+        signal = _truncate_signal(signal, 240)
 
         summaries.append(
             JarvisRunSummary(
@@ -98,6 +137,12 @@ def list_jarvis_runs(
                 agent_name=agent_name,
                 status=run.status.value if hasattr(run.status, "value") else str(run.status),
                 summary=summary,
+                signal=signal,
+                signal_source=signal_source,
+                error=getattr(run, "error", None),
+                last_event_type=last_event_type,
+                last_event_message=last_event_message,
+                last_event_at=last_event_at,
                 continuation_of_run_id=getattr(run, "continuation_of_run_id", None),
                 created_at=run.created_at,
                 updated_at=run.updated_at,
@@ -108,30 +153,10 @@ def list_jarvis_runs(
     return summaries
 
 
-def _get_last_assistant_message(db: Session, thread_id: int) -> Optional[str]:
-    """Get the last assistant message from a thread.
-
-    Args:
-        db: Database session
-        thread_id: Thread ID to query
-
-    Returns:
-        Content of the last assistant message, or None if not found
-    """
-    import json
-
-    last_msg = (
-        db.query(ThreadMessage)
-        .filter(ThreadMessage.thread_id == thread_id)
-        .filter(ThreadMessage.role == "assistant")
-        .order_by(ThreadMessage.id.desc())
-        .first()
-    )
-
-    if not last_msg or not last_msg.content:
+def _extract_text_from_message_content(content: Any) -> Optional[str]:
+    """Extract text from ThreadMessage content payloads."""
+    if not content:
         return None
-
-    content = last_msg.content
 
     # Handle string content (most common case)
     if isinstance(content, str):
@@ -153,7 +178,7 @@ def _get_last_assistant_message(db: Session, thread_id: int) -> Optional[str]:
         return content
 
     # Handle native list (if column supports JSON type)
-    elif isinstance(content, list):
+    if isinstance(content, list):
         text_parts = []
         for block in content:
             if isinstance(block, dict) and block.get("type") == "text":
@@ -163,6 +188,110 @@ def _get_last_assistant_message(db: Session, thread_id: int) -> Optional[str]:
         return " ".join(text_parts) if text_parts else None
 
     return str(content) if content else None
+
+
+def _get_last_assistant_message(db: Session, thread_id: int) -> Optional[str]:
+    """Get the last assistant message from a thread.
+
+    Args:
+        db: Database session
+        thread_id: Thread ID to query
+
+    Returns:
+        Content of the last assistant message, or None if not found
+    """
+
+    last_msg = (
+        db.query(ThreadMessage)
+        .filter(ThreadMessage.thread_id == thread_id)
+        .filter(ThreadMessage.role == "assistant")
+        .order_by(ThreadMessage.id.desc())
+        .first()
+    )
+
+    if not last_msg or not last_msg.content:
+        return None
+
+    return _extract_text_from_message_content(last_msg.content)
+
+
+def _get_latest_assistant_messages(db: Session, thread_ids: List[int]) -> Dict[int, str]:
+    if not thread_ids:
+        return {}
+
+    subquery = (
+        db.query(
+            ThreadMessage.thread_id.label("thread_id"),
+            ThreadMessage.content.label("content"),
+            func.row_number()
+            .over(
+                partition_by=ThreadMessage.thread_id,
+                order_by=ThreadMessage.id.desc(),
+            )
+            .label("rn"),
+        )
+        .filter(ThreadMessage.thread_id.in_(thread_ids))
+        .filter(ThreadMessage.role == "assistant")
+        .subquery()
+    )
+
+    rows = db.query(subquery).filter(subquery.c.rn == 1).all()
+    output: Dict[int, str] = {}
+    for row in rows:
+        text = _extract_text_from_message_content(row.content)
+        if text:
+            output[row.thread_id] = text
+    return output
+
+
+def _get_latest_run_events(db: Session, run_ids: List[int]) -> Dict[int, Any]:
+    if not run_ids:
+        return {}
+
+    subquery = (
+        db.query(
+            AgentRunEvent.run_id.label("run_id"),
+            AgentRunEvent.event_type.label("event_type"),
+            AgentRunEvent.payload.label("payload"),
+            AgentRunEvent.created_at.label("created_at"),
+            func.row_number()
+            .over(
+                partition_by=AgentRunEvent.run_id,
+                order_by=AgentRunEvent.created_at.desc(),
+            )
+            .label("rn"),
+        )
+        .filter(AgentRunEvent.run_id.in_(run_ids))
+        .subquery()
+    )
+
+    rows = db.query(subquery).filter(subquery.c.rn == 1).all()
+    return {row.run_id: row for row in rows}
+
+
+def _extract_event_message(payload: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not payload or not isinstance(payload, dict):
+        return None
+
+    for key in ("message", "summary", "error", "result", "status"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+
+    tool_name = payload.get("tool_name")
+    if isinstance(tool_name, str) and tool_name.strip():
+        return f"Tool: {tool_name}"
+
+    return None
+
+
+def _truncate_signal(signal: Optional[str], max_length: int) -> Optional[str]:
+    if not signal:
+        return signal
+    normalized = " ".join(signal.split())
+    if len(normalized) <= max_length:
+        return normalized
+    return normalized[: max_length - 1].rstrip() + "…"
 
 
 class RunStatusResponse(BaseModel):
