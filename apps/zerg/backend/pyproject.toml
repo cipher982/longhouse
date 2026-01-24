@@ -53,11 +53,16 @@ dependencies = [
     "numpy>=2.4.1",
     "anthropic>=0.40.0",
     "asyncpg>=0.30.0",
+    # Hatch CLI for workspace execution (runs coding agents headlessly)
+    "hatch-agent @ git+https://github.com/cipher982/hatch.git",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build]
 packages = ["zerg"]

@@ -142,3 +142,5 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-23) [gotcha] Sauron migration is partial: Zerg jobs only include backup_sentinel/disk_health/qa; email-commands + several scheduled jobs still live in sauron.
 - (2026-01-23) [tool] `zerg/libs/agent_runner/` superseded by standalone `~/git/hatch/` package. Use `uv tool install -e ~/git/hatch` for global `hatch` CLI. Zerg's copy kept for in-process use but new features go to standalone.
 - (2026-01-23) [tool] Codex CLI non-interactive mode: `codex exec -` reads prompt from stdin; `--full-auto` enables automatic execution.
+- (2026-01-23) [gotcha] `execution_mode=workspace` runs `hatch` in a git workspace (requires `git_repo`); `standard` runs WorkerRunner in-process. Old names `cloud`/`local` still work for backward compat.
+- (2026-01-23) [gotcha] Workspace workers bypass WorkerRunner (no worker_started/tool events); only worker_complete is emitted and diffs live in artifacts, not the supervisor summary.

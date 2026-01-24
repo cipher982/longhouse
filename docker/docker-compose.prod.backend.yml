@@ -46,11 +46,15 @@ services:
       BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:-}
       # Internal API secret for backend-to-backend calls
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
+      # Workspace execution (git-based agent runs)
+      JARVIS_WORKSPACE_PATH: /var/jarvis/workspaces
     volumes:
       - backend_static:/app/static
       - backend_data:/data
-      # SSH key access for worker infrastructure tools (ssh_exec)
+      # SSH key access for worker infrastructure tools (ssh_exec) and git operations
       - ${HOME}/.ssh:/home/zerg/.ssh:ro
+      # Workspace directory for git-based agent execution
+      - /var/jarvis/workspaces:/var/jarvis/workspaces
       # Note: ~/.config/zerg volume removed - use bootstrap API instead
       # (volume mounts are brittle in Coolify; API seeding is more reliable)
     healthcheck:
