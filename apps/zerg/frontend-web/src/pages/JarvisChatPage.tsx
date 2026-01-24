@@ -13,6 +13,7 @@ import { useSearchParams } from 'react-router-dom';
 
 // Import Jarvis styles
 import '../jarvis/styles/index.css';
+import '../jarvis/contexts/personal/theme.css';
 
 // Import Jarvis app and context
 import { AppProvider, type ChatMessage, type StoredToolCall } from '../jarvis/app/context';

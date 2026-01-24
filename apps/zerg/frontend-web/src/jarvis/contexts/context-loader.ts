@@ -95,10 +95,8 @@ export class ContextLoader {
         }
       }
 
-      // Load theme CSS if specified
-      if (manifest.themeFile) {
-        await this.loadTheme(contextName, manifest.themeFile);
-      }
+      // Theme CSS is now imported statically in JarvisChatPage.tsx
+      // Dynamic loading removed to avoid 404s in production builds
 
       this.currentContext = contextName;
       this.currentConfig = config;
