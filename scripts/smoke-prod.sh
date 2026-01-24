@@ -209,7 +209,7 @@ test_config() {
     fi
 }
 
-# Check Caddy for errors
+# Check Caddy for errors (optional - requires SSH access)
 test_caddy() {
     local errors
     # grep -c returns exit code 1 if no matches (but still outputs "0")
@@ -218,8 +218,8 @@ test_caddy() {
     errors=$(echo "$errors" | tr -d '[:space:]')
 
     if [[ -z "$errors" ]]; then
-        warn "Could not check Caddy (SSH failed)"
-        return 1
+        warn "Could not check Caddy (SSH not available)"
+        return 0  # Don't fail on missing SSH - it's optional
     elif [[ "$errors" == "0" ]]; then
         pass "Caddy: No ambiguous site errors"
         return 0
