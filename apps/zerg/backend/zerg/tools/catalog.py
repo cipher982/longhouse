@@ -30,6 +30,7 @@ CORE_TOOLS: frozenset[str] = frozenset(
     [
         # Worker coordination
         "spawn_worker",
+        "spawn_workspace_worker",
         "list_workers",
         "read_worker_result",
         "get_worker_evidence",
@@ -73,6 +74,7 @@ CATEGORY_PREFIXES = {
     "web_": "web",
     "http_": "web",
     "spawn_worker": "supervisor",
+    "spawn_workspace_worker": "supervisor",
     "list_workers": "supervisor",
     "read_worker": "supervisor",
     "get_worker_evidence": "supervisor",
