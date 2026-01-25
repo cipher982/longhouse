@@ -83,6 +83,11 @@ def _mock_settings_with_allowlist(allowed_model: str):
         supervisor_tool_output_preview_chars=real_settings.supervisor_tool_output_preview_chars,
         e2e_use_postgres_schemas=real_settings.e2e_use_postgres_schemas,
         e2e_worker_id=real_settings.e2e_worker_id,
+        jobs_git_repo_url=real_settings.jobs_git_repo_url,
+        jobs_git_branch=real_settings.jobs_git_branch,
+        jobs_git_token=real_settings.jobs_git_token,
+        jobs_dir=real_settings.jobs_dir,
+        jobs_refresh_interval_seconds=real_settings.jobs_refresh_interval_seconds,
     )
     return mock_settings
 
