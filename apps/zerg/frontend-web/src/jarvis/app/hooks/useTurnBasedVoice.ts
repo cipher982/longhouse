@@ -2,7 +2,7 @@
  * useTurnBasedVoice hook - Turn-based voice (record -> upload -> respond)
  */
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppDispatch, useAppState, type ChatMessage, type VoiceStatus } from "../context";
 import { voiceTurn, ApiError } from "../../../services/api";
 import { uuid } from "../../lib/uuid";
@@ -49,6 +49,13 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [micLevel, setMicLevel] = useState(0);
+  const micLevelRef = useRef(0);
+  const micAudioCtxRef = useRef<AudioContext | null>(null);
+  const micAnalyserRef = useRef<AnalyserNode | null>(null);
+  const micAnalyserDataRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
+  const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const micRafRef = useRef<number | null>(null);
 
   const setVoiceStatus = useCallback((status: VoiceStatus) => {
     statusRef.current = status;
@@ -61,7 +68,89 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
       streamRef.current = null;
       dispatch({ type: "SET_MIC_STREAM", stream: null });
     }
+    if (micRafRef.current) {
+      cancelAnimationFrame(micRafRef.current);
+      micRafRef.current = null;
+    }
+    if (micSourceRef.current) {
+      try {
+        micSourceRef.current.disconnect();
+      } catch {
+        // Ignore cleanup errors.
+      }
+      micSourceRef.current = null;
+    }
+    if (micAudioCtxRef.current) {
+      micAudioCtxRef.current.close().catch(() => undefined);
+      micAudioCtxRef.current = null;
+    }
+    micAnalyserRef.current = null;
+    micAnalyserDataRef.current = null;
+    micLevelRef.current = 0;
+    setMicLevel(0);
   }, [dispatch]);
+
+  const startMicVisualizer = useCallback(async (stream: MediaStream) => {
+    try {
+      if (typeof AudioContext === "undefined" && !(window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext) {
+        return;
+      }
+      if (typeof MediaStream !== "undefined" && !(stream instanceof MediaStream)) {
+        return;
+      }
+
+      if (micRafRef.current) {
+        cancelAnimationFrame(micRafRef.current);
+        micRafRef.current = null;
+      }
+
+      if (micAudioCtxRef.current) {
+        micAudioCtxRef.current.close().catch(() => undefined);
+      }
+
+      const AudioCtx = window.AudioContext || (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioCtx) return;
+
+      const audioContext = new AudioCtx();
+      micAudioCtxRef.current = audioContext;
+
+      if (audioContext.state === "suspended") {
+        await audioContext.resume().catch(() => undefined);
+      }
+
+      const source = audioContext.createMediaStreamSource(stream);
+      micSourceRef.current = source;
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.8;
+      source.connect(analyser);
+      micAnalyserRef.current = analyser;
+
+      const dataArray = new Uint8Array(new ArrayBuffer(analyser.fftSize));
+      micAnalyserDataRef.current = dataArray;
+
+      const update = () => {
+        if (!micAnalyserRef.current || !micAnalyserDataRef.current) return;
+
+        micAnalyserRef.current.getByteTimeDomainData(micAnalyserDataRef.current);
+        let sumSquares = 0;
+        for (let i = 0; i < micAnalyserDataRef.current.length; i += 1) {
+          const centered = (micAnalyserDataRef.current[i] - 128) / 128;
+          sumSquares += centered * centered;
+        }
+        const rms = Math.sqrt(sumSquares / micAnalyserDataRef.current.length);
+        const rawLevel = Math.min(1, rms * 3.2);
+        const smoothed = micLevelRef.current * 0.7 + rawLevel * 0.3;
+        micLevelRef.current = smoothed;
+        setMicLevel(smoothed);
+        micRafRef.current = requestAnimationFrame(update);
+      };
+
+      update();
+    } catch (error) {
+      logger.warn("[useTurnBasedVoice] Mic visualizer unavailable", error);
+    }
+  }, []);
 
   const cleanupAudio = useCallback(() => {
     if (audioRef.current) {
@@ -222,6 +311,7 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
 
       streamRef.current = stream;
       dispatch({ type: "SET_MIC_STREAM", stream });
+      await startMicVisualizer(stream);
 
       const mimeType = pickMimeType();
       const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
@@ -262,7 +352,7 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
       handleError("Microphone access failed", error as Error);
       cleanupStream();
     }
-  }, [cleanupStream, dispatch, handleError, sendVoiceTurn, setVoiceStatus]);
+  }, [cleanupStream, dispatch, handleError, sendVoiceTurn, setVoiceStatus, startMicVisualizer]);
 
   const stopRecording = useCallback(() => {
     if (!recordingRef.current) return;
@@ -296,5 +386,6 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
     startRecording,
     stopRecording,
     resetVoice,
+    micLevel,
   };
 }
