@@ -226,6 +226,22 @@ export interface WorkerToolFailedPayload {
   trace_id?: string;
 }
 
+export interface WorkerOutputChunkPayload {
+  /** Worker job ID (spawn_worker job) */
+  job_id?: number;
+  worker_id: string;
+  /** Runner exec job UUID */
+  runner_job_id?: string;
+  /** Output stream for this chunk */
+  stream: "stdout" | "stderr";
+  /** Output chunk (may be truncated) */
+  data: string;
+  /** Required for security (prevents cross-run leakage) */
+  run_id: number;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
+}
+
 export interface SupervisorToolStartedPayload {
   tool_name: string;
   /** Stable ID linking all events for this tool call */
@@ -300,6 +316,7 @@ export const SSE_EVENT_TYPES = [
   "worker_tool_started",
   "worker_tool_completed",
   "worker_tool_failed",
+  "worker_output_chunk",
   "supervisor_tool_started",
   "supervisor_tool_progress",
   "supervisor_tool_completed",
@@ -348,6 +365,7 @@ export type SSEPayloadFor<T extends SSEEventType> =
   T extends "worker_tool_started" ? WorkerToolStartedPayload :
   T extends "worker_tool_completed" ? WorkerToolCompletedPayload :
   T extends "worker_tool_failed" ? WorkerToolFailedPayload :
+  T extends "worker_output_chunk" ? WorkerOutputChunkPayload :
   T extends "supervisor_tool_started" ? SupervisorToolStartedPayload :
   T extends "supervisor_tool_progress" ? SupervisorToolProgressPayload :
   T extends "supervisor_tool_completed" ? SupervisorToolCompletedPayload :

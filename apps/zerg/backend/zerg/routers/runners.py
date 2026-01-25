@@ -707,7 +707,69 @@ async def runner_websocket(
                         if not job or job.runner_id != runner_id or job.owner_id != owner_id:
                             logger.warning(f"Ignoring exec_chunk for invalid job {job_id} from runner {runner_id}")
                         else:
-                            runner_crud.update_job_output(db, job_id, stream, data)
+                            updated_job = runner_crud.update_job_output(db, job_id, stream, data)
+                            if updated_job and updated_job.worker_id:
+                                from zerg.events import EventType
+                                from zerg.events.event_bus import event_bus
+                                from zerg.models.models import WorkerJob
+                                from zerg.services.worker_output_buffer import get_worker_output_buffer
+
+                                output_buffer = get_worker_output_buffer()
+
+                                # Resolve worker job metadata once (cached in buffer)
+                                worker_job_id = None
+                                trace_id = None
+                                meta = output_buffer.get_meta(updated_job.worker_id)
+                                if meta:
+                                    worker_job_id = meta.job_id
+                                    trace_id = meta.trace_id
+
+                                if worker_job_id is None:
+                                    worker_job = (
+                                        db.query(WorkerJob)
+                                        .filter(
+                                            WorkerJob.worker_id == updated_job.worker_id,
+                                            WorkerJob.owner_id == owner_id,
+                                        )
+                                        .order_by(WorkerJob.id.desc())
+                                        .first()
+                                    )
+                                    if worker_job:
+                                        worker_job_id = worker_job.id
+                                        trace_id = str(worker_job.trace_id) if worker_job.trace_id else None
+
+                                run_id_int = None
+                                if updated_job.run_id is not None:
+                                    try:
+                                        run_id_int = int(updated_job.run_id)
+                                    except (TypeError, ValueError):
+                                        run_id_int = None
+
+                                output_buffer.append_output(
+                                    worker_id=updated_job.worker_id,
+                                    stream=stream,
+                                    data=data,
+                                    runner_job_id=job_id,
+                                    job_id=worker_job_id,
+                                    run_id=run_id_int,
+                                    trace_id=trace_id,
+                                    owner_id=owner_id,
+                                )
+
+                                # Publish live output chunk (ephemeral SSE only; not persisted)
+                                if run_id_int:
+                                    MAX_CHUNK_CHARS = 4000
+                                    payload = {
+                                        "job_id": worker_job_id,
+                                        "worker_id": updated_job.worker_id,
+                                        "runner_job_id": job_id,
+                                        "stream": stream,
+                                        "data": data[-MAX_CHUNK_CHARS:] if len(data) > MAX_CHUNK_CHARS else data,
+                                        "run_id": run_id_int,
+                                        "trace_id": trace_id,
+                                        "owner_id": owner_id,
+                                    }
+                                    await event_bus.publish(EventType.WORKER_OUTPUT_CHUNK, payload)
 
                 elif message_type == "exec_done":
                     # Handle job completion

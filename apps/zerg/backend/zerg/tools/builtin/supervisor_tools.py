@@ -1042,11 +1042,100 @@ async def read_worker_file_async(job_id: str, file_path: str) -> str:
         return f"Error reading worker file: {e}"
 
 
+async def peek_worker_output_async(job_id: str, max_bytes: int = 4000) -> str:
+    """Peek live output for a running worker job (tail buffer).
+
+    Args:
+        job_id: Worker job ID
+        max_bytes: Max bytes to return from the tail (0 = full buffer)
+
+    Returns:
+        Live output tail or a helpful status message.
+    """
+    from zerg.crud import crud
+
+    resolver = get_credential_resolver()
+    if not resolver:
+        return "Error: Cannot peek worker output - no credential context available"
+
+    db = resolver.db
+
+    try:
+        job_id_int = int(job_id)
+        job = (
+            db.query(crud.WorkerJob)
+            .filter(
+                crud.WorkerJob.id == job_id_int,
+                crud.WorkerJob.owner_id == resolver.owner_id,
+            )
+            .first()
+        )
+
+        if not job:
+            return f"Error: Worker job {job_id} not found"
+
+        if not job.worker_id:
+            return f"Worker job {job_id} has not started execution yet"
+
+        execution_mode = (job.config or {}).get("execution_mode")
+        if execution_mode == "workspace":
+            return (
+                f"Worker job {job_id} is a workspace worker and does not stream live output. "
+                f"Use check_worker_status({job_id}) or read_worker_result({job_id}) after completion."
+            )
+
+        from zerg.models.models import RunnerJob
+        from zerg.services.worker_output_buffer import get_worker_output_buffer
+
+        output_buffer = get_worker_output_buffer()
+        live = output_buffer.get_tail(job.worker_id, max_bytes=max_bytes)
+        if live:
+            return f"Live worker output (tail):\n\n{live}"
+
+        # Fallback: last known runner job output (not live if buffer empty)
+        runner_job = (
+            db.query(RunnerJob)
+            .filter(
+                RunnerJob.worker_id == job.worker_id,
+                RunnerJob.owner_id == resolver.owner_id,
+            )
+            .order_by(RunnerJob.created_at.desc())
+            .first()
+        )
+        if runner_job and (runner_job.stdout_trunc or runner_job.stderr_trunc):
+            combined = runner_job.stdout_trunc or ""
+            if runner_job.stderr_trunc:
+                combined = f"{combined}\n[stderr]\n{runner_job.stderr_trunc}" if combined else f"[stderr]\n{runner_job.stderr_trunc}"
+            if max_bytes and max_bytes > 0 and len(combined) > max_bytes:
+                combined = combined[-max_bytes:]
+            return f"Recent runner output (tail):\n\n{combined}"
+
+        if job.status in ["success", "failed", "cancelled"]:
+            return (
+                f"Worker job {job_id} finished with status {job.status.upper()}. "
+                f"Use read_worker_result({job_id}) for the final summary."
+            )
+
+        return "No live output yet. Try again soon."
+    except ValueError:
+        return f"Error: Invalid job ID format: {job_id}"
+    except Exception as e:
+        logger.exception(f"Failed to peek worker output: {job_id}")
+        return f"Error peeking worker output: {e}"
+
+
 def read_worker_file(job_id: str, file_path: str) -> str:
     """Sync wrapper for read_worker_file_async. Used for CLI/tests."""
     from zerg.utils.async_utils import run_async_safely
 
     return run_async_safely(read_worker_file_async(job_id, file_path))
+
+
+def peek_worker_output(job_id: str, max_bytes: int = 4000) -> str:
+    """Sync wrapper for peek_worker_output_async. Used for CLI/tests."""
+    from zerg.utils.async_utils import run_async_safely
+
+    return run_async_safely(peek_worker_output_async(job_id, max_bytes))
 
 
 async def grep_workers_async(pattern: str, since_hours: int = 24) -> str:
@@ -1273,6 +1362,14 @@ TOOLS: List[StructuredTool] = [
         description="Read a specific file from a worker job's artifacts. "
         "Provide the job ID (integer) and file path to drill into worker details like "
         "tool outputs (tool_calls/*.txt), conversation history (thread.jsonl), or metadata (metadata.json).",
+    ),
+    StructuredTool.from_function(
+        func=peek_worker_output,
+        coroutine=peek_worker_output_async,
+        name="peek_worker_output",
+        description="Peek live output for a running worker (tail buffer). "
+        "Provide the worker job ID and optional max_bytes. "
+        "Best for seeing live runner_exec output without waiting for completion.",
     ),
     StructuredTool.from_function(
         func=grep_workers,

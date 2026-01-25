@@ -96,6 +96,14 @@ export interface EventMap {
     error: string;
     timestamp: number;
   };
+  'worker:output_chunk': {
+    workerId: string;
+    jobId?: number;
+    runnerJobId?: string;
+    stream: 'stdout' | 'stderr';
+    data: string;
+    timestamp: number;
+  };
 
   // Supervisor Tool Events (uniform treatment with worker tools)
   'supervisor:tool_started': {

@@ -139,6 +139,45 @@ describe('SupervisorToolStore', () => {
       expect(tool?.logs[1].message).toBe('Found 3 matches');
       expect(tool?.logs[1].data).toEqual({ count: 3 });
     });
+
+    it('appends live worker output chunks', () => {
+      const now = Date.now();
+
+      eventBus.emit('supervisor:tool_started', {
+        runId: 1,
+        toolName: 'spawn_worker',
+        toolCallId: 'call-live',
+        argsPreview: 'task: "check logs"',
+        args: { task: 'check logs' },
+        timestamp: now,
+      });
+
+      eventBus.emit('supervisor:worker_spawned', {
+        jobId: 42,
+        task: 'check logs',
+        toolCallId: 'call-live',
+        timestamp: now + 5,
+      });
+
+      eventBus.emit('supervisor:worker_started', {
+        jobId: 42,
+        workerId: 'worker-xyz',
+        timestamp: now + 10,
+      });
+
+      eventBus.emit('worker:output_chunk', {
+        workerId: 'worker-xyz',
+        stream: 'stdout',
+        data: 'hello world\n',
+        timestamp: now + 20,
+      });
+
+      const state = supervisorToolStore.getState();
+      const tool = state.tools.get('call-live');
+      const result = tool?.result as { liveOutput?: string };
+
+      expect(result?.liveOutput).toContain('hello world');
+    });
   });
 
   describe('filtering and querying', () => {

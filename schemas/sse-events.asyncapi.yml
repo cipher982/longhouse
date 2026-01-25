@@ -58,6 +58,8 @@ channels:
         $ref: '#/components/messages/WorkerToolCompletedEvent'
       WorkerToolFailedEvent:
         $ref: '#/components/messages/WorkerToolFailedEvent'
+      WorkerOutputChunkEvent:
+        $ref: '#/components/messages/WorkerOutputChunkEvent'
       # Supervisor tool monitoring (same treatment as worker tools)
       SupervisorToolStartedEvent:
         $ref: '#/components/messages/SupervisorToolStartedEvent'
@@ -209,6 +211,13 @@ components:
         $ref: '#/components/schemas/WorkerToolFailedPayload'
       x-sse-event-type: worker_tool_failed
 
+    WorkerOutputChunkEvent:
+      name: worker_output_chunk
+      summary: Live worker output chunk (ephemeral)
+      payload:
+        $ref: '#/components/schemas/WorkerOutputChunkPayload'
+      x-sse-event-type: worker_output_chunk
+
     # Supervisor tool monitoring (uniform treatment with worker tools)
     SupervisorToolStartedEvent:
       name: supervisor_tool_started
@@ -266,6 +275,7 @@ components:
             - worker_tool_started
             - worker_tool_completed
             - worker_tool_failed
+            - worker_output_chunk
             - supervisor_tool_started
             - supervisor_tool_progress
             - supervisor_tool_completed
@@ -727,6 +737,38 @@ components:
         run_id:
           type: integer
           minimum: 1
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
+
+    WorkerOutputChunkPayload:
+      type: object
+      required: [worker_id, stream, data, run_id]
+      properties:
+        job_id:
+          type: integer
+          minimum: 1
+          description: Worker job ID (spawn_worker job)
+        worker_id:
+          type: string
+          minLength: 1
+        runner_job_id:
+          type: string
+          minLength: 1
+          description: Runner exec job UUID
+        stream:
+          type: string
+          enum: [stdout, stderr]
+          description: Output stream for this chunk
+        data:
+          type: string
+          minLength: 1
+          description: Output chunk (may be truncated)
+        run_id:
+          type: integer
+          minimum: 1
+          description: Required for security (prevents cross-run leakage)
         trace_id:
           type: string
           format: uuid

@@ -61,6 +61,7 @@ class ToolName(str, Enum):
     NOTION_UPDATE_PAGE = "notion_update_page"
     READ_WORKER_FILE = "read_worker_file"
     READ_WORKER_RESULT = "read_worker_result"
+    PEEK_WORKER_OUTPUT = "peek_worker_output"
     REFRESH_CONNECTOR_STATUS = "refresh_connector_status"
     RUNNER_CREATE_ENROLL_TOKEN = "runner_create_enroll_token"
     RUNNER_EXEC = "runner_exec"
@@ -174,6 +175,7 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.NOTION_UPDATE_PAGE: ServerName.NOTION,
     ToolName.READ_WORKER_FILE: ServerName.SUPERVISOR,
     ToolName.READ_WORKER_RESULT: ServerName.SUPERVISOR,
+    ToolName.PEEK_WORKER_OUTPUT: ServerName.SUPERVISOR,
     ToolName.REFRESH_CONNECTOR_STATUS: ServerName.CONNECTOR,
     ToolName.RUNNER_CREATE_ENROLL_TOKEN: ServerName.RUNNER_SETUP,
     ToolName.RUNNER_EXEC: ServerName.RUNNER,

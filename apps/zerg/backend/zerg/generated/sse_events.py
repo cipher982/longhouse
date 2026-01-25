@@ -192,6 +192,17 @@ class WorkerToolFailedPayload(BaseModel):
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
+class WorkerOutputChunkPayload(BaseModel):
+    """Payload for WorkerOutputChunkPayload"""
+
+    job_id: Optional[int] = Field(default=None, ge=1, description='Worker job ID (spawn_worker job)')
+    worker_id: str = Field(min_length=1, description='')
+    runner_job_id: Optional[str] = Field(default=None, min_length=1, description='Runner exec job UUID')
+    stream: Literal['stdout', 'stderr'] = Field(description='Output stream for this chunk')
+    data: str = Field(min_length=1, description='Output chunk (may be truncated)')
+    run_id: int = Field(ge=1, description='Required for security (prevents cross-run leakage)')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
+
 class SupervisorToolStartedPayload(BaseModel):
     """Payload for SupervisorToolStartedPayload"""
 
@@ -255,6 +266,7 @@ class SSEEventType(str, Enum):
     WORKER_TOOL_STARTED = "worker_tool_started"
     WORKER_TOOL_COMPLETED = "worker_tool_completed"
     WORKER_TOOL_FAILED = "worker_tool_failed"
+    WORKER_OUTPUT_CHUNK = "worker_output_chunk"
     SUPERVISOR_TOOL_STARTED = "supervisor_tool_started"
     SUPERVISOR_TOOL_PROGRESS = "supervisor_tool_progress"
     SUPERVISOR_TOOL_COMPLETED = "supervisor_tool_completed"

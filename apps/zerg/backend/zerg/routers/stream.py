@@ -198,7 +198,7 @@ async def _replay_and_stream(
 
         # Tool events MUST have run_id to prevent leaking across runs
         event_type = event.get("event_type") or event.get("type")
-        if event_type in ("worker_tool_started", "worker_tool_completed", "worker_tool_failed"):
+        if event_type in ("worker_tool_started", "worker_tool_completed", "worker_tool_failed", "worker_output_chunk"):
             if "run_id" not in event:
                 logger.warning(f"Tool event missing run_id, dropping: {event_type}")
                 return
@@ -227,6 +227,7 @@ async def _replay_and_stream(
     event_bus.subscribe(EventType.WORKER_TOOL_STARTED, event_handler)
     event_bus.subscribe(EventType.WORKER_TOOL_COMPLETED, event_handler)
     event_bus.subscribe(EventType.WORKER_TOOL_FAILED, event_handler)
+    event_bus.subscribe(EventType.WORKER_OUTPUT_CHUNK, event_handler)
     # Supervisor tool events (for chat UI tool activity display)
     event_bus.subscribe(EventType.SUPERVISOR_TOOL_STARTED, event_handler)
     event_bus.subscribe(EventType.SUPERVISOR_TOOL_COMPLETED, event_handler)
@@ -403,6 +404,7 @@ async def _replay_and_stream(
         event_bus.unsubscribe(EventType.WORKER_TOOL_STARTED, event_handler)
         event_bus.unsubscribe(EventType.WORKER_TOOL_COMPLETED, event_handler)
         event_bus.unsubscribe(EventType.WORKER_TOOL_FAILED, event_handler)
+        event_bus.unsubscribe(EventType.WORKER_OUTPUT_CHUNK, event_handler)
         event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_STARTED, event_handler)
         event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_COMPLETED, event_handler)
         event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_FAILED, event_handler)

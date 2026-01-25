@@ -71,6 +71,7 @@ components:
         - notion_update_page
         - read_worker_file
         - read_worker_result
+        - peek_worker_output
         - refresh_connector_status
         - runner_create_enroll_token
         - runner_exec
@@ -274,6 +275,8 @@ components:
               const: supervisor
             read_worker_result:
               const: supervisor
+            peek_worker_output:
+              const: supervisor
             refresh_connector_status:
               const: connector
             runner_create_enroll_token:
@@ -370,6 +373,7 @@ components:
             - notion_update_page
             - read_worker_file
             - read_worker_result
+            - peek_worker_output
             - refresh_connector_status
             - runner_create_enroll_token
             - runner_exec
