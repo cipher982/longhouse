@@ -345,6 +345,7 @@
   position: relative;
   display: flex;
   gap: var(--space-3);
+  align-items: flex-end;
   /* Stabilize GPU layer to prevent animation interference from parent */
   isolation: isolate;
   will-change: transform;
@@ -497,6 +498,22 @@
   justify-content: center;
   transition: background 0.3s ease, border-color 0.3s ease, color 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;
   backdrop-filter: blur(8px);
+}
+
+.jarvis-container .mic-button-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.jarvis-container .mic-button-hint {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  letter-spacing: 0.02em;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .jarvis-container .mic-button:hover:not(:disabled) {

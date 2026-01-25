@@ -27,6 +27,27 @@ export function TextInput({
 }: TextInputProps) {
   const [value, setValue] = useState('')
 
+  const getVoiceHint = useCallback(() => {
+    switch (micStatus) {
+      case 'idle':
+        return 'Tap mic to enable voice'
+      case 'connecting':
+        return 'Connecting...'
+      case 'ready':
+        return 'Tap to talk'
+      case 'listening':
+        return 'Tap to stop'
+      case 'processing':
+        return 'Processing...'
+      case 'speaking':
+        return 'Speaking...'
+      case 'error':
+        return 'Tap to retry'
+      default:
+        return ''
+    }
+  }, [micStatus])
+
   const handleSend = useCallback(() => {
     const trimmed = value.trim()
     if (trimmed && !disabled) {
@@ -48,13 +69,18 @@ export function TextInput({
   return (
     <div className="text-input-container">
       {onMicConnect && (
-        <MicButton
-          status={micStatus}
-          disabled={disabled}
-          onConnect={onMicConnect}
-          onPressStart={onMicPressStart || (() => {})}
-          onPressEnd={onMicPressEnd || (() => {})}
-        />
+        <div className="mic-button-stack">
+          <MicButton
+            status={micStatus}
+            disabled={disabled}
+            onConnect={onMicConnect}
+            onPressStart={onMicPressStart || (() => {})}
+            onPressEnd={onMicPressEnd || (() => {})}
+          />
+          <span className="mic-button-hint" aria-live="polite">
+            {getVoiceHint()}
+          </span>
+        </div>
       )}
       <input
         type="text"

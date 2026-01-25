@@ -28,18 +28,14 @@ export function MicButton({
   const handleClick = () => {
     if (status === 'idle' || status === 'error') {
       onConnect()
+      return
     }
-  }
-
-  const handlePressStart = () => {
     if (isConnected && !isDisabled) {
-      onPressStart()
-    }
-  }
-
-  const handlePressEnd = () => {
-    if (isConnected && !isDisabled) {
-      onPressEnd()
+      if (status === 'ready') {
+        onPressStart()
+      } else if (status === 'listening') {
+        onPressEnd()
+      }
     }
   }
 
@@ -49,7 +45,8 @@ export function MicButton({
     if (status === 'connecting') return 'Connecting...'
     if (status === 'processing') return 'Processing...'
     if (status === 'speaking') return 'Speaking...'
-    return 'Hold to talk'
+    if (status === 'listening') return 'Tap to stop'
+    return 'Tap to talk'
   }
 
   return (
@@ -59,11 +56,6 @@ export function MicButton({
       aria-label={getAriaLabel()}
       disabled={isDisabled}
       onClick={handleClick}
-      onMouseDown={handlePressStart}
-      onMouseUp={handlePressEnd}
-      onMouseLeave={handlePressEnd}
-      onTouchStart={handlePressStart}
-      onTouchEnd={handlePressEnd}
     >
       <svg
         className="mic-button__icon"

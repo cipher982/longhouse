@@ -77,8 +77,9 @@ test("Voice turn: transcript + response appear in chat", async ({ page }) => {
   await expect(micButton).toBeVisible();
   await expect(micButton).toHaveClass(/mic-button--ready/, { timeout: 10000 });
 
-  await micButton.dispatchEvent("mousedown");
-  await micButton.dispatchEvent("mouseup");
+  await micButton.click();
+  await expect(micButton).toHaveClass(/mic-button--listening/, { timeout: 10000 });
+  await micButton.click();
 
   await expect(page.getByText("Voice transcript")).toBeVisible({ timeout: 10000 });
   await expect(page.getByText("Voice response")).toBeVisible({ timeout: 10000 });
