@@ -29,7 +29,6 @@ from zerg.models.models import (
 from zerg.models.enums import RunStatus, ThreadType
 from zerg.routers import auth as auth_router
 from zerg.routers.admin import reset_demo_user_data
-from zerg.utils.time import utc_now_naive
 
 
 def _google_login(client: TestClient, monkeypatch, email: str) -> str:
@@ -51,8 +50,6 @@ def _create_demo_user(db_session, email: str = "demo@test.local") -> User:
         is_active=True,
         display_name="Demo User",
         prefs={"demo": True},
-        created_at=utc_now_naive(),
-        updated_at=utc_now_naive(),
     )
     db_session.add(user)
     db_session.commit()
@@ -74,8 +71,6 @@ def _create_user_data(db_session, user: User) -> dict:
         system_instructions="Test system instructions",
         task_instructions="Test task instructions",
         model="gpt-test",
-        created_at=utc_now_naive(),
-        updated_at=utc_now_naive(),
     )
     db_session.add(agent)
     db_session.flush()
@@ -87,8 +82,6 @@ def _create_user_data(db_session, user: User) -> dict:
         title="Test Thread",
         active=False,
         thread_type=ThreadType.CHAT.value,
-        created_at=utc_now_naive(),
-        updated_at=utc_now_naive(),
     )
     db_session.add(thread)
     db_session.flush()
@@ -99,7 +92,6 @@ def _create_user_data(db_session, user: User) -> dict:
         thread_id=thread.id,
         role="user",
         content="Test message",
-        sent_at=utc_now_naive(),
     )
     db_session.add(msg)
     counts["thread_messages"] = 1
@@ -109,8 +101,6 @@ def _create_user_data(db_session, user: User) -> dict:
         agent_id=agent.id,
         thread_id=thread.id,
         status=RunStatus.SUCCESS,
-        created_at=utc_now_naive(),
-        updated_at=utc_now_naive(),
     )
     db_session.add(run)
     db_session.flush()
@@ -121,8 +111,6 @@ def _create_user_data(db_session, user: User) -> dict:
         owner_id=user.id,
         name="Test Workflow",
         canvas={},
-        created_at=utc_now_naive(),
-        updated_at=utc_now_naive(),
     )
     db_session.add(workflow)
     db_session.flush()
@@ -141,9 +129,7 @@ def _create_user_data(db_session, user: User) -> dict:
     connector = Connector(
         owner_id=user.id,
         type="test",
-        name="Test Connector",
-        created_at=utc_now_naive(),
-        updated_at=utc_now_naive(),
+        provider="test_provider",
     )
     db_session.add(connector)
     counts["connectors"] = 1
@@ -155,8 +141,6 @@ def _create_user_data(db_session, user: User) -> dict:
         task="Test task",
         status="completed",
         model="gpt-test",
-        created_at=utc_now_naive(),
-        updated_at=utc_now_naive(),
     )
     db_session.add(worker_job)
     counts["worker_jobs"] = 1
@@ -220,8 +204,6 @@ class TestResetDemoUserData:
             owner_id=user.id,
             name="FK Test Workflow",
             canvas={},
-            created_at=utc_now_naive(),
-            updated_at=utc_now_naive(),
         )
         db_session.add(workflow)
         db_session.flush()
@@ -295,8 +277,6 @@ class TestDemoResetEndpoint:
             role="USER",
             is_active=True,
             prefs={},  # No demo flag
-            created_at=utc_now_naive(),
-            updated_at=utc_now_naive(),
         )
         db_session.add(target_user)
         db_session.commit()
