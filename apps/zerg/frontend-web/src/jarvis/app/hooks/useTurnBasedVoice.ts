@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { useAppDispatch, useAppState, type ChatMessage, type VoiceStatus } from "../context";
-import { voiceTurn } from "../../../services/api";
+import { voiceTurn, ApiError } from "../../../services/api";
 import { uuid } from "../../lib/uuid";
 import { logger } from "../../core";
 
@@ -19,6 +19,7 @@ const PREFERRED_MIME_TYPES = [
 ];
 
 const DEFAULT_CONTENT_TYPE = "audio/webm";
+const MIN_AUDIO_BYTES = 2048;
 
 function pickMimeType(): string | undefined {
   if (typeof MediaRecorder === "undefined") return undefined;
@@ -86,6 +87,15 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
     setVoiceStatus("error");
     pushErrorMessage(`Voice error: ${message}`);
     options.onError?.(error ?? new Error(message));
+  }, [options, pushErrorMessage, setVoiceStatus]);
+
+  const handleSoftError = useCallback((message: string, error?: Error) => {
+    logger.warn(`[useTurnBasedVoice] ${message}`, error);
+    pushErrorMessage(message);
+    setVoiceStatus("ready");
+    if (error) {
+      options.onError?.(error);
+    }
   }, [options, pushErrorMessage, setVoiceStatus]);
 
   const playAudio = useCallback(async (audioBase64: string, contentType: string) => {
@@ -173,7 +183,21 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
         setVoiceStatus("ready");
       }
     } catch (error) {
-      handleError("Failed to send voice turn", error as Error);
+      if (error instanceof ApiError) {
+        const detail = typeof error.body === "object" && error.body && "detail" in error.body
+          ? String((error.body as { detail?: string }).detail)
+          : error.message;
+        const friendly = detail === "Empty transcription result" || detail === "Audio too short"
+          ? "Didn't catch that — try speaking a bit longer."
+          : detail;
+        if (detail === "Empty transcription result" || detail === "Audio too short") {
+          handleSoftError(friendly, error);
+        } else {
+          handleError(friendly, error);
+        }
+      } else {
+        handleError("Failed to send voice turn", error as Error);
+      }
     } finally {
       processingRef.current = false;
     }
@@ -224,6 +248,10 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
 
         const contentType = recorder.mimeType || mimeType || DEFAULT_CONTENT_TYPE;
         const blob = new Blob(recordedChunks, { type: contentType });
+        if (blob.size < MIN_AUDIO_BYTES) {
+          handleSoftError("Didn't catch that — try speaking a bit longer.");
+          return;
+        }
         void sendVoiceTurn(blob, contentType);
       };
 

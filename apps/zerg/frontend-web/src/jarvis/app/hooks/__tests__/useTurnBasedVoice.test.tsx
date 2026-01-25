@@ -33,7 +33,9 @@ class MockMediaRecorder {
   stop() {
     this.state = "inactive";
     if (this.ondataavailable) {
-      this.ondataavailable({ data: new Blob(["test"], { type: this.mimeType }) });
+      this.ondataavailable({
+        data: new Blob([new Uint8Array(4096)], { type: this.mimeType }),
+      });
     }
     if (this.onstop) {
       this.onstop();

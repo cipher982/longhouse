@@ -35,6 +35,7 @@ ALLOWED_AUDIO_TYPES = {
 
 # OpenAI's published per-request size limit for audio transcriptions
 MAX_AUDIO_BYTES = 25 * 1024 * 1024  # 25MB
+MIN_AUDIO_BYTES = 1024  # Reject tiny uploads that won't transcribe
 
 DEFAULT_STT_MODEL = "gpt-4o-mini-transcribe"
 SUPPORTED_STT_MODELS = {
@@ -96,6 +97,9 @@ class STTService:
 
         if not audio_bytes:
             return STTResult(success=False, error="Empty audio payload")
+
+        if len(audio_bytes) < MIN_AUDIO_BYTES:
+            return STTResult(success=False, error="Audio too short")
 
         if len(audio_bytes) > MAX_AUDIO_BYTES:
             return STTResult(success=False, error=f"Audio file too large (max {MAX_AUDIO_BYTES // (1024 * 1024)}MB)")

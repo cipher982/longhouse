@@ -50,6 +50,8 @@ Replace realtime mic flow with a turn-based STT → Supervisor → TTS round-tri
 ## Phase 2 — Error Handling + UX Polish
 - [x] Surface voice errors in chat (short assistant bubble + mic error state).
 - [x] Ensure audio playback cleanup (revoke object URLs, reset status).
+- [x] Normalize "empty transcription" to 422 + friendly UI message.
+- [x] Client-side minimum audio size gate (avoid sending tiny clips).
 
 ## Phase 3 — Tests
 - [x] Unit: mock MediaRecorder + fetch for `useTurnBasedVoice`.
