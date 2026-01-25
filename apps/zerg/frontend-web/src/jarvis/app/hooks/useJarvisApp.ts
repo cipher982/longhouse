@@ -38,6 +38,8 @@ import { stateManager, type StateChangeEvent } from '../../lib/state-manager'
 import { eventBus } from '../../lib/event-bus'
 import { timelineLogger } from '../../lib/timeline-logger'
 
+const VOICE_INPUT_MODE: 'turn-based' | 'realtime' = 'turn-based'
+
 // Types (previously in state-manager.ts)
 export interface ModelInfo {
   id: string
@@ -433,8 +435,13 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
         await loadSupervisorHistory()
       }
 
-      // 6. Set up voice listeners (streaming listeners are set up in a separate effect)
-      setupVoiceListeners()
+      // 6. Set up voice listeners (turn-based mode skips realtime listeners)
+      if (VOICE_INPUT_MODE === 'realtime') {
+        setupVoiceListeners()
+      } else {
+        setVoiceStatus('ready')
+        dispatch({ type: 'SET_VOICE_MODE', mode: 'push-to-talk' })
+      }
 
       updateState({ initialized: true })
       logger.info('[useJarvisApp] Initialization complete')
@@ -558,6 +565,11 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
   // ============= Connection =============
 
   const connect = useCallback(async () => {
+    if (VOICE_INPUT_MODE !== 'realtime') {
+      logger.info('[useJarvisApp] Voice connect skipped (turn-based mode)')
+      setVoiceStatus('ready')
+      return
+    }
     if (state.connecting || state.connected) return
 
     updateState({ connecting: true })
@@ -635,6 +647,10 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
   }, [state.connecting, state.connected, state.currentContext, dispatch, updateState, setVoiceStatus, loadSupervisorHistory])
 
   const disconnect = useCallback(async () => {
+    if (VOICE_INPUT_MODE !== 'realtime') {
+      setVoiceStatus('ready')
+      return
+    }
     logger.info('[useJarvisApp] Disconnecting...')
 
     audioController.setListeningMode(false)
@@ -660,6 +676,10 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
   }, [dispatch, updateState, setVoiceStatus])
 
   const reconnect = useCallback(async () => {
+    if (VOICE_INPUT_MODE !== 'realtime') {
+      setVoiceStatus('ready')
+      return
+    }
     await disconnect()
     await new Promise(resolve => setTimeout(resolve, 100))
     await connect()
@@ -784,6 +804,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
   // ============= Voice Controls =============
 
   const handlePTTPress = useCallback(() => {
+    if (VOICE_INPUT_MODE !== 'realtime') return
     if (!voiceController.isConnected()) {
       logger.warn('[useJarvisApp] PTT press ignored - not connected')
       return
@@ -792,6 +813,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
   }, [])
 
   const handlePTTRelease = useCallback(() => {
+    if (VOICE_INPUT_MODE !== 'realtime') return
     if (!voiceController.isConnected()) return
     voiceController.stopPTT()
   }, [])

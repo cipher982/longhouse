@@ -22,6 +22,8 @@ export function MicButton({
 }: MicButtonProps) {
   const isConnected = status !== 'idle' && status !== 'connecting' && status !== 'error'
   const isConnecting = status === 'connecting'
+  const isBusy = status === 'processing' || status === 'speaking'
+  const isDisabled = disabled || isConnecting || isBusy
 
   const handleClick = () => {
     if (status === 'idle' || status === 'error') {
@@ -30,13 +32,13 @@ export function MicButton({
   }
 
   const handlePressStart = () => {
-    if (isConnected && !disabled) {
+    if (isConnected && !isDisabled) {
       onPressStart()
     }
   }
 
   const handlePressEnd = () => {
-    if (isConnected && !disabled) {
+    if (isConnected && !isDisabled) {
       onPressEnd()
     }
   }
@@ -45,15 +47,17 @@ export function MicButton({
     if (status === 'idle') return 'Connect to voice'
     if (status === 'error') return 'Retry voice connection'
     if (status === 'connecting') return 'Connecting...'
+    if (status === 'processing') return 'Processing...'
+    if (status === 'speaking') return 'Speaking...'
     return 'Hold to talk'
   }
 
   return (
     <button
       type="button"
-      className={`mic-button mic-button--${status} ${disabled ? 'mic-button--disabled' : ''}`}
+      className={`mic-button mic-button--${status} ${isDisabled ? 'mic-button--disabled' : ''}`}
       aria-label={getAriaLabel()}
-      disabled={isConnecting || disabled}
+      disabled={isDisabled}
       onClick={handleClick}
       onMouseDown={handlePressStart}
       onMouseUp={handlePressEnd}
