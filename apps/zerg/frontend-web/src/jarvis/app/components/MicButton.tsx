@@ -6,6 +6,8 @@ import type { CSSProperties } from 'react'
 
 export type VoiceStatus = 'idle' | 'connecting' | 'ready' | 'listening' | 'processing' | 'speaking' | 'error'
 
+const EQ_BAR_FACTORS = [0.25, 0.4, 0.55, 0.75, 1, 0.85, 0.65, 0.45, 0.3, 0.5, 0.7, 0.9]
+
 interface MicButtonProps {
   status: VoiceStatus
   disabled?: boolean
@@ -62,10 +64,18 @@ export function MicButton({
       className={`voice-button-wrapper compact ${status}`}
       style={{ "--mic-level": normalizedLevel } as CSSProperties}
     >
-      <div className="mic-level-ring" aria-hidden="true" />
-      <div className="reactor-ring reactor-ring-outer" aria-hidden="true" />
-      <div className="reactor-ring reactor-ring-middle" aria-hidden="true" />
-      <div className="reactor-ring reactor-ring-inner" aria-hidden="true" />
+      <div className="mic-eq-ring" aria-hidden="true">
+        {EQ_BAR_FACTORS.map((factor, index) => (
+          <span
+            key={`eq-${index}`}
+            className="mic-eq-bar"
+            style={{
+              "--bar-angle": `${index * (360 / EQ_BAR_FACTORS.length)}deg`,
+              "--bar-factor": String(factor),
+            } as CSSProperties}
+          />
+        ))}
+      </div>
       <button
         type="button"
         className={`voice-button mic-button ${status} ${isDisabled ? 'disabled' : ''}`}
