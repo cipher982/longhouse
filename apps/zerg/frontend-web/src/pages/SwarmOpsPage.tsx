@@ -173,7 +173,7 @@ export default function SwarmOpsPage() {
 
     const seedScenario = async () => {
       try {
-        await request(`/admin/seed-scenario`, {
+        await request(`/scenarios/seed`, {
           method: "POST",
           body: JSON.stringify({ name: demoScenario, clean: true }),
         });
