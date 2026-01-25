@@ -319,7 +319,8 @@ def _get_postgres_schema_session(worker_id: str) -> sessionmaker:
     engine = engine.execution_options(schema_translate_map={DB_SCHEMA: schema_name})
 
     # Create test user for foreign key constraints (E2E tests need a user for agent creation)
-    # Use ON CONFLICT DO NOTHING to handle concurrent schema initialization race conditions
+    # Use ON CONFLICT (email) to handle the unique email constraint - this is what typically
+    # fails in race conditions when multiple processes initialize the same schema
     with engine.connect() as conn:
         conn.execute(text(f"SET search_path TO {schema_name}, public"))
         logger.debug("Worker %s (Postgres schema) ensuring test user exists...", worker_id)
@@ -329,7 +330,7 @@ def _get_postgres_schema_session(worker_id: str) -> sessionmaker:
                                   display_name, context, created_at, updated_at)
                 VALUES (1, 'test@example.com', 'ADMIN', true, 'dev', 'test-user-1',
                        'Test User', '{}', NOW(), NOW())
-                ON CONFLICT (id) DO NOTHING
+                ON CONFLICT (email) DO NOTHING
             """)
         )
         # Advance the sequence past id=1 to avoid conflicts with auto-generated IDs

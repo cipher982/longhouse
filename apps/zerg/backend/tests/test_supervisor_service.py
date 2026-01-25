@@ -321,8 +321,9 @@ class TestRecentWorkerHistoryInjection:
     def test_build_recent_worker_context_no_workers(self, db_session, test_user):
         """Should return None when no recent workers exist."""
         service = SupervisorService(db_session)
-        context = service._build_recent_worker_context(test_user.id)
+        context, jobs_to_ack = service._build_recent_worker_context(test_user.id)
         assert context is None
+        assert jobs_to_ack == []
 
     def test_build_recent_worker_context_with_workers(self, db_session, test_user, temp_artifact_path):
         """Should return formatted context when recent workers exist."""
@@ -344,13 +345,15 @@ class TestRecentWorkerHistoryInjection:
         db_session.refresh(job)
 
         service = SupervisorService(db_session)
-        context = service._build_recent_worker_context(test_user.id)
+        context, jobs_to_ack = service._build_recent_worker_context(test_user.id)
 
         assert context is not None
-        assert "Recent Worker Activity" in context
+        assert "Worker Inbox" in context
         assert f"Job {job.id}" in context
         assert "SUCCESS" in context
         assert "Check disk usage" in context
+        # Unacknowledged job should be in the list to acknowledge
+        assert job.id in jobs_to_ack
 
     def test_build_recent_worker_context_respects_limit(self, db_session, test_user, temp_artifact_path):
         """Should only return up to RECENT_WORKER_HISTORY_LIMIT workers."""
@@ -373,12 +376,14 @@ class TestRecentWorkerHistoryInjection:
         db_session.commit()
 
         service = SupervisorService(db_session)
-        context = service._build_recent_worker_context(test_user.id)
+        context, jobs_to_ack = service._build_recent_worker_context(test_user.id)
 
         assert context is not None
         # Count how many "Job X" entries
         job_count = context.count("Job ")
         assert job_count == RECENT_WORKER_HISTORY_LIMIT
+        # Should have RECENT_WORKER_HISTORY_LIMIT jobs to acknowledge
+        assert len(jobs_to_ack) == RECENT_WORKER_HISTORY_LIMIT
 
     def test_build_recent_worker_context_includes_running(self, db_session, test_user, temp_artifact_path):
         """Should include running workers in context."""
@@ -398,11 +403,13 @@ class TestRecentWorkerHistoryInjection:
         db_session.commit()
 
         service = SupervisorService(db_session)
-        context = service._build_recent_worker_context(test_user.id)
+        context, jobs_to_ack = service._build_recent_worker_context(test_user.id)
 
         assert context is not None
         assert "RUNNING" in context
         assert "Long running investigation" in context
+        # Running jobs are not acknowledged (only completed jobs)
+        assert jobs_to_ack == []
 
     def test_build_recent_worker_context_includes_marker(self, db_session, test_user, temp_artifact_path):
         """Context should include marker for cleanup identification."""
@@ -423,10 +430,12 @@ class TestRecentWorkerHistoryInjection:
         db_session.commit()
 
         service = SupervisorService(db_session)
-        context = service._build_recent_worker_context(test_user.id)
+        context, jobs_to_ack = service._build_recent_worker_context(test_user.id)
 
         assert context is not None
         assert RECENT_WORKER_CONTEXT_MARKER in context
+        # Completed job should be in acknowledgement list
+        assert job.id in jobs_to_ack
 
     def test_cleanup_stale_worker_context(self, db_session, test_user, temp_artifact_path):
         """Should delete messages containing the marker (older than min_age)."""

@@ -10,7 +10,7 @@ AI agent orchestration platform. Jarvis = voice/text UI. Swarmlet = product name
 
 ## Quick Reference
 
-**Assume `make dev` is running** during coding sessions.
+**Do not Assume `make dev` is running** during coding sessions.
 
 | URL | What |
 |-----|------|
@@ -100,6 +100,9 @@ git push origin onboard-sauron    # Triggers auto-deploy
 | Coolify | `docs/COOLIFY_DEBUGGING.md` |
 | Architecture spec | `docs/specs/durable-runs-v2.2.md` |
 
+## Misc
+- GH actions use runners on Cube
+
 ---
 
 ## Agent Self-Improvement
@@ -157,3 +160,6 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-24) [gotcha] `spawn_workspace_worker` is a normal tool (no AgentInterrupted/WAITING), but `worker_spawned` still increments SSE pending_workers, so chat streams can stay open (input disabled) until `worker_complete` even after supervisor_complete.
 - (2026-01-24) [pattern] Jarvis UX: "Human PA" model — kick off tasks, move on, don't block. Workers report back async. Input should re-enable on `supervisor_complete`, not wait for workers. See `AI-Sessions/2026-01-24-jarvis-worker-ux-design.md`.
 - (2026-01-25) [gotcha] `zerg/main.py` load_dotenv(override=True) clobbered E2E env (ENVIRONMENT=test:e2e), preventing WorkerJobProcessor startup; use override=False in test/e2e.
+- (2026-01-25) [gotcha] Telegram channel `webhook_url` only sets the remote webhook; no local webhook handler is wired yet, so inbound delivery still requires polling.
+- (2026-01-25) [gotcha] Tests patch `zerg.services.openai_realtime.httpx.AsyncClient`; keep `httpx` imported in the compatibility wrapper after moving realtime helpers.
+- (2026-01-25) [pattern] SupervisorService enforces a single ThreadType.SUPER thread per user (“one brain”); each Jarvis message creates an AgentRun tied to that thread.

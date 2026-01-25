@@ -61,21 +61,11 @@ class TraceDebugger:
         from zerg.models.models import WorkerJob
 
         # Get runs with this trace, ordered by created_at desc to get most recent on long traces
-        runs = (
-            self.db.query(AgentRun)
-            .filter(AgentRun.trace_id == trace_id)
-            .order_by(AgentRun.created_at.desc())
-            .limit(max_items)
-            .all()
-        )
+        runs = self.db.query(AgentRun).filter(AgentRun.trace_id == trace_id).order_by(AgentRun.created_at.desc()).limit(max_items).all()
 
         # Get worker jobs with this trace, ordered by created_at desc
         workers = (
-            self.db.query(WorkerJob)
-            .filter(WorkerJob.trace_id == trace_id)
-            .order_by(WorkerJob.created_at.desc())
-            .limit(max_items)
-            .all()
+            self.db.query(WorkerJob).filter(WorkerJob.trace_id == trace_id).order_by(WorkerJob.created_at.desc()).limit(max_items).all()
         )
 
         # Get LLM audit logs with this trace, ordered by created_at desc
