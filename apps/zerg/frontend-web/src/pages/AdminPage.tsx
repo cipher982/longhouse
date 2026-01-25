@@ -1102,7 +1102,7 @@ function AdminPage() {
 
               {demoUsers.length === 0 ? (
                 <div className="demo-empty-state">
-                  <p>No demo account yet.</p>
+                  <p>Create a demo account to show off Swarmlet with sample data.</p>
                   <Button
                     variant="primary"
                     size="lg"
@@ -1114,40 +1114,44 @@ function AdminPage() {
                 </div>
               ) : (
                 <div className="demo-accounts-grid">
-                  {demoUsers.map((demoUser) => (
-                    <div key={demoUser.id} className="demo-account-card">
-                      <div className="demo-account-info">
-                        <span className="demo-account-name">
-                          {demoUser.display_name || "Demo User"}
-                        </span>
-                        <span className="demo-account-email">{demoUser.email}</span>
+                  {demoUsers.map((demoUser) => {
+                    // Extract just the unique part from email for cleaner display
+                    const emailId = demoUser.email.split('@')[0].replace('demo+', '');
+                    return (
+                      <div key={demoUser.id} className="demo-account-card">
+                        <div className="demo-account-info">
+                          <span className="demo-account-name">
+                            {demoUser.display_name || "Demo Account"}
+                          </span>
+                          <span className="demo-account-email">{emailId}</span>
+                        </div>
+                        <div className="demo-account-actions">
+                          <Button
+                            variant="primary"
+                            onClick={() => handleStartDemo(demoUser.id)}
+                            disabled={seedScenarioMutation.isPending || impersonateMutation.isPending}
+                          >
+                            {(seedScenarioMutation.isPending || impersonateMutation.isPending)
+                              ? "Starting..."
+                              : "▶ Start Demo"}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            onClick={() => handleOpenDemoReset(demoUser.id)}
+                            disabled={resetDemoMutation.isPending}
+                          >
+                            Clear
+                          </Button>
+                        </div>
                       </div>
-                      <div className="demo-account-actions">
-                        <Button
-                          variant="primary"
-                          onClick={() => handleStartDemo(demoUser.id)}
-                          disabled={seedScenarioMutation.isPending || impersonateMutation.isPending}
-                        >
-                          {(seedScenarioMutation.isPending || impersonateMutation.isPending)
-                            ? "Starting..."
-                            : "Start Demo"}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleOpenDemoReset(demoUser.id)}
-                          disabled={resetDemoMutation.isPending}
-                        >
-                          Clear Data
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                   <button
                     className="demo-add-button"
                     onClick={handleCreateDemo}
                     disabled={createDemoMutation.isPending}
                   >
-                    + Add another demo account
+                    + New demo account
                   </button>
                 </div>
               )}
