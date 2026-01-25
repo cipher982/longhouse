@@ -22,8 +22,8 @@ from pydantic import BaseModel
 from pydantic import Field
 
 from zerg.routers.jarvis_auth import get_current_jarvis_user
-from zerg.services.tts_service import TTSProvider
-from zerg.services.tts_service import get_tts_service
+from zerg.voice.tts_service import TTSProvider
+from zerg.voice.tts_service import get_tts_service
 
 logger = logging.getLogger(__name__)
 

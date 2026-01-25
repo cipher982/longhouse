@@ -295,11 +295,7 @@ async def get_bootstrap_status(
     runners_details = f"{len(runners)} runner(s)" if runners_configured else "not configured"
 
     # Check credentials
-    creds = (
-        db.query(AccountConnectorCredential)
-        .filter(AccountConnectorCredential.owner_id == admin_user.id)
-        .all()
-    )
+    creds = db.query(AccountConnectorCredential).filter(AccountConnectorCredential.owner_id == admin_user.id).all()
     creds_configured = len(creds) > 0
     cred_types = [c.connector_type for c in creds]
     creds_details = f"{len(creds)} configured: {', '.join(cred_types)}" if creds_configured else "not configured"
@@ -330,11 +326,7 @@ def _seed_server_knowledge(db: Session, admin_users: list[User], context: dict):
 
     for user in admin_users:
         # Check if we already have this knowledge source
-        existing_source = (
-            db.query(KnowledgeSource)
-            .filter_by(owner_id=user.id, name="User Context - Servers")
-            .first()
-        )
+        existing_source = db.query(KnowledgeSource).filter_by(owner_id=user.id, name="User Context - Servers").first()
 
         if not existing_source:
             existing_source = knowledge_crud.create_knowledge_source(
