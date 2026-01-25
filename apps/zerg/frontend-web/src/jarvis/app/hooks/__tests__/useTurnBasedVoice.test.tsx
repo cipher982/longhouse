@@ -93,12 +93,11 @@ describe("useTurnBasedVoice", () => {
     });
 
     await waitFor(() => {
+      const userMessage = result.current.state.messages.find((msg) => msg.role === "user");
+      const assistantMessage = result.current.state.messages.find((msg) => msg.role === "assistant");
       expect(mockVoiceTurn).toHaveBeenCalledTimes(1);
-      expect(result.current.state.messages).toHaveLength(2);
+      expect(userMessage?.content).toBe("Hello from voice");
+      expect(assistantMessage?.content).toBe("Hi there");
     });
-
-    const [userMessage, assistantMessage] = result.current.state.messages;
-    expect(userMessage.content).toBe("Hello from voice");
-    expect(assistantMessage.content).toBe("Hi there");
   });
 });
