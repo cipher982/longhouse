@@ -630,15 +630,28 @@ async def _continue_supervisor_langgraph_free(
     # Inherit trace_id from the original run for end-to-end tracing
     trace_id = str(run.trace_id) if run.trace_id else None
 
-    # Get tool_call_id from WorkerJob
+    # Get tool_call_id - priority order:
+    # 1. pending_tool_call_id (from wait_for_worker) - highest priority
+    # 2. WorkerJob.tool_call_id (from job_id parameter)
+    # 3. Most recent pending worker job for this run
     tool_call_id = None
-    if job_id:
+
+    # Priority 1: Check pending_tool_call_id first (from wait_for_worker)
+    if run.pending_tool_call_id:
+        tool_call_id = run.pending_tool_call_id
+        # Clear pending_tool_call_id (one-time use)
+        run.pending_tool_call_id = None
+        db.commit()
+        logger.info(f"Using pending_tool_call_id={tool_call_id} from wait_for_worker")
+
+    # Priority 2: Get from WorkerJob if job_id provided
+    if not tool_call_id and job_id:
         job = db.query(WorkerJob).filter(WorkerJob.id == job_id).first()
         if job:
             tool_call_id = job.tool_call_id
 
+    # Priority 3: Fallback - find most recent pending worker job for this run
     if not tool_call_id:
-        # Fallback: find most recent pending worker job for this run
         job = (
             db.query(WorkerJob)
             .filter(
@@ -693,14 +706,6 @@ async def _continue_supervisor_langgraph_free(
         )
 
         return {"status": "error", "error": error_msg}
-
-    # Prefer pending_tool_call_id (from wait_for_worker) over WorkerJob lookup
-    if run.pending_tool_call_id:
-        tool_call_id = run.pending_tool_call_id
-        # Clear pending_tool_call_id (one-time use)
-        run.pending_tool_call_id = None
-        db.commit()
-        logger.info(f"Using pending_tool_call_id={tool_call_id} from wait_for_worker")
 
     logger.info(
         "Resuming supervisor run %s (thread=%s) with tool_call_id=%s [LangGraph-free]",

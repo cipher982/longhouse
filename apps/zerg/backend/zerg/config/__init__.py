@@ -144,9 +144,6 @@ class Settings:  # noqa: D401 – simple data container
     e2e_use_postgres_schemas: bool  # Use Postgres schemas for E2E test isolation (vs SQLite files)
     e2e_worker_id: str | None  # Override worker ID for E2E testing
 
-    # Async worker model -----------------------------------------------
-    async_worker_model: bool  # Non-blocking spawn_worker (inbox model vs barrier model)
-
     # Dynamic guards (evaluated at runtime) -----------------------------
     @property
     def data_dir(self) -> Path:
@@ -314,8 +311,6 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         # E2E test database isolation
         e2e_use_postgres_schemas=_truthy(os.getenv("E2E_USE_POSTGRES_SCHEMAS")),
         e2e_worker_id=os.getenv("E2E_WORKER_ID"),
-        # Async worker model (default: enabled)
-        async_worker_model=_truthy(os.getenv("ASYNC_WORKER_MODEL", "1")),
     )
 
 
