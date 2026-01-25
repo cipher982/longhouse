@@ -690,6 +690,74 @@
     margin-top: 6px;
   }
 
+  /* Simplified Demo Mode Section */
+  .demo-empty-state {
+    text-align: center;
+    padding: var(--space-8) var(--space-4);
+  }
+
+  .demo-empty-state p {
+    color: var(--color-text-muted);
+    margin-bottom: var(--space-4);
+  }
+
+  .demo-accounts-grid {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .demo-account-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-4) var(--space-5);
+    background: var(--color-surface-secondary);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-md);
+  }
+
+  .demo-account-info {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .demo-account-name {
+    font-weight: 600;
+    color: var(--color-text-primary);
+  }
+
+  .demo-account-email {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+  }
+
+  .demo-account-actions {
+    display: flex;
+    gap: var(--space-3);
+  }
+
+  .demo-add-button {
+    background: transparent;
+    border: 2px dashed var(--color-border-subtle);
+    border-radius: var(--radius-md);
+    padding: var(--space-4);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .demo-add-button:hover:not(:disabled) {
+    border-color: var(--color-brand-primary);
+    color: var(--color-brand-primary);
+  }
+
+  .demo-add-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
   /* .btn-danger now inherits from buttons.css - no need for duplicate definition */
 
   /* Admin Page Confirmation Modal - scoped to admin page only */

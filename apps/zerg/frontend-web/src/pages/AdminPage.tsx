@@ -877,6 +877,31 @@ function AdminPage() {
     impersonateMutation.mutate({ user_id: targetId });
   };
 
+  // One-click: seed sample data then impersonate
+  const handleStartDemo = async (userId: number) => {
+    const demoUser = demoUsers.find((item) => item.id === userId);
+    if (!demoUser) {
+      toast.error("Demo account not found");
+      return;
+    }
+
+    try {
+      // First seed the scenario
+      await seedScenarioForUser({
+        name: "swarm-mvp",
+        owner_email: demoUser.email,
+        clean: true,
+      });
+
+      // Then impersonate
+      await impersonateUser({ user_id: userId });
+      toast.success("Demo ready!");
+      window.location.assign("/dashboard");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to start demo");
+    }
+  };
+
   const handleOpenDemoReset = (userId?: number | null) => {
     const targetId = userId ?? selectedDemoUserId;
     if (!targetId) {
@@ -1065,131 +1090,66 @@ function AdminPage() {
             </Card.Body>
           </Card>
 
-          {/* Demo Accounts */}
+          {/* Demo Mode */}
           <Card>
             <Card.Header>
-              <h3 className="admin-section-title ui-section-title">Demo Accounts</h3>
+              <h3 className="admin-section-title ui-section-title">Demo Mode</h3>
             </Card.Header>
             <Card.Body>
               <p className="section-description admin-section-description">
-                Create demo users, seed baseline scenarios, reset them, and switch into their view safely.
+                One-click demo with sample data. Perfect for showing off Swarmlet.
               </p>
-              <div className="admin-demo-form">
-                <input
-                  className="ui-input admin-demo-input"
-                  placeholder="demo+name@swarmlet.demo (optional)"
-                  value={demoEmail}
-                  onChange={(event) => setDemoEmail(event.target.value)}
-                />
-                <input
-                  className="ui-input admin-demo-input"
-                  placeholder="Display name (optional)"
-                  value={demoDisplayName}
-                  onChange={(event) => setDemoDisplayName(event.target.value)}
-                />
-                <Button onClick={handleCreateDemo} disabled={createDemoMutation.isPending}>
-                  {createDemoMutation.isPending ? "Creating..." : "Create demo account"}
-                </Button>
-              </div>
-
-              <div className="admin-demo-seed">
-                <label className="admin-window-label">Baseline scenario</label>
-                <input
-                  className="ui-input admin-demo-input"
-                  placeholder="swarm-mvp"
-                  value={demoScenario}
-                  onChange={(event) => setDemoScenario(event.target.value)}
-                />
-                <Button
-                  variant="secondary"
-                  onClick={() => handleSeedDemo()}
-                  disabled={seedScenarioMutation.isPending || !selectedDemoUserId}
-                >
-                  {seedScenarioMutation.isPending ? "Seeding..." : "Seed selected demo"}
-                </Button>
-                <Button
-                  variant="danger"
-                  onClick={() => handleOpenDemoReset()}
-                  disabled={resetDemoMutation.isPending || !selectedDemoUserId}
-                >
-                  {resetDemoMutation.isPending ? "Resetting..." : "Reset selected demo"}
-                </Button>
-                <Button
-                  variant="primary"
-                  onClick={() => handleImpersonate()}
-                  disabled={impersonateMutation.isPending || !selectedDemoUserId}
-                >
-                  {impersonateMutation.isPending ? "Switching..." : "View as demo"}
-                </Button>
-              </div>
-
-              <div className="admin-demo-select">
-                <label className="admin-window-label">Selected demo</label>
-                <select
-                  className="ui-input admin-demo-select-input"
-                  value={selectedDemoUserId ?? ""}
-                  onChange={(event) => setSelectedDemoUserId(Number(event.target.value))}
-                >
-                  {demoUsers.length === 0 ? (
-                    <option value="">No demo users</option>
-                  ) : (
-                    demoUsers.map((demoUser) => (
-                      <option key={demoUser.id} value={demoUser.id}>
-                        {demoUser.email}
-                      </option>
-                    ))
-                  )}
-                </select>
-              </div>
 
               {demoUsers.length === 0 ? (
-                <div className="admin-empty-state">No demo users yet</div>
+                <div className="demo-empty-state">
+                  <p>No demo account yet.</p>
+                  <Button
+                    variant="primary"
+                    size="lg"
+                    onClick={handleCreateDemo}
+                    disabled={createDemoMutation.isPending}
+                  >
+                    {createDemoMutation.isPending ? "Creating..." : "Create Demo Account"}
+                  </Button>
+                </div>
               ) : (
-                <Table>
-                  <Table.Header>
-                    <Table.Row>
-                      <Table.Cell isHeader>Email</Table.Cell>
-                      <Table.Cell isHeader>Display name</Table.Cell>
-                      <Table.Cell isHeader>Actions</Table.Cell>
-                    </Table.Row>
-                  </Table.Header>
-                  <Table.Body>
-                    {demoUsers.map((demoUser) => (
-                      <Table.Row key={demoUser.id}>
-                        <Table.Cell>{demoUser.email}</Table.Cell>
-                        <Table.Cell>{demoUser.display_name || "—"}</Table.Cell>
-                        <Table.Cell>
-                          <div className="admin-demo-actions">
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              onClick={() => handleSeedDemo(demoUser.id)}
-                              disabled={seedScenarioMutation.isPending}
-                            >
-                              Seed baseline
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="danger"
-                              onClick={() => handleOpenDemoReset(demoUser.id)}
-                              disabled={resetDemoMutation.isPending}
-                            >
-                              Reset
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="primary"
-                              onClick={() => handleImpersonate(demoUser.id)}
-                              disabled={impersonateMutation.isPending}
-                            >
-                              View as
-                            </Button>
-                          </div>
-                        </Table.Cell>
-                      </Table.Row>
-                    ))}
-                  </Table.Body>
-                </Table>
+                <div className="demo-accounts-grid">
+                  {demoUsers.map((demoUser) => (
+                    <div key={demoUser.id} className="demo-account-card">
+                      <div className="demo-account-info">
+                        <span className="demo-account-name">
+                          {demoUser.display_name || "Demo User"}
+                        </span>
+                        <span className="demo-account-email">{demoUser.email}</span>
+                      </div>
+                      <div className="demo-account-actions">
+                        <Button
+                          variant="primary"
+                          onClick={() => handleStartDemo(demoUser.id)}
+                          disabled={seedScenarioMutation.isPending || impersonateMutation.isPending}
+                        >
+                          {(seedScenarioMutation.isPending || impersonateMutation.isPending)
+                            ? "Starting..."
+                            : "Start Demo"}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          onClick={() => handleOpenDemoReset(demoUser.id)}
+                          disabled={resetDemoMutation.isPending}
+                        >
+                          Clear Data
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                  <button
+                    className="demo-add-button"
+                    onClick={handleCreateDemo}
+                    disabled={createDemoMutation.isPending}
+                  >
+                    + Add another demo account
+                  </button>
+                </div>
               )}
             </Card.Body>
           </Card>
