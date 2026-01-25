@@ -6,12 +6,11 @@ disposable worker agents, retrieve their results, and drill into their artifacts
 The supervisor/worker pattern enables complex delegation scenarios where a supervisor
 can spawn multiple workers for parallel execution or break down complex tasks.
 
-Worker execution flow:
-- spawn_worker() creates WorkerJob and returns job info
-- Caller (supervisor_react_engine) raises AgentInterrupted to pause
+Worker execution flow (async inbox model):
+- spawn_worker() creates WorkerJob and returns immediately (non-blocking)
 - Worker runs in background via WorkerJobProcessor
-- Worker completion triggers resume via worker_resume.py
-- Supervisor resumes with worker result injected as tool response
+- Results surface in the supervisor inbox on the next turn
+- wait_for_worker() is the explicit opt-in blocking path (raises AgentInterrupted)
 """
 
 import logging
@@ -677,14 +676,28 @@ async def wait_for_worker_async(
         if not job:
             return f"Error: Worker job {job_id} not found"
 
+        def _acknowledge_completed_job() -> None:
+            """Mark a completed job as acknowledged (best-effort)."""
+            if job.acknowledged:
+                return
+            job.acknowledged = True
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+                logger.warning(f"Failed to acknowledge worker job {job.id}", exc_info=True)
+
         if job.status == "cancelled":
+            _acknowledge_completed_job()
             return f"Worker job {job_id} was cancelled."
 
         if job.status == "failed":
+            _acknowledge_completed_job()
             return f"Worker job {job_id} failed: {job.error or 'Unknown error'}"
 
         if job.status == "success":
             # Already complete - return result immediately
+            _acknowledge_completed_job()
             if job.worker_id:
                 try:
                     artifact_store = WorkerArtifactStore()
