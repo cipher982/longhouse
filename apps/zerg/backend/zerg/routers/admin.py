@@ -68,6 +68,13 @@ class DatabaseResetRequest(BaseModel):
     reset_type: ResetType = ResetType.CLEAR_DATA
 
 
+class ScenarioSeedRequest(BaseModel):
+    """Request model for seeding deterministic scenario data."""
+
+    name: str
+    clean: bool = True
+
+
 class SuperAdminStatusResponse(BaseModel):
     """Response model for super admin status check."""
 
@@ -238,6 +245,23 @@ async def reset_database(
     """
     # Run synchronously so the HTTP response reflects a completed commit.
     return _reset_database_sync(request, current_user, x_test_worker)
+
+
+@router.post("/seed-scenario")
+async def seed_scenario_data(
+    request: ScenarioSeedRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_super_admin),
+):
+    """Seed deterministic scenario data for demos and E2E tests."""
+    settings = get_settings()
+    if settings.environment and settings.environment.lower() == "production":
+        raise HTTPException(status_code=403, detail="Scenario seeding is disabled in production")
+
+    from zerg.scenarios.seed import seed_scenario
+
+    result = seed_scenario(db, request.name, owner_id=current_user.id, clean=request.clean)
+    return JSONResponse(content=result)
 
 
 def _reset_database_sync(request: DatabaseResetRequest, current_user, worker_id: str | None):
