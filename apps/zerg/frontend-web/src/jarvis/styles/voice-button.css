@@ -71,44 +71,6 @@
   animation: none;
 }
 
-/* EQ-style mic visualizer ring */
-.jarvis-container .mic-eq-ring {
-  position: absolute;
-  width: 68px;
-  height: 68px;
-  border-radius: 50%;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.15s ease;
-}
-
-.jarvis-container .voice-button-wrapper.listening .mic-eq-ring {
-  opacity: 1;
-}
-
-.jarvis-container .mic-eq-bar {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 2px;
-  height: 12px;
-  border-radius: 999px;
-  background: rgb(6 182 212 / 80%);
-  transform-origin: center 30px;
-  transform: rotate(var(--bar-angle)) translateY(-22px) scaleY(calc(0.25 + (var(--mic-level) * var(--bar-factor))));
-  transition: transform 80ms linear;
-  box-shadow: 0 0 6px rgb(6 182 212 / 45%);
-}
-
-.jarvis-container .voice-button-wrapper.compact .mic-eq-ring {
-  width: 64px;
-  height: 64px;
-}
-
-.jarvis-container .voice-button-wrapper.compact .mic-eq-bar {
-  transform-origin: center 28px;
-  transform: rotate(var(--bar-angle)) translateY(-20px) scaleY(calc(0.2 + (var(--mic-level) * var(--bar-factor))));
-}
 
 /* ============================
    Reactor Rings

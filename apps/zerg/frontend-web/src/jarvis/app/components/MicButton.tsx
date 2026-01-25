@@ -2,11 +2,12 @@
  * MicButton component - Hold-to-talk microphone control with visualizer rings
  */
 
-import type { CSSProperties } from 'react'
+import { useEffect, useRef } from 'react'
+
+import { useAppState } from '../context'
+import { RadialVisualizer } from '../../lib/radial-visualizer'
 
 export type VoiceStatus = 'idle' | 'connecting' | 'ready' | 'listening' | 'processing' | 'speaking' | 'error'
-
-const EQ_BAR_FACTORS = [0.25, 0.4, 0.55, 0.75, 1, 0.85, 0.65, 0.45, 0.3, 0.5, 0.7, 0.9]
 
 interface MicButtonProps {
   status: VoiceStatus
@@ -25,11 +26,49 @@ export function MicButton({
   onPressStart,
   onPressEnd,
 }: MicButtonProps) {
+  const { sharedMicStream } = useAppState()
+  const wrapperRef = useRef<HTMLDivElement | null>(null)
+  const visualizerRef = useRef<RadialVisualizer | null>(null)
+  const renderStateRef = useRef(0)
+  const renderColorRef = useRef('#475569')
   const isConnected = status !== 'idle' && status !== 'connecting' && status !== 'error'
   const isConnecting = status === 'connecting'
   const isBusy = status === 'processing' || status === 'speaking'
   const isDisabled = disabled || isConnecting || isBusy
   const normalizedLevel = Math.max(0, Math.min(1, level))
+
+  useEffect(() => {
+    if (!wrapperRef.current) return
+    const viz = new RadialVisualizer(wrapperRef.current, { outerInset: 12, minRadius: 22 })
+    visualizerRef.current = viz
+    return () => {
+      viz.destroy()
+      visualizerRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    if (visualizerRef.current) {
+      visualizerRef.current.provideStream(sharedMicStream)
+    }
+  }, [sharedMicStream])
+
+  useEffect(() => {
+    const micActive = status === 'listening'
+    renderStateRef.current = micActive ? 1 : 0
+    renderColorRef.current = micActive ? '#06b6d4' : '#475569'
+
+    const viz = visualizerRef.current
+    if (!viz) return
+
+    if (micActive && sharedMicStream) {
+      void viz.start()
+    } else {
+      viz.stop()
+    }
+
+    viz.render(normalizedLevel, renderColorRef.current, renderStateRef.current)
+  }, [normalizedLevel, sharedMicStream, status])
 
   const handleClick = () => {
     if (status === 'idle' || status === 'error') {
@@ -62,20 +101,8 @@ export function MicButton({
   return (
     <div
       className={`voice-button-wrapper compact ${status}`}
-      style={{ "--mic-level": normalizedLevel } as CSSProperties}
+      ref={wrapperRef}
     >
-      <div className="mic-eq-ring" aria-hidden="true">
-        {EQ_BAR_FACTORS.map((factor, index) => (
-          <span
-            key={`eq-${index}`}
-            className="mic-eq-bar"
-            style={{
-              "--bar-angle": `${index * (360 / EQ_BAR_FACTORS.length)}deg`,
-              "--bar-factor": String(factor),
-            } as CSSProperties}
-          />
-        ))}
-      </div>
       <button
         type="button"
         className={`voice-button mic-button ${status} ${isDisabled ? 'disabled' : ''}`}
