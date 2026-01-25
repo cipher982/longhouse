@@ -1,0 +1,54 @@
+name: swarm-mvp
+version: 1
+summary: Swarm Ops MVP scenario for demos and tests.
+timebase: now
+runs:
+  - id: needs-approval
+    title: Deploy Swarm Ops UI
+    status: waiting
+    trigger: manual
+    started_at: -18m
+    summary: "Needs approval: proceed with Step 2 (deploy)?"
+    events:
+      - type: supervisor_waiting
+        message: Waiting for approval to proceed
+        at: -16m
+    messages:
+      - role: assistant
+        content: "Step 1 complete. Want me to proceed with the deploy?"
+        at: -17m
+  - id: hard-stop
+    title: Nightly backup sentinel
+    status: failed
+    trigger: schedule
+    started_at: -2h
+    finished_at: -110m
+    error: "Backup failed: disk full on /mnt/storage"
+    events:
+      - type: tool_error
+        message: "backup: disk full on /mnt/storage"
+        at: -110m
+  - id: qa-smoke
+    title: QA smoke test
+    status: success
+    trigger: manual
+    started_at: -45m
+    finished_at: -35m
+    summary: "QA pass: 28/28 checks green"
+    events:
+      - type: worker_complete
+        message: All checks passed
+        at: -35m
+  - id: running
+    title: Refactor scheduler
+    status: running
+    trigger: manual
+    started_at: -9m
+    messages:
+      - role: assistant
+        content: "Refactor in progress: updating job queue interfaces."
+        at: -4m
+  - id: queued
+    title: Create onboarding doc
+    status: queued
+    trigger: manual
