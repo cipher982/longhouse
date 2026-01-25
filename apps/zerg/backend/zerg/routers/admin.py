@@ -440,6 +440,9 @@ def reset_demo_user_data(db: Session, user_id: int) -> dict[str, int]:
             _delete(db.query(Thread).filter(Thread.id.in_(thread_ids)), "threads")
         _delete(db.query(Agent).filter(Agent.id.in_(agent_ids)), "agents")
 
+    # CanvasLayout.workflow_id FK references Workflow - delete canvas layouts first
+    _delete(db.query(CanvasLayout).filter(CanvasLayout.user_id == user_id), "canvas_layouts")
+
     workflow_ids = [row[0] for row in db.query(Workflow.id).filter(Workflow.owner_id == user_id).all()]
     if workflow_ids:
         execution_ids = [row[0] for row in db.query(WorkflowExecution.id).filter(WorkflowExecution.workflow_id.in_(workflow_ids)).all()]
@@ -454,7 +457,6 @@ def reset_demo_user_data(db: Session, user_id: int) -> dict[str, int]:
             )
         _delete(db.query(Workflow).filter(Workflow.id.in_(workflow_ids)), "workflows")
 
-    _delete(db.query(CanvasLayout).filter(CanvasLayout.user_id == user_id), "canvas_layouts")
     _delete(db.query(WorkflowTemplate).filter(WorkflowTemplate.created_by == user_id), "workflow_templates")
 
     _delete(db.query(Connector).filter(Connector.owner_id == user_id), "connectors")

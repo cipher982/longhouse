@@ -78,7 +78,10 @@ def main() -> int:
     try:
         owner = ensure_owner(db, args.owner_email)
         result = seed_scenario(db, args.scenario, owner_id=owner.id, clean=not args.no_clean)
-        print(f"Seeded scenario '{result['scenario']}' -> runs={result['runs']}, messages={result['messages']}, events={result['events']}")
+        msg = f"Seeded scenario '{result['scenario']}' -> runs={result['runs']}, messages={result['messages']}, events={result['events']}"
+        if result.get("worker_jobs"):
+            msg += f", worker_jobs={result['worker_jobs']}"
+        print(msg)
     except ScenarioError as exc:
         print(f"Scenario error: {exc}")
         return 2
