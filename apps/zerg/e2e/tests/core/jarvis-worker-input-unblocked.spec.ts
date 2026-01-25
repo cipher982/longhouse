@@ -5,8 +5,8 @@
  * a background worker is still running (simulated by a hanging /chat fetch).
  */
 
-import { test, expect } from './fixtures';
-import { waitForReadyFlag, waitForEventBusAvailable } from './helpers/ready-signals';
+import { test, expect } from '../fixtures';
+import { waitForReadyFlag, waitForEventBusAvailable } from '../helpers/ready-signals';
 
 test('chat input unblocks after supervisor_complete while worker runs', async ({ page }) => {
   await page.goto('/chat', { waitUntil: 'domcontentloaded' });
