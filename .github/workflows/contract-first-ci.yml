@@ -8,9 +8,10 @@ on:
   workflow_dispatch: {}
 
 # Cancel previous runs for the same PR
+# Only cancel PR runs, not main branch - allow parallel runs on main
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # Self-hosted runners can have global pip config pointing at private indexes.
