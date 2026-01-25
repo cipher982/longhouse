@@ -17,6 +17,7 @@ The supervisor tools layer enables Zerg's supervisor/worker architecture by prov
 │                   Supervisor Tools                           │
 │  - spawn_worker()        - list_workers()                    │
 │  - read_worker_result()  - read_worker_file()                │
+│  - peek_worker_output()                                      │
 │  - grep_workers()        - get_worker_metadata()             │
 └──────────────────────┬──────────────────────────────────────┘
                        │ wraps
@@ -122,6 +123,28 @@ output = read_worker_file(
     "tool_calls/001_ssh_exec.txt"
 )
 ```
+
+---
+
+### peek_worker_output(job_id: str, max_bytes: int = 4000) -> str
+
+Peeks at live output for a running worker (tail buffer).
+
+**Use cases:**
+
+- Streaming runner_exec output while a worker is still running
+- Quick progress checks without waiting for completion
+
+**Example:**
+
+```python
+output = peek_worker_output("123", max_bytes=2000)
+```
+
+**Notes:**
+
+- Returns the most recent output for active workers (best-effort).
+- Workspace workers do not stream live output.
 
 ---
 

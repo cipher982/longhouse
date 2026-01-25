@@ -81,6 +81,7 @@ Before spawning, check if we already have the answer:
 - `read_worker_result(job_id)` - Full result
 - `get_worker_evidence(job_id, budget_bytes)` - Raw tool output
 - `read_worker_file(job_id, path)` - Specific files (result.txt, thread.jsonl, etc.)
+- `peek_worker_output(job_id, max_bytes?)` - Live output tail for running workers
 
 ## Ambiguity Rules
 

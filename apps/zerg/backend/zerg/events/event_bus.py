@@ -66,6 +66,7 @@ class EventType(str, Enum):
     WORKER_TOOL_STARTED = "worker_tool_started"
     WORKER_TOOL_COMPLETED = "worker_tool_completed"
     WORKER_TOOL_FAILED = "worker_tool_failed"
+    WORKER_OUTPUT_CHUNK = "worker_output_chunk"
 
     # Supervisor tool events (inline display in conversation)
     SUPERVISOR_TOOL_STARTED = "supervisor_tool_started"

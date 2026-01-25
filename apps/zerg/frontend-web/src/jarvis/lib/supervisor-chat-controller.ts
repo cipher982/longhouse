@@ -39,6 +39,7 @@ import {
   type WorkerToolStartedPayload,
   type WorkerToolCompletedPayload,
   type WorkerToolFailedPayload,
+  type WorkerOutputChunkPayload,
   type SupervisorToolStartedPayload,
   type SupervisorToolProgressPayload,
   type SupervisorToolCompletedPayload,
@@ -800,6 +801,20 @@ export class SupervisorChatController {
           toolCallId: payload.tool_call_id,
           durationMs: payload.duration_ms,
           error: payload.error,
+          timestamp: Date.now(),
+        });
+        break;
+      }
+
+      case 'worker_output_chunk': {
+        const payload = wrapper.payload as WorkerOutputChunkPayload;
+        this.petWatchdog();
+        eventBus.emit('worker:output_chunk', {
+          workerId: payload.worker_id,
+          jobId: payload.job_id,
+          runnerJobId: payload.runner_job_id,
+          stream: payload.stream,
+          data: payload.data,
           timestamp: Date.now(),
         });
         break;
