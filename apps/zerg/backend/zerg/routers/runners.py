@@ -720,11 +720,16 @@ async def runner_websocket(
                                 worker_job_id = None
                                 trace_id = None
                                 meta = output_buffer.get_meta(updated_job.worker_id)
+                                last_resolved_at = 0
                                 if meta:
                                     worker_job_id = meta.job_id
                                     trace_id = meta.trace_id
+                                    last_resolved_at = meta.last_resolved_at
 
-                                if worker_job_id is None:
+                                # Throttle DB lookup to once per 5 seconds if not yet resolved
+                                import time
+
+                                if worker_job_id is None and (time.time() - last_resolved_at) > 5.0:
                                     worker_job = (
                                         db.query(WorkerJob)
                                         .filter(
@@ -737,6 +742,17 @@ async def runner_websocket(
                                     if worker_job:
                                         worker_job_id = worker_job.id
                                         trace_id = str(worker_job.trace_id) if worker_job.trace_id else None
+
+                                    # Mark as resolved (even if not found, to trigger throttling)
+                                    output_buffer.append_output(
+                                        worker_id=updated_job.worker_id,
+                                        stream=stream,
+                                        data="",  # Don't append data here, just updating meta
+                                        job_id=worker_job_id,
+                                        trace_id=trace_id,
+                                        owner_id=owner_id,
+                                        resolved=True,
+                                    )
 
                                 run_id_int = None
                                 if updated_job.run_id is not None:
