@@ -28,6 +28,7 @@ class WorkerOutputMeta:
     run_id: Optional[int] = None
     trace_id: Optional[str] = None
     owner_id: Optional[int] = None
+    last_resolved_at: float = 0
 
 
 class _OutputBuffer:
@@ -86,6 +87,7 @@ class _OutputBuffer:
         run_id: Optional[int] = None,
         trace_id: Optional[str] = None,
         owner_id: Optional[int] = None,
+        resolved: bool = False,
     ) -> None:
         if job_id is not None:
             self.meta.job_id = job_id
@@ -95,6 +97,8 @@ class _OutputBuffer:
             self.meta.trace_id = trace_id
         if owner_id is not None:
             self.meta.owner_id = owner_id
+        if resolved:
+            self.meta.last_resolved_at = time.time()
 
 
 class WorkerOutputBuffer:
@@ -137,13 +141,23 @@ class WorkerOutputBuffer:
         run_id: Optional[int] = None,
         trace_id: Optional[str] = None,
         owner_id: Optional[int] = None,
+        resolved: bool = False,
     ) -> None:
         """Append output chunk for a worker."""
-        if not worker_id or not data:
+        if not worker_id:
             return
 
         buf = self._get_or_create(worker_id)
-        buf.set_meta(job_id=job_id, run_id=run_id, trace_id=trace_id, owner_id=owner_id)
+        buf.set_meta(
+            job_id=job_id,
+            run_id=run_id,
+            trace_id=trace_id,
+            owner_id=owner_id,
+            resolved=resolved,
+        )
+
+        if not data:
+            return
 
         prefix = ""
         if runner_job_id and runner_job_id != buf.last_runner_job_id:
