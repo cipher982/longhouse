@@ -65,7 +65,7 @@ def test_run(db_session: Session):
 async def test_emit_run_event_persists_to_db(db_session: Session, test_run: AgentRun):
     """Test that emit_run_event persists events to the database."""
     payload = {
-        "event_type": "supervisor_started",
+        "event_type": "concierge_started",
         "run_id": test_run.id,
         "task": "Test task",
         "owner_id": 1,
@@ -74,7 +74,7 @@ async def test_emit_run_event_persists_to_db(db_session: Session, test_run: Agen
     event_id = await emit_run_event(
         db=db_session,
         run_id=test_run.id,
-        event_type="supervisor_started",
+        event_type="concierge_started",
         payload=payload,
     )
 
@@ -85,7 +85,7 @@ async def test_emit_run_event_persists_to_db(db_session: Session, test_run: Agen
     event = db_session.query(AgentRunEvent).filter(AgentRunEvent.id == event_id).first()
     assert event is not None
     assert event.run_id == test_run.id
-    assert event.event_type == "supervisor_started"
+    assert event.event_type == "concierge_started"
     assert event.id == event_id  # Verify ID matches returned value
     assert event.payload == payload
     assert event.created_at is not None
@@ -95,7 +95,7 @@ async def test_emit_run_event_persists_to_db(db_session: Session, test_run: Agen
 @pytest.mark.asyncio
 async def test_event_ids_are_monotonic(db_session: Session, test_run: AgentRun):
     """Test that event IDs are monotonically increasing (ordering mechanism)."""
-    event_types = ["supervisor_started", "worker_spawned", "worker_complete", "supervisor_complete"]
+    event_types = ["concierge_started", "commis_spawned", "commis_complete", "concierge_complete"]
 
     event_ids = []
     for event_type in event_types:
@@ -133,7 +133,7 @@ async def test_invalid_payload_raises_valueerror(db_session: Session, test_run: 
     circular['self'] = circular
 
     payload = {
-        "event_type": "supervisor_started",
+        "event_type": "concierge_started",
         "circular": circular,
     }
 
@@ -142,7 +142,7 @@ async def test_invalid_payload_raises_valueerror(db_session: Session, test_run: 
         await emit_run_event(
             db=db_session,
             run_id=test_run.id,
-            event_type="supervisor_started",
+            event_type="concierge_started",
             payload=payload,
         )
 
@@ -180,11 +180,11 @@ async def test_get_events_after_returns_correct_events(db_session: Session, test
 async def test_get_events_after_filters_tokens(db_session: Session, test_run: AgentRun):
     """Test that get_events_after can filter out token events."""
     # Create mixed events including tokens
-    event_types = ["supervisor_started", "supervisor_token", "supervisor_token", "supervisor_complete"]
+    event_types = ["concierge_started", "concierge_token", "concierge_token", "concierge_complete"]
 
     for event_type in event_types:
         payload = {"event_type": event_type, "run_id": test_run.id}
-        if event_type == "supervisor_token":
+        if event_type == "concierge_token":
             payload["token"] = "test token"
         await emit_run_event(
             db=db_session,
@@ -202,8 +202,8 @@ async def test_get_events_after_filters_tokens(db_session: Session, test_run: Ag
     )
 
     assert len(events) == 2
-    assert events[0].event_type == "supervisor_started"
-    assert events[1].event_type == "supervisor_complete"
+    assert events[0].event_type == "concierge_started"
+    assert events[1].event_type == "concierge_complete"
 
 
 @pytest.mark.asyncio
@@ -304,7 +304,7 @@ async def test_delete_events_for_run(db_session: Session, test_run: AgentRun):
 async def test_get_event_count(db_session: Session, test_run: AgentRun):
     """Test getting event count with optional type filter."""
     # Create mixed event types
-    event_types = ["supervisor_started", "worker_spawned", "worker_complete", "supervisor_complete"]
+    event_types = ["concierge_started", "commis_spawned", "commis_complete", "concierge_complete"]
 
     for event_type in event_types:
         payload = {"event_type": event_type, "run_id": test_run.id}
@@ -320,10 +320,10 @@ async def test_get_event_count(db_session: Session, test_run: AgentRun):
     assert total == 4
 
     # Count by type
-    supervisor_count = EventStore.get_event_count(db_session, test_run.id, event_type="supervisor_started")
+    supervisor_count = EventStore.get_event_count(db_session, test_run.id, event_type="concierge_started")
     assert supervisor_count == 1
 
-    worker_count = EventStore.get_event_count(db_session, test_run.id, event_type="worker_spawned")
+    worker_count = EventStore.get_event_count(db_session, test_run.id, event_type="commis_spawned")
     assert worker_count == 1
 
 
@@ -339,7 +339,7 @@ async def test_datetime_serialization(db_session: Session, test_run: AgentRun):
     """Test that datetime objects in payloads are serialized correctly."""
     from datetime import timezone
     payload = {
-        "event_type": "supervisor_started",
+        "event_type": "concierge_started",
         "run_id": test_run.id,
         "timestamp": datetime.now(timezone.utc),
     }
@@ -348,7 +348,7 @@ async def test_datetime_serialization(db_session: Session, test_run: AgentRun):
     event_id = await emit_run_event(
         db=db_session,
         run_id=test_run.id,
-        event_type="supervisor_started",
+        event_type="concierge_started",
         payload=payload,
     )
 

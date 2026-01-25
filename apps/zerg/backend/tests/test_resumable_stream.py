@@ -132,10 +132,10 @@ async def collect_sse_events(response, max_events: int = 100) -> List[dict]:
 async def test_stream_replay_from_start(db_session, test_run, test_user, auth_headers):
     """Test replaying all events from the start of a run."""
     # Emit some historical events
-    await emit_run_event(db_session, test_run.id, "supervisor_started", {"task": "test task", "owner_id": test_user.id})
-    await emit_run_event(db_session, test_run.id, "supervisor_thinking", {"thought": "processing", "owner_id": test_user.id})
-    await emit_run_event(db_session, test_run.id, "supervisor_token", {"token": "Hello", "owner_id": test_user.id})
-    await emit_run_event(db_session, test_run.id, "supervisor_token", {"token": " world", "owner_id": test_user.id})
+    await emit_run_event(db_session, test_run.id, "concierge_started", {"task": "test task", "owner_id": test_user.id})
+    await emit_run_event(db_session, test_run.id, "concierge_thinking", {"thought": "processing", "owner_id": test_user.id})
+    await emit_run_event(db_session, test_run.id, "concierge_token", {"token": "Hello", "owner_id": test_user.id})
+    await emit_run_event(db_session, test_run.id, "concierge_token", {"token": " world", "owner_id": test_user.id})
 
     # Mark run as complete so stream closes after replay
     test_run.status = RunStatus.SUCCESS
@@ -153,14 +153,14 @@ async def test_stream_replay_from_start(db_session, test_run, test_user, auth_he
     assert len(events) >= 4, f"Expected at least 4 events, got {len(events)}: {events}"
 
     # Verify event structure
-    assert events[0]["event"] == "supervisor_started"
+    assert events[0]["event"] == "concierge_started"
     assert events[0]["data"]["payload"]["task"] == "test task"
     assert "id" in events[0]  # Event ID present for resumption
 
-    assert events[1]["event"] == "supervisor_thinking"
-    assert events[2]["event"] == "supervisor_token"
+    assert events[1]["event"] == "concierge_thinking"
+    assert events[2]["event"] == "concierge_token"
     assert events[2]["data"]["payload"]["token"] == "Hello"
-    assert events[3]["event"] == "supervisor_token"
+    assert events[3]["event"] == "concierge_token"
     assert events[3]["data"]["payload"]["token"] == " world"
 
 
@@ -168,9 +168,9 @@ async def test_stream_replay_from_start(db_session, test_run, test_user, auth_he
 async def test_stream_replay_from_event_id(db_session, test_run, test_user, auth_headers):
     """Test replaying events starting from a specific event ID."""
     # Emit historical events
-    event1_id = await emit_run_event(db_session, test_run.id, "supervisor_started", {"task": "test", "owner_id": test_user.id})
-    event2_id = await emit_run_event(db_session, test_run.id, "supervisor_thinking", {"thought": "thinking", "owner_id": test_user.id})
-    await emit_run_event(db_session, test_run.id, "supervisor_complete", {"result": "done", "owner_id": test_user.id})
+    event1_id = await emit_run_event(db_session, test_run.id, "concierge_started", {"task": "test", "owner_id": test_user.id})
+    event2_id = await emit_run_event(db_session, test_run.id, "concierge_thinking", {"thought": "thinking", "owner_id": test_user.id})
+    await emit_run_event(db_session, test_run.id, "concierge_complete", {"result": "done", "owner_id": test_user.id})
 
     # Mark run as complete
     test_run.status = RunStatus.SUCCESS
@@ -191,7 +191,7 @@ async def test_stream_replay_from_event_id(db_session, test_run, test_user, auth
 
     # Should only get event3 (after event2_id)
     assert len(events) >= 1
-    assert events[0]["event"] == "supervisor_complete"
+    assert events[0]["event"] == "concierge_complete"
     assert events[0]["data"]["payload"]["result"] == "done"
 
 
@@ -199,9 +199,9 @@ async def test_stream_replay_from_event_id(db_session, test_run, test_user, auth
 async def test_stream_with_last_event_id_header(db_session, test_run, test_user, auth_headers):
     """Test SSE standard Last-Event-ID header for automatic reconnect."""
     # Emit historical events
-    event1_id = await emit_run_event(db_session, test_run.id, "supervisor_started", {"task": "test", "owner_id": test_user.id})
-    await emit_run_event(db_session, test_run.id, "supervisor_thinking", {"thought": "thinking", "owner_id": test_user.id})
-    await emit_run_event(db_session, test_run.id, "supervisor_complete", {"result": "done", "owner_id": test_user.id})
+    event1_id = await emit_run_event(db_session, test_run.id, "concierge_started", {"task": "test", "owner_id": test_user.id})
+    await emit_run_event(db_session, test_run.id, "concierge_thinking", {"thought": "thinking", "owner_id": test_user.id})
+    await emit_run_event(db_session, test_run.id, "concierge_complete", {"result": "done", "owner_id": test_user.id})
 
     # Mark run as complete
     test_run.status = RunStatus.SUCCESS
@@ -219,18 +219,18 @@ async def test_stream_with_last_event_id_header(db_session, test_run, test_user,
 
     # Should get events after event1_id
     assert len(events) >= 2
-    assert events[0]["event"] == "supervisor_thinking"
-    assert events[1]["event"] == "supervisor_complete"
+    assert events[0]["event"] == "concierge_thinking"
+    assert events[1]["event"] == "concierge_complete"
 
 
 @pytest.mark.asyncio
 async def test_stream_exclude_tokens(db_session, test_run, test_user, auth_headers):
     """Test filtering out token events with include_tokens=false."""
     # Emit events including tokens
-    await emit_run_event(db_session, test_run.id, "supervisor_started", {"task": "test", "owner_id": test_user.id})
-    await emit_run_event(db_session, test_run.id, "supervisor_token", {"token": "Hello", "owner_id": test_user.id})
-    await emit_run_event(db_session, test_run.id, "supervisor_token", {"token": " world", "owner_id": test_user.id})
-    await emit_run_event(db_session, test_run.id, "supervisor_complete", {"result": "done", "owner_id": test_user.id})
+    await emit_run_event(db_session, test_run.id, "concierge_started", {"task": "test", "owner_id": test_user.id})
+    await emit_run_event(db_session, test_run.id, "concierge_token", {"token": "Hello", "owner_id": test_user.id})
+    await emit_run_event(db_session, test_run.id, "concierge_token", {"token": " world", "owner_id": test_user.id})
+    await emit_run_event(db_session, test_run.id, "concierge_complete", {"result": "done", "owner_id": test_user.id})
 
     # Mark run as complete
     test_run.status = RunStatus.SUCCESS
@@ -250,9 +250,9 @@ async def test_stream_exclude_tokens(db_session, test_run, test_user, auth_heade
     event_types = [e.get("event") for e in events if e.get("event") != "heartbeat"]
 
     # Should only get non-token events
-    assert "supervisor_started" in event_types
-    assert "supervisor_complete" in event_types
-    assert "supervisor_token" not in event_types
+    assert "concierge_started" in event_types
+    assert "concierge_complete" in event_types
+    assert "concierge_token" not in event_types
 
 
 # NOTE: DEFERRED run streaming is not unit-tested here because SSE streams for
@@ -280,8 +280,8 @@ async def test_stream_completed_run_closes_immediately(db_session, test_run, tes
     import time
 
     # Emit all events
-    await emit_run_event(db_session, test_run.id, "supervisor_started", {"task": "test", "owner_id": test_user.id})
-    await emit_run_event(db_session, test_run.id, "supervisor_complete", {"result": "done", "owner_id": test_user.id})
+    await emit_run_event(db_session, test_run.id, "concierge_started", {"task": "test", "owner_id": test_user.id})
+    await emit_run_event(db_session, test_run.id, "concierge_complete", {"result": "done", "owner_id": test_user.id})
 
     # Mark run as SUCCESS
     test_run.status = RunStatus.SUCCESS
@@ -304,18 +304,18 @@ async def test_stream_completed_run_closes_immediately(db_session, test_run, tes
     event_types = [e.get("event") for e in events if e.get("event") != "heartbeat"]
 
     # Should have all events
-    assert "supervisor_started" in event_types
-    assert "supervisor_complete" in event_types
+    assert "concierge_started" in event_types
+    assert "concierge_complete" in event_types
 
 
 @pytest.mark.asyncio
 async def test_stream_event_ids_are_monotonic(db_session, test_run, test_user, auth_headers):
     """Test that event IDs are monotonically increasing for resumption."""
     # Emit several events
-    await emit_run_event(db_session, test_run.id, "supervisor_started", {"task": "test", "owner_id": test_user.id})
-    await emit_run_event(db_session, test_run.id, "supervisor_thinking", {"thought": "a", "owner_id": test_user.id})
-    await emit_run_event(db_session, test_run.id, "supervisor_thinking", {"thought": "b", "owner_id": test_user.id})
-    await emit_run_event(db_session, test_run.id, "supervisor_complete", {"result": "done", "owner_id": test_user.id})
+    await emit_run_event(db_session, test_run.id, "concierge_started", {"task": "test", "owner_id": test_user.id})
+    await emit_run_event(db_session, test_run.id, "concierge_thinking", {"thought": "a", "owner_id": test_user.id})
+    await emit_run_event(db_session, test_run.id, "concierge_thinking", {"thought": "b", "owner_id": test_user.id})
+    await emit_run_event(db_session, test_run.id, "concierge_complete", {"result": "done", "owner_id": test_user.id})
 
     # Mark run as complete
     test_run.status = RunStatus.SUCCESS
@@ -338,10 +338,10 @@ async def test_stream_event_ids_are_monotonic(db_session, test_run, test_user, a
 async def test_stream_resumption_after_reconnect(db_session, test_run, test_user, auth_headers):
     """Test that reconnecting with Last-Event-ID doesn't miss events."""
     # Emit several events
-    await emit_run_event(db_session, test_run.id, "supervisor_started", {"task": "test", "owner_id": test_user.id})
-    event2_id = await emit_run_event(db_session, test_run.id, "supervisor_thinking", {"thought": "step1", "owner_id": test_user.id})
-    await emit_run_event(db_session, test_run.id, "supervisor_thinking", {"thought": "step2", "owner_id": test_user.id})
-    await emit_run_event(db_session, test_run.id, "supervisor_complete", {"result": "done", "owner_id": test_user.id})
+    await emit_run_event(db_session, test_run.id, "concierge_started", {"task": "test", "owner_id": test_user.id})
+    event2_id = await emit_run_event(db_session, test_run.id, "concierge_thinking", {"thought": "step1", "owner_id": test_user.id})
+    await emit_run_event(db_session, test_run.id, "concierge_thinking", {"thought": "step2", "owner_id": test_user.id})
+    await emit_run_event(db_session, test_run.id, "concierge_complete", {"result": "done", "owner_id": test_user.id})
 
     # Mark run as complete
     test_run.status = RunStatus.SUCCESS
@@ -367,5 +367,5 @@ async def test_stream_resumption_after_reconnect(db_session, test_run, test_user
 
     # Resumed should only have events after event2 (2 events: step2 thinking + complete)
     assert len(resumed_event_types) == 2
-    assert resumed_event_types[0] == "supervisor_thinking"
-    assert resumed_event_types[1] == "supervisor_complete"
+    assert resumed_event_types[0] == "concierge_thinking"
+    assert resumed_event_types[1] == "concierge_complete"

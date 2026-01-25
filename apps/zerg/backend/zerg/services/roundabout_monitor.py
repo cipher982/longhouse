@@ -569,13 +569,13 @@ class RoundaboutMonitor:
 
         # Subscribe to all tool event types
         self._event_subscription = handle_tool_event
-        event_bus.subscribe(EventType.WORKER_TOOL_STARTED, handle_tool_event)
-        event_bus.subscribe(EventType.WORKER_TOOL_COMPLETED, handle_tool_event)
-        event_bus.subscribe(EventType.WORKER_TOOL_FAILED, handle_tool_event)
+        event_bus.subscribe(EventType.COMMIS_TOOL_STARTED, handle_tool_event)
+        event_bus.subscribe(EventType.COMMIS_TOOL_COMPLETED, handle_tool_event)
+        event_bus.subscribe(EventType.COMMIS_TOOL_FAILED, handle_tool_event)
 
         # Phase 6: Subscribe to heartbeat events to track LLM reasoning progress
         self._heartbeat_subscription = handle_heartbeat_event
-        event_bus.subscribe(EventType.WORKER_HEARTBEAT, handle_heartbeat_event)
+        event_bus.subscribe(EventType.COMMIS_HEARTBEAT, handle_heartbeat_event)
 
         logger.debug(f"Subscribed to tool and heartbeat events for job {self.job_id}")
 
@@ -586,9 +586,9 @@ class RoundaboutMonitor:
 
         if self._event_subscription:
             try:
-                event_bus.unsubscribe(EventType.WORKER_TOOL_STARTED, self._event_subscription)
-                event_bus.unsubscribe(EventType.WORKER_TOOL_COMPLETED, self._event_subscription)
-                event_bus.unsubscribe(EventType.WORKER_TOOL_FAILED, self._event_subscription)
+                event_bus.unsubscribe(EventType.COMMIS_TOOL_STARTED, self._event_subscription)
+                event_bus.unsubscribe(EventType.COMMIS_TOOL_COMPLETED, self._event_subscription)
+                event_bus.unsubscribe(EventType.COMMIS_TOOL_FAILED, self._event_subscription)
                 logger.debug(f"Unsubscribed from tool events for job {self.job_id}")
             except Exception as e:
                 logger.debug(f"Error unsubscribing from events: {e}")
@@ -597,7 +597,7 @@ class RoundaboutMonitor:
         # Phase 6: Unsubscribe from heartbeat events
         if self._heartbeat_subscription:
             try:
-                event_bus.unsubscribe(EventType.WORKER_HEARTBEAT, self._heartbeat_subscription)
+                event_bus.unsubscribe(EventType.COMMIS_HEARTBEAT, self._heartbeat_subscription)
                 logger.debug(f"Unsubscribed from heartbeat events for job {self.job_id}")
             except Exception as e:
                 logger.debug(f"Error unsubscribing from heartbeat events: {e}")

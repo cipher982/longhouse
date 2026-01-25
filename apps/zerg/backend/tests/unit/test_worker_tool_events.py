@@ -1,7 +1,7 @@
 """Tests for worker tool event emission.
 
-These tests verify that tool events (WORKER_TOOL_STARTED, WORKER_TOOL_COMPLETED,
-WORKER_TOOL_FAILED) are emitted correctly when tools are executed in a worker context.
+These tests verify that tool events (COMMIS_TOOL_STARTED, COMMIS_TOOL_COMPLETED,
+COMMIS_TOOL_FAILED) are emitted correctly when tools are executed in a worker context.
 """
 
 from datetime import datetime
@@ -56,7 +56,7 @@ class TestWorkerToolEventEmission:
         """Test that tool events include all required fields."""
         # Create a test event payload matching what _call_tool_async creates
         event_data = {
-            "event_type": EventType.WORKER_TOOL_STARTED,
+            "event_type": EventType.COMMIS_TOOL_STARTED,
             "worker_id": worker_context.worker_id,
             "owner_id": worker_context.owner_id,
             "run_id": worker_context.run_id,
@@ -74,9 +74,9 @@ class TestWorkerToolEventEmission:
         assert "timestamp" in event_data
 
     def test_completed_event_includes_duration(self, worker_context):
-        """Test that WORKER_TOOL_COMPLETED includes duration_ms."""
+        """Test that COMMIS_TOOL_COMPLETED includes duration_ms."""
         event_data = {
-            "event_type": EventType.WORKER_TOOL_COMPLETED,
+            "event_type": EventType.COMMIS_TOOL_COMPLETED,
             "worker_id": worker_context.worker_id,
             "tool_name": "test_tool",
             "duration_ms": 150,
@@ -87,9 +87,9 @@ class TestWorkerToolEventEmission:
         assert event_data["duration_ms"] >= 0
 
     def test_failed_event_includes_error(self, worker_context):
-        """Test that WORKER_TOOL_FAILED includes error details."""
+        """Test that COMMIS_TOOL_FAILED includes error details."""
         event_data = {
-            "event_type": EventType.WORKER_TOOL_FAILED,
+            "event_type": EventType.COMMIS_TOOL_FAILED,
             "worker_id": worker_context.worker_id,
             "tool_name": "test_tool",
             "duration_ms": 50,
@@ -160,15 +160,15 @@ class TestEventTypeConstants:
 
     def test_worker_tool_event_types_exist(self):
         """Test that all worker tool event types are defined."""
-        assert hasattr(EventType, "WORKER_TOOL_STARTED")
-        assert hasattr(EventType, "WORKER_TOOL_COMPLETED")
-        assert hasattr(EventType, "WORKER_TOOL_FAILED")
+        assert hasattr(EventType, "COMMIS_TOOL_STARTED")
+        assert hasattr(EventType, "COMMIS_TOOL_COMPLETED")
+        assert hasattr(EventType, "COMMIS_TOOL_FAILED")
 
     def test_event_type_values(self):
         """Test that event type values are correct strings."""
-        assert EventType.WORKER_TOOL_STARTED == "worker_tool_started"
-        assert EventType.WORKER_TOOL_COMPLETED == "worker_tool_completed"
-        assert EventType.WORKER_TOOL_FAILED == "worker_tool_failed"
+        assert EventType.COMMIS_TOOL_STARTED == "commis_tool_started"
+        assert EventType.COMMIS_TOOL_COMPLETED == "commis_tool_completed"
+        assert EventType.COMMIS_TOOL_FAILED == "commis_tool_failed"
 
 
 class TestSecretRedactionIntegration:

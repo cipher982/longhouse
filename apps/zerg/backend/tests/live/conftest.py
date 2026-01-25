@@ -83,7 +83,7 @@ class SupervisorClient:
                         events.append({"type": event_type, "data": data})
 
                     # Check for completion
-                    if event_type == "supervisor_complete":
+                    if event_type == "concierge_complete":
                         completion_time = time.time()
 
                     # Grace period: drain trailing events after completion
@@ -130,7 +130,7 @@ class SupervisorClient:
                         data = data_str
 
                     # Handle Events - access nested payload
-                    if event_type == "supervisor_complete":
+                    if event_type == "concierge_complete":
                         if isinstance(data, dict):
                             # Result is nested in payload
                             return data.get("payload", {}).get("result", "")

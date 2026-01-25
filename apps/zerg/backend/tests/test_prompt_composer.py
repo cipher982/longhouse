@@ -357,7 +357,7 @@ class TestBuildSupervisorPrompt:
         assert "Google Calendar" in prompt
 
         # Check base template content is preserved
-        assert "Supervisor" in prompt
+        assert "Concierge" in prompt
         assert "spawn_commis" in prompt
         assert "Your Role" in prompt
 
@@ -373,7 +373,7 @@ class TestBuildSupervisorPrompt:
         assert "(No integrations configured)" in prompt
 
         # Base template should still be present
-        assert "Supervisor" in prompt
+        assert "Concierge" in prompt
         assert "spawn_commis" in prompt
 
     def test_build_supervisor_prompt_contains_required_sections(self):
@@ -382,10 +382,9 @@ class TestBuildSupervisorPrompt:
 
         prompt = build_supervisor_prompt(user)
 
-        # Check for key sections from base template
+        # Check for key sections from base template (now using Concierge/Commis terminology)
         assert "Your Role" in prompt
-        assert "Worker Lifecycle" in prompt or "When to Spawn Workers" in prompt
-        assert "Querying Past Work" in prompt
+        assert "commis" in prompt.lower()  # Should mention commis (worker replacement)
         assert "Response Style" in prompt
         assert "Error Handling" in prompt
 
@@ -397,7 +396,7 @@ class TestBuildSupervisorPrompt:
 
         # Should use defaults for all sections
         assert "(No user context configured)" in prompt
-        assert "Supervisor" in prompt
+        assert "Concierge" in prompt  # Now uses Concierge terminology
 
 
 # ---------------------------------------------------------------------------
@@ -433,8 +432,8 @@ class TestBuildWorkerPrompt:
         # Check user context
         assert "Charlie" in prompt
 
-        # Check base template content
-        assert "Worker" in prompt
+        # Check base template content (now uses Commis terminology)
+        assert "Commis" in prompt or "commis" in prompt
         assert "ssh_exec" in prompt
 
     @patch("zerg.prompts.composer.format_online_runners")
@@ -450,8 +449,8 @@ class TestBuildWorkerPrompt:
         assert "(No servers configured)" in prompt
         assert "(No user context configured)" in prompt
 
-        # Base template should still be present
-        assert "Worker" in prompt
+        # Base template should still be present (now uses Commis terminology)
+        assert "Commis" in prompt or "commis" in prompt
 
     @patch("zerg.prompts.composer.format_online_runners")
     def test_build_worker_prompt_contains_commands_section(self, mock_runners):
@@ -502,8 +501,8 @@ class TestBuildJarvisPrompt:
         # Check server names appear
         assert "clifford" in prompt
 
-        # Check base template
-        assert "Jarvis" in prompt
+        # Check base template (now uses Concierge terminology)
+        assert "Concierge" in prompt
 
     def test_build_jarvis_prompt_no_tools(self):
         """Test building prompt with no tools shows default message."""
@@ -514,8 +513,8 @@ class TestBuildJarvisPrompt:
         # Should show no tools message
         assert "(No direct tools currently enabled)" in prompt
 
-        # Base template should be present
-        assert "Jarvis" in prompt
+        # Base template should be present (now uses Concierge terminology)
+        assert "Concierge" in prompt
 
     def test_build_jarvis_prompt_limitations(self):
         """Test that limitations are shown for missing tools."""

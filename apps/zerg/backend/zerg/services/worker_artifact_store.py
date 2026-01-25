@@ -777,5 +777,32 @@ class WorkerArtifactStore:
         with open(metrics_path, "a") as f:
             f.write(json.dumps(metric) + "\n")
 
+    # ---------------------------------------------------------------------------
+    # Method aliases for new terminology (Phase 1 migration)
+    # These allow code to use new names while keeping internal names stable
+    # ---------------------------------------------------------------------------
+
+    def list_commis(
+        self,
+        status: str | None = None,
+        since: datetime | None = None,
+        limit: int = 50,
+        owner_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Alias for list_workers with commis terminology."""
+        return self.list_workers(status=status, since=since, limit=limit, owner_id=owner_id)
+
+    def read_commis_file(self, worker_id: str, relative_path: str) -> str:
+        """Alias for read_worker_file with commis terminology."""
+        return self.read_worker_file(worker_id, relative_path)
+
+    def get_commis_metadata(self, worker_id: str, owner_id: int | None = None) -> dict[str, Any] | None:
+        """Alias for get_worker_metadata with commis terminology."""
+        return self.get_worker_metadata(worker_id, owner_id)
+
+    def create_commis(self, task: str, config: dict[str, Any] | None = None, owner_id: int | None = None) -> str:
+        """Alias for create_worker with commis terminology."""
+        return self.create_worker(task, config, owner_id)
+
 
 __all__ = ["WorkerArtifactStore"]

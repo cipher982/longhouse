@@ -91,6 +91,17 @@ class CommisEmitter:
         """Always False - this is a commis emitter."""
         return False
 
+    # Backward-compat aliases
+    @property
+    def is_worker(self) -> bool:
+        """Backward-compat alias for is_commis."""
+        return self.is_commis
+
+    @property
+    def is_supervisor(self) -> bool:
+        """Backward-compat alias for is_concierge."""
+        return self.is_concierge
+
     def record_tool_start(
         self,
         tool_name: str,

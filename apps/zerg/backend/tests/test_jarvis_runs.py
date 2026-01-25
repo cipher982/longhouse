@@ -405,25 +405,25 @@ class TestGetRunTimeline:
         events = [
             AgentRunEvent(
                 run_id=run.id,
-                event_type="supervisor_started",
+                event_type="concierge_started",
                 payload={"message": "Starting supervisor"},
                 created_at=base_time,
             ),
             AgentRunEvent(
                 run_id=run.id,
-                event_type="supervisor_thinking",
+                event_type="concierge_thinking",
                 payload={"status": "analyzing"},
                 created_at=base_time + timedelta(milliseconds=100),
             ),
             AgentRunEvent(
                 run_id=run.id,
-                event_type="worker_spawned",
+                event_type="commis_spawned",
                 payload={"job_id": 1, "worker_type": "executor"},
                 created_at=base_time + timedelta(milliseconds=500),
             ),
             AgentRunEvent(
                 run_id=run.id,
-                event_type="worker_started",
+                event_type="commis_started",
                 payload={"worker_id": "worker-123"},
                 created_at=base_time + timedelta(milliseconds=700),
             ),
@@ -441,13 +441,13 @@ class TestGetRunTimeline:
             ),
             AgentRunEvent(
                 run_id=run.id,
-                event_type="worker_complete",
+                event_type="commis_complete",
                 payload={"result": "Success"},
                 created_at=base_time + timedelta(milliseconds=1600),
             ),
             AgentRunEvent(
                 run_id=run.id,
-                event_type="supervisor_complete",
+                event_type="concierge_complete",
                 payload={"final_result": "Task complete"},
                 created_at=base_time + timedelta(milliseconds=2000),
             ),
@@ -479,12 +479,12 @@ class TestGetRunTimeline:
         assert len(events) == 8  # All 8 events
 
         # First event should have offset 0
-        assert events[0]["phase"] == "supervisor_started"
+        assert events[0]["phase"] == "concierge_started"
         assert events[0]["offset_ms"] == 0
         assert events[0]["timestamp"] is not None
 
         # Last event should have highest offset
-        assert events[-1]["phase"] == "supervisor_complete"
+        assert events[-1]["phase"] == "concierge_complete"
         assert events[-1]["offset_ms"] > 0
 
         # Verify events are sorted by offset
@@ -602,19 +602,19 @@ class TestGetRunTimeline:
         events = [
             AgentRunEvent(
                 run_id=run.id,
-                event_type="supervisor_started",
+                event_type="concierge_started",
                 payload={},
                 created_at=base_time,
             ),
             AgentRunEvent(
                 run_id=run.id,
-                event_type="supervisor_thinking",
+                event_type="concierge_thinking",
                 payload={},
                 created_at=base_time + timedelta(milliseconds=200),
             ),
             AgentRunEvent(
                 run_id=run.id,
-                event_type="supervisor_complete",
+                event_type="concierge_complete",
                 payload={},
                 created_at=base_time + timedelta(milliseconds=800),
             ),

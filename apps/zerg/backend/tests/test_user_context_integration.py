@@ -194,8 +194,8 @@ class TestWorkerPromptIntegration:
         assert "Test User" in worker_prompt
         assert "developer" in worker_prompt
 
-        # Verify base worker template is present
-        assert "Worker" in worker_prompt
+        # Verify base worker template is present (now uses Commis terminology)
+        assert "Commis" in worker_prompt
         assert "ssh_exec" in worker_prompt
 
 
@@ -403,7 +403,7 @@ class TestContextEdgeCases:
         assert "(No servers configured)" in prompt
 
         # Should still have base template
-        assert "Supervisor" in prompt
+        assert "Concierge" in prompt
         assert "spawn_commis" in prompt
 
     def test_none_context_produces_valid_prompt(self, db_session, test_user):
@@ -415,7 +415,7 @@ class TestContextEdgeCases:
 
         # Should use defaults
         assert "(No user context configured)" in prompt
-        assert "Supervisor" in prompt
+        assert "Concierge" in prompt
 
     def test_context_with_special_characters(self, client, db_session, test_user):
         """Test that special characters in context are handled."""

@@ -2,7 +2,7 @@
 
 Tests verify:
 1. Timeout produces DEFERRED status (not FAILED)
-2. SUPERVISOR_DEFERRED event is emitted on timeout
+2. CONCIERGE_DEFERRED event is emitted on timeout
 3. Roundabout no longer cancels on no-progress (warn only)
 4. SSE stream closes on supervisor_deferred event
 5. Resume endpoint resumes WAITING runs when worker completes
@@ -71,7 +71,7 @@ class TestDurableRunsTimeout:
 
     @pytest.mark.asyncio
     async def test_timeout_emits_deferred_event(self, db_session, test_user, temp_artifact_path):
-        """Test that timeout emits SUPERVISOR_DEFERRED event, not ERROR."""
+        """Test that timeout emits CONCIERGE_DEFERRED event, not ERROR."""
         service = SupervisorService(db_session)
         events_received = []
 
@@ -81,7 +81,7 @@ class TestDurableRunsTimeout:
         async def capture_error(event_data):
             events_received.append(("error", event_data))
 
-        event_bus.subscribe(EventType.SUPERVISOR_DEFERRED, capture_deferred)
+        event_bus.subscribe(EventType.CONCIERGE_DEFERRED, capture_deferred)
         event_bus.subscribe(EventType.ERROR, capture_error)
 
         try:
@@ -100,7 +100,7 @@ class TestDurableRunsTimeout:
 
                 # Verify DEFERRED event was emitted
                 deferred_events = [e for e in events_received if e[0] == "deferred"]
-                assert len(deferred_events) >= 1, "SUPERVISOR_DEFERRED event should be emitted"
+                assert len(deferred_events) >= 1, "CONCIERGE_DEFERRED event should be emitted"
 
                 # Verify event contains expected fields
                 deferred_payload = deferred_events[0][1]
@@ -115,7 +115,7 @@ class TestDurableRunsTimeout:
                 assert len(timeout_errors) == 0, "ERROR event should not be emitted on timeout"
 
         finally:
-            event_bus.unsubscribe(EventType.SUPERVISOR_DEFERRED, capture_deferred)
+            event_bus.unsubscribe(EventType.CONCIERGE_DEFERRED, capture_deferred)
             event_bus.unsubscribe(EventType.ERROR, capture_error)
 
     @pytest.mark.asyncio
@@ -162,9 +162,9 @@ class TestDeferredEventTypes:
         assert RunStatus.WAITING.value == "waiting"
 
     def test_supervisor_deferred_event_exists(self):
-        """Verify SUPERVISOR_DEFERRED is a valid EventType."""
-        assert hasattr(EventType, "SUPERVISOR_DEFERRED")
-        assert EventType.SUPERVISOR_DEFERRED.value == "supervisor_deferred"
+        """Verify CONCIERGE_DEFERRED is a valid EventType."""
+        assert hasattr(EventType, "CONCIERGE_DEFERRED")
+        assert EventType.CONCIERGE_DEFERRED.value == "concierge_deferred"
 
 
 @pytest.mark.timeout(30)
@@ -350,8 +350,8 @@ class TestHeartbeatCounterReset:
     """Test that heartbeat events reset no-progress counter."""
 
     def test_heartbeat_event_exists(self):
-        """Verify WORKER_HEARTBEAT is a valid EventType."""
-        assert hasattr(EventType, "WORKER_HEARTBEAT")
+        """Verify COMMIS_HEARTBEAT is a valid EventType."""
+        assert hasattr(EventType, "COMMIS_HEARTBEAT")
 
     @pytest.mark.asyncio
     async def test_heartbeat_resets_no_progress_counter(
@@ -400,7 +400,7 @@ class TestHeartbeatCounterReset:
         try:
             # Emit heartbeat event
             await event_bus.publish(
-                EventType.WORKER_HEARTBEAT,
+                EventType.COMMIS_HEARTBEAT,
                 {
                     "job_id": job.id,
                     "activity": "llm_thinking",
@@ -425,7 +425,7 @@ class TestSSEDeferredHandling:
     """Test SSE stream behavior on deferred events."""
 
     def test_sse_event_types_include_deferred(self):
-        """Verify SSE subscribes to SUPERVISOR_DEFERRED event."""
+        """Verify SSE subscribes to CONCIERGE_DEFERRED event."""
         # This is a static check - the subscription is in jarvis_chat.py
         from zerg.routers.jarvis_chat import _chat_stream_generator
 

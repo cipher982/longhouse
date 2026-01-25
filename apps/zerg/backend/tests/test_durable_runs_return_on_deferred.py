@@ -29,14 +29,14 @@ class TestReturnOnDeferred:
         async def capture(event_data):
             events.append((event_data.get("event_type") or "event", event_data))
 
-        event_bus.subscribe(EventType.SUPERVISOR_DEFERRED, capture)
-        event_bus.subscribe(EventType.SUPERVISOR_COMPLETE, capture)
+        event_bus.subscribe(EventType.CONCIERGE_DEFERRED, capture)
+        event_bus.subscribe(EventType.CONCIERGE_COMPLETE, capture)
         event_bus.subscribe(EventType.ERROR, capture)
 
         yield events
 
-        event_bus.unsubscribe(EventType.SUPERVISOR_DEFERRED, capture)
-        event_bus.unsubscribe(EventType.SUPERVISOR_COMPLETE, capture)
+        event_bus.unsubscribe(EventType.CONCIERGE_DEFERRED, capture)
+        event_bus.unsubscribe(EventType.CONCIERGE_COMPLETE, capture)
         event_bus.unsubscribe(EventType.ERROR, capture)
 
     @pytest.mark.asyncio
@@ -69,9 +69,9 @@ class TestReturnOnDeferred:
         run = db_session.query(AgentRun).filter(AgentRun.id == result.run_id).first()
         assert run.status == RunStatus.DEFERRED
 
-        # Should have emitted SUPERVISOR_DEFERRED event
+        # Should have emitted CONCIERGE_DEFERRED event
         event_types = [e[0] for e in captured_events]
-        assert EventType.SUPERVISOR_DEFERRED in event_types
+        assert EventType.CONCIERGE_DEFERRED in event_types
 
     @pytest.mark.asyncio
     async def test_return_on_deferred_false_continues_to_success(
@@ -105,8 +105,8 @@ class TestReturnOnDeferred:
 
         # Should have both DEFERRED and COMPLETE events
         event_types = [e[0] for e in captured_events]
-        assert EventType.SUPERVISOR_DEFERRED in event_types
-        assert EventType.SUPERVISOR_COMPLETE in event_types
+        assert EventType.CONCIERGE_DEFERRED in event_types
+        assert EventType.CONCIERGE_COMPLETE in event_types
 
     @pytest.mark.asyncio
     async def test_return_on_deferred_false_continues_to_failure(
@@ -141,7 +141,7 @@ class TestReturnOnDeferred:
 
         # Should have DEFERRED and ERROR events
         event_types = [e[0] for e in captured_events]
-        assert EventType.SUPERVISOR_DEFERRED in event_types
+        assert EventType.CONCIERGE_DEFERRED in event_types
         assert EventType.ERROR in event_types
 
     @pytest.mark.asyncio
@@ -169,5 +169,5 @@ class TestReturnOnDeferred:
 
         # Should NOT have DEFERRED event
         event_types = [e[0] for e in captured_events]
-        assert EventType.SUPERVISOR_DEFERRED not in event_types
-        assert EventType.SUPERVISOR_COMPLETE in event_types
+        assert EventType.CONCIERGE_DEFERRED not in event_types
+        assert EventType.CONCIERGE_COMPLETE in event_types

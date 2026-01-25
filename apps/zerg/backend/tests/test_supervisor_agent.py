@@ -91,7 +91,7 @@ class TestSupervisorConfiguration:
         prompt = get_supervisor_prompt()
 
         # Verify key concepts are present
-        assert "Supervisor" in prompt
+        assert "Concierge" in prompt
         assert "spawn_commis" in prompt
         assert "list_commis" in prompt
         assert "worker" in prompt.lower()

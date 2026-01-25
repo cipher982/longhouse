@@ -163,9 +163,9 @@ class TestSupervisorServiceDirect:
             events_received.append(event_data)
 
         # Subscribe to events
-        event_bus.subscribe(EventType.SUPERVISOR_STARTED, capture_event)
-        event_bus.subscribe(EventType.SUPERVISOR_THINKING, capture_event)
-        event_bus.subscribe(EventType.SUPERVISOR_COMPLETE, capture_event)
+        event_bus.subscribe(EventType.CONCIERGE_STARTED, capture_event)
+        event_bus.subscribe(EventType.CONCIERGE_THINKING, capture_event)
+        event_bus.subscribe(EventType.CONCIERGE_COMPLETE, capture_event)
 
         try:
             result = await service.run_supervisor(
@@ -177,15 +177,15 @@ class TestSupervisorServiceDirect:
             # Give events time to propagate
             await asyncio.sleep(0.1)
 
-            # Should have received SUPERVISOR_STARTED at minimum
+            # Should have received CONCIERGE_STARTED at minimum
             event_types = [e.get("event_type") for e in events_received]
-            assert EventType.SUPERVISOR_STARTED in event_types or any("SUPERVISOR" in str(et) for et in event_types)
+            assert EventType.CONCIERGE_STARTED in event_types or any("SUPERVISOR" in str(et) for et in event_types)
 
         finally:
             # Unsubscribe
-            event_bus.unsubscribe(EventType.SUPERVISOR_STARTED, capture_event)
-            event_bus.unsubscribe(EventType.SUPERVISOR_THINKING, capture_event)
-            event_bus.unsubscribe(EventType.SUPERVISOR_COMPLETE, capture_event)
+            event_bus.unsubscribe(EventType.CONCIERGE_STARTED, capture_event)
+            event_bus.unsubscribe(EventType.CONCIERGE_THINKING, capture_event)
+            event_bus.unsubscribe(EventType.CONCIERGE_COMPLETE, capture_event)
 
     @pytest.mark.asyncio
     async def test_supervisor_thread_persists_across_calls(self, db_session, test_user, temp_artifact_path):

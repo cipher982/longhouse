@@ -699,16 +699,16 @@ async def wait_for_worker_async(
             return f"Worker job {job_id} completed."
 
         # Job is still queued or running - raise interrupt to wait
-        logger.info(f"[WAIT-FOR-WORKER] Blocking for job {job_id} (status: {job.status})")
+        logger.info(f"[WAIT-FOR-COMMIS] Blocking for job {job_id} (status: {job.status})")
 
-        # Raise AgentInterrupted to pause supervisor
+        # Raise AgentInterrupted to pause concierge
         raise AgentInterrupted(
             {
-                "type": "wait_for_worker",
+                "type": "wait_for_commis",
                 "job_id": job_id_int,
                 "task": job.task[:100],
                 "tool_call_id": _tool_call_id,
-                "message": f"Waiting for worker job {job_id} to complete...",
+                "message": f"Waiting for commis job {job_id} to complete...",
             }
         )
 
@@ -1353,6 +1353,29 @@ def get_supervisor_allowed_tools() -> list[str]:
 # Aliases for new terminology (Phase 1 migration)
 # These allow code to import with new names while keeping internal names stable
 # ---------------------------------------------------------------------------
+
+# Async function aliases
 spawn_commis_async = spawn_standard_worker_async
 spawn_workspace_commis_async = spawn_workspace_worker_async
 wait_for_commis_async = wait_for_worker_async
+list_commis_async = list_workers_async
+get_commis_evidence_async = get_worker_evidence_async
+get_commis_metadata_async = get_worker_metadata_async
+read_commis_result_async = read_worker_result_async
+read_commis_file_async = read_worker_file_async
+grep_commis_async = grep_workers_async
+check_commis_status_async = check_worker_status_async
+cancel_commis_async = cancel_worker_async
+
+# Sync function aliases
+spawn_commis = spawn_worker
+spawn_workspace_commis = spawn_workspace_worker
+wait_for_commis = wait_for_worker
+list_commis = list_workers
+get_commis_evidence = get_worker_evidence
+get_commis_metadata = get_worker_metadata
+read_commis_result = read_worker_result
+read_commis_file = read_worker_file
+grep_commis = grep_workers
+check_commis_status = check_worker_status
+cancel_commis = cancel_worker

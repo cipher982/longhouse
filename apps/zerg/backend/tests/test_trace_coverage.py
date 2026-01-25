@@ -64,14 +64,14 @@ def test_trace_coverage_report_counts(db_session, sample_agent, sample_thread, _
     db_session.add(
         AgentRunEvent(
             run_id=run.id,
-            event_type="supervisor_started",
+            event_type="concierge_started",
             payload={"trace_id": str(trace_id), "run_id": run.id},
         )
     )
     db_session.add(
         AgentRunEvent(
             run_id=run.id,
-            event_type="worker_started",
+            event_type="commis_started",
             payload={"run_id": run.id},
         )
     )
@@ -91,5 +91,5 @@ def test_trace_coverage_report_counts(db_session, sample_agent, sample_thread, _
     assert buckets["agent_run_events"]["pct"] == 50.0
 
     event_types = {bucket["name"]: bucket for bucket in report["event_types"]}
-    assert event_types["supervisor_started"]["with_trace"] == 1
-    assert event_types["worker_started"]["with_trace"] == 0
+    assert event_types["concierge_started"]["with_trace"] == 1
+    assert event_types["commis_started"]["with_trace"] == 0

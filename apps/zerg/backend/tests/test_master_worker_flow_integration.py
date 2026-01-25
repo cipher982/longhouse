@@ -90,7 +90,7 @@ async def test_supervisor_worker_interrupt_resume_flow(
     async def consume_stream() -> None:
         async for evt in stream_run_events(run.id, test_user.id):
             events.append(evt)
-            if evt.get("event") == "supervisor_complete":
+            if evt.get("event") == "concierge_complete":
                 break
 
     consumer_task = asyncio.create_task(consume_stream())
@@ -138,7 +138,7 @@ async def test_supervisor_worker_interrupt_resume_flow(
     await emit_run_event(
         db=db_session,
         run_id=run.id,
-        event_type="worker_complete",
+        event_type="commis_complete",
         payload={
             "job_id": worker_job.id,
             "worker_id": "test-worker-1",
@@ -171,7 +171,7 @@ async def test_supervisor_worker_interrupt_resume_flow(
         await emit_run_event(
             db=db,
             run_id=run_id,
-            event_type="supervisor_complete",
+            event_type="concierge_complete",
             payload={
                 "thread_id": thread.id,
                 "result": f"Based on the worker's findings: {worker_result}",
@@ -212,7 +212,7 @@ async def test_supervisor_worker_interrupt_resume_flow(
     # Verify supervisor_waiting event was emitted (new pattern)
     waiting_payload = None
     for event_name, payload, _wrapper in parsed:
-        if event_name == "supervisor_waiting":
+        if event_name == "concierge_waiting":
             waiting_payload = payload
             break
     assert waiting_payload is not None
@@ -221,7 +221,7 @@ async def test_supervisor_worker_interrupt_resume_flow(
     # Verify supervisor_complete event was emitted
     complete_payload = None
     for event_name, payload, _wrapper in parsed:
-        if event_name == "supervisor_complete":
+        if event_name == "concierge_complete":
             complete_payload = payload
             break
     assert complete_payload is not None

@@ -45,7 +45,7 @@ def get_supervisor_result(events: list) -> str:
         The final result message
     """
     for event in reversed(events):
-        if event["type"] == "supervisor_complete":
+        if event["type"] == "concierge_complete":
             # Access result from nested payload
             payload = event["data"].get("payload", {})
             return payload.get("result", "")

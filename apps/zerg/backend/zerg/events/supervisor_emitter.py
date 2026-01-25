@@ -55,6 +55,17 @@ class ConciergeEmitter:
         """Always True - this is a concierge emitter."""
         return True
 
+    # Backward-compat aliases
+    @property
+    def is_worker(self) -> bool:
+        """Backward-compat alias for is_commis."""
+        return self.is_commis
+
+    @property
+    def is_supervisor(self) -> bool:
+        """Backward-compat alias for is_concierge."""
+        return self.is_concierge
+
     async def emit_tool_started(
         self,
         tool_name: str,

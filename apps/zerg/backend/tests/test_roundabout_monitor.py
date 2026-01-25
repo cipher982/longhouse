@@ -54,13 +54,13 @@ async def test_roundabout_records_tool_events(monkeypatch, db_session, tmp_path)
 
         # Emit tool events
         await event_bus.publish(
-            EventType.WORKER_TOOL_STARTED,
-            {"event_type": EventType.WORKER_TOOL_STARTED, "job_id": job.id, "tool_name": "http_request"},
+            EventType.COMMIS_TOOL_STARTED,
+            {"event_type": EventType.COMMIS_TOOL_STARTED, "job_id": job.id, "tool_name": "http_request"},
         )
         await event_bus.publish(
-            EventType.WORKER_TOOL_COMPLETED,
+            EventType.COMMIS_TOOL_COMPLETED,
             {
-                "event_type": EventType.WORKER_TOOL_COMPLETED,
+                "event_type": EventType.COMMIS_TOOL_COMPLETED,
                 "job_id": job.id,
                 "tool_name": "http_request",
                 "duration_ms": 1200,
@@ -307,9 +307,9 @@ async def test_roundabout_warns_but_continues_on_no_progress(monkeypatch, db_ses
         # Emit a tool event to satisfy the "has_tool_activity" guard
         # After this, no more events will come (simulating "stuck after tool started")
         await event_bus.publish(
-            EventType.WORKER_TOOL_STARTED,
+            EventType.COMMIS_TOOL_STARTED,
             {
-                "event_type": EventType.WORKER_TOOL_STARTED,
+                "event_type": EventType.COMMIS_TOOL_STARTED,
                 "job_id": job.id,
                 "worker_id": worker_id,
                 "tool_name": "stuck_tool",
@@ -358,9 +358,9 @@ async def test_roundabout_correlates_events_by_job_id(monkeypatch, db_session, t
 
         # Emit event WITH job_id - should be recorded
         await event_bus.publish(
-            EventType.WORKER_TOOL_STARTED,
+            EventType.COMMIS_TOOL_STARTED,
             {
-                "event_type": EventType.WORKER_TOOL_STARTED,
+                "event_type": EventType.COMMIS_TOOL_STARTED,
                 "job_id": job.id,  # Critical: includes job_id
                 "worker_id": worker_id,
                 "owner_id": 1,
@@ -370,9 +370,9 @@ async def test_roundabout_correlates_events_by_job_id(monkeypatch, db_session, t
 
         # Emit event with WRONG job_id - should be ignored
         await event_bus.publish(
-            EventType.WORKER_TOOL_STARTED,
+            EventType.COMMIS_TOOL_STARTED,
             {
-                "event_type": EventType.WORKER_TOOL_STARTED,
+                "event_type": EventType.COMMIS_TOOL_STARTED,
                 "job_id": 99999,  # Different job
                 "worker_id": "other-worker",
                 "owner_id": 1,
@@ -382,9 +382,9 @@ async def test_roundabout_correlates_events_by_job_id(monkeypatch, db_session, t
 
         # Emit event with NO job_id - should be ignored (regression test)
         await event_bus.publish(
-            EventType.WORKER_TOOL_STARTED,
+            EventType.COMMIS_TOOL_STARTED,
             {
-                "event_type": EventType.WORKER_TOOL_STARTED,
+                "event_type": EventType.COMMIS_TOOL_STARTED,
                 "worker_id": worker_id,  # Same worker but no job_id
                 "owner_id": 1,
                 "tool_name": "also_should_not_appear",
@@ -393,9 +393,9 @@ async def test_roundabout_correlates_events_by_job_id(monkeypatch, db_session, t
 
         # Complete the worker
         await event_bus.publish(
-            EventType.WORKER_TOOL_COMPLETED,
+            EventType.COMMIS_TOOL_COMPLETED,
             {
-                "event_type": EventType.WORKER_TOOL_COMPLETED,
+                "event_type": EventType.COMMIS_TOOL_COMPLETED,
                 "job_id": job.id,
                 "worker_id": worker_id,
                 "tool_name": "http_request",
