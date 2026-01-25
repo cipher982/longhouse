@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { useAuth } from "../lib/auth";
 import config from "../lib/config";
@@ -36,6 +36,7 @@ interface AdminUserRow {
   role: string;
   is_active: boolean;
   created_at: string | null;
+  is_demo?: boolean;
   usage: AdminUserUsage;
 }
 
@@ -191,6 +192,62 @@ async function fetchUserDetail(
   }
 
   return response.json();
+}
+
+interface DemoUserCreateRequest {
+  email?: string;
+  display_name?: string;
+}
+
+interface DemoUserResponse {
+  id: number;
+  email: string;
+  display_name: string | null;
+  is_demo: boolean;
+}
+
+async function createDemoUser(request: DemoUserCreateRequest): Promise<DemoUserResponse> {
+  const response = await fetch(`${config.apiBaseUrl}/admin/demo-users`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || "Failed to create demo user");
+  }
+
+  return response.json();
+}
+
+async function seedScenarioForUser(request: { name: string; owner_email: string; clean: boolean }): Promise<void> {
+  const response = await fetch(`${config.apiBaseUrl}/admin/seed-scenario`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || "Failed to seed scenario");
+  }
+}
+
+async function impersonateUser(request: { user_id: number }): Promise<void> {
+  const response = await fetch(`${config.apiBaseUrl}/auth/impersonate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || "Failed to impersonate user");
+  }
 }
 
 // Metric card component
@@ -437,6 +494,9 @@ function UsersTable({
                 {user.display_name && (
                   <span className="user-display-name">{user.display_name}</span>
                 )}
+                {user.is_demo && (
+                  <Badge variant="warning" className="user-demo-badge">Demo</Badge>
+                )}
               </div>
             </Table.Cell>
             <Table.Cell>
@@ -594,6 +654,7 @@ function UserDetailModal({
 
 function AdminPage() {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const metricColors = {
     success: "var(--color-intent-success)",
     warning: "var(--color-intent-warning)",
@@ -618,6 +679,10 @@ function AdminPage() {
   const [usersSortOrder, setUsersSortOrder] = useState("desc");
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
   const [userDetailOpen, setUserDetailOpen] = useState(false);
+  const [demoEmail, setDemoEmail] = useState("");
+  const [demoDisplayName, setDemoDisplayName] = useState("");
+  const [demoScenario, setDemoScenario] = useState("swarm-mvp");
+  const [selectedDemoUserId, setSelectedDemoUserId] = useState<number | null>(null);
 
   // Ops summary query - FIXED: Move ALL hooks before any conditional logic
   const { data: summary, isLoading: summaryLoading, error: summaryError } = useQuery({
@@ -641,6 +706,16 @@ function AdminPage() {
     enabled: !!user,
     refetchInterval: 60000, // Refresh every minute
   });
+
+  const demoUsers = useMemo(() => {
+    return (usersData?.users ?? []).filter((demoUser) => demoUser.is_demo);
+  }, [usersData]);
+
+  useEffect(() => {
+    if (!selectedDemoUserId && demoUsers.length > 0) {
+      setSelectedDemoUserId(demoUsers[0].id);
+    }
+  }, [demoUsers, selectedDemoUserId]);
 
   useEffect(() => {
     if (summaryLoading || usersLoading) {
@@ -667,6 +742,40 @@ function AdminPage() {
     },
   });
 
+  const createDemoMutation = useMutation({
+    mutationFn: createDemoUser,
+    onSuccess: () => {
+      toast.success("Demo account ready");
+      setDemoEmail("");
+      setDemoDisplayName("");
+      queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to create demo account");
+    },
+  });
+
+  const seedScenarioMutation = useMutation({
+    mutationFn: seedScenarioForUser,
+    onSuccess: () => {
+      toast.success("Demo scenario seeded");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to seed scenario");
+    },
+  });
+
+  const impersonateMutation = useMutation({
+    mutationFn: impersonateUser,
+    onSuccess: () => {
+      toast.success("Switched to demo account");
+      window.location.assign("/dashboard");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to switch accounts");
+    },
+  });
+
   // Handle permission errors - FIXED: Move ALL hooks before conditional logic
   React.useEffect(() => {
     if (summaryError instanceof Error && summaryError.message.includes("Admin access required")) {
@@ -688,6 +797,45 @@ function AdminPage() {
   const handleUserClick = (userId: number) => {
     setSelectedUserId(userId);
     setUserDetailOpen(true);
+  };
+
+  const handleCreateDemo = () => {
+    createDemoMutation.mutate({
+      email: demoEmail.trim() || undefined,
+      display_name: demoDisplayName.trim() || undefined,
+    });
+  };
+
+  const handleSeedDemo = (userId?: number | null) => {
+    const targetId = userId ?? selectedDemoUserId;
+    if (!targetId) {
+      toast.error("Select a demo account first");
+      return;
+    }
+    const demoUser = demoUsers.find((item) => item.id === targetId);
+    if (!demoUser) {
+      toast.error("Demo account not found");
+      return;
+    }
+    const scenarioName = demoScenario.trim();
+    if (!scenarioName) {
+      toast.error("Enter a scenario name to seed");
+      return;
+    }
+    seedScenarioMutation.mutate({
+      name: scenarioName,
+      owner_email: demoUser.email,
+      clean: true,
+    });
+  };
+
+  const handleImpersonate = (userId?: number | null) => {
+    const targetId = userId ?? selectedDemoUserId;
+    if (!targetId) {
+      toast.error("Select a demo account first");
+      return;
+    }
+    impersonateMutation.mutate({ user_id: targetId });
   };
 
   // Check if user is admin (this should be checked by the router, but let's be safe)
@@ -855,6 +1003,120 @@ function AdminPage() {
                 />
               ) : (
                 <div className="admin-empty-state">No users found</div>
+              )}
+            </Card.Body>
+          </Card>
+
+          {/* Demo Accounts */}
+          <Card>
+            <Card.Header>
+              <h3 className="admin-section-title ui-section-title">Demo Accounts</h3>
+            </Card.Header>
+            <Card.Body>
+              <p className="section-description admin-section-description">
+                Create demo users, seed baseline scenarios, and switch into their view safely.
+              </p>
+              <div className="admin-demo-form">
+                <input
+                  className="ui-input admin-demo-input"
+                  placeholder="demo+name@swarmlet.demo (optional)"
+                  value={demoEmail}
+                  onChange={(event) => setDemoEmail(event.target.value)}
+                />
+                <input
+                  className="ui-input admin-demo-input"
+                  placeholder="Display name (optional)"
+                  value={demoDisplayName}
+                  onChange={(event) => setDemoDisplayName(event.target.value)}
+                />
+                <Button onClick={handleCreateDemo} disabled={createDemoMutation.isPending}>
+                  {createDemoMutation.isPending ? "Creating..." : "Create demo account"}
+                </Button>
+              </div>
+
+              <div className="admin-demo-seed">
+                <label className="admin-window-label">Baseline scenario</label>
+                <input
+                  className="ui-input admin-demo-input"
+                  placeholder="swarm-mvp"
+                  value={demoScenario}
+                  onChange={(event) => setDemoScenario(event.target.value)}
+                />
+                <Button
+                  variant="secondary"
+                  onClick={() => handleSeedDemo()}
+                  disabled={seedScenarioMutation.isPending || !selectedDemoUserId}
+                >
+                  {seedScenarioMutation.isPending ? "Seeding..." : "Seed selected demo"}
+                </Button>
+                <Button
+                  variant="primary"
+                  onClick={() => handleImpersonate()}
+                  disabled={impersonateMutation.isPending || !selectedDemoUserId}
+                >
+                  {impersonateMutation.isPending ? "Switching..." : "View as demo"}
+                </Button>
+              </div>
+
+              <div className="admin-demo-select">
+                <label className="admin-window-label">Selected demo</label>
+                <select
+                  className="ui-input admin-demo-select-input"
+                  value={selectedDemoUserId ?? ""}
+                  onChange={(event) => setSelectedDemoUserId(Number(event.target.value))}
+                >
+                  {demoUsers.length === 0 ? (
+                    <option value="">No demo users</option>
+                  ) : (
+                    demoUsers.map((demoUser) => (
+                      <option key={demoUser.id} value={demoUser.id}>
+                        {demoUser.email}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </div>
+
+              {demoUsers.length === 0 ? (
+                <div className="admin-empty-state">No demo users yet</div>
+              ) : (
+                <Table>
+                  <Table.Header>
+                    <Table.Row>
+                      <Table.Cell isHeader>Email</Table.Cell>
+                      <Table.Cell isHeader>Display name</Table.Cell>
+                      <Table.Cell isHeader>Actions</Table.Cell>
+                    </Table.Row>
+                  </Table.Header>
+                  <Table.Body>
+                    {demoUsers.map((demoUser) => (
+                      <Table.Row key={demoUser.id}>
+                        <Table.Cell>{demoUser.email}</Table.Cell>
+                        <Table.Cell>{demoUser.display_name || "—"}</Table.Cell>
+                        <Table.Cell>
+                          <div className="admin-demo-actions">
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => handleSeedDemo(demoUser.id)}
+                              disabled={seedScenarioMutation.isPending}
+                            >
+                              Seed baseline
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="primary"
+                              onClick={() => handleImpersonate(demoUser.id)}
+                              disabled={impersonateMutation.isPending}
+                            >
+                              View as
+                            </Button>
+                          </div>
+                        </Table.Cell>
+                      </Table.Row>
+                    ))}
+                  </Table.Body>
+                </Table>
               )}
             </Card.Body>
           </Card>

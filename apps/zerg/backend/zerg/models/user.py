@@ -72,6 +72,12 @@ class User(Base):
     # -------------------------------------------------------------------
 
     @property
+    def is_demo(self) -> bool:
+        """Return True if this user is marked as a demo account."""
+        prefs = self.prefs or {}
+        return bool(prefs.get("demo") or prefs.get("is_demo"))
+
+    @property
     def gmail_connected(self) -> bool:  # noqa: D401 – simple boolean accessor
         """Return *True* if the user granted offline Gmail access (refresh token stored)."""
 

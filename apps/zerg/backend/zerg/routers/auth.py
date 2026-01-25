@@ -15,12 +15,14 @@ from fastapi import HTTPException
 from fastapi import Request
 from fastapi import Response
 from fastapi import status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
 from zerg.crud import crud
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
+from zerg.dependencies.auth import require_super_admin
 from zerg.schemas.schemas import TokenOut
 
 # Use override=True to ensure proper quote stripping even if vars are inherited from parent process
@@ -125,6 +127,7 @@ def _issue_access_token(
     display_name: Optional[str] = None,
     avatar_url: Optional[str] = None,
     expires_delta: timedelta = timedelta(minutes=30),
+    extra_claims: Optional[dict[str, Any]] = None,
 ) -> str:
     """Return signed HS256 access token including *optional* profile fields.
 
@@ -181,7 +184,26 @@ def _issue_access_token(
 
     if avatar_url is not None:
         payload["avatar_url"] = avatar_url
+    if extra_claims:
+        payload.update(extra_claims)
     return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+
+def _decode_access_token(token: str) -> dict[str, Any]:
+    """Decode HS256 access token with jose fallback."""
+    try:
+        from jose import jwt  # type: ignore
+
+        return jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+    except ModuleNotFoundError:
+        from zerg.auth.strategy import _decode_jwt_fallback
+
+        return _decode_jwt_fallback(token, JWT_SECRET)
+
+
+class ImpersonateRequest(BaseModel):
+    user_id: Optional[int] = None
+    email: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -466,6 +488,91 @@ def verify_session(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
 
     # Valid token and user - 204 response handled by status_code
+
+
+@router.post("/impersonate")
+def impersonate_user(
+    request: ImpersonateRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_super_admin),
+):
+    """Start impersonating another user (admin-only)."""
+    target_user = None
+    if request.user_id is not None:
+        target_user = crud.get_user(db, int(request.user_id))
+    elif request.email:
+        target_user = crud.get_user_by_email(db, request.email)
+
+    if target_user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    expires_in = 30 * 60  # 30 minutes
+    access_token = _issue_access_token(
+        target_user.id,
+        target_user.email,
+        display_name=target_user.display_name,
+        avatar_url=target_user.avatar_url,
+        extra_claims={
+            "impersonator_id": current_user.id,
+            "impersonator_email": current_user.email,
+        },
+    )
+
+    _set_session_cookie(response, access_token, expires_in)
+
+    return {
+        "message": "Impersonation started",
+        "user": {
+            "id": target_user.id,
+            "email": target_user.email,
+            "display_name": target_user.display_name,
+            "is_demo": getattr(target_user, "is_demo", False),
+        },
+    }
+
+
+@router.post("/impersonate/stop")
+def stop_impersonation(request: Request, response: Response, db: Session = Depends(get_db)):
+    """Stop impersonation and restore the original admin session."""
+    token = request.cookies.get(SESSION_COOKIE_NAME)
+
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No session")
+
+    try:
+        payload = _decode_access_token(token)
+    except Exception:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
+
+    impersonator_id = payload.get("impersonator_id")
+    if impersonator_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Not impersonating")
+
+    try:
+        admin_id = int(impersonator_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid impersonator ID")
+
+    admin_user = crud.get_user(db, admin_id)
+    if admin_user is None or getattr(admin_user, "role", "USER") != "ADMIN":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Impersonator no longer authorized")
+
+    expires_in = 30 * 60
+    access_token = _issue_access_token(
+        admin_user.id,
+        admin_user.email,
+        display_name=admin_user.display_name,
+        avatar_url=admin_user.avatar_url,
+    )
+
+    _set_session_cookie(response, access_token, expires_in)
+    return {"message": "Impersonation stopped"}
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)

@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 # Centralised settings
 from zerg.config import get_settings
+from zerg.crud import crud
 from zerg.database import DB_SCHEMA
 
 # Database helpers
@@ -73,6 +74,14 @@ class ScenarioSeedRequest(BaseModel):
 
     name: str
     clean: bool = True
+    owner_email: str | None = None
+
+
+class DemoUserCreateRequest(BaseModel):
+    """Request model for creating or marking demo users."""
+
+    email: str | None = None
+    display_name: str | None = None
 
 
 class SuperAdminStatusResponse(BaseModel):
@@ -255,13 +264,85 @@ async def seed_scenario_data(
 ):
     """Seed deterministic scenario data for demos and E2E tests."""
     settings = get_settings()
+    target_user = current_user
+
+    if request.owner_email:
+        target_user = crud.get_user_by_email(db, request.owner_email)
+        if target_user is None:
+            raise HTTPException(status_code=404, detail="Owner email not found")
+
     if settings.environment and settings.environment.lower() == "production":
-        raise HTTPException(status_code=403, detail="Scenario seeding is disabled in production")
+        prefs = getattr(target_user, "prefs", None) or {}
+        is_demo = bool(prefs.get("demo") or prefs.get("is_demo"))
+        if not is_demo:
+            raise HTTPException(status_code=403, detail="Scenario seeding is restricted to demo users in production")
 
     from zerg.scenarios.seed import seed_scenario
 
-    result = seed_scenario(db, request.name, owner_id=current_user.id, clean=request.clean)
+    result = seed_scenario(db, request.name, owner_id=target_user.id, clean=request.clean)
     return JSONResponse(content=result)
+
+
+@router.post("/demo-users")
+async def create_demo_user(
+    request: DemoUserCreateRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_super_admin),
+):
+    """Create (or mark) a demo user account."""
+    import uuid
+
+    email = (request.email or "").strip().lower()
+    if not email:
+        email = f"demo+{uuid.uuid4().hex[:8]}@swarmlet.demo"
+
+    user = crud.get_user_by_email(db, email)
+    if user is not None:
+        prefs = getattr(user, "prefs", None) or {}
+        is_demo = bool(prefs.get("demo") or prefs.get("is_demo"))
+        if not is_demo:
+            raise HTTPException(status_code=409, detail="User already exists and is not marked as demo")
+        if request.display_name:
+            user.display_name = request.display_name
+        prefs["demo"] = True
+        user.prefs = prefs
+        db.commit()
+        db.refresh(user)
+        return JSONResponse(
+            content={
+                "id": user.id,
+                "email": user.email,
+                "display_name": user.display_name,
+                "is_demo": True,
+            }
+        )
+
+    from zerg.models.models import User
+    from zerg.utils.time import utc_now_naive
+
+    user = User(
+        email=email,
+        provider="demo",
+        provider_user_id=email,
+        role="USER",
+        is_active=True,
+        display_name=request.display_name or "Demo User",
+        prefs={"demo": True},
+        created_at=utc_now_naive(),
+        updated_at=utc_now_naive(),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    return JSONResponse(
+        content={
+            "id": user.id,
+            "email": user.email,
+            "display_name": user.display_name,
+            "is_demo": True,
+        }
+    )
 
 
 def _reset_database_sync(request: DatabaseResetRequest, current_user, worker_id: str | None):
