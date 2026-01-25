@@ -21,8 +21,8 @@ class UsageData(BaseModel):
     total_tokens: Optional[int] = Field(default=None, ge=0, description='')
     reasoning_tokens: Optional[int] = Field(default=None, ge=0, description='Reasoning tokens (OpenAI o1/o3 models)')
 
-class WorkerStatus(str, Enum):
-    """Worker execution result"""
+class CommisStatus(str, Enum):
+    """Commis execution result"""
 
     SUCCESS = "success"
     FAILED = "failed"
@@ -40,8 +40,8 @@ class HeartbeatPayload(BaseModel):
     message: Optional[str] = Field(default=None, description='Optional heartbeat message')
     timestamp: Optional[str] = Field(default=None, description='ISO 8601 timestamp')
 
-class SupervisorStartedPayload(BaseModel):
-    """Payload for SupervisorStartedPayload"""
+class ConciergeStartedPayload(BaseModel):
+    """Payload for ConciergeStartedPayload"""
 
     run_id: Optional[int] = Field(default=None, ge=1, description='Run ID (may be omitted in legacy events)')
     thread_id: int = Field(ge=1, description='Thread ID for this conversation')
@@ -50,15 +50,15 @@ class SupervisorStartedPayload(BaseModel):
     continuation_of_message_id: Optional[str] = Field(default=None, description='For continuation runs, the message_id of the original run\'s message')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging (copy from UI for agent debugging)')
 
-class SupervisorThinkingPayload(BaseModel):
-    """Payload for SupervisorThinkingPayload"""
+class ConciergeThinkingPayload(BaseModel):
+    """Payload for ConciergeThinkingPayload"""
 
     message: str = Field(min_length=1, description='Thinking status message')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class SupervisorTokenPayload(BaseModel):
-    """Payload for SupervisorTokenPayload"""
+class ConciergeTokenPayload(BaseModel):
+    """Payload for ConciergeTokenPayload"""
 
     token: str = Field(description='LLM token (may be empty string)')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
@@ -66,10 +66,10 @@ class SupervisorTokenPayload(BaseModel):
     message_id: Optional[str] = Field(default=None, description='Unique identifier for the assistant message')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class SupervisorCompletePayload(BaseModel):
-    """Payload for SupervisorCompletePayload"""
+class ConciergeCompletePayload(BaseModel):
+    """Payload for ConciergeCompletePayload"""
 
-    result: str = Field(description='Final supervisor result')
+    result: str = Field(description='Final concierge result')
     status: Literal['success', 'cancelled'] = Field(description='Completion status (\'success\' for normal completion, \'cancelled\' for user-initiated cancellation)')
     duration_ms: Optional[int] = Field(default=None, ge=0, description='Execution duration in milliseconds')
     usage: Optional[UsageData] = Field(default=None)
@@ -80,8 +80,8 @@ class SupervisorCompletePayload(BaseModel):
     message_id: Optional[str] = Field(default=None, description='Unique identifier for the assistant message')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class SupervisorDeferredPayload(BaseModel):
-    """Payload for SupervisorDeferredPayload"""
+class ConciergeDeferredPayload(BaseModel):
+    """Payload for ConciergeDeferredPayload"""
 
     message: str = Field(min_length=1, description='Deferred status message')
     attach_url: Optional[str] = Field(default=None, description='URL to re-attach to the running execution')
@@ -92,11 +92,11 @@ class SupervisorDeferredPayload(BaseModel):
     message_id: Optional[str] = Field(default=None, description='Unique identifier for the assistant message')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class SupervisorWaitingPayload(BaseModel):
-    """Payload for SupervisorWaitingPayload"""
+class ConciergeWaitingPayload(BaseModel):
+    """Payload for ConciergeWaitingPayload"""
 
-    message: str = Field(min_length=1, description='Waiting status message (e.g., worker spawned)')
-    job_id: Optional[int] = Field(default=None, ge=1, description='Worker job ID (if applicable)')
+    message: str = Field(min_length=1, description='Waiting status message (e.g., commis spawned)')
+    job_id: Optional[int] = Field(default=None, ge=1, description='Commis job ID (if applicable)')
     close_stream: Optional[bool] = Field(default=None, description='If false, keep SSE stream open while waiting')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     agent_id: Optional[int] = Field(default=None, ge=1, description='')
@@ -104,8 +104,8 @@ class SupervisorWaitingPayload(BaseModel):
     message_id: Optional[str] = Field(default=None, description='Unique identifier for the assistant message')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class SupervisorResumedPayload(BaseModel):
-    """Payload for SupervisorResumedPayload"""
+class ConciergeResumedPayload(BaseModel):
+    """Payload for ConciergeResumedPayload"""
 
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     agent_id: Optional[int] = Field(default=None, ge=1, description='')
@@ -121,59 +121,59 @@ class ErrorPayload(BaseModel):
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class WorkerSpawnedPayload(BaseModel):
-    """Payload for WorkerSpawnedPayload"""
+class CommisSpawnedPayload(BaseModel):
+    """Payload for CommisSpawnedPayload"""
 
-    job_id: int = Field(ge=1, description='Worker job ID')
-    tool_call_id: Optional[str] = Field(default=None, description='Tool call ID for the spawn_worker invocation')
-    task: str = Field(min_length=1, description='Worker task (may be truncated to 100 chars)')
-    model: Optional[str] = Field(default=None, description='LLM model for worker')
+    job_id: int = Field(ge=1, description='Commis job ID')
+    tool_call_id: Optional[str] = Field(default=None, description='Tool call ID for the spawn_commis invocation')
+    task: str = Field(min_length=1, description='Commis task (may be truncated to 100 chars)')
+    model: Optional[str] = Field(default=None, description='LLM model for commis')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class WorkerStartedPayload(BaseModel):
-    """Payload for WorkerStartedPayload"""
+class CommisStartedPayload(BaseModel):
+    """Payload for CommisStartedPayload"""
 
     job_id: int = Field(ge=1, description='')
-    worker_id: str = Field(min_length=1, description='Worker execution ID')
+    commis_id: str = Field(min_length=1, description='Commis execution ID')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
-    task: Optional[str] = Field(default=None, description='Worker task (may be truncated)')
+    task: Optional[str] = Field(default=None, description='Commis task (may be truncated)')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class WorkerCompletePayload(BaseModel):
-    """Payload for WorkerCompletePayload"""
+class CommisCompletePayload(BaseModel):
+    """Payload for CommisCompletePayload"""
 
     job_id: int = Field(ge=1, description='')
-    worker_id: Optional[str] = Field(default=None, description='Worker execution ID')
-    status: WorkerStatus
+    commis_id: Optional[str] = Field(default=None, description='Commis execution ID')
+    status: CommisStatus
     duration_ms: Optional[int] = Field(default=None, ge=0, description='')
     error: Optional[str] = Field(default=None, description='Error message (only present if status=failed)')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class WorkerSummaryReadyPayload(BaseModel):
-    """Payload for WorkerSummaryReadyPayload"""
+class CommisSummaryReadyPayload(BaseModel):
+    """Payload for CommisSummaryReadyPayload"""
 
     job_id: int = Field(ge=1, description='')
-    worker_id: Optional[str] = Field(default=None, description='Worker execution ID')
-    summary: str = Field(min_length=1, description='Extracted worker summary')
+    commis_id: Optional[str] = Field(default=None, description='Commis execution ID')
+    summary: str = Field(min_length=1, description='Extracted commis summary')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class WorkerToolStartedPayload(BaseModel):
-    """Payload for WorkerToolStartedPayload"""
+class CommisToolStartedPayload(BaseModel):
+    """Payload for CommisToolStartedPayload"""
 
-    worker_id: str = Field(min_length=1, description='')
+    commis_id: str = Field(min_length=1, description='')
     tool_name: str = Field(min_length=1, description='')
     tool_call_id: str = Field(min_length=1, description='LangChain tool call ID')
     tool_args_preview: Optional[str] = Field(default=None, description='Preview of tool arguments (may be truncated)')
     run_id: Optional[int] = Field(default=None, ge=1, description='Required for security (prevents cross-run leakage)')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class WorkerToolCompletedPayload(BaseModel):
-    """Payload for WorkerToolCompletedPayload"""
+class CommisToolCompletedPayload(BaseModel):
+    """Payload for CommisToolCompletedPayload"""
 
-    worker_id: str = Field(min_length=1, description='')
+    commis_id: str = Field(min_length=1, description='')
     tool_name: str = Field(min_length=1, description='')
     tool_call_id: str = Field(min_length=1, description='')
     duration_ms: int = Field(ge=0, description='')
@@ -181,10 +181,10 @@ class WorkerToolCompletedPayload(BaseModel):
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class WorkerToolFailedPayload(BaseModel):
-    """Payload for WorkerToolFailedPayload"""
+class CommisToolFailedPayload(BaseModel):
+    """Payload for CommisToolFailedPayload"""
 
-    worker_id: str = Field(min_length=1, description='')
+    commis_id: str = Field(min_length=1, description='')
     tool_name: str = Field(min_length=1, description='')
     tool_call_id: str = Field(min_length=1, description='')
     duration_ms: int = Field(ge=0, description='')
@@ -192,18 +192,18 @@ class WorkerToolFailedPayload(BaseModel):
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class SupervisorToolStartedPayload(BaseModel):
-    """Payload for SupervisorToolStartedPayload"""
+class ConciergeToolStartedPayload(BaseModel):
+    """Payload for ConciergeToolStartedPayload"""
 
     tool_name: str = Field(min_length=1, description='')
     tool_call_id: str = Field(min_length=1, description='Stable ID linking all events for this tool call')
     tool_args_preview: Optional[str] = Field(default=None, description='Preview of tool arguments (may be truncated)')
     tool_args: Optional[Dict[str, Any]] = Field(default=None, description='Full tool arguments (for persistence/raw view)')
-    run_id: Optional[int] = Field(default=None, ge=1, description='Supervisor run ID for correlation')
+    run_id: Optional[int] = Field(default=None, ge=1, description='Concierge run ID for correlation')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class SupervisorToolProgressPayload(BaseModel):
-    """Payload for SupervisorToolProgressPayload"""
+class ConciergeToolProgressPayload(BaseModel):
+    """Payload for ConciergeToolProgressPayload"""
 
     tool_call_id: str = Field(min_length=1, description='')
     message: str = Field(description='Progress message (log line)')
@@ -213,8 +213,8 @@ class SupervisorToolProgressPayload(BaseModel):
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class SupervisorToolCompletedPayload(BaseModel):
-    """Payload for SupervisorToolCompletedPayload"""
+class ConciergeToolCompletedPayload(BaseModel):
+    """Payload for ConciergeToolCompletedPayload"""
 
     tool_name: str = Field(min_length=1, description='')
     tool_call_id: str = Field(min_length=1, description='')
@@ -224,8 +224,8 @@ class SupervisorToolCompletedPayload(BaseModel):
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class SupervisorToolFailedPayload(BaseModel):
-    """Payload for SupervisorToolFailedPayload"""
+class ConciergeToolFailedPayload(BaseModel):
+    """Payload for ConciergeToolFailedPayload"""
 
     tool_name: str = Field(min_length=1, description='')
     tool_call_id: str = Field(min_length=1, description='')
@@ -240,25 +240,25 @@ class SSEEventType(str, Enum):
 
     CONNECTED = "connected"
     HEARTBEAT = "heartbeat"
-    SUPERVISOR_STARTED = "supervisor_started"
-    SUPERVISOR_THINKING = "supervisor_thinking"
-    SUPERVISOR_TOKEN = "supervisor_token"
-    SUPERVISOR_COMPLETE = "supervisor_complete"
-    SUPERVISOR_DEFERRED = "supervisor_deferred"
-    SUPERVISOR_WAITING = "supervisor_waiting"
-    SUPERVISOR_RESUMED = "supervisor_resumed"
+    CONCIERGE_STARTED = "concierge_started"
+    CONCIERGE_THINKING = "concierge_thinking"
+    CONCIERGE_TOKEN = "concierge_token"
+    CONCIERGE_COMPLETE = "concierge_complete"
+    CONCIERGE_DEFERRED = "concierge_deferred"
+    CONCIERGE_WAITING = "concierge_waiting"
+    CONCIERGE_RESUMED = "concierge_resumed"
     ERROR = "error"
-    WORKER_SPAWNED = "worker_spawned"
-    WORKER_STARTED = "worker_started"
-    WORKER_COMPLETE = "worker_complete"
-    WORKER_SUMMARY_READY = "worker_summary_ready"
-    WORKER_TOOL_STARTED = "worker_tool_started"
-    WORKER_TOOL_COMPLETED = "worker_tool_completed"
-    WORKER_TOOL_FAILED = "worker_tool_failed"
-    SUPERVISOR_TOOL_STARTED = "supervisor_tool_started"
-    SUPERVISOR_TOOL_PROGRESS = "supervisor_tool_progress"
-    SUPERVISOR_TOOL_COMPLETED = "supervisor_tool_completed"
-    SUPERVISOR_TOOL_FAILED = "supervisor_tool_failed"
+    COMMIS_SPAWNED = "commis_spawned"
+    COMMIS_STARTED = "commis_started"
+    COMMIS_COMPLETE = "commis_complete"
+    COMMIS_SUMMARY_READY = "commis_summary_ready"
+    COMMIS_TOOL_STARTED = "commis_tool_started"
+    COMMIS_TOOL_COMPLETED = "commis_tool_completed"
+    COMMIS_TOOL_FAILED = "commis_tool_failed"
+    CONCIERGE_TOOL_STARTED = "concierge_tool_started"
+    CONCIERGE_TOOL_PROGRESS = "concierge_tool_progress"
+    CONCIERGE_TOOL_COMPLETED = "concierge_tool_completed"
+    CONCIERGE_TOOL_FAILED = "concierge_tool_failed"
 
 
 # Typed emitter for SSE events

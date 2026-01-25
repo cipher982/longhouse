@@ -24,25 +24,25 @@ import {
   type SSEEventType,
   type SSEEventWrapper,
   type ConnectedPayload,
-  type SupervisorStartedPayload,
-  type SupervisorThinkingPayload,
-  type SupervisorTokenPayload,
-  type SupervisorCompletePayload,
-  type SupervisorDeferredPayload,
-  type SupervisorWaitingPayload,
-  type SupervisorResumedPayload,
+  type ConciergeStartedPayload,
+  type ConciergeThinkingPayload,
+  type ConciergeTokenPayload,
+  type ConciergeCompletePayload,
+  type ConciergeDeferredPayload,
+  type ConciergeWaitingPayload,
+  type ConciergeResumedPayload,
   type ErrorPayload,
-  type WorkerSpawnedPayload,
-  type WorkerStartedPayload,
-  type WorkerCompletePayload,
-  type WorkerSummaryReadyPayload,
-  type WorkerToolStartedPayload,
-  type WorkerToolCompletedPayload,
-  type WorkerToolFailedPayload,
-  type SupervisorToolStartedPayload,
-  type SupervisorToolProgressPayload,
-  type SupervisorToolCompletedPayload,
-  type SupervisorToolFailedPayload,
+  type CommisSpawnedPayload,
+  type CommisStartedPayload,
+  type CommisCompletePayload,
+  type CommisSummaryReadyPayload,
+  type CommisToolStartedPayload,
+  type CommisToolCompletedPayload,
+  type CommisToolFailedPayload,
+  type ConciergeToolStartedPayload,
+  type ConciergeToolProgressPayload,
+  type ConciergeToolCompletedPayload,
+  type ConciergeToolFailedPayload,
 } from '../../generated/sse-events';
 
 export interface WorkerToolInfo {
@@ -375,7 +375,7 @@ export class SupervisorChatController {
         }
 
         // Skip logging high-frequency token events to reduce console spam
-        if (eventType && eventType !== 'supervisor_token') {
+        if (eventType && eventType !== 'concierge_token') {
           logger.debug(`[SupervisorChat] Processing SSE event: ${eventType} (id=${eventId})`);
         }
 
@@ -470,8 +470,8 @@ export class SupervisorChatController {
     const wrapper = data as SSEEventWrapper<unknown>;
 
     switch (eventType) {
-      case 'supervisor_started': {
-        const payload = wrapper.payload as SupervisorStartedPayload;
+      case 'concierge_started': {
+        const payload = wrapper.payload as ConciergeStartedPayload;
         this.petWatchdog();
         logger.debug('[SupervisorChat] Supervisor started, message_id:', payload.message_id);
         if (payload.run_id) {
@@ -511,8 +511,8 @@ export class SupervisorChatController {
         break;
       }
 
-      case 'supervisor_thinking': {
-        const payload = wrapper.payload as SupervisorThinkingPayload;
+      case 'concierge_thinking': {
+        const payload = wrapper.payload as ConciergeThinkingPayload;
         this.petWatchdog();
         logger.debug('[SupervisorChat] Supervisor thinking:', payload.message);
         // If this is a continuation run, do NOT reset status to 'typing'
@@ -530,8 +530,8 @@ export class SupervisorChatController {
         break;
       }
 
-      case 'supervisor_token': {
-        const payload = wrapper.payload as SupervisorTokenPayload;
+      case 'concierge_token': {
+        const payload = wrapper.payload as ConciergeTokenPayload;
         // Real-time token streaming from LLM
         this.petWatchdog();
         const token = payload.token;
@@ -553,8 +553,8 @@ export class SupervisorChatController {
         break;
       }
 
-      case 'supervisor_complete': {
-        const payload = wrapper.payload as SupervisorCompletePayload;
+      case 'concierge_complete': {
+        const payload = wrapper.payload as ConciergeCompletePayload;
         this.petWatchdog();
         logger.debug('[SupervisorChat] Supervisor complete');
         const result = payload.result;
@@ -611,8 +611,8 @@ export class SupervisorChatController {
         break;
       }
 
-      case 'supervisor_deferred': {
-        const payload = wrapper.payload as SupervisorDeferredPayload;
+      case 'concierge_deferred': {
+        const payload = wrapper.payload as ConciergeDeferredPayload;
         // Timeout migration: run continues in background, we show a friendly message
         this.clearWatchdog();
         logger.debug('[SupervisorChat] Supervisor deferred (timeout migration)');
@@ -640,8 +640,8 @@ export class SupervisorChatController {
         break;
       }
 
-      case 'supervisor_waiting': {
-        const payload = wrapper.payload as SupervisorWaitingPayload;
+      case 'concierge_waiting': {
+        const payload = wrapper.payload as ConciergeWaitingPayload;
         this.petWatchdog();
         logger.debug('[SupervisorChat] Supervisor waiting (interrupt):', payload.job_id);
 
@@ -665,8 +665,8 @@ export class SupervisorChatController {
         break;
       }
 
-      case 'supervisor_resumed': {
-        const payload = wrapper.payload as SupervisorResumedPayload;
+      case 'concierge_resumed': {
+        const payload = wrapper.payload as ConciergeResumedPayload;
         this.petWatchdog();
         logger.debug('[SupervisorChat] Supervisor resumed (interrupt)');
 
@@ -708,8 +708,8 @@ export class SupervisorChatController {
       }
 
       // ===== Worker lifecycle events (v2.1) =====
-      case 'worker_spawned': {
-        const payload = wrapper.payload as WorkerSpawnedPayload;
+      case 'commis_spawned': {
+        const payload = wrapper.payload as CommisSpawnedPayload;
         this.petWatchdog();
         logger.debug('[SupervisorChat] Worker spawned:', payload.job_id);
         eventBus.emit('supervisor:worker_spawned', {
@@ -721,25 +721,25 @@ export class SupervisorChatController {
         break;
       }
 
-      case 'worker_started': {
-        const payload = wrapper.payload as WorkerStartedPayload;
+      case 'commis_started': {
+        const payload = wrapper.payload as CommisStartedPayload;
         this.petWatchdog();
         logger.debug('[SupervisorChat] Worker started:', payload.job_id);
         eventBus.emit('supervisor:worker_started', {
           jobId: payload.job_id,
-          workerId: payload.worker_id,
+          workerId: payload.commis_id,
           timestamp: Date.now(),
         });
         break;
       }
 
-      case 'worker_complete': {
-        const payload = wrapper.payload as WorkerCompletePayload;
+      case 'commis_complete': {
+        const payload = wrapper.payload as CommisCompletePayload;
         this.petWatchdog();
         logger.debug(`[SupervisorChat] Worker complete: job=${payload.job_id} status=${payload.status}`);
         eventBus.emit('supervisor:worker_complete', {
           jobId: payload.job_id,
-          workerId: payload.worker_id,
+          workerId: payload.commis_id,
           status: payload.status,
           durationMs: payload.duration_ms,
           timestamp: Date.now(),
@@ -747,13 +747,13 @@ export class SupervisorChatController {
         break;
       }
 
-      case 'worker_summary_ready': {
-        const payload = wrapper.payload as WorkerSummaryReadyPayload;
+      case 'commis_summary_ready': {
+        const payload = wrapper.payload as CommisSummaryReadyPayload;
         this.petWatchdog();
         logger.debug('[SupervisorChat] Worker summary ready:', payload.job_id);
         eventBus.emit('supervisor:worker_summary', {
           jobId: payload.job_id,
-          workerId: payload.worker_id,
+          workerId: payload.commis_id,
           summary: payload.summary,
           timestamp: Date.now(),
         });
@@ -761,12 +761,12 @@ export class SupervisorChatController {
       }
 
       // ===== Worker tool events (v2.1 Activity Ticker) =====
-      case 'worker_tool_started': {
-        const payload = wrapper.payload as WorkerToolStartedPayload;
+      case 'commis_tool_started': {
+        const payload = wrapper.payload as CommisToolStartedPayload;
         this.petWatchdog();
         logger.debug('[SupervisorChat] Worker tool started:', payload.tool_name);
         eventBus.emit('worker:tool_started', {
-          workerId: payload.worker_id,
+          workerId: payload.commis_id,
           toolName: payload.tool_name,
           toolCallId: payload.tool_call_id,
           argsPreview: payload.tool_args_preview,
@@ -775,12 +775,12 @@ export class SupervisorChatController {
         break;
       }
 
-      case 'worker_tool_completed': {
-        const payload = wrapper.payload as WorkerToolCompletedPayload;
+      case 'commis_tool_completed': {
+        const payload = wrapper.payload as CommisToolCompletedPayload;
         this.petWatchdog();
         logger.debug('[SupervisorChat] Worker tool completed:', payload.tool_name);
         eventBus.emit('worker:tool_completed', {
-          workerId: payload.worker_id,
+          workerId: payload.commis_id,
           toolName: payload.tool_name,
           toolCallId: payload.tool_call_id,
           durationMs: payload.duration_ms,
@@ -790,12 +790,12 @@ export class SupervisorChatController {
         break;
       }
 
-      case 'worker_tool_failed': {
-        const payload = wrapper.payload as WorkerToolFailedPayload;
+      case 'commis_tool_failed': {
+        const payload = wrapper.payload as CommisToolFailedPayload;
         this.petWatchdog();
         logger.warn(`[SupervisorChat] Worker tool failed: ${payload.tool_name} - ${payload.error}`);
         eventBus.emit('worker:tool_failed', {
-          workerId: payload.worker_id,
+          workerId: payload.commis_id,
           toolName: payload.tool_name,
           toolCallId: payload.tool_call_id,
           durationMs: payload.duration_ms,
@@ -806,8 +806,8 @@ export class SupervisorChatController {
       }
 
       // ===== Supervisor tool events (uniform treatment with worker tools) =====
-      case 'supervisor_tool_started': {
-        const payload = wrapper.payload as SupervisorToolStartedPayload;
+      case 'concierge_tool_started': {
+        const payload = wrapper.payload as ConciergeToolStartedPayload;
         this.petWatchdog();
         logger.debug('[SupervisorChat] Supervisor tool started:', payload.tool_name);
         eventBus.emit('supervisor:tool_started', {
@@ -821,8 +821,8 @@ export class SupervisorChatController {
         break;
       }
 
-      case 'supervisor_tool_progress': {
-        const payload = wrapper.payload as SupervisorToolProgressPayload;
+      case 'concierge_tool_progress': {
+        const payload = wrapper.payload as ConciergeToolProgressPayload;
         this.petWatchdog();
         logger.debug('[SupervisorChat] Supervisor tool progress:', payload.message);
         eventBus.emit('supervisor:tool_progress', {
@@ -837,8 +837,8 @@ export class SupervisorChatController {
         break;
       }
 
-      case 'supervisor_tool_completed': {
-        const payload = wrapper.payload as SupervisorToolCompletedPayload;
+      case 'concierge_tool_completed': {
+        const payload = wrapper.payload as ConciergeToolCompletedPayload;
         this.petWatchdog();
         logger.debug('[SupervisorChat] Supervisor tool completed:', payload.tool_name);
         eventBus.emit('supervisor:tool_completed', {
@@ -853,8 +853,8 @@ export class SupervisorChatController {
         break;
       }
 
-      case 'supervisor_tool_failed': {
-        const payload = wrapper.payload as SupervisorToolFailedPayload;
+      case 'concierge_tool_failed': {
+        const payload = wrapper.payload as ConciergeToolFailedPayload;
         this.petWatchdog();
         logger.warn(`[SupervisorChat] Supervisor tool failed: ${payload.tool_name} - ${payload.error}`);
         eventBus.emit('supervisor:tool_failed', {

@@ -16,8 +16,8 @@ export interface UsageData {
   reasoning_tokens?: number;
 }
 
-/** Worker execution result */
-export type WorkerStatus = "success" | "failed";
+/** Commis execution result */
+export type CommisStatus = "success" | "failed";
 
 export interface ConnectedPayload {
   /** Connection confirmation message */
@@ -35,7 +35,7 @@ export interface HeartbeatPayload {
   timestamp?: string;
 }
 
-export interface SupervisorStartedPayload {
+export interface ConciergeStartedPayload {
   /** Run ID (may be omitted in legacy events) */
   run_id?: number;
   /** Thread ID for this conversation */
@@ -50,7 +50,7 @@ export interface SupervisorStartedPayload {
   trace_id?: string;
 }
 
-export interface SupervisorThinkingPayload {
+export interface ConciergeThinkingPayload {
   /** Thinking status message */
   message: string;
   run_id?: number;
@@ -58,7 +58,7 @@ export interface SupervisorThinkingPayload {
   trace_id?: string;
 }
 
-export interface SupervisorTokenPayload {
+export interface ConciergeTokenPayload {
   /** LLM token (may be empty string) */
   token: string;
   run_id?: number;
@@ -69,8 +69,8 @@ export interface SupervisorTokenPayload {
   trace_id?: string;
 }
 
-export interface SupervisorCompletePayload {
-  /** Final supervisor result */
+export interface ConciergeCompletePayload {
+  /** Final concierge result */
   result: string;
   /** Completion status ('success' for normal completion, 'cancelled' for user-initiated cancellation) */
   status: "success" | "cancelled";
@@ -88,7 +88,7 @@ export interface SupervisorCompletePayload {
   trace_id?: string;
 }
 
-export interface SupervisorDeferredPayload {
+export interface ConciergeDeferredPayload {
   /** Deferred status message */
   message: string;
   /** URL to re-attach to the running execution */
@@ -104,10 +104,10 @@ export interface SupervisorDeferredPayload {
   trace_id?: string;
 }
 
-export interface SupervisorWaitingPayload {
-  /** Waiting status message (e.g., worker spawned) */
+export interface ConciergeWaitingPayload {
+  /** Waiting status message (e.g., commis spawned) */
   message: string;
-  /** Worker job ID (if applicable) */
+  /** Commis job ID (if applicable) */
   job_id?: number;
   /** If false, keep SSE stream open while waiting */
   close_stream?: boolean;
@@ -120,7 +120,7 @@ export interface SupervisorWaitingPayload {
   trace_id?: string;
 }
 
-export interface SupervisorResumedPayload {
+export interface ConciergeResumedPayload {
   run_id?: number;
   agent_id?: number;
   thread_id: number;
@@ -140,36 +140,36 @@ export interface ErrorPayload {
   trace_id?: string;
 }
 
-export interface WorkerSpawnedPayload {
-  /** Worker job ID */
+export interface CommisSpawnedPayload {
+  /** Commis job ID */
   job_id: number;
-  /** Tool call ID for the spawn_worker invocation */
+  /** Tool call ID for the spawn_commis invocation */
   tool_call_id?: string;
-  /** Worker task (may be truncated to 100 chars) */
+  /** Commis task (may be truncated to 100 chars) */
   task: string;
-  /** LLM model for worker */
+  /** LLM model for commis */
   model?: string;
   run_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
 
-export interface WorkerStartedPayload {
+export interface CommisStartedPayload {
   job_id: number;
-  /** Worker execution ID */
-  worker_id: string;
+  /** Commis execution ID */
+  commis_id: string;
   run_id?: number;
-  /** Worker task (may be truncated) */
+  /** Commis task (may be truncated) */
   task?: string;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
 
-export interface WorkerCompletePayload {
+export interface CommisCompletePayload {
   job_id: number;
-  /** Worker execution ID */
-  worker_id?: string;
-  status: WorkerStatus;
+  /** Commis execution ID */
+  commis_id?: string;
+  status: CommisStatus;
   duration_ms?: number;
   /** Error message (only present if status=failed) */
   error?: string;
@@ -178,19 +178,19 @@ export interface WorkerCompletePayload {
   trace_id?: string;
 }
 
-export interface WorkerSummaryReadyPayload {
+export interface CommisSummaryReadyPayload {
   job_id: number;
-  /** Worker execution ID */
-  worker_id?: string;
-  /** Extracted worker summary */
+  /** Commis execution ID */
+  commis_id?: string;
+  /** Extracted commis summary */
   summary: string;
   run_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
 
-export interface WorkerToolStartedPayload {
-  worker_id: string;
+export interface CommisToolStartedPayload {
+  commis_id: string;
   tool_name: string;
   /** LangChain tool call ID */
   tool_call_id: string;
@@ -202,8 +202,8 @@ export interface WorkerToolStartedPayload {
   trace_id?: string;
 }
 
-export interface WorkerToolCompletedPayload {
-  worker_id: string;
+export interface CommisToolCompletedPayload {
+  commis_id: string;
   tool_name: string;
   tool_call_id: string;
   duration_ms: number;
@@ -214,8 +214,8 @@ export interface WorkerToolCompletedPayload {
   trace_id?: string;
 }
 
-export interface WorkerToolFailedPayload {
-  worker_id: string;
+export interface CommisToolFailedPayload {
+  commis_id: string;
   tool_name: string;
   tool_call_id: string;
   duration_ms: number;
@@ -226,7 +226,7 @@ export interface WorkerToolFailedPayload {
   trace_id?: string;
 }
 
-export interface SupervisorToolStartedPayload {
+export interface ConciergeToolStartedPayload {
   tool_name: string;
   /** Stable ID linking all events for this tool call */
   tool_call_id: string;
@@ -234,13 +234,13 @@ export interface SupervisorToolStartedPayload {
   tool_args_preview?: string;
   /** Full tool arguments (for persistence/raw view) */
   tool_args?: Record<string, any>;
-  /** Supervisor run ID for correlation */
+  /** Concierge run ID for correlation */
   run_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
 
-export interface SupervisorToolProgressPayload {
+export interface ConciergeToolProgressPayload {
   tool_call_id: string;
   /** Progress message (log line) */
   message: string;
@@ -255,7 +255,7 @@ export interface SupervisorToolProgressPayload {
   trace_id?: string;
 }
 
-export interface SupervisorToolCompletedPayload {
+export interface ConciergeToolCompletedPayload {
   tool_name: string;
   tool_call_id: string;
   duration_ms: number;
@@ -268,7 +268,7 @@ export interface SupervisorToolCompletedPayload {
   trace_id?: string;
 }
 
-export interface SupervisorToolFailedPayload {
+export interface ConciergeToolFailedPayload {
   tool_name: string;
   tool_call_id: string;
   duration_ms: number;
@@ -285,25 +285,25 @@ export interface SupervisorToolFailedPayload {
 export const SSE_EVENT_TYPES = [
   "connected",
   "heartbeat",
-  "supervisor_started",
-  "supervisor_thinking",
-  "supervisor_token",
-  "supervisor_complete",
-  "supervisor_deferred",
-  "supervisor_waiting",
-  "supervisor_resumed",
+  "concierge_started",
+  "concierge_thinking",
+  "concierge_token",
+  "concierge_complete",
+  "concierge_deferred",
+  "concierge_waiting",
+  "concierge_resumed",
   "error",
-  "worker_spawned",
-  "worker_started",
-  "worker_complete",
-  "worker_summary_ready",
-  "worker_tool_started",
-  "worker_tool_completed",
-  "worker_tool_failed",
-  "supervisor_tool_started",
-  "supervisor_tool_progress",
-  "supervisor_tool_completed",
-  "supervisor_tool_failed",
+  "commis_spawned",
+  "commis_started",
+  "commis_complete",
+  "commis_summary_ready",
+  "commis_tool_started",
+  "commis_tool_completed",
+  "commis_tool_failed",
+  "concierge_tool_started",
+  "concierge_tool_progress",
+  "concierge_tool_completed",
+  "concierge_tool_failed",
 ] as const;
 
 // SSE event type union (derived from SSE_EVENT_TYPES)
@@ -333,25 +333,25 @@ export interface SSEEventWrapper<T> {
 export type SSEPayloadFor<T extends SSEEventType> =
   T extends "connected" ? ConnectedPayload :
   T extends "heartbeat" ? HeartbeatPayload :
-  T extends "supervisor_started" ? SupervisorStartedPayload :
-  T extends "supervisor_thinking" ? SupervisorThinkingPayload :
-  T extends "supervisor_token" ? SupervisorTokenPayload :
-  T extends "supervisor_complete" ? SupervisorCompletePayload :
-  T extends "supervisor_deferred" ? SupervisorDeferredPayload :
-  T extends "supervisor_waiting" ? SupervisorWaitingPayload :
-  T extends "supervisor_resumed" ? SupervisorResumedPayload :
+  T extends "concierge_started" ? ConciergeStartedPayload :
+  T extends "concierge_thinking" ? ConciergeThinkingPayload :
+  T extends "concierge_token" ? ConciergeTokenPayload :
+  T extends "concierge_complete" ? ConciergeCompletePayload :
+  T extends "concierge_deferred" ? ConciergeDeferredPayload :
+  T extends "concierge_waiting" ? ConciergeWaitingPayload :
+  T extends "concierge_resumed" ? ConciergeResumedPayload :
   T extends "error" ? ErrorPayload :
-  T extends "worker_spawned" ? WorkerSpawnedPayload :
-  T extends "worker_started" ? WorkerStartedPayload :
-  T extends "worker_complete" ? WorkerCompletePayload :
-  T extends "worker_summary_ready" ? WorkerSummaryReadyPayload :
-  T extends "worker_tool_started" ? WorkerToolStartedPayload :
-  T extends "worker_tool_completed" ? WorkerToolCompletedPayload :
-  T extends "worker_tool_failed" ? WorkerToolFailedPayload :
-  T extends "supervisor_tool_started" ? SupervisorToolStartedPayload :
-  T extends "supervisor_tool_progress" ? SupervisorToolProgressPayload :
-  T extends "supervisor_tool_completed" ? SupervisorToolCompletedPayload :
-  T extends "supervisor_tool_failed" ? SupervisorToolFailedPayload :
+  T extends "commis_spawned" ? CommisSpawnedPayload :
+  T extends "commis_started" ? CommisStartedPayload :
+  T extends "commis_complete" ? CommisCompletePayload :
+  T extends "commis_summary_ready" ? CommisSummaryReadyPayload :
+  T extends "commis_tool_started" ? CommisToolStartedPayload :
+  T extends "commis_tool_completed" ? CommisToolCompletedPayload :
+  T extends "commis_tool_failed" ? CommisToolFailedPayload :
+  T extends "concierge_tool_started" ? ConciergeToolStartedPayload :
+  T extends "concierge_tool_progress" ? ConciergeToolProgressPayload :
+  T extends "concierge_tool_completed" ? ConciergeToolCompletedPayload :
+  T extends "concierge_tool_failed" ? ConciergeToolFailedPayload :
   never;
 
 // Payload type lookup (for direct payload access after unwrapping)

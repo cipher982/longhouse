@@ -5,7 +5,7 @@ info:
   version: 1.0.0
   description: |
     Server-Sent Events (SSE) protocol for real-time updates from Jarvis backend to frontend.
-    Provides typed contracts for supervisor execution, worker lifecycle, and tool monitoring.
+    Provides typed contracts for concierge execution, commis lifecycle, and tool monitoring.
 
     Features:
     - Strongly-typed event payloads
@@ -22,51 +22,51 @@ defaultContentType: application/json
 channels:
   RunEventsChannel:
     address: /api/jarvis/chat/stream
-    description: Real-time supervisor and worker events for a specific run
+    description: Real-time concierge and commis events for a specific run
     messages:
       ConnectedEvent:
         $ref: '#/components/messages/ConnectedEvent'
       HeartbeatEvent:
         $ref: '#/components/messages/HeartbeatEvent'
-      SupervisorStartedEvent:
-        $ref: '#/components/messages/SupervisorStartedEvent'
-      SupervisorThinkingEvent:
-        $ref: '#/components/messages/SupervisorThinkingEvent'
-      SupervisorTokenEvent:
-        $ref: '#/components/messages/SupervisorTokenEvent'
-      SupervisorCompleteEvent:
-        $ref: '#/components/messages/SupervisorCompleteEvent'
-      SupervisorDeferredEvent:
-        $ref: '#/components/messages/SupervisorDeferredEvent'
-      SupervisorWaitingEvent:
-        $ref: '#/components/messages/SupervisorWaitingEvent'
-      SupervisorResumedEvent:
-        $ref: '#/components/messages/SupervisorResumedEvent'
+      ConciergeStartedEvent:
+        $ref: '#/components/messages/ConciergeStartedEvent'
+      ConciergeThinkingEvent:
+        $ref: '#/components/messages/ConciergeThinkingEvent'
+      ConciergeTokenEvent:
+        $ref: '#/components/messages/ConciergeTokenEvent'
+      ConciergeCompleteEvent:
+        $ref: '#/components/messages/ConciergeCompleteEvent'
+      ConciergeDeferredEvent:
+        $ref: '#/components/messages/ConciergeDeferredEvent'
+      ConciergeWaitingEvent:
+        $ref: '#/components/messages/ConciergeWaitingEvent'
+      ConciergeResumedEvent:
+        $ref: '#/components/messages/ConciergeResumedEvent'
       ErrorEvent:
         $ref: '#/components/messages/ErrorEvent'
-      WorkerSpawnedEvent:
-        $ref: '#/components/messages/WorkerSpawnedEvent'
-      WorkerStartedEvent:
-        $ref: '#/components/messages/WorkerStartedEvent'
-      WorkerCompleteEvent:
-        $ref: '#/components/messages/WorkerCompleteEvent'
-      WorkerSummaryReadyEvent:
-        $ref: '#/components/messages/WorkerSummaryReadyEvent'
-      WorkerToolStartedEvent:
-        $ref: '#/components/messages/WorkerToolStartedEvent'
-      WorkerToolCompletedEvent:
-        $ref: '#/components/messages/WorkerToolCompletedEvent'
-      WorkerToolFailedEvent:
-        $ref: '#/components/messages/WorkerToolFailedEvent'
-      # Supervisor tool monitoring (same treatment as worker tools)
-      SupervisorToolStartedEvent:
-        $ref: '#/components/messages/SupervisorToolStartedEvent'
-      SupervisorToolProgressEvent:
-        $ref: '#/components/messages/SupervisorToolProgressEvent'
-      SupervisorToolCompletedEvent:
-        $ref: '#/components/messages/SupervisorToolCompletedEvent'
-      SupervisorToolFailedEvent:
-        $ref: '#/components/messages/SupervisorToolFailedEvent'
+      CommisSpawnedEvent:
+        $ref: '#/components/messages/CommisSpawnedEvent'
+      CommisStartedEvent:
+        $ref: '#/components/messages/CommisStartedEvent'
+      CommisCompleteEvent:
+        $ref: '#/components/messages/CommisCompleteEvent'
+      CommisSummaryReadyEvent:
+        $ref: '#/components/messages/CommisSummaryReadyEvent'
+      CommisToolStartedEvent:
+        $ref: '#/components/messages/CommisToolStartedEvent'
+      CommisToolCompletedEvent:
+        $ref: '#/components/messages/CommisToolCompletedEvent'
+      CommisToolFailedEvent:
+        $ref: '#/components/messages/CommisToolFailedEvent'
+      # Concierge tool monitoring (same treatment as commis tools)
+      ConciergeToolStartedEvent:
+        $ref: '#/components/messages/ConciergeToolStartedEvent'
+      ConciergeToolProgressEvent:
+        $ref: '#/components/messages/ConciergeToolProgressEvent'
+      ConciergeToolCompletedEvent:
+        $ref: '#/components/messages/ConciergeToolCompletedEvent'
+      ConciergeToolFailedEvent:
+        $ref: '#/components/messages/ConciergeToolFailedEvent'
 
 # ---------------------------------------------------------------------------
 # Operations - SSE is always server → client (send only)
@@ -77,7 +77,7 @@ operations:
     action: send
     channel:
       $ref: '#/channels/RunEventsChannel'
-    summary: Stream supervisor and worker events for a run
+    summary: Stream concierge and commis events for a run
 
 # ---------------------------------------------------------------------------
 # Components - Messages and schemas
@@ -100,55 +100,55 @@ components:
         $ref: '#/components/schemas/HeartbeatPayload'
       x-sse-event-type: heartbeat
 
-    # Supervisor lifecycle
-    SupervisorStartedEvent:
-      name: supervisor_started
-      summary: Supervisor began processing task
+    # Concierge lifecycle
+    ConciergeStartedEvent:
+      name: concierge_started
+      summary: Concierge began processing task
       payload:
-        $ref: '#/components/schemas/SupervisorStartedPayload'
-      x-sse-event-type: supervisor_started
+        $ref: '#/components/schemas/ConciergeStartedPayload'
+      x-sse-event-type: concierge_started
 
-    SupervisorThinkingEvent:
-      name: supervisor_thinking
-      summary: Supervisor reasoning phase
+    ConciergeThinkingEvent:
+      name: concierge_thinking
+      summary: Concierge reasoning phase
       payload:
-        $ref: '#/components/schemas/SupervisorThinkingPayload'
-      x-sse-event-type: supervisor_thinking
+        $ref: '#/components/schemas/ConciergeThinkingPayload'
+      x-sse-event-type: concierge_thinking
 
-    SupervisorTokenEvent:
-      name: supervisor_token
+    ConciergeTokenEvent:
+      name: concierge_token
       summary: LLM token stream (high frequency)
       payload:
-        $ref: '#/components/schemas/SupervisorTokenPayload'
-      x-sse-event-type: supervisor_token
+        $ref: '#/components/schemas/ConciergeTokenPayload'
+      x-sse-event-type: concierge_token
 
-    SupervisorCompleteEvent:
-      name: supervisor_complete
-      summary: Supervisor finished successfully
+    ConciergeCompleteEvent:
+      name: concierge_complete
+      summary: Concierge finished successfully
       payload:
-        $ref: '#/components/schemas/SupervisorCompletePayload'
-      x-sse-event-type: supervisor_complete
+        $ref: '#/components/schemas/ConciergeCompletePayload'
+      x-sse-event-type: concierge_complete
 
-    SupervisorDeferredEvent:
-      name: supervisor_deferred
-      summary: Timeout migration - supervisor continues in background
+    ConciergeDeferredEvent:
+      name: concierge_deferred
+      summary: Timeout migration - concierge continues in background
       payload:
-        $ref: '#/components/schemas/SupervisorDeferredPayload'
-      x-sse-event-type: supervisor_deferred
+        $ref: '#/components/schemas/ConciergeDeferredPayload'
+      x-sse-event-type: concierge_deferred
 
-    SupervisorWaitingEvent:
-      name: supervisor_waiting
-      summary: Supervisor interrupted waiting for worker completion
+    ConciergeWaitingEvent:
+      name: concierge_waiting
+      summary: Concierge interrupted waiting for commis completion
       payload:
-        $ref: '#/components/schemas/SupervisorWaitingPayload'
-      x-sse-event-type: supervisor_waiting
+        $ref: '#/components/schemas/ConciergeWaitingPayload'
+      x-sse-event-type: concierge_waiting
 
-    SupervisorResumedEvent:
-      name: supervisor_resumed
-      summary: Supervisor resumed from interrupt after worker completion
+    ConciergeResumedEvent:
+      name: concierge_resumed
+      summary: Concierge resumed from interrupt after commis completion
       payload:
-        $ref: '#/components/schemas/SupervisorResumedPayload'
-      x-sse-event-type: supervisor_resumed
+        $ref: '#/components/schemas/ConciergeResumedPayload'
+      x-sse-event-type: concierge_resumed
 
     # Error handling
     ErrorEvent:
@@ -158,85 +158,85 @@ components:
         $ref: '#/components/schemas/ErrorPayload'
       x-sse-event-type: error
 
-    # Worker lifecycle
-    WorkerSpawnedEvent:
-      name: worker_spawned
-      summary: Worker job queued
+    # Commis lifecycle
+    CommisSpawnedEvent:
+      name: commis_spawned
+      summary: Commis job queued
       payload:
-        $ref: '#/components/schemas/WorkerSpawnedPayload'
-      x-sse-event-type: worker_spawned
+        $ref: '#/components/schemas/CommisSpawnedPayload'
+      x-sse-event-type: commis_spawned
 
-    WorkerStartedEvent:
-      name: worker_started
-      summary: Worker execution began
+    CommisStartedEvent:
+      name: commis_started
+      summary: Commis execution began
       payload:
-        $ref: '#/components/schemas/WorkerStartedPayload'
-      x-sse-event-type: worker_started
+        $ref: '#/components/schemas/CommisStartedPayload'
+      x-sse-event-type: commis_started
 
-    WorkerCompleteEvent:
-      name: worker_complete
-      summary: Worker finished (success or failure)
+    CommisCompleteEvent:
+      name: commis_complete
+      summary: Commis finished (success or failure)
       payload:
-        $ref: '#/components/schemas/WorkerCompletePayload'
-      x-sse-event-type: worker_complete
+        $ref: '#/components/schemas/CommisCompletePayload'
+      x-sse-event-type: commis_complete
 
-    WorkerSummaryReadyEvent:
-      name: worker_summary_ready
-      summary: Worker summary extracted
+    CommisSummaryReadyEvent:
+      name: commis_summary_ready
+      summary: Commis summary extracted
       payload:
-        $ref: '#/components/schemas/WorkerSummaryReadyPayload'
-      x-sse-event-type: worker_summary_ready
+        $ref: '#/components/schemas/CommisSummaryReadyPayload'
+      x-sse-event-type: commis_summary_ready
 
-    # Worker tool monitoring
-    WorkerToolStartedEvent:
-      name: worker_tool_started
-      summary: Worker tool call began
+    # Commis tool monitoring
+    CommisToolStartedEvent:
+      name: commis_tool_started
+      summary: Commis tool call began
       payload:
-        $ref: '#/components/schemas/WorkerToolStartedPayload'
-      x-sse-event-type: worker_tool_started
+        $ref: '#/components/schemas/CommisToolStartedPayload'
+      x-sse-event-type: commis_tool_started
 
-    WorkerToolCompletedEvent:
-      name: worker_tool_completed
-      summary: Worker tool call succeeded
+    CommisToolCompletedEvent:
+      name: commis_tool_completed
+      summary: Commis tool call succeeded
       payload:
-        $ref: '#/components/schemas/WorkerToolCompletedPayload'
-      x-sse-event-type: worker_tool_completed
+        $ref: '#/components/schemas/CommisToolCompletedPayload'
+      x-sse-event-type: commis_tool_completed
 
-    WorkerToolFailedEvent:
-      name: worker_tool_failed
-      summary: Worker tool call failed
+    CommisToolFailedEvent:
+      name: commis_tool_failed
+      summary: Commis tool call failed
       payload:
-        $ref: '#/components/schemas/WorkerToolFailedPayload'
-      x-sse-event-type: worker_tool_failed
+        $ref: '#/components/schemas/CommisToolFailedPayload'
+      x-sse-event-type: commis_tool_failed
 
-    # Supervisor tool monitoring (uniform treatment with worker tools)
-    SupervisorToolStartedEvent:
-      name: supervisor_tool_started
-      summary: Supervisor tool call began
+    # Concierge tool monitoring (uniform treatment with commis tools)
+    ConciergeToolStartedEvent:
+      name: concierge_tool_started
+      summary: Concierge tool call began
       payload:
-        $ref: '#/components/schemas/SupervisorToolStartedPayload'
-      x-sse-event-type: supervisor_tool_started
+        $ref: '#/components/schemas/ConciergeToolStartedPayload'
+      x-sse-event-type: concierge_tool_started
 
-    SupervisorToolProgressEvent:
-      name: supervisor_tool_progress
-      summary: Supervisor tool progress update (streaming logs)
+    ConciergeToolProgressEvent:
+      name: concierge_tool_progress
+      summary: Concierge tool progress update (streaming logs)
       payload:
-        $ref: '#/components/schemas/SupervisorToolProgressPayload'
-      x-sse-event-type: supervisor_tool_progress
+        $ref: '#/components/schemas/ConciergeToolProgressPayload'
+      x-sse-event-type: concierge_tool_progress
 
-    SupervisorToolCompletedEvent:
-      name: supervisor_tool_completed
-      summary: Supervisor tool call succeeded
+    ConciergeToolCompletedEvent:
+      name: concierge_tool_completed
+      summary: Concierge tool call succeeded
       payload:
-        $ref: '#/components/schemas/SupervisorToolCompletedPayload'
-      x-sse-event-type: supervisor_tool_completed
+        $ref: '#/components/schemas/ConciergeToolCompletedPayload'
+      x-sse-event-type: concierge_tool_completed
 
-    SupervisorToolFailedEvent:
-      name: supervisor_tool_failed
-      summary: Supervisor tool call failed
+    ConciergeToolFailedEvent:
+      name: concierge_tool_failed
+      summary: Concierge tool call failed
       payload:
-        $ref: '#/components/schemas/SupervisorToolFailedPayload'
-      x-sse-event-type: supervisor_tool_failed
+        $ref: '#/components/schemas/ConciergeToolFailedPayload'
+      x-sse-event-type: concierge_tool_failed
 
   schemas:
     # ---------------------------------------------------------------------------
@@ -253,23 +253,23 @@ components:
           enum:
             - connected
             - heartbeat
-            - supervisor_started
-            - supervisor_thinking
-            - supervisor_token
-            - supervisor_complete
-            - supervisor_deferred
+            - concierge_started
+            - concierge_thinking
+            - concierge_token
+            - concierge_complete
+            - concierge_deferred
             - error
-            - worker_spawned
-            - worker_started
-            - worker_complete
-            - worker_summary_ready
-            - worker_tool_started
-            - worker_tool_completed
-            - worker_tool_failed
-            - supervisor_tool_started
-            - supervisor_tool_progress
-            - supervisor_tool_completed
-            - supervisor_tool_failed
+            - commis_spawned
+            - commis_started
+            - commis_complete
+            - commis_summary_ready
+            - commis_tool_started
+            - commis_tool_completed
+            - commis_tool_failed
+            - concierge_tool_started
+            - concierge_tool_progress
+            - concierge_tool_completed
+            - concierge_tool_failed
         id:
           type: integer
           description: Event ID for resumption (maps to `id:` line in SSE protocol)
@@ -299,10 +299,10 @@ components:
           minimum: 0
           description: Reasoning tokens (OpenAI o1/o3 models)
 
-    WorkerStatus:
+    CommisStatus:
       type: string
       enum: [success, failed]
-      description: Worker execution result
+      description: Commis execution result
 
     # ---------------------------------------------------------------------------
     # Connection Lifecycle Payloads
@@ -334,9 +334,9 @@ components:
           description: ISO 8601 timestamp
 
     # ---------------------------------------------------------------------------
-    # Supervisor Event Payloads
+    # Concierge Event Payloads
     # ---------------------------------------------------------------------------
-    SupervisorStartedPayload:
+    ConciergeStartedPayload:
       type: object
       required: [task, thread_id, message_id]
       properties:
@@ -365,7 +365,7 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging (copy from UI for agent debugging)
 
-    SupervisorThinkingPayload:
+    ConciergeThinkingPayload:
       type: object
       required: [message]
       properties:
@@ -381,7 +381,7 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    SupervisorTokenPayload:
+    ConciergeTokenPayload:
       type: object
       required: [token]
       properties:
@@ -403,13 +403,13 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    SupervisorCompletePayload:
+    ConciergeCompletePayload:
       type: object
       required: [result, status]
       properties:
         result:
           type: string
-          description: Final supervisor result
+          description: Final concierge result
         status:
           type: string
           enum: [success, cancelled]
@@ -441,7 +441,7 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    SupervisorDeferredPayload:
+    ConciergeDeferredPayload:
       type: object
       required: [message]
       properties:
@@ -474,18 +474,18 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    SupervisorWaitingPayload:
+    ConciergeWaitingPayload:
       type: object
       required: [message]
       properties:
         message:
           type: string
           minLength: 1
-          description: Waiting status message (e.g., worker spawned)
+          description: Waiting status message (e.g., commis spawned)
         job_id:
           type: integer
           minimum: 1
-          description: Worker job ID (if applicable)
+          description: Commis job ID (if applicable)
         close_stream:
           type: boolean
           description: If false, keep SSE stream open while waiting
@@ -507,7 +507,7 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    SupervisorResumedPayload:
+    ConciergeResumedPayload:
       type: object
       required: [thread_id, message_id]
       properties:
@@ -550,26 +550,26 @@ components:
           description: End-to-end trace ID for debugging
 
     # ---------------------------------------------------------------------------
-    # Worker Event Payloads
+    # Commis Event Payloads
     # ---------------------------------------------------------------------------
-    WorkerSpawnedPayload:
+    CommisSpawnedPayload:
       type: object
       required: [job_id, task]
       properties:
         job_id:
           type: integer
           minimum: 1
-          description: Worker job ID
+          description: Commis job ID
         tool_call_id:
           type: string
-          description: Tool call ID for the spawn_worker invocation
+          description: Tool call ID for the spawn_commis invocation
         task:
           type: string
           minLength: 1
-          description: Worker task (may be truncated to 100 chars)
+          description: Commis task (may be truncated to 100 chars)
         model:
           type: string
-          description: LLM model for worker
+          description: LLM model for commis
         run_id:
           type: integer
           minimum: 1
@@ -578,40 +578,40 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    WorkerStartedPayload:
+    CommisStartedPayload:
       type: object
-      required: [job_id, worker_id]
+      required: [job_id, commis_id]
       properties:
         job_id:
           type: integer
           minimum: 1
-        worker_id:
+        commis_id:
           type: string
           minLength: 1
-          description: Worker execution ID
+          description: Commis execution ID
         run_id:
           type: integer
           minimum: 1
         task:
           type: string
-          description: Worker task (may be truncated)
+          description: Commis task (may be truncated)
         trace_id:
           type: string
           format: uuid
           description: End-to-end trace ID for debugging
 
-    WorkerCompletePayload:
+    CommisCompletePayload:
       type: object
       required: [job_id, status]
       properties:
         job_id:
           type: integer
           minimum: 1
-        worker_id:
+        commis_id:
           type: string
-          description: Worker execution ID
+          description: Commis execution ID
         status:
-          $ref: '#/components/schemas/WorkerStatus'
+          $ref: '#/components/schemas/CommisStatus'
         duration_ms:
           type: integer
           minimum: 0
@@ -626,20 +626,20 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    WorkerSummaryReadyPayload:
+    CommisSummaryReadyPayload:
       type: object
       required: [job_id, summary]
       properties:
         job_id:
           type: integer
           minimum: 1
-        worker_id:
+        commis_id:
           type: string
-          description: Worker execution ID
+          description: Commis execution ID
         summary:
           type: string
           minLength: 1
-          description: Extracted worker summary
+          description: Extracted commis summary
         run_id:
           type: integer
           minimum: 1
@@ -649,13 +649,13 @@ components:
           description: End-to-end trace ID for debugging
 
     # ---------------------------------------------------------------------------
-    # Worker Tool Monitoring Payloads
+    # Commis Tool Monitoring Payloads
     # ---------------------------------------------------------------------------
-    WorkerToolStartedPayload:
+    CommisToolStartedPayload:
       type: object
-      required: [worker_id, tool_name, tool_call_id]
+      required: [commis_id, tool_name, tool_call_id]
       properties:
-        worker_id:
+        commis_id:
           type: string
           minLength: 1
         tool_name:
@@ -677,11 +677,11 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    WorkerToolCompletedPayload:
+    CommisToolCompletedPayload:
       type: object
-      required: [worker_id, tool_name, tool_call_id, duration_ms]
+      required: [commis_id, tool_name, tool_call_id, duration_ms]
       properties:
-        worker_id:
+        commis_id:
           type: string
           minLength: 1
         tool_name:
@@ -704,11 +704,11 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    WorkerToolFailedPayload:
+    CommisToolFailedPayload:
       type: object
-      required: [worker_id, tool_name, tool_call_id, duration_ms, error]
+      required: [commis_id, tool_name, tool_call_id, duration_ms, error]
       properties:
-        worker_id:
+        commis_id:
           type: string
           minLength: 1
         tool_name:
@@ -733,9 +733,9 @@ components:
           description: End-to-end trace ID for debugging
 
     # ---------------------------------------------------------------------------
-    # Supervisor Tool Monitoring Payloads
+    # Concierge Tool Monitoring Payloads
     # ---------------------------------------------------------------------------
-    SupervisorToolStartedPayload:
+    ConciergeToolStartedPayload:
       type: object
       required: [tool_name, tool_call_id]
       properties:
@@ -755,13 +755,13 @@ components:
         run_id:
           type: integer
           minimum: 1
-          description: Supervisor run ID for correlation
+          description: Concierge run ID for correlation
         trace_id:
           type: string
           format: uuid
           description: End-to-end trace ID for debugging
 
-    SupervisorToolProgressPayload:
+    ConciergeToolProgressPayload:
       type: object
       required: [tool_call_id, message]
       properties:
@@ -791,7 +791,7 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    SupervisorToolCompletedPayload:
+    ConciergeToolCompletedPayload:
       type: object
       required: [tool_name, tool_call_id, duration_ms]
       properties:
@@ -818,7 +818,7 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    SupervisorToolFailedPayload:
+    ConciergeToolFailedPayload:
       type: object
       required: [tool_name, tool_call_id, duration_ms, error]
       properties:
@@ -864,6 +864,6 @@ x-security-notes:
   - SSE stream filters events by run_id and owner_id
 
 x-performance-notes:
-  - supervisor_token events are high-frequency (per-token streaming)
+  - concierge_token events are high-frequency (per-token streaming)
   - Heartbeat sent every 30s to prevent timeout
   - Event IDs enable resumable streams (reconnect with Last-Event-ID header)
