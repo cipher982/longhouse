@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import platform
 import re
 from pathlib import Path
 
@@ -25,6 +26,40 @@ logger = logging.getLogger(__name__)
 # Life Hub API configuration
 LIFE_HUB_URL = os.getenv("LIFE_HUB_URL", "https://data.drose.io")
 LIFE_HUB_API_KEY = os.getenv("LIFE_HUB_API_KEY")
+
+# Valid session ID pattern (alphanumeric, dashes, underscores only)
+# Prevents path traversal attacks via malicious session IDs
+SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def get_claude_config_dir() -> Path:
+    """Get the Claude config directory, respecting CLAUDE_CONFIG_DIR env var.
+
+    Priority:
+    1. CLAUDE_CONFIG_DIR environment variable
+    2. ~/.claude (default)
+    """
+    config_dir = os.getenv("CLAUDE_CONFIG_DIR")
+    if config_dir:
+        return Path(config_dir)
+    return Path.home() / ".claude"
+
+
+def validate_session_id(session_id: str) -> None:
+    """Validate session ID to prevent path traversal attacks.
+
+    Args:
+        session_id: The session ID to validate
+
+    Raises:
+        ValueError: If session ID contains unsafe characters
+    """
+    if not session_id:
+        raise ValueError("Session ID cannot be empty")
+    if not SESSION_ID_PATTERN.match(session_id):
+        raise ValueError(f"Invalid session ID format: {session_id}")
+    if ".." in session_id or "/" in session_id or "\\" in session_id:
+        raise ValueError(f"Session ID contains path traversal characters: {session_id}")
 
 
 def encode_cwd_for_claude(absolute_path: str) -> str:
@@ -75,6 +110,10 @@ async def fetch_session_from_life_hub(session_id: str) -> tuple[bytes, str, str]
         cwd = response.headers.get("X-Session-CWD", "")
         provider_session_id = response.headers.get("X-Provider-Session-ID", "")
 
+        # Validate provider_session_id to prevent path traversal
+        if provider_session_id:
+            validate_session_id(provider_session_id)
+
         return response.content, cwd, provider_session_id
 
 
@@ -91,7 +130,7 @@ async def prepare_session_for_resume(
     Args:
         session_id: Life Hub session UUID to fetch
         workspace_path: The workspace directory where Claude Code will run
-        claude_config_dir: Override for ~/.claude (default: ~/.claude)
+        claude_config_dir: Override for Claude config dir (default: from CLAUDE_CONFIG_DIR or ~/.claude)
 
     Returns:
         The provider_session_id to pass to --resume flag
@@ -105,8 +144,11 @@ async def prepare_session_for_resume(
     if not provider_session_id:
         raise ValueError(f"Session {session_id} has no provider_session_id - cannot resume")
 
-    # Determine Claude config directory
-    config_dir = claude_config_dir or Path.home() / ".claude"
+    # Validate provider_session_id to prevent path traversal (defense in depth)
+    validate_session_id(provider_session_id)
+
+    # Determine Claude config directory (respects CLAUDE_CONFIG_DIR env var)
+    config_dir = claude_config_dir or get_claude_config_dir()
 
     # Use workspace path for the encoded_cwd (where the new session will run)
     # This allows resuming a session that started in a different directory
@@ -138,7 +180,7 @@ async def ship_session_to_life_hub(
     Args:
         workspace_path: The workspace directory where Claude Code ran
         worker_id: Worker ID for logging/tracking
-        claude_config_dir: Override for ~/.claude (default: ~/.claude)
+        claude_config_dir: Override for Claude config dir (default: from CLAUDE_CONFIG_DIR or ~/.claude)
 
     Returns:
         The Life Hub session ID if shipped successfully, None otherwise
@@ -147,8 +189,8 @@ async def ship_session_to_life_hub(
         logger.warning("LIFE_HUB_API_KEY not configured, skipping session ship")
         return None
 
-    # Determine Claude config directory
-    config_dir = claude_config_dir or Path.home() / ".claude"
+    # Determine Claude config directory (respects CLAUDE_CONFIG_DIR env var)
+    config_dir = claude_config_dir or get_claude_config_dir()
 
     # Find session file for this workspace
     encoded_cwd = encode_cwd_for_claude(str(workspace_path.absolute()))
@@ -192,15 +234,16 @@ async def ship_session_to_life_hub(
                     except json.JSONDecodeError:
                         events.append({"raw_text": line})
 
+            # Build device_id for Life Hub (required field)
+            device_id = f"zerg-worker-{platform.node()}"
+
             payload = {
+                "device_id": device_id,
                 "provider": "claude",
+                "source_path": str(session_file),
                 "provider_session_id": provider_session_id,
                 "cwd": str(workspace_path.absolute()),
                 "events": events,
-                "metadata": {
-                    "shipped_by": "zerg",
-                    "worker_id": worker_id,
-                },
             }
 
             response = await client.post(
