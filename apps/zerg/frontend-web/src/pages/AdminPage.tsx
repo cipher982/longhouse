@@ -236,6 +236,26 @@ async function seedScenarioForUser(request: { name: string; owner_email: string;
   }
 }
 
+interface DemoResetResponse {
+  user_id: number;
+  email: string;
+  cleared: Record<string, number>;
+}
+
+async function resetDemoUser(userId: number): Promise<DemoResetResponse> {
+  const response = await fetch(`${config.apiBaseUrl}/admin/demo-users/${userId}/reset`, {
+    method: "POST",
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || "Failed to reset demo account");
+  }
+
+  return response.json();
+}
+
 async function impersonateUser(request: { user_id: number }): Promise<void> {
   const response = await fetch(`${config.apiBaseUrl}/auth/impersonate`, {
     method: "POST",
@@ -683,6 +703,13 @@ function AdminPage() {
   const [demoDisplayName, setDemoDisplayName] = useState("");
   const [demoScenario, setDemoScenario] = useState("swarm-mvp");
   const [selectedDemoUserId, setSelectedDemoUserId] = useState<number | null>(null);
+  const [demoResetState, setDemoResetState] = useState<{
+    isOpen: boolean;
+    target: AdminUserRow | null;
+  }>({
+    isOpen: false,
+    target: null,
+  });
 
   // Ops summary query - FIXED: Move ALL hooks before any conditional logic
   const { data: summary, isLoading: summaryLoading, error: summaryError } = useQuery({
@@ -776,6 +803,18 @@ function AdminPage() {
     },
   });
 
+  const resetDemoMutation = useMutation({
+    mutationFn: (userId: number) => resetDemoUser(userId),
+    onSuccess: (data) => {
+      toast.success(`Demo reset for ${data.email}`);
+      setDemoResetState({ isOpen: false, target: null });
+      queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to reset demo account");
+    },
+  });
+
   // Handle permission errors - FIXED: Move ALL hooks before conditional logic
   React.useEffect(() => {
     if (summaryError instanceof Error && summaryError.message.includes("Admin access required")) {
@@ -836,6 +875,25 @@ function AdminPage() {
       return;
     }
     impersonateMutation.mutate({ user_id: targetId });
+  };
+
+  const handleOpenDemoReset = (userId?: number | null) => {
+    const targetId = userId ?? selectedDemoUserId;
+    if (!targetId) {
+      toast.error("Select a demo account first");
+      return;
+    }
+    const demoUser = demoUsers.find((item) => item.id === targetId);
+    if (!demoUser) {
+      toast.error("Demo account not found");
+      return;
+    }
+    setDemoResetState({ isOpen: true, target: demoUser });
+  };
+
+  const handleConfirmDemoReset = () => {
+    if (!demoResetState.target) return;
+    resetDemoMutation.mutate(demoResetState.target.id);
   };
 
   // Check if user is admin (this should be checked by the router, but let's be safe)
@@ -1014,7 +1072,7 @@ function AdminPage() {
             </Card.Header>
             <Card.Body>
               <p className="section-description admin-section-description">
-                Create demo users, seed baseline scenarios, and switch into their view safely.
+                Create demo users, seed baseline scenarios, reset them, and switch into their view safely.
               </p>
               <div className="admin-demo-form">
                 <input
@@ -1048,6 +1106,13 @@ function AdminPage() {
                   disabled={seedScenarioMutation.isPending || !selectedDemoUserId}
                 >
                   {seedScenarioMutation.isPending ? "Seeding..." : "Seed selected demo"}
+                </Button>
+                <Button
+                  variant="danger"
+                  onClick={() => handleOpenDemoReset()}
+                  disabled={resetDemoMutation.isPending || !selectedDemoUserId}
+                >
+                  {resetDemoMutation.isPending ? "Resetting..." : "Reset selected demo"}
                 </Button>
                 <Button
                   variant="primary"
@@ -1102,6 +1167,14 @@ function AdminPage() {
                               disabled={seedScenarioMutation.isPending}
                             >
                               Seed baseline
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              onClick={() => handleOpenDemoReset(demoUser.id)}
+                              disabled={resetDemoMutation.isPending}
+                            >
+                              Reset
                             </Button>
                             <Button
                               size="sm"
@@ -1257,6 +1330,20 @@ function AdminPage() {
         confirmText={resetMutation.isPending ? "Processing..." : "Confirm"}
         isDangerous={true}
         requirePassword={modalState.requirePassword}
+      />
+
+      <ConfirmationModal
+        isOpen={demoResetState.isOpen}
+        onClose={() => setDemoResetState({ isOpen: false, target: null })}
+        onConfirm={handleConfirmDemoReset}
+        title="Reset demo account"
+        message={
+          demoResetState.target
+            ? `This will erase all data for ${demoResetState.target.email}. You can re-seed the baseline scenario afterwards.`
+            : "This will erase all data for the selected demo account."
+        }
+        confirmText={resetDemoMutation.isPending ? "Resetting..." : "Reset demo"}
+        isDangerous={true}
       />
 
       {/* User Detail Modal */}
