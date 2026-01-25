@@ -830,6 +830,7 @@ async def _execute_tools_parallel(
         from zerg.connectors.context import get_credential_resolver
         from zerg.events.supervisor_emitter import SupervisorEmitter
         from zerg.models.models import WorkerJob
+        from zerg.models_config import DEFAULT_WORKER_MODEL_ID
         from zerg.services.supervisor_context import get_supervisor_context
 
         # Get context for job creation
@@ -863,7 +864,7 @@ async def _execute_tools_parallel(
         trace_id = ctx.trace_id if ctx else None
 
         # Worker inherits model and reasoning_effort from supervisor context
-        worker_model = (ctx.model if ctx else None) or "gpt-5-mini"
+        worker_model = (ctx.model if ctx else None) or DEFAULT_WORKER_MODEL_ID
         worker_reasoning_effort = (ctx.reasoning_effort if ctx else None) or "none"
 
         created_jobs: list[dict] = []
