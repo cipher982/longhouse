@@ -71,6 +71,7 @@ class AdminUserRow(BaseModel):
     role: str
     is_active: bool
     created_at: Optional[datetime] = None
+    is_demo: bool = False
     usage: UserUsageSummary
 
 

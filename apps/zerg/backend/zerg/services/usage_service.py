@@ -87,6 +87,12 @@ def _get_user_usage_range(db: Session, user_id: int, start_dt: datetime, end_dt:
     }
 
 
+def _is_demo_prefs(prefs: Optional[dict]) -> bool:
+    if not prefs:
+        return False
+    return bool(prefs.get("demo") or prefs.get("is_demo"))
+
+
 def get_user_usage(
     db: Session,
     user_id: int,
@@ -271,6 +277,12 @@ def get_all_users_usage(
 
     rows = query.limit(limit).offset(offset).all()
 
+    user_ids = [row.id for row in rows]
+    prefs_by_id: dict[int, Optional[dict]] = {}
+    if user_ids:
+        prefs_rows = db.query(UserModel.id, UserModel.prefs).filter(UserModel.id.in_(user_ids)).all()
+        prefs_by_id = {row.id: row.prefs for row in prefs_rows}
+
     users = []
     for row in rows:
         users.append(
@@ -281,6 +293,7 @@ def get_all_users_usage(
                 "role": row.role,
                 "is_active": row.is_active,
                 "created_at": row.created_at,
+                "is_demo": _is_demo_prefs(prefs_by_id.get(row.id)),
                 "usage": {
                     "today": {
                         "tokens": int(row.tokens_today or 0),
@@ -411,6 +424,7 @@ def get_user_usage_detail(
             "role": user.role,
             "is_active": user.is_active,
             "created_at": user.created_at,
+            "is_demo": _is_demo_prefs(user.prefs),
             "usage": {
                 "today": usage_today,
                 "seven_days": usage_7d,
