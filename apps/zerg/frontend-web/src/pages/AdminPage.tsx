@@ -1118,14 +1118,22 @@ function AdminPage() {
                     // Extract just the unique part from email for cleaner display
                     const emailId = demoUser.email.split('@')[0].replace('demo+', '');
                     return (
-                      <div key={demoUser.id} className="demo-account-card">
-                        <div className="demo-account-info">
-                          <span className="demo-account-name">
+                      <div key={demoUser.id} className="demo-account-card" style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '20px 24px',
+                        background: 'linear-gradient(135deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%)',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        borderRadius: '12px',
+                      }}>
+                        <div className="demo-account-info" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          <span className="demo-account-name" style={{ fontWeight: 600, fontSize: '16px', color: '#fff' }}>
                             {demoUser.display_name || "Demo Account"}
                           </span>
-                          <span className="demo-account-email">{emailId}</span>
+                          <span className="demo-account-email" style={{ fontSize: '13px', color: 'rgba(255,255,255,0.5)', fontFamily: 'monospace' }}>{emailId}</span>
                         </div>
-                        <div className="demo-account-actions">
+                        <div className="demo-account-actions" style={{ display: 'flex', gap: '12px' }}>
                           <Button
                             variant="primary"
                             onClick={() => handleStartDemo(demoUser.id)}
