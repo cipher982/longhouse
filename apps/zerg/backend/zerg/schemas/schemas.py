@@ -195,6 +195,8 @@ class Agent(AgentBase):
     next_run_at: Optional[datetime] = None
     last_run_at: Optional[datetime] = None
     last_error: Optional[str] = None
+    # Display type for UI (Phase 2 terminology rebrand)
+    display_type: str = "fiche"
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +285,8 @@ class AgentRunOut(BaseModel):
     total_tokens: Optional[int] = None
     total_cost_usd: Optional[float] = None
     error: Optional[str] = None
+    # Display type for UI (Phase 2 terminology rebrand)
+    display_type: str = "course"
 
 
 # ---------------------------------------------------------------------------
