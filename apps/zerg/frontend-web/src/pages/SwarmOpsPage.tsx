@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Badge, Button, Card, EmptyState, PageShell, SectionHeader, Spinner } from "../components/ui";
 import { request } from "../services/api";
 import "../styles/swarm-ops.css";
@@ -145,6 +145,7 @@ function getEventSummary(event: RunEvent): string {
 
 export default function SwarmOpsPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [filter, setFilter] = useState<RunFilter>("attention");
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
 
@@ -153,6 +154,48 @@ export default function SwarmOpsPage() {
     queryFn: () => request<JarvisRunSummary[]>(`/jarvis/runs?limit=${RUN_LIMIT}`),
     refetchInterval: 5000,
   });
+
+  const demoScenario = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    const value = params.get("demo");
+    return value && value.trim().length > 0 ? value.trim() : null;
+  }, [location.search]);
+
+  useEffect(() => {
+    if (!demoScenario) return;
+
+    const storageKey = `swarm-demo-seeded:${demoScenario}`;
+    if (typeof window !== "undefined" && window.sessionStorage.getItem(storageKey)) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const seedScenario = async () => {
+      try {
+        await request(`/admin/seed-scenario`, {
+          method: "POST",
+          body: JSON.stringify({ name: demoScenario, clean: true }),
+        });
+        if (typeof window !== "undefined") {
+          window.sessionStorage.setItem(storageKey, "1");
+        }
+        if (!cancelled) {
+          runsQuery.refetch();
+        }
+      } catch (error) {
+        // Ignore demo seeding failures (prod blocks this endpoint).
+        // eslint-disable-next-line no-console
+        console.warn("Swarm demo seeding failed:", error);
+      }
+    };
+
+    void seedScenario();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [demoScenario, runsQuery]);
 
   const runs = useMemo<RunWithAttention[]>(() => {
     return (runsQuery.data ?? []).map((run) => ({
