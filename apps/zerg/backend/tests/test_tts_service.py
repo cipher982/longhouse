@@ -11,6 +11,7 @@ Tests cover:
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -31,8 +32,10 @@ class TestTTSConfig:
         config = TTSConfig()
         assert config.enabled is True
         assert config.provider == TTSProvider.EDGE
-        assert config.max_text_length == 4000
+        assert config.max_text_length == 4096
         assert config.timeout_ms == 30000
+        assert config.openai_model == "gpt-4o-mini-tts"
+        assert config.openai_voice == "alloy"
         assert config.elevenlabs_voice_id == "pMsXgVXv3BLzUgSXRplE"
         assert config.edge_voice == "en-US-GuyNeural"
 
@@ -84,6 +87,19 @@ class TestTTSService:
         service = TTSService(config)
         assert service._is_provider_available(TTSProvider.EDGE) is True
 
+    def test_provider_availability_openai_no_key(self):
+        """Test OpenAI unavailable without API key."""
+        config = TTSConfig(provider=TTSProvider.OPENAI, openai_api_key=None)
+        service = TTSService(config)
+        with patch("zerg.voice.tts_service.get_settings", return_value=SimpleNamespace(openai_api_key=None)):
+            assert service._is_provider_available(TTSProvider.OPENAI) is False
+
+    def test_provider_availability_openai_with_key(self):
+        """Test OpenAI available with API key."""
+        config = TTSConfig(provider=TTSProvider.OPENAI, openai_api_key="test-key")
+        service = TTSService(config)
+        assert service._is_provider_available(TTSProvider.OPENAI) is True
+
     def test_provider_availability_elevenlabs_no_key(self):
         """Test ElevenLabs unavailable without API key."""
         config = TTSConfig(provider=TTSProvider.ELEVENLABS, elevenlabs_api_key=None)
@@ -102,6 +118,7 @@ class TestTTSService:
         service = TTSService(config)
         order = service._get_provider_order()
         assert order[0] == TTSProvider.ELEVENLABS
+        assert TTSProvider.OPENAI in order
         assert TTSProvider.EDGE in order
 
     def test_provider_order_edge_primary(self):
@@ -110,6 +127,16 @@ class TestTTSService:
         service = TTSService(config)
         order = service._get_provider_order()
         assert order[0] == TTSProvider.EDGE
+        assert TTSProvider.OPENAI in order
+
+    def test_provider_order_openai_primary(self):
+        """Test provider order when OpenAI is primary."""
+        config = TTSConfig(provider=TTSProvider.OPENAI)
+        service = TTSService(config)
+        order = service._get_provider_order()
+        assert order[0] == TTSProvider.OPENAI
+        assert TTSProvider.ELEVENLABS in order
+        assert TTSProvider.EDGE in order
 
     @pytest.mark.asyncio
     async def test_convert_empty_text(self):
@@ -199,6 +226,26 @@ class TestTTSService:
         assert result.audio_data == b"audio-data"
 
     @pytest.mark.asyncio
+    async def test_convert_openai_success(self):
+        """Test successful OpenAI conversion."""
+        config = TTSConfig(provider=TTSProvider.OPENAI, openai_api_key="test-key")
+        service = TTSService(config)
+
+        mock_response = MagicMock()
+        mock_response.aread = AsyncMock(return_value=b"audio-data")
+
+        mock_client = MagicMock()
+        mock_client.audio.speech.create = AsyncMock(return_value=mock_response)
+
+        with patch("zerg.voice.tts_service.AsyncOpenAI", return_value=mock_client):
+            result = await service.convert("Hello world", provider=TTSProvider.OPENAI)
+
+        assert result.success is True
+        assert result.provider == "openai"
+        assert result.audio_data == b"audio-data"
+        assert result.output_format == "mp3"
+
+    @pytest.mark.asyncio
     async def test_convert_elevenlabs_api_error(self):
         """Test ElevenLabs API error handling with no fallback."""
         # Only ElevenLabs available, no Edge fallback
@@ -276,9 +323,10 @@ class TestTTSService:
         mock_edge_tts.Communicate.return_value = mock_communicate
 
         with patch("httpx.AsyncClient", return_value=mock_client):
-            with patch.dict("sys.modules", {"edge_tts": mock_edge_tts}):
-                with patch("pathlib.Path.read_bytes", return_value=b"edge-audio"):
-                    result = await service.convert("Hello world")
+            with patch("zerg.voice.tts_service.get_settings", return_value=SimpleNamespace(openai_api_key=None)):
+                with patch.dict("sys.modules", {"edge_tts": mock_edge_tts}):
+                    with patch("pathlib.Path.read_bytes", return_value=b"edge-audio"):
+                        result = await service.convert("Hello world")
 
         # Should fall back to Edge
         assert result.success is True

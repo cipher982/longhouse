@@ -38,9 +38,9 @@ router = APIRouter(tags=["jarvis-tts"])
 class TTSRequest(BaseModel):
     """Request to convert text to speech."""
 
-    text: str = Field(..., description="Text to convert to speech", min_length=1, max_length=4000)
-    provider: Optional[str] = Field(None, description="TTS provider: elevenlabs or edge (default: auto)")
-    voice_id: Optional[str] = Field(None, description="ElevenLabs voice ID (if using elevenlabs)")
+    text: str = Field(..., description="Text to convert to speech", min_length=1, max_length=4096)
+    provider: Optional[str] = Field(None, description="TTS provider: openai, elevenlabs, or edge (default: auto)")
+    voice_id: Optional[str] = Field(None, description="Voice ID/name for the selected provider")
 
 
 class TTSResponse(BaseModel):
@@ -104,6 +104,19 @@ ELEVENLABS_DEFAULT_VOICES = [
     VoiceInfo(id="MF3mGyEYCl7XYWbV9V6O", name="Elli", provider="elevenlabs", language="en", gender="female"),
     VoiceInfo(id="TxGEqnHWrfWFTfGW9XjX", name="Josh", provider="elevenlabs", language="en", gender="male"),
     VoiceInfo(id="VR6AewLTigWG4xSOukaG", name="Arnold", provider="elevenlabs", language="en", gender="male"),
+]
+
+OPENAI_VOICES = [
+    VoiceInfo(id="alloy", name="Alloy", provider="openai", language="en", gender=None),
+    VoiceInfo(id="ash", name="Ash", provider="openai", language="en", gender=None),
+    VoiceInfo(id="ballad", name="Ballad", provider="openai", language="en", gender=None),
+    VoiceInfo(id="coral", name="Coral", provider="openai", language="en", gender=None),
+    VoiceInfo(id="echo", name="Echo", provider="openai", language="en", gender=None),
+    VoiceInfo(id="sage", name="Sage", provider="openai", language="en", gender=None),
+    VoiceInfo(id="shimmer", name="Shimmer", provider="openai", language="en", gender=None),
+    VoiceInfo(id="verse", name="Verse", provider="openai", language="en", gender=None),
+    VoiceInfo(id="marin", name="Marin", provider="openai", language="en", gender=None),
+    VoiceInfo(id="cedar", name="Cedar", provider="openai", language="en", gender=None),
 ]
 
 
@@ -262,7 +275,7 @@ async def list_voices(
     """List available TTS voices.
 
     Args:
-        provider: Filter by provider (elevenlabs, edge, or all)
+        provider: Filter by provider (openai, elevenlabs, edge, or all)
 
     Returns:
         List of available voices with metadata
@@ -270,6 +283,11 @@ async def list_voices(
     tts_service = get_tts_service()
 
     voices = []
+
+    # Add OpenAI voices if available
+    if provider is None or provider.lower() == "openai":
+        if tts_service._is_provider_available(TTSProvider.OPENAI):
+            voices.extend(OPENAI_VOICES)
 
     # Add Edge voices if available
     if provider is None or provider.lower() == "edge":
