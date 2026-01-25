@@ -2,6 +2,8 @@ import React, { createContext, useContext, useEffect, useState, type ReactNode }
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 import config from './config';
+import { useServiceHealth, isServiceUnavailable } from './useServiceHealth';
+import { ServiceUnavailable } from '../components/ServiceUnavailable';
 
 // Types from our API
 interface User {
@@ -43,6 +45,16 @@ function cleanupLegacyToken(): void {
   }
 }
 
+// Custom error class that includes HTTP status for retry logic
+class HttpError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'HttpError';
+    this.status = status;
+  }
+}
+
 // API functions - all use credentials: 'include' for cookie auth
 async function loginWithGoogle(idToken: string): Promise<{ access_token: string; expires_in: number }> {
   const response = await fetch(`${config.apiBaseUrl}/auth/google`, {
@@ -56,7 +68,7 @@ async function loginWithGoogle(idToken: string): Promise<{ access_token: string;
 
   if (!response.ok) {
     const error = await response.text();
-    throw new Error(error || 'Login failed');
+    throw new HttpError(error || 'Login failed', response.status);
   }
 
   return response.json();
@@ -69,9 +81,9 @@ async function getCurrentUser(): Promise<User> {
 
   if (!response.ok) {
     if (response.status === 401) {
-      throw new Error('Authentication expired');
+      throw new HttpError('Authentication expired', 401);
     }
-    throw new Error('Failed to get user profile');
+    throw new HttpError(`Failed to get user profile (${response.status})`, response.status);
   }
 
   return response.json();
@@ -107,7 +119,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
     queryKey: ['current-user'],
     queryFn: getCurrentUser,
     enabled: true, // Always try - cookie auth is checked server-side
-    retry: false,
+    // Retry on 502/503 (service unavailable) but not on 401 (auth required)
+    retry: (failureCount, err) => {
+      if (isServiceUnavailable(err)) {
+        return failureCount < 5; // Retry up to 5 times for service unavailable
+      }
+      return false; // Don't retry auth failures
+    },
+    retryDelay: (attemptIndex) => Math.min(1000 * Math.pow(2, attemptIndex), 10000),
     staleTime: 5 * 60 * 1000, // 5 minutes
   });
 
@@ -359,12 +378,37 @@ interface AuthGuardProps {
 
 export function AuthGuard({ children, clientId }: AuthGuardProps) {
   const { isAuthenticated, isLoading } = useAuth();
+  const { status: serviceStatus, retryCount, retry } = useServiceHealth();
 
   // Skip auth guard if authentication is disabled (for demos/tests)
   if (!config.authEnabled) {
     return <>{children}</>;
   }
 
+  // Show service unavailable screen when backend is not reachable
+  // This happens during deployments, restarts, or network issues
+  if (serviceStatus === 'unavailable' || serviceStatus === 'checking') {
+    // During initial check, show unavailable if we've already failed once
+    // This prevents flash of "Loading..." followed by unavailable
+    if (serviceStatus === 'checking' && retryCount === 0) {
+      return (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: '100vh',
+          fontSize: '1.2rem',
+          background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)',
+          color: 'rgba(255, 255, 255, 0.7)',
+        }}>
+          Loading...
+        </div>
+      );
+    }
+    return <ServiceUnavailable retryCount={retryCount} onRetry={retry} />;
+  }
+
+  // Service is available - now check authentication
   if (isLoading) {
     return (
       <div style={{
@@ -373,6 +417,8 @@ export function AuthGuard({ children, clientId }: AuthGuardProps) {
         justifyContent: 'center',
         height: '100vh',
         fontSize: '1.2rem',
+        background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)',
+        color: 'rgba(255, 255, 255, 0.7)',
       }}>
         Loading...
       </div>
