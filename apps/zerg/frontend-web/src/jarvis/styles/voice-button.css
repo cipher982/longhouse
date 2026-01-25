@@ -38,25 +38,6 @@
   height: 72px;
 }
 
-/* Compact ring sizes */
-#react-root[data-ui-effects="on"] .jarvis-container .voice-button-wrapper.compact .reactor-ring-outer {
-  width: 68px;
-  height: 68px;
-  border-width: 1.5px;
-}
-
-#react-root[data-ui-effects="on"] .jarvis-container .voice-button-wrapper.compact .reactor-ring-middle {
-  width: 56px;
-  height: 56px;
-  border-width: 1px;
-}
-
-#react-root[data-ui-effects="on"] .jarvis-container .voice-button-wrapper.compact .reactor-ring-inner {
-  width: 46px;
-  height: 46px;
-  border-width: 1px;
-}
-
 /* Compact button sizing */
 .jarvis-container .voice-button-wrapper.compact .voice-button {
   width: 40px;
@@ -68,27 +49,65 @@
   height: 16px;
 }
 
-/* Mic level pulse ring */
-.jarvis-container .mic-level-ring {
+/* Compact button: neutral idle/ready state (no motion) */
+.jarvis-container .voice-button-wrapper.compact .voice-button.idle,
+.jarvis-container .voice-button-wrapper.compact .voice-button.ready {
+  animation: none;
+  border-color: rgb(148 163 184 / 40%);
+  box-shadow:
+    inset 0 0 18px rgb(0 0 0 / 55%),
+    0 6px 20px rgb(0 0 0 / 45%),
+    0 0 0 1px rgb(148 163 184 / 10%);
+}
+
+.jarvis-container .voice-button-wrapper.compact .voice-button.idle .voice-icon,
+.jarvis-container .voice-button-wrapper.compact .voice-button.ready .voice-icon {
+  color: rgb(148 163 184 / 70%);
+  filter: none;
+}
+
+/* Compact button: only animate while listening */
+.jarvis-container .voice-button-wrapper.compact .voice-button.listening {
+  animation: none;
+}
+
+/* EQ-style mic visualizer ring */
+.jarvis-container .mic-eq-ring {
   position: absolute;
-  width: 74px;
-  height: 74px;
+  width: 68px;
+  height: 68px;
   border-radius: 50%;
-  border: 2px solid rgb(6 182 212 / 35%);
   opacity: 0;
-  transform: scale(0.9);
-  transition: opacity 0.08s linear, transform 0.08s linear;
   pointer-events: none;
+  transition: opacity 0.15s ease;
 }
 
-.jarvis-container .voice-button-wrapper.compact .mic-level-ring {
-  width: 66px;
-  height: 66px;
+.jarvis-container .voice-button-wrapper.listening .mic-eq-ring {
+  opacity: 1;
 }
 
-.jarvis-container .voice-button-wrapper.listening .mic-level-ring {
-  opacity: calc(0.2 + (var(--mic-level) * 0.8));
-  transform: scale(calc(0.9 + (var(--mic-level) * 0.35)));
+.jarvis-container .mic-eq-bar {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 2px;
+  height: 12px;
+  border-radius: 999px;
+  background: rgb(6 182 212 / 80%);
+  transform-origin: center 30px;
+  transform: rotate(var(--bar-angle)) translateY(-22px) scaleY(calc(0.25 + (var(--mic-level) * var(--bar-factor))));
+  transition: transform 80ms linear;
+  box-shadow: 0 0 6px rgb(6 182 212 / 45%);
+}
+
+.jarvis-container .voice-button-wrapper.compact .mic-eq-ring {
+  width: 64px;
+  height: 64px;
+}
+
+.jarvis-container .voice-button-wrapper.compact .mic-eq-bar {
+  transform-origin: center 28px;
+  transform: rotate(var(--bar-angle)) translateY(-20px) scaleY(calc(0.2 + (var(--mic-level) * var(--bar-factor))));
 }
 
 /* ============================
@@ -379,18 +398,18 @@
 
 /* Ready */
 .jarvis-container .voice-button.ready {
-  border-color: rgb(34 197 94 / 40%);
+  border-color: rgb(148 163 184 / 45%);
   box-shadow:
     inset 0 0 30px rgb(0 0 0 / 60%),
     0 8px 30px rgb(0 0 0 / 50%),
-    0 0 0 1px rgb(34 197 94 / 20%),
-    0 0 40px rgb(34 197 94 / 15%);
-  animation: button-ready-breathe 3s ease-in-out infinite;
+    0 0 0 1px rgb(148 163 184 / 18%),
+    0 0 30px rgb(148 163 184 / 12%);
+  animation: none;
 }
 
 .jarvis-container .voice-button.ready .voice-icon {
-  color: #22c55e;
-  filter: drop-shadow(0 0 6px rgb(34 197 94 / 50%));
+  color: rgb(148 163 184 / 80%);
+  filter: none;
 }
 
 /* Listening */
@@ -519,23 +538,6 @@
   }
 }
 
-@keyframes button-ready-breathe {
-  0%,
-  100% {
-    box-shadow:
-      inset 0 0 30px rgb(0 0 0 / 60%),
-      0 8px 30px rgb(0 0 0 / 50%),
-      0 0 0 1px rgb(34 197 94 / 20%),
-      0 0 40px rgb(34 197 94 / 15%);
-  }
-  50% {
-    box-shadow:
-      inset 0 0 30px rgb(0 0 0 / 60%),
-      0 8px 30px rgb(0 0 0 / 50%),
-      0 0 0 3px rgb(34 197 94 / 30%),
-      0 0 60px rgb(34 197 94 / 25%);
-  }
-}
 
 @keyframes button-listening {
   0%,
