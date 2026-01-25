@@ -56,6 +56,7 @@ def find_matching_scenario(prompt: str, role: str) -> Optional[Dict[str, Any]]:
     host_count = sum([is_cube, is_clifford, is_zerg])
     # Heuristic: multi-host disk checks imply parallel intent even without the keyword.
     is_parallel = "parallel" in text or host_count >= 2
+    is_math = "2+2" in text or "2 + 2" in text
 
     # Session continuity / workspace worker scenarios
     is_resume = any(k in text for k in ("resume", "continue session", "pick up where"))
@@ -82,6 +83,13 @@ def find_matching_scenario(prompt: str, role: str) -> Optional[Dict[str, Any]]:
             "name": "workspace_worker_supervisor",
             "evidence_keyword": "workspace",
             "resume_session_id": resume_session_id,
+        }
+
+    if role == "supervisor" and is_math:
+        return {
+            "role": "supervisor",
+            "name": "math_simple",
+            "evidence_keyword": None,
         }
 
     # Supervisor: parallel disk checks first, then single-host disk checks.
@@ -237,6 +245,10 @@ class ScriptedChatLLM(BaseChatModel):
             return ChatResult(generations=[ChatGeneration(message=ai_message)])
 
         scenario = find_matching_scenario(prompt, role)
+
+        if role == "supervisor" and scenario and scenario.get("name") == "math_simple":
+            ai_message = AIMessage(content="4", tool_calls=[])
+            return ChatResult(generations=[ChatGeneration(message=ai_message)])
 
         # Workspace worker scenario: spawns spawn_workspace_worker with git repo and optional resume
         if role == "supervisor" and scenario and scenario.get("name") == "workspace_worker_supervisor":
