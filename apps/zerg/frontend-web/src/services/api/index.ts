@@ -10,3 +10,4 @@ export * from "./users";
 export * from "./runners";
 export * from "./knowledge";
 export * from "./contacts";
+export * from "./voice";

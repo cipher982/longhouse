@@ -41,19 +41,19 @@ Replace realtime mic flow with a turn-based STT → Supervisor → TTS round-tri
 - [!] Gemini review of plan (tool timeout; retry pending).
 
 ## Phase 1 — Frontend Turn-Based Voice
-- [ ] Add `useTurnBasedVoice` hook (record → upload → render → play audio).
-- [ ] Add `voiceTurn` API helper in `services/api/`.
-- [ ] Wire Jarvis `App.tsx` mic handlers to turn-based hook (remove realtime connect step).
-- [ ] Guard/disable realtime voice listeners in `useJarvisApp` to avoid status conflicts.
-- [ ] Make `MicButton` ignore presses while processing/speaking.
+- [x] Add `useTurnBasedVoice` hook (record → upload → render → play audio).
+- [x] Add `voiceTurn` API helper in `services/api/`.
+- [x] Wire Jarvis `App.tsx` mic handlers to turn-based hook (remove realtime connect step).
+- [x] Guard/disable realtime voice listeners in `useJarvisApp` to avoid status conflicts.
+- [x] Make `MicButton` ignore presses while processing/speaking.
 
 ## Phase 2 — Error Handling + UX Polish
-- [ ] Surface voice errors in chat (short assistant bubble + mic error state).
-- [ ] Ensure audio playback cleanup (revoke object URLs, reset status).
+- [x] Surface voice errors in chat (short assistant bubble + mic error state).
+- [x] Ensure audio playback cleanup (revoke object URLs, reset status).
 
 ## Phase 3 — Tests
-- [ ] Unit: mock MediaRecorder + fetch for `useTurnBasedVoice`.
-- [ ] E2E: stub mic + voice-turn response; assert transcript + response appear.
+- [x] Unit: mock MediaRecorder + fetch for `useTurnBasedVoice`.
+- [x] E2E: stub mic + voice-turn response; assert transcript + response appear.
 
 ## Phase 4 — QA
 - [ ] Manual smoke: mic record → transcript + response + audio playback.
