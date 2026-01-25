@@ -27,7 +27,7 @@ test("Voice turn: transcript + response appear in chat", async ({ page }) => {
       stop() {
         this.state = "inactive";
         if (this.ondataavailable) {
-          const blob = new Blob(["test"], { type: this.mimeType });
+          const blob = new Blob([new Uint8Array(4096)], { type: this.mimeType });
           this.ondataavailable({ data: blob });
         }
         if (this.onstop) {
