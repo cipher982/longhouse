@@ -12,6 +12,14 @@ from zerg.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+
+# Normalize content-type values like "audio/webm;codecs=opus" -> "audio/webm"
+def normalize_content_type(content_type: str | None) -> str | None:
+    if not content_type:
+        return None
+    return content_type.split(";", 1)[0].strip().lower()
+
+
 # OpenAI-supported audio types for transcription
 ALLOWED_AUDIO_TYPES = {
     "audio/flac",
@@ -92,7 +100,8 @@ class STTService:
         if len(audio_bytes) > MAX_AUDIO_BYTES:
             return STTResult(success=False, error=f"Audio file too large (max {MAX_AUDIO_BYTES // (1024 * 1024)}MB)")
 
-        if content_type and content_type not in ALLOWED_AUDIO_TYPES:
+        normalized_content_type = normalize_content_type(content_type)
+        if normalized_content_type and normalized_content_type not in ALLOWED_AUDIO_TYPES:
             return STTResult(success=False, error=f"Unsupported audio type: {content_type}")
 
         selected_model = model or self._model
