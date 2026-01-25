@@ -568,7 +568,7 @@ class SupervisorService:
         await emit_run_event(
             db=self.db,
             run_id=run.id,
-            event_type="supervisor_started",
+            event_type="concierge_started",
             payload=started_payload,
         )
 
@@ -614,7 +614,7 @@ class SupervisorService:
             await emit_run_event(
                 db=self.db,
                 run_id=run.id,
-                event_type="supervisor_thinking",
+                event_type="concierge_thinking",
                 payload={
                     "message": "Analyzing your request...",
                     "owner_id": owner_id,
@@ -680,7 +680,7 @@ class SupervisorService:
                 await emit_run_event(
                     db=self.db,
                     run_id=run.id,
-                    event_type="supervisor_deferred",
+                    event_type="concierge_deferred",
                     payload={
                         "agent_id": agent.id,
                         "thread_id": thread.id,
@@ -799,7 +799,7 @@ class SupervisorService:
                         task = job_info.get("task", job.task[:100] if job.task else "")
                         await append_run_event(
                             run_id=run.id,
-                            event_type="worker_spawned",
+                            event_type="commis_spawned",
                             payload={
                                 "job_id": job.id,
                                 "tool_call_id": tool_call_id,
@@ -878,7 +878,7 @@ class SupervisorService:
                 await emit_run_event(
                     db=self.db,
                     run_id=run.id,
-                    event_type="supervisor_waiting",
+                    event_type="concierge_waiting",
                     payload={
                         "agent_id": agent.id,
                         "thread_id": thread.id,
@@ -952,7 +952,7 @@ class SupervisorService:
             await emit_run_event(
                 db=self.db,
                 run_id=run.id,
-                event_type="supervisor_complete",
+                event_type="concierge_complete",
                 payload={
                     "agent_id": agent.id,
                     "thread_id": thread.id,
@@ -1037,7 +1037,7 @@ class SupervisorService:
             await emit_run_event(
                 db=self.db,
                 run_id=run.id,
-                event_type="supervisor_complete",
+                event_type="concierge_complete",
                 payload={
                     "agent_id": agent.id,
                     "thread_id": thread.id,

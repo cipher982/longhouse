@@ -198,7 +198,7 @@ async def _replay_and_stream(
 
         # Tool events MUST have run_id to prevent leaking across runs
         event_type = event.get("event_type") or event.get("type")
-        if event_type in ("worker_tool_started", "worker_tool_completed", "worker_tool_failed"):
+        if event_type in ("commis_tool_started", "commis_tool_completed", "commis_tool_failed"):
             if "run_id" not in event:
                 logger.warning(f"Tool event missing run_id, dropping: {event_type}")
                 return
@@ -211,26 +211,26 @@ async def _replay_and_stream(
             logger.warning(f"Stream queue overflow for run {run_id}, signaling client to reconnect")
 
     # Subscribe to all relevant events
-    event_bus.subscribe(EventType.SUPERVISOR_STARTED, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_THINKING, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_TOKEN, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_DEFERRED, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_WAITING, event_handler)  # Interrupt/resume pattern
-    event_bus.subscribe(EventType.SUPERVISOR_RESUMED, event_handler)  # Interrupt/resume pattern
-    event_bus.subscribe(EventType.SUPERVISOR_HEARTBEAT, event_handler)
-    event_bus.subscribe(EventType.WORKER_SPAWNED, event_handler)
-    event_bus.subscribe(EventType.WORKER_STARTED, event_handler)
-    event_bus.subscribe(EventType.WORKER_COMPLETE, event_handler)
-    event_bus.subscribe(EventType.WORKER_SUMMARY_READY, event_handler)
+    event_bus.subscribe(EventType.CONCIERGE_STARTED, event_handler)
+    event_bus.subscribe(EventType.CONCIERGE_THINKING, event_handler)
+    event_bus.subscribe(EventType.CONCIERGE_TOKEN, event_handler)
+    event_bus.subscribe(EventType.CONCIERGE_COMPLETE, event_handler)
+    event_bus.subscribe(EventType.CONCIERGE_DEFERRED, event_handler)
+    event_bus.subscribe(EventType.CONCIERGE_WAITING, event_handler)  # Interrupt/resume pattern
+    event_bus.subscribe(EventType.CONCIERGE_RESUMED, event_handler)  # Interrupt/resume pattern
+    event_bus.subscribe(EventType.CONCIERGE_HEARTBEAT, event_handler)
+    event_bus.subscribe(EventType.COMMIS_SPAWNED, event_handler)
+    event_bus.subscribe(EventType.COMMIS_STARTED, event_handler)
+    event_bus.subscribe(EventType.COMMIS_COMPLETE, event_handler)
+    event_bus.subscribe(EventType.COMMIS_SUMMARY_READY, event_handler)
     event_bus.subscribe(EventType.ERROR, event_handler)
-    event_bus.subscribe(EventType.WORKER_TOOL_STARTED, event_handler)
-    event_bus.subscribe(EventType.WORKER_TOOL_COMPLETED, event_handler)
-    event_bus.subscribe(EventType.WORKER_TOOL_FAILED, event_handler)
+    event_bus.subscribe(EventType.COMMIS_TOOL_STARTED, event_handler)
+    event_bus.subscribe(EventType.COMMIS_TOOL_COMPLETED, event_handler)
+    event_bus.subscribe(EventType.COMMIS_TOOL_FAILED, event_handler)
     # Supervisor tool events (for chat UI tool activity display)
-    event_bus.subscribe(EventType.SUPERVISOR_TOOL_STARTED, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_TOOL_COMPLETED, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_TOOL_FAILED, event_handler)
+    event_bus.subscribe(EventType.CONCIERGE_TOOL_STARTED, event_handler)
+    event_bus.subscribe(EventType.CONCIERGE_TOOL_COMPLETED, event_handler)
+    event_bus.subscribe(EventType.CONCIERGE_TOOL_FAILED, event_handler)
 
     try:
         # 2. Optionally load and replay historical events
@@ -312,7 +312,7 @@ async def _replay_and_stream(
                 event_type = event.get("event_type") or event.get("type") or "event"
 
                 # Skip tokens if not requested
-                if not include_tokens and event_type == "supervisor_token":
+                if not include_tokens and event_type == "concierge_token":
                     continue
 
                 # CRITICAL: Skip events that were already in the replay
@@ -323,19 +323,19 @@ async def _replay_and_stream(
                     continue
 
                 # SUPERVISOR_TOKEN is emitted per-token and will spam logs when DEBUG is enabled
-                if event_type != EventType.SUPERVISOR_TOKEN.value:
+                if event_type != EventType.CONCIERGE_TOKEN.value:
                     logger.debug(f"Stream: received live event {event_type} for run {run_id}")
 
                 # Track worker lifecycle so we don't close the stream until workers finish
-                if event_type == "worker_spawned":
+                if event_type == "commis_spawned":
                     pending_workers += 1
-                elif event_type == "worker_complete" and pending_workers > 0:
+                elif event_type == "commis_complete" and pending_workers > 0:
                     pending_workers -= 1
-                elif event_type == "worker_summary_ready" and pending_workers > 0:
+                elif event_type == "commis_summary_ready" and pending_workers > 0:
                     pending_workers -= 1
-                elif event_type == "supervisor_complete":
+                elif event_type == "concierge_complete":
                     supervisor_done = True
-                elif event_type == "supervisor_deferred":
+                elif event_type == "concierge_deferred":
                     # v2.2: Timeout migration default is to close the stream, but some
                     # DEFERRED states (e.g., waiting for worker continuations) should
                     # keep the stream open so the connected client receives the final answer.
@@ -387,25 +387,25 @@ async def _replay_and_stream(
         logger.info(f"Stream disconnected for run {run_id}")
     finally:
         # Unsubscribe from all events
-        event_bus.unsubscribe(EventType.SUPERVISOR_STARTED, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_THINKING, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_TOKEN, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_DEFERRED, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_WAITING, event_handler)  # Interrupt/resume pattern
-        event_bus.unsubscribe(EventType.SUPERVISOR_RESUMED, event_handler)  # Interrupt/resume pattern
-        event_bus.unsubscribe(EventType.SUPERVISOR_HEARTBEAT, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_SPAWNED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_STARTED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_COMPLETE, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_SUMMARY_READY, event_handler)
+        event_bus.unsubscribe(EventType.CONCIERGE_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.CONCIERGE_THINKING, event_handler)
+        event_bus.unsubscribe(EventType.CONCIERGE_TOKEN, event_handler)
+        event_bus.unsubscribe(EventType.CONCIERGE_COMPLETE, event_handler)
+        event_bus.unsubscribe(EventType.CONCIERGE_DEFERRED, event_handler)
+        event_bus.unsubscribe(EventType.CONCIERGE_WAITING, event_handler)  # Interrupt/resume pattern
+        event_bus.unsubscribe(EventType.CONCIERGE_RESUMED, event_handler)  # Interrupt/resume pattern
+        event_bus.unsubscribe(EventType.CONCIERGE_HEARTBEAT, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_SPAWNED, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_COMPLETE, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_SUMMARY_READY, event_handler)
         event_bus.unsubscribe(EventType.ERROR, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_TOOL_STARTED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_TOOL_COMPLETED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_TOOL_FAILED, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_STARTED, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_COMPLETED, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_FAILED, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_TOOL_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_TOOL_COMPLETED, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_TOOL_FAILED, event_handler)
+        event_bus.unsubscribe(EventType.CONCIERGE_TOOL_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.CONCIERGE_TOOL_COMPLETED, event_handler)
+        event_bus.unsubscribe(EventType.CONCIERGE_TOOL_FAILED, event_handler)
 
 
 async def stream_run_events_live(

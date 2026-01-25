@@ -40,7 +40,7 @@ class AgentRunEvent(Base):
     run_id = Column(Integer, ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False)
 
     # Event metadata -----------------------------------------------------
-    event_type = Column(String(50), nullable=False, index=True)  # supervisor_started, worker_complete, etc.
+    event_type = Column(String(50), nullable=False, index=True)  # concierge_started, commis_complete, etc.
 
     # Event payload ------------------------------------------------------
     payload = Column(JSON().with_variant(JSONB, "postgresql"), nullable=False)  # Full event data (JSON-serializable)

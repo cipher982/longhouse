@@ -11,10 +11,10 @@ runs:
     finished_at: -18m
     summary: "Repo audit complete: 3 TODOs found"
     events:
-      - type: worker_spawned
+      - type: commis_spawned
         message: "Worker spawned for repo audit"
         at: -24m
-      - type: worker_complete
+      - type: commis_complete
         message: "Worker completed repo audit"
         at: -18m
     worker_jobs:

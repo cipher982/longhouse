@@ -517,10 +517,10 @@ class WorkerJobProcessor:
                     await emit_run_event(
                         db=event_db,
                         run_id=supervisor_run_id,
-                        event_type="worker_complete",
+                        event_type="commis_complete",
                         payload={
                             "job_id": job_id,
-                            "worker_id": worker_id,
+                            "commis_id": worker_id,
                             "status": final_status,
                             "error": final_error,
                             "duration_ms": result.duration_ms if result else 0,

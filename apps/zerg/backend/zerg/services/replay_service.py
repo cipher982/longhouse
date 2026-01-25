@@ -137,9 +137,9 @@ class ReplayService:
 
         # Emit supervisor_started
         await event_bus.publish(
-            EventType.SUPERVISOR_STARTED,
+            EventType.CONCIERGE_STARTED,
             {
-                "event_type": "supervisor_started",
+                "event_type": "concierge_started",
                 "run_id": run_id,
                 "thread_id": thread_id,
                 "owner_id": owner_id,
@@ -151,9 +151,9 @@ class ReplayService:
 
         # Emit thinking
         await event_bus.publish(
-            EventType.SUPERVISOR_THINKING,
+            EventType.CONCIERGE_THINKING,
             {
-                "event_type": "supervisor_thinking",
+                "event_type": "concierge_thinking",
                 "run_id": run_id,
                 "owner_id": owner_id,
                 "message": "Analyzing your request...",
@@ -185,9 +185,9 @@ class ReplayService:
                 if tool_name == "spawn_commis":
                     # Emit worker spawned event
                     await event_bus.publish(
-                        EventType.WORKER_SPAWNED,
+                        EventType.COMMIS_SPAWNED,
                         {
-                            "event_type": "worker_spawned",
+                            "event_type": "commis_spawned",
                             "run_id": run_id,
                             "owner_id": owner_id,
                             "job_id": 999,  # Fake job ID
@@ -204,9 +204,9 @@ class ReplayService:
 
             # Emit worker complete
             await event_bus.publish(
-                EventType.WORKER_COMPLETE,
+                EventType.COMMIS_COMPLETE,
                 {
-                    "event_type": "worker_complete",
+                    "event_type": "commis_complete",
                     "run_id": run_id,
                     "owner_id": owner_id,
                     "job_id": 999,
@@ -233,9 +233,9 @@ class ReplayService:
 
         # Emit completion
         await event_bus.publish(
-            EventType.SUPERVISOR_COMPLETE,
+            EventType.CONCIERGE_COMPLETE,
             {
-                "event_type": "supervisor_complete",
+                "event_type": "concierge_complete",
                 "run_id": run_id,
                 "thread_id": thread_id,
                 "owner_id": owner_id,
@@ -277,9 +277,9 @@ class ReplayService:
 
         for chunk in chunks:
             await event_bus.publish(
-                EventType.SUPERVISOR_TOKEN,
+                EventType.CONCIERGE_TOKEN,
                 {
-                    "event_type": "supervisor_token",
+                    "event_type": "concierge_token",
                     "run_id": run_id,
                     "owner_id": owner_id,
                     "message_id": message_id,

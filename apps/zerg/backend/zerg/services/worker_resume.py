@@ -221,7 +221,7 @@ async def resume_supervisor_batch(
     await emit_run_event(
         db=db,
         run_id=run.id,
-        event_type="supervisor_resumed",
+        event_type="concierge_resumed",
         payload={
             "agent_id": agent.id,
             "thread_id": thread.id,
@@ -301,7 +301,7 @@ async def resume_supervisor_batch(
         await emit_run_event(
             db=db,
             run_id=run.id,
-            event_type="supervisor_complete",
+            event_type="concierge_complete",
             payload={
                 "agent_id": agent.id,
                 "thread_id": thread.id,
@@ -445,7 +445,7 @@ async def resume_supervisor_batch(
                 task = job.task[:100] if job.task else ""
                 await append_run_event(
                     run_id=run_id,
-                    event_type="worker_spawned",
+                    event_type="commis_spawned",
                     payload={
                         "job_id": job.id,
                         "tool_call_id": tool_call_id,
@@ -472,7 +472,7 @@ async def resume_supervisor_batch(
         await emit_run_event(
             db=db,
             run_id=run.id,
-            event_type="supervisor_waiting",
+            event_type="concierge_waiting",
             payload={
                 "agent_id": agent.id,
                 "thread_id": thread.id,
@@ -718,7 +718,7 @@ async def _continue_supervisor_langgraph_free(
     await emit_run_event(
         db=db,
         run_id=run.id,
-        event_type="supervisor_resumed",
+        event_type="concierge_resumed",
         payload={
             "agent_id": agent.id,
             "thread_id": thread.id,
@@ -796,7 +796,7 @@ async def _continue_supervisor_langgraph_free(
         await emit_run_event(
             db=db,
             run_id=run.id,
-            event_type="supervisor_complete",
+            event_type="concierge_complete",
             payload={
                 "agent_id": agent.id,
                 "thread_id": thread.id,
@@ -869,7 +869,7 @@ async def _continue_supervisor_langgraph_free(
         await emit_run_event(
             db=db,
             run_id=run.id,
-            event_type="supervisor_waiting",
+            event_type="concierge_waiting",
             payload={
                 "agent_id": agent.id,
                 "thread_id": thread.id,

@@ -81,9 +81,9 @@ async def _replay_stream_generator(
                     },
                 )
                 await event_bus.publish(
-                    EventType.SUPERVISOR_COMPLETE,
+                    EventType.CONCIERGE_COMPLETE,
                     {
-                        "event_type": "supervisor_complete",
+                        "event_type": "concierge_complete",
                         "run_id": run_id,
                         "thread_id": thread_id,
                         "owner_id": owner_id,
@@ -106,9 +106,9 @@ async def _replay_stream_generator(
                 },
             )
             await event_bus.publish(
-                EventType.SUPERVISOR_COMPLETE,
+                EventType.CONCIERGE_COMPLETE,
                 {
-                    "event_type": "supervisor_complete",
+                    "event_type": "concierge_complete",
                     "run_id": run_id,
                     "thread_id": thread_id,
                     "owner_id": owner_id,

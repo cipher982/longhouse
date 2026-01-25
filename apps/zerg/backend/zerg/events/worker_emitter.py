@@ -1,7 +1,7 @@
-"""WorkerEmitter - emits worker_tool_* events with identity baked in.
+"""CommisEmitter - emits commis_tool_* events with identity baked in.
 
 This class replaces the contextvar-based event emission pattern. The emitter's
-identity (worker) is fixed at construction time, so it always emits the correct
+identity (commis) is fixed at construction time, so it always emits the correct
 event type regardless of contextvar state.
 
 Key design principle: The emitter does NOT hold a DB session. Event emission
@@ -36,53 +36,59 @@ class ToolCall:
 
 
 @dataclass
-class WorkerEmitter:
-    """Emitter for worker tool events - identity baked at construction.
+class CommisEmitter:
+    """Emitter for commis tool events - identity baked at construction.
 
-    Always emits worker_tool_* events, regardless of contextvar state.
-    This eliminates the contextvar leakage bug where supervisor events
-    could be misclassified as worker events.
+    Always emits commis_tool_* events, regardless of contextvar state.
+    This eliminates the contextvar leakage bug where concierge events
+    could be misclassified as commis events.
 
     Key principle: No DB session stored. Event emission uses append_run_event()
     which opens its own short-lived session per event.
 
     Attributes
     ----------
-    worker_id
-        Unique identifier for the worker (e.g., "2024-12-05T16-30-00_disk-check")
+    commis_id
+        Unique identifier for the commis (e.g., "2024-12-05T16-30-00_disk-check")
     owner_id
-        User ID that owns this worker's agent
+        User ID that owns this commis's agent
     run_id
-        Run ID for correlating events (supervisor run ID)
+        Run ID for correlating events (concierge run ID)
     job_id
-        WorkerJob ID for roundabout event correlation (critical!)
+        CommisJob ID for roundabout event correlation (critical!)
     tool_calls
-        List of tool calls made during this worker run (for activity log)
+        List of tool calls made during this commis run (for activity log)
     has_critical_error
         Flag indicating a critical tool error occurred (fail-fast)
     critical_error_message
         Human-readable error message for the critical error
     """
 
-    worker_id: str
+    commis_id: str
     owner_id: int | None
     run_id: int | None
     job_id: int | None
     trace_id: str | None = None
 
-    # Tool tracking (existing WorkerContext functionality)
+    # Tool tracking (existing CommisContext functionality)
     tool_calls: list[ToolCall] = field(default_factory=list)
     has_critical_error: bool = False
     critical_error_message: str | None = None
 
+    # Backward compatibility: expose worker_id as alias for commis_id
     @property
-    def is_worker(self) -> bool:
-        """Always True - this is a worker emitter."""
+    def worker_id(self) -> str:
+        """Backward-compat alias for commis_id."""
+        return self.commis_id
+
+    @property
+    def is_commis(self) -> bool:
+        """Always True - this is a commis emitter."""
         return True
 
     @property
-    def is_supervisor(self) -> bool:
-        """Always False - this is a worker emitter."""
+    def is_concierge(self) -> bool:
+        """Always False - this is a commis emitter."""
         return False
 
     def record_tool_start(
@@ -126,11 +132,11 @@ class WorkerEmitter:
         tool_name: str,
         tool_call_id: str,
         tool_args_preview: str,
-        tool_args: dict | None = None,  # Accept but don't use (supervisor uses this)
+        tool_args: dict | None = None,  # Accept but don't use (concierge uses this)
     ) -> None:
-        """Emit worker_tool_started event.
+        """Emit commis_tool_started event.
 
-        Always emits worker_tool_started - identity is fixed at construction.
+        Always emits commis_tool_started - identity is fixed at construction.
         """
         if not self.run_id:
             logger.debug("Skipping emit_tool_started: no run_id")
@@ -141,9 +147,9 @@ class WorkerEmitter:
         try:
             await append_run_event(
                 run_id=self.run_id,
-                event_type="worker_tool_started",
+                event_type="commis_tool_started",
                 payload={
-                    "worker_id": self.worker_id,
+                    "commis_id": self.commis_id,
                     "owner_id": self.owner_id,
                     "job_id": self.job_id,  # Critical for roundabout correlation
                     "tool_name": tool_name,
@@ -154,7 +160,7 @@ class WorkerEmitter:
                 },
             )
         except Exception:
-            logger.warning("Failed to emit worker_tool_started event", exc_info=True)
+            logger.warning("Failed to emit commis_tool_started event", exc_info=True)
 
     async def emit_tool_completed(
         self,
@@ -162,11 +168,11 @@ class WorkerEmitter:
         tool_call_id: str,
         duration_ms: int,
         result_preview: str,
-        result: str | None = None,  # Accept but don't use (supervisor uses this)
+        result: str | None = None,  # Accept but don't use (concierge uses this)
     ) -> None:
-        """Emit worker_tool_completed event.
+        """Emit commis_tool_completed event.
 
-        Always emits worker_tool_completed - identity is fixed at construction.
+        Always emits commis_tool_completed - identity is fixed at construction.
         """
         if not self.run_id:
             logger.debug("Skipping emit_tool_completed: no run_id")
@@ -177,9 +183,9 @@ class WorkerEmitter:
         try:
             await append_run_event(
                 run_id=self.run_id,
-                event_type="worker_tool_completed",
+                event_type="commis_tool_completed",
                 payload={
-                    "worker_id": self.worker_id,
+                    "commis_id": self.commis_id,
                     "owner_id": self.owner_id,
                     "job_id": self.job_id,  # Critical for roundabout correlation
                     "tool_name": tool_name,
@@ -191,7 +197,7 @@ class WorkerEmitter:
                 },
             )
         except Exception:
-            logger.warning("Failed to emit worker_tool_completed event", exc_info=True)
+            logger.warning("Failed to emit commis_tool_completed event", exc_info=True)
 
     async def emit_tool_failed(
         self,
@@ -200,9 +206,9 @@ class WorkerEmitter:
         duration_ms: int,
         error: str,
     ) -> None:
-        """Emit worker_tool_failed event.
+        """Emit commis_tool_failed event.
 
-        Always emits worker_tool_failed - identity is fixed at construction.
+        Always emits commis_tool_failed - identity is fixed at construction.
         """
         if not self.run_id:
             logger.debug("Skipping emit_tool_failed: no run_id")
@@ -213,9 +219,9 @@ class WorkerEmitter:
         try:
             await append_run_event(
                 run_id=self.run_id,
-                event_type="worker_tool_failed",
+                event_type="commis_tool_failed",
                 payload={
-                    "worker_id": self.worker_id,
+                    "commis_id": self.commis_id,
                     "owner_id": self.owner_id,
                     "job_id": self.job_id,  # Critical for roundabout correlation
                     "tool_name": tool_name,
@@ -227,26 +233,26 @@ class WorkerEmitter:
                 },
             )
         except Exception:
-            logger.warning("Failed to emit worker_tool_failed event", exc_info=True)
+            logger.warning("Failed to emit commis_tool_failed event", exc_info=True)
 
     async def emit_heartbeat(
         self,
         activity: str,
         phase: str,
     ) -> None:
-        """Emit worker_heartbeat event during long-running LLM calls.
+        """Emit commis_heartbeat event during long-running LLM calls.
 
-        Always emits worker_heartbeat - identity is fixed at construction.
+        Always emits commis_heartbeat - identity is fixed at construction.
         """
         from zerg.events.event_bus import EventType
         from zerg.events.event_bus import event_bus
 
         try:
             await event_bus.publish(
-                EventType.WORKER_HEARTBEAT,
+                EventType.COMMIS_HEARTBEAT,
                 {
-                    "event_type": EventType.WORKER_HEARTBEAT,
-                    "worker_id": self.worker_id,
+                    "event_type": EventType.COMMIS_HEARTBEAT,
+                    "commis_id": self.commis_id,
                     "owner_id": self.owner_id,
                     "run_id": self.run_id,
                     "job_id": self.job_id,
@@ -255,9 +261,12 @@ class WorkerEmitter:
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
             )
-            logger.debug(f"Emitted heartbeat for worker {self.worker_id} during {phase}")
+            logger.debug(f"Emitted heartbeat for commis {self.commis_id} during {phase}")
         except Exception:
-            logger.warning("Failed to emit worker_heartbeat event", exc_info=True)
+            logger.warning("Failed to emit commis_heartbeat event", exc_info=True)
 
 
-__all__ = ["WorkerEmitter", "ToolCall"]
+# Keep WorkerEmitter as alias for backward compatibility during migration
+WorkerEmitter = CommisEmitter
+
+__all__ = ["CommisEmitter", "WorkerEmitter", "ToolCall"]

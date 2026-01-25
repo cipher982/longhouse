@@ -133,7 +133,7 @@ class WsTokenCallback(AsyncCallbackHandler):
                 from zerg.events import event_bus
 
                 payload = {
-                    "event_type": EventType.SUPERVISOR_TOKEN,
+                    "event_type": EventType.CONCIERGE_TOKEN,
                     "run_id": run_id,
                     "thread_id": thread_id,
                     "token": token,
@@ -142,7 +142,7 @@ class WsTokenCallback(AsyncCallbackHandler):
                 if message_id:
                     payload["message_id"] = message_id
 
-                await event_bus.publish(EventType.SUPERVISOR_TOKEN, payload)
+                await event_bus.publish(EventType.CONCIERGE_TOKEN, payload)
             except Exception:  # noqa: BLE001 – token streaming is best-effort
                 logger.exception("Error publishing token to event bus for run %s", run_id)
             # For supervisor runs, SSE is the primary delivery path - skip WS broadcast

@@ -1044,7 +1044,7 @@ async def _execute_tools_parallel(
                     task = job_info.get("task", job.task[:100] if job.task else "")
                     await append_run_event(
                         run_id=supervisor_run_id,
-                        event_type="worker_spawned",
+                        event_type="commis_spawned",
                         payload={
                             "job_id": job.id,
                             "tool_call_id": tool_call_id,

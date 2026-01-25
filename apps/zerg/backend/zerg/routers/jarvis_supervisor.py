@@ -279,9 +279,9 @@ async def jarvis_supervisor_cancel(
 
     # Emit cancellation event for SSE subscribers
     await event_bus.publish(
-        EventType.SUPERVISOR_COMPLETE,
+        EventType.CONCIERGE_COMPLETE,
         {
-            "event_type": "supervisor_complete",
+            "event_type": "concierge_complete",
             "run_id": run_id,
             "owner_id": current_user.id,
             "status": "cancelled",

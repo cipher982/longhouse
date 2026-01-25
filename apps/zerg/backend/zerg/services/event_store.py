@@ -55,7 +55,7 @@ async def append_run_event(
 
     Args:
         run_id: Run identifier
-        event_type: Event type (supervisor_started, worker_complete, etc.)
+        event_type: Event type (concierge_started, commis_complete, etc.)
         payload: Event data (must be JSON-serializable)
 
     Returns:
@@ -95,7 +95,7 @@ async def append_run_event(
     except ValueError:
         logger.warning(f"Event type {event_type} not in EventType enum, skipping event_bus publish")
 
-    if event_type != "supervisor_token":
+    if event_type != "concierge_token":
         logger.debug(f"Emitted {event_type} (id={event_id}) for run {run_id}")
 
     return event_id
@@ -115,7 +115,7 @@ async def emit_run_event(
     Args:
         db: Database session (DEPRECATED - will be removed)
         run_id: Run identifier
-        event_type: Event type (supervisor_started, worker_complete, etc.)
+        event_type: Event type (concierge_started, commis_complete, etc.)
         payload: Event data (must be JSON-serializable)
 
     Returns:
@@ -156,7 +156,7 @@ async def emit_run_event(
         logger.warning(f"Event type {event_type} not in EventType enum, skipping event_bus publish")
 
     # Only log non-token events to avoid spam
-    if event_type != "supervisor_token":
+    if event_type != "concierge_token":
         logger.debug(f"Emitted {event_type} (id={event.id}) for run {run_id}")
 
     return event.id
@@ -189,7 +189,7 @@ class EventStore:
             query = query.filter(AgentRunEvent.id > after_id)
 
         if not include_tokens:
-            query = query.filter(AgentRunEvent.event_type != "supervisor_token")
+            query = query.filter(AgentRunEvent.event_type != "concierge_token")
 
         return query.order_by(AgentRunEvent.id).all()
 

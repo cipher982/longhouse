@@ -221,7 +221,7 @@ async def spawn_worker_async(
 
                 await append_run_event(
                     run_id=supervisor_run_id,
-                    event_type="worker_spawned",
+                    event_type="commis_spawned",
                     payload={
                         "job_id": worker_job.id,
                         "tool_call_id": _tool_call_id,

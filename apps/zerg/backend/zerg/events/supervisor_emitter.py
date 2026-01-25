@@ -1,7 +1,7 @@
-"""SupervisorEmitter - emits supervisor_tool_* events with identity baked in.
+"""ConciergeEmitter - emits concierge_tool_* events with identity baked in.
 
 This class replaces the contextvar-based event emission pattern. The emitter's
-identity (supervisor) is fixed at construction time, so it always emits the
+identity (concierge) is fixed at construction time, so it always emits the
 correct event type regardless of contextvar state.
 
 Key design principle: The emitter does NOT hold a DB session. Event emission
@@ -20,12 +20,12 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class SupervisorEmitter:
-    """Emitter for supervisor tool events - identity baked at construction.
+class ConciergeEmitter:
+    """Emitter for concierge tool events - identity baked at construction.
 
-    Always emits supervisor_tool_* events, regardless of contextvar state.
-    This eliminates the contextvar leakage bug where worker events could
-    contaminate supervisor event emission.
+    Always emits concierge_tool_* events, regardless of contextvar state.
+    This eliminates the contextvar leakage bug where commis events could
+    contaminate concierge event emission.
 
     Key principle: No DB session stored. Event emission uses append_run_event()
     which opens its own short-lived session per event.
@@ -33,9 +33,9 @@ class SupervisorEmitter:
     Attributes
     ----------
     run_id
-        Supervisor AgentRun ID for event correlation
+        Concierge AgentRun ID for event correlation
     owner_id
-        User ID that owns this supervisor agent
+        User ID that owns this concierge agent
     message_id
         UUID for the assistant message (stable across tokens/completion)
     """
@@ -46,13 +46,13 @@ class SupervisorEmitter:
     trace_id: str | None = None
 
     @property
-    def is_worker(self) -> bool:
-        """Always False - this is a supervisor emitter."""
+    def is_commis(self) -> bool:
+        """Always False - this is a concierge emitter."""
         return False
 
     @property
-    def is_supervisor(self) -> bool:
-        """Always True - this is a supervisor emitter."""
+    def is_concierge(self) -> bool:
+        """Always True - this is a concierge emitter."""
         return True
 
     async def emit_tool_started(
@@ -62,16 +62,16 @@ class SupervisorEmitter:
         tool_args_preview: str,
         tool_args: dict | None = None,
     ) -> None:
-        """Emit supervisor_tool_started event.
+        """Emit concierge_tool_started event.
 
-        Always emits supervisor_tool_started - identity is fixed at construction.
+        Always emits concierge_tool_started - identity is fixed at construction.
         """
         from zerg.services.event_store import append_run_event
 
         try:
             await append_run_event(
                 run_id=self.run_id,
-                event_type="supervisor_tool_started",
+                event_type="concierge_tool_started",
                 payload={
                     "owner_id": self.owner_id,
                     "tool_name": tool_name,
@@ -83,7 +83,7 @@ class SupervisorEmitter:
                 },
             )
         except Exception:
-            logger.warning("Failed to emit supervisor_tool_started event", exc_info=True)
+            logger.warning("Failed to emit concierge_tool_started event", exc_info=True)
 
     async def emit_tool_completed(
         self,
@@ -93,16 +93,16 @@ class SupervisorEmitter:
         result_preview: str,
         result: str | dict | None = None,
     ) -> None:
-        """Emit supervisor_tool_completed event.
+        """Emit concierge_tool_completed event.
 
-        Always emits supervisor_tool_completed - identity is fixed at construction.
+        Always emits concierge_tool_completed - identity is fixed at construction.
         """
         from zerg.services.event_store import append_run_event
 
         try:
             # Handle structured results (dict) vs string results differently
             if isinstance(result, dict):
-                # Structured result (e.g., spawn_worker with job_id) - pass through
+                # Structured result (e.g., spawn_commis with job_id) - pass through
                 result_payload = result
             elif isinstance(result, str):
                 # String result - truncate and wrap for backward compatibility
@@ -113,7 +113,7 @@ class SupervisorEmitter:
 
             await append_run_event(
                 run_id=self.run_id,
-                event_type="supervisor_tool_completed",
+                event_type="concierge_tool_completed",
                 payload={
                     "owner_id": self.owner_id,
                     "tool_name": tool_name,
@@ -126,7 +126,7 @@ class SupervisorEmitter:
                 },
             )
         except Exception:
-            logger.warning("Failed to emit supervisor_tool_completed event", exc_info=True)
+            logger.warning("Failed to emit concierge_tool_completed event", exc_info=True)
 
     async def emit_tool_failed(
         self,
@@ -135,16 +135,16 @@ class SupervisorEmitter:
         duration_ms: int,
         error: str,
     ) -> None:
-        """Emit supervisor_tool_failed event.
+        """Emit concierge_tool_failed event.
 
-        Always emits supervisor_tool_failed - identity is fixed at construction.
+        Always emits concierge_tool_failed - identity is fixed at construction.
         """
         from zerg.services.event_store import append_run_event
 
         try:
             await append_run_event(
                 run_id=self.run_id,
-                event_type="supervisor_tool_failed",
+                event_type="concierge_tool_failed",
                 payload={
                     "owner_id": self.owner_id,
                     "tool_name": tool_name,
@@ -157,25 +157,25 @@ class SupervisorEmitter:
                 },
             )
         except Exception:
-            logger.warning("Failed to emit supervisor_tool_failed event", exc_info=True)
+            logger.warning("Failed to emit concierge_tool_failed event", exc_info=True)
 
     async def emit_heartbeat(
         self,
         activity: str,
         phase: str,
     ) -> None:
-        """Emit supervisor_heartbeat event during long-running LLM calls.
+        """Emit concierge_heartbeat event during long-running LLM calls.
 
-        Always emits supervisor_heartbeat - identity is fixed at construction.
+        Always emits concierge_heartbeat - identity is fixed at construction.
         """
         from zerg.events.event_bus import EventType
         from zerg.events.event_bus import event_bus
 
         try:
             await event_bus.publish(
-                EventType.SUPERVISOR_HEARTBEAT,
+                EventType.CONCIERGE_HEARTBEAT,
                 {
-                    "event_type": EventType.SUPERVISOR_HEARTBEAT,
+                    "event_type": EventType.CONCIERGE_HEARTBEAT,
                     "run_id": self.run_id,
                     "owner_id": self.owner_id,
                     "activity": activity,
@@ -183,9 +183,12 @@ class SupervisorEmitter:
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
             )
-            logger.debug(f"Emitted heartbeat for supervisor run {self.run_id} during {phase}")
+            logger.debug(f"Emitted heartbeat for concierge run {self.run_id} during {phase}")
         except Exception:
-            logger.warning("Failed to emit supervisor_heartbeat event", exc_info=True)
+            logger.warning("Failed to emit concierge_heartbeat event", exc_info=True)
 
 
-__all__ = ["SupervisorEmitter"]
+# Keep SupervisorEmitter as alias for backward compatibility during migration
+SupervisorEmitter = ConciergeEmitter
+
+__all__ = ["ConciergeEmitter", "SupervisorEmitter"]

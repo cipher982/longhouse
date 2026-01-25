@@ -263,11 +263,11 @@ def _fetch_worker_activity(db: Session, agent_id: int, tool_call_ids: list[str])
     """Fetch worker activity for spawn_commis tool calls.
 
     Queries AgentRunEvent to build a complete picture of worker execution:
-    - worker_spawned: task, job_id
-    - worker_started: confirms worker began
-    - worker_tool_started/completed/failed: nested tool calls
-    - worker_complete: final status
-    - worker_summary_ready: LLM-generated summary
+    - commis_spawned: task, job_id
+    - commis_started: confirms worker began
+    - commis_tool_started/completed/failed: nested tool calls
+    - commis_complete: final status
+    - commis_summary_ready: LLM-generated summary
 
     Args:
         db: Database session
@@ -296,14 +296,14 @@ def _fetch_worker_activity(db: Session, agent_id: int, tool_call_ids: list[str])
             AgentRunEvent.run_id.in_(run_ids),
             AgentRunEvent.event_type.in_(
                 [
-                    "supervisor_tool_started",
-                    "worker_spawned",
-                    "worker_started",
-                    "worker_tool_started",
-                    "worker_tool_completed",
-                    "worker_tool_failed",
-                    "worker_complete",
-                    "worker_summary_ready",
+                    "concierge_tool_started",
+                    "commis_spawned",
+                    "commis_started",
+                    "commis_tool_started",
+                    "commis_tool_completed",
+                    "commis_tool_failed",
+                    "commis_complete",
+                    "commis_summary_ready",
                 ]
             ),
         )
@@ -319,7 +319,7 @@ def _fetch_worker_activity(db: Session, agent_id: int, tool_call_ids: list[str])
         payload = e.payload or {}
         job_id = payload.get("job_id")
 
-        if e.event_type == "worker_spawned" and job_id:
+        if e.event_type == "commis_spawned" and job_id:
             job_activity[job_id] = {
                 "job_id": job_id,
                 "task": payload.get("task", ""),
@@ -330,9 +330,9 @@ def _fetch_worker_activity(db: Session, agent_id: int, tool_call_ids: list[str])
             tool_call_id = payload.get("tool_call_id")
             if tool_call_id and tool_call_id in tool_call_ids:
                 result[tool_call_id] = job_activity[job_id]
-        elif e.event_type == "worker_started" and job_id and job_id in job_activity:
+        elif e.event_type == "commis_started" and job_id and job_id in job_activity:
             job_activity[job_id]["status"] = "running"
-        elif e.event_type == "worker_tool_started" and job_id and job_id in job_activity:
+        elif e.event_type == "commis_tool_started" and job_id and job_id in job_activity:
             job_activity[job_id]["tools"].append(
                 {
                     "tool_call_id": payload.get("tool_call_id"),
@@ -340,7 +340,7 @@ def _fetch_worker_activity(db: Session, agent_id: int, tool_call_ids: list[str])
                     "status": "running",
                 }
             )
-        elif e.event_type == "worker_tool_completed" and job_id and job_id in job_activity:
+        elif e.event_type == "commis_tool_completed" and job_id and job_id in job_activity:
             tc_id = payload.get("tool_call_id")
             for t in job_activity[job_id]["tools"]:
                 if t["tool_call_id"] == tc_id:
@@ -348,7 +348,7 @@ def _fetch_worker_activity(db: Session, agent_id: int, tool_call_ids: list[str])
                     t["duration_ms"] = payload.get("duration_ms")
                     t["result_preview"] = payload.get("result_preview")
                     break
-        elif e.event_type == "worker_tool_failed" and job_id and job_id in job_activity:
+        elif e.event_type == "commis_tool_failed" and job_id and job_id in job_activity:
             tc_id = payload.get("tool_call_id")
             for t in job_activity[job_id]["tools"]:
                 if t["tool_call_id"] == tc_id:
@@ -356,13 +356,13 @@ def _fetch_worker_activity(db: Session, agent_id: int, tool_call_ids: list[str])
                     t["duration_ms"] = payload.get("duration_ms")
                     t["error"] = payload.get("error")
                     break
-        elif e.event_type == "worker_complete" and job_id and job_id in job_activity:
+        elif e.event_type == "commis_complete" and job_id and job_id in job_activity:
             job_activity[job_id]["status"] = "complete" if payload.get("status") == "success" else "failed"
-        elif e.event_type == "worker_summary_ready" and job_id and job_id in job_activity:
+        elif e.event_type == "commis_summary_ready" and job_id and job_id in job_activity:
             job_activity[job_id]["summary"] = payload.get("summary")
 
-    # Fallback mapping for legacy events without worker_spawned.tool_call_id
-    # Use supervisor_tool_started -> worker_spawned correlation only when tool_call_id is missing.
+    # Fallback mapping for legacy events without commis_spawned.tool_call_id
+    # Use concierge_tool_started -> commis_spawned correlation only when tool_call_id is missing.
     from collections import deque
 
     events_by_run: dict[int, list] = {}
@@ -375,11 +375,11 @@ def _fetch_worker_activity(db: Session, agent_id: int, tool_call_ids: list[str])
         pending_tool_call_ids: deque[str] = deque()
         for e in run_events:
             payload = e.payload or {}
-            if e.event_type == "supervisor_tool_started" and payload.get("tool_name") == "spawn_commis":
+            if e.event_type == "concierge_tool_started" and payload.get("tool_name") == "spawn_commis":
                 tc_id = payload.get("tool_call_id")
                 if tc_id in tool_call_ids and tc_id not in result:
                     pending_tool_call_ids.append(tc_id)
-            elif e.event_type == "worker_spawned" and not payload.get("tool_call_id"):
+            elif e.event_type == "commis_spawned" and not payload.get("tool_call_id"):
                 if not pending_tool_call_ids:
                     continue
                 job_id = payload.get("job_id")

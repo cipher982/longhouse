@@ -500,7 +500,7 @@ async def attach_to_run_stream(
         # Run is complete/failed - return single completion event and close
         async def completed_stream():
             # Send completion event matching the format from jarvis_sse.py
-            event_type = "supervisor_complete" if run_status == RunStatus.SUCCESS else "error"
+            event_type = "concierge_complete" if run_status == RunStatus.SUCCESS else "error"
             payload = {
                 "run_id": run_id_val,
                 "status": run_status.value,
@@ -555,7 +555,7 @@ def get_run_events(
 
     Args:
         run_id: ID of the run to query
-        event_type: Optional filter by event type (e.g., "supervisor_tool_started")
+        event_type: Optional filter by event type (e.g., "concierge_tool_started")
         limit: Maximum number of events to return (default 100)
         db: Database session
         current_user: Authenticated user (multi-tenant filtered)
@@ -694,22 +694,22 @@ def get_run_timeline(
     total_duration_ms = int((last_timestamp - first_timestamp).total_seconds() * 1000)
 
     # Find key phase transitions for summary
-    supervisor_started_time: Optional[datetime] = None
-    supervisor_complete_time: Optional[datetime] = None
-    worker_spawned_time: Optional[datetime] = None
-    worker_complete_time: Optional[datetime] = None
+    concierge_started_time: Optional[datetime] = None
+    concierge_complete_time: Optional[datetime] = None
+    commis_spawned_time: Optional[datetime] = None
+    commis_complete_time: Optional[datetime] = None
     first_tool_time: Optional[datetime] = None
     last_tool_time: Optional[datetime] = None
 
     for event in events:
-        if event.event_type == "supervisor_started" and not supervisor_started_time:
-            supervisor_started_time = event.created_at
-        elif event.event_type == "supervisor_complete" and not supervisor_complete_time:
-            supervisor_complete_time = event.created_at
-        elif event.event_type == "worker_spawned" and not worker_spawned_time:
-            worker_spawned_time = event.created_at
-        elif event.event_type == "worker_complete" and not worker_complete_time:
-            worker_complete_time = event.created_at
+        if event.event_type == "concierge_started" and not concierge_started_time:
+            concierge_started_time = event.created_at
+        elif event.event_type == "concierge_complete" and not concierge_complete_time:
+            concierge_complete_time = event.created_at
+        elif event.event_type == "commis_spawned" and not commis_spawned_time:
+            commis_spawned_time = event.created_at
+        elif event.event_type == "commis_complete" and not commis_complete_time:
+            commis_complete_time = event.created_at
         elif event.event_type == "tool_started" and not first_tool_time:
             first_tool_time = event.created_at
         elif event.event_type in ("tool_completed", "tool_failed"):
@@ -717,12 +717,12 @@ def get_run_timeline(
 
     # Calculate derived metrics
     supervisor_thinking_ms = None
-    if supervisor_started_time and worker_spawned_time:
-        supervisor_thinking_ms = int((worker_spawned_time - supervisor_started_time).total_seconds() * 1000)
+    if concierge_started_time and commis_spawned_time:
+        supervisor_thinking_ms = int((commis_spawned_time - concierge_started_time).total_seconds() * 1000)
 
     worker_execution_ms = None
-    if worker_spawned_time and worker_complete_time:
-        worker_execution_ms = int((worker_complete_time - worker_spawned_time).total_seconds() * 1000)
+    if commis_spawned_time and commis_complete_time:
+        worker_execution_ms = int((commis_complete_time - commis_spawned_time).total_seconds() * 1000)
 
     tool_execution_ms = None
     if first_tool_time and last_tool_time:

@@ -196,10 +196,10 @@ class WorkerRunner:
                 await self._emit_event(
                     db=db,
                     run_id=event_ctx["run_id"],
-                    event_type="worker_started",
+                    event_type="commis_started",
                     payload={
                         "job_id": job_id,
-                        "worker_id": worker_id,
+                        "commis_id": worker_id,
                         "owner_id": owner_for_events,
                         "task": task[:100],
                         "trace_id": trace_id,
@@ -281,10 +281,10 @@ class WorkerRunner:
                     await self._emit_event(
                         db=db,
                         run_id=event_ctx["run_id"],
-                        event_type="worker_complete",
+                        event_type="commis_complete",
                         payload={
                             "job_id": job_id,
-                            "worker_id": worker_id,
+                            "commis_id": worker_id,
                             "status": "failed",
                             "error": worker_context.critical_error_message,
                             "duration_ms": duration_ms,
@@ -335,10 +335,10 @@ class WorkerRunner:
                 await self._emit_event(
                     db=db,
                     run_id=event_ctx["run_id"],
-                    event_type="worker_complete",
+                    event_type="commis_complete",
                     payload={
                         "job_id": job_id,
-                        "worker_id": worker_id,
+                        "commis_id": worker_id,
                         "status": "success",
                         "duration_ms": duration_ms,
                         "owner_id": owner_for_events,
@@ -350,10 +350,10 @@ class WorkerRunner:
                     await self._emit_event(
                         db=db,
                         run_id=event_ctx["run_id"],
-                        event_type="worker_summary_ready",
+                        event_type="commis_summary_ready",
                         payload={
                             "job_id": job_id,
-                            "worker_id": worker_id,
+                            "commis_id": worker_id,
                             "summary": summary,
                             "owner_id": owner_for_events,
                             "trace_id": trace_id,
@@ -409,10 +409,10 @@ class WorkerRunner:
                 await self._emit_event(
                     db=db,
                     run_id=event_ctx["run_id"],
-                    event_type="worker_complete",
+                    event_type="commis_complete",
                     payload={
                         "job_id": job_id,
-                        "worker_id": worker_id,
+                        "commis_id": worker_id,
                         "status": "failed",
                         "error": error_msg,
                         "duration_ms": duration_ms,

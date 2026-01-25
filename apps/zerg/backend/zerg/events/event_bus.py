@@ -49,33 +49,33 @@ class EventType(str, Enum):
     # Ops dashboard events
     BUDGET_DENIED = "budget_denied"
 
-    # Supervisor/Worker events (Super Siri architecture)
-    SUPERVISOR_STARTED = "supervisor_started"
-    SUPERVISOR_THINKING = "supervisor_thinking"
-    SUPERVISOR_TOKEN = "supervisor_token"  # Real-time LLM token streaming
-    SUPERVISOR_COMPLETE = "supervisor_complete"
-    SUPERVISOR_DEFERRED = "supervisor_deferred"  # Timeout migration: still running, caller stopped waiting
-    SUPERVISOR_WAITING = "supervisor_waiting"  # Interrupted waiting for worker (supervisor resume)
-    SUPERVISOR_RESUMED = "supervisor_resumed"  # Resumed from interrupt after worker completed
-    WORKER_SPAWNED = "worker_spawned"
-    WORKER_STARTED = "worker_started"
-    WORKER_COMPLETE = "worker_complete"
-    WORKER_SUMMARY_READY = "worker_summary_ready"
+    # Concierge/Commis events (Super Siri architecture)
+    CONCIERGE_STARTED = "concierge_started"
+    CONCIERGE_THINKING = "concierge_thinking"
+    CONCIERGE_TOKEN = "concierge_token"  # Real-time LLM token streaming
+    CONCIERGE_COMPLETE = "concierge_complete"
+    CONCIERGE_DEFERRED = "concierge_deferred"  # Timeout migration: still running, caller stopped waiting
+    CONCIERGE_WAITING = "concierge_waiting"  # Interrupted waiting for commis (concierge resume)
+    CONCIERGE_RESUMED = "concierge_resumed"  # Resumed from interrupt after commis completed
+    COMMIS_SPAWNED = "commis_spawned"
+    COMMIS_STARTED = "commis_started"
+    COMMIS_COMPLETE = "commis_complete"
+    COMMIS_SUMMARY_READY = "commis_summary_ready"
 
-    # Worker tool events (roundabout monitoring)
-    WORKER_TOOL_STARTED = "worker_tool_started"
-    WORKER_TOOL_COMPLETED = "worker_tool_completed"
-    WORKER_TOOL_FAILED = "worker_tool_failed"
+    # Commis tool events (roundabout monitoring)
+    COMMIS_TOOL_STARTED = "commis_tool_started"
+    COMMIS_TOOL_COMPLETED = "commis_tool_completed"
+    COMMIS_TOOL_FAILED = "commis_tool_failed"
 
-    # Supervisor tool events (inline display in conversation)
-    SUPERVISOR_TOOL_STARTED = "supervisor_tool_started"
-    SUPERVISOR_TOOL_PROGRESS = "supervisor_tool_progress"
-    SUPERVISOR_TOOL_COMPLETED = "supervisor_tool_completed"
-    SUPERVISOR_TOOL_FAILED = "supervisor_tool_failed"
+    # Concierge tool events (inline display in conversation)
+    CONCIERGE_TOOL_STARTED = "concierge_tool_started"
+    CONCIERGE_TOOL_PROGRESS = "concierge_tool_progress"
+    CONCIERGE_TOOL_COMPLETED = "concierge_tool_completed"
+    CONCIERGE_TOOL_FAILED = "concierge_tool_failed"
 
     # Heartbeat events (Phase 6: prevent false "no progress" warnings during LLM reasoning)
-    SUPERVISOR_HEARTBEAT = "supervisor_heartbeat"
-    WORKER_HEARTBEAT = "worker_heartbeat"
+    CONCIERGE_HEARTBEAT = "concierge_heartbeat"
+    COMMIS_HEARTBEAT = "commis_heartbeat"
 
     SESSION_ENDED = "session_ended"  # External session (Claude Code, Codex, etc.) ended
 
@@ -99,8 +99,8 @@ class EventBus:
             logger.debug("No subscribers for %s", event_type)
             return
 
-        # SUPERVISOR_TOKEN is emitted per-token and can spam logs when DEBUG is enabled.
-        if event_type != EventType.SUPERVISOR_TOKEN:
+        # CONCIERGE_TOKEN is emitted per-token and can spam logs when DEBUG is enabled.
+        if event_type != EventType.CONCIERGE_TOKEN:
             logger.debug("Publishing event %s to %s subscriber(s)", event_type, subscriber_count)
 
         # ------------------------------------------------------------------
