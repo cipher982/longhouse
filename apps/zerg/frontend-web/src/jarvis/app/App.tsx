@@ -180,6 +180,7 @@ export default function App({ embedded = false }: AppProps) {
             onSend={textChannel.sendMessage}
             disabled={textChannel.isSending}
             micStatus={micStatus}
+            micLevel={turnBasedVoice.micLevel}
             onMicConnect={turnBasedVoice.resetVoice}
             onMicPressStart={turnBasedVoice.startRecording}
             onMicPressEnd={turnBasedVoice.stopRecording}
