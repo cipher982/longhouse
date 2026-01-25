@@ -45,6 +45,8 @@ interface WorkerState {
   status: 'spawned' | 'running' | 'complete' | 'failed';
   summary?: string;
   nestedTools: NestedToolCall[];
+  liveOutput?: string;
+  liveOutputUpdatedAt?: number;
 }
 
 function formatDuration(ms: number | undefined, startedAt: number, status: string): string {
@@ -259,6 +261,8 @@ export function WorkerToolCard({ tool, isDetached = false, detachedIndex = 0 }: 
       status: metadata?.workerStatus || (tool.status === 'running' ? 'running' : tool.status === 'failed' ? 'failed' : 'complete'),
       summary: metadata?.workerSummary,
       nestedTools: metadata?.nestedTools || [],
+      liveOutput: metadata?.liveOutput,
+      liveOutputUpdatedAt: metadata?.liveOutputUpdatedAt,
     };
   }, [tool]);
 
@@ -334,6 +338,14 @@ export function WorkerToolCard({ tool, isDetached = false, detachedIndex = 0 }: 
             <div className="worker-tool-card__summary">
               <span className="worker-tool-card__summary-label">Summary:</span>
               <span className="worker-tool-card__summary-text">{workerState.summary}</span>
+            </div>
+          )}
+
+          {/* Live output */}
+          {workerState.liveOutput && (
+            <div className="worker-tool-card__live-output">
+              <span className="worker-tool-card__live-label">Live output:</span>
+              <pre className="worker-tool-card__live-text">{workerState.liveOutput}</pre>
             </div>
           )}
 

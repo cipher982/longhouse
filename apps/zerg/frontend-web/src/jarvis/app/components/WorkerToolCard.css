@@ -279,6 +279,37 @@
   line-height: 1.5;
 }
 
+/* Live output */
+.worker-tool-card__live-output {
+  margin-top: 12px;
+  padding: 8px;
+  background: var(--surface-tertiary, rgba(0, 0, 0, 0.2));
+  border-radius: 4px;
+  font-size: 0.8125rem;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.worker-tool-card__live-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+}
+
+.worker-tool-card__live-text {
+  margin: 0;
+  font-family: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow: auto;
+  color: var(--text-primary, #fff);
+}
+
 /* Error display */
 .worker-tool-card__error {
   margin-top: 12px;

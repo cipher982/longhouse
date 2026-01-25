@@ -13,6 +13,7 @@ from zerg.tools.builtin.supervisor_tools import get_worker_evidence
 from zerg.tools.builtin.supervisor_tools import get_tool_output
 from zerg.tools.builtin.supervisor_tools import grep_workers
 from zerg.tools.builtin.supervisor_tools import list_workers
+from zerg.tools.builtin.supervisor_tools import peek_worker_output
 from zerg.tools.builtin.supervisor_tools import read_worker_file
 from zerg.tools.builtin.supervisor_tools import read_worker_result
 from zerg.tools.builtin.supervisor_tools import spawn_worker
@@ -567,6 +568,39 @@ def test_read_worker_file_path_traversal(credential_context, temp_artifact_path,
     result = read_worker_file(job_id, "../../../etc/passwd")
 
     assert "Error" in result
+
+
+def test_peek_worker_output_live(credential_context, temp_artifact_path, db_session, test_user):
+    """Peek live output for a running worker job."""
+    from zerg.models.models import WorkerJob
+    from zerg.services.worker_output_buffer import get_worker_output_buffer
+
+    worker_id = "worker-test-live-output"
+    job = WorkerJob(
+        owner_id=test_user.id,
+        supervisor_run_id=None,
+        task="Live output test",
+        model=TEST_WORKER_MODEL,
+        status="running",
+        worker_id=worker_id,
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    buffer = get_worker_output_buffer()
+    buffer.append_output(
+        worker_id=worker_id,
+        stream="stdout",
+        data="hello from worker\n",
+        runner_job_id="runner-job-1",
+        job_id=job.id,
+        run_id=123,
+    )
+
+    result = peek_worker_output(str(job.id), max_bytes=2000)
+
+    assert "Live worker output" in result
+    assert "hello from worker" in result
 
 
 def test_get_worker_metadata_success(credential_context, temp_artifact_path, db_session):

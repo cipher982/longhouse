@@ -43,6 +43,8 @@ export interface SpawnWorkerResult {
   workerStatus: 'spawned' | 'running' | 'complete' | 'failed';
   workerSummary?: string;
   nestedTools: NestedToolCall[];
+  liveOutput?: string;
+  liveOutputUpdatedAt?: number;
   rawResult?: unknown;
 }
 
@@ -86,6 +88,7 @@ type Listener = () => void;
  * Supervisor tool store for React integration via useSyncExternalStore
  */
 class SupervisorToolStore {
+  private static readonly MAX_LIVE_OUTPUT_CHARS = 50_000;
   private state: SupervisorToolState = {
     isActive: false,
     currentRunId: null,
@@ -476,6 +479,20 @@ class SupervisorToolStore {
         logger.debug(`[SupervisorToolStore] Nested tool failed: ${data.toolName}`);
       }
     });
+
+    eventBus.on('worker:output_chunk', (data) => {
+      const toolCallId = data.workerId
+        ? this.workerIdToToolCallId.get(data.workerId)
+        : data.jobId
+          ? this.workerJobToToolCallId.get(data.jobId)
+          : undefined;
+
+      if (toolCallId) {
+        this.appendWorkerLiveOutput(toolCallId, data.stream, data.data);
+      } else {
+        logger.warn('[SupervisorToolStore] Could not route worker output chunk (missing mapping)');
+      }
+    });
   }
 
   /**
@@ -583,6 +600,34 @@ class SupervisorToolStore {
         result: {
           ...existingResult,
           ...metadata,
+        },
+      };
+      newTools.set(toolCallId, updatedTool);
+      this.setState({ tools: newTools });
+    }
+  }
+
+  private appendWorkerLiveOutput(toolCallId: string, stream: 'stdout' | 'stderr', data: string): void {
+    if (!data) return;
+
+    const newTools = new Map(this.state.tools);
+    const tool = newTools.get(toolCallId);
+
+    if (tool && tool.toolName === 'spawn_worker') {
+      const existingResult = this.getSpawnWorkerResult(tool);
+      const prefix = stream === 'stderr' ? '[stderr] ' : '';
+      let liveOutput = `${existingResult.liveOutput ?? ''}${prefix}${data}`;
+
+      if (liveOutput.length > SupervisorToolStore.MAX_LIVE_OUTPUT_CHARS) {
+        liveOutput = liveOutput.slice(-SupervisorToolStore.MAX_LIVE_OUTPUT_CHARS);
+      }
+
+      const updatedTool: SupervisorToolCall = {
+        ...tool,
+        result: {
+          ...existingResult,
+          liveOutput,
+          liveOutputUpdatedAt: Date.now(),
         },
       };
       newTools.set(toolCallId, updatedTool);
