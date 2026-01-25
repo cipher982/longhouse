@@ -56,26 +56,12 @@ def supervisor_agent(db_session, test_user):
 
 @pytest.mark.asyncio
 async def test_supervisor_spawns_worker_via_tool(supervisor_agent, db_session, test_user, temp_artifact_path):
-    """Test that a supervisor agent can use spawn_worker tool (queues job) in BARRIER mode.
+    """Test that a supervisor agent can use spawn_worker tool (queues job).
 
-    spawn_worker triggers AgentInterrupted in the LangGraph-free supervisor loop (barrier model).
-    We verify the interrupt payload and that the job was queued.
-
-    NOTE: This test uses barrier mode (ASYNC_WORKER_MODEL=False). For async inbox model
-    tests, see tests/test_async_worker_model.py.
+    In async model, spawn_worker returns immediately and the supervisor continues.
+    We verify the job was created and queued.
     """
-    from unittest.mock import MagicMock
-    from unittest.mock import patch
-
-    from zerg.managers.agent_runner import AgentInterrupted
     from zerg.models.models import WorkerJob
-
-    # Disable async worker model for this test (use barrier model)
-    from zerg.config import get_settings
-
-    real_settings = get_settings()
-    mock_settings = MagicMock(wraps=real_settings)
-    mock_settings.async_worker_model = False  # Barrier model
 
     # Create a thread for the supervisor
     thread = ThreadService.create_thread_with_system_message(
@@ -100,27 +86,20 @@ async def test_supervisor_spawns_worker_via_tool(supervisor_agent, db_session, t
     set_credential_resolver(resolver)
 
     try:
-        # Run with barrier model (mock settings)
-        with patch("zerg.config.get_settings", return_value=mock_settings):
-            # Run the supervisor agent - spawn_worker triggers interrupt
-            runner = AgentRunner(supervisor_agent)
-            try:
-                await runner.run_thread(db_session, thread)
-                pytest.fail("Expected AgentInterrupted to be raised")
-            except AgentInterrupted as e:
-                # Verify interrupt payload indicates workers_pending (parallel pattern)
-                assert e.interrupt_value.get("type") == "workers_pending", "Interrupt should be workers_pending"
-                assert "job_ids" in e.interrupt_value, "Interrupt should include job_ids"
-                assert len(e.interrupt_value["job_ids"]) >= 1, "Should have at least one job_id"
+        # Run the supervisor agent - spawn_worker returns immediately in async model
+        runner = AgentRunner(supervisor_agent)
+        messages = await runner.run_thread(db_session, thread)
+
+        # Verify the supervisor completed (not interrupted)
+        assert messages is not None, "Supervisor should return messages"
 
         # Verify a worker JOB was created
         jobs = db_session.query(WorkerJob).filter(WorkerJob.owner_id == test_user.id).all()
         assert len(jobs) >= 1, "At least one worker job should have been created"
 
-        # Verify job is in 'created' status (two-phase commit pattern - not yet 'queued')
-        # The job gets flipped to 'queued' by supervisor_service.py after barrier creation
+        # Verify job is in 'queued' status (async model flips to queued immediately)
         job = jobs[0]
-        assert job.status == "created", "Worker job should be in 'created' status (two-phase commit)"
+        assert job.status == "queued", "Worker job should be in 'queued' status"
         assert len(job.task) > 0, "Worker job should have a task"
 
     finally:

@@ -802,8 +802,16 @@ async def _execute_tools_parallel(
         )
 
         # Process results, preserving order
+        # CRITICAL: Check for AgentInterrupted first - it must propagate, not become a ToolMessage
+        from zerg.managers.agent_runner import AgentInterrupted
+
         for tc, result in zip(other_calls, results):
-            if isinstance(result, Exception):
+            if isinstance(result, AgentInterrupted):
+                # Re-raise interrupt (e.g., from wait_for_worker)
+                # This ensures the supervisor enters WAITING state
+                logger.info(f"[INTERRUPT] Re-raising AgentInterrupted from {tc.get('name')}")
+                raise result
+            elif isinstance(result, Exception):
                 # Shouldn't happen often since execute_single_tool catches exceptions
                 tool_results.append(
                     ToolMessage(
@@ -1000,71 +1008,55 @@ async def _execute_tools_parallel(
                     )
                 )
 
-        # If we created/found jobs, decide whether to return interrupt or continue
+        # If we created/found jobs, return ToolMessages and continue (async model)
+        # Workers run in background, supervisor sees results via inbox context on next turn
         if created_jobs:
-            from zerg.config import get_settings
+            from zerg.services.event_store import append_run_event
 
-            settings = get_settings()
+            for job_info in created_jobs:
+                job = job_info["job"]
+                tool_call_id = job_info["tool_call_id"]
+                task = job_info.get("task", job.task[:100] if job.task else "")
+                tool_results.append(
+                    ToolMessage(
+                        content=f"Worker job {job.id} spawned successfully. Working on: {task}\n\n"
+                        f"The worker is running in the background. You can continue the conversation. "
+                        f"Check worker status with check_worker_status({job.id}) or wait for results "
+                        f"with wait_for_worker({job.id}).",
+                        tool_call_id=tool_call_id,
+                        name="spawn_worker",
+                    )
+                )
 
-            if settings.async_worker_model:
-                # ASYNC MODEL: Add ToolMessages for spawn_workers and continue
-                # Workers run in background, supervisor sees results via inbox context on next turn
-                from zerg.services.event_store import append_run_event
+                # Flip job status from 'created' to 'queued' immediately
+                db.query(WorkerJob).filter(
+                    WorkerJob.id == job.id,
+                    WorkerJob.status == "created",
+                ).update({"status": "queued"})
 
+            db.commit()
+
+            # Emit worker_spawned events for UI
+            if supervisor_run_id is not None:
                 for job_info in created_jobs:
                     job = job_info["job"]
                     tool_call_id = job_info["tool_call_id"]
                     task = job_info.get("task", job.task[:100] if job.task else "")
-                    tool_results.append(
-                        ToolMessage(
-                            content=f"Worker job {job.id} spawned successfully. Working on: {task}\n\n"
-                            f"The worker is running in the background. You can continue the conversation. "
-                            f"Check worker status with check_worker_status({job.id}) or wait for results "
-                            f"with wait_for_worker({job.id}).",
-                            tool_call_id=tool_call_id,
-                            name="spawn_worker",
-                        )
+                    await append_run_event(
+                        run_id=supervisor_run_id,
+                        event_type="worker_spawned",
+                        payload={
+                            "job_id": job.id,
+                            "tool_call_id": tool_call_id,
+                            "task": task,
+                            "model": job.model,
+                            "owner_id": resolver.owner_id,
+                            "trace_id": trace_id,
+                        },
                     )
 
-                    # Flip job status from 'created' to 'queued' immediately (no barrier needed)
-                    db.query(WorkerJob).filter(
-                        WorkerJob.id == job.id,
-                        WorkerJob.status == "created",
-                    ).update({"status": "queued"})
-
-                db.commit()
-
-                # Emit worker_spawned events for UI (async model - no barrier)
-                if supervisor_run_id is not None:
-                    for job_info in created_jobs:
-                        job = job_info["job"]
-                        tool_call_id = job_info["tool_call_id"]
-                        task = job_info.get("task", job.task[:100] if job.task else "")
-                        await append_run_event(
-                            run_id=supervisor_run_id,
-                            event_type="worker_spawned",
-                            payload={
-                                "job_id": job.id,
-                                "tool_call_id": tool_call_id,
-                                "task": task,
-                                "model": job.model,
-                                "owner_id": resolver.owner_id,
-                                "trace_id": trace_id,
-                                "async_model": True,  # Mark as non-blocking
-                            },
-                        )
-
-                logger.info(f"[ASYNC-MODEL] {len(created_jobs)} workers spawned non-blocking")
-                return tool_results, None
-            else:
-                # BARRIER MODEL: Return interrupt info for barrier creation (original behavior)
-                return tool_results, {
-                    "type": "workers_pending",
-                    "created_jobs": created_jobs,
-                    "job_ids": [j["job"].id for j in created_jobs],
-                    "tool_call_ids": [j["tool_call_id"] for j in created_jobs],
-                    "tasks": [j["task"] for j in created_jobs],
-                }
+            logger.info(f"Spawned {len(created_jobs)} workers (async)")
+            return tool_results, None
 
     return tool_results, None
 

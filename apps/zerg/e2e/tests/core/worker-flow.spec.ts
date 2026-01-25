@@ -6,7 +6,7 @@ test.describe('Core Worker Flow', () => {
     await resetDatabase(request);
   });
 
-  test('spawns a worker and resumes supervisor', async ({ request }) => {
+  test('spawns a worker and completes', async ({ request }) => {
     test.setTimeout(60000);
 
     const startTime = Date.now();
@@ -48,6 +48,8 @@ test.describe('Core Worker Flow', () => {
       throw new Error('Failed to locate worker run');
     }
 
+    // In async model: supervisor spawns worker and completes immediately
+    // Worker runs in background, completes later
     let events: Array<{ event_type: string }> = [];
     await expect
       .poll(async () => {
@@ -58,9 +60,9 @@ test.describe('Core Worker Flow', () => {
 
         const spawnedCount = events.filter((e) => e.event_type === 'worker_spawned').length;
         const completeCount = events.filter((e) => e.event_type === 'worker_complete').length;
-        const resumedCount = events.filter((e) => e.event_type === 'supervisor_resumed').length;
 
-        return spawnedCount >= 1 && completeCount >= 1 && resumedCount >= 1;
+        // Async model: supervisor doesn't wait, so no supervisor_resumed
+        return spawnedCount >= 1 && completeCount >= 1;
       }, {
         timeout: 60000,
         intervals: [1000, 2000, 5000],
@@ -69,11 +71,9 @@ test.describe('Core Worker Flow', () => {
 
     const spawnedCount = events.filter((e) => e.event_type === 'worker_spawned').length;
     const completeCount = events.filter((e) => e.event_type === 'worker_complete').length;
-    const resumedCount = events.filter((e) => e.event_type === 'supervisor_resumed').length;
 
     expect(spawnedCount).toBeGreaterThanOrEqual(1);
     expect(completeCount).toBeGreaterThanOrEqual(1);
-    expect(resumedCount).toBeGreaterThanOrEqual(1);
 
     let runStatus: { status: string; result?: string } | null = null;
     await expect
@@ -89,6 +89,5 @@ test.describe('Core Worker Flow', () => {
       .toBeTruthy();
 
     expect(runStatus?.status).toBe('success');
-    expect(runStatus?.result?.toLowerCase()).toContain('45%');
   });
 });
