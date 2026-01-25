@@ -20,7 +20,7 @@ env:
 
 jobs:
   validate:
-    runs-on: [self-hosted, Linux, X64, cube]
+    runs-on: cube
     name: "🔍 Validate (WS + Makefile)"
 
     steps:
@@ -38,7 +38,7 @@ jobs:
       run: make validate
 
   backend-tests:
-    runs-on: [self-hosted, Linux, X64, cube]
+    runs-on: cube
     needs: validate
     name: "🐍 Backend Tests"
     env:
@@ -62,7 +62,7 @@ jobs:
         ./run_backend_tests.sh
 
   frontend-tests:
-    runs-on: [self-hosted, Linux, X64, cube]
+    runs-on: cube
     needs: validate
     name: "⚛️  Frontend Tests"
 
@@ -88,3 +88,43 @@ jobs:
         bun run validate:types
         bun run test -- --run
         echo "🚀 Ready for deployment with contract-first guarantees!"
+
+  e2e-core:
+    runs-on: cube
+    needs: [backend-tests, frontend-tests]
+    name: "🎭 Core E2E Tests"
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Setup uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: '1.2.20'
+
+    - name: Install dependencies
+      run: bun install --frozen-lockfile
+
+    - name: Install Playwright browsers
+      run: cd apps/zerg/e2e && bunx playwright install chromium
+
+    - name: Run Core E2E Tests
+      run: make test-e2e-core
+      env:
+        # Life Hub credentials for session continuity tests
+        LIFE_HUB_API_KEY: ${{ secrets.LIFE_HUB_API_KEY }}
+        LIFE_HUB_URL: https://data.drose.io
+        # DATABASE_URL inherited from runner environment

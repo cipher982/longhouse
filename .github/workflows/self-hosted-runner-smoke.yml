@@ -6,7 +6,7 @@ on:
 jobs:
   smoke:
     name: "🧪 Smoke (self-hosted on cube)"
-    runs-on: [self-hosted, Linux, X64, cube]
+    runs-on: cube
     timeout-minutes: 10
 
     steps:

@@ -12,7 +12,7 @@ on:
 
 jobs:
   codegen-diff:
-    runs-on: [self-hosted, Linux, X64, cube]
+    runs-on: cube
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
