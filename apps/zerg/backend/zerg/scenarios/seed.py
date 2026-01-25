@@ -22,6 +22,7 @@ from zerg.models.enums import ThreadType
 from zerg.models.models import AgentRun
 from zerg.models.models import Thread
 from zerg.models.models import ThreadMessage
+from zerg.models.models import WorkerJob
 from zerg.services.supervisor_service import SupervisorService
 from zerg.utils.time import utc_now
 
@@ -79,7 +80,7 @@ def seed_scenario(
         if parsed_base is not None:
             base_time = parsed_base
 
-    counts = {"runs": 0, "messages": 0, "events": 0}
+    counts = {"runs": 0, "messages": 0, "events": 0, "worker_jobs": 0}
 
     for index, run_data in enumerate(runs, start=1):
         if not isinstance(run_data, dict):
@@ -165,6 +166,37 @@ def seed_scenario(
             )
             counts["messages"] += 1
 
+        for job_data in _as_list(run_data.get("worker_jobs")):
+            if not isinstance(job_data, dict):
+                raise ScenarioError("Worker job must be a mapping")
+            task = job_data.get("task")
+            if not task:
+                raise ScenarioError("Worker job requires 'task'")
+            job_status = job_data.get("status", "queued")
+            job_started_at = _parse_time(job_data.get("started_at"), base_time)
+            job_finished_at = _parse_time(job_data.get("finished_at"), base_time)
+            job_created_at = _parse_time(job_data.get("created_at"), base_time) or job_started_at or base_time
+            job_updated_at = _parse_time(job_data.get("updated_at"), base_time) or job_finished_at or job_created_at
+            db.add(
+                WorkerJob(
+                    owner_id=owner_id,
+                    supervisor_run_id=run.id,
+                    task=str(task),
+                    status=str(job_status),
+                    model=str(job_data.get("model") or "gpt-5-mini"),
+                    reasoning_effort=job_data.get("reasoning_effort"),
+                    config=dict(job_data.get("config") or {}),
+                    worker_id=job_data.get("worker_id"),
+                    error=job_data.get("error"),
+                    acknowledged=bool(job_data.get("acknowledged", False)),
+                    created_at=_to_naive(job_created_at),
+                    updated_at=_to_naive(job_updated_at),
+                    started_at=_to_naive(job_started_at),
+                    finished_at=_to_naive(job_finished_at),
+                )
+            )
+            counts["worker_jobs"] += 1
+
         counts["runs"] += 1
 
     db.commit()
@@ -178,21 +210,33 @@ def cleanup_scenario(db: Session, scenario_name: Optional[str]) -> dict[str, int
     thread_ids = [row[0] for row in thread_rows]
 
     if not thread_ids:
-        return {"runs": 0, "threads": 0, "messages": 0}
+        return {"runs": 0, "threads": 0, "messages": 0, "worker_jobs": 0}
+
+    run_ids = [row[0] for row in db.query(AgentRun.id).filter(AgentRun.thread_id.in_(thread_ids)).all()]
+
+    worker_jobs_deleted = 0
+    if run_ids:
+        worker_jobs_deleted = db.query(WorkerJob).filter(WorkerJob.supervisor_run_id.in_(run_ids)).delete(synchronize_session=False)
 
     runs_deleted = db.query(AgentRun).filter(AgentRun.thread_id.in_(thread_ids)).delete(synchronize_session=False)
     messages_deleted = db.query(ThreadMessage).filter(ThreadMessage.thread_id.in_(thread_ids)).delete(synchronize_session=False)
     threads_deleted = db.query(Thread).filter(Thread.id.in_(thread_ids)).delete(synchronize_session=False)
 
     logger.info(
-        "Scenario cleanup %s: %s runs, %s messages, %s threads",
+        "Scenario cleanup %s: %s runs, %s messages, %s threads, %s worker jobs",
         prefix,
         runs_deleted,
         messages_deleted,
         threads_deleted,
+        worker_jobs_deleted,
     )
 
-    return {"runs": runs_deleted, "threads": threads_deleted, "messages": messages_deleted}
+    return {
+        "runs": runs_deleted,
+        "threads": threads_deleted,
+        "messages": messages_deleted,
+        "worker_jobs": worker_jobs_deleted,
+    }
 
 
 def _parse_time(value: Any, base_time: datetime) -> Optional[datetime]:

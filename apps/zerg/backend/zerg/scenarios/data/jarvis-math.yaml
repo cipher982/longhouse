@@ -1,0 +1,20 @@
+name: jarvis-math
+version: 1
+summary: Simple Jarvis math exchange for demos/tests.
+timebase: now
+runs:
+  - id: math
+    title: Jarvis math (2+2)
+    status: success
+    trigger: chat
+    thread_type: chat
+    started_at: -3m
+    finished_at: -3m
+    summary: "4"
+    messages:
+      - role: user
+        content: "2+2"
+        at: -3m
+      - role: assistant
+        content: "4"
+        at: -3m
