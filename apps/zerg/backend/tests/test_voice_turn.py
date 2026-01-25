@@ -109,6 +109,7 @@ def test_voice_turn_endpoint_success(monkeypatch):
     """API endpoint should return transcript + response."""
     import zerg.voice.router as voice_router
     from zerg.main import app
+    from zerg.routers.jarvis_auth import get_current_jarvis_user
 
     client = TestClient(app)
 
@@ -127,14 +128,21 @@ def test_voice_turn_endpoint_success(monkeypatch):
         ),
     )
 
-    response = client.post(
-        "/api/jarvis/voice/turn",
-        headers={"Authorization": "Bearer test-token"},
-        files={"audio": ("sample.wav", b"audio", "audio/wav")},
-    )
+    app.dependency_overrides[get_current_jarvis_user] = lambda: SimpleNamespace(id=1)
+    try:
+        response = client.post(
+            "/api/jarvis/voice/turn",
+            headers={"Authorization": "Bearer test-token"},
+            files={"audio": ("sample.wav", b"audio", "audio/wav")},
+            data={"return_audio": "true"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_current_jarvis_user, None)
 
     assert response.status_code == 200
     data = response.json()
     assert data["transcript"] == "hello"
     assert data["response_text"] == "ok"
     assert data["status"] == "success"
+    assert data["tts"] is not None
+    assert data["tts"]["audio_base64"]

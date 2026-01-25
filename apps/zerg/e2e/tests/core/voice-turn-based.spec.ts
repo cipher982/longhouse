@@ -47,6 +47,7 @@ test.describe('Voice Turn-Based - Core', () => {
           mimeType: 'audio/wav',
           buffer: audioBuffer,
         },
+        return_audio: 'true',
       },
     });
 
@@ -59,5 +60,8 @@ test.describe('Voice Turn-Based - Core', () => {
     expect(typeof data.status).toBe('string');
     expect(data.status.length).toBeGreaterThan(0);
     expect(typeof data.response_text).toBe('string');
+    expect(data.tts).toBeTruthy();
+    expect(typeof data.tts.audio_base64).toBe('string');
+    expect(data.tts.audio_base64.length).toBeGreaterThan(0);
   });
 });

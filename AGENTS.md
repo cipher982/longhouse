@@ -163,3 +163,4 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-25) [gotcha] Telegram channel `webhook_url` only sets the remote webhook; no local webhook handler is wired yet, so inbound delivery still requires polling.
 - (2026-01-25) [gotcha] Tests patch `zerg.services.openai_realtime.httpx.AsyncClient`; keep `httpx` imported in the compatibility wrapper after moving realtime helpers.
 - (2026-01-25) [pattern] SupervisorService enforces a single ThreadType.SUPER thread per user (“one brain”); each Jarvis message creates an AgentRun tied to that thread.
+- (2026-01-25) [gotcha] Skills loader/registry must use `skill.name` (SkillEntry has no `.name`); `e.name` raises AttributeError during load/sort.
