@@ -39,7 +39,7 @@ class TTSConfig:
     """TTS configuration settings."""
 
     enabled: bool = True
-    provider: TTSProvider = TTSProvider.EDGE
+    provider: TTSProvider = TTSProvider.OPENAI
     max_text_length: int = 4096
     timeout_ms: int = 30000
 
@@ -68,50 +68,6 @@ class TTSConfig:
     edge_pitch: str | None = None  # e.g., "+10Hz", "-5Hz", None for default
     edge_volume: str | None = None  # e.g., "+10%", "-5%", None for default
 
-    @classmethod
-    def from_env(cls) -> "TTSConfig":
-        """Load configuration from environment variables."""
-
-        def _truthy(val: str | None) -> bool:
-            return val is not None and val.strip().lower() in {"1", "true", "yes", "on"}
-
-        provider_str = os.getenv("TTS_PROVIDER")
-        if provider_str:
-            provider_str = provider_str.lower()
-        else:
-            provider_str = "openai" if os.getenv("OPENAI_API_KEY") else "edge"
-
-        provider = TTSProvider(provider_str) if provider_str in [p.value for p in TTSProvider] else TTSProvider.EDGE
-
-        return cls(
-            enabled=_truthy(os.getenv("TTS_ENABLED", "1")),
-            provider=provider,
-            max_text_length=int(os.getenv("TTS_MAX_TEXT_LENGTH", "4096")),
-            timeout_ms=int(os.getenv("TTS_TIMEOUT_MS", "30000")),
-            # OpenAI
-            openai_api_key=os.getenv("OPENAI_API_KEY"),
-            openai_model=os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),
-            openai_voice=os.getenv("OPENAI_TTS_VOICE", "alloy"),
-            openai_response_format=os.getenv("OPENAI_TTS_FORMAT", "mp3"),
-            openai_speed=float(os.getenv("OPENAI_TTS_SPEED", "1.0")),
-            openai_instructions=os.getenv("OPENAI_TTS_INSTRUCTIONS") or None,
-            # ElevenLabs
-            elevenlabs_api_key=os.getenv("ELEVENLABS_API_KEY") or os.getenv("XI_API_KEY"),
-            elevenlabs_voice_id=os.getenv("ELEVENLABS_VOICE_ID", "pMsXgVXv3BLzUgSXRplE"),
-            elevenlabs_model_id=os.getenv("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2"),
-            elevenlabs_stability=float(os.getenv("ELEVENLABS_STABILITY", "0.5")),
-            elevenlabs_similarity_boost=float(os.getenv("ELEVENLABS_SIMILARITY_BOOST", "0.75")),
-            elevenlabs_style=float(os.getenv("ELEVENLABS_STYLE", "0.0")),
-            elevenlabs_use_speaker_boost=_truthy(os.getenv("ELEVENLABS_USE_SPEAKER_BOOST", "1")),
-            elevenlabs_speed=float(os.getenv("ELEVENLABS_SPEED", "1.0")),
-            # Edge TTS
-            edge_voice=os.getenv("TTS_EDGE_VOICE", "en-US-GuyNeural"),
-            edge_lang=os.getenv("TTS_EDGE_LANG", "en-US"),
-            edge_rate=os.getenv("TTS_EDGE_RATE") or None,
-            edge_pitch=os.getenv("TTS_EDGE_PITCH") or None,
-            edge_volume=os.getenv("TTS_EDGE_VOLUME") or None,
-        )
-
 
 @dataclass
 class TTSResult:
@@ -131,9 +87,17 @@ class TTSService:
     """Text-to-Speech service with provider fallback."""
 
     def __init__(self, config: TTSConfig | None = None):
-        self.config = config or TTSConfig.from_env()
+        self.config = config or TTSConfig()
         self._temp_dir: Path | None = None
         self._openai_client: AsyncOpenAI | None = None
+
+        settings = get_settings()
+        if self.config.openai_api_key is None:
+            self.config.openai_api_key = settings.openai_api_key
+
+        # ElevenLabs has no settings store yet; env is the only source for now.
+        if self.config.elevenlabs_api_key is None:
+            self.config.elevenlabs_api_key = os.getenv("ELEVENLABS_API_KEY") or os.getenv("XI_API_KEY")
 
     def _get_openai_client(self) -> AsyncOpenAI:
         """Get or create OpenAI client."""
