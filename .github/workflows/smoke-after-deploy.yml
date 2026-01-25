@@ -22,7 +22,7 @@ concurrency:
 jobs:
   smoke:
     name: "🧪 Post-Deploy Smoke Test"
-    runs-on: arc-runner-set
+    runs-on: cube
     timeout-minutes: 10
 
     steps:
