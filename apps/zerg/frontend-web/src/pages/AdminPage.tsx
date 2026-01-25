@@ -1158,6 +1158,17 @@ function AdminPage() {
                     className="demo-add-button"
                     onClick={handleCreateDemo}
                     disabled={createDemoMutation.isPending}
+                    style={{
+                      width: '100%',
+                      background: 'transparent',
+                      border: '2px dashed rgba(255,255,255,0.15)',
+                      borderRadius: '12px',
+                      padding: '16px',
+                      color: 'rgba(255,255,255,0.4)',
+                      cursor: 'pointer',
+                      fontSize: '14px',
+                      fontWeight: 500,
+                    }}
                   >
                     + New demo account
                   </button>
