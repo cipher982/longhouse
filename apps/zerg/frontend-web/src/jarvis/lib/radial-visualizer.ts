@@ -44,7 +44,7 @@ export class RadialVisualizer {
     this.canvas.id = 'radialViz';
     this.canvas.style.position = 'absolute';
     this.canvas.style.pointerEvents = 'none';
-    this.canvas.style.filter = 'drop-shadow(0 0 32px rgba(139,92,246,0.45))';
+    this.canvas.style.filter = 'drop-shadow(0 0 14px rgba(6,182,212,0.22))';
     this.canvas.style.zIndex = '5';
 
     // robust positioning: pin to corners instead of center transform
@@ -221,8 +221,9 @@ export class RadialVisualizer {
     const cx = w / 2;
     const cy = h / 2;
     const minDim = Math.min(w, h);
-    const baseR = Math.max(this.minRadius, (minDim / 2) - 12);
+    const baseR = Math.max(this.minRadius, (minDim / 2) - 14);
     const innerR = baseR * 0.6;
+    const maxRadius = (minDim / 2) - 2;
 
     const micActive = (this.renderState & 1) === 1;
     const assistantActive = (this.renderState & 2) === 2;
@@ -238,12 +239,13 @@ export class RadialVisualizer {
 
     // ACTIVE STATE: Draw full visualizer
     // Ambient glow
-    const ambientGradient = ctx.createRadialGradient(cx, cy, innerR * 0.4, cx, cy, baseR + 36);
-    const glowOpacity = 0.2 + intensity * 0.35;
-    ambientGradient.addColorStop(0, `rgba(99,102,241,${glowOpacity})`);
+    const ambientRadius = Math.min(maxRadius, baseR + 18);
+    const ambientGradient = ctx.createRadialGradient(cx, cy, innerR * 0.4, cx, cy, ambientRadius);
+    const glowOpacity = 0.12 + intensity * 0.22;
+    ambientGradient.addColorStop(0, `rgba(6,182,212,${glowOpacity})`);
     ambientGradient.addColorStop(1, 'rgba(15,23,42,0)');
     ctx.beginPath();
-    ctx.arc(cx, cy, baseR + 32, 0, Math.PI * 2);
+    ctx.arc(cx, cy, ambientRadius, 0, Math.PI * 2);
     ctx.fillStyle = ambientGradient;
     ctx.fill();
 
@@ -268,10 +270,12 @@ export class RadialVisualizer {
     }
 
     const barColor = ctx.createLinearGradient(cx, cy - innerR, cx, cy + baseR);
-    barColor.addColorStop(0, assistantActive && !micActive ? '#38bdf8' : accent);
-    barColor.addColorStop(1, micActive && !assistantActive ? '#f472b6' : '#6366f1');
+    const barStart = assistantActive && !micActive ? '#38bdf8' : accent;
+    const barEnd = assistantActive && !micActive ? 'rgba(56,189,248,0.35)' : 'rgba(6,182,212,0.25)';
+    barColor.addColorStop(0, barStart);
+    barColor.addColorStop(1, barEnd);
 
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 2;
     ctx.strokeStyle = barColor;
 
     for (let i = 0; i < bars; i++) {
@@ -283,8 +287,10 @@ export class RadialVisualizer {
       const sin = Math.sin(angle);
       const x1 = cx + cos * innerR;
       const y1 = cy + sin * innerR;
-      const x2 = cx + cos * (radius + 6 + intensity * 8);
-      const y2 = cy + sin * (radius + 6 + intensity * 8);
+      const extension = 3 + intensity * 4;
+      const cappedRadius = Math.min(maxRadius, radius + extension);
+      const x2 = cx + cos * cappedRadius;
+      const y2 = cy + sin * cappedRadius;
       ctx.beginPath();
       ctx.moveTo(x1, y1);
       ctx.lineTo(x2, y2);
@@ -301,15 +307,15 @@ export class RadialVisualizer {
     ctx.fill();
 
     // Highlight pulses for activity
-    const pulseCount = micActive && assistantActive ? 3 : 2;
+    const pulseCount = assistantActive ? 2 : 1;
     for (let i = 0; i < pulseCount; i++) {
-      const progress = (this.pulseClock * (micActive ? 1.45 : 1.1) + i * 0.6) % 1;
-      const pulseRadius = innerR + progress * (baseR - innerR);
-      const alpha = Math.max(0, 0.35 - progress * (0.5 + intensity * 0.5));
+      const progress = (this.pulseClock * (assistantActive ? 1.3 : 1.0) + i * 0.7) % 1;
+      const pulseRadius = Math.min(maxRadius, innerR + progress * (baseR - innerR));
+      const alpha = Math.max(0, 0.2 - progress * (0.4 + intensity * 0.4));
       ctx.beginPath();
       ctx.arc(cx, cy, pulseRadius, 0, Math.PI * 2);
-      ctx.strokeStyle = `rgba(236,72,153,${micActive ? alpha : alpha * 0.6})`;
-      ctx.lineWidth = 1.5 + intensity * 1.5;
+      ctx.strokeStyle = micActive ? `rgba(6,182,212,${alpha})` : `rgba(99,102,241,${alpha * 0.6})`;
+      ctx.lineWidth = 1 + intensity;
       ctx.stroke();
     }
   }
