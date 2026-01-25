@@ -71,7 +71,8 @@ def _create_user_data(db_session, user: User) -> dict:
     agent = Agent(
         owner_id=user.id,
         name="Test Agent",
-        system_prompt="Test prompt",
+        system_instructions="Test system instructions",
+        task_instructions="Test task instructions",
         model="gpt-test",
         created_at=utc_now_naive(),
         updated_at=utc_now_naive(),
@@ -119,7 +120,7 @@ def _create_user_data(db_session, user: User) -> dict:
     workflow = Workflow(
         owner_id=user.id,
         name="Test Workflow",
-        definition={},
+        canvas={},
         created_at=utc_now_naive(),
         updated_at=utc_now_naive(),
     )
@@ -220,7 +221,7 @@ class TestResetDemoUserData:
         workflow = Workflow(
             owner_id=user.id,
             name="FK Test Workflow",
-            definition={},
+            canvas={},
             created_at=utc_now_naive(),
             updated_at=utc_now_naive(),
         )
