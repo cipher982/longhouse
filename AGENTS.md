@@ -167,3 +167,5 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-25) [gotcha] Frontend CSP `connect-src` must include `api.openai.com` for OpenAI Realtime; otherwise voice connect fails with CSP-blocked fetch.
 - (2026-01-25) [gotcha] Worker artifacts (thread.jsonl, tool_calls/*.txt, result.txt) are written after completion; no live tail via read_worker_file. Runner exec streams exec_chunk to runner_jobs stdout_trunc but isn't exposed to supervisors.
 - (2026-01-25) [gotcha] Voice uploads may send content-type params (e.g., `audio/webm;codecs=opus`); normalize before validation or browser uploads will 400.
+- (2026-01-25) [gotcha] Empty or too-short audio yields no transcription; return 422 and show a friendly “try speaking longer” prompt instead of 500.
+- (2026-01-25) [gotcha] Client-side min audio size gate prevents tiny blobs from hitting STT and returning empty transcription.

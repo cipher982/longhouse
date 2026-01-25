@@ -38,6 +38,28 @@ async def test_stt_service_rejects_large_audio(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_stt_service_rejects_short_audio(monkeypatch):
+    """STT should reject audio that is too short to transcribe."""
+    import zerg.voice.stt_service as stt_module
+
+    monkeypatch.setattr(
+        stt_module,
+        "get_settings",
+        lambda: SimpleNamespace(testing=False, llm_disabled=False, openai_api_key="test-key"),
+    )
+
+    service = STTService()
+    result = await service.transcribe_bytes(
+        b"x" * 10,
+        filename="audio.wav",
+        content_type="audio/wav",
+    )
+
+    assert result.success is False
+    assert result.error and "too short" in result.error.lower()
+
+
+@pytest.mark.asyncio
 async def test_stt_service_calls_openai(monkeypatch):
     """STT should call OpenAI when not in testing mode."""
     import zerg.voice.stt_service as stt_module
@@ -183,3 +205,38 @@ def test_voice_turn_accepts_webm_with_codecs(monkeypatch):
         app.dependency_overrides.pop(get_current_jarvis_user, None)
 
     assert response.status_code == 200
+
+
+def test_voice_turn_empty_transcription_returns_422(monkeypatch):
+    """Empty transcription should return 422 instead of 500."""
+    import zerg.voice.router as voice_router
+    from zerg.main import app
+    from zerg.routers.jarvis_auth import get_current_jarvis_user
+
+    client = TestClient(app)
+
+    monkeypatch.setattr(
+        voice_router,
+        "run_voice_turn",
+        AsyncMock(
+            return_value=VoiceTurnResult(
+                transcript="",
+                response_text=None,
+                status="error",
+                error="Empty transcription result",
+            )
+        ),
+    )
+
+    app.dependency_overrides[get_current_jarvis_user] = lambda: SimpleNamespace(id=1)
+    try:
+        response = client.post(
+            "/api/jarvis/voice/turn",
+            headers={"Authorization": "Bearer test-token"},
+            files={"audio": ("sample.webm", b"audio", "audio/webm;codecs=opus")},
+            data={"return_audio": "true"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_current_jarvis_user, None)
+
+    assert response.status_code == 422
