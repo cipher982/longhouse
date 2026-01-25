@@ -17,6 +17,7 @@ from zerg.config import get_settings
 from zerg.routers.jarvis_auth import get_current_jarvis_user
 from zerg.voice.stt_service import ALLOWED_AUDIO_TYPES
 from zerg.voice.stt_service import MAX_AUDIO_BYTES
+from zerg.voice.stt_service import normalize_content_type
 from zerg.voice.tts_service import TTSProvider
 from zerg.voice.tts_service import get_tts_service
 from zerg.voice.turn_based import run_voice_turn
@@ -72,7 +73,8 @@ async def voice_turn(
     if not audio:
         raise HTTPException(status_code=400, detail="Audio file is required")
 
-    if audio.content_type and audio.content_type not in ALLOWED_AUDIO_TYPES:
+    normalized_content_type = normalize_content_type(audio.content_type)
+    if normalized_content_type and normalized_content_type not in ALLOWED_AUDIO_TYPES:
         raise HTTPException(status_code=400, detail=f"Unsupported audio type: {audio.content_type}")
 
     audio_bytes = await audio.read()
