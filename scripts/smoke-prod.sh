@@ -277,6 +277,7 @@ run_frontend_checks() {
     run_test test_http "Landing page" "$FRONTEND_URL" "200"
     run_test test_http "Chat page" "$FRONTEND_URL/chat" "200"
     run_test test_http "Dashboard" "$FRONTEND_URL/dashboard" "200"
+    run_test test_http "Swarm Ops" "$FRONTEND_URL/swarm" "200"
     run_test test_config
 }
 
@@ -479,6 +480,7 @@ if [[ -n "$SMOKE_TEST_SECRET" ]]; then
         pass "Service login ($LOGIN_STATUS)"
         run_test test_http_auth "Jarvis bootstrap (authed)" "$API_URL/api/jarvis/bootstrap" "200" "$COOKIE_JAR"
         run_test test_http_auth "Jarvis history (authed)" "$API_URL/api/jarvis/history" "200" "$COOKIE_JAR"
+        run_test test_http_auth "Jarvis runs (authed)" "$API_URL/api/jarvis/runs?limit=1" "200" "$COOKIE_JAR"
         run_test test_http_auth "User profile (authed)" "$API_URL/api/users/me" "200" "$COOKIE_JAR"
 
         if [[ $RUN_LLM -eq 1 ]]; then
