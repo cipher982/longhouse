@@ -1,6 +1,7 @@
 """Text-to-Speech service for Jarvis voice responses.
 
 Provides TTS conversion using multiple providers:
+- OpenAI (audio/speech API)
 - ElevenLabs (premium, requires API key)
 - Edge TTS (free fallback, uses Microsoft Edge's neural TTS)
 
@@ -18,6 +19,9 @@ from enum import Enum
 from pathlib import Path
 
 import httpx
+from openai import AsyncOpenAI
+
+from zerg.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +29,7 @@ logger = logging.getLogger(__name__)
 class TTSProvider(str, Enum):
     """Available TTS providers."""
 
+    OPENAI = "openai"
     ELEVENLABS = "elevenlabs"
     EDGE = "edge"
 
@@ -35,8 +40,16 @@ class TTSConfig:
 
     enabled: bool = True
     provider: TTSProvider = TTSProvider.EDGE
-    max_text_length: int = 4000
+    max_text_length: int = 4096
     timeout_ms: int = 30000
+
+    # OpenAI settings
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-4o-mini-tts"
+    openai_voice: str = "alloy"
+    openai_response_format: str = "mp3"
+    openai_speed: float = 1.0
+    openai_instructions: str | None = None
 
     # ElevenLabs settings
     elevenlabs_api_key: str | None = None
@@ -62,14 +75,26 @@ class TTSConfig:
         def _truthy(val: str | None) -> bool:
             return val is not None and val.strip().lower() in {"1", "true", "yes", "on"}
 
-        provider_str = os.getenv("TTS_PROVIDER", "edge").lower()
+        provider_str = os.getenv("TTS_PROVIDER")
+        if provider_str:
+            provider_str = provider_str.lower()
+        else:
+            provider_str = "openai" if os.getenv("OPENAI_API_KEY") else "edge"
+
         provider = TTSProvider(provider_str) if provider_str in [p.value for p in TTSProvider] else TTSProvider.EDGE
 
         return cls(
             enabled=_truthy(os.getenv("TTS_ENABLED", "1")),
             provider=provider,
-            max_text_length=int(os.getenv("TTS_MAX_TEXT_LENGTH", "4000")),
+            max_text_length=int(os.getenv("TTS_MAX_TEXT_LENGTH", "4096")),
             timeout_ms=int(os.getenv("TTS_TIMEOUT_MS", "30000")),
+            # OpenAI
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            openai_model=os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),
+            openai_voice=os.getenv("OPENAI_TTS_VOICE", "alloy"),
+            openai_response_format=os.getenv("OPENAI_TTS_FORMAT", "mp3"),
+            openai_speed=float(os.getenv("OPENAI_TTS_SPEED", "1.0")),
+            openai_instructions=os.getenv("OPENAI_TTS_INSTRUCTIONS") or None,
             # ElevenLabs
             elevenlabs_api_key=os.getenv("ELEVENLABS_API_KEY") or os.getenv("XI_API_KEY"),
             elevenlabs_voice_id=os.getenv("ELEVENLABS_VOICE_ID", "pMsXgVXv3BLzUgSXRplE"),
@@ -108,6 +133,17 @@ class TTSService:
     def __init__(self, config: TTSConfig | None = None):
         self.config = config or TTSConfig.from_env()
         self._temp_dir: Path | None = None
+        self._openai_client: AsyncOpenAI | None = None
+
+    def _get_openai_client(self) -> AsyncOpenAI:
+        """Get or create OpenAI client."""
+        if self._openai_client is None:
+            api_key = self.config.openai_api_key
+            if not api_key:
+                settings = get_settings()
+                api_key = settings.openai_api_key
+            self._openai_client = AsyncOpenAI(api_key=api_key)
+        return self._openai_client
 
     def _get_temp_dir(self) -> Path:
         """Get or create temporary directory for audio files."""
@@ -118,22 +154,85 @@ class TTSService:
     def _get_provider_order(self) -> list[TTSProvider]:
         """Get provider order based on configuration and availability."""
         primary = self.config.provider
-        providers = [primary]
-
-        # Add fallbacks
-        for p in TTSProvider:
-            if p != primary:
-                providers.append(p)
-
-        return providers
+        fallback_order = [
+            TTSProvider.OPENAI,
+            TTSProvider.ELEVENLABS,
+            TTSProvider.EDGE,
+        ]
+        return [primary] + [p for p in fallback_order if p != primary]
 
     def _is_provider_available(self, provider: TTSProvider) -> bool:
         """Check if a provider is available (has required credentials)."""
+        if provider == TTSProvider.OPENAI:
+            if self.config.openai_api_key:
+                return True
+            settings = get_settings()
+            return bool(settings.openai_api_key)
         if provider == TTSProvider.ELEVENLABS:
             return bool(self.config.elevenlabs_api_key)
         if provider == TTSProvider.EDGE:
             return True  # Edge TTS requires no credentials
         return False
+
+    @staticmethod
+    def _content_type_for_format(format_name: str | None) -> str:
+        """Map response format to content type."""
+        mapping = {
+            "mp3": "audio/mpeg",
+            "opus": "audio/opus",
+            "aac": "audio/aac",
+            "flac": "audio/flac",
+            "wav": "audio/wav",
+            "pcm": "audio/pcm",
+        }
+        return mapping.get((format_name or "mp3").lower(), "audio/mpeg")
+
+    async def _convert_openai(self, text: str, voice_id: str | None = None) -> TTSResult:
+        """Convert text to speech using OpenAI Audio API."""
+        if not self._is_provider_available(TTSProvider.OPENAI):
+            return TTSResult(success=False, error="OpenAI API key not configured")
+
+        import time
+
+        start_time = time.time()
+        voice = voice_id or self.config.openai_voice
+        response_format = self.config.openai_response_format
+        instructions = self.config.openai_instructions
+
+        try:
+            payload = {
+                "model": self.config.openai_model,
+                "voice": voice,
+                "input": text,
+                "response_format": response_format,
+                "speed": self.config.openai_speed,
+            }
+            if instructions:
+                payload["instructions"] = instructions
+
+            response = await self._get_openai_client().audio.speech.create(**payload)
+
+            audio_data = await response.aread()
+            latency_ms = int((time.time() - start_time) * 1000)
+
+            temp_dir = self._get_temp_dir()
+            extension = (response_format or "mp3").lower()
+            audio_path = temp_dir / f"tts-{int(time.time() * 1000)}.{extension}"
+            audio_path.write_bytes(audio_data)
+
+            return TTSResult(
+                success=True,
+                audio_path=str(audio_path),
+                audio_data=audio_data,
+                latency_ms=latency_ms,
+                provider="openai",
+                output_format=extension,
+                content_type=self._content_type_for_format(extension),
+            )
+        except httpx.TimeoutException:
+            return TTSResult(success=False, error="OpenAI TTS request timed out")
+        except Exception as e:
+            return TTSResult(success=False, error=f"OpenAI TTS error: {str(e)}")
 
     async def _convert_elevenlabs(self, text: str, voice_id: str | None = None) -> TTSResult:
         """Convert text to speech using ElevenLabs API."""
@@ -296,7 +395,9 @@ class TTSService:
 
             logger.debug(f"TTS: trying provider {p.value}")
 
-            if p == TTSProvider.ELEVENLABS:
+            if p == TTSProvider.OPENAI:
+                result = await self._convert_openai(text, voice_id)
+            elif p == TTSProvider.ELEVENLABS:
                 result = await self._convert_elevenlabs(text, voice_id)
             elif p == TTSProvider.EDGE:
                 result = await self._convert_edge(text, voice_id)
