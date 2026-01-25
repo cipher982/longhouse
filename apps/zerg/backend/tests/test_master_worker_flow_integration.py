@@ -111,11 +111,13 @@ async def test_supervisor_worker_interrupt_resume_flow(
         """Simulate supervisor calling spawn_worker which triggers AgentInterrupted."""
         # Raise AgentInterrupted to simulate the interrupt path inside spawn_worker
         # Note: No "message" field - frontend shows typing indicator, worker card shows task
-        raise AgentInterrupted({
-            "type": "worker_pending",
-            "job_id": worker_job.id,
-            "task": "Check disk space on cube",
-        })
+        raise AgentInterrupted(
+            {
+                "type": "worker_pending",
+                "job_id": worker_job.id,
+                "task": "Check disk space on cube",
+            }
+        )
 
     # Test Phase 1: Supervisor run should become WAITING when interrupted
     with patch("zerg.managers.agent_runner.AgentRunner.run_thread", new=fake_run_thread_with_interrupt):
@@ -268,17 +270,14 @@ async def test_spawn_worker_fallback_when_outside_runnable_context(
         assert "queued successfully" in result
 
         # Worker job should have been created
-        job = (
-            db_session.query(WorkerJob)
-            .filter(WorkerJob.task == "Test fallback task")
-            .first()
-        )
+        job = db_session.query(WorkerJob).filter(WorkerJob.task == "Test fallback task").first()
         assert job is not None
         assert job.supervisor_run_id == run.id
         assert job.owner_id == test_user.id
 
     finally:
         from zerg.services.supervisor_context import reset_supervisor_context
+
         reset_supervisor_context(token)
 
     # NOTE: When called outside the graph, we only enqueue the worker job.
@@ -293,7 +292,11 @@ async def test_interrupt_triggers_waiting_status(
     credential_context,  # noqa: ARG001 - fixture activates resolver context
     temp_artifact_path,  # noqa: ARG001 - ensures artifact store is writable if used
 ):
-    """Test that spawn_worker properly triggers interrupt and WAITING status.
+    """Test that spawn_worker triggers WAITING status in barrier mode.
+
+    This test uses the BARRIER MODEL (ASYNC_WORKER_MODEL=0) to verify
+    the legacy interrupt behavior is preserved. For the async inbox model
+    tests, see test_async_worker_model.py.
 
     This catches regressions where:
     - AgentInterrupted is accidentally caught (would result in SUCCESS instead of WAITING)
@@ -302,9 +305,17 @@ async def test_interrupt_triggers_waiting_status(
     The test uses ScriptedLLM to deterministically call spawn_worker,
     then verifies the run transitions to WAITING (not SUCCESS or FAILED).
     """
+    from unittest.mock import MagicMock
     from unittest.mock import patch
 
     from zerg.testing.scripted_llm import ScriptedChatLLM
+
+    # Create a mock settings with async_worker_model=False (barrier mode)
+    from zerg.config import get_settings
+
+    real_settings = get_settings()
+    mock_settings = MagicMock(wraps=real_settings)
+    mock_settings.async_worker_model = False  # Barrier model
 
     service = SupervisorService(db_session)
     agent = service.get_or_create_supervisor_agent(test_user.id)
@@ -324,9 +335,12 @@ async def test_interrupt_triggers_waiting_status(
     # Use ScriptedChatLLM - it will call spawn_worker for "disk space on cube" prompts
     scripted_llm = ScriptedChatLLM()
 
-    # Patch the LLM creation to use our scripted version
-    with patch("zerg.services.supervisor_react_engine._make_llm", return_value=scripted_llm):
-        # Run supervisor - should interrupt on spawn_worker
+    # Patch both LLM and settings
+    with (
+        patch("zerg.services.supervisor_react_engine._make_llm", return_value=scripted_llm),
+        patch("zerg.config.get_settings", return_value=mock_settings),
+    ):
+        # Run supervisor - should interrupt on spawn_worker (barrier model)
         result = await service.run_supervisor(
             owner_id=test_user.id,
             task="check disk space on cube",
@@ -348,11 +362,7 @@ async def test_interrupt_triggers_waiting_status(
     assert run.status == RunStatus.WAITING, f"Run should be WAITING but is {run.status}"
 
     # Verify worker job was created (spawn_worker ran before interrupt)
-    worker_job = (
-        db_session.query(WorkerJob)
-        .filter(WorkerJob.supervisor_run_id == run.id)
-        .first()
-    )
+    worker_job = db_session.query(WorkerJob).filter(WorkerJob.supervisor_run_id == run.id).first()
     assert worker_job is not None, "Worker job should have been created before interrupt"
     assert worker_job.status == "queued", "Worker job should be queued"
 
@@ -510,9 +520,7 @@ async def test_different_tasks_create_separate_workers(
         assert "queued successfully" in result1, f"First spawn should create job, got: {result1}"
 
         # Verify first worker was created
-        workers = db_session.query(WorkerJob).filter(
-            WorkerJob.supervisor_run_id == run.id
-        ).all()
+        workers = db_session.query(WorkerJob).filter(WorkerJob.supervisor_run_id == run.id).all()
         assert len(workers) == 1, f"Phase 1: Expected 1 worker, got {len(workers)}"
         first_worker = workers[0]
         assert first_worker.task == "Check disk space on cube"
@@ -530,12 +538,15 @@ async def test_different_tasks_create_separate_workers(
         with open(worker_dir / "result.txt", "w") as f:
             f.write("Disk usage on cube: 45% used. Docker images are the largest consumer.")
         with open(worker_dir / "metadata.json", "w") as f:
-            json.dump({
-                "worker_id": "test-worker-resume-001",
-                "status": "success",
-                "summary": "Cube is at 45% disk usage, Docker is largest consumer.",
-                "owner_id": test_user.id,
-            }, f)
+            json.dump(
+                {
+                    "worker_id": "test-worker-resume-001",
+                    "status": "success",
+                    "summary": "Cube is at 45% disk usage, Docker is largest consumer.",
+                    "owner_id": test_user.id,
+                },
+                f,
+            )
 
         # Phase 2: Second spawn_worker with DIFFERENT task
         # With exact matching only, this creates a new worker (expected behavior)
@@ -543,9 +554,7 @@ async def test_different_tasks_create_separate_workers(
 
         # Count workers AFTER second spawn
         db_session.expire_all()  # Force refresh
-        workers_after = db_session.query(WorkerJob).filter(
-            WorkerJob.supervisor_run_id == run.id
-        ).all()
+        workers_after = db_session.query(WorkerJob).filter(WorkerJob.supervisor_run_id == run.id).all()
 
         # Different tasks = different workers (exact matching only)
         assert len(workers_after) == 2, (
@@ -556,9 +565,7 @@ async def test_different_tasks_create_separate_workers(
         )
 
         # Second call creates new worker (different task = no cache hit)
-        assert "queued successfully" in result2, (
-            f"Second spawn should create new job (different task), got: {result2}"
-        )
+        assert "queued successfully" in result2, f"Second spawn should create new job (different task), got: {result2}"
 
     finally:
         reset_supervisor_context(sup_token)

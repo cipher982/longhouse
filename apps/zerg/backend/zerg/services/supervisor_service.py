@@ -203,33 +203,62 @@ class SupervisorService:
         return thread
 
     def _build_recent_worker_context(self, owner_id: int) -> str | None:
-        """Build context message with recent worker history.
+        """Build inbox context with active workers and unacknowledged results.
 
-        v2.0 Improvement: Auto-inject recent worker results so the supervisor
-        doesn't have to call list_workers to check for duplicate work.
+        v3.0 (Async Inbox Model): The inbox shows:
+        1. Active workers (queued, running) with elapsed time
+        2. Unacknowledged completed workers with summaries (marked acknowledged after injection)
 
+        This allows the supervisor to be aware of background work without blocking.
         The message includes a marker for cleanup - see _cleanup_stale_worker_context().
 
         Returns:
-            Context string if there are recent workers, None otherwise.
+            Context string if there are workers to show, None otherwise.
         """
         from datetime import timedelta
 
-        # Query recent workers
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=RECENT_WORKER_HISTORY_MINUTES)
-        recent_jobs = (
+        # Query active workers (queued, running)
+        active_jobs = (
             self.db.query(WorkerJob)
             .filter(
                 WorkerJob.owner_id == owner_id,
-                WorkerJob.created_at >= cutoff,
-                WorkerJob.status.in_(["success", "failed", "running"]),
+                WorkerJob.status.in_(["queued", "running"]),
             )
             .order_by(WorkerJob.created_at.desc())
             .limit(RECENT_WORKER_HISTORY_LIMIT)
             .all()
         )
 
-        if not recent_jobs:
+        # Query unacknowledged completed workers (for inbox model)
+        # These are results the supervisor hasn't seen yet
+        unacknowledged_jobs = (
+            self.db.query(WorkerJob)
+            .filter(
+                WorkerJob.owner_id == owner_id,
+                WorkerJob.status.in_(["success", "failed"]),
+                WorkerJob.acknowledged == False,  # noqa: E712
+            )
+            .order_by(WorkerJob.created_at.desc())
+            .limit(RECENT_WORKER_HISTORY_LIMIT)
+            .all()
+        )
+
+        # Also include recent acknowledged jobs for context (last N minutes)
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=RECENT_WORKER_HISTORY_MINUTES)
+        recent_acknowledged_jobs = (
+            self.db.query(WorkerJob)
+            .filter(
+                WorkerJob.owner_id == owner_id,
+                WorkerJob.status.in_(["success", "failed"]),
+                WorkerJob.acknowledged == True,  # noqa: E712
+                WorkerJob.created_at >= cutoff,
+            )
+            .order_by(WorkerJob.created_at.desc())
+            .limit(3)  # Just show a few recent acknowledged for context
+            .all()
+        )
+
+        if not active_jobs and not unacknowledged_jobs and not recent_acknowledged_jobs:
             return None
 
         # Try to get artifact store for richer summaries, but don't fail if unavailable
@@ -239,24 +268,20 @@ class SupervisorService:
         except (OSError, PermissionError) as e:
             logger.warning(f"WorkerArtifactStore unavailable, using task summaries only: {e}")
 
-        # Build context with marker for cleanup
-        lines = [
-            RECENT_WORKER_CONTEXT_MARKER,  # Marker for identifying ephemeral context
-            "## Recent Worker Activity (last 10 minutes)",
-            "Check if any of these results already answer the user's question before spawning new workers:\n",
-        ]
+        def get_elapsed_str(job_time: datetime) -> str:
+            """Calculate elapsed time string."""
+            if job_time.tzinfo is None:
+                job_time = job_time.replace(tzinfo=timezone.utc)
+            elapsed = datetime.now(timezone.utc) - job_time
+            if elapsed.total_seconds() >= 3600:
+                return f"{int(elapsed.total_seconds() / 3600)}h ago"
+            elif elapsed.total_seconds() >= 60:
+                return f"{int(elapsed.total_seconds() / 60)}m ago"
+            else:
+                return f"{int(elapsed.total_seconds())}s ago"
 
-        for job in recent_jobs:
-            # Calculate elapsed time (handle naive vs aware datetimes)
-            job_created = job.created_at
-            if job_created.tzinfo is None:
-                job_created = job_created.replace(tzinfo=timezone.utc)
-            elapsed = datetime.now(timezone.utc) - job_created
-            elapsed_str = (
-                f"{int(elapsed.total_seconds() / 60)}m ago" if elapsed.total_seconds() >= 60 else f"{int(elapsed.total_seconds())}s ago"
-            )
-
-            # Get summary from artifact store if available
+        def get_summary(job: WorkerJob, max_chars: int = 150) -> str:
+            """Get summary from artifact store or truncate task."""
             summary = None
             if artifact_store and job.worker_id and job.status in ["success", "failed"]:
                 try:
@@ -264,16 +289,61 @@ class SupervisorService:
                     summary = metadata.get("summary")
                 except Exception:
                     pass
-
             if not summary:
-                # Truncate task as fallback
-                summary = job.task[:100] + "..." if len(job.task) > 100 else job.task
+                summary = job.task[:max_chars] + "..." if len(job.task) > max_chars else job.task
+            return summary
 
-            status_emoji = {"success": "✓", "failed": "✗", "running": "⋯"}.get(job.status, "?")
-            lines.append(f"- Job {job.id} [{status_emoji} {job.status.upper()}] ({elapsed_str})")
-            lines.append(f"  {summary}\n")
+        # Build context with marker for cleanup
+        lines = [
+            RECENT_WORKER_CONTEXT_MARKER,  # Marker for identifying ephemeral context
+            "## Worker Inbox",
+        ]
 
-        lines.append("Use read_worker_result(job_id) to get full details from any of these.")
+        # Section 1: Active workers
+        if active_jobs:
+            lines.append("\n**Active Workers:**")
+            for job in active_jobs:
+                elapsed_str = get_elapsed_str(job.started_at or job.created_at)
+                status_icon = "⏳" if job.status == "queued" else "⋯"
+                task_preview = job.task[:80] + "..." if len(job.task) > 80 else job.task
+                lines.append(f"- Job {job.id} [{status_icon} {job.status.upper()}] ({elapsed_str})")
+                lines.append(f"  Task: {task_preview}")
+
+        # Section 2: New results (unacknowledged)
+        if unacknowledged_jobs:
+            lines.append("\n**New Results (unread):**")
+            for job in unacknowledged_jobs:
+                elapsed_str = get_elapsed_str(job.finished_at or job.created_at)
+                status_icon = "✓" if job.status == "success" else "✗"
+                summary = get_summary(job)
+                lines.append(f"- Job {job.id} [{status_icon} {job.status.upper()}] ({elapsed_str})")
+                lines.append(f"  {summary}")
+
+            # Mark these jobs as acknowledged
+            unack_ids = [job.id for job in unacknowledged_jobs]
+            self.db.query(WorkerJob).filter(WorkerJob.id.in_(unack_ids)).update(
+                {"acknowledged": True},
+                synchronize_session=False,
+            )
+            self.db.commit()
+            logger.debug(f"Marked {len(unack_ids)} worker jobs as acknowledged")
+
+        # Section 3: Recent acknowledged (brief reference only)
+        if recent_acknowledged_jobs and not unacknowledged_jobs:
+            lines.append("\n**Recent Work:**")
+            for job in recent_acknowledged_jobs:
+                elapsed_str = get_elapsed_str(job.finished_at or job.created_at)
+                status_icon = "✓" if job.status == "success" else "✗"
+                task_preview = job.task[:60] + "..." if len(job.task) > 60 else job.task
+                lines.append(f"- Job {job.id} [{status_icon}] {task_preview} ({elapsed_str})")
+
+        # Footer with usage hints
+        lines.append("")
+        if unacknowledged_jobs:
+            lines.append("Use `read_worker_result(job_id)` for full details.")
+        if active_jobs:
+            lines.append("Use `check_worker_status()` to see worker progress.")
+            lines.append("Use `wait_for_worker(job_id)` if you need to block for a result.")
 
         return "\n".join(lines)
 
@@ -739,16 +809,24 @@ class SupervisorService:
                         logger.info(f"{already_completed}/{len(job_ids)} workers already completed - scheduled barrier checks")
 
                 else:
-                    # SINGLE-WORKER PATH (backwards compatibility)
-                    # Commit WAITING status now (no barrier needed for single worker)
-                    self.db.commit()
-
+                    # SINGLE-WORKER PATH (wait_for_worker or backwards compatibility)
                     job_id = interrupt_value.get("job_id") if isinstance(interrupt_value, dict) else None
                     interrupt_message = (
                         interrupt_value.get("message", "Working on this in the background...")
                         if isinstance(interrupt_value, dict)
                         else str(interrupt_value)
                     )
+
+                    # For wait_for_worker: store tool_call_id so resume uses it (not spawn_worker's)
+                    interrupt_type = interrupt_value.get("type") if isinstance(interrupt_value, dict) else None
+                    if interrupt_type == "wait_for_worker":
+                        wait_tool_call_id = interrupt_value.get("tool_call_id")
+                        if wait_tool_call_id:
+                            run.pending_tool_call_id = wait_tool_call_id
+                            logger.debug(f"Stored pending_tool_call_id={wait_tool_call_id} for wait_for_worker")
+
+                    # Commit WAITING status now (no barrier needed for single worker)
+                    self.db.commit()
 
                     # RACE SAFETY: Check if worker already completed while we were setting up.
                     # This handles the case where worker finished before WAITING was committed,
@@ -1193,7 +1271,7 @@ class SupervisorService:
                         f"Immediate barrier check for run {run_id}: " f"{barrier_result['completed']}/{barrier_result['expected']} complete"
                     )
                 else:
-                    logger.debug(f"Immediate barrier check skipped for run {run_id}: " f"{barrier_result.get('reason')}")
+                    logger.debug(f"Immediate barrier check skipped for run {run_id}: {barrier_result.get('reason')}")
 
             finally:
                 fresh_db.close()

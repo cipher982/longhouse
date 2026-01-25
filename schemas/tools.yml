@@ -81,8 +81,11 @@ components:
         - send_imessage
         - send_slack_webhook
         - send_sms
+        - cancel_worker
+        - check_worker_status
         - spawn_worker
         - spawn_workspace_worker
+        - wait_for_worker
         - ssh_exec
         - task_create
         - task_delete
@@ -291,9 +294,15 @@ components:
               const: slack
             send_sms:
               const: sms
+            cancel_worker:
+              const: supervisor
+            check_worker_status:
+              const: supervisor
             spawn_worker:
               const: supervisor
             spawn_workspace_worker:
+              const: supervisor
+            wait_for_worker:
               const: supervisor
             ssh_exec:
               const: ssh

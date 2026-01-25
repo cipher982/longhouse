@@ -71,8 +71,11 @@ class ToolName(str, Enum):
     SEND_IMESSAGE = "send_imessage"
     SEND_SLACK_WEBHOOK = "send_slack_webhook"
     SEND_SMS = "send_sms"
+    CANCEL_WORKER = "cancel_worker"
+    CHECK_WORKER_STATUS = "check_worker_status"
     SPAWN_WORKER = "spawn_worker"
     SPAWN_WORKSPACE_WORKER = "spawn_workspace_worker"
+    WAIT_FOR_WORKER = "wait_for_worker"
     SSH_EXEC = "ssh_exec"
     TASK_CREATE = "task_create"
     TASK_DELETE = "task_delete"
@@ -181,8 +184,11 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.SEND_IMESSAGE: ServerName.IMESSAGE,
     ToolName.SEND_SLACK_WEBHOOK: ServerName.SLACK,
     ToolName.SEND_SMS: ServerName.SMS,
+    ToolName.CANCEL_WORKER: ServerName.SUPERVISOR,
+    ToolName.CHECK_WORKER_STATUS: ServerName.SUPERVISOR,
     ToolName.SPAWN_WORKER: ServerName.SUPERVISOR,
     ToolName.SPAWN_WORKSPACE_WORKER: ServerName.SUPERVISOR,
+    ToolName.WAIT_FOR_WORKER: ServerName.SUPERVISOR,
     ToolName.SSH_EXEC: ServerName.SSH,
     ToolName.TASK_CREATE: ServerName.TASK,
     ToolName.TASK_DELETE: ServerName.TASK,

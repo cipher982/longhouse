@@ -57,6 +57,11 @@ class AgentRun(Base):
     # continuation_of_message_id (schema requires UUID, not sentinel string).
     assistant_message_id = Column(String(36), nullable=True)
 
+    # Pending tool_call_id for WAITING runs (async inbox model).
+    # When wait_for_worker causes an interrupt, this stores its tool_call_id
+    # so resume can inject the result into the correct tool call.
+    pending_tool_call_id = Column(String(64), nullable=True)
+
     # Lifecycle ----------------------------------------------------------
     status = Column(
         SAEnum(RunStatus, native_enum=False, name="run_status_enum"),

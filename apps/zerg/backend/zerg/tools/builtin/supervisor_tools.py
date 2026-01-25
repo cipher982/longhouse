@@ -458,6 +458,277 @@ def format_duration(duration_ms: int) -> str:
         return f"{minutes}m {remaining_seconds}s"
 
 
+async def check_worker_status_async(job_id: str | None = None) -> str:
+    """Check the status of a specific worker or list all active workers.
+
+    Args:
+        job_id: Optional worker job ID. If None, lists all active (queued/running) workers.
+
+    Returns:
+        Status information about the specified worker or list of active workers.
+    """
+    from zerg.crud import crud
+
+    # Get owner_id from context for security filtering
+    resolver = get_credential_resolver()
+    if not resolver:
+        return "Error: Cannot check worker status - no credential context available"
+
+    db = resolver.db
+
+    try:
+        if job_id is not None:
+            # Check specific job
+            job_id_int = int(job_id)
+            job = (
+                db.query(crud.WorkerJob)
+                .filter(
+                    crud.WorkerJob.id == job_id_int,
+                    crud.WorkerJob.owner_id == resolver.owner_id,
+                )
+                .first()
+            )
+
+            if not job:
+                return f"Error: Worker job {job_id} not found"
+
+            # Calculate elapsed time
+            from zerg.utils.time import utc_now_naive
+
+            elapsed_str = "N/A"
+            if job.started_at:
+                elapsed = (utc_now_naive() - job.started_at).total_seconds()
+                if elapsed >= 3600:
+                    elapsed_str = f"{int(elapsed / 3600)}h {int((elapsed % 3600) / 60)}m"
+                elif elapsed >= 60:
+                    elapsed_str = f"{int(elapsed / 60)}m {int(elapsed % 60)}s"
+                else:
+                    elapsed_str = f"{int(elapsed)}s"
+
+            # Build status response
+            lines = [
+                f"Worker Job {job.id}:",
+                f"  Status: {job.status.upper()}",
+                f"  Task: {job.task[:100]}{'...' if len(job.task) > 100 else ''}",
+                f"  Model: {job.model}",
+                f"  Created: {job.created_at.isoformat() if job.created_at else 'N/A'}",
+            ]
+
+            if job.started_at:
+                lines.append(f"  Started: {job.started_at.isoformat()}")
+                lines.append(f"  Elapsed: {elapsed_str}")
+
+            if job.finished_at:
+                lines.append(f"  Finished: {job.finished_at.isoformat()}")
+
+            if job.status in ["success", "failed"]:
+                lines.append(f"\nUse read_worker_result({job.id}) to get the full result.")
+
+            if job.error:
+                lines.append(f"\nError: {job.error[:200]}{'...' if len(job.error) > 200 else ''}")
+
+            return "\n".join(lines)
+        else:
+            # List all active workers
+            active_jobs = (
+                db.query(crud.WorkerJob)
+                .filter(
+                    crud.WorkerJob.owner_id == resolver.owner_id,
+                    crud.WorkerJob.status.in_(["queued", "running"]),
+                )
+                .order_by(crud.WorkerJob.created_at.desc())
+                .limit(20)
+                .all()
+            )
+
+            if not active_jobs:
+                return "No active workers. All workers have completed or there are none running."
+
+            lines = [f"Active Workers ({len(active_jobs)}):\n"]
+            for job in active_jobs:
+                status_icon = "⏳" if job.status == "queued" else "⋯"
+                task_preview = job.task[:60] + "..." if len(job.task) > 60 else job.task
+                lines.append(f"- Job {job.id} [{status_icon} {job.status.upper()}]")
+                lines.append(f"  {task_preview}\n")
+
+            lines.append("Use check_worker_status(job_id) for details on a specific worker.")
+            return "\n".join(lines)
+
+    except ValueError:
+        return f"Error: Invalid job ID format: {job_id}"
+    except Exception as e:
+        logger.exception(f"Failed to check worker status: {job_id}")
+        return f"Error checking worker status: {e}"
+
+
+def check_worker_status(job_id: str | None = None) -> str:
+    """Sync wrapper for check_worker_status_async. Used for CLI/tests."""
+    from zerg.utils.async_utils import run_async_safely
+
+    return run_async_safely(check_worker_status_async(job_id))
+
+
+async def cancel_worker_async(job_id: str) -> str:
+    """Cancel a running or queued worker job.
+
+    Sets the job status to 'cancelled'. The worker process will check this
+    status between tool iterations and abort if cancelled.
+
+    Args:
+        job_id: The worker job ID to cancel
+
+    Returns:
+        Confirmation message or error
+    """
+    from zerg.crud import crud
+
+    # Get owner_id from context for security filtering
+    resolver = get_credential_resolver()
+    if not resolver:
+        return "Error: Cannot cancel worker - no credential context available"
+
+    db = resolver.db
+
+    try:
+        job_id_int = int(job_id)
+
+        # Get job record
+        job = (
+            db.query(crud.WorkerJob)
+            .filter(
+                crud.WorkerJob.id == job_id_int,
+                crud.WorkerJob.owner_id == resolver.owner_id,
+            )
+            .first()
+        )
+
+        if not job:
+            return f"Error: Worker job {job_id} not found"
+
+        if job.status in ["success", "failed", "cancelled"]:
+            return f"Worker job {job_id} is already {job.status} and cannot be cancelled."
+
+        # Update status to cancelled
+        job.status = "cancelled"
+        job.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        job.error = "Cancelled by user"
+        db.commit()
+
+        logger.info(f"Worker job {job_id} cancelled by user")
+        return f"Worker job {job_id} has been cancelled. It may take a moment for the worker to stop."
+
+    except ValueError:
+        return f"Error: Invalid job ID format: {job_id}"
+    except Exception as e:
+        logger.exception(f"Failed to cancel worker: {job_id}")
+        db.rollback()
+        return f"Error cancelling worker: {e}"
+
+
+def cancel_worker(job_id: str) -> str:
+    """Sync wrapper for cancel_worker_async. Used for CLI/tests."""
+    from zerg.utils.async_utils import run_async_safely
+
+    return run_async_safely(cancel_worker_async(job_id))
+
+
+async def wait_for_worker_async(
+    job_id: str,
+    *,
+    _tool_call_id: str | None = None,
+) -> str:
+    """Wait for a specific worker to complete (blocking).
+
+    This is an explicit opt-in to block execution until the worker completes.
+    Use sparingly - the async inbox model is preferred for most cases.
+
+    If the worker is still running, this raises AgentInterrupted to pause
+    the supervisor until the worker completes.
+
+    Args:
+        job_id: The worker job ID to wait for
+
+    Returns:
+        The worker's result if already complete, or raises AgentInterrupted
+    """
+    from zerg.crud import crud
+    from zerg.managers.agent_runner import AgentInterrupted
+
+    # Get owner_id from context for security filtering
+    resolver = get_credential_resolver()
+    if not resolver:
+        return "Error: Cannot wait for worker - no credential context available"
+
+    db = resolver.db
+
+    try:
+        job_id_int = int(job_id)
+
+        # Get job record
+        job = (
+            db.query(crud.WorkerJob)
+            .filter(
+                crud.WorkerJob.id == job_id_int,
+                crud.WorkerJob.owner_id == resolver.owner_id,
+            )
+            .first()
+        )
+
+        if not job:
+            return f"Error: Worker job {job_id} not found"
+
+        if job.status == "cancelled":
+            return f"Worker job {job_id} was cancelled."
+
+        if job.status == "failed":
+            return f"Worker job {job_id} failed: {job.error or 'Unknown error'}"
+
+        if job.status == "success":
+            # Already complete - return result immediately
+            if job.worker_id:
+                try:
+                    artifact_store = WorkerArtifactStore()
+                    metadata = artifact_store.get_worker_metadata(job.worker_id)
+                    summary = metadata.get("summary")
+                    if summary:
+                        return f"Worker job {job_id} completed:\n\n{summary}"
+                    result = artifact_store.get_worker_result(job.worker_id)
+                    return f"Worker job {job_id} completed:\n\n{result}"
+                except FileNotFoundError:
+                    return f"Worker job {job_id} completed but result not found."
+            return f"Worker job {job_id} completed."
+
+        # Job is still queued or running - raise interrupt to wait
+        logger.info(f"[WAIT-FOR-WORKER] Blocking for job {job_id} (status: {job.status})")
+
+        # Raise AgentInterrupted to pause supervisor
+        raise AgentInterrupted(
+            {
+                "type": "wait_for_worker",
+                "job_id": job_id_int,
+                "task": job.task[:100],
+                "tool_call_id": _tool_call_id,
+                "message": f"Waiting for worker job {job_id} to complete...",
+            }
+        )
+
+    except AgentInterrupted:
+        # Re-raise interrupt
+        raise
+    except ValueError:
+        return f"Error: Invalid job ID format: {job_id}"
+    except Exception as e:
+        logger.exception(f"Failed to wait for worker: {job_id}")
+        return f"Error waiting for worker: {e}"
+
+
+def wait_for_worker(job_id: str) -> str:
+    """Sync wrapper for wait_for_worker_async. Used for CLI/tests."""
+    from zerg.utils.async_utils import run_async_safely
+
+    return run_async_safely(wait_for_worker_async(job_id))
+
+
 async def read_worker_result_async(job_id: str) -> str:
     """Read the final result from a completed worker job.
 
@@ -1005,6 +1276,31 @@ TOOLS: List[StructuredTool] = [
         description="Get detailed metadata about a worker job execution including "
         "task, status, timestamps, duration, and configuration. "
         "Provide the job ID (integer) to inspect job details.",
+    ),
+    # Async inbox model tools
+    StructuredTool.from_function(
+        func=check_worker_status,
+        coroutine=check_worker_status_async,
+        name="check_worker_status",
+        description="Check the status of a specific worker or list all active workers. "
+        "Pass job_id for a specific worker, or call without arguments to see all active workers. "
+        "Use this to monitor background workers without blocking.",
+    ),
+    StructuredTool.from_function(
+        func=cancel_worker,
+        coroutine=cancel_worker_async,
+        name="cancel_worker",
+        description="Cancel a running or queued worker job. "
+        "The worker will abort at its next checkpoint. "
+        "Use when a task is no longer needed or taking too long.",
+    ),
+    StructuredTool.from_function(
+        func=wait_for_worker,
+        coroutine=wait_for_worker_async,
+        name="wait_for_worker",
+        description="Wait for a specific worker to complete (blocking). "
+        "Use sparingly - the async model is preferred. "
+        "Only use when you need the result before proceeding.",
     ),
 ]
 

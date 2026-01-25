@@ -365,7 +365,9 @@ class WorkerJobProcessor:
 
         # Initialize managers (stateless, no DB needed)
         workspace_manager = WorkspaceManager()
-        cloud_executor = CloudExecutor()
+        # Support E2E_HATCH_PATH env var for mock hatch in E2E tests
+        hatch_path = os.environ.get("E2E_HATCH_PATH")
+        cloud_executor = CloudExecutor(hatch_path=hatch_path)
 
         # Artifact store is best-effort - if init fails, continue without it
         artifact_store = None

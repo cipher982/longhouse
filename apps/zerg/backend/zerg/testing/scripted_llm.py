@@ -57,6 +57,15 @@ def find_matching_scenario(prompt: str, role: str) -> Optional[Dict[str, Any]]:
     # Heuristic: multi-host disk checks imply parallel intent even without the keyword.
     is_parallel = "parallel" in text or host_count >= 2
 
+    # Session continuity / workspace worker scenarios
+    is_resume = any(k in text for k in ("resume", "continue session", "pick up where"))
+    is_workspace = any(k in text for k in ("workspace", "git repo", "code change", "repository"))
+    # Extract session ID if present (UUID-like pattern or explicit session ID mention)
+    import re
+
+    session_match = re.search(r"session[:\s]+([a-f0-9-]{36})", text) or re.search(r"([a-f0-9-]{36})", text)
+    resume_session_id = session_match.group(1) if session_match else None
+
     if role == "worker":
         if is_disk and (is_cube or is_clifford or is_zerg):
             return {
@@ -65,6 +74,15 @@ def find_matching_scenario(prompt: str, role: str) -> Optional[Dict[str, Any]]:
                 "evidence_keyword": "45%",
             }
         return None
+
+    # Supervisor: workspace worker scenarios (session continuity, git repos)
+    if role == "supervisor" and (is_resume or is_workspace):
+        return {
+            "role": "supervisor",
+            "name": "workspace_worker_supervisor",
+            "evidence_keyword": "workspace",
+            "resume_session_id": resume_session_id,
+        }
 
     # Supervisor: parallel disk checks first, then single-host disk checks.
     if is_disk and is_parallel:
@@ -200,19 +218,44 @@ class ScriptedChatLLM(BaseChatModel):
         tool_msg = next((m for m in reversed(messages) if isinstance(m, ToolMessage)), None)
         if tool_msg is not None:
             content = str(tool_msg.content)
-            keyword = "45%" if "45%" in content else None
-            if not keyword:
-                scenario = find_matching_scenario(prompt, role)
-                scenario_keyword = scenario.get("evidence_keyword") if scenario else None
-                if isinstance(scenario_keyword, str) and scenario_keyword:
-                    keyword = scenario_keyword
-            final_text = (
-                f"Cube is at {keyword} disk usage; biggest usage is Docker images/volumes." if keyword else "Task completed successfully."
-            )
+            scenario = find_matching_scenario(prompt, role)
+
+            # Determine final text based on scenario type
+            if scenario and scenario.get("name") == "workspace_worker_supervisor":
+                # Workspace worker completed - summarize the result
+                final_text = "Workspace worker completed successfully. Repository analyzed and changes captured."
+            elif "45%" in content:
+                # Disk space check with evidence in tool result
+                final_text = "Cube is at 45% disk usage; biggest usage is Docker images/volumes."
+            elif scenario and scenario.get("evidence_keyword") == "45%":
+                # Disk space scenario - inject evidence keyword even if not in tool result
+                final_text = "Cube is at 45% disk usage; biggest usage is Docker images/volumes."
+            else:
+                final_text = "Task completed successfully."
+
             ai_message = AIMessage(content=final_text, tool_calls=[])
             return ChatResult(generations=[ChatGeneration(message=ai_message)])
 
         scenario = find_matching_scenario(prompt, role)
+
+        # Workspace worker scenario: spawns spawn_workspace_worker with git repo and optional resume
+        if role == "supervisor" and scenario and scenario.get("name") == "workspace_worker_supervisor":
+            # Use a public test repo that's small and fast to clone
+            args = {
+                "task": "Analyze the repository and list the main files",
+                "git_repo": "https://github.com/octocat/Hello-World.git",
+            }
+            # Include resume_session_id if one was extracted from the prompt
+            if scenario.get("resume_session_id"):
+                args["resume_session_id"] = scenario["resume_session_id"]
+
+            tool_call = {
+                "id": f"call_{uuid.uuid4().hex[:8]}",
+                "name": "spawn_workspace_worker",
+                "args": args,
+            }
+            ai_message = AIMessage(content="", tool_calls=[tool_call])
+            return ChatResult(generations=[ChatGeneration(message=ai_message)])
 
         if role == "supervisor" and scenario and scenario.get("name") == "disk_space_parallel_supervisor":
             tasks = [
