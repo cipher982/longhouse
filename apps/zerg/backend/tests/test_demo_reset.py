@@ -132,7 +132,7 @@ def _create_user_data(db_session, user: User) -> dict:
     canvas = CanvasLayout(
         user_id=user.id,
         workflow_id=workflow.id,
-        layout={"nodes": [], "edges": []},
+        nodes_json={"nodes": [], "edges": []},
         created_at=utc_now_naive(),
         updated_at=utc_now_naive(),
     )
@@ -232,7 +232,7 @@ class TestResetDemoUserData:
         canvas = CanvasLayout(
             user_id=user.id,
             workflow_id=workflow.id,
-            layout={"test": True},
+            nodes_json={"test": True},
             created_at=utc_now_naive(),
             updated_at=utc_now_naive(),
         )
