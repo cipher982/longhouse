@@ -607,6 +607,7 @@ export class SupervisorChatController {
         // Reset continuation flag for next run
         this.isContinuationRun = false;
         this.currentMessageId = null;
+        this.lastMessageId = null;
         break;
       }
 
@@ -635,6 +636,7 @@ export class SupervisorChatController {
             timestamp: Date.now(),
           });
         }
+        this.lastMessageId = null;
         break;
       }
 
@@ -700,6 +702,8 @@ export class SupervisorChatController {
             traceId: payload.trace_id,
           });
         }
+
+        this.lastMessageId = null;
         break;
       }
 

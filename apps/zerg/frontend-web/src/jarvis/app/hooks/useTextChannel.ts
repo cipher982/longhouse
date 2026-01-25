@@ -24,6 +24,7 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
   const dispatch = useAppDispatch()
   const [isSending, setIsSending] = useState(false)
   const [lastError, setLastError] = useState<Error | null>(null)
+  const sendCounterRef = useRef(0)
   const optionsRef = useRef(options)
   optionsRef.current = options
 
@@ -42,6 +43,19 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
     }).catch((error) => {
       logger.error('[useTextChannel] Failed to initialize SupervisorChatController:', error)
     })
+  }, [])
+
+  useEffect(() => {
+    const clearSending = () => setIsSending(false)
+    const unsubComplete = eventBus.on('supervisor:complete', clearSending)
+    const unsubDeferred = eventBus.on('supervisor:deferred', clearSending)
+    const unsubError = eventBus.on('supervisor:error', clearSending)
+
+    return () => {
+      unsubComplete()
+      unsubDeferred()
+      unsubError()
+    }
   }, [])
 
   const { messages, streamingContent, isConnected, preferences } = state
@@ -66,6 +80,7 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
       }
 
       const trimmedText = text.trim()
+      const sendId = ++sendCounterRef.current
       setIsSending(true)
 
       // Generate messageId upfront (client-generated, no binding step needed)
@@ -118,8 +133,6 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
           model: preferences.chat_model,
           reasoning_effort: preferences.reasoning_effort,
         })
-        // Response arrives via Supervisor SSE events
-        setIsSending(false)
       } catch (error) {
         logger.error('[useTextChannel] Error sending message:', error)
 
@@ -136,7 +149,11 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
         const err = error as Error
         setLastError(err)
         optionsRef.current.onError?.(err)
-        setIsSending(false)
+      } finally {
+        if (sendCounterRef.current === sendId) {
+          // Response arrives via Supervisor SSE events; keep input unlocked after completion.
+          setIsSending(false)
+        }
       }
     },
     [dispatch, preferences]
