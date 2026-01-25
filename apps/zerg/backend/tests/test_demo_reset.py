@@ -133,8 +133,6 @@ def _create_user_data(db_session, user: User) -> dict:
         user_id=user.id,
         workflow_id=workflow.id,
         nodes_json={"nodes": [], "edges": []},
-        created_at=utc_now_naive(),
-        updated_at=utc_now_naive(),
     )
     db_session.add(canvas)
     counts["canvas_layouts"] = 1
@@ -233,8 +231,6 @@ class TestResetDemoUserData:
             user_id=user.id,
             workflow_id=workflow.id,
             nodes_json={"test": True},
-            created_at=utc_now_naive(),
-            updated_at=utc_now_naive(),
         )
         db_session.add(canvas)
         db_session.commit()
