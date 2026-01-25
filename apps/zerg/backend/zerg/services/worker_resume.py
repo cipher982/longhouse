@@ -694,6 +694,14 @@ async def _continue_supervisor_langgraph_free(
 
         return {"status": "error", "error": error_msg}
 
+    # Prefer pending_tool_call_id (from wait_for_worker) over WorkerJob lookup
+    if run.pending_tool_call_id:
+        tool_call_id = run.pending_tool_call_id
+        # Clear pending_tool_call_id (one-time use)
+        run.pending_tool_call_id = None
+        db.commit()
+        logger.info(f"Using pending_tool_call_id={tool_call_id} from wait_for_worker")
+
     logger.info(
         "Resuming supervisor run %s (thread=%s) with tool_call_id=%s [LangGraph-free]",
         run_id,

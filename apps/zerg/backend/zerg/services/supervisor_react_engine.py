@@ -456,7 +456,7 @@ async def _execute_tool(
         logger.error(result_content)
     else:
         try:
-            # Special handling for spawn_worker
+            # Special handling for spawn_worker - needs interrupt handling
             if tool_name == "spawn_worker":
                 # Import here to avoid circular dependency
                 from zerg.tools.builtin.supervisor_tools import spawn_worker_async
@@ -505,6 +505,96 @@ async def _execute_tool(
                 else:
                     # String response - typically an error or completed result
                     result_content = str(job_result)
+
+            # Special handling for spawn_workspace_worker - needs interrupt handling
+            elif tool_name == "spawn_workspace_worker":
+                from zerg.tools.builtin.supervisor_tools import spawn_workspace_worker_async
+
+                job_result = await spawn_workspace_worker_async(
+                    task=tool_args.get("task", ""),
+                    git_repo=tool_args.get("git_repo", ""),
+                    model=tool_args.get("model"),
+                    resume_session_id=tool_args.get("resume_session_id"),
+                    _tool_call_id=tool_call_id,
+                    _return_structured=True,
+                )
+
+                # Handle structured response (dict) or string response
+                if isinstance(job_result, dict):
+                    job_id = job_result.get("job_id")
+                    if job_result.get("status") == "queued" and job_id is not None:
+                        end_time = datetime.now(timezone.utc)
+                        duration_ms = int((end_time - start_time).total_seconds() * 1000)
+                        if emitter:
+                            await emitter.emit_tool_completed(
+                                tool_name=tool_name,
+                                tool_call_id=tool_call_id,
+                                duration_ms=duration_ms,
+                                result_preview=f"Worker job {job_id} spawned",
+                                result=str(job_result),
+                            )
+                        raise AgentInterrupted(
+                            {
+                                "type": "worker_pending",
+                                "job_id": job_id,
+                                "task": tool_args.get("task", "")[:100],
+                                "model": tool_args.get("model"),
+                                "tool_call_id": tool_call_id,
+                            }
+                        )
+                    else:
+                        result_content = json.dumps(job_result)
+                else:
+                    result_content = str(job_result)
+
+            # Special handling for spawn_standard_worker - needs interrupt handling
+            elif tool_name == "spawn_standard_worker":
+                from zerg.tools.builtin.supervisor_tools import spawn_standard_worker_async
+
+                job_result = await spawn_standard_worker_async(
+                    task=tool_args.get("task", ""),
+                    model=tool_args.get("model"),
+                    _tool_call_id=tool_call_id,
+                    _return_structured=True,
+                )
+
+                # Handle structured response (dict) or string response
+                if isinstance(job_result, dict):
+                    job_id = job_result.get("job_id")
+                    if job_result.get("status") == "queued" and job_id is not None:
+                        end_time = datetime.now(timezone.utc)
+                        duration_ms = int((end_time - start_time).total_seconds() * 1000)
+                        if emitter:
+                            await emitter.emit_tool_completed(
+                                tool_name=tool_name,
+                                tool_call_id=tool_call_id,
+                                duration_ms=duration_ms,
+                                result_preview=f"Worker job {job_id} spawned",
+                                result=str(job_result),
+                            )
+                        raise AgentInterrupted(
+                            {
+                                "type": "worker_pending",
+                                "job_id": job_id,
+                                "task": tool_args.get("task", "")[:100],
+                                "model": tool_args.get("model"),
+                                "tool_call_id": tool_call_id,
+                            }
+                        )
+                    else:
+                        result_content = json.dumps(job_result)
+                else:
+                    result_content = str(job_result)
+
+            # Special handling for wait_for_worker (needs tool_call_id for resume)
+            elif tool_name == "wait_for_worker":
+                from zerg.tools.builtin.supervisor_tools import wait_for_worker_async
+
+                # Pass tool_call_id for proper resume handling
+                observation = await wait_for_worker_async(
+                    job_id=tool_args.get("job_id", ""),
+                    _tool_call_id=tool_call_id,
+                )
 
             # Check if tool has async implementation
             elif getattr(tool_to_call, "coroutine", None):
@@ -910,15 +1000,71 @@ async def _execute_tools_parallel(
                     )
                 )
 
-        # If we created/found jobs, return interrupt info for barrier creation
+        # If we created/found jobs, decide whether to return interrupt or continue
         if created_jobs:
-            return tool_results, {
-                "type": "workers_pending",
-                "created_jobs": created_jobs,
-                "job_ids": [j["job"].id for j in created_jobs],
-                "tool_call_ids": [j["tool_call_id"] for j in created_jobs],
-                "tasks": [j["task"] for j in created_jobs],
-            }
+            from zerg.config import get_settings
+
+            settings = get_settings()
+
+            if settings.async_worker_model:
+                # ASYNC MODEL: Add ToolMessages for spawn_workers and continue
+                # Workers run in background, supervisor sees results via inbox context on next turn
+                from zerg.services.event_store import append_run_event
+
+                for job_info in created_jobs:
+                    job = job_info["job"]
+                    tool_call_id = job_info["tool_call_id"]
+                    task = job_info.get("task", job.task[:100] if job.task else "")
+                    tool_results.append(
+                        ToolMessage(
+                            content=f"Worker job {job.id} spawned successfully. Working on: {task}\n\n"
+                            f"The worker is running in the background. You can continue the conversation. "
+                            f"Check worker status with check_worker_status({job.id}) or wait for results "
+                            f"with wait_for_worker({job.id}).",
+                            tool_call_id=tool_call_id,
+                            name="spawn_worker",
+                        )
+                    )
+
+                    # Flip job status from 'created' to 'queued' immediately (no barrier needed)
+                    db.query(WorkerJob).filter(
+                        WorkerJob.id == job.id,
+                        WorkerJob.status == "created",
+                    ).update({"status": "queued"})
+
+                db.commit()
+
+                # Emit worker_spawned events for UI (async model - no barrier)
+                if supervisor_run_id is not None:
+                    for job_info in created_jobs:
+                        job = job_info["job"]
+                        tool_call_id = job_info["tool_call_id"]
+                        task = job_info.get("task", job.task[:100] if job.task else "")
+                        await append_run_event(
+                            run_id=supervisor_run_id,
+                            event_type="worker_spawned",
+                            payload={
+                                "job_id": job.id,
+                                "tool_call_id": tool_call_id,
+                                "task": task,
+                                "model": job.model,
+                                "owner_id": resolver.owner_id,
+                                "trace_id": trace_id,
+                                "async_model": True,  # Mark as non-blocking
+                            },
+                        )
+
+                logger.info(f"[ASYNC-MODEL] {len(created_jobs)} workers spawned non-blocking")
+                return tool_results, None
+            else:
+                # BARRIER MODEL: Return interrupt info for barrier creation (original behavior)
+                return tool_results, {
+                    "type": "workers_pending",
+                    "created_jobs": created_jobs,
+                    "job_ids": [j["job"].id for j in created_jobs],
+                    "tool_call_ids": [j["tool_call_id"] for j in created_jobs],
+                    "tasks": [j["task"] for j in created_jobs],
+                }
 
     return tool_results, None
 
@@ -1247,9 +1393,7 @@ async def run_supervisor_loop(
 
                     if not retry_text.strip():
                         logger.error("Agent produced empty response after retry")
-                        llm_response = AIMessage(
-                            content=("Error: LLM returned an empty response twice. " "This is a provider/model issue.")
-                        )
+                        llm_response = AIMessage(content=("Error: LLM returned an empty response twice. This is a provider/model issue."))
 
         # Main ReAct loop with iteration guard
         iteration = 0

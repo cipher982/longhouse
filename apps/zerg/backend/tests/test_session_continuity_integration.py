@@ -48,13 +48,15 @@ class TestPrepareSessionIntegration:
 
         # Verify content is valid JSONL
         import json
+
         lines = content.decode("utf-8").strip().split("\n")
         assert len(lines) >= 1, "Expected at least one JSONL line"
 
         # First line should be valid JSON
         first_event = json.loads(lines[0])
-        assert "type" in first_event or "message" in first_event, \
+        assert "type" in first_event or "message" in first_event, (
             f"First event missing expected fields: {first_event.keys()}"
+        )
 
         print(f"\n✓ Fetched real session from Life Hub")
         print(f"  Life Hub session ID: {session_id}")
@@ -100,6 +102,7 @@ class TestPrepareSessionIntegration:
 
                 # Verify content is valid JSONL
                 import json
+
                 content = expected_file.read_text()
                 lines = content.strip().split("\n")
                 assert len(lines) >= 1
@@ -193,6 +196,7 @@ class TestShipSessionIntegration:
 
                 # Write minimal valid session data
                 import json
+
                 test_events = [
                     {"type": "user", "message": {"role": "user", "content": "test"}},
                     {"type": "assistant", "message": {"role": "assistant", "content": "ok"}},
@@ -212,23 +216,42 @@ class TestShipSessionIntegration:
 
 
 class TestWorkerJobProcessorIntegration:
-    """Integration tests for the full worker job processor flow with session continuity."""
+    """Worker job processor integration is now tested in E2E.
 
+    See: apps/zerg/e2e/tests/core/session-continuity.spec.ts
+
+    These tests required:
+    1. WorkerJobProcessor running (available in E2E mode)
+    2. Real Life Hub API (LIFE_HUB_API_KEY in CI secrets)
+    3. Mock hatch CLI (creates session files without running real Claude Code)
+
+    Run with: make test-e2e-core
+
+    The E2E tests provide full coverage including:
+    - Workspace worker execution with mock hatch
+    - Session fetch from real Life Hub API
+    - Graceful fallback when session not found
+    """
+
+    @pytest.mark.skip(reason="Covered by E2E: session-continuity.spec.ts::workspace worker with resume_session_id")
     @pytest.mark.asyncio
     async def test_worker_with_resume_session_id(self, db_session):
-        """Test that passing resume_session_id to a worker actually prepares the session.
+        """Test that passing resume_session_id to a worker prepares the session.
 
-        This test simulates what happens when spawn_worker is called with resume_session_id.
+        E2E test sends a chat message with a real Life Hub session ID,
+        and verifies the workspace worker completes successfully.
         """
-        pytest.skip("Requires running worker infrastructure - run manually or in CI with make test-e2e")
+        pass
 
+    @pytest.mark.skip(reason="Covered by E2E: session-continuity.spec.ts::workspace worker executes with mock hatch")
     @pytest.mark.asyncio
     async def test_successful_worker_ships_session(self, db_session):
-        """Test that a successful worker completion ships the session to Life Hub.
+        """Test that successful worker completion ships session to Life Hub.
 
-        This test simulates the post-completion shipping behavior.
+        E2E test triggers workspace worker, verifies worker_complete event,
+        and can query Life Hub to verify session was shipped.
         """
-        pytest.skip("Requires running worker infrastructure - run manually or in CI with make test-e2e")
+        pass
 
 
 class TestEndToEndResumeFlow:
@@ -272,11 +295,11 @@ class TestEndToEndResumeFlow:
                 encoded_cwd = encode_cwd_for_claude(str(workspace_path.absolute()))
                 claude_code_path = config_path / "projects" / encoded_cwd / f"{provider_session_id}.jsonl"
 
-                assert claude_code_path.exists(), \
-                    f"Session file not at expected Claude Code path: {claude_code_path}"
+                assert claude_code_path.exists(), f"Session file not at expected Claude Code path: {claude_code_path}"
 
                 # Verify it's resumable (has valid JSONL content)
                 import json
+
                 content = claude_code_path.read_text()
                 lines = [l for l in content.strip().split("\n") if l.strip()]
 
