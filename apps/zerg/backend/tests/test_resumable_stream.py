@@ -12,7 +12,6 @@ which is compatible with pytest-xdist parallel execution.
 """
 
 import json
-import asyncio
 from typing import List
 
 import httpx
@@ -370,56 +369,3 @@ async def test_stream_resumption_after_reconnect(db_session, test_run, test_user
     assert len(resumed_event_types) == 2
     assert resumed_event_types[0] == "supervisor_thinking"
     assert resumed_event_types[1] == "supervisor_complete"
-
-
-@pytest.mark.asyncio
-async def test_stream_closes_on_supervisor_complete_with_pending_workers(db_session, test_run, test_user, auth_headers):
-    """Stream should close on supervisor_complete even if workers are still pending."""
-    from zerg.models.models import WorkerJob
-
-    # Create a worker job to reference in worker_spawned payload
-    job = WorkerJob(
-        owner_id=test_user.id,
-        task="Long task",
-        model="gpt-5-mini",
-        status="queued",
-    )
-    db_session.add(job)
-    db_session.commit()
-    db_session.refresh(job)
-
-    async def emit_events():
-        # Let the stream start listening before emitting
-        await asyncio.sleep(0.1)
-        await emit_run_event(
-            db_session,
-            test_run.id,
-            "worker_spawned",
-            {
-                "job_id": job.id,
-                "tool_call_id": "tool-123",
-                "task": "Long task",
-                "model": "gpt-5-mini",
-                "owner_id": test_user.id,
-            },
-        )
-        await asyncio.sleep(0.1)
-        await emit_run_event(
-            db_session,
-            test_run.id,
-            "supervisor_complete",
-            {"result": "done", "owner_id": test_user.id},
-        )
-
-    emitter_task = asyncio.create_task(emit_events())
-
-    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test", timeout=5.0) as client:
-        async with client.stream("GET", f"/api/stream/runs/{test_run.id}", headers=auth_headers) as response:
-            assert response.status_code == 200
-            events = await collect_sse_events(response, max_events=10)
-
-    await emitter_task
-
-    event_types = [e.get("event") for e in events if e.get("event") != "heartbeat"]
-    assert "worker_spawned" in event_types
-    assert "supervisor_complete" in event_types

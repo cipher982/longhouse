@@ -201,7 +201,7 @@ def test_cancel(base_url: str, headers: dict, run_id: int) -> dict:
 def run_disk_health_check(base_url: str, headers: dict) -> None:
     """Run a disk health check task through the supervisor.
 
-    This tests the full flow: supervisor -> spawn_worker -> ssh_exec
+    This tests the full flow: supervisor -> spawn_commis -> ssh_exec
     """
     task = (
         "Check disk usage on all infrastructure servers (cube, clifford, zerg, slim). "

@@ -6,7 +6,7 @@ decorated graph with explicit control flow.
 
 Key differences from LangGraph-based implementation:
 - No checkpointer - state is managed via DB thread messages
-- No interrupt() - spawn_worker raises AgentInterrupted directly
+- No interrupt() - spawn_commis raises AgentInterrupted directly
 - No add_messages() - plain list operations
 - Returns (messages, usage) tuple for explicit persistence
 
@@ -121,7 +121,7 @@ class SupervisorResult:
     """Accumulated token usage for this run."""
 
     interrupted: bool = False
-    """True if execution was interrupted (spawn_worker called)."""
+    """True if execution was interrupted (spawn_commis called)."""
 
     interrupt_value: dict | None = None
     """Interrupt payload if interrupted=True."""
@@ -401,7 +401,7 @@ async def _execute_tool(
 ) -> ToolMessage:
     """Execute a single tool call with event emission.
 
-    For spawn_worker, raises AgentInterrupted instead of returning ToolMessage.
+    For spawn_commis, raises AgentInterrupted instead of returning ToolMessage.
     For other tools, returns ToolMessage with result.
 
     Args:
@@ -413,7 +413,7 @@ async def _execute_tool(
             called with tool_name to get/load the tool. Used for lazy loading.
 
     Raises:
-        AgentInterrupted: If spawn_worker is called and job is queued (not already complete).
+        AgentInterrupted: If spawn_commis is called and job is queued (not already complete).
     """
     import json
 
@@ -442,7 +442,7 @@ async def _execute_tool(
         )
 
     start_time = datetime.now(timezone.utc)
-    result_content = None  # May be set by spawn_worker or error handling
+    result_content = None  # May be set by spawn_commis or error handling
     observation = None  # Set by normal tool execution
 
     # Get tool using tool_getter (lazy loading) or tools_by_name (eager)
@@ -456,15 +456,15 @@ async def _execute_tool(
         logger.error(result_content)
     else:
         try:
-            # Special handling for spawn_worker - needs interrupt handling
-            if tool_name == "spawn_worker":
+            # Special handling for spawn_commis - needs interrupt handling
+            if tool_name == "spawn_commis":
                 # Import here to avoid circular dependency
-                from zerg.tools.builtin.supervisor_tools import spawn_worker_async
+                from zerg.tools.builtin.supervisor_tools import spawn_commis_async
 
-                # Call spawn_worker_async directly with tool_call_id for idempotency
+                # Call spawn_commis_async directly with tool_call_id for idempotency
                 # Pass _skip_interrupt=True because we handle interrupt ourselves
                 # Pass _return_structured=True to get job_id directly without regex
-                job_result = await spawn_worker_async(
+                job_result = await spawn_commis_async(
                     task=tool_args.get("task", ""),
                     model=tool_args.get("model"),
                     _tool_call_id=tool_call_id,
@@ -506,11 +506,11 @@ async def _execute_tool(
                     # String response - typically an error or completed result
                     result_content = str(job_result)
 
-            # Special handling for spawn_workspace_worker - needs interrupt handling
-            elif tool_name == "spawn_workspace_worker":
-                from zerg.tools.builtin.supervisor_tools import spawn_workspace_worker_async
+            # Special handling for spawn_workspace_commis - needs interrupt handling
+            elif tool_name == "spawn_workspace_commis":
+                from zerg.tools.builtin.supervisor_tools import spawn_workspace_commis_async
 
-                job_result = await spawn_workspace_worker_async(
+                job_result = await spawn_workspace_commis_async(
                     task=tool_args.get("task", ""),
                     git_repo=tool_args.get("git_repo", ""),
                     model=tool_args.get("model"),
@@ -586,12 +586,12 @@ async def _execute_tool(
                 else:
                     result_content = str(job_result)
 
-            # Special handling for wait_for_worker (needs tool_call_id for resume)
-            elif tool_name == "wait_for_worker":
-                from zerg.tools.builtin.supervisor_tools import wait_for_worker_async
+            # Special handling for wait_for_commis (needs tool_call_id for resume)
+            elif tool_name == "wait_for_commis":
+                from zerg.tools.builtin.supervisor_tools import wait_for_commis_async
 
                 # Pass tool_call_id for proper resume handling
-                observation = await wait_for_worker_async(
+                observation = await wait_for_commis_async(
                     job_id=tool_args.get("job_id", ""),
                     _tool_call_id=tool_call_id,
                 )
@@ -603,7 +603,7 @@ async def _execute_tool(
                 # Run sync tool in thread
                 observation = await asyncio.to_thread(tool_to_call.invoke, tool_args)
 
-            # Serialize observation (only if not already set by spawn_worker)
+            # Serialize observation (only if not already set by spawn_commis)
             if observation is not None and result_content is None:
                 if isinstance(observation, dict):
                     from datetime import date as date_type
@@ -737,14 +737,14 @@ async def _execute_tools_parallel(
     owner_id: int | None,
     tool_getter: callable | None = None,
 ) -> tuple[list[ToolMessage], dict | None]:
-    """Execute tools in parallel, handling spawn_workers specially.
+    """Execute tools in parallel, handling spawn_commiss specially.
 
     Implements the parallel-first pattern:
     1. Non-spawn tools execute concurrently via asyncio.gather()
     2. Spawn_worker calls are collected (not executed immediately)
-    3. Returns interrupt info with ALL spawn_worker job_ids for barrier creation
+    3. Returns interrupt info with ALL spawn_commis job_ids for barrier creation
 
-    Two-Phase Commit for spawn_worker:
+    Two-Phase Commit for spawn_commis:
     - Jobs are created with status='created' (not 'queued')
     - Caller (supervisor_service) creates WorkerBarrier + flips to 'queued'
     - This prevents the "fast worker" race condition
@@ -759,15 +759,15 @@ async def _execute_tools_parallel(
     Returns:
         Tuple of (tool_results, interrupt_value):
         - tool_results: List of ToolMessages from non-spawn tools
-        - interrupt_value: Dict with spawn_worker info if any, None otherwise
+        - interrupt_value: Dict with spawn_commis info if any, None otherwise
 
     Note:
         Does NOT raise AgentInterrupted - caller handles interruption.
     """
 
-    # Separate spawn_workers from other tools
-    spawn_calls = [tc for tc in tool_calls if tc.get("name") == "spawn_worker"]
-    other_calls = [tc for tc in tool_calls if tc.get("name") != "spawn_worker"]
+    # Separate spawn_commiss from other tools
+    spawn_calls = [tc for tc in tool_calls if tc.get("name") == "spawn_commis"]
+    other_calls = [tc for tc in tool_calls if tc.get("name") != "spawn_commis"]
 
     tool_results: list[ToolMessage] = []
 
@@ -823,14 +823,13 @@ async def _execute_tools_parallel(
             else:
                 tool_results.append(result)
 
-    # Phase 2: Process spawn_workers (two-phase commit pattern)
+    # Phase 2: Process spawn_commiss (two-phase commit pattern)
     if spawn_calls:
         import time
 
         from zerg.connectors.context import get_credential_resolver
         from zerg.events.supervisor_emitter import SupervisorEmitter
         from zerg.models.models import WorkerJob
-        from zerg.models_config import DEFAULT_WORKER_MODEL_ID
         from zerg.services.supervisor_context import get_supervisor_context
 
         # Get context for job creation
@@ -848,13 +847,13 @@ async def _execute_tools_parallel(
             )
 
         if not resolver:
-            # No credential context - return error for each spawn_worker
+            # No credential context - return error for each spawn_commis
             for tc in spawn_calls:
                 tool_results.append(
                     ToolMessage(
                         content="<tool-error>Cannot spawn worker - no credential context</tool-error>",
                         tool_call_id=tc.get("id", ""),
-                        name="spawn_worker",
+                        name="spawn_commis",
                     )
                 )
             return tool_results, None
@@ -864,7 +863,7 @@ async def _execute_tools_parallel(
         trace_id = ctx.trace_id if ctx else None
 
         # Worker inherits model and reasoning_effort from supervisor context
-        worker_model = (ctx.model if ctx else None) or DEFAULT_WORKER_MODEL_ID
+        worker_model = (ctx.model if ctx else None) or "gpt-5-mini"
         worker_reasoning_effort = (ctx.reasoning_effort if ctx else None) or "none"
 
         created_jobs: list[dict] = []
@@ -878,7 +877,7 @@ async def _execute_tools_parallel(
             # Emit tool_started event for UI
             if emitter:
                 await emitter.emit_tool_started(
-                    tool_name="spawn_worker",
+                    tool_name="spawn_commis",
                     tool_call_id=tool_call_id,
                     tool_args_preview=task[:100] if task else "",
                     tool_args={"task": task, "model": model_override},
@@ -910,20 +909,20 @@ async def _execute_tools_parallel(
                             ToolMessage(
                                 content=f"Worker job {existing_job.id} completed:\n\n{result}",
                                 tool_call_id=tool_call_id,
-                                name="spawn_worker",
+                                name="spawn_commis",
                             )
                         )
                         # Emit tool_completed for idempotent cached result
                         if emitter:
                             duration_ms = int((time.time() - start_time) * 1000)
                             await emitter.emit_tool_completed(
-                                tool_name="spawn_worker",
+                                tool_name="spawn_commis",
                                 tool_call_id=tool_call_id,
                                 duration_ms=duration_ms,
                                 result_preview=f"Cached result for job {existing_job.id}",
                                 result={"job_id": existing_job.id, "status": "success", "cached": True},
                             )
-                        continue  # Skip to next spawn_worker
+                        continue  # Skip to next spawn_commis
                     except FileNotFoundError:
                         pass  # Fall through to create new job
 
@@ -940,7 +939,7 @@ async def _execute_tools_parallel(
                     if emitter:
                         duration_ms = int((time.time() - start_time) * 1000)
                         await emitter.emit_tool_completed(
-                            tool_name="spawn_worker",
+                            tool_name="spawn_commis",
                             tool_call_id=tool_call_id,
                             duration_ms=duration_ms,
                             result_preview=f"Reusing existing job {existing_job.id}",
@@ -980,7 +979,7 @@ async def _execute_tools_parallel(
                 if emitter:
                     duration_ms = int((time.time() - start_time) * 1000)
                     await emitter.emit_tool_completed(
-                        tool_name="spawn_worker",
+                        tool_name="spawn_commis",
                         tool_call_id=tool_call_id,
                         duration_ms=duration_ms,
                         result_preview=f"Created job {worker_job.id}",
@@ -988,14 +987,14 @@ async def _execute_tools_parallel(
                     )
 
             except Exception as exc:
-                logger.exception(f"Error creating spawn_worker job: {task[:50]}")
+                logger.exception(f"Error creating spawn_commis job: {task[:50]}")
                 db.rollback()  # Clear error state so subsequent operations work
 
                 # Emit tool_failed event
                 if emitter:
                     duration_ms = int((time.time() - start_time) * 1000)
                     await emitter.emit_tool_failed(
-                        tool_name="spawn_worker",
+                        tool_name="spawn_commis",
                         tool_call_id=tool_call_id,
                         duration_ms=duration_ms,
                         error=str(exc),
@@ -1005,7 +1004,7 @@ async def _execute_tools_parallel(
                     ToolMessage(
                         content=f"<tool-error>Failed to spawn worker: {exc}</tool-error>",
                         tool_call_id=tool_call_id,
-                        name="spawn_worker",
+                        name="spawn_commis",
                     )
                 )
 
@@ -1022,10 +1021,10 @@ async def _execute_tools_parallel(
                     ToolMessage(
                         content=f"Worker job {job.id} spawned successfully. Working on: {task}\n\n"
                         f"The worker is running in the background. You can continue the conversation. "
-                        f"Check worker status with check_worker_status({job.id}) or wait for results "
-                        f"with wait_for_worker({job.id}).",
+                        f"Check commis status with check_commis_status({job.id}) or wait for results "
+                        f"with wait_for_commis({job.id}).",
                         tool_call_id=tool_call_id,
-                        name="spawn_worker",
+                        name="spawn_commis",
                     )
                 )
 
@@ -1267,7 +1266,7 @@ async def run_supervisor_loop(
                         tool_getter=get_tool_for_execution if lazy_binder else None,
                     )
 
-                    # Handle interruption from spawn_worker (barrier pattern)
+                    # Handle interruption from spawn_commis (barrier pattern)
                     if interrupt_value:
                         current_messages.extend(tool_results)
                         return SupervisorResult(
@@ -1412,7 +1411,7 @@ async def run_supervisor_loop(
             current_messages.append(llm_response)
 
             # Execute tools in PARALLEL (non-spawn tools run concurrently,
-            # spawn_workers use two-phase commit for barrier synchronization)
+            # spawn_commiss use two-phase commit for barrier synchronization)
             tool_results, interrupt_value = await _execute_tools_parallel(
                 llm_response.tool_calls,
                 tools_by_name,
@@ -1421,9 +1420,9 @@ async def run_supervisor_loop(
                 tool_getter=get_tool_for_execution if lazy_binder else None,
             )
 
-            # Handle interruption from spawn_worker (barrier pattern)
+            # Handle interruption from spawn_commis (barrier pattern)
             if interrupt_value:
-                # Non-spawn tool results are included, spawn_workers trigger barrier
+                # Non-spawn tool results are included, spawn_commiss trigger barrier
                 current_messages.extend(tool_results)
                 return SupervisorResult(
                     messages=current_messages,

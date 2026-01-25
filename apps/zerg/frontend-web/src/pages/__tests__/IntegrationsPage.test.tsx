@@ -118,13 +118,15 @@ describe("IntegrationsPage", () => {
     });
 
     // Slack should show "Connected"
-    const slackCard = screen.getByTestId("integration-card-slack");
-    expect(within(slackCard).getByText("Connected")).toBeInTheDocument();
+    const slackCard = screen.getByText("My Slack").closest(".connector-card");
+    expect(slackCard).not.toBeNull();
+    expect(within(slackCard as HTMLElement).getByText("Connected")).toBeInTheDocument();
 
     // GitHub should show "Not configured"
     expect(screen.getByText("GitHub")).toBeInTheDocument();
-    const githubCard = screen.getByTestId("integration-card-github");
-    expect(within(githubCard).getByText("Not configured")).toBeInTheDocument();
+    const githubCard = screen.getByText("GitHub").closest(".connector-card");
+    expect(githubCard).not.toBeNull();
+    expect(within(githubCard as HTMLElement).getByText("Not configured")).toBeInTheDocument();
   });
 
   it("shows Connect button for OAuth connectors like GitHub", async () => {
@@ -134,9 +136,10 @@ describe("IntegrationsPage", () => {
       expect(screen.getByText("GitHub")).toBeInTheDocument();
     });
 
-    // GitHub is an OAuth connector, so it shows "Connect" instead of "Configure"
-    const githubCard = screen.getByTestId("integration-card-github");
-    const connectBtn = within(githubCard).getByRole("button", { name: "Connect" });
+    // GitHub is an OAuth connector, so it shows "Connect GitHub" instead of "Configure"
+    const githubCard = screen.getByText("GitHub").closest(".connector-card");
+    expect(githubCard).not.toBeNull();
+    const connectBtn = within(githubCard as HTMLElement).getByRole("button", { name: "Connect GitHub" });
     expect(connectBtn).toBeInTheDocument();
   });
 

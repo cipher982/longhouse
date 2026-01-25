@@ -8,15 +8,15 @@ from tests.conftest import TEST_MODEL
 from tests.conftest import TEST_WORKER_MODEL
 from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
-from zerg.tools.builtin.supervisor_tools import get_worker_metadata
-from zerg.tools.builtin.supervisor_tools import get_worker_evidence
+from zerg.tools.builtin.supervisor_tools import get_commis_metadata
+from zerg.tools.builtin.supervisor_tools import get_commis_evidence
 from zerg.tools.builtin.supervisor_tools import get_tool_output
-from zerg.tools.builtin.supervisor_tools import grep_workers
-from zerg.tools.builtin.supervisor_tools import list_workers
-from zerg.tools.builtin.supervisor_tools import read_worker_file
-from zerg.tools.builtin.supervisor_tools import read_worker_result
-from zerg.tools.builtin.supervisor_tools import spawn_worker
-from zerg.tools.builtin.supervisor_tools import spawn_workspace_worker
+from zerg.tools.builtin.supervisor_tools import grep_commis
+from zerg.tools.builtin.supervisor_tools import list_commis
+from zerg.tools.builtin.supervisor_tools import read_commis_file
+from zerg.tools.builtin.supervisor_tools import read_commis_result
+from zerg.tools.builtin.supervisor_tools import spawn_commis
+from zerg.tools.builtin.supervisor_tools import spawn_workspace_commis
 
 
 @pytest.fixture
@@ -42,9 +42,9 @@ def _count_worker_jobs(db_session) -> int:
     return db_session.query(WorkerJob).count()
 
 
-def test_spawn_worker_success(credential_context, temp_artifact_path, db_session):
+def test_spawn_commis_success(credential_context, temp_artifact_path, db_session):
     """Test spawning a worker job that gets queued."""
-    result = spawn_worker(task="What is 2+2?", model=TEST_WORKER_MODEL)
+    result = spawn_commis(task="What is 2+2?", model=TEST_WORKER_MODEL)
 
     # Verify result format - now queued instead of executed synchronously
     # With interrupt/resume pattern, when called outside runnable context:
@@ -70,17 +70,17 @@ def test_spawn_worker_success(credential_context, temp_artifact_path, db_session
     assert "2+2" in job.task
 
 
-def test_spawn_worker_no_context():
+def test_spawn_commis_no_context():
     """Test spawning worker without credential context fails gracefully."""
-    result = spawn_worker(task="Test task")
+    result = spawn_commis(task="Test task")
 
     assert "Error" in result
     assert "no credential context" in result
 
 
-def test_spawn_workspace_worker_success(credential_context, temp_artifact_path, db_session):
+def test_spawn_workspace_commis_success(credential_context, temp_artifact_path, db_session):
     """Test spawning a workspace worker with git_repo creates correct job config."""
-    result = spawn_workspace_worker(
+    result = spawn_workspace_commis(
         task="List dependencies from pyproject.toml",
         git_repo="https://github.com/langchain-ai/langchain.git",
         model=TEST_WORKER_MODEL,
@@ -110,9 +110,9 @@ def test_spawn_workspace_worker_success(credential_context, temp_artifact_path, 
     assert job.config.get("git_repo") == "https://github.com/langchain-ai/langchain.git"
 
 
-def test_spawn_workspace_worker_no_context():
+def test_spawn_workspace_commis_no_context():
     """Test spawning workspace worker without credential context fails gracefully."""
-    result = spawn_workspace_worker(
+    result = spawn_workspace_commis(
         task="Test task",
         git_repo="https://github.com/test/repo.git",
     )
@@ -121,9 +121,9 @@ def test_spawn_workspace_worker_no_context():
     assert "no credential context" in result
 
 
-def test_spawn_worker_has_no_config(credential_context, temp_artifact_path, db_session):
-    """Test that standard spawn_worker creates job WITHOUT execution config."""
-    result = spawn_worker(task="Check disk space", model=TEST_WORKER_MODEL)
+def test_spawn_commis_has_no_config(credential_context, temp_artifact_path, db_session):
+    """Test that standard spawn_commis creates job WITHOUT execution config."""
+    result = spawn_commis(task="Check disk space", model=TEST_WORKER_MODEL)
 
     # Verify result format
     assert "Worker job" in result
@@ -144,9 +144,9 @@ def test_spawn_worker_has_no_config(credential_context, temp_artifact_path, db_s
     assert job.config is None  # Standard worker has no special config
 
 
-def test_spawn_workspace_worker_ssh_url(credential_context, temp_artifact_path, db_session):
+def test_spawn_workspace_commis_ssh_url(credential_context, temp_artifact_path, db_session):
     """Test spawning workspace worker with SSH git URL."""
-    result = spawn_workspace_worker(
+    result = spawn_workspace_commis(
         task="Fix typo in README.md",
         git_repo="git@github.com:cipher982/zerg.git",
         model=TEST_WORKER_MODEL,
@@ -168,10 +168,10 @@ def test_spawn_workspace_worker_ssh_url(credential_context, temp_artifact_path, 
     assert job.config.get("execution_mode") == "workspace"
 
 
-def test_spawn_workspace_worker_rejects_file_url(credential_context, temp_artifact_path, db_session):
+def test_spawn_workspace_commis_rejects_file_url(credential_context, temp_artifact_path, db_session):
     """Test that file:// URLs are rejected early (security)."""
     before_count = _count_worker_jobs(db_session)
-    result = spawn_workspace_worker(
+    result = spawn_workspace_commis(
         task="Test task",
         git_repo="file:///etc/passwd",
     )
@@ -181,10 +181,10 @@ def test_spawn_workspace_worker_rejects_file_url(credential_context, temp_artifa
     assert _count_worker_jobs(db_session) == before_count
 
 
-def test_spawn_workspace_worker_rejects_flag_injection(credential_context, temp_artifact_path, db_session):
+def test_spawn_workspace_commis_rejects_flag_injection(credential_context, temp_artifact_path, db_session):
     """Test that URLs starting with '-' are rejected (flag injection)."""
     before_count = _count_worker_jobs(db_session)
-    result = spawn_workspace_worker(
+    result = spawn_workspace_commis(
         task="Test task",
         git_repo="-o ProxyCommand=whoami",
     )
@@ -194,10 +194,10 @@ def test_spawn_workspace_worker_rejects_flag_injection(credential_context, temp_
     assert _count_worker_jobs(db_session) == before_count
 
 
-def test_spawn_workspace_worker_rejects_empty_repo(credential_context, temp_artifact_path, db_session):
+def test_spawn_workspace_commis_rejects_empty_repo(credential_context, temp_artifact_path, db_session):
     """Test that empty git_repo is rejected."""
     before_count = _count_worker_jobs(db_session)
-    result = spawn_workspace_worker(
+    result = spawn_workspace_commis(
         task="Test task",
         git_repo="",
     )
@@ -207,9 +207,9 @@ def test_spawn_workspace_worker_rejects_empty_repo(credential_context, temp_arti
     assert _count_worker_jobs(db_session) == before_count
 
 
-def test_spawn_workspace_worker_ssh_scheme_url(credential_context, temp_artifact_path, db_session):
+def test_spawn_workspace_commis_ssh_scheme_url(credential_context, temp_artifact_path, db_session):
     """Test spawning workspace worker with ssh:// git URL."""
-    result = spawn_workspace_worker(
+    result = spawn_workspace_commis(
         task="Audit README via ssh scheme",
         git_repo="ssh://git@github.com/cipher982/zerg.git",
         model=TEST_WORKER_MODEL,
@@ -230,12 +230,12 @@ def test_spawn_workspace_worker_ssh_scheme_url(credential_context, temp_artifact
     assert job.config.get("execution_mode") == "workspace"
 
 
-def test_spawn_workspace_worker_rejects_ssh_option_injection(
+def test_spawn_workspace_commis_rejects_ssh_option_injection(
     credential_context, temp_artifact_path, db_session
 ):
     """Test ssh:// URLs with option injection are rejected."""
     before_count = _count_worker_jobs(db_session)
-    result = spawn_workspace_worker(
+    result = spawn_workspace_commis(
         task="Test task",
         git_repo="ssh://-oProxyCommand=whoami@github.com/repo.git",
     )
@@ -245,7 +245,7 @@ def test_spawn_workspace_worker_rejects_ssh_option_injection(
     assert _count_worker_jobs(db_session) == before_count
 
 
-def test_spawn_workspace_worker_security_filtering(
+def test_spawn_workspace_commis_security_filtering(
     credential_context, temp_artifact_path, db_session, test_user
 ):
     """Test that workspace workers respect owner isolation."""
@@ -253,14 +253,14 @@ def test_spawn_workspace_worker_security_filtering(
     from zerg.crud import crud
 
     # 1. Create workspace worker as User A
-    spawn_workspace_worker(
+    spawn_workspace_commis(
         task="User A repo task",
         git_repo="https://github.com/user-a/repo.git",
         model=TEST_WORKER_MODEL,
     )
 
     # Verify User A can see it
-    result_a = list_workers()
+    result_a = list_commis()
     assert "User A repo task" in result_a
 
     # 2. Create User B
@@ -271,17 +271,17 @@ def test_spawn_workspace_worker_security_filtering(
     set_credential_resolver(resolver_b)
 
     # User B CANNOT see User A's workspace worker
-    result_b = list_workers()
+    result_b = list_commis()
     assert "User A repo task" not in result_b
 
     # 3. User B creates their own workspace worker
-    spawn_workspace_worker(
+    spawn_workspace_commis(
         task="User B repo task",
         git_repo="https://github.com/user-b/repo.git",
         model=TEST_WORKER_MODEL,
     )
 
-    result_b_2 = list_workers()
+    result_b_2 = list_commis()
     assert "User B repo task" in result_b_2
     assert "User A repo task" not in result_b_2
 
@@ -289,23 +289,23 @@ def test_spawn_workspace_worker_security_filtering(
     set_credential_resolver(credential_context)
 
 
-def test_list_workers_empty(temp_artifact_path):
+def test_list_commis_empty(temp_artifact_path):
     """Test listing workers when none exist."""
     # We expect a "no credential context" error because we didn't set up context
-    result = list_workers()
+    result = list_commis()
 
     assert "Error" in result
     assert "no credential context" in result
 
 
-def test_list_workers_with_data(credential_context, temp_artifact_path, db_session):
+def test_list_commis_with_data(credential_context, temp_artifact_path, db_session):
     """Test listing workers after spawning some."""
     # Spawn a couple of workers (they get queued, not executed synchronously)
-    spawn_worker(task="Task 1", model=TEST_WORKER_MODEL)
-    spawn_worker(task="Task 2", model=TEST_WORKER_MODEL)
+    spawn_commis(task="Task 1", model=TEST_WORKER_MODEL)
+    spawn_commis(task="Task 2", model=TEST_WORKER_MODEL)
 
     # List workers
-    result = list_workers(limit=10)
+    result = list_commis(limit=10)
 
     # Check we got results (format: "Recent workers (showing N)")
     assert "showing 2" in result or "Job 1" in result or "Job 2" in result
@@ -322,10 +322,10 @@ def test_security_filtering(credential_context, temp_artifact_path, db_session, 
     from zerg.crud import crud
 
     # 1. Create a worker as User A (test_user)
-    spawn_worker(task="User A Task", model=TEST_WORKER_MODEL)
+    spawn_commis(task="User A Task", model=TEST_WORKER_MODEL)
 
     # Verify User A can see it
-    result_a = list_workers()
+    result_a = list_commis()
     assert "User A Task" in result_a
 
     # 2. Create User B in database (required for foreign key)
@@ -339,21 +339,21 @@ def test_security_filtering(credential_context, temp_artifact_path, db_session, 
     set_credential_resolver(resolver_b)
 
     # Verify User B CANNOT see User A's worker
-    result_b = list_workers()
+    result_b = list_commis()
     assert "User A Task" not in result_b
     assert "showing 0" in result_b or "No worker" in result_b
 
     # 3. Create worker as User B
-    spawn_worker(task="User B Task", model=TEST_WORKER_MODEL)
+    spawn_commis(task="User B Task", model=TEST_WORKER_MODEL)
 
     # Verify User B sees their task
-    result_b_2 = list_workers()
+    result_b_2 = list_commis()
     assert "User B Task" in result_b_2
     assert "User A Task" not in result_b_2
 
     # 4. Switch back to User A
     set_credential_resolver(credential_context)
-    result_a_2 = list_workers()
+    result_a_2 = list_commis()
     assert "User A Task" in result_a_2
     assert "User B Task" not in result_a_2
 
@@ -363,7 +363,7 @@ def test_security_read_access(credential_context, temp_artifact_path, db_session
     from zerg.connectors.resolver import CredentialResolver
 
     # 1. Create worker as User A
-    res_spawn = spawn_worker(task="Secret Task", model=TEST_WORKER_MODEL)
+    res_spawn = spawn_commis(task="Secret Task", model=TEST_WORKER_MODEL)
     lines = res_spawn.split("\n")
     worker_line = [line for line in lines if "Worker" in line][0]
     worker_id = worker_line.split()[1]
@@ -374,51 +374,51 @@ def test_security_read_access(credential_context, temp_artifact_path, db_session
     set_credential_resolver(resolver_b)
 
     # 3. Attempt to read result
-    res_read = read_worker_result(worker_id)
+    res_read = read_commis_result(worker_id)
     assert "Access denied" in res_read or "Error" in res_read
 
     # 4. Attempt to read file
-    res_file = read_worker_file(worker_id, "metadata.json")
+    res_file = read_commis_file(worker_id, "metadata.json")
     assert "Access denied" in res_file or "Error" in res_file
 
     # 5. Attempt to get metadata
-    res_meta = get_worker_metadata(worker_id)
+    res_meta = get_commis_metadata(worker_id)
     assert "Access denied" in res_meta or "Error" in res_meta
 
     # 6. Attempt to grep
-    res_grep = grep_workers("Secret")
+    res_grep = grep_commis("Secret")
     assert "No matches found" in res_grep
 
 
-def test_list_workers_with_status_filter(credential_context, temp_artifact_path, db_session):
+def test_list_commis_with_status_filter(credential_context, temp_artifact_path, db_session):
     """Test listing workers with status filter."""
     # Spawn workers (gets queued)
-    spawn_worker(task="Queued task", model=TEST_WORKER_MODEL)
+    spawn_commis(task="Queued task", model=TEST_WORKER_MODEL)
 
     # List only queued workers (they don't run synchronously anymore)
-    result = list_workers(status="queued", limit=10)
+    result = list_commis(status="queued", limit=10)
 
     assert "showing" in result or "Job" in result
     assert "QUEUED" in result
 
 
-def test_list_workers_with_time_filter(credential_context, temp_artifact_path, db_session):
+def test_list_commis_with_time_filter(credential_context, temp_artifact_path, db_session):
     """Test listing workers with time filter."""
     # Spawn a worker
-    spawn_worker(task="Recent task", model=TEST_WORKER_MODEL)
+    spawn_commis(task="Recent task", model=TEST_WORKER_MODEL)
 
     # List workers from last hour
-    result = list_workers(since_hours=1)
+    result = list_commis(since_hours=1)
 
     assert "showing" in result or "Job" in result
     assert "Recent task" in result
 
     # List workers from last 0 hours (should be empty or close to it)
-    result = list_workers(since_hours=0)
+    result = list_commis(since_hours=0)
     # May or may not find it depending on timing, just check no error
 
 
-def test_get_worker_evidence_success(credential_context, temp_artifact_path, db_session, test_user):
+def test_get_commis_evidence_success(credential_context, temp_artifact_path, db_session, test_user):
     """Test compiling evidence for a worker job via tool."""
     import json
 
@@ -457,19 +457,19 @@ def test_get_worker_evidence_success(credential_context, temp_artifact_path, db_
     db_session.add(job)
     db_session.commit()
 
-    evidence = get_worker_evidence(str(job.id), budget_bytes=5000)
+    evidence = get_commis_evidence(str(job.id), budget_bytes=5000)
 
     assert "Evidence for worker job" in evidence
     assert "tool_calls/001_ssh_exec.txt" in evidence
     assert "df -h" in evidence
 
 
-def test_read_worker_result_success(credential_context, temp_artifact_path, db_session):
+def test_read_commis_result_success(credential_context, temp_artifact_path, db_session):
     """Test reading a worker's result (queued jobs not yet executed)."""
     import re
 
     # Spawn a worker (gets queued, not executed)
-    spawn_result = spawn_worker(task="What is 1+1?", model=TEST_WORKER_MODEL)
+    spawn_result = spawn_commis(task="What is 1+1?", model=TEST_WORKER_MODEL)
 
     # Extract job_id
     job_id_match = re.search(r"Worker job (\d+)", spawn_result)
@@ -477,15 +477,15 @@ def test_read_worker_result_success(credential_context, temp_artifact_path, db_s
     job_id = job_id_match.group(1)
 
     # Read the result - should fail because job hasn't executed yet
-    result = read_worker_result(job_id)
+    result = read_commis_result(job_id)
 
     # Job is queued, not executed, so should report that
     assert "Error" in result or "not started" in result or "not complete" in result
 
 
-def test_read_worker_result_not_found(temp_artifact_path):
+def test_read_commis_result_not_found(temp_artifact_path):
     """Test reading result without context."""
-    result = read_worker_result("nonexistent-worker-id")
+    result = read_commis_result("nonexistent-worker-id")
 
     assert "Error" in result
     assert "no credential context" in result
@@ -499,12 +499,12 @@ def test_get_tool_output_no_context():
     assert "no credential context" in result
 
 
-def test_read_worker_file_metadata(credential_context, temp_artifact_path, db_session):
+def test_read_commis_file_metadata(credential_context, temp_artifact_path, db_session):
     """Test reading worker file (queued job not yet executed)."""
     import re
 
     # Spawn a worker (gets queued)
-    spawn_result = spawn_worker(task="Test task", model=TEST_WORKER_MODEL)
+    spawn_result = spawn_commis(task="Test task", model=TEST_WORKER_MODEL)
 
     # Extract job_id
     job_id_match = re.search(r"Worker job (\d+)", spawn_result)
@@ -512,18 +512,18 @@ def test_read_worker_file_metadata(credential_context, temp_artifact_path, db_se
     job_id = job_id_match.group(1)
 
     # Read metadata.json - job hasn't executed so no artifacts yet
-    result = read_worker_file(job_id, "metadata.json")
+    result = read_commis_file(job_id, "metadata.json")
 
     # Job is queued, not executed, so should report error
     assert "Error" in result or "not started" in result
 
 
-def test_read_worker_file_result(credential_context, temp_artifact_path, db_session):
+def test_read_commis_file_result(credential_context, temp_artifact_path, db_session):
     """Test reading worker result.txt file (queued job not yet executed)."""
     import re
 
     # Spawn a worker (gets queued)
-    spawn_result = spawn_worker(task="Say hello", model=TEST_WORKER_MODEL)
+    spawn_result = spawn_commis(task="Say hello", model=TEST_WORKER_MODEL)
 
     # Extract job_id
     job_id_match = re.search(r"Worker job (\d+)", spawn_result)
@@ -531,50 +531,50 @@ def test_read_worker_file_result(credential_context, temp_artifact_path, db_sess
     job_id = job_id_match.group(1)
 
     # Read result.txt - job hasn't executed so no artifacts yet
-    result = read_worker_file(job_id, "result.txt")
+    result = read_commis_file(job_id, "result.txt")
 
     # Job is queued, not executed, so should report error
     assert "Error" in result or "not started" in result
 
 
-def test_read_worker_file_not_found(credential_context, temp_artifact_path, db_session):
+def test_read_commis_file_not_found(credential_context, temp_artifact_path, db_session):
     """Test reading non-existent file from worker."""
     import re
 
     # Spawn a worker (gets queued)
-    spawn_result = spawn_worker(task="Test", model=TEST_WORKER_MODEL)
+    spawn_result = spawn_commis(task="Test", model=TEST_WORKER_MODEL)
     job_id_match = re.search(r"Worker job (\d+)", spawn_result)
     assert job_id_match
     job_id = job_id_match.group(1)
 
     # Try to read non-existent file - job hasn't executed
-    result = read_worker_file(job_id, "nonexistent.txt")
+    result = read_commis_file(job_id, "nonexistent.txt")
 
     assert "Error" in result
 
 
-def test_read_worker_file_path_traversal(credential_context, temp_artifact_path, db_session):
+def test_read_commis_file_path_traversal(credential_context, temp_artifact_path, db_session):
     """Test that path traversal is blocked."""
     import re
 
     # Spawn a worker (gets queued)
-    spawn_result = spawn_worker(task="Test", model=TEST_WORKER_MODEL)
+    spawn_result = spawn_commis(task="Test", model=TEST_WORKER_MODEL)
     job_id_match = re.search(r"Worker job (\d+)", spawn_result)
     assert job_id_match
     job_id = job_id_match.group(1)
 
     # Try path traversal - should error (either because job not executed or path invalid)
-    result = read_worker_file(job_id, "../../../etc/passwd")
+    result = read_commis_file(job_id, "../../../etc/passwd")
 
     assert "Error" in result
 
 
-def test_get_worker_metadata_success(credential_context, temp_artifact_path, db_session):
+def test_get_commis_metadata_success(credential_context, temp_artifact_path, db_session):
     """Test getting worker metadata (queued job)."""
     import re
 
     # Spawn a worker (gets queued)
-    spawn_result = spawn_worker(task="Metadata test task", model=TEST_WORKER_MODEL)
+    spawn_result = spawn_commis(task="Metadata test task", model=TEST_WORKER_MODEL)
 
     # Extract job_id
     job_id_match = re.search(r"Worker job (\d+)", spawn_result)
@@ -582,7 +582,7 @@ def test_get_worker_metadata_success(credential_context, temp_artifact_path, db_
     job_id = job_id_match.group(1)
 
     # Get metadata - this should work even for queued jobs
-    result = get_worker_metadata(job_id)
+    result = get_commis_metadata(job_id)
 
     assert f"Metadata for worker job {job_id}" in result
     assert "Status: queued" in result
@@ -590,41 +590,41 @@ def test_get_worker_metadata_success(credential_context, temp_artifact_path, db_
     assert "Created:" in result
 
 
-def test_get_worker_metadata_not_found(temp_artifact_path):
+def test_get_commis_metadata_not_found(temp_artifact_path):
     """Test getting metadata without context."""
-    result = get_worker_metadata("nonexistent-worker")
+    result = get_commis_metadata("nonexistent-worker")
 
     assert "Error" in result
     assert "no credential context" in result
 
 
-def test_grep_workers_no_matches(temp_artifact_path):
+def test_grep_commis_no_matches(temp_artifact_path):
     """Test grepping workers without context."""
-    result = grep_workers("nonexistent-pattern-xyz")
+    result = grep_commis("nonexistent-pattern-xyz")
 
     assert "Error" in result
     assert "no credential context" in result
 
 
-def test_grep_workers_with_matches(credential_context, temp_artifact_path, db_session):
+def test_grep_commis_with_matches(credential_context, temp_artifact_path, db_session):
     """Test grepping workers for a pattern."""
     # Spawn a worker with distinctive text
-    spawn_worker(task="Find the word UNICORN in this task", model=TEST_WORKER_MODEL)
+    spawn_commis(task="Find the word UNICORN in this task", model=TEST_WORKER_MODEL)
 
     # Search for the pattern
-    result = grep_workers("UNICORN", since_hours=1)
+    result = grep_commis("UNICORN", since_hours=1)
 
     # Should find the match
     assert "match" in result.lower() or "found" in result.lower()
 
 
-def test_grep_workers_case_insensitive(credential_context, temp_artifact_path, db_session):
+def test_grep_commis_case_insensitive(credential_context, temp_artifact_path, db_session):
     """Test that grep is case-insensitive."""
     # Spawn a worker
-    spawn_worker(task="This task has UPPERCASE text", model=TEST_WORKER_MODEL)
+    spawn_commis(task="This task has UPPERCASE text", model=TEST_WORKER_MODEL)
 
     # Search with lowercase
-    result = grep_workers("uppercase", since_hours=1)
+    result = grep_commis("uppercase", since_hours=1)
 
     # Should find the match despite case difference
     assert "match" in result.lower() or "found" in result.lower()
@@ -660,12 +660,12 @@ def test_get_tool_output_success(credential_context, tmp_path, monkeypatch):
 def test_multiple_workers_workflow(credential_context, temp_artifact_path, db_session):
     """Test complete workflow with multiple workers."""
     # Spawn multiple workers (get queued)
-    spawn_worker(task="First worker task", model=TEST_WORKER_MODEL)
-    spawn_worker(task="Second worker task", model=TEST_WORKER_MODEL)
-    spawn_worker(task="Third worker task", model=TEST_WORKER_MODEL)
+    spawn_commis(task="First worker task", model=TEST_WORKER_MODEL)
+    spawn_commis(task="Second worker task", model=TEST_WORKER_MODEL)
+    spawn_commis(task="Third worker task", model=TEST_WORKER_MODEL)
 
     # List all workers
-    list_result = list_workers(limit=10)
+    list_result = list_commis(limit=10)
     assert "showing 3" in list_result or "Job" in list_result
 
     # Verify tasks are visible
@@ -674,30 +674,30 @@ def test_multiple_workers_workflow(credential_context, temp_artifact_path, db_se
     assert "Third worker task" in list_result
 
     # Search for a pattern - won't match artifacts since workers haven't executed
-    grep_result = grep_workers("worker task", since_hours=1)
+    grep_result = grep_commis("worker task", since_hours=1)
     # Queued workers have no artifacts yet, so no matches expected
     assert "No matches" in grep_result or "match" in grep_result.lower()
 
 
-def test_spawn_worker_with_different_models(credential_context, temp_artifact_path, db_session):
+def test_spawn_commis_with_different_models(credential_context, temp_artifact_path, db_session):
     """Test spawning workers with different models."""
     # Test with worker model (gpt-5-mini)
-    result1 = spawn_worker(task="Test with mini", model=TEST_WORKER_MODEL)
+    result1 = spawn_commis(task="Test with mini", model=TEST_WORKER_MODEL)
     assert "queued successfully" in result1
 
     # Test with default model (gpt-5.2)
-    result2 = spawn_worker(task="Test with default model", model=TEST_MODEL)
+    result2 = spawn_commis(task="Test with default model", model=TEST_MODEL)
     assert "queued successfully" in result2 or "Worker job" in result2
 
 
-def test_list_workers_limit(credential_context, temp_artifact_path, db_session):
-    """Test that list_workers respects limit parameter."""
+def test_list_commis_limit(credential_context, temp_artifact_path, db_session):
+    """Test that list_commis respects limit parameter."""
     # Spawn several workers
     for i in range(5):
-        spawn_worker(task=f"Worker {i}", model=TEST_WORKER_MODEL)
+        spawn_commis(task=f"Worker {i}", model=TEST_WORKER_MODEL)
 
     # List with limit of 3
-    result = list_workers(limit=3)
+    result = list_commis(limit=3)
 
     # Should only show 3 workers
     assert "showing 3" in result or result.count("Job") == 3

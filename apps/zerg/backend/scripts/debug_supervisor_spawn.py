@@ -50,11 +50,11 @@ def main():
     print(f"Agent name: {agent.name}")
     print(f"Allowed tools: {agent.allowed_tools}")
 
-    # Check if spawn_worker is in tools
-    if "spawn_worker" in (agent.allowed_tools or []):
-        print("✅ spawn_worker is in allowed_tools")
+    # Check if spawn_commis is in tools
+    if "spawn_commis" in (agent.allowed_tools or []):
+        print("✅ spawn_commis is in allowed_tools")
     else:
-        print("❌ spawn_worker NOT in allowed_tools!")
+        print("❌ spawn_commis NOT in allowed_tools!")
 
     # Check ACTUAL thread messages (runtime state, not just config)
     print("\n" + "=" * 60)
@@ -141,8 +141,8 @@ def main():
     issues = []
     if not user.context:
         issues.append("User context is empty - run auto-seed")
-    if "spawn_worker" not in (agent.allowed_tools or []):
-        issues.append("spawn_worker not in allowed_tools")
+    if "spawn_commis" not in (agent.allowed_tools or []):
+        issues.append("spawn_commis not in allowed_tools")
     if "cube" not in prompt.lower():
         issues.append("'cube' not in prompt - user context not injected")
     if "Spawn a worker immediately" not in prompt:

@@ -10,6 +10,7 @@ Tests cover:
 
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
@@ -30,7 +31,7 @@ class TestTTSConfig:
         """Test default configuration values."""
         config = TTSConfig()
         assert config.enabled is True
-        assert config.provider == TTSProvider.OPENAI
+        assert config.provider == TTSProvider.EDGE
         assert config.max_text_length == 4096
         assert config.timeout_ms == 30000
         assert config.openai_model == "gpt-4o-mini-tts"
@@ -38,10 +39,43 @@ class TestTTSConfig:
         assert config.elevenlabs_voice_id == "pMsXgVXv3BLzUgSXRplE"
         assert config.edge_voice == "en-US-GuyNeural"
 
+    def test_config_from_env(self):
+        """Test loading config from environment variables."""
+        env_vars = {
+            "TTS_ENABLED": "1",
+            "TTS_PROVIDER": "elevenlabs",
+            "TTS_MAX_TEXT_LENGTH": "2000",
+            "TTS_TIMEOUT_MS": "15000",
+            "ELEVENLABS_API_KEY": "test-key",
+            "ELEVENLABS_VOICE_ID": "custom-voice",
+            "TTS_EDGE_VOICE": "en-GB-RyanNeural",
+        }
+        with patch.dict(os.environ, env_vars, clear=False):
+            config = TTSConfig.from_env()
+
+        assert config.enabled is True
+        assert config.provider == TTSProvider.ELEVENLABS
+        assert config.max_text_length == 2000
+        assert config.timeout_ms == 15000
+        assert config.elevenlabs_api_key == "test-key"
+        assert config.elevenlabs_voice_id == "custom-voice"
+        assert config.edge_voice == "en-GB-RyanNeural"
+
     def test_config_disabled(self):
-        """Test TTS disabled via explicit config."""
-        config = TTSConfig(enabled=False)
+        """Test TTS disabled via environment."""
+        with patch.dict(os.environ, {"TTS_ENABLED": "0"}, clear=False):
+            config = TTSConfig.from_env()
         assert config.enabled is False
+
+    def test_xi_api_key_fallback(self):
+        """Test XI_API_KEY as fallback for ELEVENLABS_API_KEY."""
+        env_vars = {"XI_API_KEY": "xi-key"}
+        with patch.dict(os.environ, env_vars, clear=False):
+            # Clear ELEVENLABS_API_KEY if set
+            with patch.dict(os.environ, {"ELEVENLABS_API_KEY": ""}, clear=False):
+                config = TTSConfig.from_env()
+        # XI_API_KEY should be used as fallback
+        assert config.elevenlabs_api_key == "xi-key"
 
 
 class TestTTSService:
@@ -55,9 +89,9 @@ class TestTTSService:
 
     def test_provider_availability_openai_no_key(self):
         """Test OpenAI unavailable without API key."""
+        config = TTSConfig(provider=TTSProvider.OPENAI, openai_api_key=None)
+        service = TTSService(config)
         with patch("zerg.voice.tts_service.get_settings", return_value=SimpleNamespace(openai_api_key=None)):
-            config = TTSConfig(provider=TTSProvider.OPENAI, openai_api_key=None)
-            service = TTSService(config)
             assert service._is_provider_available(TTSProvider.OPENAI) is False
 
     def test_provider_availability_openai_with_key(self):
@@ -269,9 +303,8 @@ class TestTTSService:
     @pytest.mark.asyncio
     async def test_convert_fallback_to_edge(self):
         """Test fallback from ElevenLabs to Edge on failure."""
-        with patch("zerg.voice.tts_service.get_settings", return_value=SimpleNamespace(openai_api_key=None)):
-            config = TTSConfig(provider=TTSProvider.ELEVENLABS, elevenlabs_api_key="test-key")
-            service = TTSService(config)
+        config = TTSConfig(provider=TTSProvider.ELEVENLABS, elevenlabs_api_key="test-key")
+        service = TTSService(config)
 
         # Mock ElevenLabs failure
         mock_response = MagicMock()
@@ -290,9 +323,10 @@ class TestTTSService:
         mock_edge_tts.Communicate.return_value = mock_communicate
 
         with patch("httpx.AsyncClient", return_value=mock_client):
-            with patch.dict("sys.modules", {"edge_tts": mock_edge_tts}):
-                with patch("pathlib.Path.read_bytes", return_value=b"edge-audio"):
-                    result = await service.convert("Hello world")
+            with patch("zerg.voice.tts_service.get_settings", return_value=SimpleNamespace(openai_api_key=None)):
+                with patch.dict("sys.modules", {"edge_tts": mock_edge_tts}):
+                    with patch("pathlib.Path.read_bytes", return_value=b"edge-audio"):
+                        result = await service.convert("Hello world")
 
         # Should fall back to Edge
         assert result.success is True
@@ -392,12 +426,11 @@ class TestEdgeTTSIntegration:
     @pytest.mark.integration
     async def test_real_edge_conversion(self):
         """Test real Edge TTS conversion (requires network)."""
-        pytest.importorskip("edge_tts")
         config = TTSConfig(provider=TTSProvider.EDGE)
         service = TTSService(config)
 
         try:
-            result = await service.convert("Hello, this is a test of Jarvis voice.", provider=TTSProvider.EDGE)
+            result = await service.convert("Hello, this is a test of Jarvis voice.")
 
             assert result.success is True
             assert result.provider == "edge"

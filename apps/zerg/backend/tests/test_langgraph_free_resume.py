@@ -73,7 +73,7 @@ class TestLangGraphFreeResumeHappyPath:
             "tool_calls": [
                 {
                     "id": tool_call_id,
-                    "name": "spawn_worker",
+                    "name": "spawn_commis",
                     "args": {"task": "test task"},
                 }
             ]
@@ -206,7 +206,7 @@ class TestLangGraphFreeResumeConcurrency:
             "tool_calls": [
                 {
                     "id": tool_call_id,
-                    "name": "spawn_worker",
+                    "name": "spawn_commis",
                     "args": {"task": "test task"},
                 }
             ]
@@ -382,7 +382,7 @@ class TestLangGraphFreeResumeErrorHandling:
             "tool_calls": [
                 {
                     "id": tool_call_id,
-                    "name": "spawn_worker",
+                    "name": "spawn_commis",
                     "args": {"task": "test task"},
                 }
             ]
@@ -466,7 +466,7 @@ class TestRunContinuationIdempotency:
             processed=True,
         )
 
-        # Add AIMessage with tool_calls (simulating spawn_worker call)
+        # Add AIMessage with tool_calls (simulating spawn_commis call)
         tool_call_id = f"call_{uuid.uuid4().hex[:12]}"
         ai_msg = crud.create_thread_message(
             db=db_session,
@@ -479,7 +479,7 @@ class TestRunContinuationIdempotency:
             "tool_calls": [
                 {
                     "id": tool_call_id,
-                    "name": "spawn_worker",
+                    "name": "spawn_commis",
                     "args": {"task": "test task"},
                 }
             ]
@@ -493,8 +493,8 @@ class TestRunContinuationIdempotency:
                 LcSystemMessage(content="system"),
                 LcSystemMessage(content="context"),
                 HumanMessage(content="Run a task"),
-                AIMessage(content="", tool_calls=[{"id": tool_call_id, "name": "spawn_worker", "args": {"task": "test"}}]),
-                ToolMessage(content="Worker completed:\n\ntest result", tool_call_id=tool_call_id, name="spawn_worker"),
+                AIMessage(content="", tool_calls=[{"id": tool_call_id, "name": "spawn_commis", "args": {"task": "test"}}]),
+                ToolMessage(content="Worker completed:\n\ntest result", tool_call_id=tool_call_id, name="spawn_commis"),
                 AIMessage(content="Task completed successfully."),
             ],
             usage={"total_tokens": 100},
@@ -568,7 +568,7 @@ class TestRunContinuationIdempotency:
             "tool_calls": [
                 {
                     "id": tool_call_id,
-                    "name": "spawn_worker",
+                    "name": "spawn_commis",
                     "args": {"task": "test task"},
                 }
             ]
@@ -584,7 +584,7 @@ class TestRunContinuationIdempotency:
         )
         existing_tool_msg.message_metadata = {
             "tool_call_id": tool_call_id,
-            "name": "spawn_worker",
+            "name": "spawn_commis",
         }
         db_session.commit()
 

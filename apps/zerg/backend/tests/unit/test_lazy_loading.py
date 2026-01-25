@@ -32,19 +32,19 @@ class TestLazyToolBinderAllowlist:
         # Create a mock resolver that returns mock tools
         mock_resolver = MagicMock()
         mock_tool = MagicMock()
-        mock_tool.name = "spawn_worker"
+        mock_tool.name = "spawn_commis"
         mock_resolver.get_tool.return_value = mock_tool
 
-        # Only allow spawn_worker, not other core tools
-        allowed = ["spawn_worker"]
+        # Only allow spawn_commis, not other core tools
+        allowed = ["spawn_commis"]
         binder = LazyToolBinder(mock_resolver, allowed_tools=allowed)
 
-        # Should only have spawn_worker loaded
+        # Should only have spawn_commis loaded
         loaded_names = binder.loaded_tool_names
-        assert "spawn_worker" in loaded_names
+        assert "spawn_commis" in loaded_names
         # Other core tools should NOT be loaded
         for name in CORE_TOOLS:
-            if name != "spawn_worker":
+            if name != "spawn_commis":
                 assert name not in loaded_names, f"{name} should not be loaded"
 
     def test_wildcard_allowlist(self):
@@ -60,12 +60,12 @@ class TestLazyToolBinderAllowlist:
 
         mock_resolver.get_tool.side_effect = mock_get_tool
 
-        # Allow all github_* tools and spawn_worker
-        allowed = ["spawn_worker", "github_*"]
+        # Allow all github_* tools and spawn_commis
+        allowed = ["spawn_commis", "github_*"]
         binder = LazyToolBinder(mock_resolver, allowed_tools=allowed)
 
-        # spawn_worker should be loaded (it's a core tool)
-        assert binder.is_loaded("spawn_worker")
+        # spawn_commis should be loaded (it's a core tool)
+        assert binder.is_loaded("spawn_commis")
 
         # Try to load a github tool - should succeed
         tool = binder.get_tool("github_list_issues")
@@ -109,12 +109,12 @@ class TestLazyToolBinderAllowlist:
 
         mock_resolver.get_tool.side_effect = mock_get_tool
 
-        allowed = ["spawn_worker", "contact_user"]
+        allowed = ["spawn_commis", "contact_user"]
         binder = LazyToolBinder(mock_resolver, allowed_tools=allowed)
 
         names = binder.loaded_tool_names
         assert isinstance(names, frozenset)
-        assert "spawn_worker" in names
+        assert "spawn_commis" in names
         assert "contact_user" in names
 
 
@@ -331,13 +331,13 @@ class TestRebindMechanism:
 
         mock_resolver.get_tool.side_effect = mock_get_tool
 
-        allowed = ["spawn_worker", "contact_user", "custom_tool"]
+        allowed = ["spawn_commis", "contact_user", "custom_tool"]
         binder = LazyToolBinder(mock_resolver, allowed_tools=allowed)
 
         # Initially only core tools that are allowed
         initial_tools = binder.get_bound_tools()
         initial_names = {t.name for t in initial_tools}
-        assert "spawn_worker" in initial_names
+        assert "spawn_commis" in initial_names
         assert "contact_user" in initial_names
 
         # Load custom_tool
@@ -371,7 +371,7 @@ class TestCatalogPromptIntegration:
         mock_resolver.get_tool.side_effect = mock_get_tool
 
         # Restrict to only 2 core tools
-        allowed = ["spawn_worker", "contact_user"]
+        allowed = ["spawn_commis", "contact_user"]
         binder = LazyToolBinder(mock_resolver, allowed_tools=allowed)
 
         # The loaded_tool_names should only have the allowed core tools
@@ -381,7 +381,7 @@ class TestCatalogPromptIntegration:
         catalog_header = f"### Core Tools (always loaded): {', '.join(loaded_names)}"
 
         # Should NOT contain tools that aren't allowed
-        assert "spawn_worker" in catalog_header
+        assert "spawn_commis" in catalog_header
         assert "contact_user" in catalog_header
         assert "web_search" not in catalog_header
         assert "http_request" not in catalog_header

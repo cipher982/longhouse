@@ -34,20 +34,20 @@ def supervisor_agent(db_session, test_user):
         model=TEST_MODEL,  # Use smarter model - gpt-5-mini is unreliable for tool calling
         system_instructions=(
             "You are a supervisor agent that MUST delegate ALL tasks to workers. "
-            "You have access to the spawn_worker tool. "
-            "IMPORTANT: When asked to do anything, you MUST call spawn_worker immediately. "
-            "Never respond with text - always use the spawn_worker tool."
+            "You have access to the spawn_commis tool. "
+            "IMPORTANT: When asked to do anything, you MUST call spawn_commis immediately. "
+            "Never respond with text - always use the spawn_commis tool."
         ),
         task_instructions="",
     )
     # Set allowed_tools - required for tools to be passed to the LLM
     agent.allowed_tools = [
-        "spawn_worker",
-        "list_workers",
-        "read_worker_result",
-        "read_worker_file",
-        "grep_workers",
-        "get_worker_metadata",
+        "spawn_commis",
+        "list_commis",
+        "read_commis_result",
+        "read_commis_file",
+        "grep_commis",
+        "get_commis_metadata",
     ]
     db_session.commit()
     db_session.refresh(agent)
@@ -56,9 +56,9 @@ def supervisor_agent(db_session, test_user):
 
 @pytest.mark.asyncio
 async def test_supervisor_spawns_worker_via_tool(supervisor_agent, db_session, test_user, temp_artifact_path):
-    """Test that a supervisor agent can use spawn_worker tool (queues job).
+    """Test that a supervisor agent can use spawn_commis tool (queues job).
 
-    In async model, spawn_worker returns immediately and the supervisor continues.
+    In async model, spawn_commis returns immediately and the supervisor continues.
     We verify the job was created and queued.
     """
     from zerg.models.models import WorkerJob
@@ -86,7 +86,7 @@ async def test_supervisor_spawns_worker_via_tool(supervisor_agent, db_session, t
     set_credential_resolver(resolver)
 
     try:
-        # Run the supervisor agent - spawn_worker returns immediately in async model
+        # Run the supervisor agent - spawn_commis returns immediately in async model
         runner = AgentRunner(supervisor_agent)
         messages = await runner.run_thread(db_session, thread)
 
@@ -107,8 +107,8 @@ async def test_supervisor_spawns_worker_via_tool(supervisor_agent, db_session, t
 
 
 @pytest.mark.asyncio
-async def test_supervisor_can_list_workers(supervisor_agent, db_session, test_user, temp_artifact_path):
-    """Test that a supervisor can use list_workers tool."""
+async def test_supervisor_can_list_commis(supervisor_agent, db_session, test_user, temp_artifact_path):
+    """Test that a supervisor can use list_commis tool."""
     from datetime import datetime
     from datetime import timezone
 
@@ -139,7 +139,7 @@ async def test_supervisor_can_list_workers(supervisor_agent, db_session, test_us
         db=db_session,
         thread_id=thread.id,
         role="user",
-        content="Use the list_workers tool to show me all recent workers",
+        content="Use the list_commis tool to show me all recent workers",
         processed=False,
     )
 
@@ -152,17 +152,17 @@ async def test_supervisor_can_list_workers(supervisor_agent, db_session, test_us
         agent_runner = AgentRunner(supervisor_agent)
         messages = await agent_runner.run_thread(db_session, thread)
 
-        # Verify the supervisor called list_workers
-        list_workers_called = False
+        # Verify the supervisor called list_commis
+        list_commis_called = False
 
         for msg in messages:
             if msg.role == "assistant" and msg.tool_calls:
                 for tool_call in msg.tool_calls:
-                    if tool_call.get("name") == "list_workers":
-                        list_workers_called = True
+                    if tool_call.get("name") == "list_commis":
+                        list_commis_called = True
                         break
 
-        assert list_workers_called, "Supervisor should have called list_workers"
+        assert list_commis_called, "Supervisor should have called list_commis"
 
         # Check that the response mentions the worker
         final_message = messages[-1]
@@ -240,17 +240,17 @@ async def test_supervisor_reads_worker_result(supervisor_agent, db_session, test
         agent_runner = AgentRunner(supervisor_agent)
         messages = await agent_runner.run_thread(db_session, thread)
 
-        # Verify the supervisor called read_worker_result
-        read_worker_result_called = False
+        # Verify the supervisor called read_commis_result
+        read_commis_result_called = False
 
         for msg in messages:
             if msg.role == "assistant" and msg.tool_calls:
                 for tool_call in msg.tool_calls:
-                    if tool_call.get("name") == "read_worker_result":
-                        read_worker_result_called = True
+                    if tool_call.get("name") == "read_commis_result":
+                        read_commis_result_called = True
                         break
 
-        assert read_worker_result_called, "Supervisor should have called read_worker_result"
+        assert read_commis_result_called, "Supervisor should have called read_commis_result"
 
     finally:
         set_credential_resolver(None)
@@ -263,21 +263,21 @@ async def test_tools_registered_in_builtin(db_session):
     registry = ImmutableToolRegistry.build([BUILTIN_TOOLS])
 
     # Verify all supervisor tools are registered
-    assert registry.get("spawn_worker") is not None
-    assert registry.get("list_workers") is not None
-    assert registry.get("read_worker_result") is not None
-    assert registry.get("read_worker_file") is not None
-    assert registry.get("grep_workers") is not None
-    assert registry.get("get_worker_metadata") is not None
+    assert registry.get("spawn_commis") is not None
+    assert registry.get("list_commis") is not None
+    assert registry.get("read_commis_result") is not None
+    assert registry.get("read_commis_file") is not None
+    assert registry.get("grep_commis") is not None
+    assert registry.get("get_commis_metadata") is not None
 
     # Verify tool descriptions
-    spawn_tool = registry.get("spawn_worker")
+    spawn_tool = registry.get("spawn_commis")
     assert "delegate" in spawn_tool.description.lower() or "spawn" in spawn_tool.description.lower()
 
 
 @pytest.mark.asyncio
-async def test_read_worker_result_includes_duration(supervisor_agent, db_session, test_user, temp_artifact_path):
-    """Test that read_worker_result returns duration_ms from completed workers (Tier 1 visibility)."""
+async def test_read_commis_result_includes_duration(supervisor_agent, db_session, test_user, temp_artifact_path):
+    """Test that read_commis_result returns duration_ms from completed workers (Tier 1 visibility)."""
     from datetime import datetime
     from datetime import timezone
 
@@ -321,10 +321,10 @@ async def test_read_worker_result_includes_duration(supervisor_agent, db_session
 
         job_id = worker_job.id
 
-        # Call read_worker_result_async directly (to preserve context in same async loop)
-        from zerg.tools.builtin.supervisor_tools import read_worker_result_async
+        # Call read_commis_result_async directly (to preserve context in same async loop)
+        from zerg.tools.builtin.supervisor_tools import read_commis_result_async
 
-        result_text = await read_worker_result_async(str(job_id))
+        result_text = await read_commis_result_async(str(job_id))
 
         # Verify the result includes duration_ms
         assert "Execution time:" in result_text, f"Result should include execution time. Got: {result_text}"

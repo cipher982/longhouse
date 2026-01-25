@@ -91,7 +91,6 @@ class UserOut(BaseModel):
     prefs: Optional[Dict[str, Any]] = None
     last_login: Optional[datetime] = None
     role: str = "USER"
-    is_demo: bool = False
 
     # -------------------- Gmail integration (Phase-C) --------------------
     # Whether the authenticated user already connected their Gmail account.

@@ -326,7 +326,7 @@ async def _replay_and_stream(
                 if event_type != EventType.SUPERVISOR_TOKEN.value:
                     logger.debug(f"Stream: received live event {event_type} for run {run_id}")
 
-                # Track worker lifecycle for UI telemetry (stream no longer waits on workers)
+                # Track worker lifecycle so we don't close the stream until workers finish
                 if event_type == "worker_spawned":
                     pending_workers += 1
                 elif event_type == "worker_complete" and pending_workers > 0:
@@ -344,8 +344,8 @@ async def _replay_and_stream(
                 elif event_type == "error":
                     complete = True
 
-                # Close once supervisor is done (async inbox model doesn't block on workers)
-                if supervisor_done:
+                # Close once supervisor is done AND all workers for this run have finished
+                if supervisor_done and pending_workers == 0:
                     complete = True
 
                 # Format payload (strip internal fields)

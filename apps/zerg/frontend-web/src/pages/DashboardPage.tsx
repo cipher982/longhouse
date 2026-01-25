@@ -679,7 +679,7 @@ export default function DashboardPage() {
       <div id="dashboard-container" className="dashboard-page">
         <EmptyState
           icon={<Spinner size="lg" />}
-          title="Loading agents..."
+          title="Loading fiches..."
           description="Fetching your autonomous workforce."
         />
       </div>
@@ -710,8 +710,8 @@ export default function DashboardPage() {
   return (
     <div id="dashboard-container" className="dashboard-page">
       <SectionHeader
-        title={scope === "all" ? "All agents" : "My agents"}
-        description="Monitor and manage your autonomous workers."
+        title={scope === "all" ? "All fiches" : "My fiches"}
+        description="Monitor and manage your autonomous commis."
         actions={
           <div className="button-container">
             <div className="scope-wrapper">
@@ -720,7 +720,7 @@ export default function DashboardPage() {
                   type="checkbox"
                   id="dashboard-scope-toggle"
                   data-testid="dashboard-scope-toggle"
-                  aria-label="Toggle between my agents and all agents"
+                  aria-label="Toggle between my fiches and all fiches"
                   checked={scope === "all"}
                   onChange={(e) => {
                     const newScope = e.target.checked ? "all" : "my";
@@ -741,7 +741,7 @@ export default function DashboardPage() {
               ) : (
                 <>
                   <PlusIcon />
-                  Create Agent
+                  Create Fiche
                 </>
               )}
             </Button>
@@ -797,8 +797,8 @@ export default function DashboardPage() {
                 <Table.Cell isHeader colSpan={emptyColspan}>
                   <EmptyState
                     icon={<img src={appLogo} alt="Swarmlet Logo" className="dashboard-empty-logo" />}
-                    title="No agents found"
-                    description="Click 'Create Agent' to get started."
+                    title="No fiches found"
+                    description="Click 'Create Fiche' to get started."
                   />
                 </Table.Cell>
               </Table.Row>
@@ -865,7 +865,7 @@ export default function DashboardPage() {
   async function handleDeleteAgent(event: ReactMouseEvent<HTMLButtonElement>, agentId: number, name: string) {
     event.stopPropagation();
     const confirmed = await confirm({
-      title: `Delete agent "${name}"?`,
+      title: `Delete fiche "${name}"?`,
       message: 'This action cannot be undone. All associated data will be permanently removed.',
       confirmLabel: 'Delete',
       cancelLabel: 'Keep',

@@ -647,49 +647,6 @@
     line-height: 1.4;
   }
 
-  .admin-demo-form {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    margin-bottom: 16px;
-  }
-
-  .admin-demo-input {
-    min-width: 220px;
-    flex: 1;
-  }
-
-  .admin-demo-seed {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    align-items: center;
-    margin-bottom: 16px;
-  }
-
-  .admin-demo-select {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    align-items: center;
-    margin-bottom: 16px;
-  }
-
-  .admin-demo-select-input {
-    min-width: 240px;
-  }
-
-  .admin-demo-actions {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  .user-demo-badge {
-    align-self: flex-start;
-    margin-top: 6px;
-  }
-
   /* .btn-danger now inherits from buttons.css - no need for duplicate definition */
 
   /* Admin Page Confirmation Modal - scoped to admin page only */

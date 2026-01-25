@@ -76,10 +76,10 @@ class TestDetectRoleFromMessages:
         ]
         assert detect_role_from_messages(messages) == "supervisor"
 
-    def test_spawn_worker_call_indicates_supervisor(self):
+    def test_spawn_commis_call_indicates_supervisor(self):
         messages = [
             HumanMessage(content="Check disk"),
-            AIMessage(content="", tool_calls=[{"id": "call_123", "name": "spawn_worker", "args": {}}]),
+            AIMessage(content="", tool_calls=[{"id": "call_123", "name": "spawn_commis", "args": {}}]),
         ]
         assert detect_role_from_messages(messages) == "supervisor"
 
@@ -87,7 +87,7 @@ class TestDetectRoleFromMessages:
 class TestScriptedChatLLM:
     """Test the ScriptedChatLLM class."""
 
-    def test_supervisor_emits_spawn_worker(self):
+    def test_supervisor_emits_spawn_commis(self):
         llm = ScriptedChatLLM()
         llm = llm.bind_tools([])  # Bind empty tools
 
@@ -101,9 +101,9 @@ class TestScriptedChatLLM:
 
         assert isinstance(ai_msg, AIMessage)
         assert ai_msg.tool_calls
-        assert ai_msg.tool_calls[0]["name"] == "spawn_worker"
+        assert ai_msg.tool_calls[0]["name"] == "spawn_commis"
 
-    def test_supervisor_emits_parallel_spawn_workers(self):
+    def test_supervisor_emits_parallel_spawn_commiss(self):
         llm = ScriptedChatLLM()
         llm = llm.bind_tools([])  # Bind empty tools
 
@@ -118,7 +118,7 @@ class TestScriptedChatLLM:
         assert isinstance(ai_msg, AIMessage)
         assert ai_msg.tool_calls
         assert len(ai_msg.tool_calls) == 3
-        assert all(call["name"] == "spawn_worker" for call in ai_msg.tool_calls)
+        assert all(call["name"] == "spawn_commis" for call in ai_msg.tool_calls)
 
     def test_worker_emits_ssh_exec(self):
         llm = ScriptedChatLLM()
@@ -144,7 +144,7 @@ class TestScriptedChatLLM:
         messages = [
             SystemMessage(content="You are Jarvis. " + "x" * 2000),
             HumanMessage(content="check disk space on cube"),
-            AIMessage(content="", tool_calls=[{"id": "call_123", "name": "spawn_worker", "args": {}}]),
+            AIMessage(content="", tool_calls=[{"id": "call_123", "name": "spawn_commis", "args": {}}]),
             ToolMessage(content="Worker completed. /dev/sda1 45%", tool_call_id="call_123"),
         ]
 
@@ -162,7 +162,7 @@ class TestScriptedChatLLM:
         messages = [
             SystemMessage(content="You are Jarvis. " + "x" * 2000),
             HumanMessage(content="check disk space on cube"),
-            AIMessage(content="", tool_calls=[{"id": "call_123", "name": "spawn_worker", "args": {}}]),
+            AIMessage(content="", tool_calls=[{"id": "call_123", "name": "spawn_commis", "args": {}}]),
             ToolMessage(content="Worker completed.", tool_call_id="call_123"),
         ]
 
@@ -224,7 +224,7 @@ class TestSequencedResponses:
                     "call_number": 0,
                     "response": AIMessage(
                         content="",
-                        tool_calls=[{"id": "seq-call-1", "name": "spawn_worker", "args": {"task": "Check disk space"}}],
+                        tool_calls=[{"id": "seq-call-1", "name": "spawn_commis", "args": {"task": "Check disk space"}}],
                     ),
                 },
             ]
@@ -246,7 +246,7 @@ class TestSequencedResponses:
                     "call_number": 0,
                     "response": AIMessage(
                         content="",
-                        tool_calls=[{"id": "call-first", "name": "spawn_worker", "args": {"task": "Check disk space"}}],
+                        tool_calls=[{"id": "call-first", "name": "spawn_commis", "args": {"task": "Check disk space"}}],
                     ),
                 },
                 {
@@ -254,7 +254,7 @@ class TestSequencedResponses:
                     "call_number": 1,
                     "response": AIMessage(
                         content="",
-                        tool_calls=[{"id": "call-second", "name": "spawn_worker", "args": {"task": "Check disk usage"}}],
+                        tool_calls=[{"id": "call-second", "name": "spawn_commis", "args": {"task": "Check disk usage"}}],
                     ),
                 },
             ]

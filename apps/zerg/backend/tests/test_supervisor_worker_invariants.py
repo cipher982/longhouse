@@ -221,7 +221,7 @@ class TestSupervisorWorkerInvariants:
         """Verify WAITING runs must go through RUNNING before SUCCESS.
 
         The correct state machine is:
-        RUNNING → spawn_worker → interrupt → WAITING → worker done → resume → RUNNING → SUCCESS
+        RUNNING → spawn_commis → interrupt → WAITING → worker done → resume → RUNNING → SUCCESS
 
         A direct WAITING → SUCCESS transition would skip the resume logic and
         potentially leave the graph in an inconsistent state.

@@ -211,34 +211,34 @@ def test_get_worker_result_not_found(temp_store):
         temp_store.get_worker_result(worker_id)
 
 
-def test_read_worker_file(temp_store):
+def test_read_commis_file(temp_store):
     """Test reading arbitrary files from worker directory."""
     worker_id = temp_store.create_worker("Test task")
     temp_store.save_tool_output(worker_id, "ssh_exec", "SSH output", sequence=1)
 
     # Read tool output file
-    content = temp_store.read_worker_file(worker_id, "tool_calls/001_ssh_exec.txt")
+    content = temp_store.read_commis_file(worker_id, "tool_calls/001_ssh_exec.txt")
     assert content == "SSH output"
 
     # Read metadata
-    metadata_content = temp_store.read_worker_file(worker_id, "metadata.json")
+    metadata_content = temp_store.read_commis_file(worker_id, "metadata.json")
     metadata = json.loads(metadata_content)
     assert metadata["worker_id"] == worker_id
 
 
-def test_read_worker_file_security(temp_store):
+def test_read_commis_file_security(temp_store):
     """Test security: prevent directory traversal."""
     worker_id = temp_store.create_worker("Test task")
 
     # Attempt directory traversal
     with pytest.raises(ValueError, match="Invalid relative path"):
-        temp_store.read_worker_file(worker_id, "../../../etc/passwd")
+        temp_store.read_commis_file(worker_id, "../../../etc/passwd")
 
     with pytest.raises(ValueError, match="Invalid relative path"):
-        temp_store.read_worker_file(worker_id, "/etc/passwd")
+        temp_store.read_commis_file(worker_id, "/etc/passwd")
 
 
-def test_list_workers(temp_store):
+def test_list_commis(temp_store):
     """Test listing workers."""
     # Create multiple workers
     worker_ids = []
@@ -247,7 +247,7 @@ def test_list_workers(temp_store):
         worker_ids.append(worker_id)
 
     # List all workers
-    workers = temp_store.list_workers(limit=10)
+    workers = temp_store.list_commis(limit=10)
     assert len(workers) == 5
 
     # Verify sorted by created_at descending (newest first)
@@ -255,18 +255,18 @@ def test_list_workers(temp_store):
         assert workers[i]["created_at"] >= workers[i + 1]["created_at"]
 
 
-def test_list_workers_with_limit(temp_store):
+def test_list_commis_with_limit(temp_store):
     """Test listing workers with limit."""
     # Create multiple workers
     for i in range(5):
         temp_store.create_worker(f"Task {i}")
 
     # List with limit
-    workers = temp_store.list_workers(limit=3)
+    workers = temp_store.list_commis(limit=3)
     assert len(workers) == 3
 
 
-def test_list_workers_filter_by_status(temp_store):
+def test_list_commis_filter_by_status(temp_store):
     """Test filtering workers by status."""
     # Create workers with different statuses
     worker1 = temp_store.create_worker("Task 1")
@@ -281,22 +281,22 @@ def test_list_workers_filter_by_status(temp_store):
     temp_store.start_worker(worker3)
 
     # Filter by success
-    success_workers = temp_store.list_workers(status="success")
+    success_workers = temp_store.list_commis(status="success")
     assert len(success_workers) == 1
     assert success_workers[0]["worker_id"] == worker1
 
     # Filter by failed
-    failed_workers = temp_store.list_workers(status="failed")
+    failed_workers = temp_store.list_commis(status="failed")
     assert len(failed_workers) == 1
     assert failed_workers[0]["worker_id"] == worker2
 
     # Filter by running
-    running_workers = temp_store.list_workers(status="running")
+    running_workers = temp_store.list_commis(status="running")
     assert len(running_workers) == 1
     assert running_workers[0]["worker_id"] == worker3
 
 
-def test_list_workers_filter_by_since(temp_store):
+def test_list_commis_filter_by_since(temp_store):
     """Test filtering workers by creation time."""
     # Create workers at different times
     worker1 = temp_store.create_worker("Task 1")
@@ -309,7 +309,7 @@ def test_list_workers_filter_by_since(temp_store):
     worker3 = temp_store.create_worker("Task 3")
 
     # Filter by since
-    recent_workers = temp_store.list_workers(since=cutoff_time)
+    recent_workers = temp_store.list_commis(since=cutoff_time)
     worker_ids = [w["worker_id"] for w in recent_workers]
 
     # Should only include worker2 and worker3 (created after cutoff)
@@ -481,7 +481,7 @@ def test_multiple_stores_same_path():
         assert result == "Result from store1"
 
         # List workers from second instance
-        workers = store2.list_workers()
+        workers = store2.list_commis()
         assert len(workers) == 1
         assert workers[0]["worker_id"] == worker_id
 

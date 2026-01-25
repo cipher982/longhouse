@@ -96,7 +96,7 @@ When a user asks for something, you can:
 2. Use tools to help accomplish tasks
 3. Spawn workers for complex tasks that need tool access
 
-When you call spawn_worker, it will create a background worker to handle the task.
+When you call spawn_commis, it will create a background worker to handle the task.
 Once the worker completes, you'll receive the result and should synthesize it for the user.
 
 IMPORTANT: When you see a tool result that says "Worker job N completed:", that means
@@ -104,17 +104,17 @@ the task is DONE. You should summarize the result for the user, NOT spawn anothe
 
     user_message = "check disk space on cube real quick"
 
-    # The AI's first response - called spawn_worker
+    # The AI's first response - called spawn_commis
     first_ai_response = AIMessage(
         content="",
         tool_calls=[{
             "id": "call_abc123",
-            "name": "spawn_worker",
+            "name": "spawn_commis",
             "args": {"task": "Check disk space on cube"}
         }]
     )
 
-    # The tool result from spawn_worker AFTER worker completed
+    # The tool result from spawn_commis AFTER worker completed
     # This is what interrupt() returns after Command(resume=worker_result)
     tool_result = ToolMessage(
         content="""Worker job 41 completed:
@@ -128,7 +128,7 @@ Details:
   - /home: 42GB
   - /var/log: 8GB""",
         tool_call_id="call_abc123",
-        name="spawn_worker"
+        name="spawn_commis"
     )
 
     # This is what the LLM should see on resume
@@ -159,10 +159,10 @@ Possible causes for the double-spawn bug:
    requires for function calling.
 
 4. REPLAY BEHAVIOR: LangGraph might be replaying the tool calls from checkpoint
-   before continuing, causing spawn_worker to be called twice.
+   before continuing, causing spawn_commis to be called twice.
 
 5. PROMPT CONFUSION: The LLM might see "check disk space on cube" in the user
-   message but "Check disk space on cube" (capitalized) in the spawn_worker args,
+   message but "Check disk space on cube" (capitalized) in the spawn_commis args,
    and decide the original request wasn't fully addressed.
 
 TO DIAGNOSE:

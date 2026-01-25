@@ -1,7 +1,7 @@
-"""Tests for the async inbox model (non-blocking spawn_worker, wait_for_worker, acknowledgements).
+"""Tests for the async inbox model (non-blocking spawn_commis, wait_for_commis, acknowledgements).
 
 These tests verify the critical bugs fixed in the async inbox model implementation:
-1. wait_for_worker properly raises AgentInterrupted (not swallowed by asyncio.gather)
+1. wait_for_commis properly raises AgentInterrupted (not swallowed by asyncio.gather)
 2. pending_tool_call_id is used for resume before falling back to WorkerJob lookup
 3. Inbox acknowledgements are only committed after system message is persisted
 """
@@ -25,14 +25,14 @@ def temp_artifact_path(monkeypatch):
 
 
 class TestWaitForWorkerInterrupt:
-    """Tests that wait_for_worker properly propagates AgentInterrupted."""
+    """Tests that wait_for_commis properly propagates AgentInterrupted."""
 
     @pytest.mark.asyncio
-    async def test_wait_for_worker_raises_interrupt_for_running_job(self, db_session, test_user):
-        """wait_for_worker should raise AgentInterrupted when job is still running."""
+    async def test_wait_for_commis_raises_interrupt_for_running_job(self, db_session, test_user):
+        """wait_for_commis should raise AgentInterrupted when job is still running."""
         from zerg.models.models import WorkerJob
         from zerg.managers.agent_runner import AgentInterrupted
-        from zerg.tools.builtin.supervisor_tools import wait_for_worker_async
+        from zerg.tools.builtin.supervisor_tools import wait_for_commis_async
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
 
@@ -54,23 +54,23 @@ class TestWaitForWorkerInterrupt:
         set_credential_resolver(resolver)
 
         try:
-            # Call wait_for_worker - should raise AgentInterrupted
+            # Call wait_for_commis - should raise AgentInterrupted
             with pytest.raises(AgentInterrupted) as exc_info:
-                await wait_for_worker_async(str(job.id), _tool_call_id="test-tool-call-123")
+                await wait_for_commis_async(str(job.id), _tool_call_id="test-tool-call-123")
 
             # Verify interrupt payload
             interrupt_value = exc_info.value.interrupt_value
-            assert interrupt_value["type"] == "wait_for_worker"
+            assert interrupt_value["type"] == "wait_for_commis"
             assert interrupt_value["job_id"] == job.id
             assert interrupt_value["tool_call_id"] == "test-tool-call-123"
         finally:
             set_credential_resolver(None)
 
     @pytest.mark.asyncio
-    async def test_wait_for_worker_returns_result_for_completed_job(self, db_session, test_user, temp_artifact_path):
-        """wait_for_worker should return result immediately for completed jobs."""
+    async def test_wait_for_commis_returns_result_for_completed_job(self, db_session, test_user, temp_artifact_path):
+        """wait_for_commis should return result immediately for completed jobs."""
         from zerg.models.models import WorkerJob
-        from zerg.tools.builtin.supervisor_tools import wait_for_worker_async
+        from zerg.tools.builtin.supervisor_tools import wait_for_commis_async
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
         from zerg.services.worker_artifact_store import WorkerArtifactStore
@@ -90,7 +90,6 @@ class TestWaitForWorkerInterrupt:
             task="Compute the answer",
             model=TEST_WORKER_MODEL,
             status="success",
-            acknowledged=False,
             worker_id=worker_id,
             created_at=datetime.now(timezone.utc),
             started_at=datetime.now(timezone.utc),
@@ -105,22 +104,18 @@ class TestWaitForWorkerInterrupt:
         set_credential_resolver(resolver)
 
         try:
-            # Call wait_for_worker - should return immediately
-            result = await wait_for_worker_async(str(job.id))
+            # Call wait_for_commis - should return immediately
+            result = await wait_for_commis_async(str(job.id))
 
             # Should NOT raise, should return the result
             assert f"job {job.id} completed" in result.lower()
             assert "Computed the answer" in result or "42" in result
-
-            # Completed job should be acknowledged to avoid inbox replays
-            db_session.refresh(job)
-            assert job.acknowledged is True
         finally:
             set_credential_resolver(None)
 
     @pytest.mark.asyncio
-    async def test_wait_for_worker_interrupt_propagates_through_gather(self, db_session, test_user):
-        """AgentInterrupted from wait_for_worker should propagate through asyncio.gather."""
+    async def test_wait_for_commis_interrupt_propagates_through_gather(self, db_session, test_user):
+        """AgentInterrupted from wait_for_commis should propagate through asyncio.gather."""
         from zerg.models.models import WorkerJob
         from zerg.managers.agent_runner import AgentInterrupted
         from zerg.connectors.context import set_credential_resolver
@@ -144,11 +139,11 @@ class TestWaitForWorkerInterrupt:
 
         try:
             # Simulate the tool execution path in supervisor_react_engine
-            from zerg.tools.builtin.supervisor_tools import wait_for_worker_async
+            from zerg.tools.builtin.supervisor_tools import wait_for_commis_async
             import asyncio
 
             async def execute_tool():
-                return await wait_for_worker_async(str(job.id), _tool_call_id="gather-test-123")
+                return await wait_for_commis_async(str(job.id), _tool_call_id="gather-test-123")
 
             # asyncio.gather with return_exceptions=True converts exceptions to results
             results = await asyncio.gather(execute_tool(), return_exceptions=True)
@@ -160,7 +155,7 @@ class TestWaitForWorkerInterrupt:
             # The fix in supervisor_react_engine checks for this and re-raises it
             # Let's verify the interrupt value is correct
             interrupt_value = results[0].interrupt_value
-            assert interrupt_value["type"] == "wait_for_worker"
+            assert interrupt_value["type"] == "wait_for_commis"
             assert interrupt_value["job_id"] == job.id
         finally:
             set_credential_resolver(None)
@@ -203,7 +198,7 @@ class TestPendingToolCallIdResume:
             trigger=RunTrigger.API,
             started_at=datetime.now(timezone.utc).replace(tzinfo=None),
             model=TEST_MODEL,
-            pending_tool_call_id="wait-for-worker-tool-call-456",  # From wait_for_worker
+            pending_tool_call_id="wait-for-worker-tool-call-456",  # From wait_for_commis
         )
         db_session.add(run)
         db_session.commit()
@@ -340,38 +335,13 @@ class TestInboxAcknowledgementAtomicity:
         assert "RUNNING" in context
         assert running_job.id not in jobs_to_ack, "Running jobs should not be acknowledged"
 
-    def test_cancelled_jobs_in_inbox_and_ack_list(self, db_session, test_user):
-        """Cancelled jobs should appear in inbox and be acknowledged."""
-        from zerg.models.models import WorkerJob
-        from zerg.services.supervisor_service import SupervisorService
-
-        cancelled_job = WorkerJob(
-            owner_id=test_user.id,
-            task="Cancelled task",
-            model=TEST_WORKER_MODEL,
-            status="cancelled",
-            acknowledged=False,
-            created_at=datetime.now(timezone.utc),
-            finished_at=datetime.now(timezone.utc),
-        )
-        db_session.add(cancelled_job)
-        db_session.commit()
-        db_session.refresh(cancelled_job)
-
-        service = SupervisorService(db_session)
-        context, jobs_to_ack = service._build_recent_worker_context(test_user.id)
-
-        assert context is not None
-        assert "CANCELLED" in context
-        assert cancelled_job.id in jobs_to_ack
-
 
 class TestAsyncInboxModelIntegration:
     """Integration tests for the complete async inbox model flow."""
 
     @pytest.mark.asyncio
-    async def test_spawn_worker_non_blocking(self, db_session, test_user):
-        """spawn_worker should return immediately (not raise AgentInterrupted)."""
+    async def test_spawn_commis_non_blocking(self, db_session, test_user):
+        """spawn_commis should return immediately (not raise AgentInterrupted)."""
         from zerg.models.models import WorkerJob
         from zerg.tools.builtin.supervisor_tools import spawn_standard_worker_async
         from zerg.connectors.context import set_credential_resolver
@@ -404,7 +374,7 @@ class TestAsyncInboxModelIntegration:
                     reasoning_effort="none",
                 )
 
-                # spawn_worker should return a string (not raise)
+                # spawn_commis should return a string (not raise)
                 result = await spawn_standard_worker_async(
                     task="Test async spawn",
                     model=TEST_WORKER_MODEL,
@@ -427,13 +397,13 @@ class TestAsyncInboxModelIntegration:
 
 
 class TestCancelWorker:
-    """Tests for the cancel_worker tool."""
+    """Tests for the cancel_commis tool."""
 
     @pytest.mark.asyncio
-    async def test_cancel_worker_sets_status_to_cancelled(self, db_session, test_user):
-        """cancel_worker should set job status to 'cancelled'."""
+    async def test_cancel_commis_sets_status_to_cancelled(self, db_session, test_user):
+        """cancel_commis should set job status to 'cancelled'."""
         from zerg.models.models import WorkerJob
-        from zerg.tools.builtin.supervisor_tools import cancel_worker_async
+        from zerg.tools.builtin.supervisor_tools import cancel_commis_async
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
 
@@ -455,7 +425,7 @@ class TestCancelWorker:
         set_credential_resolver(resolver)
 
         try:
-            result = await cancel_worker_async(str(job.id))
+            result = await cancel_commis_async(str(job.id))
 
             # Should return success message
             assert "cancelled" in result.lower()
@@ -470,9 +440,9 @@ class TestCancelWorker:
 
     @pytest.mark.asyncio
     async def test_cancel_already_completed_job_returns_error(self, db_session, test_user):
-        """cancel_worker should error for already completed jobs."""
+        """cancel_commis should error for already completed jobs."""
         from zerg.models.models import WorkerJob
-        from zerg.tools.builtin.supervisor_tools import cancel_worker_async
+        from zerg.tools.builtin.supervisor_tools import cancel_commis_async
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
 
@@ -494,7 +464,7 @@ class TestCancelWorker:
         set_credential_resolver(resolver)
 
         try:
-            result = await cancel_worker_async(str(job.id))
+            result = await cancel_commis_async(str(job.id))
 
             # Should indicate job is already complete
             assert "already" in result.lower() or "success" in result.lower()
@@ -507,13 +477,13 @@ class TestCancelWorker:
 
 
 class TestCheckWorkerStatus:
-    """Tests for the check_worker_status tool."""
+    """Tests for the check_commis_status tool."""
 
     @pytest.mark.asyncio
-    async def test_check_worker_status_specific_job(self, db_session, test_user):
-        """check_worker_status with job_id should return job details."""
+    async def test_check_commis_status_specific_job(self, db_session, test_user):
+        """check_commis_status with job_id should return job details."""
         from zerg.models.models import WorkerJob
-        from zerg.tools.builtin.supervisor_tools import check_worker_status_async
+        from zerg.tools.builtin.supervisor_tools import check_commis_status_async
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
 
@@ -535,7 +505,7 @@ class TestCheckWorkerStatus:
         set_credential_resolver(resolver)
 
         try:
-            result = await check_worker_status_async(str(job.id))
+            result = await check_commis_status_async(str(job.id))
 
             # Should include job details
             assert f"Job {job.id}" in result
@@ -546,10 +516,10 @@ class TestCheckWorkerStatus:
             set_credential_resolver(None)
 
     @pytest.mark.asyncio
-    async def test_check_worker_status_list_active(self, db_session, test_user):
-        """check_worker_status without job_id should list all active workers."""
+    async def test_check_commis_status_list_active(self, db_session, test_user):
+        """check_commis_status without job_id should list all active workers."""
         from zerg.models.models import WorkerJob
-        from zerg.tools.builtin.supervisor_tools import check_worker_status_async
+        from zerg.tools.builtin.supervisor_tools import check_commis_status_async
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
 
@@ -570,7 +540,7 @@ class TestCheckWorkerStatus:
         set_credential_resolver(resolver)
 
         try:
-            result = await check_worker_status_async(None)
+            result = await check_commis_status_async(None)
 
             # Should list active workers only
             assert "Active Workers" in result

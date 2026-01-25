@@ -1,16 +1,17 @@
-"""Supervisor tools for spawning and managing worker agents.
+"""Concierge tools for spawning and managing commis agents.
 
-This module provides tools that allow supervisor agents to delegate tasks to
-disposable worker agents, retrieve their results, and drill into their artifacts.
+This module provides tools that allow concierge agents to delegate tasks to
+disposable commis agents, retrieve their results, and drill into their artifacts.
 
-The supervisor/worker pattern enables complex delegation scenarios where a supervisor
-can spawn multiple workers for parallel execution or break down complex tasks.
+The concierge/commis pattern enables complex delegation scenarios where a concierge
+can spawn multiple commis for parallel execution or break down complex tasks.
 
-Worker execution flow (async inbox model):
-- spawn_worker() creates WorkerJob and returns immediately (non-blocking)
-- Worker runs in background via WorkerJobProcessor
-- Results surface in the supervisor inbox on the next turn
-- wait_for_worker() is the explicit opt-in blocking path (raises AgentInterrupted)
+Commis execution flow:
+- spawn_commis() creates WorkerJob and returns job info
+- Caller (supervisor_react_engine) raises AgentInterrupted to pause
+- Commis runs in background via WorkerJobProcessor
+- Commis completion triggers resume via worker_resume.py
+- Concierge resumes with commis result injected as tool response
 """
 
 import logging
@@ -355,7 +356,7 @@ async def list_workers_async(
     """List recent worker jobs with SUMMARIES ONLY.
 
     Returns compressed summaries for scanning. To get full details,
-    call read_worker_result(job_id).
+    call read_commis_result(job_id).
 
     This prevents context overflow when scanning 50+ workers.
 
@@ -418,7 +419,7 @@ async def list_workers_async(
             lines.append(f"- Job {job_id} [{job_status.upper()}]")
             lines.append(f"  {summary}\n")
 
-        lines.append("Use read_worker_result(job_id) for full details.")
+        lines.append("Use read_commis_result(job_id) for full details.")
         return "\n".join(lines)
 
     except Exception as e:
@@ -521,7 +522,7 @@ async def check_worker_status_async(job_id: str | None = None) -> str:
                 lines.append(f"  Finished: {job.finished_at.isoformat()}")
 
             if job.status in ["success", "failed"]:
-                lines.append(f"\nUse read_worker_result({job.id}) to get the full result.")
+                lines.append(f"\nUse read_commis_result({job.id}) to get the full result.")
 
             if job.error:
                 lines.append(f"\nError: {job.error[:200]}{'...' if len(job.error) > 200 else ''}")
@@ -550,7 +551,7 @@ async def check_worker_status_async(job_id: str | None = None) -> str:
                 lines.append(f"- Job {job.id} [{status_icon} {job.status.upper()}]")
                 lines.append(f"  {task_preview}\n")
 
-            lines.append("Use check_worker_status(job_id) for details on a specific worker.")
+            lines.append("Use check_commis_status(job_id) for details on a specific commis.")
             return "\n".join(lines)
 
     except ValueError:
@@ -676,28 +677,14 @@ async def wait_for_worker_async(
         if not job:
             return f"Error: Worker job {job_id} not found"
 
-        def _acknowledge_completed_job() -> None:
-            """Mark a completed job as acknowledged (best-effort)."""
-            if job.acknowledged:
-                return
-            job.acknowledged = True
-            try:
-                db.commit()
-            except Exception:
-                db.rollback()
-                logger.warning(f"Failed to acknowledge worker job {job.id}", exc_info=True)
-
         if job.status == "cancelled":
-            _acknowledge_completed_job()
             return f"Worker job {job_id} was cancelled."
 
         if job.status == "failed":
-            _acknowledge_completed_job()
             return f"Worker job {job_id} failed: {job.error or 'Unknown error'}"
 
         if job.status == "success":
             # Already complete - return result immediately
-            _acknowledge_completed_job()
             if job.worker_id:
                 try:
                     artifact_store = WorkerArtifactStore()
@@ -1222,40 +1209,40 @@ TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
         func=spawn_worker,
         coroutine=spawn_standard_worker_async,
-        name="spawn_worker",
-        description="Spawn a worker for server tasks, research, or investigations. "
-        "Workers can run commands on servers via runner_exec. "
-        "For repository/code tasks, use spawn_workspace_worker instead.",
+        name="spawn_commis",
+        description="Spawn a commis for server tasks, research, or investigations. "
+        "Commis can run commands on servers via runner_exec. "
+        "For repository/code tasks, use spawn_workspace_commis instead.",
     ),
     StructuredTool.from_function(
         func=spawn_workspace_worker,
         coroutine=spawn_workspace_worker_async,
-        name="spawn_workspace_worker",
-        description="Spawn a worker to work in a git repository. "
+        name="spawn_workspace_commis",
+        description="Spawn a commis to work in a git repository. "
         "Clones the repo, runs the agent in an isolated workspace, and captures any changes. "
         "Use this for: reading code, analyzing dependencies, making changes, running tests.",
     ),
     StructuredTool.from_function(
         func=list_workers,
         coroutine=list_workers_async,
-        name="list_workers",
-        description="List recent worker jobs with SUMMARIES ONLY. "
+        name="list_commis",
+        description="List recent commis jobs with SUMMARIES ONLY. "
         "Returns compressed summaries for quick scanning. "
-        "Use read_worker_result(job_id) to get full details. "
-        "This prevents context overflow when scanning 50+ workers.",
+        "Use read_commis_result(job_id) to get full details. "
+        "This prevents context overflow when scanning 50+ commis.",
     ),
     StructuredTool.from_function(
         func=read_worker_result,
         coroutine=read_worker_result_async,
-        name="read_worker_result",
-        description="Read the final result from a completed worker job. "
+        name="read_commis_result",
+        description="Read the final result from a completed commis job. "
         "Provide the job ID (integer) to get the natural language result text.",
     ),
     StructuredTool.from_function(
         func=get_worker_evidence,
         coroutine=get_worker_evidence_async,
-        name="get_worker_evidence",
-        description="Compile raw tool evidence for a worker job within a byte budget. "
+        name="get_commis_evidence",
+        description="Compile raw tool evidence for a commis job within a byte budget. "
         "Use this to dereference [EVIDENCE:...] markers when you need full artifact details.",
     ),
     StructuredTool.from_function(
@@ -1269,24 +1256,24 @@ TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
         func=read_worker_file,
         coroutine=read_worker_file_async,
-        name="read_worker_file",
-        description="Read a specific file from a worker job's artifacts. "
-        "Provide the job ID (integer) and file path to drill into worker details like "
+        name="read_commis_file",
+        description="Read a specific file from a commis job's artifacts. "
+        "Provide the job ID (integer) and file path to drill into commis details like "
         "tool outputs (tool_calls/*.txt), conversation history (thread.jsonl), or metadata (metadata.json).",
     ),
     StructuredTool.from_function(
         func=grep_workers,
         coroutine=grep_workers_async,
-        name="grep_workers",
-        description="Search across completed worker job artifacts for a text pattern. "
+        name="grep_commis",
+        description="Search across completed commis job artifacts for a text pattern. "
         "Performs case-insensitive search and returns matches with job IDs and context. "
         "Useful for finding jobs that encountered specific errors or outputs.",
     ),
     StructuredTool.from_function(
         func=get_worker_metadata,
         coroutine=get_worker_metadata_async,
-        name="get_worker_metadata",
-        description="Get detailed metadata about a worker job execution including "
+        name="get_commis_metadata",
+        description="Get detailed metadata about a commis job execution including "
         "task, status, timestamps, duration, and configuration. "
         "Provide the job ID (integer) to inspect job details.",
     ),
@@ -1294,24 +1281,24 @@ TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
         func=check_worker_status,
         coroutine=check_worker_status_async,
-        name="check_worker_status",
-        description="Check the status of a specific worker or list all active workers. "
-        "Pass job_id for a specific worker, or call without arguments to see all active workers. "
-        "Use this to monitor background workers without blocking.",
+        name="check_commis_status",
+        description="Check the status of a specific commis or list all active commis. "
+        "Pass job_id for a specific commis, or call without arguments to see all active commis. "
+        "Use this to monitor background commis without blocking.",
     ),
     StructuredTool.from_function(
         func=cancel_worker,
         coroutine=cancel_worker_async,
-        name="cancel_worker",
-        description="Cancel a running or queued worker job. "
-        "The worker will abort at its next checkpoint. "
+        name="cancel_commis",
+        description="Cancel a running or queued commis job. "
+        "The commis will abort at its next checkpoint. "
         "Use when a task is no longer needed or taking too long.",
     ),
     StructuredTool.from_function(
         func=wait_for_worker,
         coroutine=wait_for_worker_async,
-        name="wait_for_worker",
-        description="Wait for a specific worker to complete (blocking). "
+        name="wait_for_commis",
+        description="Wait for a specific commis to complete (blocking). "
         "Use sparingly - the async model is preferred. "
         "Only use when you need the result before proceeding.",
     ),
@@ -1360,3 +1347,12 @@ def get_supervisor_allowed_tools() -> list[str]:
         Sorted list of tool names (supervisor tools + utility tools)
     """
     return sorted(SUPERVISOR_TOOL_NAMES | SUPERVISOR_UTILITY_TOOLS)
+
+
+# ---------------------------------------------------------------------------
+# Aliases for new terminology (Phase 1 migration)
+# These allow code to import with new names while keeping internal names stable
+# ---------------------------------------------------------------------------
+spawn_commis_async = spawn_standard_worker_async
+spawn_workspace_commis_async = spawn_workspace_worker_async
+wait_for_commis_async = wait_for_worker_async

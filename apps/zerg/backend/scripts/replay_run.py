@@ -66,7 +66,7 @@ logger = logging.getLogger(__name__)
 class ReplayStats:
     """Track replay statistics for comparison."""
 
-    spawn_worker_calls: int = 0
+    spawn_commis_calls: int = 0
     cache_hits: int = 0
     cache_misses: int = 0
     blocked_tool_calls: int = 0
@@ -96,7 +96,7 @@ def normalize_datetime(dt: datetime | None) -> datetime | None:
 
 
 class MockedSpawnWorker:
-    """Mock spawn_worker that returns cached results from original run."""
+    """Mock spawn_commis that returns cached results from original run."""
 
     def __init__(self, db: Session, original_run_id: int, stats: ReplayStats, *, match_threshold: float = 0.7):
         self.db = db
@@ -163,9 +163,9 @@ class MockedSpawnWorker:
         timeout_seconds: float = 300.0,
         decision_mode: str = "heuristic",
     ) -> str:
-        """Mock spawn_worker - returns cached results instead of spawning real workers."""
-        self.stats.spawn_worker_calls += 1
-        self.stats.tool_call_names.append("spawn_worker")
+        """Mock spawn_commis - returns cached results instead of spawning real workers."""
+        self.stats.spawn_commis_calls += 1
+        self.stats.tool_call_names.append("spawn_commis")
 
         matching_job = self._find_matching_job(task)
 
@@ -178,7 +178,7 @@ class MockedSpawnWorker:
             )
 
         # Mark the matched cached job as used to avoid reusing a single cached job
-        # for multiple spawn_worker calls in the replay.
+        # for multiple spawn_commis calls in the replay.
         self.used_job_ids.add(int(matching_job["job_id"]))
         self.stats.cache_hits += 1
         job_id = matching_job["job_id"]
@@ -191,7 +191,7 @@ class MockedSpawnWorker:
                 f"[REPLAY MOCK] Worker job {job_id} (cached) queued.\n"
                 f"Task: {task[:100]}\n"
                 f"Original status: {status}\n\n"
-                f"Use read_worker_result('{job_id}') to get results."
+                f"Use read_commis_result('{job_id}') to get results."
             )
 
         # Wait mode: return actual cached result
@@ -216,11 +216,11 @@ class MockedSpawnWorker:
         timeout_seconds: float = 300.0,
         decision_mode: str = "heuristic",
     ) -> str:
-        """Sync wrapper for the mock (matches spawn_worker signature)."""
+        """Sync wrapper for the mock (matches spawn_commis signature)."""
         try:
             asyncio.get_running_loop()
             raise RuntimeError(
-                "spawn_worker sync wrapper was called while an event loop is already running. "
+                "spawn_commis sync wrapper was called while an event loop is already running. "
                 "This usually indicates the tool was executed synchronously in an async context."
             )
         except RuntimeError as e:
@@ -251,7 +251,7 @@ class ToolMocker:
         """Initialize the tool mocker.
 
         Args:
-            tool_name: Name of the tool to mock (e.g., "spawn_worker")
+            tool_name: Name of the tool to mock (e.g., "spawn_commis")
             mock_async: Async function to replace the tool's coroutine
             mock_sync: Sync function to replace the tool's func
         """
@@ -292,11 +292,11 @@ class ToolMocker:
 
 SAFE_DEFAULT_TOOLS = {
     # Supervisor/worker inspection (read-only)
-    "list_workers",
-    "read_worker_result",
-    "read_worker_file",
-    "grep_workers",
-    "get_worker_metadata",
+    "list_commis",
+    "read_commis_result",
+    "read_commis_file",
+    "grep_commis",
+    "get_commis_metadata",
     "get_current_time",
     # Runner inspection (read-only)
     "runner_list",
@@ -452,12 +452,12 @@ def print_comparison(original: dict, replay: dict, stats: ReplayStats):
 
     # Tool calls
     print(f"{'Tool Calls (all)':<25} {original['tool_calls']:<20} {replay['tool_calls']:<20}")
-    print(f"{'  spawn_worker (mocked)':<25} {original['workers']:<20} {stats.spawn_worker_calls:<20}")
+    print(f"{'  spawn_commis (mocked)':<25} {original['workers']:<20} {stats.spawn_commis_calls:<20}")
     if stats.blocked_tool_calls:
         print(f"{'  blocked tools':<25} {'-':<20} {stats.blocked_tool_calls:<20}")
 
     # Workers
-    print(f"{'Workers Spawned':<25} {original['workers']:<20} {stats.spawn_worker_calls:<20}")
+    print(f"{'Workers Spawned':<25} {original['workers']:<20} {stats.spawn_commis_calls:<20}")
     print(f"{'  Cache Hits':<25} {'-':<20} {stats.cache_hits:<20}")
     print(f"{'  Cache Misses':<25} {'-':<20} {stats.cache_misses:<20}")
 
@@ -605,7 +605,7 @@ async def replay_run(
     blocked_tools: list[str] = []
     if not allow_all_tools:
         for tool_name in allowed_tool_names:
-            if tool_name == "spawn_worker":
+            if tool_name == "spawn_commis":
                 continue
             if tool_name in SAFE_DEFAULT_TOOLS:
                 continue
@@ -631,7 +631,7 @@ async def replay_run(
         else:
             context_note = f" ({context_count})"
 
-        print("\n[DRY RUN] Would replay with mocked spawn_worker in an isolated replay thread")
+        print("\n[DRY RUN] Would replay with mocked spawn_commis in an isolated replay thread")
         print(f"Context messages to copy (non-system):{context_note}")
         print(f"Tool policy: {'ALLOW ALL' if allow_all_tools else 'SAFE DEFAULT'}")
         if blocked_tools:
@@ -676,7 +676,7 @@ async def replay_run(
         processed=False,
     )
 
-    print("\n--- STARTING REPLAY (isolated thread + mocked spawn_worker) ---\n")
+    print("\n--- STARTING REPLAY (isolated thread + mocked spawn_commis) ---\n")
     print(f"Replay run:   #{replay_run_row.id} (thread {replay_thread.id})")
     print(f"Context size: {copied_count} message(s) copied from original thread history")
     if blocked_tools:
@@ -690,8 +690,8 @@ async def replay_run(
     start_time = datetime.now(timezone.utc)
 
     with ExitStack() as stack:
-        # Patch spawn_worker tool directly on the StructuredTool instance
-        stack.enter_context(ToolMocker("spawn_worker", mock_spawn, mock_spawn.sync_wrapper))
+        # Patch spawn_commis tool directly on the StructuredTool instance
+        stack.enter_context(ToolMocker("spawn_commis", mock_spawn, mock_spawn.sync_wrapper))
 
         # Optionally block side-effect tools for safety
         for tool_name in blocked_tools:

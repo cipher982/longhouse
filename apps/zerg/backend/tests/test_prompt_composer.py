@@ -358,7 +358,7 @@ class TestBuildSupervisorPrompt:
 
         # Check base template content is preserved
         assert "Supervisor" in prompt
-        assert "spawn_worker" in prompt
+        assert "spawn_commis" in prompt
         assert "Your Role" in prompt
 
     def test_build_supervisor_prompt_empty_context(self):
@@ -374,7 +374,7 @@ class TestBuildSupervisorPrompt:
 
         # Base template should still be present
         assert "Supervisor" in prompt
-        assert "spawn_worker" in prompt
+        assert "spawn_commis" in prompt
 
     def test_build_supervisor_prompt_contains_required_sections(self):
         """Test that prompt contains all required sections."""

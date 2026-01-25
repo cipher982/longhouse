@@ -223,20 +223,20 @@ class TestWorkerSpawning:
             monkeypatch.setenv("SWARMLET_DATA_PATH", tmpdir)
             yield tmpdir
 
-    def test_spawn_worker_creates_job(self, db_session, test_user, temp_artifact_path):
-        """Test that spawn_worker tool creates a WorkerJob."""
+    def test_spawn_commis_creates_job(self, db_session, test_user, temp_artifact_path):
+        """Test that spawn_commis tool creates a WorkerJob."""
         from tests.conftest import TEST_WORKER_MODEL
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
         from zerg.models.models import WorkerJob
-        from zerg.tools.builtin.supervisor_tools import spawn_worker
+        from zerg.tools.builtin.supervisor_tools import spawn_commis
 
         # Set up credential context
         resolver = CredentialResolver(agent_id=1, db=db_session, owner_id=test_user.id)
         token = set_credential_resolver(resolver)
 
         try:
-            result = spawn_worker(
+            result = spawn_commis(
                 task="Check disk usage on cube",
                 model=TEST_WORKER_MODEL,
             )

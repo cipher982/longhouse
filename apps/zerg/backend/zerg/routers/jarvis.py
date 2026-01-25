@@ -222,7 +222,7 @@ class WorkerToolInfo(BaseModel):
 
 
 class WorkerInfo(BaseModel):
-    """Worker spawned by spawn_worker tool."""
+    """Worker spawned by spawn_commis tool."""
 
     job_id: int
     task: str
@@ -238,7 +238,7 @@ class ToolCallInfo(BaseModel):
     tool_name: str
     args: Optional[dict] = None
     result: Optional[str] = None
-    # For spawn_worker tools, includes worker activity
+    # For spawn_commis tools, includes worker activity
     worker: Optional[WorkerInfo] = None
 
 
@@ -260,7 +260,7 @@ class JarvisHistoryResponse(BaseModel):
 
 
 def _fetch_worker_activity(db: Session, agent_id: int, tool_call_ids: list[str]) -> dict[str, dict]:
-    """Fetch worker activity for spawn_worker tool calls.
+    """Fetch worker activity for spawn_commis tool calls.
 
     Queries AgentRunEvent to build a complete picture of worker execution:
     - worker_spawned: task, job_id
@@ -272,7 +272,7 @@ def _fetch_worker_activity(db: Session, agent_id: int, tool_call_ids: list[str])
     Args:
         db: Database session
         agent_id: Supervisor agent ID (to filter runs)
-        tool_call_ids: List of spawn_worker tool_call_ids to look up
+        tool_call_ids: List of spawn_commis tool_call_ids to look up
 
     Returns:
         Dict mapping tool_call_id -> worker activity dict with:
@@ -313,7 +313,7 @@ def _fetch_worker_activity(db: Session, agent_id: int, tool_call_ids: list[str])
 
     # Build job_id -> worker activity from worker events
     job_activity: dict[int, dict] = {}
-    # Map tool_call_id -> worker activity (for spawn_worker history)
+    # Map tool_call_id -> worker activity (for spawn_commis history)
     result: dict[str, dict] = {}
     for e in events:
         payload = e.payload or {}
@@ -375,7 +375,7 @@ def _fetch_worker_activity(db: Session, agent_id: int, tool_call_ids: list[str])
         pending_tool_call_ids: deque[str] = deque()
         for e in run_events:
             payload = e.payload or {}
-            if e.event_type == "supervisor_tool_started" and payload.get("tool_name") == "spawn_worker":
+            if e.event_type == "supervisor_tool_started" and payload.get("tool_name") == "spawn_commis":
                 tc_id = payload.get("tool_call_id")
                 if tc_id in tool_call_ids and tc_id not in result:
                     pending_tool_call_ids.append(tc_id)
@@ -439,18 +439,18 @@ def jarvis_history(
     # Get paginated messages
     messages = query.offset(offset).limit(limit).all()
 
-    # Collect all tool_call_ids that are spawn_worker to batch-fetch worker activity
-    spawn_worker_tool_call_ids = []
+    # Collect all tool_call_ids that are spawn_commis to batch-fetch worker activity
+    spawn_commis_tool_call_ids = []
     for msg in messages:
         if msg.role == "assistant" and msg.tool_calls:
             for tc in msg.tool_calls:
-                if tc.get("name") == "spawn_worker" and tc.get("id"):
-                    spawn_worker_tool_call_ids.append(tc["id"])
+                if tc.get("name") == "spawn_commis" and tc.get("id"):
+                    spawn_commis_tool_call_ids.append(tc["id"])
 
-    # Batch fetch worker activity for all spawn_worker tool calls
+    # Batch fetch worker activity for all spawn_commis tool calls
     worker_activity_map: dict[str, dict] = {}
-    if spawn_worker_tool_call_ids:
-        worker_activity_map = _fetch_worker_activity(db, agent.id, spawn_worker_tool_call_ids)
+    if spawn_commis_tool_call_ids:
+        worker_activity_map = _fetch_worker_activity(db, agent.id, spawn_commis_tool_call_ids)
 
     # Also need to find tool results from ToolMessages
     # Get all ToolMessages for this thread to map tool_call_id -> result
@@ -480,9 +480,9 @@ def jarvis_history(
                 tc_args = tc.get("args")
                 tc_result = tool_results_map.get(tc_id)
 
-                # For spawn_worker, include worker activity
+                # For spawn_commis, include worker activity
                 worker_info = None
-                if tc_name == "spawn_worker" and tc_id in worker_activity_map:
+                if tc_name == "spawn_commis" and tc_id in worker_activity_map:
                     wa = worker_activity_map[tc_id]
                     worker_info = WorkerInfo(
                         job_id=wa["job_id"],

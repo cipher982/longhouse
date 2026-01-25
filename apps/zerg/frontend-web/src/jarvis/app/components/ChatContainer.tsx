@@ -158,7 +158,7 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
   // Check if any workers are actively running (for hiding typing dots)
   const hasActiveWorkers = useMemo(() => {
     return Array.from(toolState.tools.values()).some(tool => {
-      if (tool.toolName === 'spawn_worker') {
+      if (tool.toolName === 'spawn_commis') {
         const workerStatus = (tool.result as Record<string, unknown>)?.workerStatus
         return workerStatus === 'running' || workerStatus === 'spawned'
       }
@@ -170,7 +170,7 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
 
   // Render a tool event
   const renderTool = (tool: SupervisorToolCall) => {
-    if (tool.toolName === 'spawn_worker') {
+    if (tool.toolName === 'spawn_commis') {
       const isDeferred = supervisorToolStore.isDeferred(tool.runId)
       const workerStatus = (tool.result as Record<string, unknown>)?.workerStatus
       const isDetached = isDeferred && (workerStatus === 'running' || workerStatus === 'spawned')

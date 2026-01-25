@@ -38,7 +38,7 @@ export function ActivityStream({ runId, className }: ActivityStreamProps): React
 
   const hasActiveWork = tools.some(t => {
     if (t.status === 'running') return true;
-    if (t.toolName !== 'spawn_worker') return false;
+    if (t.toolName !== 'spawn_commis') return false;
 
     const workerStatus = (t.result as any)?.workerStatus;
     const nestedTools = (t.result as any)?.nestedTools || [];
@@ -58,8 +58,8 @@ export function ActivityStream({ runId, className }: ActivityStreamProps): React
   return (
     <div className={`activity-stream ${className || ''} ${hasActiveWork ? 'activity-stream--active' : ''}`}>
       {tools.map(tool => {
-        // Use WorkerToolCard for spawn_worker, regular ToolCard for everything else
-        if (tool.toolName === 'spawn_worker') {
+        // Use WorkerToolCard for spawn_commis, regular ToolCard for everything else
+        if (tool.toolName === 'spawn_commis') {
           // Mark worker as detached if it's still running while supervisor is deferred
           const workerStatus = (tool.result as any)?.workerStatus;
           const isDetached = isDeferred && (workerStatus === 'running' || workerStatus === 'spawned');

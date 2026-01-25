@@ -191,13 +191,13 @@ class TestSupervisorEmitter:
         )
 
         with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
-            await emitter.emit_tool_started("spawn_worker", "call_456", "task preview")
+            await emitter.emit_tool_started("spawn_commis", "call_456", "task preview")
 
             mock_emit.assert_called_once()
             call_kwargs = mock_emit.call_args.kwargs
             assert call_kwargs["event_type"] == "supervisor_tool_started"
             assert call_kwargs["payload"]["owner_id"] == 1
-            assert call_kwargs["payload"]["tool_name"] == "spawn_worker"
+            assert call_kwargs["payload"]["tool_name"] == "spawn_commis"
             assert call_kwargs["payload"]["trace_id"] == "12345678-1234-5678-1234-567812345678"
 
     @pytest.mark.asyncio
@@ -210,7 +210,7 @@ class TestSupervisorEmitter:
         )
 
         with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
-            await emitter.emit_tool_completed("spawn_worker", "call_456", 1000, "result preview")
+            await emitter.emit_tool_completed("spawn_commis", "call_456", 1000, "result preview")
 
             mock_emit.assert_called_once()
             call_kwargs = mock_emit.call_args.kwargs
@@ -227,7 +227,7 @@ class TestSupervisorEmitter:
         )
 
         with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
-            await emitter.emit_tool_failed("spawn_worker", "call_456", 100, "worker failed")
+            await emitter.emit_tool_failed("spawn_commis", "call_456", 100, "worker failed")
 
             mock_emit.assert_called_once()
             call_kwargs = mock_emit.call_args.kwargs

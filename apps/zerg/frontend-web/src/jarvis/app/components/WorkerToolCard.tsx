@@ -1,16 +1,16 @@
 /**
- * WorkerToolCard - Displays spawn_worker tool calls with nested worker progress
+ * CommisToolCard - Displays spawn_commis tool calls with nested commis progress
  *
- * Unified component that replaces the separate WorkerProgress panel.
+ * Unified component that replaces the separate CommisProgress panel.
  * Shows:
- * - Worker task description
- * - Nested tool calls within the worker
- * - Worker status (spawned/running/complete/failed)
- * - Worker summary when complete
+ * - Commis task description
+ * - Nested tool calls within the commis
+ * - Commis status (spawned/running/complete/failed)
+ * - Commis summary when complete
  *
  * Two display modes:
  * - Inline: Renders in the conversation flow (default)
- * - Sticky: Lifts to top of chat when worker becomes "detached" (after DEFERRED)
+ * - Sticky: Lifts to top of chat when commis becomes "detached" (after DEFERRED)
  */
 
 import React, { useState, useMemo } from 'react';
@@ -26,8 +26,8 @@ import './WorkerToolCard.css';
 
 interface WorkerToolCardProps {
   tool: SupervisorToolCall;
-  isDetached?: boolean; // True when worker continues after DEFERRED
-  detachedIndex?: number; // Index among detached workers for stacking offset
+  isDetached?: boolean; // True when commis continues after DEFERRED
+  detachedIndex?: number; // Index among detached commis for stacking offset
 }
 
 interface NestedToolCall {
@@ -88,9 +88,9 @@ function truncatePreview(text: string, maxLen: number): string {
 }
 
 /**
- * Worker status icon
+ * Commis status icon
  */
-function WorkerStatusIcon({ status }: { status: WorkerState['status'] }) {
+function CommisStatusIcon({ status }: { status: WorkerState['status'] }) {
   switch (status) {
     case 'spawned':
       return <span className="worker-icon-spawned"><CircleIcon width={14} height={14} /></span>;
@@ -264,7 +264,7 @@ export function WorkerToolCard({ tool, isDetached = false, detachedIndex = 0 }: 
 
   const taskDisplay = useMemo(() => {
     // Extract task from args
-    const task = (tool.args as any)?.task || 'Worker task';
+    const task = (tool.args as any)?.task || 'Commis task';
     return task.length > 60 ? task.slice(0, 57) + '...' : task;
   }, [tool.args]);
 
@@ -291,9 +291,9 @@ export function WorkerToolCard({ tool, isDetached = false, detachedIndex = 0 }: 
         onClick={() => setIsExpanded(!isExpanded)}
       >
         <span className="worker-tool-card__icon">
-          <WorkerStatusIcon status={workerState.status} />
+          <CommisStatusIcon status={workerState.status} />
         </span>
-        <span className="worker-tool-card__name">spawn_worker</span>
+        <span className="worker-tool-card__name">spawn_commis</span>
         <span className="worker-tool-card__task">{taskDisplay}</span>
         <span className="worker-tool-card__spacer" />
         {hasNestedTools && (

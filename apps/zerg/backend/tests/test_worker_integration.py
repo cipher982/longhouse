@@ -50,7 +50,7 @@ async def test_full_worker_lifecycle(db_session, test_user):
         assert len(saved_result) > 0
 
         # 5. Read thread messages
-        thread_content = artifact_store.read_worker_file(worker_id, "thread.jsonl")
+        thread_content = artifact_store.read_commis_file(worker_id, "thread.jsonl")
         assert len(thread_content) > 0
 
         # Parse and verify messages
@@ -71,7 +71,7 @@ async def test_full_worker_lifecycle(db_session, test_user):
         assert len(assistant_messages) >= 1
 
         # 6. List workers - should include our worker
-        workers = artifact_store.list_workers(limit=10)
+        workers = artifact_store.list_commis(limit=10)
         worker_ids = [w["worker_id"] for w in workers]
         assert worker_id in worker_ids
 
@@ -107,7 +107,7 @@ async def test_multiple_workers(db_session, test_user):
             worker_ids.append(result.worker_id)
 
         # Verify all workers are in index
-        workers = artifact_store.list_workers(limit=10)
+        workers = artifact_store.list_commis(limit=10)
         found_ids = [w["worker_id"] for w in workers]
 
         for worker_id in worker_ids:
@@ -159,7 +159,7 @@ async def test_worker_with_error(db_session, test_user):
 
 
 @pytest.mark.asyncio
-async def test_supervisor_can_read_worker_results(db_session, test_user):
+async def test_supervisor_can_read_commis_results(db_session, test_user):
     """Test that a supervisor can retrieve and analyze worker results."""
     with tempfile.TemporaryDirectory() as tmpdir:
         artifact_store = WorkerArtifactStore(base_path=tmpdir)
@@ -185,7 +185,7 @@ async def test_supervisor_can_read_worker_results(db_session, test_user):
                 completed_workers.append(result.worker_id)
 
         # Supervisor queries completed workers
-        workers = artifact_store.list_workers(status="success", limit=10)
+        workers = artifact_store.list_commis(status="success", limit=10)
         assert len(workers) >= len(completed_workers)
 
         # Supervisor reads each worker's result
@@ -198,7 +198,7 @@ async def test_supervisor_can_read_worker_results(db_session, test_user):
             assert result_text is not None
 
             # Supervisor can also drill into specific artifacts
-            thread_content = artifact_store.read_worker_file(worker_id, "thread.jsonl")
+            thread_content = artifact_store.read_commis_file(worker_id, "thread.jsonl")
             assert len(thread_content) > 0
 
 

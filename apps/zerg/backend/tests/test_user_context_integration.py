@@ -404,7 +404,7 @@ class TestContextEdgeCases:
 
         # Should still have base template
         assert "Supervisor" in prompt
-        assert "spawn_worker" in prompt
+        assert "spawn_commis" in prompt
 
     def test_none_context_produces_valid_prompt(self, db_session, test_user):
         """Test that None context is handled gracefully."""

@@ -243,7 +243,7 @@ class SupervisorService:
             self.db.query(WorkerJob)
             .filter(
                 WorkerJob.owner_id == owner_id,
-                WorkerJob.status.in_(["success", "failed", "cancelled"]),
+                WorkerJob.status.in_(["success", "failed"]),
                 WorkerJob.acknowledged == False,  # noqa: E712
             )
             .order_by(WorkerJob.created_at.desc())
@@ -257,7 +257,7 @@ class SupervisorService:
             self.db.query(WorkerJob)
             .filter(
                 WorkerJob.owner_id == owner_id,
-                WorkerJob.status.in_(["success", "failed", "cancelled"]),
+                WorkerJob.status.in_(["success", "failed"]),
                 WorkerJob.acknowledged == True,  # noqa: E712
                 WorkerJob.created_at >= cutoff,
             )
@@ -342,10 +342,10 @@ class SupervisorService:
         # Footer with usage hints
         lines.append("")
         if unacknowledged_jobs:
-            lines.append("Use `read_worker_result(job_id)` for full details.")
+            lines.append("Use `read_commis_result(job_id)` for full details.")
         if active_jobs:
-            lines.append("Use `check_worker_status()` to see worker progress.")
-            lines.append("Use `wait_for_worker(job_id)` if you need to block for a result.")
+            lines.append("Use `check_commis_status()` to see commis progress.")
+            lines.append("Use `wait_for_commis(job_id)` if you need to block for a result.")
 
         return "\n".join(lines), jobs_to_acknowledge
 

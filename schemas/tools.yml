@@ -30,9 +30,9 @@ components:
         - get_current_location
         - get_current_time
         - get_whoop_data
-        - get_worker_evidence
+        - get_commis_evidence
         - get_tool_output
-        - get_worker_metadata
+        - get_commis_metadata
         - github_add_comment
         - github_create_issue
         - github_get_issue
@@ -40,7 +40,7 @@ components:
         - github_list_issues
         - github_list_pull_requests
         - github_list_repositories
-        - grep_workers
+        - grep_commis
         - http_request
         - jira_add_comment
         - jira_create_issue
@@ -56,7 +56,7 @@ components:
         - linear_list_teams
         - linear_update_issue
         - list_imessage_messages
-        - list_workers
+        - list_commis
         - math_eval
         - memory_delete
         - memory_ls
@@ -69,8 +69,8 @@ components:
         - notion_query_database
         - notion_search
         - notion_update_page
-        - read_worker_file
-        - read_worker_result
+        - read_commis_file
+        - read_commis_result
         - refresh_connector_status
         - runner_create_enroll_token
         - runner_exec
@@ -81,11 +81,11 @@ components:
         - send_imessage
         - send_slack_webhook
         - send_sms
-        - cancel_worker
-        - check_worker_status
-        - spawn_worker
-        - spawn_workspace_worker
-        - wait_for_worker
+        - cancel_commis
+        - check_commis_status
+        - spawn_commis
+        - spawn_workspace_commis
+        - wait_for_commis
         - ssh_exec
         - task_create
         - task_delete
@@ -192,11 +192,11 @@ components:
               const: datetime
             get_whoop_data:
               const: personal
-            get_worker_evidence:
+            get_commis_evidence:
               const: supervisor
             get_tool_output:
               const: supervisor
-            get_worker_metadata:
+            get_commis_metadata:
               const: supervisor
             github_add_comment:
               const: github
@@ -212,7 +212,7 @@ components:
               const: github
             github_list_repositories:
               const: github
-            grep_workers:
+            grep_commis:
               const: supervisor
             http_request:
               const: http
@@ -244,7 +244,7 @@ components:
               const: linear
             list_imessage_messages:
               const: imessage
-            list_workers:
+            list_commis:
               const: supervisor
             math_eval:
               const: math
@@ -270,9 +270,9 @@ components:
               const: notion
             notion_update_page:
               const: notion
-            read_worker_file:
+            read_commis_file:
               const: supervisor
-            read_worker_result:
+            read_commis_result:
               const: supervisor
             refresh_connector_status:
               const: connector
@@ -294,15 +294,15 @@ components:
               const: slack
             send_sms:
               const: sms
-            cancel_worker:
+            cancel_commis:
               const: supervisor
-            check_worker_status:
+            check_commis_status:
               const: supervisor
-            spawn_worker:
+            spawn_commis:
               const: supervisor
-            spawn_workspace_worker:
+            spawn_workspace_commis:
               const: supervisor
-            wait_for_worker:
+            wait_for_commis:
               const: supervisor
             ssh_exec:
               const: ssh
@@ -334,9 +334,9 @@ components:
             - get_current_location
             - get_current_time
             - get_whoop_data
-            - get_worker_evidence
+            - get_commis_evidence
             - get_tool_output
-            - get_worker_metadata
+            - get_commis_metadata
             - github_add_comment
             - github_create_issue
             - github_get_issue
@@ -344,7 +344,7 @@ components:
             - github_list_issues
             - github_list_pull_requests
             - github_list_repositories
-            - grep_workers
+            - grep_commis
             - http_request
             - jira_add_comment
             - jira_create_issue
@@ -360,7 +360,7 @@ components:
             - linear_list_teams
             - linear_update_issue
             - list_imessage_messages
-            - list_workers
+            - list_commis
             - math_eval
             - notion_append_blocks
             - notion_create_page
@@ -368,8 +368,8 @@ components:
             - notion_query_database
             - notion_search
             - notion_update_page
-            - read_worker_file
-            - read_worker_result
+            - read_commis_file
+            - read_commis_result
             - refresh_connector_status
             - runner_create_enroll_token
             - runner_exec
@@ -380,8 +380,8 @@ components:
             - send_imessage
             - send_slack_webhook
             - send_sms
-            - spawn_worker
-            - spawn_workspace_worker
+            - spawn_commis
+            - spawn_workspace_commis
             - ssh_exec
             - task_create
             - task_delete

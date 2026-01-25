@@ -219,7 +219,7 @@ function AgentTableRowComponent({
               className={clsx("run-btn", (isRunning || isPendingRun) && "disabled")}
               data-testid={`run-agent-${agent.id}`}
               disabled={isRunning || isPendingRun}
-              title={isRunning ? "Agent is already running" : "Run Agent"}
+              title={isRunning ? "Fiche is already running" : "Run Fiche"}
               onClick={(event) => onRunAgent(event, agent.id, agent.status)}
             >
               <PlayIcon />
@@ -227,7 +227,7 @@ function AgentTableRowComponent({
             <IconButton
               className="chat-btn"
               data-testid={`chat-agent-${agent.id}`}
-              title="Chat with Agent"
+              title="Chat with Fiche"
               onClick={(event) => onChatAgent(event, agent.id, agent.name)}
             >
               <MessageCircleIcon />
@@ -243,7 +243,7 @@ function AgentTableRowComponent({
             <IconButton
               className="delete-btn"
               data-testid={`delete-agent-${agent.id}`}
-              title="Delete Agent"
+              title="Delete Fiche"
               onClick={(event) => onDeleteAgent(event, agent.id, agent.name)}
             >
               <TrashIcon />

@@ -9,7 +9,7 @@ import "../styles/swarm-ops.css";
 type AttentionLevel = "auto" | "soft" | "needs" | "hard";
 type RunFilter = "all" | "attention" | "active" | "done";
 
-type JarvisRunSummary = {
+type CourseRunSummary = {
   id: number;
   agent_id: number;
   thread_id?: number;
@@ -28,7 +28,7 @@ type JarvisRunSummary = {
   completed_at?: string | null;
 };
 
-type RunWithAttention = JarvisRunSummary & { attention: AttentionLevel };
+type RunWithAttention = CourseRunSummary & { attention: AttentionLevel };
 
 type RunEvent = {
   id: number;
@@ -93,7 +93,7 @@ function formatRelativeTime(timestamp: string): string {
   return `${diffDays}d ago`;
 }
 
-function classifyAttention(run: JarvisRunSummary): AttentionLevel {
+function classifyAttention(run: CourseRunSummary): AttentionLevel {
   const status = (run.status || "").toLowerCase();
   const signalText = (run.signal || run.summary || "").toLowerCase();
 
@@ -151,7 +151,7 @@ export default function SwarmOpsPage() {
 
   const runsQuery = useQuery({
     queryKey: ["swarm-ops", "runs", RUN_LIMIT],
-    queryFn: () => request<JarvisRunSummary[]>(`/jarvis/runs?limit=${RUN_LIMIT}`),
+    queryFn: () => request<CourseRunSummary[]>(`/jarvis/runs?limit=${RUN_LIMIT}`),
     refetchInterval: 5000,
   });
 
@@ -173,7 +173,7 @@ export default function SwarmOpsPage() {
 
     const seedScenario = async () => {
       try {
-        await request(`/scenarios/seed`, {
+        await request(`/admin/seed-scenario`, {
           method: "POST",
           body: JSON.stringify({ name: demoScenario, clean: true }),
         });
@@ -270,7 +270,7 @@ export default function SwarmOpsPage() {
     return (
       <div className="swarm-ops-loading">
         <Spinner size="lg" />
-        <span>Loading swarm activity...</span>
+        <span>Loading course activity...</span>
       </div>
     );
   }
@@ -280,7 +280,7 @@ export default function SwarmOpsPage() {
       <div className="swarm-ops-loading">
         <EmptyState
           variant="error"
-          title="Failed to load runs"
+          title="Failed to load courses"
           description={runsQuery.error instanceof Error ? runsQuery.error.message : "Unknown error"}
         />
       </div>
@@ -341,22 +341,22 @@ export default function SwarmOpsPage() {
             <div className="swarm-ops-summary-value">{attentionCounts.active}</div>
           </Card>
           <Card className="swarm-ops-summary-card">
-            <div className="swarm-ops-summary-label">Total runs</div>
+            <div className="swarm-ops-summary-label">Total courses</div>
             <div className="swarm-ops-summary-value">{attentionCounts.total}</div>
           </Card>
         </div>
 
         {runs.length === 0 ? (
           <EmptyState
-            title="No runs yet"
-            description="Kick off a task in Jarvis and it will show up here for triage."
+            title="No courses yet"
+            description="Kick off a task with the Concierge and it will show up here for triage."
           />
         ) : (
           <div className="swarm-ops-layout">
             <div className="swarm-ops-list">
               <div className="swarm-ops-list-header">
                 <div>
-                  <div className="swarm-ops-list-title">Run queue</div>
+                  <div className="swarm-ops-list-title">Course queue</div>
                   <div className="swarm-ops-list-subtitle">Sorted by urgency, newest first</div>
                 </div>
                 <div className="swarm-ops-list-count">{visibleRuns.length} shown</div>
@@ -416,7 +416,7 @@ export default function SwarmOpsPage() {
                     <div>
                       <div className="swarm-ops-detail-title">{selectedRun.agent_name}</div>
                       <div className="swarm-ops-detail-subtitle">
-                        Run #{selectedRun.id} · {selectedRun.status} · {formatRelativeTime(selectedRun.created_at)}
+                        Course #{selectedRun.id} · {selectedRun.status} · {formatRelativeTime(selectedRun.created_at)}
                       </div>
                     </div>
                     <span className={clsx("swarm-ops-attention-pill", `swarm-ops-attention-pill--${selectedRun.attention}`)}>
@@ -510,8 +510,8 @@ export default function SwarmOpsPage() {
               ) : (
                 <Card className="swarm-ops-detail-card swarm-ops-detail-empty">
                   <Card.Body>
-                    <div className="swarm-ops-detail-title">No run selected</div>
-                    <p className="swarm-ops-detail-summary">Pick a run from the left to inspect details.</p>
+                    <div className="swarm-ops-detail-title">No course selected</div>
+                    <p className="swarm-ops-detail-summary">Pick a course from the left to inspect details.</p>
                   </Card.Body>
                 </Card>
               )}

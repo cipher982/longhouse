@@ -47,7 +47,7 @@ TEST_CASES = [
         expected_behavior={
             "max_tool_calls": 1,
             "max_tokens": 10000,
-            "should_spawn_worker": True,
+            "should_spawn_commis": True,
             "worker_should_use_df": True,
             "keywords_in_result": ["disk", "%", "GB"],
         },
@@ -60,7 +60,7 @@ TEST_CASES = [
         expected_behavior={
             "max_tool_calls": 1,
             "max_tokens": 10000,
-            "should_spawn_worker": True,
+            "should_spawn_commis": True,
             "worker_should_use_free": True,
             "keywords_in_result": ["memory", "GB"],
         },
@@ -73,7 +73,7 @@ TEST_CASES = [
         expected_behavior={
             "max_tool_calls": 1,
             "max_tokens": 10000,
-            "should_spawn_worker": True,
+            "should_spawn_commis": True,
             "keywords_in_result": ["container", "docker"],
         },
         category="simple",
@@ -85,7 +85,7 @@ TEST_CASES = [
         expected_behavior={
             "max_tool_calls": 3,  # df + du + docker system df acceptable
             "max_tokens": 20000,
-            "should_spawn_worker": True,
+            "should_spawn_commis": True,
             "keywords_in_result": ["disk", "GB", "cleanup"],
         },
         category="complex",
@@ -97,7 +97,7 @@ TEST_CASES = [
         expected_behavior={
             "max_tool_calls": 3,  # Should spawn 3 workers in parallel
             "max_tokens": 30000,
-            "should_spawn_worker": True,
+            "should_spawn_commis": True,
             "parallel_workers": 3,
             "keywords_in_result": ["cube", "clifford", "zerg"],
         },
@@ -108,9 +108,9 @@ TEST_CASES = [
         description="Follow-up question - should NOT spawn new worker",
         user_query="what did you find?",
         expected_behavior={
-            "max_tool_calls": 1,  # Should use read_worker_result
+            "max_tool_calls": 1,  # Should use read_commis_result
             "max_tokens": 5000,
-            "should_spawn_worker": False,
+            "should_spawn_commis": False,
             "should_query_past_workers": True,
         },
         category="simple",
@@ -214,15 +214,15 @@ def analyze_session_logs(logs: list[dict], test_case: TestCase) -> dict[str, Any
             )
 
     # Check if worker was spawned
-    if "should_spawn_worker" in expected:
+    if "should_spawn_commis" in expected:
         worker_spawned = any(log.get("worker_id") for log in logs)
-        if worker_spawned == expected["should_spawn_worker"]:
+        if worker_spawned == expected["should_spawn_commis"]:
             results["passed"].append(
-                f"Worker spawned: {worker_spawned} (expected: {expected['should_spawn_worker']})"
+                f"Worker spawned: {worker_spawned} (expected: {expected['should_spawn_commis']})"
             )
         else:
             results["failed"].append(
-                f"Worker spawned: {worker_spawned} (expected: {expected['should_spawn_worker']})"
+                f"Worker spawned: {worker_spawned} (expected: {expected['should_spawn_commis']})"
             )
 
     # Check for over-specification in supervisor's task delegation

@@ -54,10 +54,10 @@ class MockChatLLM(BaseChatModel):
         content = str(last_msg.content) if last_msg else ""
 
         if "TRIGGER_WORKER" in content:
-            # Emit spawn_worker tool call
+            # Emit spawn_commis tool call
             tool_call = {
                 "id": f"call_{uuid.uuid4().hex[:8]}",
-                "name": "spawn_worker",
+                "name": "spawn_commis",
                 "args": {"task": "Test worker task", "model": "gpt-mock", "wait": False},
             }
             ai_message = AIMessage(content="Spawning worker...", tool_calls=[tool_call])

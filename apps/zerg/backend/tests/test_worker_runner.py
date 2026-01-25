@@ -333,11 +333,11 @@ async def test_worker_artifacts_readable(worker_runner, temp_store, db_session, 
     assert saved_result is not None
 
     # Read thread messages
-    thread_content = temp_store.read_worker_file(worker_id, "thread.jsonl")
+    thread_content = temp_store.read_commis_file(worker_id, "thread.jsonl")
     assert len(thread_content) > 0
 
     # List should include this worker
-    workers = temp_store.list_workers(limit=10)
+    workers = temp_store.list_commis(limit=10)
     worker_ids = [w["worker_id"] for w in workers]
     assert worker_id in worker_ids
 

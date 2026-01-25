@@ -83,7 +83,7 @@ class TestEvidenceMountingLLM:
 
         messages = [
             HumanMessage(content="Test message"),
-            ToolMessage(content="[EVIDENCE:run_id=1,job_id=2,worker_id=abc]", tool_call_id="123", name="spawn_worker"),
+            ToolMessage(content="[EVIDENCE:run_id=1,job_id=2,worker_id=abc]", tool_call_id="123", name="spawn_commis"),
         ]
 
         result = await wrapper.ainvoke(messages)
@@ -103,7 +103,7 @@ class TestEvidenceMountingLLM:
 
         messages = [
             HumanMessage(content="Test message"),
-            ToolMessage(content="Worker completed successfully", tool_call_id="123", name="spawn_worker"),
+            ToolMessage(content="Worker completed successfully", tool_call_id="123", name="spawn_commis"),
         ]
 
         result = await wrapper.ainvoke(messages)
@@ -129,7 +129,7 @@ class TestEvidenceMountingLLM:
             ToolMessage(
                 content="Worker completed.\n[EVIDENCE:run_id=48,job_id=123,worker_id=abc-123]",
                 tool_call_id="tc1",
-                name="spawn_worker",
+                name="spawn_commis",
             ),
         ]
 
@@ -161,12 +161,12 @@ class TestEvidenceMountingLLM:
             ToolMessage(
                 content="Worker 1 done.\n[EVIDENCE:run_id=48,job_id=123,worker_id=abc-123]",
                 tool_call_id="tc1",
-                name="spawn_worker",
+                name="spawn_commis",
             ),
             ToolMessage(
                 content="Worker 2 done.\n[EVIDENCE:run_id=48,job_id=456,worker_id=xyz-456]",
                 tool_call_id="tc2",
-                name="spawn_worker",
+                name="spawn_commis",
             ),
         ]
 
@@ -198,7 +198,7 @@ class TestEvidenceMountingLLM:
             ToolMessage(
                 content="Worker unknown.\n[EVIDENCE:run_id=48,job_id=999,worker_id=missing]",
                 tool_call_id="tc1",
-                name="spawn_worker",
+                name="spawn_commis",
             ),
         ]
 
@@ -220,7 +220,7 @@ class TestEvidenceMountingLLM:
             ToolMessage(
                 content="Worker done.\n[EVIDENCE:run_id=99,job_id=123,worker_id=abc]",  # Wrong run_id
                 tool_call_id="tc1",
-                name="spawn_worker",
+                name="spawn_commis",
             ),
         ]
 
@@ -246,7 +246,7 @@ class TestEvidenceMountingLLM:
                 ToolMessage(
                     content="Worker done.\n[EVIDENCE:run_id=48,job_id=123,worker_id=abc]",
                     tool_call_id="tc1",
-                    name="spawn_worker",
+                    name="spawn_commis",
                 ),
             ]
 
@@ -269,7 +269,7 @@ class TestEvidenceMountingLLM:
             ToolMessage(
                 content=original_content,
                 tool_call_id="tc1",
-                name="spawn_worker",
+                name="spawn_commis",
             ),
         ]
 

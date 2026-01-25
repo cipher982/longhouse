@@ -182,7 +182,7 @@ class ReplayService:
                 tool_name = msg.get("name", "")
                 tool_input = msg.get("input", {})
 
-                if tool_name == "spawn_worker":
+                if tool_name == "spawn_commis":
                     # Emit worker spawned event
                     await event_bus.publish(
                         EventType.WORKER_SPAWNED,

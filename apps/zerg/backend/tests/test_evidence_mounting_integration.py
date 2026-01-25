@@ -1,7 +1,7 @@
 """Integration tests for evidence mounting system (Phase 2 of Mount → Reason → Prune).
 
 These tests verify the end-to-end flow:
-1. spawn_worker returns compact payload with evidence marker
+1. spawn_commis returns compact payload with evidence marker
 2. EvidenceMountingLLM expands marker before LLM call
 3. Expanded evidence is NOT persisted to thread_messages
 """
@@ -30,7 +30,7 @@ def temp_artifact_path(monkeypatch):
 
 
 class TestSpawnWorkerReturnFormat:
-    """Test that spawn_worker returns compact payload with evidence marker."""
+    """Test that spawn_commis returns compact payload with evidence marker."""
 
     def test_format_includes_tool_index(self):
         """Test that formatted result includes tool index."""
@@ -168,7 +168,7 @@ class TestEvidenceMountingIntegration:
                 ToolMessage(
                     content="Worker completed.\n[EVIDENCE:run_id=48,job_id=123,worker_id=test-worker]",
                     tool_call_id="tc1",
-                    name="spawn_worker",
+                    name="spawn_commis",
                 ),
             ]
 
@@ -204,7 +204,7 @@ class TestEvidenceMountingIntegration:
             ToolMessage(
                 content="Worker completed.\n[EVIDENCE:run_id=48,job_id=123,worker_id=test-worker]",
                 tool_call_id="tc1",
-                name="spawn_worker",
+                name="spawn_commis",
             ),
         ]
 
@@ -244,7 +244,7 @@ class TestEvidencePersistence:
         compact_message = ToolMessage(
             content="Worker completed.\n[EVIDENCE:run_id=48,job_id=123,worker_id=test-worker]",
             tool_call_id="tc1",
-            name="spawn_worker",
+            name="spawn_commis",
         )
 
         # Simulate persistence check
@@ -319,7 +319,7 @@ class TestNonStreamingPath:
                 ToolMessage(
                     content="Worker result\n[EVIDENCE:run_id=48,job_id=123,worker_id=test-worker]",
                     tool_call_id="tc1",
-                    name="spawn_worker",
+                    name="spawn_commis",
                 ),
             ]
 
@@ -457,7 +457,7 @@ class TestCriticalScenario:
             ToolMessage(
                 content=compact_payload,
                 tool_call_id="tc1",
-                name="spawn_worker",
+                name="spawn_commis",
             ),
         ]
 

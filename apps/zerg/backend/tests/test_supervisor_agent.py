@@ -49,12 +49,12 @@ class TestSupervisorConfiguration:
     def test_supervisor_has_required_tools(self, db_session, test_user):
         """Test that supervisor has all required delegation tools."""
         required_supervisor_tools = [
-            "spawn_worker",
-            "list_workers",
-            "read_worker_result",
-            "read_worker_file",
-            "grep_workers",
-            "get_worker_metadata",
+            "spawn_commis",
+            "list_commis",
+            "read_commis_result",
+            "read_commis_file",
+            "grep_commis",
+            "get_commis_metadata",
         ]
 
         required_direct_tools = [
@@ -92,8 +92,8 @@ class TestSupervisorConfiguration:
 
         # Verify key concepts are present
         assert "Supervisor" in prompt
-        assert "spawn_worker" in prompt
-        assert "list_workers" in prompt
+        assert "spawn_commis" in prompt
+        assert "list_commis" in prompt
         assert "worker" in prompt.lower()
 
         # Verify guidance sections
@@ -121,7 +121,7 @@ class TestSupervisorDelegation:
     """Test supervisor's ability to spawn and manage workers."""
 
     @pytest.mark.asyncio
-    async def test_spawn_worker_integration(self, db_session, test_user, tmp_path):
+    async def test_spawn_commis_integration(self, db_session, test_user, tmp_path):
         """Test that supervisor can spawn a worker and get result."""
         from zerg.services.worker_artifact_store import WorkerArtifactStore
         from zerg.services.worker_runner import WorkerRunner
@@ -179,36 +179,36 @@ class TestSupervisorDelegation:
                 assert retrieved_result is not None
                 assert len(retrieved_result) > 0
 
-    def test_spawn_worker_tool_basic(self, db_session, test_user):
-        """Test spawn_worker tool is callable and validates context."""
+    def test_spawn_commis_tool_basic(self, db_session, test_user):
+        """Test spawn_commis tool is callable and validates context."""
         from zerg.connectors.context import set_credential_resolver
-        from zerg.tools.builtin.supervisor_tools import spawn_worker
+        from zerg.tools.builtin.supervisor_tools import spawn_commis
 
         # Without context, should return error
         set_credential_resolver(None)
-        result = spawn_worker(task="Test task", model=TEST_WORKER_MODEL)
+        result = spawn_commis(task="Test task", model=TEST_WORKER_MODEL)
         assert "Error" in result or "error" in result.lower()
         assert "credential context" in result.lower() or "context" in result.lower()
 
-    def test_list_workers_tool_basic(self, db_session, test_user):
-        """Test list_workers tool is callable and validates context."""
+    def test_list_commis_tool_basic(self, db_session, test_user):
+        """Test list_commis tool is callable and validates context."""
         from zerg.connectors.context import set_credential_resolver
-        from zerg.tools.builtin.supervisor_tools import list_workers
+        from zerg.tools.builtin.supervisor_tools import list_commis
 
         # Without context, should return error
         set_credential_resolver(None)
-        result = list_workers(limit=10)
+        result = list_commis(limit=10)
         assert "Error" in result or "error" in result.lower()
         assert "credential context" in result.lower() or "context" in result.lower()
 
-    def test_read_worker_result_tool_basic(self, db_session, test_user):
-        """Test read_worker_result tool is callable and validates context."""
+    def test_read_commis_result_tool_basic(self, db_session, test_user):
+        """Test read_commis_result tool is callable and validates context."""
         from zerg.connectors.context import set_credential_resolver
-        from zerg.tools.builtin.supervisor_tools import read_worker_result
+        from zerg.tools.builtin.supervisor_tools import read_commis_result
 
         # Without context, should return error
         set_credential_resolver(None)
-        result = read_worker_result(job_id="999")
+        result = read_commis_result(job_id="999")
         assert "Error" in result or "error" in result.lower()
         assert "credential context" in result.lower() or "context" in result.lower()
 
@@ -280,7 +280,7 @@ class TestSupervisorEndToEnd:
             assert len(result.result) > 0
 
             # 6. Verify we can retrieve metadata
-            metadata = artifact_store.get_worker_metadata(result.worker_id, owner_id=test_user.id)
+            metadata = artifact_store.get_commis_metadata(result.worker_id, owner_id=test_user.id)
             assert metadata["status"] == "success"
             assert metadata["worker_id"] == result.worker_id
             assert metadata["config"]["owner_id"] == test_user.id
@@ -311,15 +311,15 @@ class TestSupervisorEndToEnd:
 
         with patch.object(
             artifact_store,
-            "get_worker_metadata",
+            "get_commis_metadata",
             side_effect=lambda worker_id, owner_id: (other_user_metadata if owner_id == other_user.id else None),
         ):
             # Try to access other user's worker
-            result = artifact_store.get_worker_metadata("other-worker-123", owner_id=test_user.id)
+            result = artifact_store.get_commis_metadata("other-worker-123", owner_id=test_user.id)
             assert result is None  # Should not be accessible
 
             # Access own worker
-            result = artifact_store.get_worker_metadata("other-worker-123", owner_id=other_user.id)
+            result = artifact_store.get_commis_metadata("other-worker-123", owner_id=other_user.id)
             assert result == other_user_metadata
 
 
@@ -342,7 +342,7 @@ class TestSupervisorFromScript:
                 assert agent.owner_id == test_user.id
                 assert agent.config.get("is_supervisor") is True
                 assert agent.allowed_tools is not None
-                assert "spawn_worker" in agent.allowed_tools
+                assert "spawn_commis" in agent.allowed_tools
 
     def test_seed_script_updates_existing(self, db_session, test_user):
         """Test that seed script updates existing supervisor."""
@@ -366,5 +366,5 @@ class TestSupervisorFromScript:
                 # Verify agent was updated
                 assert agent.id == initial.id  # Same agent
                 assert agent.model == TEST_MODEL  # Updated to supervisor model
-                assert "spawn_worker" in agent.system_instructions  # Updated prompt
+                assert "spawn_commis" in agent.system_instructions  # Updated prompt
                 assert agent.config.get("is_supervisor") is True  # Updated config

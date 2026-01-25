@@ -29,11 +29,11 @@ from langchain_core.outputs import ChatResult
 
 def detect_role_from_messages(messages: List[BaseMessage]) -> str:
     """Best-effort role detector used by scripted scenarios."""
-    # If we see a spawn_worker call, assume supervisor.
+    # If we see a spawn_commis call, assume supervisor.
     for msg in messages:
         if isinstance(msg, AIMessage) and msg.tool_calls:
             for call in msg.tool_calls:
-                if call.get("name") == "spawn_worker":
+                if call.get("name") == "spawn_commis":
                     return "supervisor"
 
     # Otherwise, infer from system prompt length (tests use this heuristic).
@@ -250,7 +250,7 @@ class ScriptedChatLLM(BaseChatModel):
             ai_message = AIMessage(content="4", tool_calls=[])
             return ChatResult(generations=[ChatGeneration(message=ai_message)])
 
-        # Workspace worker scenario: spawns spawn_workspace_worker with git repo and optional resume
+        # Workspace worker scenario: spawns spawn_workspace_commis with git repo and optional resume
         if role == "supervisor" and scenario and scenario.get("name") == "workspace_worker_supervisor":
             # Use a public test repo that's small and fast to clone
             args = {
@@ -263,7 +263,7 @@ class ScriptedChatLLM(BaseChatModel):
 
             tool_call = {
                 "id": f"call_{uuid.uuid4().hex[:8]}",
-                "name": "spawn_workspace_worker",
+                "name": "spawn_workspace_commis",
                 "args": args,
             }
             ai_message = AIMessage(content="", tool_calls=[tool_call])
@@ -278,7 +278,7 @@ class ScriptedChatLLM(BaseChatModel):
             tool_calls = [
                 {
                     "id": f"call_{uuid.uuid4().hex[:8]}",
-                    "name": "spawn_worker",
+                    "name": "spawn_commis",
                     "args": {"task": task},
                 }
                 for task in tasks
@@ -289,7 +289,7 @@ class ScriptedChatLLM(BaseChatModel):
         if role == "supervisor" and scenario and scenario.get("name") == "disk_space_supervisor":
             tool_call = {
                 "id": f"call_{uuid.uuid4().hex[:8]}",
-                "name": "spawn_worker",
+                "name": "spawn_commis",
                 "args": {"task": "Check disk space on cube and identify what is using space"},
             }
             ai_message = AIMessage(content="", tool_calls=[tool_call])

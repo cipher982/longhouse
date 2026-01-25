@@ -208,9 +208,9 @@ class TestWorkerResultWithSummary:
 
 
 class TestListWorkersWithSummaries:
-    """Tests for list_workers returning summaries."""
+    """Tests for list_commis returning summaries."""
 
-    def test_list_workers_index_has_summary(self, temp_store):
+    def test_list_commis_index_has_summary(self, temp_store):
         """Workers in index include summary after update."""
         # Create and complete a worker
         worker_id = temp_store.create_worker("Check disk space")
@@ -226,18 +226,18 @@ class TestListWorkersWithSummaries:
         )
 
         # List workers and verify summary in index
-        workers = temp_store.list_workers(limit=10)
+        workers = temp_store.list_commis(limit=10)
         assert len(workers) == 1
         assert workers[0]["summary"] == "Disk at 45% capacity (225GB used)"
 
-    def test_list_workers_without_summary_fallback(self, temp_store):
+    def test_list_commis_without_summary_fallback(self, temp_store):
         """Workers without summary use task in index (no summary field)."""
         # Create worker without summary
         worker_id = temp_store.create_worker("Old worker without summary")
         temp_store.start_worker(worker_id)
         temp_store.complete_worker(worker_id, status="success")
 
-        workers = temp_store.list_workers(limit=10)
+        workers = temp_store.list_commis(limit=10)
         assert len(workers) == 1
         # No summary field in index entry
         assert "summary" not in workers[0] or workers[0].get("summary") is None

@@ -39,16 +39,16 @@ cases:
     tags: [quick, conversational]
 
   # 2. Supervisor tool usage - list workers
-  - id: list_workers
+  - id: list_commis
     category: tool_usage
-    description: Supervisor should call list_workers tool (hermetic mode)
+    description: Supervisor should call list_commis tool (hermetic mode)
     input: "List recent worker jobs"
     timeout: 30
     assert:
       - type: status
         value: success
       - type: tool_called
-        value: "list_workers"
+        value: "list_commis"
       - type: worker_spawned
         count: 0
       - type: latency_ms
@@ -56,16 +56,16 @@ cases:
     tags: [quick, tool_usage]
 
   # 3. Supervisor tool usage - spawn worker
-  - id: spawn_worker
+  - id: spawn_commis
     category: infrastructure
-    description: Supervisor should delegate via spawn_worker (hermetic mode)
+    description: Supervisor should delegate via spawn_commis (hermetic mode)
     input: "Delegate checking disk space on cube"
     timeout: 60
     assert:
       - type: status
         value: success
       - type: tool_called
-        value: "spawn_worker"
+        value: "spawn_commis"
       - type: worker_spawned
         min: 1
       - type: worker_result_contains
@@ -123,7 +123,7 @@ cases:
       - type: status
         value: success
       - type: tool_called
-        value: "spawn_worker"
+        value: "spawn_commis"
       - type: worker_spawned
         min: 1
       - type: worker_tool_called

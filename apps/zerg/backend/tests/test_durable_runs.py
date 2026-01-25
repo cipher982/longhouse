@@ -188,7 +188,7 @@ class TestResumeFlow:
         from zerg.routers.jarvis_internal import WorkerCompletionPayload
         from zerg.routers.jarvis_internal import resume_run
 
-        # Create a WAITING run (interrupted by spawn_worker)
+        # Create a WAITING run (interrupted by spawn_commis)
         thread = crud.create_thread(
             db=db_session,
             agent_id=sample_agent.id,
@@ -279,7 +279,7 @@ class TestResumeFlow:
         """Test that worker completion calls resume when run is WAITING."""
         from zerg.services.worker_runner import WorkerRunner
 
-        # Create a WAITING supervisor run (interrupted by spawn_worker)
+        # Create a WAITING supervisor run (interrupted by spawn_commis)
         thread = crud.create_thread(
             db=db_session,
             agent_id=sample_agent.id,

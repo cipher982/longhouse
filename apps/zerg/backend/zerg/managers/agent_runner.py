@@ -12,7 +12,7 @@ Design goals
    ever propagate.
 2. Keep DB interactions synchronous for now (SQLAlchemy sync API).  These DB
    calls run inside FastAPI's request thread so they remain thread-safe.
-3. Handle interrupt/resume pattern for async tool execution (spawn_worker).
+3. Handle interrupt/resume pattern for async tool execution (spawn_commis).
 """
 
 from __future__ import annotations
@@ -146,7 +146,7 @@ def _latest_user_query(
 class AgentInterrupted(Exception):
     """Raised when the agent execution is interrupted (waiting for external input).
 
-    This happens when spawn_worker raises AgentInterrupted. The caller should
+    This happens when spawn_commis raises AgentInterrupted. The caller should
     set the run status to WAITING.
     """
 
@@ -422,7 +422,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
                 self.usage_total_tokens = engine_usage.get("total_tokens")
                 self.usage_reasoning_tokens = engine_usage.get("reasoning_tokens")
 
-            # Handle interrupt (spawn_worker was called)
+            # Handle interrupt (spawn_commis was called)
             if loop_result.interrupted:
                 # Persist new messages before raising interrupt
                 if len(loop_result.messages) > messages_with_context:
@@ -478,7 +478,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
             )
 
         except AgentInterrupted:
-            # Interrupts are part of normal control flow for async tools (spawn_worker).
+            # Interrupts are part of normal control flow for async tools (spawn_commis).
             raise
         except Exception as e:
             logger.exception(f"[AgentRunner] Exception during runnable.ainvoke: {e}")
@@ -584,7 +584,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
         Args:
             db: Database session.
             thread: Thread to continue.
-            tool_call_id: The tool_call_id from the spawn_worker call.
+            tool_call_id: The tool_call_id from the spawn_commis call.
             tool_result: The worker's result to inject as ToolMessage.
             run_id: Supervisor run ID for event correlation.
             trace_id: End-to-end trace ID for debugging.
@@ -593,7 +593,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
             List of new message rows created during continuation.
 
         Raises:
-            AgentInterrupted: If spawn_worker is called again (sequential workers).
+            AgentInterrupted: If spawn_commis is called again (sequential workers).
         """
         from langchain_core.messages import ToolMessage
 
@@ -624,7 +624,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
             tool_msg = ToolMessage(
                 content=f"Worker completed:\n\n{tool_result}",
                 tool_call_id=tool_call_id,
-                name="spawn_worker",
+                name="spawn_commis",
             )
 
             # Find the parent assistant message that issued this tool_call
@@ -857,7 +857,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
             List of new message rows created during continuation.
 
         Raises:
-            AgentInterrupted: If spawn_worker is called again (new batch of workers).
+            AgentInterrupted: If spawn_commis is called again (new batch of workers).
         """
         from langchain_core.messages import ToolMessage
 
@@ -918,7 +918,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
                 tool_msg = ToolMessage(
                     content=content,
                     tool_call_id=tool_call_id,
-                    name="spawn_worker",
+                    name="spawn_commis",
                 )
 
                 # Persist ToolMessage with parent_id for UI grouping

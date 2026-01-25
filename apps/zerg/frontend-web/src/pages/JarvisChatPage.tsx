@@ -21,64 +21,13 @@ import App from '../jarvis/app/App';
 import { supervisorToolStore, type SupervisorToolCall } from '../jarvis/lib/supervisor-tool-store';
 
 // API functions
-import { fetchThreadByTitle, fetchThreadMessages, request } from '../services/api';
-
-const DEMO_THREAD_TITLES: Record<string, string> = {
-  'jarvis-math': '[scenario:jarvis-math] Jarvis math (2+2)',
-};
+import { fetchThreadByTitle, fetchThreadMessages } from '../services/api';
 
 export default function JarvisChatPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const threadTitle = searchParams.get('thread');
-  const demoScenario = searchParams.get('demo');
   const [initialMessages, setInitialMessages] = useState<ChatMessage[] | undefined>(undefined);
-  const [loading, setLoading] = useState(!!threadTitle || !!demoScenario);
-
-  useEffect(() => {
-    if (!demoScenario) return;
-
-    const storageKey = `jarvis-demo-seeded:${demoScenario}`;
-    if (typeof window !== 'undefined' && window.sessionStorage.getItem(storageKey)) {
-      if (!threadTitle && DEMO_THREAD_TITLES[demoScenario]) {
-        const nextParams = new URLSearchParams(searchParams);
-        nextParams.set('thread', DEMO_THREAD_TITLES[demoScenario]);
-        setSearchParams(nextParams, { replace: true });
-      }
-      return;
-    }
-
-    let cancelled = false;
-
-    const seedScenario = async () => {
-      try {
-        await request('/scenarios/seed', {
-          method: 'POST',
-          body: JSON.stringify({ name: demoScenario, clean: true }),
-        });
-        if (typeof window !== 'undefined') {
-          window.sessionStorage.setItem(storageKey, '1');
-        }
-        if (!threadTitle && DEMO_THREAD_TITLES[demoScenario]) {
-          const nextParams = new URLSearchParams(searchParams);
-          nextParams.set('thread', DEMO_THREAD_TITLES[demoScenario]);
-          setSearchParams(nextParams, { replace: true });
-        }
-      } catch (error) {
-        // eslint-disable-next-line no-console
-        console.warn('Jarvis demo seeding failed:', error);
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    };
-
-    void seedScenario();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [demoScenario, threadTitle, searchParams, setSearchParams]);
+  const [loading, setLoading] = useState(!!threadTitle);
 
   useEffect(() => {
     if (!threadTitle) return;

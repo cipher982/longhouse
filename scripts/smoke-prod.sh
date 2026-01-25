@@ -266,35 +266,6 @@ test_caddy() {
     fi
 }
 
-test_csp_connect() {
-    local name="$1"
-    local url="$2"
-    local expected="$3"
-
-    local headers
-    headers=$(curl -s -D - "$url" -o /dev/null 2>/dev/null || true)
-    local csp
-    csp=$(echo "$headers" | tr -d '\r' | awk -F': ' 'tolower($1)=="content-security-policy" {print $2}' | tail -1)
-
-    if [[ -z "$csp" ]]; then
-        fail "$name (missing CSP header)"
-        return 1
-    fi
-
-    if [[ "$csp" != *"connect-src"* ]]; then
-        fail "$name (no connect-src directive)"
-        return 1
-    fi
-
-    if [[ "$csp" == *"$expected"* ]]; then
-        pass "$name (connect-src includes $expected)"
-        return 0
-    else
-        fail "$name (connect-src missing $expected)"
-        return 1
-    fi
-}
-
 run_health_checks() {
     run_test test_http "API health" "$API_URL/health" "200"
     run_test test_json "Health status" "$API_URL/health" ".status" "healthy"
@@ -308,7 +279,6 @@ run_frontend_checks() {
     run_test test_http "Dashboard" "$FRONTEND_URL/dashboard" "200"
     run_test test_http "Swarm Ops" "$FRONTEND_URL/swarm" "200"
     run_test test_config
-    run_test test_csp_connect "CSP: OpenAI Realtime" "$FRONTEND_URL" "api.openai.com"
 }
 
 run_cors_checks() {

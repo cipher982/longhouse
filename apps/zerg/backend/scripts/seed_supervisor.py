@@ -84,12 +84,12 @@ def seed_supervisor(user_email: str = None, name: str = "Supervisor"):
     # Supervisor tools - carefully selected for delegation and direct tasks
     supervisor_tools = [
         # Supervisor/delegation tools
-        "spawn_worker",
-        "list_workers",
-        "read_worker_result",
-        "read_worker_file",
-        "grep_workers",
-        "get_worker_metadata",
+        "spawn_commis",
+        "list_commis",
+        "read_commis_result",
+        "read_commis_file",
+        "grep_commis",
+        "get_commis_metadata",
         # Direct utility tools
         "get_current_time",
         "http_request",
@@ -161,7 +161,7 @@ Be helpful, concise, and transparent about what you're doing."""
     print(f"   Owner: {user.email}")
     print(f"   Model: {agent.model}")
     print(f"   Tools: {len(agent.allowed_tools)} tools")
-    print(f"     - Supervisor: spawn_worker, list_workers, read_worker_result, etc.")
+    print(f"     - Supervisor: spawn_commis, list_commis, read_commis_result, etc.")
     print(f"     - Direct: get_current_time, http_request, send_email")
 
     print(f"\n🚀 Supervisor is ready!")

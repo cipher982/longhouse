@@ -48,8 +48,8 @@ class TestSupervisorService:
         assert agent.name == "Supervisor"
         assert agent.owner_id == test_user.id
         assert agent.config.get("is_supervisor") is True
-        assert "spawn_worker" in agent.allowed_tools
-        assert "list_workers" in agent.allowed_tools
+        assert "spawn_commis" in agent.allowed_tools
+        assert "list_commis" in agent.allowed_tools
         # V1.1: knowledge_search should be available to supervisor
         assert "knowledge_search" in agent.allowed_tools
         # V1.2: web research tools should be available to supervisor
@@ -123,12 +123,12 @@ class TestSupervisorService:
         agent = service.get_or_create_supervisor_agent(test_user.id)
 
         expected_tools = [
-            "spawn_worker",
-            "list_workers",
-            "read_worker_result",
-            "read_worker_file",
-            "grep_workers",
-            "get_worker_metadata",
+            "spawn_commis",
+            "list_commis",
+            "read_commis_result",
+            "read_commis_file",
+            "grep_commis",
+            "get_commis_metadata",
             "get_current_time",
             "http_request",
             "send_email",
@@ -249,11 +249,11 @@ class TestSupervisorContext:
 class TestWorkerSupervisorCorrelation:
     """Tests for worker-supervisor correlation via run_id."""
 
-    def test_spawn_worker_stores_supervisor_run_id(self, db_session, test_user, credential_context, temp_artifact_path):
-        """Test that spawn_worker stores supervisor_run_id from context."""
+    def test_spawn_commis_stores_supervisor_run_id(self, db_session, test_user, credential_context, temp_artifact_path):
+        """Test that spawn_commis stores supervisor_run_id from context."""
         from tests.conftest import TEST_WORKER_MODEL
         from zerg.models.models import WorkerJob
-        from zerg.tools.builtin.supervisor_tools import spawn_worker
+        from zerg.tools.builtin.supervisor_tools import spawn_commis
 
         # Create a real supervisor agent and run for FK constraint
         service = SupervisorService(db_session)
@@ -276,7 +276,7 @@ class TestWorkerSupervisorCorrelation:
         # Set supervisor context with real run_id
         token = set_supervisor_context(run_id=run.id, owner_id=test_user.id, message_id="test-message-id")
         try:
-            result = spawn_worker(task="Test task", model=TEST_WORKER_MODEL)
+            result = spawn_commis(task="Test task", model=TEST_WORKER_MODEL)
             assert "queued successfully" in result
 
             # Find the created job
@@ -286,18 +286,18 @@ class TestWorkerSupervisorCorrelation:
         finally:
             reset_supervisor_context(token)
 
-    def test_spawn_worker_without_context_has_null_supervisor_run_id(
+    def test_spawn_commis_without_context_has_null_supervisor_run_id(
         self, db_session, test_user, credential_context, temp_artifact_path
     ):
-        """Test that spawn_worker without context sets supervisor_run_id to None."""
+        """Test that spawn_commis without context sets supervisor_run_id to None."""
         from tests.conftest import TEST_WORKER_MODEL
         from zerg.models.models import WorkerJob
-        from zerg.tools.builtin.supervisor_tools import spawn_worker
+        from zerg.tools.builtin.supervisor_tools import spawn_commis
 
         # Ensure no supervisor context
         assert get_supervisor_context() is None
 
-        result = spawn_worker(task="Standalone task", model=TEST_WORKER_MODEL)
+        result = spawn_commis(task="Standalone task", model=TEST_WORKER_MODEL)
         assert "queued successfully" in result
 
         # Find the created job

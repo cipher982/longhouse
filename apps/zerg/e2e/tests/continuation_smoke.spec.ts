@@ -25,7 +25,7 @@ test.describe('Continuation Flow Smoke Test', () => {
     // which would block forever on SSE streams
     const chatPromise = request.post('/api/jarvis/chat', {
       data: {
-        message: 'TRIGGER_WORKER', // Triggers spawn_worker in MockLLM
+        message: 'TRIGGER_WORKER', // Triggers spawn_commis in MockLLM
         message_id: crypto.randomUUID(),
         model: 'gpt-mock',
         client_correlation_id: 'smoke-continuation'

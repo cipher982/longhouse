@@ -261,7 +261,7 @@ class _StubLlm:
             import re
 
             tool_names = [t.name if hasattr(t, "name") else str(t) for t in self._tools]
-            supervisor_tools = {"spawn_worker", "list_workers", "read_worker_result"}
+            supervisor_tools = {"spawn_commis", "list_commis", "read_commis_result"}
 
             # Only make tool calls if agent has ALL supervisor tools (tool integration tests)
             if supervisor_tools.issubset(set(tool_names)) and user_content:
@@ -270,19 +270,19 @@ class _StubLlm:
                 # Select tool based on keywords in user message
                 tool_name = None
                 if any(kw in user_lower for kw in ["list", "show", "recent"]):
-                    tool_name = "list_workers"
+                    tool_name = "list_commis"
                 elif any(kw in user_lower for kw in ["read", "result", "job"]):
-                    tool_name = "read_worker_result"
+                    tool_name = "read_commis_result"
                 elif any(kw in user_lower for kw in ["spawn", "calculate", "delegate", "create"]):
-                    tool_name = "spawn_worker"
+                    tool_name = "spawn_commis"
 
                 if tool_name:
                     tool_args = {}
-                    if tool_name == "spawn_worker":
+                    if tool_name == "spawn_commis":
                         tool_args = {"task": user_content, "model": "gpt-5-mini"}
-                    elif tool_name == "list_workers":
+                    elif tool_name == "list_commis":
                         tool_args = {"limit": 10}
-                    elif tool_name == "read_worker_result":
+                    elif tool_name == "read_commis_result":
                         match = re.search(r"job (\d+)", user_lower)
                         tool_args = {"job_id": int(match.group(1)) if match else 1}
 

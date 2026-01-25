@@ -134,7 +134,7 @@ cases:
       - type: status
         value: success
       - type: tool_called
-        value: spawn_worker
+        value: spawn_commis
       - type: not_tool_called
         value: http_request
       - type: worker_spawned

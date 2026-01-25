@@ -1,7 +1,7 @@
-"""Integration test: supervisor → spawn_worker → interrupt → worker_complete → resume → final response.
+"""Integration test: supervisor → spawn_commis → interrupt → worker_complete → resume → final response.
 
 This covers the master/worker flow used by Jarvis chat using the LangGraph-free resume pattern:
-- Supervisor calls spawn_worker and raises AgentInterrupted
+- Supervisor calls spawn_commis and raises AgentInterrupted
 - Run is marked WAITING (interrupted waiting for worker completion)
 - Worker completes, triggers resume via AgentRunner.run_continuation
 - Supervisor continues and generates final response
@@ -65,7 +65,7 @@ async def test_supervisor_worker_interrupt_resume_flow(
     """Test the interrupt/resume flow for supervisor → worker → final response.
 
     This test verifies:
-    1. Supervisor run becomes WAITING when spawn_worker triggers AgentInterrupted
+    1. Supervisor run becomes WAITING when spawn_commis triggers AgentInterrupted
     2. Worker job is created and correlated to the supervisor run
     3. Resume completes the supervisor run with final response
     """
@@ -95,7 +95,7 @@ async def test_supervisor_worker_interrupt_resume_flow(
 
     consumer_task = asyncio.create_task(consume_stream())
 
-    # Create a worker job first (simulating what spawn_worker does before interrupt)
+    # Create a worker job first (simulating what spawn_commis does before interrupt)
     worker_job = WorkerJob(
         owner_id=test_user.id,
         supervisor_run_id=run.id,
@@ -108,8 +108,8 @@ async def test_supervisor_worker_interrupt_resume_flow(
     db_session.refresh(worker_job)
 
     async def fake_run_thread_with_interrupt(_self, _db, _thread):
-        """Simulate supervisor calling spawn_worker which triggers AgentInterrupted."""
-        # Raise AgentInterrupted to simulate the interrupt path inside spawn_worker
+        """Simulate supervisor calling spawn_commis which triggers AgentInterrupted."""
+        # Raise AgentInterrupted to simulate the interrupt path inside spawn_commis
         # Note: No "message" field - frontend shows typing indicator, worker card shows task
         raise AgentInterrupted(
             {
@@ -230,18 +230,18 @@ async def test_supervisor_worker_interrupt_resume_flow(
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(10)
-async def test_spawn_worker_fallback_when_outside_runnable_context(
+async def test_spawn_commis_fallback_when_outside_runnable_context(
     db_session,
     test_user,
     credential_context,
     temp_artifact_path,
 ):
-    """Test that spawn_worker queues a job when called outside supervisor context.
+    """Test that spawn_commis queues a job when called outside supervisor context.
 
-    This tests the graceful degradation when spawn_worker is called directly
+    This tests the graceful degradation when spawn_commis is called directly
     (e.g., from tests or CLI) rather than from within the supervisor loop.
     """
-    from zerg.tools.builtin.supervisor_tools import spawn_worker_async
+    from zerg.tools.builtin.supervisor_tools import spawn_commis_async
 
     # Set up supervisor context for the tool
     service = SupervisorService(db_session)
@@ -262,9 +262,9 @@ async def test_spawn_worker_fallback_when_outside_runnable_context(
     token = set_supervisor_context(run_id=run.id, owner_id=test_user.id, message_id="test-message-id")
 
     try:
-        # Call spawn_worker directly (outside supervisor loop context)
+        # Call spawn_commis directly (outside supervisor loop context)
         # This should trigger the fallback path since no AgentInterrupted handling exists
-        result = await spawn_worker_async(task="Test fallback task", model=TEST_WORKER_MODEL)
+        result = await spawn_commis_async(task="Test fallback task", model=TEST_WORKER_MODEL)
 
         # Should return "queued successfully" (fallback pattern)
         assert "queued successfully" in result
@@ -391,9 +391,9 @@ async def test_different_tasks_create_separate_workers(
     """Verify that different tasks create separate workers (EXACT match only).
 
     Scenario from Docker logs (2026-01-13 01:58):
-    1. LLM call 1: spawn_worker("Check disk space on cube")
+    1. LLM call 1: spawn_commis("Check disk space on cube")
     2. Worker completes
-    3. LLM call 2: spawn_worker("Check disk space on cube real quick")
+    3. LLM call 2: spawn_commis("Check disk space on cube real quick")
 
     With EXACT matching only, these are treated as different tasks and create
     separate workers. This is the safer default - prefix matching was removed
@@ -406,7 +406,7 @@ async def test_different_tasks_create_separate_workers(
 
     from zerg.services.supervisor_context import reset_supervisor_context
     from zerg.services.worker_artifact_store import WorkerArtifactStore
-    from zerg.tools.builtin.supervisor_tools import spawn_worker_async
+    from zerg.tools.builtin.supervisor_tools import spawn_commis_async
 
     # Set up supervisor agent/thread
     service = SupervisorService(db_session)
@@ -424,7 +424,7 @@ async def test_different_tasks_create_separate_workers(
     db_session.commit()
     db_session.refresh(run)
 
-    # Set supervisor context for spawn_worker tool
+    # Set supervisor context for spawn_commis tool
     sup_token = set_supervisor_context(
         run_id=run.id,
         owner_id=test_user.id,
@@ -432,8 +432,8 @@ async def test_different_tasks_create_separate_workers(
     )
 
     try:
-        # Phase 1: First spawn_worker call - creates worker
-        result1 = await spawn_worker_async("Check disk space on cube", model=TEST_WORKER_MODEL)
+        # Phase 1: First spawn_commis call - creates worker
+        result1 = await spawn_commis_async("Check disk space on cube", model=TEST_WORKER_MODEL)
         assert "queued successfully" in result1, f"First spawn should create job, got: {result1}"
 
         # Verify first worker was created
@@ -465,9 +465,9 @@ async def test_different_tasks_create_separate_workers(
                 f,
             )
 
-        # Phase 2: Second spawn_worker with DIFFERENT task
+        # Phase 2: Second spawn_commis with DIFFERENT task
         # With exact matching only, this creates a new worker (expected behavior)
-        result2 = await spawn_worker_async("Check disk space on cube real quick", model=TEST_WORKER_MODEL)
+        result2 = await spawn_commis_async("Check disk space on cube real quick", model=TEST_WORKER_MODEL)
 
         # Count workers AFTER second spawn
         db_session.expire_all()  # Force refresh

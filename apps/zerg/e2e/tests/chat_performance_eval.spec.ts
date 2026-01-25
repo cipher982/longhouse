@@ -583,7 +583,7 @@ test.describe('Chat Performance Evaluation', () => {
 
     // Guardrail: Simple math shouldn't spawn workers
     if (metrics.backendTimeline) {
-      expect(metrics.backendTimeline.eventCounts['worker_spawned'] ?? 0).toBe(0);
+      expect(metrics.backendTimeline.eventCounts['commis_spawned'] ?? 0).toBe(0);
     }
 
     exportMetrics('ttft-baseline', metrics);
@@ -636,7 +636,7 @@ test.describe('Chat Performance Evaluation', () => {
 
     // Guardrail: Explanation shouldn't spawn workers
     if (metrics.backendTimeline) {
-      expect(metrics.backendTimeline.eventCounts['worker_spawned'] ?? 0).toBe(0);
+      expect(metrics.backendTimeline.eventCounts['commis_spawned'] ?? 0).toBe(0);
     }
 
     exportMetrics('throughput', metrics);
@@ -668,7 +668,7 @@ test.describe('Chat Performance Evaluation', () => {
     );
     console.log(`Direct: TTFT=${directMetrics.timeToFirstToken}ms, Total=${directMetrics.timeToComplete}ms`);
 
-    // Worker response (triggers spawn_worker)
+    // Worker response (triggers spawn_commis)
     console.log('\n--- Worker response (with delegation) ---');
     await navigateToChatWithTimeline(page);
     const workerMetrics = await measureChatPerformance(
@@ -689,14 +689,14 @@ test.describe('Chat Performance Evaluation', () => {
 
     // Worker should have spawned
     if (workerMetrics.backendTimeline) {
-      const spawned = workerMetrics.backendTimeline.eventCounts['worker_spawned'] ?? 0;
+      const spawned = workerMetrics.backendTimeline.eventCounts['commis_spawned'] ?? 0;
       console.log(`   Workers spawned: ${spawned}`);
       // Note: We don't assert spawned > 0 because the model might answer directly
     }
 
     // Direct should NOT have spawned workers
     if (directMetrics.backendTimeline) {
-      expect(directMetrics.backendTimeline.eventCounts['worker_spawned'] ?? 0).toBe(0);
+      expect(directMetrics.backendTimeline.eventCounts['commis_spawned'] ?? 0).toBe(0);
     }
 
     exportMetrics('worker-direct', directMetrics);
@@ -744,7 +744,7 @@ test.describe('Chat Performance Evaluation', () => {
 
     // Shouldn't spawn workers for simple advice
     if (metrics.backendTimeline) {
-      expect(metrics.backendTimeline.eventCounts['worker_spawned'] ?? 0).toBe(0);
+      expect(metrics.backendTimeline.eventCounts['commis_spawned'] ?? 0).toBe(0);
     }
 
     console.log('\n✅ Happy path complete');

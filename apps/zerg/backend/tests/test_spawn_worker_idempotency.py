@@ -1,4 +1,4 @@
-"""Tests for spawn_worker idempotency during supervisor resume replay.
+"""Tests for spawn_commis idempotency during supervisor resume replay.
 
 These tests verify the idempotency fix that prevents duplicate workers when:
 1. The supervisor loop replays tool calls after interrupt/resume
@@ -21,7 +21,7 @@ from zerg.models.models import AgentRun
 from zerg.models.models import WorkerJob
 from zerg.services.supervisor_context import reset_supervisor_context
 from zerg.services.supervisor_context import set_supervisor_context
-from zerg.tools.builtin.supervisor_tools import spawn_worker_async
+from zerg.tools.builtin.supervisor_tools import spawn_commis_async
 
 
 @pytest.fixture
@@ -56,13 +56,13 @@ def supervisor_run(db_session, test_user, sample_agent, sample_thread):
 
 
 class TestSpawnWorkerIdempotency:
-    """Tests for spawn_worker idempotency during supervisor replay."""
+    """Tests for spawn_commis idempotency during supervisor replay."""
 
     @pytest.mark.asyncio
     async def test_exact_task_reuse_while_in_progress(
         self, db_session, test_user, credential_context, temp_artifact_path, supervisor_run
     ):
-        """Verify spawn_worker with exact same task during in-progress reuses job."""
+        """Verify spawn_commis with exact same task during in-progress reuses job."""
         token = set_supervisor_context(
             run_id=supervisor_run.id,
             owner_id=test_user.id,
@@ -71,11 +71,11 @@ class TestSpawnWorkerIdempotency:
 
         try:
             # First call creates queued WorkerJob
-            result1 = await spawn_worker_async("Check disk space on cube", model=TEST_WORKER_MODEL)
+            result1 = await spawn_commis_async("Check disk space on cube", model=TEST_WORKER_MODEL)
             assert "queued successfully" in result1
 
             # Second call with EXACT same task should reuse the existing job
-            result2 = await spawn_worker_async("Check disk space on cube", model=TEST_WORKER_MODEL)
+            result2 = await spawn_commis_async("Check disk space on cube", model=TEST_WORKER_MODEL)
             assert "queued successfully" in result2
 
             # Assert: still only ONE job for this run
@@ -92,7 +92,7 @@ class TestSpawnWorkerIdempotency:
     async def test_different_tasks_create_separate_workers(
         self, db_session, test_user, credential_context, temp_artifact_path, supervisor_run
     ):
-        """Verify spawn_worker with genuinely different tasks creates separate workers."""
+        """Verify spawn_commis with genuinely different tasks creates separate workers."""
         token = set_supervisor_context(
             run_id=supervisor_run.id,
             owner_id=test_user.id,
@@ -101,11 +101,11 @@ class TestSpawnWorkerIdempotency:
 
         try:
             # First task
-            result1 = await spawn_worker_async("Check disk space on cube", model=TEST_WORKER_MODEL)
+            result1 = await spawn_commis_async("Check disk space on cube", model=TEST_WORKER_MODEL)
             assert "queued successfully" in result1
 
             # Different task should create a NEW job (not a duplicate - this is legitimate)
-            result2 = await spawn_worker_async("Check memory usage on cube", model=TEST_WORKER_MODEL)
+            result2 = await spawn_commis_async("Check memory usage on cube", model=TEST_WORKER_MODEL)
             assert "queued successfully" in result2
 
             # Assert: TWO jobs since tasks are different
@@ -122,7 +122,7 @@ class TestSpawnWorkerIdempotency:
     async def test_completed_job_returns_cached_result(
         self, db_session, test_user, credential_context, temp_artifact_path, supervisor_run
     ):
-        """Verify spawn_worker with matching completed job returns cached result."""
+        """Verify spawn_commis with matching completed job returns cached result."""
         import os
 
         from zerg.services.worker_artifact_store import WorkerArtifactStore
@@ -170,8 +170,8 @@ class TestSpawnWorkerIdempotency:
                     f,
                 )
 
-            # Now call spawn_worker with same task - should return cached result
-            result = await spawn_worker_async("Check disk space on cube", model=TEST_WORKER_MODEL)
+            # Now call spawn_commis with same task - should return cached result
+            result = await spawn_commis_async("Check disk space on cube", model=TEST_WORKER_MODEL)
 
             # Should return cached result, not create new job
             assert "completed" in result
@@ -191,7 +191,7 @@ class TestSpawnWorkerIdempotency:
     async def test_no_fuzzy_matching_for_similar_tasks(
         self, db_session, test_user, credential_context, temp_artifact_path, supervisor_run
     ):
-        """Verify spawn_worker uses EXACT task matching only.
+        """Verify spawn_commis uses EXACT task matching only.
 
         Prefix/fuzzy matching was removed as unsafe - near-matches could return
         the wrong worker result if tasks share prefixes. Only exact task matches
@@ -244,7 +244,7 @@ class TestSpawnWorkerIdempotency:
 
             # Query with a similar but different task
             # Since we only match EXACT tasks, this should create a new job
-            result = await spawn_worker_async(
+            result = await spawn_commis_async(
                 "Check disk space on cube server - new request", model=TEST_WORKER_MODEL
             )
 
@@ -292,7 +292,7 @@ class TestSpawnWorkerIdempotency:
             message_id="test-msg-run1",
         )
         try:
-            result1 = await spawn_worker_async("Check disk space", model=TEST_WORKER_MODEL)
+            result1 = await spawn_commis_async("Check disk space", model=TEST_WORKER_MODEL)
             assert "queued successfully" in result1
         finally:
             reset_supervisor_context(token1)
@@ -304,7 +304,7 @@ class TestSpawnWorkerIdempotency:
             message_id="test-msg-run2",
         )
         try:
-            result2 = await spawn_worker_async("Check disk space", model=TEST_WORKER_MODEL)
+            result2 = await spawn_commis_async("Check disk space", model=TEST_WORKER_MODEL)
             assert "queued successfully" in result2
         finally:
             reset_supervisor_context(token2)

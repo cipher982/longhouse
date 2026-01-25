@@ -275,8 +275,8 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
                 logs: [],
               }
 
-              // For spawn_worker, include worker metadata
-              if (tc.tool_name === 'spawn_worker' && tc.worker) {
+              // For spawn_commis, include worker metadata
+              if (tc.tool_name === 'spawn_commis' && tc.worker) {
                 const nestedTools = tc.worker.tools.map(wt => ({
                   toolCallId: `${tc.tool_call_id}-${wt.tool_name}`,
                   toolName: wt.tool_name,

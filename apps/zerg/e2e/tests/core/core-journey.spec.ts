@@ -12,7 +12,7 @@
  * - Supervisor returns direct scripted response
  * - No worker spawning (avoids continuation complexity)
  *
- * For worker flow testing with spawn_worker, see TODO: worker_flow.spec.ts
+ * For worker flow testing with spawn_commis, see TODO: worker_flow.spec.ts
  */
 
 import { randomUUID } from 'node:crypto';
@@ -210,9 +210,9 @@ test.describe('Core User Journey - Scripted LLM', () => {
         bus.emit('supervisor:started', { runId, task: 'Test task', timestamp: now });
         bus.emit('supervisor:tool_started', {
           runId,
-          toolName: 'spawn_worker',
+          toolName: 'spawn_commis',
           toolCallId,
-          argsPreview: 'spawn_worker args',
+          argsPreview: 'spawn_commis args',
           args: { task: 'Check disk space on cube' },
           timestamp: now + 1,
         });
@@ -279,9 +279,9 @@ test.describe('Core User Journey - Scripted LLM', () => {
         bus.emit('supervisor:started', { runId, task: 'Details test', timestamp: now });
         bus.emit('supervisor:tool_started', {
           runId,
-          toolName: 'spawn_worker',
+          toolName: 'spawn_commis',
           toolCallId,
-          argsPreview: 'spawn_worker args',
+          argsPreview: 'spawn_commis args',
           args: { task: 'Test details drawer' },
           timestamp: now + 1,
         });
@@ -353,9 +353,9 @@ test.describe('Core User Journey - Scripted LLM', () => {
         bus.emit('supervisor:started', { runId, task: 'Source badge test', timestamp: now });
         bus.emit('supervisor:tool_started', {
           runId,
-          toolName: 'spawn_worker',
+          toolName: 'spawn_commis',
           toolCallId,
-          argsPreview: 'spawn_worker args',
+          argsPreview: 'spawn_commis args',
           args: { task: 'Test source badge' },
           timestamp: now + 1,
         });
@@ -410,9 +410,9 @@ test.describe('Core User Journey - Scripted LLM', () => {
         bus.emit('supervisor:started', { runId, task: 'Offline badge test', timestamp: now });
         bus.emit('supervisor:tool_started', {
           runId,
-          toolName: 'spawn_worker',
+          toolName: 'spawn_commis',
           toolCallId,
-          argsPreview: 'spawn_worker args',
+          argsPreview: 'spawn_commis args',
           args: { task: 'Test offline badge' },
           timestamp: now + 1,
         });
@@ -475,9 +475,9 @@ test.describe('Core User Journey - Scripted LLM', () => {
         bus.emit('supervisor:started', { runId, task: 'Compact mode test', timestamp: now });
         bus.emit('supervisor:tool_started', {
           runId,
-          toolName: 'spawn_worker',
+          toolName: 'spawn_commis',
           toolCallId,
-          argsPreview: 'spawn_worker args',
+          argsPreview: 'spawn_commis args',
           args: { task: 'Test compact mode' },
           timestamp: now + 1,
         });
@@ -550,9 +550,9 @@ test.describe('Core User Journey - Scripted LLM', () => {
         bus.emit('supervisor:started', { runId, task: 'Copy button test', timestamp: now });
         bus.emit('supervisor:tool_started', {
           runId,
-          toolName: 'spawn_worker',
+          toolName: 'spawn_commis',
           toolCallId,
-          argsPreview: 'spawn_worker args',
+          argsPreview: 'spawn_commis args',
           args: { task: 'Test copy button' },
           timestamp: now + 1,
         });

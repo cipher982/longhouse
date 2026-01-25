@@ -771,8 +771,8 @@ class RoundaboutMonitor:
         # Build drill-down hint
         drill_down_hint = (
             f"For more details, use:\n"
-            f"  read_worker_file('{self.job_id}', 'thread.jsonl')  # Full conversation\n"
-            f"  read_worker_result('{self.job_id}')  # Final result (when complete)"
+            f"  read_commis_file('{self.job_id}', 'thread.jsonl')  # Full conversation\n"
+            f"  read_commis_result('{self.job_id}')  # Final result (when complete)"
         )
 
         activity_summary = self._build_activity_summary(peek_reason=reason)
@@ -1115,8 +1115,8 @@ def format_roundabout_result(result: RoundaboutResult) -> str:
             lines.append("It may complete successfully - check status periodically:")
         else:
             lines.append("The worker appears to have stopped.")
-        lines.append(f"  get_worker_metadata('{result.job_id}')")
-        lines.append(f"  read_worker_result('{result.job_id}')  # when complete")
+        lines.append(f"  get_commis_metadata('{result.job_id}')")
+        lines.append(f"  read_commis_result('{result.job_id}')  # when complete")
         lines.append("")
 
         # Evidence marker for LLM wrapper expansion (even for timeouts - partial output may be useful)
