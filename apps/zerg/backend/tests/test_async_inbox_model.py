@@ -90,6 +90,7 @@ class TestWaitForWorkerInterrupt:
             task="Compute the answer",
             model=TEST_WORKER_MODEL,
             status="success",
+            acknowledged=False,
             worker_id=worker_id,
             created_at=datetime.now(timezone.utc),
             started_at=datetime.now(timezone.utc),
@@ -110,6 +111,10 @@ class TestWaitForWorkerInterrupt:
             # Should NOT raise, should return the result
             assert f"job {job.id} completed" in result.lower()
             assert "Computed the answer" in result or "42" in result
+
+            # Completed job should be acknowledged to avoid inbox replays
+            db_session.refresh(job)
+            assert job.acknowledged is True
         finally:
             set_credential_resolver(None)
 
@@ -334,6 +339,31 @@ class TestInboxAcknowledgementAtomicity:
         assert context is not None
         assert "RUNNING" in context
         assert running_job.id not in jobs_to_ack, "Running jobs should not be acknowledged"
+
+    def test_cancelled_jobs_in_inbox_and_ack_list(self, db_session, test_user):
+        """Cancelled jobs should appear in inbox and be acknowledged."""
+        from zerg.models.models import WorkerJob
+        from zerg.services.supervisor_service import SupervisorService
+
+        cancelled_job = WorkerJob(
+            owner_id=test_user.id,
+            task="Cancelled task",
+            model=TEST_WORKER_MODEL,
+            status="cancelled",
+            acknowledged=False,
+            created_at=datetime.now(timezone.utc),
+            finished_at=datetime.now(timezone.utc),
+        )
+        db_session.add(cancelled_job)
+        db_session.commit()
+        db_session.refresh(cancelled_job)
+
+        service = SupervisorService(db_session)
+        context, jobs_to_ack = service._build_recent_worker_context(test_user.id)
+
+        assert context is not None
+        assert "CANCELLED" in context
+        assert cancelled_job.id in jobs_to_ack
 
 
 class TestAsyncInboxModelIntegration:

@@ -243,7 +243,7 @@ class SupervisorService:
             self.db.query(WorkerJob)
             .filter(
                 WorkerJob.owner_id == owner_id,
-                WorkerJob.status.in_(["success", "failed"]),
+                WorkerJob.status.in_(["success", "failed", "cancelled"]),
                 WorkerJob.acknowledged == False,  # noqa: E712
             )
             .order_by(WorkerJob.created_at.desc())
@@ -257,7 +257,7 @@ class SupervisorService:
             self.db.query(WorkerJob)
             .filter(
                 WorkerJob.owner_id == owner_id,
-                WorkerJob.status.in_(["success", "failed"]),
+                WorkerJob.status.in_(["success", "failed", "cancelled"]),
                 WorkerJob.acknowledged == True,  # noqa: E712
                 WorkerJob.created_at >= cutoff,
             )
