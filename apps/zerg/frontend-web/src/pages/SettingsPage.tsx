@@ -412,14 +412,14 @@ export default function SettingsPage() {
             </Card.Body>
           </Card>
 
-          {/* Jarvis Tools */}
+          {/* Concierge Tools */}
           <Card>
             <Card.Header>
-              <h3 className="settings-section-title ui-section-title">Jarvis Tools</h3>
+              <h3 className="settings-section-title ui-section-title">Concierge Tools</h3>
             </Card.Header>
             <Card.Body>
               <p className="section-description">
-                Enable or disable tools that Jarvis can use to help you
+                Enable or disable tools that Concierge can use to help you
               </p>
 
               <div className="tools-list">
@@ -427,7 +427,7 @@ export default function SettingsPage() {
                   { id: 'location', name: 'Location', desc: 'Get current GPS location via Traccar' },
                   { id: 'whoop', name: 'WHOOP Health Data', desc: 'Get WHOOP health metrics and recovery data' },
                   { id: 'obsidian', name: 'Obsidian Notes', desc: 'Search and read notes from your Obsidian vault' },
-                  { id: 'supervisor', name: 'Supervisor Agent', desc: 'Delegate complex multi-step tasks to supervisor' }
+                  { id: 'supervisor', name: 'Concierge', desc: 'Delegate complex multi-step tasks to Concierge' }
                 ].map(tool => (
                   <div key={tool.id} className="tool-toggle">
                     <label className="tool-label">

@@ -38,20 +38,20 @@ function generateInstructions(tools: ToolConfig[]): string {
     ? maybeCapabilities.map(c => `  - ${c}`).join('\n')
     : '  (No tools currently enabled)';
 
-  return `You are Jarvis. You provide voice I/O (transcription + turn-taking cues).
+  return `You are Concierge. You provide voice I/O (transcription + turn-taking cues).
 
 ## Architecture (v2.1 One-Brain)
 
-- Supervisor (server) is the ONLY brain and generates all assistant responses.
+- Concierge (server) is the ONLY brain and generates all assistant responses.
 - This Realtime session is I/O ONLY. Do NOT generate assistant responses.
 - Do NOT call tools from this session.
 
 ## Tool Awareness (informational)
 
-These capabilities may exist server-side (via Supervisor tools) depending on configuration:
+These capabilities may exist server-side (via Concierge tools) depending on configuration:
 ${capabilityList}
 
-If the user asks for something that requires tools, respond that the request will be handled by Supervisor.`;
+If the user asks for something that requires tools, respond that the request will be handled by Concierge.`;
 }
 
 /**
@@ -75,24 +75,24 @@ const toolsConfig: ToolConfig[] = [
     name: 'get_current_location',
     description: 'Get current GPS location with coordinates and address',
     enabled: true,
-    // Executed by Supervisor via Traccar connector
+    // Executed by Concierge via Traccar connector
   },
   {
     name: 'get_whoop_data',
     description: 'Get WHOOP health metrics (recovery, sleep, strain)',
     enabled: true,
-    // Executed by Supervisor via WHOOP connector
+    // Executed by Concierge via WHOOP connector
   },
   {
     name: 'search_notes',
     description: 'Search personal notes and knowledge base',
     enabled: true,
-    // Executed by Supervisor via Runner (Obsidian vault)
+    // Executed by Concierge via Runner (Obsidian vault)
   }
 ];
 
 export const personalConfig: VoiceAgentConfig = {
-  name: 'Jarvis',
+  name: 'Concierge',
   description: 'Your personal AI assistant',
 
   // Use getter to allow dynamic lookup of server-provided prompt
@@ -110,7 +110,7 @@ export const personalConfig: VoiceAgentConfig = {
   },
 
   branding: {
-    title: 'Jarvis',
+    title: 'Concierge',
     subtitle: 'Personal AI Assistant',
     favicon: '/icon-192.png'
   },
@@ -119,7 +119,7 @@ export const personalConfig: VoiceAgentConfig = {
 
   apiEndpoints: {
     tokenMinting: '/session',
-    // toolExecution removed in v2.1 - tools execute via Supervisor
+    // toolExecution removed in v2.1 - tools execute via Concierge
   },
 
   sync: {

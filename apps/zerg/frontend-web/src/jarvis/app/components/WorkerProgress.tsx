@@ -199,7 +199,7 @@ export function WorkerProgress({ mode = 'sticky' }: WorkerProgressProps) {
         )}
         {runningWorkers.length > 0 && (
           <div className="supervisor-active-count">
-            {runningWorkers.length} worker{runningWorkers.length > 1 ? 's' : ''} running...
+            {runningWorkers.length} commis running...
           </div>
         )}
       </div>

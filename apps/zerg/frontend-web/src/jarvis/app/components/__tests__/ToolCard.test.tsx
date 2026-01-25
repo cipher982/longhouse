@@ -318,7 +318,7 @@ describe('ToolCard', () => {
         { name: 'search_notes', icon: '📝' },
         { name: 'web_search', icon: '🌐' },
         { name: 'web_fetch', icon: '🔗' },
-        { name: 'spawn_worker', icon: '🤖' },
+        { name: 'spawn_commis', icon: '🤖' },
       ];
 
       tools.forEach(({ name, icon }) => {

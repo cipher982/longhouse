@@ -305,7 +305,7 @@ export default function ChatPage() {
             ←
           </button>
           <div className="agent-info">
-            <div className="agent-name">{agent?.name ?? "Agent"}</div>
+            <div className="agent-name">{agent?.name ?? "Fiche"}</div>
             <div>
               <span className="thread-title-label">Thread: </span>
               <span className="thread-title-text">
@@ -332,7 +332,7 @@ export default function ChatPage() {
                 type="button"
                 className="chat-settings-btn"
                 onClick={() => setIsSettingsDrawerOpen(true)}
-                title="Agent configuration settings"
+                title="Fiche configuration settings"
               >
                 <SettingsIcon />
                 <span>Config</span>

@@ -69,12 +69,12 @@ export default function DocsPage() {
 
           <h3>2. Explore the Dashboard</h3>
           <p>
-            Once signed in, you'll land on the Dashboard where you can see and manage your agents.
+            Once signed in, you'll land on the Dashboard where you can see and manage your fiches.
           </p>
 
-          <h3>3. Create an Agent</h3>
+          <h3>3. Create a Fiche</h3>
           <p>
-            From the Dashboard, click "New Agent" and configure what you want it to do.
+            From the Dashboard, click "New Fiche" and configure what you want it to do.
           </p>
 
           <h3>4. Build a Workflow</h3>
