@@ -10,6 +10,7 @@ Sub-routers:
 - jarvis_dispatch: Manual agent dispatch
 - jarvis_supervisor: Supervisor dispatch, events, cancel
 - jarvis_chat: Text chat with streaming
+- jarvis_tts: Text-to-speech for voice responses
 
 Endpoints in this file:
 - /events: General SSE events stream
@@ -52,8 +53,10 @@ from zerg.routers import jarvis_chat
 from zerg.routers import jarvis_dispatch
 from zerg.routers import jarvis_runs
 from zerg.routers import jarvis_supervisor
+from zerg.routers import jarvis_tts
 from zerg.routers.jarvis_auth import _is_tool_enabled
 from zerg.routers.jarvis_auth import get_current_jarvis_user
+from zerg.voice import router as jarvis_voice
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +69,8 @@ router.include_router(jarvis_runs.router, prefix="", tags=["jarvis"])
 router.include_router(jarvis_dispatch.router, prefix="", tags=["jarvis"])
 router.include_router(jarvis_supervisor.router, prefix="", tags=["jarvis"])
 router.include_router(jarvis_chat.router, prefix="", tags=["jarvis"])
+router.include_router(jarvis_tts.router, prefix="", tags=["jarvis-tts"])
+router.include_router(jarvis_voice.router, prefix="", tags=["jarvis-voice"])
 
 # ---------------------------------------------------------------------------
 # Deprecated Authentication Endpoint
@@ -822,7 +827,7 @@ async def jarvis_session_get(
     """
     import httpx
 
-    from zerg.services.openai_realtime import mint_realtime_session_token
+    from zerg.voice.realtime import mint_realtime_session_token
 
     try:
         result = await mint_realtime_session_token()
@@ -841,7 +846,7 @@ async def jarvis_session_post(
     """Backwards compatibility: some clients may still POST."""
     import httpx
 
-    from zerg.services.openai_realtime import mint_realtime_session_token
+    from zerg.voice.realtime import mint_realtime_session_token
 
     logger.debug("Jarvis session: received POST /session; handling directly")
     try:

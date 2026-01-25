@@ -177,3 +177,65 @@ class TestCloudExecutor:
         # but we can verify the executor has correct attributes
         assert executor.hatch_path == "hatch"
         assert executor.default_model == "zai/glm-4.7"
+
+    @pytest.mark.asyncio
+    async def test_run_agent_includes_resume_flag(self, executor, tmp_path):
+        """Verify --resume flag is included when resume_session_id is provided."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_process.communicate = AsyncMock(return_value=(b"output", b""))
+        mock_process.pid = 12345
+
+        captured_cmd = None
+
+        async def capture_exec(*args, **kwargs):
+            nonlocal captured_cmd
+            captured_cmd = args
+            return mock_process
+
+        with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
+            await executor.run_agent(
+                task="test task",
+                workspace_path=workspace,
+                resume_session_id="abc123-session-id",
+            )
+
+        # Verify --resume flag was included with correct session ID
+        assert captured_cmd is not None
+        cmd_list = list(captured_cmd)
+        assert "--resume" in cmd_list
+        resume_idx = cmd_list.index("--resume")
+        assert cmd_list[resume_idx + 1] == "abc123-session-id"
+
+    @pytest.mark.asyncio
+    async def test_run_agent_no_resume_flag_without_session_id(self, executor, tmp_path):
+        """Verify --resume flag is NOT included when resume_session_id is None."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_process.communicate = AsyncMock(return_value=(b"output", b""))
+        mock_process.pid = 12345
+
+        captured_cmd = None
+
+        async def capture_exec(*args, **kwargs):
+            nonlocal captured_cmd
+            captured_cmd = args
+            return mock_process
+
+        with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
+            await executor.run_agent(
+                task="test task",
+                workspace_path=workspace,
+                # No resume_session_id
+            )
+
+        # Verify --resume flag was NOT included
+        assert captured_cmd is not None
+        cmd_list = list(captured_cmd)
+        assert "--resume" not in cmd_list
