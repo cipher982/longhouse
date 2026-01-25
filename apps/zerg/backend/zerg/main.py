@@ -1,10 +1,17 @@
 # E2E log suppression: only active when E2E_LOG_SUPPRESS=1 for test runs
 
 # CRITICAL: Load environment variables FIRST - before ANY other imports that might use os.getenv()
-# Use override=True to ensure proper quote stripping even if vars are inherited from parent process (Node spawn)
+# Use override=False in test/e2e contexts so Node-spawned overrides (ENVIRONMENT, TESTING, etc.)
+# are preserved; override=True for normal dev/prod to keep .env authoritative and strip quotes.
+import os
+
 from dotenv import load_dotenv
 
-load_dotenv(override=True)
+_env = os.getenv("ENVIRONMENT", "").lower()
+_testing = os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes", "on"}
+_is_test_env = _testing or ("test" in _env) or ("e2e" in _env)
+
+load_dotenv(override=not _is_test_env)
 
 from zerg.config import get_settings
 
@@ -71,6 +78,7 @@ from zerg.routers.ops import router as ops_router
 from zerg.routers.reliability import router as reliability_router
 from zerg.routers.runners import router as runners_router
 from zerg.routers.runs import router as runs_router
+from zerg.routers.skills import router as skills_router
 from zerg.routers.stream import router as stream_router
 from zerg.routers.sync import router as sync_router
 from zerg.routers.system import router as system_router
@@ -659,6 +667,7 @@ app.include_router(waitlist_router, prefix=f"{API_PREFIX}")  # Public waitlist s
 app.include_router(jobs_router, prefix=f"{API_PREFIX}")  # Scheduled jobs management
 app.include_router(traces_router, prefix=f"{API_PREFIX}")  # Trace Explorer (admin only)
 app.include_router(reliability_router, prefix=f"{API_PREFIX}")  # Reliability Dashboard (admin only)
+app.include_router(skills_router, prefix=f"{API_PREFIX}")  # Skills Platform for workspace-scoped tools
 
 # ---------------------------------------------------------------------------
 # Legacy admin routes without /api prefix – keep at very end so they override
