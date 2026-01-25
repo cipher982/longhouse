@@ -34,6 +34,9 @@ jobs:
     - name: Setup uv
       uses: astral-sh/setup-uv@v7
 
+    - name: Install build tools
+      run: sudo apt-get update && sudo apt-get install -y make
+
     - name: Validate
       run: make validate
 
