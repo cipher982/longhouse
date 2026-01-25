@@ -202,18 +202,26 @@ class SupervisorService:
         logger.info(f"Created supervisor thread {thread.id} for user {owner_id}")
         return thread
 
-    def _build_recent_worker_context(self, owner_id: int) -> str | None:
+    def _build_recent_worker_context(self, owner_id: int) -> tuple[str | None, list[int]]:
         """Build inbox context with active workers and unacknowledged results.
 
         v3.0 (Async Inbox Model): The inbox shows:
         1. Active workers (queued, running) with elapsed time
-        2. Unacknowledged completed workers with summaries (marked acknowledged after injection)
+        2. Unacknowledged completed workers with summaries
 
         This allows the supervisor to be aware of background work without blocking.
         The message includes a marker for cleanup - see _cleanup_stale_worker_context().
 
+        IMPORTANT: This method does NOT commit acknowledgements. It returns the job IDs
+        that should be acknowledged. The caller must:
+        1. Persist the system message to the thread
+        2. THEN call _acknowledge_worker_jobs(job_ids) to mark them as seen
+
+        This ensures atomic "see message + acknowledge" semantics.
+
         Returns:
-            Context string if there are workers to show, None otherwise.
+            Tuple of (context_string, job_ids_to_acknowledge).
+            context_string is None if there are no workers to show.
         """
         from datetime import timedelta
 
@@ -259,7 +267,7 @@ class SupervisorService:
         )
 
         if not active_jobs and not unacknowledged_jobs and not recent_acknowledged_jobs:
-            return None
+            return None, []
 
         # Try to get artifact store for richer summaries, but don't fail if unavailable
         artifact_store = None
@@ -310,6 +318,8 @@ class SupervisorService:
                 lines.append(f"  Task: {task_preview}")
 
         # Section 2: New results (unacknowledged)
+        # Collect job IDs to acknowledge (caller will commit after message is persisted)
+        jobs_to_acknowledge: list[int] = []
         if unacknowledged_jobs:
             lines.append("\n**New Results (unread):**")
             for job in unacknowledged_jobs:
@@ -318,15 +328,7 @@ class SupervisorService:
                 summary = get_summary(job)
                 lines.append(f"- Job {job.id} [{status_icon} {job.status.upper()}] ({elapsed_str})")
                 lines.append(f"  {summary}")
-
-            # Mark these jobs as acknowledged
-            unack_ids = [job.id for job in unacknowledged_jobs]
-            self.db.query(WorkerJob).filter(WorkerJob.id.in_(unack_ids)).update(
-                {"acknowledged": True},
-                synchronize_session=False,
-            )
-            self.db.commit()
-            logger.debug(f"Marked {len(unack_ids)} worker jobs as acknowledged")
+                jobs_to_acknowledge.append(job.id)
 
         # Section 3: Recent acknowledged (brief reference only)
         if recent_acknowledged_jobs and not unacknowledged_jobs:
@@ -345,7 +347,26 @@ class SupervisorService:
             lines.append("Use `check_worker_status()` to see worker progress.")
             lines.append("Use `wait_for_worker(job_id)` if you need to block for a result.")
 
-        return "\n".join(lines)
+        return "\n".join(lines), jobs_to_acknowledge
+
+    def _acknowledge_worker_jobs(self, job_ids: list[int]) -> None:
+        """Mark worker jobs as acknowledged after system message is persisted.
+
+        This should be called AFTER the inbox context message is successfully
+        persisted to the thread. This ensures atomic "see message + acknowledge" semantics.
+
+        Args:
+            job_ids: List of WorkerJob IDs to mark as acknowledged
+        """
+        if not job_ids:
+            return
+
+        self.db.query(WorkerJob).filter(WorkerJob.id.in_(job_ids)).update(
+            {"acknowledged": True},
+            synchronize_session=False,
+        )
+        self.db.commit()
+        logger.debug(f"Marked {len(job_ids)} worker jobs as acknowledged")
 
     def _cleanup_stale_worker_context(self, thread_id: int, min_age_seconds: float = 5.0) -> int:
         """Delete previous recent worker context messages from the thread.
@@ -560,7 +581,7 @@ class SupervisorService:
             # accumulation of outdated "X minutes ago" timestamps
             self._cleanup_stale_worker_context(thread.id)
 
-            recent_worker_context = self._build_recent_worker_context(owner_id)
+            recent_worker_context, jobs_to_acknowledge = self._build_recent_worker_context(owner_id)
             if recent_worker_context:
                 logger.debug(f"Injecting recent worker context for user {owner_id}")
                 crud.create_thread_message(
@@ -583,6 +604,11 @@ class SupervisorService:
                 internal=is_continuation,  # Mark continuation prompts as internal
             )
             self.db.commit()
+
+            # Acknowledge worker jobs AFTER messages are persisted (atomic semantics)
+            # This ensures jobs aren't marked "seen" unless supervisor actually sees them
+            if jobs_to_acknowledge:
+                self._acknowledge_worker_jobs(jobs_to_acknowledge)
 
             # Emit thinking event
             await emit_run_event(
