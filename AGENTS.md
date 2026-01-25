@@ -154,3 +154,5 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-24) [gotcha] Repo policy: work only on main, no worktrees; confirm `git -C /Users/davidrose/git/zerg status -sb` before changes; no stashing unless explicitly requested.
 - (2026-01-24) [tool] Claude Code sessions are stored at `~/.claude/projects/{encoded-cwd}/{sessionId}.jsonl`; `--resume` requires the file locally.
 - (2026-01-24) [tool] `CLAUDE_CONFIG_DIR` overrides the entire `~/.claude/` location, enabling shared config/cache paths across machines.
+- (2026-01-24) [gotcha] `spawn_workspace_worker` is a normal tool (no AgentInterrupted/WAITING), but `worker_spawned` still increments SSE pending_workers, so chat streams can stay open (input disabled) until `worker_complete` even after supervisor_complete.
+- (2026-01-24) [pattern] Jarvis UX: "Human PA" model — kick off tasks, move on, don't block. Workers report back async. Input should re-enable on `supervisor_complete`, not wait for workers. See `AI-Sessions/2026-01-24-jarvis-worker-ux-design.md`.
