@@ -120,6 +120,8 @@ const backend = spawn('uv', [
 ], {
     env: {
         ...process.env,
+        // Add e2e/bin to PATH for mock-hatch CLI (used by workspace workers in E2E)
+        PATH: `${join(__dirname, 'bin')}:${process.env.PATH || ''}`,
         ENVIRONMENT: 'test:e2e',  // Use E2E test config for real models
         TEST_WORKER_ID: workerId || '0',
         NODE_ENV: 'test',
@@ -130,6 +132,13 @@ const backend = spawn('uv', [
         E2E_USE_POSTGRES_SCHEMAS: '1',  // Enable Postgres schema isolation
         // DATABASE_URL inherited from environment (Postgres)
         LLM_TOKEN_STREAM: process.env.LLM_TOKEN_STREAM || 'true',  // Enable token streaming for E2E tests
+        // LIFE_HUB_URL and LIFE_HUB_API_KEY inherited from environment (for session continuity tests)
+        // Workspace path for workspace workers (use temp dir in E2E, not /var/jarvis)
+        JARVIS_WORKSPACE_PATH: process.env.JARVIS_WORKSPACE_PATH || os.tmpdir() + '/zerg-e2e-workspaces',
+        // Claude config dir for session files (use temp dir in E2E)
+        CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR || os.tmpdir() + '/zerg-e2e-claude',
+        // Mock hatch CLI for workspace workers in E2E (can't run real Claude Code agents)
+        E2E_HATCH_PATH: join(__dirname, 'bin', 'hatch'),
         // Suppress Python logging noise for E2E tests
         LOG_LEVEL: 'ERROR',
     },

@@ -396,8 +396,11 @@ class WorkerJob(Base):
     config = Column(JSON, nullable=True)
 
     # Execution state
-    status = Column(String(20), nullable=False, default="queued")  # queued, running, success, failed
+    status = Column(String(20), nullable=False, default="queued")  # queued, running, success, failed, cancelled
     worker_id = Column(String(255), nullable=True, index=True)  # Set when execution starts
+
+    # Async inbox model - tracks whether supervisor has acknowledged this result
+    acknowledged = Column(Boolean, nullable=False, default=False, server_default="false")
 
     # Error handling
     error = Column(Text, nullable=True)

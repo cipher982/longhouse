@@ -1,0 +1,69 @@
+#!/bin/bash
+# Mock hatch CLI for E2E testing
+#
+# Creates expected session file for ship_session_to_life_hub to find.
+# Real hatch spawns Claude Code agents, which we can't run in tests.
+# This mock creates the file structure that session continuity expects.
+
+set -euo pipefail
+
+WORKSPACE=""
+RESUME_ID=""
+PROMPT=""
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -C)
+            WORKSPACE="$2"
+            shift 2
+            ;;
+        --resume)
+            RESUME_ID="$2"
+            shift 2
+            ;;
+        -b|--model)
+            # Ignore model selection
+            shift 2
+            ;;
+        --)
+            shift
+            # Rest is the prompt
+            PROMPT="$*"
+            break
+            ;;
+        *)
+            # Accumulate prompt
+            PROMPT="$PROMPT $1"
+            shift
+            ;;
+    esac
+done
+
+# Create session file if workspace provided
+if [[ -n "$WORKSPACE" ]]; then
+    # Encode CWD like Claude Code does (replace non-alphanumeric with -)
+    ENCODED_CWD=$(echo "$WORKSPACE" | sed 's|/|-|g' | sed 's/[^A-Za-z0-9-]/-/g' | sed 's/^-//')
+
+    SESSION_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$ENCODED_CWD"
+    mkdir -p "$SESSION_DIR"
+
+    # Use resume_id if provided, otherwise generate mock session ID
+    SESSION_ID="${RESUME_ID:-mock-session-$(date +%s)}"
+    SESSION_FILE="$SESSION_DIR/$SESSION_ID.jsonl"
+
+    # Write minimal valid session data that ship_session_to_life_hub expects
+    TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    cat > "$SESSION_FILE" << EOF
+{"type":"init","timestamp":"$TIMESTAMP","cwd":"$WORKSPACE"}
+{"type":"user","message":{"role":"user","content":"${PROMPT:-e2e test task}"}}
+{"type":"assistant","message":{"role":"assistant","content":"Task completed successfully. Made changes to the repository."}}
+EOF
+
+    # Write to stderr so it doesn't interfere with stdout
+    >&2 echo "[mock-hatch] Created session file: $SESSION_FILE"
+fi
+
+# Output success message to stdout
+echo "Task completed successfully."
+exit 0
