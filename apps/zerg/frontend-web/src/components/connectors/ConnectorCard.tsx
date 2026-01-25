@@ -78,7 +78,10 @@ export function ConnectorCard({
   const supportsOAuth = isOAuthConnector(connector.type);
 
   return (
-    <div className={`integration-card ${connector.configured ? "configured" : ""}`}>
+    <div
+      className={`integration-card ${connector.configured ? "configured" : ""}`}
+      data-testid={`integration-card-${connector.type}`}
+    >
       <div className="integration-card-icon" style={{ backgroundColor: config.color }}>
         {config.icon}
       </div>
