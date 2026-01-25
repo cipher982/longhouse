@@ -39,6 +39,11 @@ export interface UseTurnBasedVoiceOptions {
   onError?: (error: Error) => void;
 }
 
+type VoicePlaceholders = {
+  userItemId?: string;
+  assistantMessageId?: string;
+};
+
 export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
   const dispatch = useAppDispatch();
   const { preferences } = useAppState();
@@ -171,21 +176,69 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
     dispatch({ type: "ADD_MESSAGE", message: errorMessage });
   }, [dispatch]);
 
-  const handleError = useCallback((message: string, error?: Error) => {
+  const updatePlaceholders = useCallback((message: string, context?: VoicePlaceholders, assistantStatus: "final" | "error" = "error", userFallback?: string) => {
+    if (context?.assistantMessageId) {
+      dispatch({
+        type: "UPDATE_MESSAGE_BY_MESSAGE_ID",
+        messageId: context.assistantMessageId,
+        updates: {
+          content: message,
+          status: assistantStatus,
+          timestamp: new Date(),
+        },
+      });
+    } else {
+      pushErrorMessage(message);
+    }
+
+    if (context?.userItemId && userFallback) {
+      dispatch({ type: "UPDATE_MESSAGE", itemId: context.userItemId, content: userFallback });
+    }
+  }, [dispatch, pushErrorMessage]);
+
+  const handleError = useCallback((message: string, error?: Error, context?: VoicePlaceholders) => {
     logger.error(`[useTurnBasedVoice] ${message}`, error);
     setVoiceStatus("error");
-    pushErrorMessage(`Voice error: ${message}`);
+    updatePlaceholders(`Voice error: ${message}`, context, "error", "Voice input failed");
     options.onError?.(error ?? new Error(message));
-  }, [options, pushErrorMessage, setVoiceStatus]);
+  }, [options, setVoiceStatus, updatePlaceholders]);
 
-  const handleSoftError = useCallback((message: string, error?: Error) => {
+  const handleSoftError = useCallback((message: string, error?: Error, context?: VoicePlaceholders) => {
     logger.warn(`[useTurnBasedVoice] ${message}`, error);
-    pushErrorMessage(message);
+    updatePlaceholders(message, context, "final", "No speech detected");
     setVoiceStatus("ready");
     if (error) {
       options.onError?.(error);
     }
-  }, [options, pushErrorMessage, setVoiceStatus]);
+  }, [options, setVoiceStatus, updatePlaceholders]);
+
+  const createPlaceholders = useCallback((): VoicePlaceholders => {
+    const userItemId = uuid();
+    const assistantMessageId = uuid();
+
+    const userMessage: ChatMessage = {
+      id: uuid(),
+      role: "user",
+      content: "Transcribing...",
+      timestamp: new Date(),
+      itemId: userItemId,
+      skipAnimation: true,
+    };
+
+    const assistantMessage: ChatMessage = {
+      id: uuid(),
+      role: "assistant",
+      content: "",
+      status: "typing",
+      timestamp: new Date(),
+      messageId: assistantMessageId,
+    };
+
+    dispatch({ type: "ADD_MESSAGE", message: userMessage });
+    dispatch({ type: "ADD_MESSAGE", message: assistantMessage });
+
+    return { userItemId, assistantMessageId };
+  }, [dispatch]);
 
   const playAudio = useCallback(async (audioBase64: string, contentType: string) => {
     if (!audioBase64) {
@@ -223,6 +276,7 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
   const sendVoiceTurn = useCallback(async (blob: Blob, contentType: string) => {
     processingRef.current = true;
     setVoiceStatus("processing");
+    const placeholders = createPlaceholders();
 
     try {
       const formData = new FormData();
@@ -235,35 +289,32 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
 
       const response = await voiceTurn(formData);
       if (response.status !== "success") {
-        handleError(response.error || "Voice turn failed");
+        handleError(response.error || "Voice turn failed", undefined, placeholders);
         return;
       }
 
       const transcript = response.transcript?.trim() || "";
       if (!transcript) {
-        handleError("Empty transcript from voice turn");
+        handleSoftError("Didn't catch that — try speaking a bit longer.", undefined, placeholders);
         return;
       }
-
-      const userMessage: ChatMessage = {
-        id: uuid(),
-        role: "user",
-        content: transcript,
-        timestamp: new Date(),
-      };
+      if (placeholders.userItemId) {
+        dispatch({ type: "UPDATE_MESSAGE", itemId: placeholders.userItemId, content: transcript });
+      }
 
       const assistantText = response.response_text || "";
-      const assistantMessage: ChatMessage = {
-        id: uuid(),
-        role: "assistant",
-        content: assistantText,
-        status: "final",
-        timestamp: new Date(),
-        runId: response.run_id ?? undefined,
-      };
-
-      dispatch({ type: "ADD_MESSAGE", message: userMessage });
-      dispatch({ type: "ADD_MESSAGE", message: assistantMessage });
+      if (placeholders.assistantMessageId) {
+        dispatch({
+          type: "UPDATE_MESSAGE_BY_MESSAGE_ID",
+          messageId: placeholders.assistantMessageId,
+          updates: {
+            content: assistantText,
+            status: "final",
+            timestamp: new Date(),
+            runId: response.run_id ?? undefined,
+          },
+        });
+      }
 
       const tts = response.tts;
       if (tts?.audio_base64 && !tts.error) {
@@ -280,17 +331,17 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
           ? "Didn't catch that — try speaking a bit longer."
           : detail;
         if (detail === "Empty transcription result" || detail === "Audio too short") {
-          handleSoftError(friendly, error);
+          handleSoftError(friendly, error, placeholders);
         } else {
-          handleError(friendly, error);
+          handleError(friendly, error, placeholders);
         }
       } else {
-        handleError("Failed to send voice turn", error as Error);
+        handleError("Failed to send voice turn", error as Error, placeholders);
       }
     } finally {
       processingRef.current = false;
     }
-  }, [dispatch, handleError, playAudio, preferences.chat_model, setVoiceStatus]);
+  }, [createPlaceholders, dispatch, handleError, handleSoftError, playAudio, preferences.chat_model, setVoiceStatus]);
 
   const startRecording = useCallback(async () => {
     if (processingRef.current || recordingRef.current) return;
