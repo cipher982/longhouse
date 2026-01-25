@@ -11,6 +11,7 @@ interface TextInputProps {
   placeholder?: string
   // Voice control props
   micStatus?: VoiceStatus
+  micLevel?: number
   onMicConnect?: () => void
   onMicPressStart?: () => void
   onMicPressEnd?: () => void
@@ -21,6 +22,7 @@ export function TextInput({
   disabled = false,
   placeholder = 'Type a message...',
   micStatus = 'idle',
+  micLevel = 0,
   onMicConnect,
   onMicPressStart,
   onMicPressEnd,
@@ -34,9 +36,9 @@ export function TextInput({
       case 'connecting':
         return 'Connecting...'
       case 'ready':
-        return 'Tap to talk'
+        return 'Hold to talk'
       case 'listening':
-        return 'Tap to stop'
+        return 'Release to send'
       case 'processing':
         return 'Processing...'
       case 'speaking':
@@ -72,6 +74,7 @@ export function TextInput({
         <div className="mic-button-stack">
           <MicButton
             status={micStatus}
+            level={micLevel}
             disabled={disabled}
             onConnect={onMicConnect}
             onPressStart={onMicPressStart || (() => {})}

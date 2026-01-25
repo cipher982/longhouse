@@ -29,6 +29,66 @@
   justify-content: center;
   width: 120px;
   height: 120px;
+  --mic-level: 0;
+}
+
+/* Compact variant for inline mic button */
+.jarvis-container .voice-button-wrapper.compact {
+  width: 72px;
+  height: 72px;
+}
+
+/* Compact ring sizes */
+#react-root[data-ui-effects="on"] .jarvis-container .voice-button-wrapper.compact .reactor-ring-outer {
+  width: 68px;
+  height: 68px;
+  border-width: 1.5px;
+}
+
+#react-root[data-ui-effects="on"] .jarvis-container .voice-button-wrapper.compact .reactor-ring-middle {
+  width: 56px;
+  height: 56px;
+  border-width: 1px;
+}
+
+#react-root[data-ui-effects="on"] .jarvis-container .voice-button-wrapper.compact .reactor-ring-inner {
+  width: 46px;
+  height: 46px;
+  border-width: 1px;
+}
+
+/* Compact button sizing */
+.jarvis-container .voice-button-wrapper.compact .voice-button {
+  width: 40px;
+  height: 40px;
+}
+
+.jarvis-container .voice-button-wrapper.compact .voice-icon {
+  width: 16px;
+  height: 16px;
+}
+
+/* Mic level pulse ring */
+.jarvis-container .mic-level-ring {
+  position: absolute;
+  width: 74px;
+  height: 74px;
+  border-radius: 50%;
+  border: 2px solid rgb(6 182 212 / 35%);
+  opacity: 0;
+  transform: scale(0.9);
+  transition: opacity 0.08s linear, transform 0.08s linear;
+  pointer-events: none;
+}
+
+.jarvis-container .voice-button-wrapper.compact .mic-level-ring {
+  width: 66px;
+  height: 66px;
+}
+
+.jarvis-container .voice-button-wrapper.listening .mic-level-ring {
+  opacity: calc(0.2 + (var(--mic-level) * 0.8));
+  transform: scale(calc(0.9 + (var(--mic-level) * 0.35)));
 }
 
 /* ============================
