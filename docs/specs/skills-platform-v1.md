@@ -82,6 +82,7 @@ conditions including prod E2E verification.
 - Inject skill prompt into supervisor and worker system prompts.
 - Default insertion: end of system prompt (append).
 - Filter to model_invocable skills only.
+- Default to compact metadata (name + description + tool dispatch); load full SKILL.md only when needed.
 - Allow allowlist patterns per agent or per run.
 
 ### Tool Dispatch Integration
@@ -96,6 +97,12 @@ conditions including prod E2E verification.
 - User skills are opt-in. A user must explicitly allow skill names
   for a given agent or workspace.
 - Bundled skills may be enabled by default for core agents.
+
+### Skill Settings (Agent Config / User Context)
+- `skills_enabled`: bool (default true)
+- `skills_allowlist`: list or comma-separated string of patterns
+- `skills_include_user`: bool (default false)
+- `skills_max`: int (optional cap for prompt injection)
 
 ### Observability
 - Add structured log or run event when a skill prompt is injected.
