@@ -13,7 +13,7 @@
  * - Sticky: Lifts to top of chat when worker becomes "detached" (after DEFERRED)
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import type { SupervisorToolCall } from '../../lib/supervisor-tool-store';
 import {
   CheckCircleIcon,
@@ -23,6 +23,23 @@ import {
 } from '../../../components/icons';
 import { extractCommandPreview, extractExecTarget, extractExitCode, extractExecSource, extractOfflineReason } from '../../lib/tool-display';
 import './WorkerToolCard.css';
+
+/**
+ * Hook to force a re-render at a fixed interval
+ */
+function useTimer(isActive: boolean, intervalMs = 1000) {
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!isActive) return;
+
+    const timer = setInterval(() => {
+      setTick(t => t + 1);
+    }, intervalMs);
+
+    return () => clearInterval(timer);
+  }, [isActive, intervalMs]);
+}
 
 interface WorkerToolCardProps {
   tool: SupervisorToolCall;
@@ -50,38 +67,37 @@ interface WorkerState {
 }
 
 function formatDuration(ms: number | undefined, startedAt: number, status: string): string {
-  // Only use live calculation (Date.now()) for running tools
-  // Completed/failed tools should have durationMs set; if not, show "—" to avoid ticking
-  let duration: number;
-  if (ms != null) {
-    duration = ms;
-  } else if (status === 'running' || status === 'spawned') {
-    duration = Date.now() - startedAt;
-  } else {
-    return '—';
+  // If status is active, always calculate live elapsed time
+  if (status === 'running' || status === 'spawned') {
+    const elapsed = Date.now() - startedAt;
+    if (elapsed < 1000) return `${elapsed}ms`;
+    return `${(elapsed / 1000).toFixed(1)}s`;
   }
 
-  if (duration < 1000) {
-    return `${duration}ms`;
+  // If status is complete/failed, use the recorded duration
+  if (ms != null) {
+    if (ms < 1000) return `${ms}ms`;
+    return `${(ms / 1000).toFixed(1)}s`;
   }
-  return `${(duration / 1000).toFixed(1)}s`;
+
+  return '—';
 }
 
 function getElapsedTime(startedAt: number, status: string, durationMs?: number): string {
-  // Only use live calculation for running tools
-  let elapsed: number;
-  if (durationMs != null) {
-    elapsed = durationMs;
-  } else if (status === 'running') {
-    elapsed = Date.now() - startedAt;
-  } else {
-    return '—';
+  // If active, show live ticking
+  if (status === 'running') {
+    const elapsed = Date.now() - startedAt;
+    if (elapsed < 1000) return `${elapsed}ms`;
+    return `${(elapsed / 1000).toFixed(1)}s`;
   }
 
-  if (elapsed < 1000) {
-    return `${elapsed}ms`;
+  // If done, use recorded duration
+  if (durationMs != null) {
+    if (durationMs < 1000) return `${durationMs}ms`;
+    return `${(durationMs / 1000).toFixed(1)}s`;
   }
-  return `${(elapsed / 1000).toFixed(1)}s`;
+
+  return '—';
 }
 
 function truncatePreview(text: string, maxLen: number): string {
@@ -241,18 +257,6 @@ export function WorkerToolCard({ tool, isDetached = false, detachedIndex = 0 }: 
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [isCompact, setIsCompact] = useState(false);
 
-  const toggleToolExpand = (toolCallId: string) => {
-    setExpandedTools(prev => {
-      const next = new Set(prev);
-      if (next.has(toolCallId)) {
-        next.delete(toolCallId);
-      } else {
-        next.add(toolCallId);
-      }
-      return next;
-    });
-  };
-
   // Extract worker state from tool metadata
   const workerState = useMemo<WorkerState>(() => {
     // Worker state is stored in tool.result as metadata
@@ -265,6 +269,28 @@ export function WorkerToolCard({ tool, isDetached = false, detachedIndex = 0 }: 
       liveOutputUpdatedAt: metadata?.liveOutputUpdatedAt,
     };
   }, [tool]);
+
+  // Enable live ticking for the card if worker is active
+  const isWorkerActive = workerState.status === 'running' || workerState.status === 'spawned';
+  useTimer(isWorkerActive);
+
+  // Enable live ticking for any active nested tools
+  const hasActiveNestedTools = useMemo(() =>
+    workerState.nestedTools.some(nt => nt.status === 'running'),
+  [workerState.nestedTools]);
+  useTimer(hasActiveNestedTools, 100); // Higher frequency for sub-tools if needed
+
+  const toggleToolExpand = (toolCallId: string) => {
+    setExpandedTools(prev => {
+      const next = new Set(prev);
+      if (next.has(toolCallId)) {
+        next.delete(toolCallId);
+      } else {
+        next.add(toolCallId);
+      }
+      return next;
+    });
+  };
 
   const taskDisplay = useMemo(() => {
     // Extract task from args

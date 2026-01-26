@@ -11,7 +11,7 @@
  * - Worker summaries when complete
  */
 
-import { useSyncExternalStore } from 'react';
+import { useSyncExternalStore, useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { workerProgressStore, type WorkerState, type ToolCall } from '../../lib/worker-progress-store';
 import { extractCommandPreview } from '../../lib/tool-display';
@@ -23,6 +23,23 @@ import {
   LoaderIcon,
   PlayIcon,
 } from '../../../components/icons';
+
+/**
+ * Hook to force a re-render at a fixed interval
+ */
+function useTimer(isActive: boolean, intervalMs = 1000) {
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!isActive) return;
+
+    const timer = setInterval(() => {
+      setTick(t => t + 1);
+    }, intervalMs);
+
+    return () => clearInterval(timer);
+  }, [isActive, intervalMs]);
+}
 
 /**
  * Display mode for worker progress UI
@@ -37,20 +54,20 @@ interface WorkerProgressProps {
  * Get elapsed time since start (only for running tools)
  */
 function getElapsedTime(startedAt: number, status: string, durationMs?: number): string {
-  // Use captured duration for completed/failed tools to avoid "ticking" on re-render
-  let elapsed: number;
-  if (durationMs !== undefined) {
-    elapsed = durationMs;
-  } else if (status === 'running') {
-    elapsed = Date.now() - startedAt;
-  } else {
-    return '—';
+  // If active, show live ticking
+  if (status === 'running' || status === 'spawned') {
+    const elapsed = Date.now() - startedAt;
+    if (elapsed < 1000) return `${elapsed}ms`;
+    return `${(elapsed / 1000).toFixed(1)}s`;
   }
 
-  if (elapsed < 1000) {
-    return `${elapsed}ms`;
+  // If done, use recorded duration
+  if (durationMs != null) {
+    if (durationMs < 1000) return `${durationMs}ms`;
+    return `${(durationMs / 1000).toFixed(1)}s`;
   }
-  return `${(elapsed / 1000).toFixed(1)}s`;
+
+  return '—';
 }
 
 /**
@@ -169,12 +186,15 @@ export function WorkerProgress({ mode = 'sticky' }: WorkerProgressProps) {
     () => workerProgressStore.getState()
   );
 
+  const workersArray = Array.from(state.workers.values());
+  const runningWorkers = workersArray.filter(w => w.status === 'running' || w.status === 'spawned');
+
+  // Force re-renders for active timers
+  useTimer(runningWorkers.length > 0 || state.reconnecting);
+
   if (!state.isActive) {
     return null;
   }
-
-  const workersArray = Array.from(state.workers.values());
-  const runningWorkers = workersArray.filter(w => w.status === 'running' || w.status === 'spawned');
 
   const modeClass = mode === 'floating' ? 'worker-progress--floating' : mode === 'sticky' ? 'worker-progress--sticky' : '';
 
