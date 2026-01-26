@@ -210,6 +210,10 @@ export type SwarmReplayEvent =
       entityId?: SwarmId;
     });
 
+export type SwarmReplayEventInput = {
+  [K in SwarmReplayEvent["type"]]: Omit<Extract<SwarmReplayEvent, { type: K }>, "id" | "seq">;
+}[SwarmReplayEvent["type"]];
+
 export type SwarmReplayScenario = {
   seed: string;
   createdAt: number;

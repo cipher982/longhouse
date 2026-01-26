@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { advanceSwarmReplay, createSwarmReplayCursor, type SwarmReplayCursor } from "./replay";
-import type { SwarmReplayScenario } from "./types";
-import type { SwarmMapState } from "./state";
+import type { SwarmReplayScenario, SwarmReplayEvent } from "./types";
+import { applySwarmEvent, type SwarmMapState } from "./state";
 
 export type SwarmReplayPlayerOptions = {
   loop?: boolean;
@@ -16,6 +16,8 @@ export type SwarmReplayPlayer = {
   playing: boolean;
   setPlaying: (next: boolean) => void;
   reset: () => void;
+  dispatchEvent: (event: SwarmReplayEvent) => void;
+  dispatchEvents: (events: SwarmReplayEvent[]) => void;
 };
 
 export function useSwarmReplayPlayer(
@@ -41,6 +43,28 @@ export function useSwarmReplayPlayer(
       forceRender();
     };
   }, [scenario]);
+
+  const dispatchEvent = useMemo(() => {
+    return (event: SwarmReplayEvent) => {
+      applySwarmEvent(cursorRef.current.state, event);
+      stateRef.current = cursorRef.current.state;
+      const now = cursorRef.current.state.now;
+      cursorRef.current.now = Math.max(cursorRef.current.now, now);
+      timeRef.current = now;
+      forceRender();
+    };
+  }, []);
+
+  const dispatchEvents = useMemo(() => {
+    return (events: SwarmReplayEvent[]) => {
+      events.forEach((event) => applySwarmEvent(cursorRef.current.state, event));
+      stateRef.current = cursorRef.current.state;
+      const now = cursorRef.current.state.now;
+      cursorRef.current.now = Math.max(cursorRef.current.now, now);
+      timeRef.current = now;
+      forceRender();
+    };
+  }, []);
 
   useEffect(() => {
     reset();
@@ -106,5 +130,7 @@ export function useSwarmReplayPlayer(
     playing,
     setPlaying,
     reset,
+    dispatchEvent,
+    dispatchEvents,
   };
 }
