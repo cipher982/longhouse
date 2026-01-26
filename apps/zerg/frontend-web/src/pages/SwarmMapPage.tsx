@@ -138,6 +138,9 @@ export default function SwarmMapPage() {
   };
 
   const nudgeTask = (task: SwarmTask) => {
+    if (task.status === "success" || task.status === "failed" || task.progress >= 1) {
+      return;
+    }
     const now = Math.max(timeMs, stateRef.current.now);
     const nextProgress = Math.min(1, task.progress + 0.2);
     const events: SwarmReplayEvent[] = [];
@@ -468,6 +471,35 @@ export default function SwarmMapPage() {
             {!selectedEntity && !selectedTask ? (
               <div className="swarm-selection-empty">Select a unit or task to inspect.</div>
             ) : null}
+          </div>
+          <div className="swarm-legend">
+            <div className="swarm-legend-title">Legend</div>
+            <div className="swarm-legend-grid">
+              <div className="swarm-legend-item">
+                <span className="swarm-legend-swatch swarm-legend-swatch--unit" />
+                Unit
+              </div>
+              <div className="swarm-legend-item">
+                <span className="swarm-legend-swatch swarm-legend-swatch--structure" />
+                Structure
+              </div>
+              <div className="swarm-legend-item">
+                <span className="swarm-legend-swatch swarm-legend-swatch--worker" />
+                Worker
+              </div>
+              <div className="swarm-legend-item">
+                <span className="swarm-legend-swatch swarm-legend-swatch--task" />
+                Task Node
+              </div>
+              <div className="swarm-legend-item">
+                <span className="swarm-legend-swatch swarm-legend-swatch--alert" />
+                Alert Ring
+              </div>
+              <div className="swarm-legend-item">
+                <span className="swarm-legend-swatch swarm-legend-swatch--marker" />
+                Marker Ping
+              </div>
+            </div>
           </div>
         </Card>
       </div>
