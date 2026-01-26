@@ -446,5 +446,7 @@ export function advanceForumReplay(cursor: ForumReplayCursor, targetTime: number
     applied += 1;
   }
   cursor.now = Math.max(cursor.now, targetTime);
+  // Also update state.now so marker expiry works even on eventless frames
+  cursor.state.now = Math.max(cursor.state.now, targetTime);
   return applied;
 }
