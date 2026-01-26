@@ -156,6 +156,55 @@ async def _replay_and_stream(
     overflow_event = asyncio.Event()  # Signal overflow without queue sentinel
     continuation_cache: dict[int, bool] = {}  # Cache for continuation run lookups
 
+    def _apply_event_state(event_type: str, event: dict, *, from_replay: bool = False) -> None:
+        """Update stream lifecycle state from an event."""
+        nonlocal pending_workers, supervisor_done, saw_supervisor_complete, continuation_active, awaiting_continuation_until, complete
+
+        if event_type == "worker_spawned":
+            pending_workers += 1
+            # Cancel any pending close while new workers are active.
+            awaiting_continuation_until = None
+            return
+
+        if event_type in ("worker_complete", "worker_summary_ready"):
+            if pending_workers > 0:
+                pending_workers -= 1
+
+            # If supervisor already finished, start a short grace window
+            # to allow the inbox continuation to begin streaming.
+            if pending_workers == 0 and supervisor_done and not continuation_active and not from_replay:
+                if awaiting_continuation_until is None:
+                    awaiting_continuation_until = time.monotonic() + worker_grace_seconds
+            return
+
+        if event_type == "supervisor_started":
+            if saw_supervisor_complete:
+                continuation_active = True
+            supervisor_done = False
+            awaiting_continuation_until = None
+            return
+
+        if event_type == "supervisor_complete":
+            saw_supervisor_complete = True
+            supervisor_done = True
+            if continuation_active:
+                continuation_active = False
+            # If workers are still pending, keep stream open for their events.
+            if pending_workers == 0 and not from_replay:
+                complete = True
+            return
+
+        if event_type == "supervisor_deferred":
+            # v2.2: Timeout migration default is to close the stream, but some
+            # DEFERRED states (e.g., waiting for worker continuations) should
+            # keep the stream open so the connected client receives the final answer.
+            if event.get("close_stream", True):
+                complete = True
+            return
+
+        if event_type == "error":
+            complete = True
+
     def _is_continuation_of_run(candidate_run_id: int) -> bool:
         """Return True if candidate_run_id is a continuation of run_id (including chains).
 
@@ -255,6 +304,7 @@ async def _replay_and_stream(
             # Yield historical events with SSE id: field
             for event_id, event_type, payload, timestamp_str in historical_events:
                 last_sent_event_id = event_id
+                _apply_event_state(event_type, payload, from_replay=True)
 
                 yield {
                     "id": str(event_id),  # SSE last-event-id for resumption
@@ -280,12 +330,17 @@ async def _replay_and_stream(
                 "data": json.dumps(connected_payload, default=_json_default),
             }
 
-        # 4. If run is complete (not RUNNING / DEFERRED / WAITING), close stream
+        # 4. If replay already includes a terminal supervisor_complete and no pending workers, close early
+        if saw_supervisor_complete and pending_workers == 0 and not continuation_active:
+            logger.debug(f"Stream closed after replay for run {run_id} (no pending workers)")
+            return
+
+        # 5. If run is complete (not RUNNING / DEFERRED / WAITING), close stream
         if status not in (RunStatus.RUNNING, RunStatus.DEFERRED, RunStatus.WAITING):
             logger.debug(f"Stream closed: run {run_id} is {status.value}, not streamable")
             return
 
-        # 5. Stream live events (filtering out already-replayed ones)
+        # 6. Stream live events (filtering out already-replayed ones)
         logger.debug(f"Starting live stream for run {run_id} (status={status.value}, last_sent_id={last_sent_event_id})")
 
         # Send initial heartbeat to confirm we're in live mode
@@ -346,40 +401,7 @@ async def _replay_and_stream(
                     logger.debug(f"Stream: received live event {event_type} for run {run_id}")
 
                 # Track worker lifecycle for UI telemetry (stream no longer waits on workers)
-                if event_type == "worker_spawned":
-                    pending_workers += 1
-                    # Cancel any pending close while new workers are active.
-                    awaiting_continuation_until = None
-                elif event_type in ("worker_complete", "worker_summary_ready"):
-                    if pending_workers > 0:
-                        pending_workers -= 1
-
-                    # If supervisor already finished, start a short grace window
-                    # to allow the inbox continuation to begin streaming.
-                    if pending_workers == 0 and supervisor_done and not continuation_active:
-                        if awaiting_continuation_until is None:
-                            awaiting_continuation_until = time.monotonic() + worker_grace_seconds
-                elif event_type == "supervisor_started":
-                    if saw_supervisor_complete:
-                        continuation_active = True
-                        supervisor_done = False
-                        awaiting_continuation_until = None
-                elif event_type == "supervisor_complete":
-                    saw_supervisor_complete = True
-                    supervisor_done = True
-                    if continuation_active:
-                        continuation_active = False
-                    # If workers are still pending, keep stream open for their events.
-                    if pending_workers == 0:
-                        complete = True
-                elif event_type == "supervisor_deferred":
-                    # v2.2: Timeout migration default is to close the stream, but some
-                    # DEFERRED states (e.g., waiting for worker continuations) should
-                    # keep the stream open so the connected client receives the final answer.
-                    if event.get("close_stream", True):
-                        complete = True
-                elif event_type == "error":
-                    complete = True
+                _apply_event_state(event_type, event)
 
                 # If we've drained workers after a supervisor_complete and no continuation
                 # started within the grace window, close the stream.
