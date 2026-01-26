@@ -36,8 +36,8 @@ from zerg.schemas.schemas import ThreadMessageCreate
 from zerg.schemas.schemas import ThreadMessageResponse
 from zerg.schemas.schemas import ThreadSummary
 from zerg.schemas.schemas import ThreadUpdate
-from zerg.services.course_history import execute_thread_course_with_history
-from zerg.services.quota import assert_can_start_course
+from zerg.services.quota import assert_can_start_run
+from zerg.services.run_history import execute_thread_run_with_history
 
 # Thread service façade
 from zerg.services.thread_service import ThreadService
@@ -281,12 +281,12 @@ def create_thread_message(
     return new_message
 
 
-@router.post("/{thread_id}/courses", status_code=status.HTTP_202_ACCEPTED)
-async def start_thread_course(thread_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+@router.post("/{thread_id}/runs", status_code=status.HTTP_202_ACCEPTED)
+async def start_thread_run(thread_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """Process any unprocessed messages in the thread and stream back the result."""
 
-    # Enforce per-user daily course cap (non-admins are restricted)
-    assert_can_start_course(db, user=current_user)
+    # Enforce per-user daily run cap (non-admins are restricted)
+    assert_can_start_run(db, user=current_user)
 
     # Validate thread & fiche and ownership
     thread = crud.get_thread(db, thread_id=thread_id)
@@ -323,8 +323,8 @@ async def start_thread_course(thread_id: int, db: Session = Depends(get_db), cur
         )
         await topic_manager.broadcast_to_topic(topic, envelope.model_dump())
 
-        # Execute the fiche turn and record course history/events
-        created_rows = await execute_thread_course_with_history(
+        # Execute the fiche turn and record run history/events
+        created_rows = await execute_thread_run_with_history(
             db=db,
             fiche=fiche,
             thread=thread,

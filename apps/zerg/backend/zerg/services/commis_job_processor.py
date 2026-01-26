@@ -194,7 +194,7 @@ class CommisJobProcessor:
         # First, fetch job data and determine execution mode
         # This session is short-lived - we extract data and close before execution
         execution_mode = "standard"
-        concierge_course_id = None
+        oikos_run_id = None
         job_task_preview = ""
 
         with db_session() as db:
@@ -221,8 +221,8 @@ class CommisJobProcessor:
                 logger.error(f"Commis job {job_id} failed: invalid execution_mode '{execution_mode}'")
                 return
 
-            # Capture concierge course ID for SSE correlation
-            concierge_course_id = job.concierge_course_id
+            # Capture oikos run ID for SSE correlation
+            oikos_run_id = job.oikos_run_id
             job_task_preview = job.task[:50] if job.task else ""
 
             if not already_claimed:
@@ -237,12 +237,12 @@ class CommisJobProcessor:
         if execution_mode == "workspace":
             # Workspace execution: manages its own short-lived sessions
             # No db session passed - _process_workspace_job opens/closes sessions as needed
-            await self._process_workspace_job(job_id, concierge_course_id)
+            await self._process_workspace_job(job_id, oikos_run_id)
         else:
             # Standard execution: use CommisRunner with its own session
-            await self._process_standard_job(job_id, concierge_course_id)
+            await self._process_standard_job(job_id, oikos_run_id)
 
-    async def _process_standard_job(self, job_id: int, concierge_course_id: Optional[int]) -> None:
+    async def _process_standard_job(self, job_id: int, oikos_run_id: Optional[int]) -> None:
         """Process a job using standard CommisRunner (in-process execution).
 
         Opens its own short-lived db sessions as needed.
@@ -274,8 +274,8 @@ class CommisJobProcessor:
             # If that fails, the main try block will catch it and mark job failed
             runner = CommisRunner(artifact_store=artifact_store)
             # Execute the commis - CommisRunner manages its own db sessions internally
-            # Pass job_id for roundabout correlation, course_id for SSE tool events
-            # trace_id for end-to-end debugging (inherited from concierge)
+            # Pass job_id for roundabout correlation, run_id for SSE tool events
+            # trace_id for end-to-end debugging (inherited from oikos)
             with db_session() as exec_db:
                 result = await runner.run_commis(
                     db=exec_db,
@@ -288,7 +288,7 @@ class CommisJobProcessor:
                     },
                     job_id=job_id,
                     event_context={
-                        "course_id": concierge_course_id,
+                        "run_id": oikos_run_id,
                         "trace_id": job_trace_id,
                     },
                 )
@@ -324,7 +324,7 @@ class CommisJobProcessor:
                     error_job.finished_at = datetime.now(timezone.utc)
                     error_db.commit()
 
-    async def _process_workspace_job(self, job_id: int, concierge_course_id: Optional[int]) -> None:
+    async def _process_workspace_job(self, job_id: int, oikos_run_id: Optional[int]) -> None:
         """Process a job using workspace execution (hatch subprocess with git workspace).
 
         This enables 24/7 execution on zerg-vps independent of laptop connectivity.
@@ -393,7 +393,7 @@ class CommisJobProcessor:
             logger.info(f"Setting up workspace for job {job_id}")
             workspace = await workspace_manager.setup(
                 repo_url=git_repo,
-                course_id=commis_id,
+                run_id=commis_id,
                 base_branch=base_branch,
             )
 
@@ -512,18 +512,18 @@ class CommisJobProcessor:
             except Exception as complete_error:
                 logger.warning(f"Failed to complete artifact commis for job {job_id}: {complete_error}")
 
-        # 9. Emit completion event for SSE (if concierge run exists)
+        # 9. Emit completion event for SSE (if oikos run exists)
         # IMPORTANT: These are best-effort operations. Failures here should NOT
         # change the job status - the job already succeeded/failed above.
-        if concierge_course_id:
+        if oikos_run_id:
             # Use a new short-lived session for event emission
             with db_session() as event_db:
                 try:
-                    from zerg.services.event_store import emit_course_event
+                    from zerg.services.event_store import emit_run_event
 
-                    await emit_course_event(
+                    await emit_run_event(
                         db=event_db,
-                        course_id=concierge_course_id,
+                        run_id=oikos_run_id,
                         event_type="commis_complete",
                         payload={
                             "job_id": job_id,
@@ -540,23 +540,23 @@ class CommisJobProcessor:
                 except Exception as emit_error:
                     logger.warning(f"Failed to emit SSE event for job {job_id}: {emit_error}")
 
-            # Resume concierge if waiting (best-effort) - use another short session
+            # Resume oikos if waiting (best-effort) - use another short session
             with db_session() as resume_db:
                 try:
-                    from zerg.services.commis_resume import resume_concierge_with_commis_result
+                    from zerg.services.commis_resume import resume_oikos_with_commis_result
 
                     summary = result.output[:500] if result and result.output else "(No output)"
                     if diff:
                         summary += f"\n\n[Git diff captured: {len(diff)} bytes]"
 
-                    await resume_concierge_with_commis_result(
+                    await resume_oikos_with_commis_result(
                         db=resume_db,
-                        course_id=concierge_course_id,
+                        run_id=oikos_run_id,
                         commis_result=summary,
                         job_id=job_id,
                     )
                 except Exception as resume_error:
-                    logger.warning(f"Failed to resume concierge for job {job_id}: {resume_error}")
+                    logger.warning(f"Failed to resume oikos for job {job_id}: {resume_error}")
 
     async def process_job_now(self, job_id: int) -> bool:
         """Process a specific job immediately (for testing/debugging).

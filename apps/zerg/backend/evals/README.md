@@ -181,7 +181,7 @@ make eval
 
 ### Live Mode (Opt-in)
 - **LLM:** Real OpenAI API calls
-- **Tools:** Full concierge toolset
+- **Tools:** Full oikos toolset
 - **Speed:** Slower (~10-30s per test)
 - **Cost:** Real API costs
 - **Use:** Pre-deploy validation, prompt quality testing
@@ -190,7 +190,7 @@ make eval
 
 | Capability | Hermetic | Live |
 |------------|----------|------|
-| Concierge doesn't crash | ✅ | ✅ |
+| Oikos doesn't crash | ✅ | ✅ |
 | Commis artifacts created correctly | ✅ | ✅ |
 | Latency within bounds | ✅ | ✅ |
 | Multi-turn message injection works | ✅ | ✅ |
@@ -283,7 +283,7 @@ YAML datasets (human-editable)
     ↓
 pytest plugin (load + generate tests)
     ↓
-EvalRunner (in-process ConciergeService calls)
+EvalRunner (in-process OikosService calls)
     ↓
 Assertions (deterministic + LLM-graded)
     ↓

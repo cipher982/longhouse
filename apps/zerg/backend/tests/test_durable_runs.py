@@ -2,15 +2,15 @@
 
 Tests verify:
 1. Timeout produces DEFERRED status (not FAILED)
-2. CONCIERGE_DEFERRED event is emitted on timeout
+2. OIKOS_DEFERRED event is emitted on timeout
 3. Roundabout no longer cancels on no-progress (warn only)
-4. SSE stream closes on concierge_deferred event
+4. SSE stream closes on oikos_deferred event
 5. Resume endpoint resumes WAITING runs when commis completes
 6. Heartbeat events reset no-progress counter
 
-NOTE: The continuation pattern was replaced by the LangGraph-free concierge
-resume path in Jan 2026 (CourseInterrupted + FicheRunner.run_continuation).
-See: docs/work/concierge-continuation-refactor.md
+NOTE: The continuation pattern was replaced by the LangGraph-free oikos
+resume path in Jan 2026 (RunInterrupted + FicheRunner.run_continuation).
+See: docs/work/oikos-continuation-refactor.md
 """
 
 import asyncio
@@ -23,10 +23,10 @@ import pytest
 from zerg.crud import crud
 from zerg.events import EventType
 from zerg.events import event_bus
-from zerg.models.enums import CourseStatus
-from zerg.models.enums import CourseTrigger
-from zerg.models.models import Course
-from zerg.services.concierge_service import ConciergeService
+from zerg.models.enums import RunStatus
+from zerg.models.enums import RunTrigger
+from zerg.models.models import Run
+from zerg.services.oikos_service import OikosService
 
 
 @pytest.mark.timeout(30)
@@ -42,8 +42,8 @@ class TestDurableRunsTimeout:
 
     @pytest.mark.asyncio
     async def test_timeout_produces_deferred_status(self, db_session, test_user, temp_artifact_path):
-        """Test that concierge timeout sets DEFERRED status, not FAILED."""
-        service = ConciergeService(db_session)
+        """Test that oikos timeout sets DEFERRED status, not FAILED."""
+        service = OikosService(db_session)
 
         # Mock FicheRunner.run_thread to be slower than timeout
         async def slow_run_thread(_self, *_args, **_kwargs):
@@ -51,7 +51,7 @@ class TestDurableRunsTimeout:
             return []
 
         with patch("zerg.managers.fiche_runner.FicheRunner.run_thread", new=slow_run_thread):
-            result = await service.run_concierge(
+            result = await service.run_oikos(
                 owner_id=test_user.id,
                 task="This will timeout",
                 timeout=0.05,  # Very short timeout
@@ -65,14 +65,14 @@ class TestDurableRunsTimeout:
             await asyncio.sleep(0.25)
 
             # Verify DB record
-            run = db_session.query(Course).filter(Course.id == result.course_id).first()
+            run = db_session.query(Run).filter(Run.id == result.run_id).first()
             assert run is not None
-            assert run.status == CourseStatus.DEFERRED
+            assert run.status == RunStatus.DEFERRED
 
     @pytest.mark.asyncio
     async def test_timeout_emits_deferred_event(self, db_session, test_user, temp_artifact_path):
-        """Test that timeout emits CONCIERGE_DEFERRED event, not ERROR."""
-        service = ConciergeService(db_session)
+        """Test that timeout emits OIKOS_DEFERRED event, not ERROR."""
+        service = OikosService(db_session)
         events_received = []
 
         async def capture_deferred(event_data):
@@ -81,7 +81,7 @@ class TestDurableRunsTimeout:
         async def capture_error(event_data):
             events_received.append(("error", event_data))
 
-        event_bus.subscribe(EventType.CONCIERGE_DEFERRED, capture_deferred)
+        event_bus.subscribe(EventType.OIKOS_DEFERRED, capture_deferred)
         event_bus.subscribe(EventType.ERROR, capture_error)
 
         try:
@@ -90,7 +90,7 @@ class TestDurableRunsTimeout:
                 return []
 
             with patch("zerg.managers.fiche_runner.FicheRunner.run_thread", new=slow_run_thread):
-                result = await service.run_concierge(
+                result = await service.run_oikos(
                     owner_id=test_user.id,
                     task="Timeout test",
                     timeout=0.05,
@@ -100,13 +100,13 @@ class TestDurableRunsTimeout:
 
                 # Verify DEFERRED event was emitted
                 deferred_events = [e for e in events_received if e[0] == "deferred"]
-                assert len(deferred_events) >= 1, "CONCIERGE_DEFERRED event should be emitted"
+                assert len(deferred_events) >= 1, "OIKOS_DEFERRED event should be emitted"
 
                 # Verify event contains expected fields
                 deferred_payload = deferred_events[0][1]
-                assert "course_id" in deferred_payload
+                assert "run_id" in deferred_payload
                 assert "message" in deferred_payload
-                assert deferred_payload["course_id"] == result.course_id
+                assert deferred_payload["run_id"] == result.run_id
 
                 # Verify NO error event was emitted (for timeout)
                 error_events = [e for e in events_received if e[0] == "error"]
@@ -115,13 +115,13 @@ class TestDurableRunsTimeout:
                 assert len(timeout_errors) == 0, "ERROR event should not be emitted on timeout"
 
         finally:
-            event_bus.unsubscribe(EventType.CONCIERGE_DEFERRED, capture_deferred)
+            event_bus.unsubscribe(EventType.OIKOS_DEFERRED, capture_deferred)
             event_bus.unsubscribe(EventType.ERROR, capture_error)
 
     @pytest.mark.asyncio
     async def test_normal_completion_still_works(self, db_session, test_user, temp_artifact_path):
         """Test that normal (non-timeout) completion still returns SUCCESS."""
-        service = ConciergeService(db_session)
+        service = OikosService(db_session)
 
         # Mock a fast completion
         mock_message = AsyncMock()
@@ -132,7 +132,7 @@ class TestDurableRunsTimeout:
             return [mock_message]
 
         with patch("zerg.managers.fiche_runner.FicheRunner.run_thread", new=fast_run_thread):
-            result = await service.run_concierge(
+            result = await service.run_oikos(
                 owner_id=test_user.id,
                 task="Quick task",
                 timeout=30,  # Plenty of time
@@ -142,9 +142,9 @@ class TestDurableRunsTimeout:
             assert result.status == "success"
 
             # Verify DB record
-            run = db_session.query(Course).filter(Course.id == result.course_id).first()
+            run = db_session.query(Run).filter(Run.id == result.run_id).first()
             assert run is not None
-            assert run.status == CourseStatus.SUCCESS
+            assert run.status == RunStatus.SUCCESS
 
 
 @pytest.mark.timeout(10)
@@ -152,26 +152,26 @@ class TestDeferredEventTypes:
     """Test that DEFERRED status and event types exist."""
 
     def test_deferred_status_exists(self):
-        """Verify DEFERRED is a valid CourseStatus."""
-        assert hasattr(CourseStatus, "DEFERRED")
-        assert CourseStatus.DEFERRED.value == "deferred"
+        """Verify DEFERRED is a valid RunStatus."""
+        assert hasattr(RunStatus, "DEFERRED")
+        assert RunStatus.DEFERRED.value == "deferred"
 
     def test_waiting_status_exists(self):
-        """Verify WAITING is a valid CourseStatus (for interrupt/resume pattern)."""
-        assert hasattr(CourseStatus, "WAITING")
-        assert CourseStatus.WAITING.value == "waiting"
+        """Verify WAITING is a valid RunStatus (for interrupt/resume pattern)."""
+        assert hasattr(RunStatus, "WAITING")
+        assert RunStatus.WAITING.value == "waiting"
 
-    def test_concierge_deferred_event_exists(self):
-        """Verify CONCIERGE_DEFERRED is a valid EventType."""
-        assert hasattr(EventType, "CONCIERGE_DEFERRED")
-        assert EventType.CONCIERGE_DEFERRED.value == "concierge_deferred"
+    def test_oikos_deferred_event_exists(self):
+        """Verify OIKOS_DEFERRED is a valid EventType."""
+        assert hasattr(EventType, "OIKOS_DEFERRED")
+        assert EventType.OIKOS_DEFERRED.value == "oikos_deferred"
 
 
 @pytest.mark.timeout(30)
 class TestResumeFlow:
-    """Test resume flow when commis completes while concierge is WAITING.
+    """Test resume flow when commis completes while oikos is WAITING.
 
-    This tests the LangGraph-free concierge resume pattern that replaced the
+    This tests the LangGraph-free oikos resume pattern that replaced the
     old continuation pattern in Jan 2026.
     """
 
@@ -184,9 +184,9 @@ class TestResumeFlow:
 
     @pytest.mark.asyncio
     async def test_resume_endpoint_resumes_waiting_run(self, db_session, test_user, sample_fiche):
-        """Test that resume endpoint calls resume_concierge_with_commis_result for WAITING run."""
-        from zerg.routers.jarvis_internal import CommisCompletionPayload
-        from zerg.routers.jarvis_internal import resume_run
+        """Test that resume endpoint calls resume_oikos_with_commis_result for WAITING run."""
+        from zerg.routers.oikos_internal import CommisCompletionPayload
+        from zerg.routers.oikos_internal import resume_run
 
         # Create a WAITING run (interrupted by spawn_commis)
         thread = crud.create_thread(
@@ -195,25 +195,25 @@ class TestResumeFlow:
             title="Test thread",
             active=True,
         )
-        waiting_run = Course(
+        waiting_run = Run(
             fiche_id=sample_fiche.id,
             thread_id=thread.id,
-            status=CourseStatus.WAITING,
+            status=RunStatus.WAITING,
         )
         db_session.add(waiting_run)
         db_session.commit()
         db_session.refresh(waiting_run)
 
-        # Mock resume_concierge_with_commis_result
+        # Mock resume_oikos_with_commis_result
         # The import is inside the function, so we patch the service module
-        async def mock_resume(db, course_id, commis_result, job_id=None):  # noqa: ARG001 - test double
+        async def mock_resume(db, run_id, commis_result, job_id=None):  # noqa: ARG001 - test double
             # Update run status to success (simulating what real resume does)
-            run = db.query(Course).filter(Course.id == course_id).first()
-            run.status = CourseStatus.SUCCESS
+            run = db.query(Run).filter(Run.id == run_id).first()
+            run.status = RunStatus.SUCCESS
             db.commit()
             return {"status": "success", "result": "Resumed successfully"}
 
-        with patch("zerg.services.commis_resume.resume_concierge_with_commis_result", side_effect=mock_resume):
+        with patch("zerg.services.commis_resume.resume_oikos_with_commis_result", side_effect=mock_resume):
             # Call resume endpoint
             payload = CommisCompletionPayload(
                 job_id=123,
@@ -223,20 +223,20 @@ class TestResumeFlow:
             )
 
             result = await resume_run(
-                course_id=waiting_run.id,
+                run_id=waiting_run.id,
                 payload=payload,
                 db=db_session,
             )
 
             # Verify response
             assert result["status"] == "resumed"
-            assert result["course_id"] == waiting_run.id
+            assert result["run_id"] == waiting_run.id
 
     @pytest.mark.asyncio
     async def test_resume_endpoint_skips_non_waiting_run(self, db_session, test_user, sample_fiche):
         """Test that calling resume on non-WAITING run is a no-op (idempotent)."""
-        from zerg.routers.jarvis_internal import CommisCompletionPayload
-        from zerg.routers.jarvis_internal import resume_run
+        from zerg.routers.oikos_internal import CommisCompletionPayload
+        from zerg.routers.oikos_internal import resume_run
 
         # Create a SUCCESS run (not WAITING)
         thread = crud.create_thread(
@@ -245,10 +245,10 @@ class TestResumeFlow:
             title="Test thread",
             active=True,
         )
-        completed_run = Course(
+        completed_run = Run(
             fiche_id=sample_fiche.id,
             thread_id=thread.id,
-            status=CourseStatus.SUCCESS,
+            status=RunStatus.SUCCESS,
         )
         db_session.add(completed_run)
         db_session.commit()
@@ -263,7 +263,7 @@ class TestResumeFlow:
         )
 
         result = await resume_run(
-            course_id=completed_run.id,
+            run_id=completed_run.id,
             payload=payload,
             db=db_session,
         )
@@ -279,17 +279,17 @@ class TestResumeFlow:
         """Test that commis completion calls resume when run is WAITING."""
         from zerg.services.commis_runner import CommisRunner
 
-        # Create a WAITING concierge run (interrupted by spawn_commis)
+        # Create a WAITING oikos run (interrupted by spawn_commis)
         thread = crud.create_thread(
             db=db_session,
             fiche_id=sample_fiche.id,
             title="Test thread",
             active=True,
         )
-        waiting_run = Course(
+        waiting_run = Run(
             fiche_id=sample_fiche.id,
             thread_id=thread.id,
-            status=CourseStatus.WAITING,
+            status=RunStatus.WAITING,
         )
         db_session.add(waiting_run)
         db_session.commit()
@@ -316,13 +316,13 @@ class TestResumeFlow:
             # Mock the resume function to track calls
             resume_calls = []
 
-            async def mock_resume(db, course_id, commis_result):
-                resume_calls.append({"course_id": course_id, "commis_result": commis_result})
+            async def mock_resume(db, run_id, commis_result):
+                resume_calls.append({"run_id": run_id, "commis_result": commis_result})
                 return {"status": "success"}
 
             with patch("zerg.services.commis_runner.asyncio.create_task", side_effect=_capture_task):
                 with patch(
-                    "zerg.services.commis_resume.resume_concierge_with_commis_result",
+                    "zerg.services.commis_resume.resume_oikos_with_commis_result",
                     side_effect=mock_resume,
                 ):
                     result = await runner.run_commis(
@@ -330,7 +330,7 @@ class TestResumeFlow:
                         task="Test task",
                         fiche=sample_fiche,
                         timeout=10,
-                        event_context={"course_id": waiting_run.id},
+                        event_context={"run_id": waiting_run.id},
                         job_id=123,
                     )
 
@@ -425,9 +425,9 @@ class TestSSEDeferredHandling:
     """Test SSE stream behavior on deferred events."""
 
     def test_sse_event_types_include_deferred(self):
-        """Verify SSE subscribes to CONCIERGE_DEFERRED event."""
-        # This is a static check - the subscription is in jarvis_chat.py
-        from zerg.routers.jarvis_chat import _chat_stream_generator
+        """Verify SSE subscribes to OIKOS_DEFERRED event."""
+        # This is a static check - the subscription is in oikos_chat.py
+        from zerg.routers.oikos_chat import _chat_stream_generator
 
         # The function should exist and be an async generator
         assert asyncio.iscoroutinefunction(_chat_stream_generator) or hasattr(_chat_stream_generator, "__code__")

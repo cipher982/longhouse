@@ -1,4 +1,4 @@
-import type { DashboardSnapshot, FicheSummary, Course } from "../../services/api";
+import type { DashboardSnapshot, FicheSummary, Run } from "../../services/api";
 
 export function applyFicheStateUpdate(
   current: DashboardSnapshot,
@@ -10,8 +10,8 @@ export function applyFicheStateUpdate(
     typeof dataPayload.status === "string" && validStatuses.includes(dataPayload.status as (typeof validStatuses)[number])
       ? (dataPayload.status as FicheSummary["status"])
       : undefined;
-  const lastCourseAtValue = typeof dataPayload.last_course_at === "string" ? dataPayload.last_course_at : undefined;
-  const nextCourseAtValue = typeof dataPayload.next_course_at === "string" ? dataPayload.next_course_at : undefined;
+  const lastRunAtValue = typeof dataPayload.last_run_at === "string" ? dataPayload.last_run_at : undefined;
+  const nextRunAtValue = typeof dataPayload.next_run_at === "string" ? dataPayload.next_run_at : undefined;
   const lastErrorValue =
     dataPayload.last_error === null || typeof dataPayload.last_error === "string"
       ? (dataPayload.last_error as string | null)
@@ -26,15 +26,15 @@ export function applyFicheStateUpdate(
     const nextFiche: FicheSummary = {
       ...fiche,
       status: statusValue ?? fiche.status,
-      last_course_at: lastCourseAtValue ?? fiche.last_course_at,
-      next_course_at: nextCourseAtValue ?? fiche.next_course_at,
+      last_run_at: lastRunAtValue ?? fiche.last_run_at,
+      next_run_at: nextRunAtValue ?? fiche.next_run_at,
       last_error: lastErrorValue !== undefined ? lastErrorValue : fiche.last_error,
     };
 
     if (
       nextFiche.status !== fiche.status ||
-      nextFiche.last_course_at !== fiche.last_course_at ||
-      nextFiche.next_course_at !== fiche.next_course_at ||
+      nextFiche.last_run_at !== fiche.last_run_at ||
+      nextFiche.next_run_at !== fiche.next_run_at ||
       nextFiche.last_error !== fiche.last_error
     ) {
       changed = true;
@@ -53,51 +53,51 @@ export function applyFicheStateUpdate(
   };
 }
 
-export function applyCourseUpdate(
+export function applyRunUpdate(
   current: DashboardSnapshot,
   ficheId: number,
   dataPayload: Record<string, unknown>
 ): DashboardSnapshot {
-  const courseIdCandidate = dataPayload.id ?? dataPayload.course_id;
-  const courseId = typeof courseIdCandidate === "number" ? courseIdCandidate : null;
-  if (courseId == null) {
+  const runIdCandidate = dataPayload.id ?? dataPayload.run_id;
+  const runId = typeof runIdCandidate === "number" ? runIdCandidate : null;
+  if (runId == null) {
     return current;
   }
 
   const threadId =
     typeof dataPayload.thread_id === "number" ? (dataPayload.thread_id as number) : undefined;
 
-  const courseBundles = current.courses.slice();
-  let bundleIndex = courseBundles.findIndex((bundle) => bundle.ficheId === ficheId);
-  let coursesChanged = false;
+  const runBundles = current.runs.slice();
+  let bundleIndex = runBundles.findIndex((bundle) => bundle.ficheId === ficheId);
+  let runsChanged = false;
 
   if (bundleIndex === -1) {
-    courseBundles.push({ ficheId, courses: [] });
-    bundleIndex = courseBundles.length - 1;
-    coursesChanged = true;
+    runBundles.push({ ficheId, runs: [] });
+    bundleIndex = runBundles.length - 1;
+    runsChanged = true;
   }
 
-  const targetBundle = courseBundles[bundleIndex];
-  const existingCourses = targetBundle.courses ?? [];
-  const existingIndex = existingCourses.findIndex((course) => course.id === courseId);
-  let nextCourses = existingCourses;
+  const targetBundle = runBundles[bundleIndex];
+  const existingRuns = targetBundle.runs ?? [];
+  const existingIndex = existingRuns.findIndex((run) => run.id === runId);
+  let nextRuns = existingRuns;
 
   if (existingIndex === -1) {
     if (threadId === undefined) {
       return current;
     }
 
-    const newCourse: Course = {
-      id: courseId,
+    const newRun: Run = {
+      id: runId,
       fiche_id: ficheId,
       thread_id: threadId,
       status:
         typeof dataPayload.status === "string"
-          ? (dataPayload.status as Course["status"])
+          ? (dataPayload.status as Run["status"])
           : "running",
       trigger:
         typeof dataPayload.trigger === "string"
-          ? (dataPayload.trigger as Course["trigger"])
+          ? (dataPayload.trigger as Run["trigger"])
           : "manual",
       started_at: typeof dataPayload.started_at === "string" ? (dataPayload.started_at as string) : null,
       finished_at: typeof dataPayload.finished_at === "string" ? (dataPayload.finished_at as string) : null,
@@ -110,68 +110,68 @@ export function applyCourseUpdate(
           ? null
           : (dataPayload.error as string | null) ?? null,
       display_type:
-        typeof dataPayload.display_type === "string" ? (dataPayload.display_type as string) : "course",
+        typeof dataPayload.display_type === "string" ? (dataPayload.display_type as string) : "run",
     };
 
-    nextCourses = [newCourse, ...existingCourses];
-    if (nextCourses.length > current.coursesLimit) {
-      nextCourses = nextCourses.slice(0, current.coursesLimit);
+    nextRuns = [newRun, ...existingRuns];
+    if (nextRuns.length > current.runsLimit) {
+      nextRuns = nextRuns.slice(0, current.runsLimit);
     }
-    coursesChanged = true;
+    runsChanged = true;
   } else {
-    const previousCourse = existingCourses[existingIndex];
-    const updatedCourse: Course = {
-      ...previousCourse,
+    const previousRun = existingRuns[existingIndex];
+    const updatedRun: Run = {
+      ...previousRun,
       status:
         typeof dataPayload.status === "string"
-          ? (dataPayload.status as Course["status"])
-          : previousCourse.status,
+          ? (dataPayload.status as Run["status"])
+          : previousRun.status,
       started_at:
         typeof dataPayload.started_at === "string"
-          ? (dataPayload.started_at as Course["started_at"])
-          : previousCourse.started_at,
+          ? (dataPayload.started_at as Run["started_at"])
+          : previousRun.started_at,
       finished_at:
         typeof dataPayload.finished_at === "string"
-          ? (dataPayload.finished_at as Course["finished_at"])
-          : previousCourse.finished_at,
+          ? (dataPayload.finished_at as Run["finished_at"])
+          : previousRun.finished_at,
       duration_ms:
         typeof dataPayload.duration_ms === "number"
-          ? (dataPayload.duration_ms as Course["duration_ms"])
-          : previousCourse.duration_ms,
+          ? (dataPayload.duration_ms as Run["duration_ms"])
+          : previousRun.duration_ms,
       total_tokens:
         typeof dataPayload.total_tokens === "number"
-          ? (dataPayload.total_tokens as Course["total_tokens"])
-          : previousCourse.total_tokens,
+          ? (dataPayload.total_tokens as Run["total_tokens"])
+          : previousRun.total_tokens,
       total_cost_usd:
         typeof dataPayload.total_cost_usd === "number"
-          ? (dataPayload.total_cost_usd as Course["total_cost_usd"])
-          : previousCourse.total_cost_usd,
+          ? (dataPayload.total_cost_usd as Run["total_cost_usd"])
+          : previousRun.total_cost_usd,
       error:
         dataPayload.error === undefined
-          ? previousCourse.error
+          ? previousRun.error
           : ((dataPayload.error as string | null) ?? null),
     };
 
-    const hasCourseDiff =
-      updatedCourse.status !== previousCourse.status ||
-      updatedCourse.started_at !== previousCourse.started_at ||
-      updatedCourse.finished_at !== previousCourse.finished_at ||
-      updatedCourse.duration_ms !== previousCourse.duration_ms ||
-      updatedCourse.total_tokens !== previousCourse.total_tokens ||
-      updatedCourse.total_cost_usd !== previousCourse.total_cost_usd ||
-      updatedCourse.error !== previousCourse.error;
+    const hasRunDiff =
+      updatedRun.status !== previousRun.status ||
+      updatedRun.started_at !== previousRun.started_at ||
+      updatedRun.finished_at !== previousRun.finished_at ||
+      updatedRun.duration_ms !== previousRun.duration_ms ||
+      updatedRun.total_tokens !== previousRun.total_tokens ||
+      updatedRun.total_cost_usd !== previousRun.total_cost_usd ||
+      updatedRun.error !== previousRun.error;
 
-    if (hasCourseDiff) {
-      nextCourses = [...existingCourses];
-      nextCourses[existingIndex] = updatedCourse;
-      coursesChanged = true;
+    if (hasRunDiff) {
+      nextRuns = [...existingRuns];
+      nextRuns[existingIndex] = updatedRun;
+      runsChanged = true;
     }
   }
 
-  if (coursesChanged) {
-    courseBundles[bundleIndex] = {
+  if (runsChanged) {
+    runBundles[bundleIndex] = {
       ficheId,
-      courses: nextCourses,
+      runs: nextRuns,
     };
   }
 
@@ -186,10 +186,10 @@ export function applyCourseUpdate(
       typeof dataPayload.status === "string" && validFicheStatuses.includes(dataPayload.status as (typeof validFicheStatuses)[number])
         ? (dataPayload.status as FicheSummary["status"])
         : fiche.status;
-    const lastCourseValue =
-      typeof dataPayload.started_at === "string" ? (dataPayload.started_at as string) : fiche.last_course_at;
+    const lastRunValue =
+      typeof dataPayload.started_at === "string" ? (dataPayload.started_at as string) : fiche.last_run_at;
 
-    if (statusValue === fiche.status && lastCourseValue === fiche.last_course_at) {
+    if (statusValue === fiche.status && lastRunValue === fiche.last_run_at) {
       return fiche;
     }
 
@@ -197,17 +197,17 @@ export function applyCourseUpdate(
     return {
       ...fiche,
       status: statusValue,
-      last_course_at: lastCourseValue,
+      last_run_at: lastRunValue,
     };
   });
 
-  if (!coursesChanged && !fichesChanged) {
+  if (!runsChanged && !fichesChanged) {
     return current;
   }
 
   return {
     ...current,
     fiches: fichesChanged ? updatedFiches : current.fiches,
-    courses: coursesChanged ? courseBundles : current.courses,
+    runs: runsChanged ? runBundles : current.runs,
   };
 }

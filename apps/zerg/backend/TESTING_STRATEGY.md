@@ -29,8 +29,8 @@
 
 ```python
 # tests/test_basic_fiche_workflow_e2e.py - Tests exact "add fiche, press run" scenario
-with patch('zerg.services.concierge_react_engine.run_concierge_loop') as mock_loop:
-    mock_loop.return_value = ConciergeResult(messages=[...], usage={}, interrupted=False)
+with patch('zerg.services.oikos_react_engine.run_oikos_loop') as mock_loop:
+    mock_loop.return_value = OikosResult(messages=[...], usage={}, interrupted=False)
 
     # Everything else runs REAL:
     execution_id = await workflow_engine.execute_workflow(workflow.id)
@@ -80,5 +80,5 @@ The two critical bugs you encountered would be **impossible** with proper integr
 make test
 
 # Backend-only unit tests (supports passing extra pytest args)
-cd apps/zerg/backend && ./run_backend_tests.sh -k concierge_tools
+cd apps/zerg/backend && ./run_backend_tests.sh -k oikos_tools
 ```

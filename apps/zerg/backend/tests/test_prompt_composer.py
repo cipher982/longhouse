@@ -6,8 +6,7 @@ from base templates and user context.
 
 from unittest.mock import patch
 
-from zerg.prompts.composer import build_jarvis_prompt
-from zerg.prompts.composer import build_concierge_prompt
+from zerg.prompts.composer import build_oikos_prompt
 from zerg.prompts.composer import build_commis_prompt
 from zerg.prompts.composer import format_integrations
 from zerg.prompts.composer import format_server_names
@@ -315,14 +314,14 @@ class TestFormatIntegrations:
 
 
 # ---------------------------------------------------------------------------
-# Test build_concierge_prompt
+# Test build_oikos_prompt
 # ---------------------------------------------------------------------------
 
 
-class TestBuildConciergePrompt:
-    """Test complete concierge prompt building."""
+class TestBuildOikosOrchestratorPrompt:
+    """Test complete Oikos orchestrator prompt building."""
 
-    def test_build_concierge_prompt_with_full_context(self):
+    def test_build_oikos_prompt_with_full_context(self):
         """Test building prompt with all sections populated."""
         user = MockUser(
             context={
@@ -340,7 +339,7 @@ class TestBuildConciergePrompt:
             }
         )
 
-        prompt = build_concierge_prompt(user)
+        prompt = build_oikos_prompt(user)
 
         # Check user context is injected
         assert "Alice" in prompt
@@ -357,15 +356,15 @@ class TestBuildConciergePrompt:
         assert "Google Calendar" in prompt
 
         # Check base template content is preserved
-        assert "Concierge" in prompt
+        assert "Oikos" in prompt
         assert "spawn_commis" in prompt
         assert "Your Role" in prompt
 
-    def test_build_concierge_prompt_empty_context(self):
+    def test_build_oikos_prompt_empty_context(self):
         """Test building prompt with empty context uses defaults."""
         user = MockUser(context={})
 
-        prompt = build_concierge_prompt(user)
+        prompt = build_oikos_prompt(user)
 
         # Should include default messages
         assert "(No user context configured)" in prompt
@@ -373,30 +372,30 @@ class TestBuildConciergePrompt:
         assert "(No integrations configured)" in prompt
 
         # Base template should still be present
-        assert "Concierge" in prompt
+        assert "Oikos" in prompt
         assert "spawn_commis" in prompt
 
-    def test_build_concierge_prompt_contains_required_sections(self):
+    def test_build_oikos_prompt_contains_required_sections(self):
         """Test that prompt contains all required sections."""
         user = MockUser(context={"display_name": "Bob"})
 
-        prompt = build_concierge_prompt(user)
+        prompt = build_oikos_prompt(user)
 
-        # Check for key sections from base template (now using Concierge/Commis terminology)
+        # Check for key sections from base template (now using Oikos/Commis terminology)
         assert "Your Role" in prompt
         assert "commis" in prompt.lower()  # Should mention commis (commis replacement)
         assert "Response Style" in prompt
         assert "Error Handling" in prompt
 
-    def test_build_concierge_prompt_none_context(self):
+    def test_build_oikos_prompt_none_context(self):
         """Test that None context is handled gracefully."""
         user = MockUser(context=None)
 
-        prompt = build_concierge_prompt(user)
+        prompt = build_oikos_prompt(user)
 
         # Should use defaults for all sections
         assert "(No user context configured)" in prompt
-        assert "Concierge" in prompt  # Now uses Concierge terminology
+        assert "Oikos" in prompt  # Now uses Oikos terminology
 
 
 # ---------------------------------------------------------------------------
@@ -467,14 +466,14 @@ class TestBuildCommisPrompt:
 
 
 # ---------------------------------------------------------------------------
-# Test build_jarvis_prompt
+# Test build_oikos_prompt
 # ---------------------------------------------------------------------------
 
 
-class TestBuildJarvisPrompt:
-    """Test complete Jarvis prompt building."""
+class TestBuildOikosAssistantPrompt:
+    """Test complete Oikos assistant prompt building."""
 
-    def test_build_jarvis_prompt_with_tools(self):
+    def test_build_oikos_prompt_with_tools(self):
         """Test building prompt with tools configured."""
         user = MockUser(
             context={
@@ -483,53 +482,53 @@ class TestBuildJarvisPrompt:
             }
         )
 
-        # v2.1: route_to_concierge removed - use other tools
+        # v2.1: route_to_oikos removed - use other tools
         enabled_tools = [
             {"name": "get_current_location", "description": "Get current GPS location"},
             {"name": "get_current_time", "description": "Get the current time"},
         ]
 
-        prompt = build_jarvis_prompt(user, enabled_tools)
+        prompt = build_oikos_prompt(user, enabled_tools)
 
         # Check user context
         assert "Dana" in prompt
 
-        # Check tools appear in prompt (v2.1: route_to_concierge removed)
+        # Check tools appear in prompt (v2.1: route_to_oikos removed)
         assert "get_current_location" in prompt
         assert "get_current_time" in prompt
 
         # Check server names appear
         assert "clifford" in prompt
 
-        # Check base template (now uses Concierge terminology)
-        assert "Concierge" in prompt
+        # Check base template (now uses Oikos terminology)
+        assert "Oikos" in prompt
 
-    def test_build_jarvis_prompt_no_tools(self):
+    def test_build_oikos_prompt_no_tools(self):
         """Test building prompt with no tools shows default message."""
         user = MockUser(context={})
 
-        prompt = build_jarvis_prompt(user, [])
+        prompt = build_oikos_prompt(user, [])
 
         # Should show no tools message
         assert "(No direct tools currently enabled)" in prompt
 
-        # Base template should be present (now uses Concierge terminology)
-        assert "Concierge" in prompt
+        # Base template should be present (now uses Oikos terminology)
+        assert "Oikos" in prompt
 
-    def test_build_jarvis_prompt_limitations(self):
+    def test_build_oikos_prompt_limitations(self):
         """Test that limitations are shown for missing tools."""
         user = MockUser(context={})
 
         # Only provide one tool, so limitations should be shown
         enabled_tools = [{"name": "get_current_time", "description": "Get time"}]
 
-        prompt = build_jarvis_prompt(user, enabled_tools)
+        prompt = build_oikos_prompt(user, enabled_tools)
 
         # Should show limitations for missing calendar and smart_home
         assert "Calendar/reminders" in prompt or "calendar" in prompt.lower()
         assert "Smart home" in prompt or "smart_home" in prompt.lower()
 
-    def test_build_jarvis_prompt_no_limitations_when_all_present(self):
+    def test_build_oikos_prompt_no_limitations_when_all_present(self):
         """Test that no limitations when all expected tools present."""
         user = MockUser(context={})
 
@@ -539,7 +538,7 @@ class TestBuildJarvisPrompt:
             {"name": "get_current_time", "description": "Get time"},
         ]
 
-        prompt = build_jarvis_prompt(user, enabled_tools)
+        prompt = build_oikos_prompt(user, enabled_tools)
 
         # Check that "None currently" appears in limitations section
         # or that limitation section mentions no limitations

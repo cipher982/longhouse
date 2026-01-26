@@ -143,11 +143,11 @@ def _latest_user_query(
     return None
 
 
-class CourseInterrupted(Exception):
+class RunInterrupted(Exception):
     """Raised when the fiche execution is interrupted (waiting for external input).
 
-    This happens when spawn_commis raises CourseInterrupted. The caller should
-    set the course status to WAITING.
+    This happens when spawn_commis raises RunInterrupted. The caller should
+    set the run status to WAITING.
     """
 
     def __init__(self, interrupt_value: dict):
@@ -378,11 +378,11 @@ class FicheRunner:  # noqa: D401 – naming follows project conventions
                 logger.info(f"[DEBUG] Full LLM input written to: {debug_file}")
 
             # ------------------------------------------------------------------
-            # Execute concierge loop (LangGraph-free)
+            # Execute oikos loop (LangGraph-free)
             # ------------------------------------------------------------------
-            from zerg.services.concierge_react_engine import get_llm_usage
-            from zerg.services.concierge_react_engine import reset_llm_usage
-            from zerg.services.concierge_react_engine import run_concierge_loop
+            from zerg.services.oikos_react_engine import get_llm_usage
+            from zerg.services.oikos_react_engine import reset_llm_usage
+            from zerg.services.oikos_react_engine import run_oikos_loop
             from zerg.tools.unified_access import get_tool_resolver
 
             # Get tools for this fiche (use DB-loaded fiche_row for fresh allowed_tools)
@@ -391,23 +391,23 @@ class FicheRunner:  # noqa: D401 – naming follows project conventions
 
             reset_llm_usage()
 
-            # Get course_id and trace_id from context (concierge or commis)
+            # Get run_id and trace_id from context (oikos or commis)
             from zerg.context import get_commis_context
-            from zerg.services.concierge_context import get_concierge_context
+            from zerg.services.oikos_context import get_oikos_context
 
-            sup_ctx = get_concierge_context()
+            sup_ctx = get_oikos_context()
             commis_ctx = get_commis_context()
 
-            # Prefer concierge context, fall back to commis context for trace_id
-            course_id = sup_ctx.course_id if sup_ctx else None
+            # Prefer oikos context, fall back to commis context for trace_id
+            run_id = sup_ctx.run_id if sup_ctx else None
             trace_id = sup_ctx.trace_id if sup_ctx else (commis_ctx.trace_id if commis_ctx else None)
 
-            # Run the concierge loop
-            loop_result = await run_concierge_loop(
+            # Run the oikos loop
+            loop_result = await run_oikos_loop(
                 messages=original_msgs,
                 fiche_row=self.fiche,
                 tools=tools,
-                course_id=course_id,
+                run_id=run_id,
                 owner_id=self.fiche.owner_id,
                 trace_id=trace_id,
                 enable_token_stream=self.enable_token_stream,
@@ -458,8 +458,8 @@ class FicheRunner:  # noqa: D401 – naming follows project conventions
                 self.thread_service.mark_messages_processed(db, (row.id for row in unprocessed_rows))
                 self.thread_service.touch_thread_timestamp(db, thread.id)
 
-                logger.info(f"[FicheRunner] Concierge interrupted: {loop_result.interrupt_value}", extra={"tag": "FICHE"})
-                raise CourseInterrupted(loop_result.interrupt_value or {})
+                logger.info(f"[FicheRunner] Oikos interrupted: {loop_result.interrupt_value}", extra={"tag": "FICHE"})
+                raise RunInterrupted(loop_result.interrupt_value or {})
 
             # Log usage
             if self.usage_total_tokens is not None:
@@ -477,7 +477,7 @@ class FicheRunner:  # noqa: D401 – naming follows project conventions
                 extra={"tag": "FICHE"},
             )
 
-        except CourseInterrupted:
+        except RunInterrupted:
             # Interrupts are part of normal control flow for async tools (spawn_commis).
             raise
         except Exception as e:
@@ -494,7 +494,7 @@ class FicheRunner:  # noqa: D401 – naming follows project conventions
             logger.debug("[FicheRunner] Reset thread ID and credential resolver context")
 
         # Extract only the new messages since our last context
-        # The concierge loop returns ALL messages including the history
+        # The oikos loop returns ALL messages including the history
         # We use messages_with_context to slice correctly - this includes the
         # ephemeral context injection that should NOT be saved to the database.
         if len(updated_messages) <= messages_with_context:
@@ -573,12 +573,12 @@ class FicheRunner:  # noqa: D401 – naming follows project conventions
         tool_call_id: str,
         tool_result: str,
         *,
-        course_id: int | None = None,
+        run_id: int | None = None,
         trace_id: str | None = None,
     ) -> Sequence[ThreadMessageModel]:
-        """Continue concierge execution after commis completion.
+        """Continue oikos execution after commis completion.
 
-        This method is called when a commis completes and the concierge needs to
+        This method is called when a commis completes and the oikos needs to
         resume. Unlike run_thread(), this does NOT use LangGraph checkpointing.
 
         Args:
@@ -586,21 +586,21 @@ class FicheRunner:  # noqa: D401 – naming follows project conventions
             thread: Thread to continue.
             tool_call_id: The tool_call_id from the spawn_commis call.
             tool_result: The commis's result to inject as ToolMessage.
-            course_id: Concierge run ID for event correlation.
+            run_id: Oikos run ID for event correlation.
             trace_id: End-to-end trace ID for debugging.
 
         Returns:
             List of new message rows created during continuation.
 
         Raises:
-            CourseInterrupted: If spawn_commis is called again (sequential commis).
+            RunInterrupted: If spawn_commis is called again (sequential commis).
         """
         from langchain_core.messages import ToolMessage
 
         from zerg.connectors.context import reset_credential_resolver
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
-        from zerg.services.concierge_react_engine import run_concierge_loop
+        from zerg.services.oikos_react_engine import run_oikos_loop
         from zerg.tools.unified_access import get_tool_resolver
 
         logger.info(
@@ -733,16 +733,16 @@ class FicheRunner:  # noqa: D401 – naming follows project conventions
             tools = resolver.filter_by_allowlist(allowed_tools)
 
             # Reset usage tracking
-            from zerg.services.concierge_react_engine import reset_llm_usage
+            from zerg.services.oikos_react_engine import reset_llm_usage
 
             reset_llm_usage()
 
-            # Run the concierge loop using the new engine
-            result = await run_concierge_loop(
+            # Run the oikos loop using the new engine
+            result = await run_oikos_loop(
                 messages=full_messages,
                 fiche_row=self.fiche,
                 tools=tools,
-                course_id=course_id,
+                run_id=run_id,
                 owner_id=self.fiche.owner_id,
                 trace_id=trace_id,
                 enable_token_stream=self.enable_token_stream,
@@ -754,7 +754,7 @@ class FicheRunner:  # noqa: D401 – naming follows project conventions
             self.usage_total_tokens = result.usage.get("total_tokens")
             self.usage_reasoning_tokens = result.usage.get("reasoning_tokens")
 
-            # Handle interrupt (concierge spawned another commis)
+            # Handle interrupt (oikos spawned another commis)
             if result.interrupted:
                 logger.info(
                     f"[FicheRunner] Continuation interrupted: {result.interrupt_value}",
@@ -772,7 +772,7 @@ class FicheRunner:  # noqa: D401 – naming follows project conventions
                             messages=new_messages,
                             processed=True,
                         )
-                raise CourseInterrupted(result.interrupt_value or {})
+                raise RunInterrupted(result.interrupt_value or {})
 
             # Normal completion: extract new messages
             if len(result.messages) <= messages_with_context:
@@ -837,12 +837,12 @@ class FicheRunner:  # noqa: D401 – naming follows project conventions
         thread: ThreadModel,
         commis_results: list[dict],
         *,
-        course_id: int | None = None,
+        run_id: int | None = None,
         trace_id: str | None = None,
     ) -> Sequence[ThreadMessageModel]:
-        """Continue concierge execution after ALL commis complete (barrier pattern).
+        """Continue oikos execution after ALL commis complete (barrier pattern).
 
-        This method is called when all commis in a barrier complete and the concierge
+        This method is called when all commis in a barrier complete and the oikos
         needs to resume with ALL results at once. Creates ToolMessages for each commis
         result and continues the ReAct loop.
 
@@ -850,21 +850,21 @@ class FicheRunner:  # noqa: D401 – naming follows project conventions
             db: Database session.
             thread: Thread to continue.
             commis_results: List of dicts with tool_call_id, result, error, status.
-            course_id: Concierge run ID for event correlation.
+            run_id: Oikos run ID for event correlation.
             trace_id: End-to-end trace ID for debugging.
 
         Returns:
             List of new message rows created during continuation.
 
         Raises:
-            CourseInterrupted: If spawn_commis is called again (new batch of commis).
+            RunInterrupted: If spawn_commis is called again (new batch of commis).
         """
         from langchain_core.messages import ToolMessage
 
         from zerg.connectors.context import reset_credential_resolver
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
-        from zerg.services.concierge_react_engine import run_concierge_loop
+        from zerg.services.oikos_react_engine import run_oikos_loop
         from zerg.tools.unified_access import get_tool_resolver
 
         logger.info(
@@ -1001,16 +1001,16 @@ class FicheRunner:  # noqa: D401 – naming follows project conventions
             tools = resolver.filter_by_allowlist(allowed_tools)
 
             # Reset usage tracking
-            from zerg.services.concierge_react_engine import reset_llm_usage
+            from zerg.services.oikos_react_engine import reset_llm_usage
 
             reset_llm_usage()
 
-            # Run the concierge loop using the new engine
-            result = await run_concierge_loop(
+            # Run the oikos loop using the new engine
+            result = await run_oikos_loop(
                 messages=full_messages,
                 fiche_row=self.fiche,
                 tools=tools,
-                course_id=course_id,
+                run_id=run_id,
                 owner_id=self.fiche.owner_id,
                 trace_id=trace_id,
                 enable_token_stream=self.enable_token_stream,
@@ -1022,7 +1022,7 @@ class FicheRunner:  # noqa: D401 – naming follows project conventions
             self.usage_total_tokens = result.usage.get("total_tokens")
             self.usage_reasoning_tokens = result.usage.get("reasoning_tokens")
 
-            # Handle interrupt (concierge spawned more commis)
+            # Handle interrupt (oikos spawned more commis)
             if result.interrupted:
                 logger.info(
                     f"[FicheRunner] Batch continuation interrupted: {result.interrupt_value}",
@@ -1039,7 +1039,7 @@ class FicheRunner:  # noqa: D401 – naming follows project conventions
                             messages=new_messages,
                             processed=True,
                         )
-                raise CourseInterrupted(result.interrupt_value or {})
+                raise RunInterrupted(result.interrupt_value or {})
 
             # Normal completion: extract new messages
             if len(result.messages) <= messages_with_context:

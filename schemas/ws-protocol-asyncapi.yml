@@ -66,7 +66,7 @@ channels:
 
   FicheChannel:
     address: fiche:{fiche_id}
-    description: Fiche lifecycle events and course updates
+    description: Fiche lifecycle events and run updates
     parameters:
       fiche_id:
         description: Numeric identifier of the fiche
@@ -74,8 +74,8 @@ channels:
     messages:
       FicheEvent:
         $ref: '#/components/messages/FicheEvent'
-      CourseUpdate:
-        $ref: '#/components/messages/CourseUpdate'
+      RunUpdate:
+        $ref: '#/components/messages/RunUpdate'
 
   UserChannel:
     address: user:{user_id}
@@ -93,7 +93,7 @@ channels:
     description: Workflow execution state, node updates, and logs
     parameters:
       execution_id:
-        description: Numeric identifier of the execution course
+        description: Numeric identifier of the execution run
         examples: ["123", "456"]
     messages:
       NodeState:
@@ -285,12 +285,12 @@ components:
       x-handler-method: handle_fiche_event
       x-aliases: ["fiche_created", "fiche_updated", "fiche_deleted", "fiche_state"]
 
-    CourseUpdate:
-      name: course_update
-      summary: Fiche course status update
+    RunUpdate:
+      name: run_update
+      summary: Fiche run status update
       payload:
-        $ref: '#/components/schemas/CourseUpdateData'
-      x-handler-method: handle_course_update
+        $ref: '#/components/schemas/RunUpdateData'
+      x-handler-method: handle_run_update
       x-aliases: []
 
     # User messages
@@ -595,10 +595,10 @@ components:
           minimum: 1
         status:
           type: string
-        last_course_at:
+        last_run_at:
           type: string
           format: date-time
-        next_course_at:
+        next_run_at:
           type: string
           format: date-time
         last_error:
@@ -608,7 +608,7 @@ components:
         description:
           type: string
 
-    CourseUpdateData:
+    RunUpdateData:
       type: object
       required: [id, fiche_id, status]
       properties:
@@ -749,9 +749,9 @@ components:
         type:
           type: string
           enum:
-            - course_started
-            - course_success
-            - course_failed
+            - run_started
+            - run_success
+            - run_failed
             - fiche_created
             - fiche_updated
             - thread_message_created
@@ -760,7 +760,7 @@ components:
         fiche_id:
           type: integer
           minimum: 1
-        course_id:
+        run_id:
           type: integer
           minimum: 1
         thread_id:
@@ -796,9 +796,9 @@ components:
 
 x-handler-groups:
   dashboard:
-    description: Handles fiche management, courses, workflow execution, and ops ticker
+    description: Handles fiche management, runs, workflow execution, and ops ticker
     handles:
-      - course_update
+      - run_update
       - fiche_event
       - execution_finished
       - node_state
@@ -828,7 +828,7 @@ x-validation-rules:
 
 x-performance-contracts:
   message_size_limits:
-    course_update: "max_1kb"
+    run_update: "max_1kb"
     stream_chunk: "max_64kb"
   throughput_requirements:
     dashboard_messages: "100/sec"
@@ -836,7 +836,7 @@ x-performance-contracts:
 
 x-security-contracts:
   authentication_required: ["send_message", "subscribe"]
-  authorization_checks: ["fiche_event", "course_update"]
+  authorization_checks: ["fiche_event", "run_update"]
   data_validation: "strict"
   sanitization_rules:
     user_content: "html_escape"

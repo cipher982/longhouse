@@ -1,4 +1,4 @@
-import type { Course } from "../../services/api";
+import type { Run } from "../../services/api";
 
 const NBSP = "\u00A0";
 
@@ -74,7 +74,7 @@ export function formatCost(cost?: number | null): string {
   return `$${cost.toFixed(4)}`;
 }
 
-export function formatCourseStatusIcon(status: Course["status"]): string {
+export function formatRunStatusIcon(status: Run["status"]): string {
   switch (status) {
     case "running":
       return "▶";

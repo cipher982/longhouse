@@ -1,4 +1,4 @@
-"""Integration tests for concierge tools with real fiche execution."""
+"""Integration tests for oikos tools with real fiche execution."""
 
 import tempfile
 
@@ -25,15 +25,15 @@ def temp_artifact_path(monkeypatch):
 
 
 @pytest.fixture
-def concierge_fiche(db_session, test_user):
-    """Create a concierge fiche with concierge tools enabled."""
+def oikos_fiche(db_session, test_user):
+    """Create a oikos fiche with oikos tools enabled."""
     fiche = crud.create_fiche(
         db=db_session,
         owner_id=test_user.id,
-        name="Concierge Fiche",
+        name="Oikos Fiche",
         model=TEST_MODEL,  # Use smarter model - gpt-5-mini is unreliable for tool calling
         system_instructions=(
-            "You are a concierge fiche that MUST delegate ALL tasks to commis. "
+            "You are a oikos fiche that MUST delegate ALL tasks to commis. "
             "You have access to the spawn_commis tool. "
             "IMPORTANT: When asked to do anything, you MUST call spawn_commis immediately. "
             "Never respond with text - always use the spawn_commis tool."
@@ -55,24 +55,24 @@ def concierge_fiche(db_session, test_user):
 
 
 @pytest.mark.asyncio
-async def test_concierge_spawns_commis_via_tool(concierge_fiche, db_session, test_user, temp_artifact_path):
-    """Test that a concierge fiche can use spawn_commis tool (queues job).
+async def test_oikos_spawns_commis_via_tool(oikos_fiche, db_session, test_user, temp_artifact_path):
+    """Test that a oikos fiche can use spawn_commis tool (queues job).
 
-    In async model, spawn_commis returns immediately and the concierge continues.
+    In async model, spawn_commis returns immediately and the oikos continues.
     We verify the job was created and queued.
     """
     from zerg.models.models import CommisJob
 
-    # Create a thread for the concierge
+    # Create a thread for the oikos
     thread = ThreadService.create_thread_with_system_message(
         db_session,
-        concierge_fiche,
-        title="Test Concierge Thread",
+        oikos_fiche,
+        title="Test Oikos Thread",
         thread_type="manual",
         active=False,
     )
 
-    # Add user message asking concierge to spawn a commis
+    # Add user message asking oikos to spawn a commis
     crud.create_thread_message(
         db=db_session,
         thread_id=thread.id,
@@ -82,16 +82,16 @@ async def test_concierge_spawns_commis_via_tool(concierge_fiche, db_session, tes
     )
 
     # Set up credential resolver context
-    resolver = CredentialResolver(fiche_id=concierge_fiche.id, db=db_session, owner_id=test_user.id)
+    resolver = CredentialResolver(fiche_id=oikos_fiche.id, db=db_session, owner_id=test_user.id)
     set_credential_resolver(resolver)
 
     try:
-        # Run the concierge fiche - spawn_commis returns immediately in async model
-        runner = FicheRunner(concierge_fiche)
+        # Run the oikos fiche - spawn_commis returns immediately in async model
+        runner = FicheRunner(oikos_fiche)
         messages = await runner.run_thread(db_session, thread)
 
-        # Verify the concierge completed (not interrupted)
-        assert messages is not None, "Concierge should return messages"
+        # Verify the oikos completed (not interrupted)
+        assert messages is not None, "Oikos should return messages"
 
         # Verify a commis JOB was created
         jobs = db_session.query(CommisJob).filter(CommisJob.owner_id == test_user.id).all()
@@ -107,8 +107,8 @@ async def test_concierge_spawns_commis_via_tool(concierge_fiche, db_session, tes
 
 
 @pytest.mark.asyncio
-async def test_concierge_can_list_commis(concierge_fiche, db_session, test_user, temp_artifact_path):
-    """Test that a concierge can use list_commis tool."""
+async def test_oikos_can_list_commis(oikos_fiche, db_session, test_user, temp_artifact_path):
+    """Test that a oikos can use list_commis tool."""
     from datetime import datetime
     from datetime import timezone
 
@@ -125,16 +125,16 @@ async def test_concierge_can_list_commis(concierge_fiche, db_session, test_user,
     db_session.add(commis_job)
     db_session.commit()
 
-    # Create a thread for the concierge
+    # Create a thread for the oikos
     thread = ThreadService.create_thread_with_system_message(
         db_session,
-        concierge_fiche,
+        oikos_fiche,
         title="Test List Commis",
         thread_type="manual",
         active=False,
     )
 
-    # Add user message asking concierge to list commis
+    # Add user message asking oikos to list commis
     crud.create_thread_message(
         db=db_session,
         thread_id=thread.id,
@@ -144,15 +144,15 @@ async def test_concierge_can_list_commis(concierge_fiche, db_session, test_user,
     )
 
     # Set up credential resolver context
-    resolver = CredentialResolver(fiche_id=concierge_fiche.id, db=db_session, owner_id=test_user.id)
+    resolver = CredentialResolver(fiche_id=oikos_fiche.id, db=db_session, owner_id=test_user.id)
     set_credential_resolver(resolver)
 
     try:
-        # Run the concierge fiche
-        fiche_runner = FicheRunner(concierge_fiche)
+        # Run the oikos fiche
+        fiche_runner = FicheRunner(oikos_fiche)
         messages = await fiche_runner.run_thread(db_session, thread)
 
-        # Verify the concierge called list_commis
+        # Verify the oikos called list_commis
         list_commis_called = False
 
         for msg in messages:
@@ -162,7 +162,7 @@ async def test_concierge_can_list_commis(concierge_fiche, db_session, test_user,
                         list_commis_called = True
                         break
 
-        assert list_commis_called, "Concierge should have called list_commis"
+        assert list_commis_called, "Oikos should have called list_commis"
 
         # Check that the response mentions the commis
         final_message = messages[-1]
@@ -175,8 +175,8 @@ async def test_concierge_can_list_commis(concierge_fiche, db_session, test_user,
 
 
 @pytest.mark.asyncio
-async def test_concierge_reads_commis_result(concierge_fiche, db_session, test_user, temp_artifact_path):
-    """Test that a concierge can read commis results."""
+async def test_oikos_reads_commis_result(oikos_fiche, db_session, test_user, temp_artifact_path):
+    """Test that a oikos can read commis results."""
     from datetime import datetime
     from datetime import timezone
 
@@ -213,16 +213,16 @@ async def test_concierge_reads_commis_result(concierge_fiche, db_session, test_u
 
     job_id = commis_job.id
 
-    # Create a thread for the concierge
+    # Create a thread for the oikos
     thread = ThreadService.create_thread_with_system_message(
         db_session,
-        concierge_fiche,
+        oikos_fiche,
         title="Test Read Commis Result",
         thread_type="manual",
         active=False,
     )
 
-    # Add user message asking concierge to read the commis result (using job_id)
+    # Add user message asking oikos to read the commis result (using job_id)
     crud.create_thread_message(
         db=db_session,
         thread_id=thread.id,
@@ -232,15 +232,15 @@ async def test_concierge_reads_commis_result(concierge_fiche, db_session, test_u
     )
 
     # Set up credential resolver context
-    resolver = CredentialResolver(fiche_id=concierge_fiche.id, db=db_session, owner_id=test_user.id)
+    resolver = CredentialResolver(fiche_id=oikos_fiche.id, db=db_session, owner_id=test_user.id)
     set_credential_resolver(resolver)
 
     try:
-        # Run the concierge fiche
-        fiche_runner = FicheRunner(concierge_fiche)
+        # Run the oikos fiche
+        fiche_runner = FicheRunner(oikos_fiche)
         messages = await fiche_runner.run_thread(db_session, thread)
 
-        # Verify the concierge called read_commis_result
+        # Verify the oikos called read_commis_result
         read_commis_result_called = False
 
         for msg in messages:
@@ -250,7 +250,7 @@ async def test_concierge_reads_commis_result(concierge_fiche, db_session, test_u
                         read_commis_result_called = True
                         break
 
-        assert read_commis_result_called, "Concierge should have called read_commis_result"
+        assert read_commis_result_called, "Oikos should have called read_commis_result"
 
     finally:
         set_credential_resolver(None)
@@ -258,11 +258,11 @@ async def test_concierge_reads_commis_result(concierge_fiche, db_session, test_u
 
 @pytest.mark.asyncio
 async def test_tools_registered_in_builtin(db_session):
-    """Test that concierge tools are registered in BUILTIN_TOOLS."""
+    """Test that oikos tools are registered in BUILTIN_TOOLS."""
     # Build registry
     registry = ImmutableToolRegistry.build([BUILTIN_TOOLS])
 
-    # Verify all concierge tools are registered
+    # Verify all oikos tools are registered
     assert registry.get("spawn_commis") is not None
     assert registry.get("list_commis") is not None
     assert registry.get("read_commis_result") is not None
@@ -276,7 +276,7 @@ async def test_tools_registered_in_builtin(db_session):
 
 
 @pytest.mark.asyncio
-async def test_read_commis_result_includes_duration(concierge_fiche, db_session, test_user, temp_artifact_path):
+async def test_read_commis_result_includes_duration(oikos_fiche, db_session, test_user, temp_artifact_path):
     """Test that read_commis_result returns duration_ms from completed commis (Tier 1 visibility)."""
     from datetime import datetime
     from datetime import timezone
@@ -288,7 +288,7 @@ async def test_read_commis_result_includes_duration(concierge_fiche, db_session,
 
     # Create and run a commis directly via CommisRunner
     # Set up credential resolver context FIRST (needed for commis execution)
-    resolver = CredentialResolver(fiche_id=concierge_fiche.id, db=db_session, owner_id=test_user.id)
+    resolver = CredentialResolver(fiche_id=oikos_fiche.id, db=db_session, owner_id=test_user.id)
     set_credential_resolver(resolver)
 
     try:
@@ -322,7 +322,7 @@ async def test_read_commis_result_includes_duration(concierge_fiche, db_session,
         job_id = commis_job.id
 
         # Call read_commis_result_async directly (to preserve context in same async loop)
-        from zerg.tools.builtin.concierge_tools import read_commis_result_async
+        from zerg.tools.builtin.oikos_tools import read_commis_result_async
 
         result_text = await read_commis_result_async(str(job_id))
 

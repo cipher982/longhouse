@@ -18,7 +18,7 @@ def mock_commis_context():
     ctx = CommisContext(
         commis_id="test-commis-123",
         owner_id=1,
-        course_id="test-run-456",
+        run_id="test-run-456",
         task="Test task",
     )
     token = set_commis_context(ctx)

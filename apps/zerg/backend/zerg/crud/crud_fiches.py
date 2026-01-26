@@ -10,9 +10,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import selectinload
 
 from zerg.models import CommisJob
-from zerg.models import Course
 from zerg.models import Fiche
 from zerg.models import FicheMessage
+from zerg.models import Run
 from zerg.models import Thread
 from zerg.models import ThreadMessage
 from zerg.models import Trigger
@@ -105,8 +105,8 @@ def create_fiche(
         status="idle",
         schedule=schedule,
         config=config,
-        next_course_at=None,
-        last_course_at=None,
+        next_run_at=None,
+        last_run_at=None,
     )
     db.add(db_fiche)
     db.commit()
@@ -130,8 +130,8 @@ def update_fiche(
     schedule: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
     allowed_tools: Optional[list] = None,
-    next_course_at: Optional[datetime] = None,
-    last_course_at: Optional[datetime] = None,
+    next_run_at: Optional[datetime] = None,
+    last_run_at: Optional[datetime] = None,
     last_error: Optional[str] = None,
 ):
     """Update an existing fiche"""
@@ -157,10 +157,10 @@ def update_fiche(
         db_fiche.config = config
     if allowed_tools is not None:
         db_fiche.allowed_tools = allowed_tools
-    if next_course_at is not None:
-        db_fiche.next_course_at = next_course_at
-    if last_course_at is not None:
-        db_fiche.last_course_at = last_course_at
+    if next_run_at is not None:
+        db_fiche.next_run_at = next_run_at
+    if last_run_at is not None:
+        db_fiche.last_run_at = last_run_at
     if last_error is not None:
         db_fiche.last_error = last_error
 
@@ -175,7 +175,7 @@ def delete_fiche(db: Session, fiche_id: int):
 
     NOTE: In production (Postgres), an Fiche can be referenced by:
     - threads / thread_messages
-    - courses (and commis_jobs.concierge_course_id)
+    - runs (and commis_jobs.oikos_run_id)
     - fiche_messages (legacy)
     - triggers
     Deleting the Fiche row directly can violate FK constraints, especially for
@@ -188,15 +188,15 @@ def delete_fiche(db: Session, fiche_id: int):
     # Triggers are linked via backref and do not cascade by default.
     db.query(Trigger).filter(Trigger.fiche_id == fiche_id).delete(synchronize_session=False)
 
-    # Runs must be deleted before threads (Course.thread_id FK).
-    course_ids = [row[0] for row in db.query(Course.id).filter(Course.fiche_id == fiche_id).all()]
-    if course_ids:
-        # Commis jobs may reference concierge runs; preserve jobs but remove correlation.
-        db.query(CommisJob).filter(CommisJob.concierge_course_id.in_(course_ids)).update(
-            {CommisJob.concierge_course_id: None},
+    # Runs must be deleted before threads (Run.thread_id FK).
+    run_ids = [row[0] for row in db.query(Run.id).filter(Run.fiche_id == fiche_id).all()]
+    if run_ids:
+        # Commis jobs may reference oikos runs; preserve jobs but remove correlation.
+        db.query(CommisJob).filter(CommisJob.oikos_run_id.in_(run_ids)).update(
+            {CommisJob.oikos_run_id: None},
             synchronize_session="fetch",
         )
-        db.query(Course).filter(Course.id.in_(course_ids)).delete(synchronize_session=False)
+        db.query(Run).filter(Run.id.in_(run_ids)).delete(synchronize_session=False)
 
     # Delete thread messages + threads for this fiche.
     thread_ids = [row[0] for row in db.query(Thread.id).filter(Thread.fiche_id == fiche_id).all()]

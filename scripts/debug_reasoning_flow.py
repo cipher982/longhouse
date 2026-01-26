@@ -14,10 +14,10 @@ def main():
     print("REASONING EFFORT FLOW VERIFICATION")
     print("=" * 60)
 
-    # 1. Check JarvisChatRequest
-    from zerg.routers.jarvis_chat import JarvisChatRequest
-    request = JarvisChatRequest(message="test", reasoning_effort="high")
-    print(f"\n1. JarvisChatRequest.reasoning_effort = {request.reasoning_effort!r}")
+    # 1. Check OikosChatRequest
+    from zerg.routers.oikos_chat import OikosChatRequest
+    request = OikosChatRequest(message="test", reasoning_effort="high")
+    print(f"\n1. OikosChatRequest.reasoning_effort = {request.reasoning_effort!r}")
     assert request.reasoning_effort == "high"
     print("   >>> PASS")
 

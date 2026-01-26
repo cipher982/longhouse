@@ -1,11 +1,11 @@
-"""Commis resume handler - resumes interrupted concierge after commis completion.
+"""Commis resume handler - resumes interrupted oikos after commis completion.
 
 Uses FicheRunner.run_continuation() for DB-based resume.
 
 Key requirements:
 - Idempotent: multiple callers must not resume the same run twice.
 - Durable: resumed execution persists new messages to the thread.
-- Interrupt-safe: concierge may interrupt again (multiple commis sequentially).
+- Interrupt-safe: oikos may interrupt again (multiple commis sequentially).
 - Barrier-safe: parallel commis coordinate via barrier pattern (single resume trigger).
 """
 
@@ -23,10 +23,10 @@ from sqlalchemy.orm import Session
 
 from zerg.models.commis_barrier import CommisBarrier
 from zerg.models.commis_barrier import CommisBarrierJob
-from zerg.models.enums import CourseStatus
+from zerg.models.enums import RunStatus
 from zerg.models.models import CommisJob
-from zerg.models.models import Course
-from zerg.services.concierge_context import reset_seq
+from zerg.models.models import Run
+from zerg.services.oikos_context import reset_seq
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 async def check_and_resume_if_all_complete(
     db: Session,
-    course_id: int,
+    run_id: int,
     job_id: int,
     result: str,
     error: str | None = None,
@@ -47,11 +47,11 @@ async def check_and_resume_if_all_complete(
 
     Uses SELECT FOR UPDATE + status guard in single transaction to prevent
     the double-resume race condition where multiple commis completing
-    simultaneously might both try to resume the concierge.
+    simultaneously might both try to resume the oikos.
 
     Args:
         db: Database session.
-        course_id: Concierge run ID (CommisBarrier.course_id).
+        run_id: Oikos run ID (CommisBarrier.run_id).
         job_id: Commis job ID that just completed.
         result: Commis result string.
         error: Optional error message if commis failed.
@@ -67,14 +67,14 @@ async def check_and_resume_if_all_complete(
         # Note: SQLAlchemy's begin() creates a subtransaction if already in one
         with db.begin_nested():
             # 1. Lock the barrier row with FOR UPDATE
-            barrier = db.query(CommisBarrier).filter(CommisBarrier.course_id == course_id).with_for_update().first()
+            barrier = db.query(CommisBarrier).filter(CommisBarrier.run_id == run_id).with_for_update().first()
 
             if not barrier:
-                logger.warning("No barrier found for course_id=%s", course_id)
+                logger.warning("No barrier found for run_id=%s", run_id)
                 return {"status": "skipped", "reason": "no barrier found"}
 
             if barrier.status != "waiting":
-                logger.info("Barrier for run %s is %s, not waiting", course_id, barrier.status)
+                logger.info("Barrier for run %s is %s, not waiting", run_id, barrier.status)
                 return {"status": "skipped", "reason": f"barrier is {barrier.status}, not waiting"}
 
             # 2. Update the specific CommisBarrierJob
@@ -101,7 +101,7 @@ async def check_and_resume_if_all_complete(
 
             logger.info(
                 "Barrier for run %s: %s/%s complete (job %s %s)",
-                course_id,
+                run_id,
                 barrier.completed_count,
                 barrier.expected_count,
                 job_id,
@@ -129,7 +129,7 @@ async def check_and_resume_if_all_complete(
 
                 logger.info(
                     "Barrier for run %s complete! Triggering batch resume with %s results",
-                    course_id,
+                    run_id,
                     len(commis_results),
                 )
 
@@ -144,24 +144,24 @@ async def check_and_resume_if_all_complete(
             }
 
     except Exception as e:
-        logger.exception("Error in check_and_resume_if_all_complete for run %s: %s", course_id, e)
+        logger.exception("Error in check_and_resume_if_all_complete for run %s: %s", run_id, e)
         # Let the caller handle the exception
         raise
 
 
-async def resume_concierge_batch(
+async def resume_oikos_batch(
     db: Session,
-    course_id: int,
+    run_id: int,
     commis_results: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    """Resume concierge with ALL commis results (batch continuation).
+    """Resume oikos with ALL commis results (batch continuation).
 
     Called by check_and_resume_if_all_complete when all commis are done.
-    Creates ToolMessages for each commis result and resumes concierge.
+    Creates ToolMessages for each commis result and resumes oikos.
 
     Args:
         db: Database session.
-        course_id: Course ID to resume.
+        run_id: Run ID to resume.
         commis_results: List of dicts with tool_call_id, result, error, status.
 
     Returns:
@@ -169,24 +169,24 @@ async def resume_concierge_batch(
     """
     from zerg.callbacks.token_stream import current_user_id_var
     from zerg.callbacks.token_stream import set_current_user_id
-    from zerg.events import ConciergeEmitter
+    from zerg.events import OikosEmitter
     from zerg.events import reset_emitter
     from zerg.events import set_emitter
-    from zerg.managers.fiche_runner import CourseInterrupted
     from zerg.managers.fiche_runner import FicheRunner
-    from zerg.services.concierge_context import reset_concierge_context
-    from zerg.services.concierge_context import set_concierge_context
-    from zerg.services.event_store import emit_course_event
+    from zerg.managers.fiche_runner import RunInterrupted
+    from zerg.services.event_store import emit_run_event
+    from zerg.services.oikos_context import reset_oikos_context
+    from zerg.services.oikos_context import set_oikos_context
 
     # Load run
-    run = db.query(Course).filter(Course.id == course_id).first()
+    run = db.query(Run).filter(Run.id == run_id).first()
     if not run:
-        logger.error("Cannot batch resume: run %s not found", course_id)
+        logger.error("Cannot batch resume: run %s not found", run_id)
         return None
 
-    if run.status != CourseStatus.WAITING:
-        logger.info("Skipping batch resume: run %s is %s, not WAITING", course_id, run.status.value)
-        return {"status": "skipped", "reason": f"run is {run.status.value}, not waiting", "course_id": course_id}
+    if run.status != RunStatus.WAITING:
+        logger.info("Skipping batch resume: run %s is %s, not WAITING", run_id, run.status.value)
+        return {"status": "skipped", "reason": f"run is {run.status.value}, not waiting", "run_id": run_id}
 
     # Ensure stable message_id
     if not run.assistant_message_id:
@@ -194,15 +194,13 @@ async def resume_concierge_batch(
         db.commit()
 
     # Idempotency gate: WAITING → RUNNING atomically
-    updated = (
-        db.query(Course).filter(Course.id == course_id, Course.status == CourseStatus.WAITING).update({Course.status: CourseStatus.RUNNING})
-    )
+    updated = db.query(Run).filter(Run.id == run_id, Run.status == RunStatus.WAITING).update({Run.status: RunStatus.RUNNING})
     db.commit()
     if updated == 0:
-        return {"status": "skipped", "reason": "run no longer waiting", "course_id": course_id}
+        return {"status": "skipped", "reason": "run no longer waiting", "run_id": run_id}
 
     # Reload with relationships
-    run = db.query(Course).filter(Course.id == course_id).first()
+    run = db.query(Run).filter(Run.id == run_id).first()
     if not run:
         return None
 
@@ -213,17 +211,17 @@ async def resume_concierge_batch(
     trace_id = str(run.trace_id) if run.trace_id else None
 
     logger.info(
-        "Batch resuming concierge run %s (thread=%s) with %s commis results",
-        course_id,
+        "Batch resuming oikos run %s (thread=%s) with %s commis results",
+        run_id,
         thread.id,
         len(commis_results),
     )
 
     # Emit "resumed" event
-    await emit_course_event(
+    await emit_run_event(
         db=db,
-        course_id=run.id,
-        event_type="concierge_resumed",
+        run_id=run.id,
+        event_type="oikos_resumed",
         payload={
             "fiche_id": fiche.id,
             "thread_id": thread.id,
@@ -235,8 +233,8 @@ async def resume_concierge_batch(
     )
 
     # Set up contexts
-    _concierge_ctx_token = set_concierge_context(
-        course_id=run.id,
+    _oikos_ctx_token = set_oikos_context(
+        run_id=run.id,
         owner_id=owner_id,
         message_id=message_id,
         trace_id=trace_id,
@@ -244,13 +242,13 @@ async def resume_concierge_batch(
         reasoning_effort=run.reasoning_effort,
     )
 
-    _concierge_emitter = ConciergeEmitter(
-        course_id=run.id,
+    _oikos_emitter = OikosEmitter(
+        run_id=run.id,
         owner_id=owner_id,
         message_id=message_id,
         trace_id=trace_id,
     )
-    _emitter_token = set_emitter(_concierge_emitter)
+    _emitter_token = set_emitter(_oikos_emitter)
     _user_ctx_token = set_current_user_id(owner_id)
 
     try:
@@ -264,7 +262,7 @@ async def resume_concierge_batch(
             db=db,
             thread=thread,
             commis_results=commis_results,
-            course_id=course_id,
+            run_id=run_id,
             trace_id=trace_id,
         )
 
@@ -272,7 +270,7 @@ async def resume_concierge_batch(
         end_time = datetime.now(timezone.utc)
         duration_ms = _compute_duration_ms(run.started_at, end_time=end_time)
 
-        run.status = CourseStatus.SUCCESS
+        run.status = RunStatus.SUCCESS
         run.finished_at = end_time.replace(tzinfo=None)
         run.duration_ms = duration_ms
 
@@ -280,7 +278,7 @@ async def resume_concierge_batch(
             run.total_tokens = (run.total_tokens or 0) + runner.usage_total_tokens
 
         # Mark barrier as completed
-        barrier = db.query(CommisBarrier).filter(CommisBarrier.course_id == course_id).first()
+        barrier = db.query(CommisBarrier).filter(CommisBarrier.run_id == run_id).first()
         if barrier:
             barrier.status = "completed"
         db.commit()
@@ -300,17 +298,17 @@ async def resume_concierge_batch(
             "reasoning_tokens": runner.usage_reasoning_tokens,
         }
 
-        await emit_course_event(
+        await emit_run_event(
             db=db,
-            course_id=run.id,
-            event_type="concierge_complete",
+            run_id=run.id,
+            event_type="oikos_complete",
             payload={
                 "fiche_id": fiche.id,
                 "thread_id": thread.id,
                 "result": final_response or "(No result)",
                 "status": "success",
                 "duration_ms": duration_ms,
-                "debug_url": f"/concierge/{run.id}",
+                "debug_url": f"/oikos/{run.id}",
                 "owner_id": owner_id,
                 "message_id": message_id,
                 "usage": usage_payload,
@@ -319,10 +317,10 @@ async def resume_concierge_batch(
             },
         )
 
-        await emit_course_event(
+        await emit_run_event(
             db=db,
-            course_id=run.id,
-            event_type="course_updated",
+            run_id=run.id,
+            event_type="run_updated",
             payload={
                 "fiche_id": fiche.id,
                 "status": "success",
@@ -335,7 +333,7 @@ async def resume_concierge_batch(
 
         # Auto-summary -> Memory Files (async, best-effort)
         from zerg.models.models import ThreadMessage
-        from zerg.services.memory_summarizer import schedule_course_summary
+        from zerg.services.memory_summarizer import schedule_run_summary
 
         task_row = (
             db.query(ThreadMessage)
@@ -348,21 +346,21 @@ async def resume_concierge_batch(
             .first()
         )
         task_text = task_row.content if task_row else ""
-        schedule_course_summary(
+        schedule_run_summary(
             owner_id=owner_id,
             thread_id=thread.id,
-            course_id=run.id,
+            run_id=run.id,
             task=task_text or "",
             result_text=final_response or "",
             trace_id=str(run.trace_id) if run.trace_id else None,
         )
 
         reset_seq(run.id)
-        logger.info("Successfully batch resumed concierge run %s", course_id)
+        logger.info("Successfully batch resumed oikos run %s", run_id)
         return {"status": "success", "result": final_response}
 
-    except CourseInterrupted as e:
-        # Concierge spawned more commis - set back to WAITING and reuse/reset barrier
+    except RunInterrupted as e:
+        # Oikos spawned more commis - set back to WAITING and reuse/reset barrier
         interrupt_value = e.interrupt_value
         interrupt_message = "Working on more tasks in the background..."
 
@@ -373,8 +371,8 @@ async def resume_concierge_batch(
 
             logger.info(f"Batch re-interrupt: resetting barrier for {len(job_ids)} new commis")
 
-            # Reuse existing barrier (unique constraint on course_id)
-            barrier = db.query(CommisBarrier).filter(CommisBarrier.course_id == course_id).first()
+            # Reuse existing barrier (unique constraint on run_id)
+            barrier = db.query(CommisBarrier).filter(CommisBarrier.run_id == run_id).first()
             if barrier:
                 # Prune old BarrierJobs to prevent stale data in resume
                 # (old completed jobs would pollute commis_results)
@@ -409,10 +407,10 @@ async def resume_concierge_batch(
 
                 logger.info(f"Barrier {barrier.id} reset: {len(job_ids)} new jobs queued")
             else:
-                logger.warning(f"No existing barrier for run {course_id} - creating new one")
+                logger.warning(f"No existing barrier for run {run_id} - creating new one")
                 # This shouldn't happen, but handle gracefully
                 barrier = CommisBarrier(
-                    course_id=course_id,
+                    run_id=run_id,
                     expected_count=len(job_ids),
                     status="waiting",
                     deadline_at=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=10),
@@ -439,14 +437,14 @@ async def resume_concierge_batch(
                     ).update({"status": "queued"})
 
             # Emit commis_spawned events for UI (after jobs are queued)
-            from zerg.services.event_store import append_course_event
+            from zerg.services.event_store import append_run_event
 
             for job_info in created_jobs:
                 job = job_info["job"]
                 tool_call_id = job_info["tool_call_id"]
                 task = job.task[:100] if job.task else ""
-                await append_course_event(
-                    course_id=course_id,
+                await append_run_event(
+                    run_id=run_id,
                     event_type="commis_spawned",
                     payload={
                         "job_id": job.id,
@@ -465,16 +463,16 @@ async def resume_concierge_batch(
             job_ids = interrupt_value.get("job_ids") if isinstance(interrupt_value, dict) else None
 
         # Update run status to WAITING (atomic with barrier reset above)
-        run.status = CourseStatus.WAITING
+        run.status = RunStatus.WAITING
         run.duration_ms = _compute_duration_ms(run.started_at)
         if runner.usage_total_tokens is not None:
             run.total_tokens = (run.total_tokens or 0) + runner.usage_total_tokens
         db.commit()  # Single commit: WAITING + barrier reset
 
-        await emit_course_event(
+        await emit_run_event(
             db=db,
-            course_id=run.id,
-            event_type="concierge_waiting",
+            run_id=run.id,
+            event_type="oikos_waiting",
             payload={
                 "fiche_id": fiche.id,
                 "thread_id": thread.id,
@@ -487,10 +485,10 @@ async def resume_concierge_batch(
             },
         )
 
-        await emit_course_event(
+        await emit_run_event(
             db=db,
-            course_id=run.id,
-            event_type="course_updated",
+            run_id=run.id,
+            event_type="run_updated",
             payload={
                 "fiche_id": fiche.id,
                 "status": "waiting",
@@ -501,32 +499,32 @@ async def resume_concierge_batch(
 
         logger.info(
             "Batch resume interrupted: run %s waiting for more commis %s",
-            course_id,
+            run_id,
             job_ids,
         )
-        return {"status": "waiting", "course_id": course_id, "job_ids": job_ids, "message": interrupt_message}
+        return {"status": "waiting", "run_id": run_id, "job_ids": job_ids, "message": interrupt_message}
 
     except Exception as e:
-        logger.exception("Failed to batch resume concierge run %s: %s", course_id, e)
+        logger.exception("Failed to batch resume oikos run %s: %s", run_id, e)
 
         end_time = datetime.now(timezone.utc)
         duration_ms = _compute_duration_ms(run.started_at, end_time=end_time)
 
-        run.status = CourseStatus.FAILED
+        run.status = RunStatus.FAILED
         run.error = str(e)
         run.finished_at = end_time.replace(tzinfo=None)
         run.duration_ms = duration_ms
 
         # Mark barrier as failed (prevents stuck "resuming" state)
-        barrier = db.query(CommisBarrier).filter(CommisBarrier.course_id == course_id).first()
+        barrier = db.query(CommisBarrier).filter(CommisBarrier.run_id == run_id).first()
         if barrier:
             barrier.status = "failed"
 
         db.commit()
 
-        await emit_course_event(
+        await emit_run_event(
             db=db,
-            course_id=run.id,
+            run_id=run.id,
             event_type="error",
             payload={
                 "thread_id": thread.id,
@@ -537,10 +535,10 @@ async def resume_concierge_batch(
             },
         )
 
-        await emit_course_event(
+        await emit_run_event(
             db=db,
-            course_id=run.id,
-            event_type="course_updated",
+            run_id=run.id,
+            event_type="run_updated",
             payload={
                 "fiche_id": fiche.id,
                 "status": "failed",
@@ -557,7 +555,7 @@ async def resume_concierge_batch(
         return {"status": "error", "error": str(e)}
 
     finally:
-        reset_concierge_context(_concierge_ctx_token)
+        reset_oikos_context(_oikos_ctx_token)
         reset_emitter(_emitter_token)
         current_user_id_var.reset(_user_ctx_token)
 
@@ -567,19 +565,19 @@ async def resume_concierge_batch(
 # ---------------------------------------------------------------------------
 
 
-async def _continue_concierge_langgraph_free(
+async def _continue_oikos_langgraph_free(
     db: Session,
-    course_id: int,
+    run_id: int,
     commis_result: str,
     job_id: int | None = None,
 ) -> dict[str, Any] | None:
-    """Resume concierge using the LangGraph-free FicheRunner.run_continuation().
+    """Resume oikos using the LangGraph-free FicheRunner.run_continuation().
 
     This is the new path that doesn't rely on LangGraph checkpointing.
 
     Args:
         db: Database session.
-        course_id: Course ID to resume.
+        run_id: Run ID to resume.
         commis_result: Commis's result string.
         job_id: Optional CommisJob ID to look up tool_call_id.
 
@@ -588,24 +586,24 @@ async def _continue_concierge_langgraph_free(
     """
     from zerg.callbacks.token_stream import current_user_id_var
     from zerg.callbacks.token_stream import set_current_user_id
-    from zerg.events import ConciergeEmitter
+    from zerg.events import OikosEmitter
     from zerg.events import reset_emitter
     from zerg.events import set_emitter
-    from zerg.managers.fiche_runner import CourseInterrupted
     from zerg.managers.fiche_runner import FicheRunner
-    from zerg.services.concierge_context import reset_concierge_context
-    from zerg.services.concierge_context import set_concierge_context
-    from zerg.services.event_store import emit_course_event
+    from zerg.managers.fiche_runner import RunInterrupted
+    from zerg.services.event_store import emit_run_event
+    from zerg.services.oikos_context import reset_oikos_context
+    from zerg.services.oikos_context import set_oikos_context
 
     # Load run
-    run = db.query(Course).filter(Course.id == course_id).first()
+    run = db.query(Run).filter(Run.id == run_id).first()
     if not run:
-        logger.error("Cannot resume: run %s not found", course_id)
+        logger.error("Cannot resume: run %s not found", run_id)
         return None
 
-    if run.status != CourseStatus.WAITING:
-        logger.info("Skipping resume: run %s is %s, not WAITING", course_id, run.status.value)
-        return {"status": "skipped", "reason": f"run is {run.status.value}, not waiting", "course_id": course_id}
+    if run.status != RunStatus.WAITING:
+        logger.info("Skipping resume: run %s is %s, not WAITING", run_id, run.status.value)
+        return {"status": "skipped", "reason": f"run is {run.status.value}, not waiting", "run_id": run_id}
 
     # Ensure stable message_id
     if not run.assistant_message_id:
@@ -613,15 +611,13 @@ async def _continue_concierge_langgraph_free(
         db.commit()
 
     # Idempotency gate: WAITING → RUNNING atomically
-    updated = (
-        db.query(Course).filter(Course.id == course_id, Course.status == CourseStatus.WAITING).update({Course.status: CourseStatus.RUNNING})
-    )
+    updated = db.query(Run).filter(Run.id == run_id, Run.status == RunStatus.WAITING).update({Run.status: RunStatus.RUNNING})
     db.commit()
     if updated == 0:
-        return {"status": "skipped", "reason": "run no longer waiting", "course_id": course_id}
+        return {"status": "skipped", "reason": "run no longer waiting", "run_id": run_id}
 
     # Reload with relationships
-    run = db.query(Course).filter(Course.id == course_id).first()
+    run = db.query(Run).filter(Run.id == run_id).first()
     if not run:
         return None
 
@@ -657,7 +653,7 @@ async def _continue_concierge_langgraph_free(
         job = (
             db.query(CommisJob)
             .filter(
-                CommisJob.concierge_course_id == course_id,
+                CommisJob.oikos_run_id == run_id,
                 CommisJob.tool_call_id.isnot(None),
             )
             .order_by(CommisJob.created_at.desc())
@@ -667,21 +663,21 @@ async def _continue_concierge_langgraph_free(
             tool_call_id = job.tool_call_id
 
     if not tool_call_id:
-        logger.error("Cannot resume run %s: no tool_call_id found", course_id)
+        logger.error("Cannot resume run %s: no tool_call_id found", run_id)
         error_msg = "No tool_call_id found for commis resume"
         end_time = datetime.now(timezone.utc)
         duration_ms = _compute_duration_ms(run.started_at, end_time=end_time)
 
-        run.status = CourseStatus.FAILED
+        run.status = RunStatus.FAILED
         run.error = error_msg
         run.finished_at = end_time.replace(tzinfo=None)
         run.duration_ms = duration_ms
         db.commit()
 
         # Emit error events for UI consistency
-        await emit_course_event(
+        await emit_run_event(
             db=db,
-            course_id=run.id,
+            run_id=run.id,
             event_type="error",
             payload={
                 "thread_id": thread.id,
@@ -692,10 +688,10 @@ async def _continue_concierge_langgraph_free(
             },
         )
 
-        await emit_course_event(
+        await emit_run_event(
             db=db,
-            course_id=run.id,
-            event_type="course_updated",
+            run_id=run.id,
+            event_type="run_updated",
             payload={
                 "fiche_id": fiche.id,
                 "status": "failed",
@@ -710,17 +706,17 @@ async def _continue_concierge_langgraph_free(
         return {"status": "error", "error": error_msg}
 
     logger.info(
-        "Resuming concierge run %s (thread=%s) with tool_call_id=%s [LangGraph-free]",
-        course_id,
+        "Resuming oikos run %s (thread=%s) with tool_call_id=%s [LangGraph-free]",
+        run_id,
         thread.id,
         tool_call_id,
     )
 
     # Emit "resumed" event
-    await emit_course_event(
+    await emit_run_event(
         db=db,
-        course_id=run.id,
-        event_type="concierge_resumed",
+        run_id=run.id,
+        event_type="oikos_resumed",
         payload={
             "fiche_id": fiche.id,
             "thread_id": thread.id,
@@ -731,9 +727,9 @@ async def _continue_concierge_langgraph_free(
     )
 
     # Set up contexts (include trace_id for end-to-end tracing)
-    # Include model/reasoning_effort so commis inherit concierge settings
-    _concierge_ctx_token = set_concierge_context(
-        course_id=run.id,
+    # Include model/reasoning_effort so commis inherit oikos settings
+    _oikos_ctx_token = set_oikos_context(
+        run_id=run.id,
         owner_id=owner_id,
         message_id=message_id,
         trace_id=trace_id,
@@ -741,13 +737,13 @@ async def _continue_concierge_langgraph_free(
         reasoning_effort=run.reasoning_effort,
     )
 
-    _concierge_emitter = ConciergeEmitter(
-        course_id=run.id,
+    _oikos_emitter = OikosEmitter(
+        run_id=run.id,
         owner_id=owner_id,
         message_id=message_id,
         trace_id=trace_id,
     )
-    _emitter_token = set_emitter(_concierge_emitter)
+    _emitter_token = set_emitter(_oikos_emitter)
     _user_ctx_token = set_current_user_id(owner_id)
 
     try:
@@ -763,7 +759,7 @@ async def _continue_concierge_langgraph_free(
             thread=thread,
             tool_call_id=tool_call_id,
             tool_result=commis_result,
-            course_id=course_id,
+            run_id=run_id,
             trace_id=trace_id,
         )
 
@@ -771,7 +767,7 @@ async def _continue_concierge_langgraph_free(
         end_time = datetime.now(timezone.utc)
         duration_ms = _compute_duration_ms(run.started_at, end_time=end_time)
 
-        run.status = CourseStatus.SUCCESS
+        run.status = RunStatus.SUCCESS
         run.finished_at = end_time.replace(tzinfo=None)
         run.duration_ms = duration_ms
 
@@ -795,17 +791,17 @@ async def _continue_concierge_langgraph_free(
             "reasoning_tokens": runner.usage_reasoning_tokens,
         }
 
-        await emit_course_event(
+        await emit_run_event(
             db=db,
-            course_id=run.id,
-            event_type="concierge_complete",
+            run_id=run.id,
+            event_type="oikos_complete",
             payload={
                 "fiche_id": fiche.id,
                 "thread_id": thread.id,
                 "result": final_response or "(No result)",
                 "status": "success",
                 "duration_ms": duration_ms,
-                "debug_url": f"/concierge/{run.id}",
+                "debug_url": f"/oikos/{run.id}",
                 "owner_id": owner_id,
                 "message_id": message_id,
                 "usage": usage_payload,
@@ -813,10 +809,10 @@ async def _continue_concierge_langgraph_free(
             },
         )
 
-        await emit_course_event(
+        await emit_run_event(
             db=db,
-            course_id=run.id,
-            event_type="course_updated",
+            run_id=run.id,
+            event_type="run_updated",
             payload={
                 "fiche_id": fiche.id,
                 "status": "success",
@@ -829,7 +825,7 @@ async def _continue_concierge_langgraph_free(
 
         # Auto-summary -> Memory Files (async, best-effort)
         from zerg.models.models import ThreadMessage
-        from zerg.services.memory_summarizer import schedule_course_summary
+        from zerg.services.memory_summarizer import schedule_run_summary
 
         task_row = (
             db.query(ThreadMessage)
@@ -842,36 +838,36 @@ async def _continue_concierge_langgraph_free(
             .first()
         )
         task_text = task_row.content if task_row else ""
-        schedule_course_summary(
+        schedule_run_summary(
             owner_id=owner_id,
             thread_id=thread.id,
-            course_id=run.id,
+            run_id=run.id,
             task=task_text or "",
             result_text=final_response or "",
             trace_id=str(run.trace_id) if run.trace_id else None,
         )
 
         reset_seq(run.id)
-        logger.info("Successfully resumed concierge run %s", course_id)
+        logger.info("Successfully resumed oikos run %s", run_id)
         return {"status": "success", "result": final_response}
 
-    except CourseInterrupted as e:
-        # Concierge spawned another commis - set back to WAITING
+    except RunInterrupted as e:
+        # Oikos spawned another commis - set back to WAITING
         interrupt_value = e.interrupt_value
         job_id = interrupt_value.get("job_id") if isinstance(interrupt_value, dict) else None
         interrupt_message = "Working on this in the background..."
 
-        run.status = CourseStatus.WAITING
+        run.status = RunStatus.WAITING
         run.duration_ms = _compute_duration_ms(run.started_at)
         # Persist partial token usage (will be added to on next resume)
         if runner.usage_total_tokens is not None:
             run.total_tokens = (run.total_tokens or 0) + runner.usage_total_tokens
         db.commit()
 
-        await emit_course_event(
+        await emit_run_event(
             db=db,
-            course_id=run.id,
-            event_type="concierge_waiting",
+            run_id=run.id,
+            event_type="oikos_waiting",
             payload={
                 "fiche_id": fiche.id,
                 "thread_id": thread.id,
@@ -884,10 +880,10 @@ async def _continue_concierge_langgraph_free(
             },
         )
 
-        await emit_course_event(
+        await emit_run_event(
             db=db,
-            course_id=run.id,
-            event_type="course_updated",
+            run_id=run.id,
+            event_type="run_updated",
             payload={
                 "fiche_id": fiche.id,
                 "status": "waiting",
@@ -897,27 +893,27 @@ async def _continue_concierge_langgraph_free(
         )
 
         logger.info(
-            "Concierge run %s interrupted again (WAITING for commis job %s) [LangGraph-free]",
-            course_id,
+            "Oikos run %s interrupted again (WAITING for commis job %s) [LangGraph-free]",
+            run_id,
             job_id,
         )
-        return {"status": "waiting", "course_id": course_id, "job_id": job_id, "message": interrupt_message}
+        return {"status": "waiting", "run_id": run_id, "job_id": job_id, "message": interrupt_message}
 
     except Exception as e:
-        logger.exception("Failed to resume concierge run %s [LangGraph-free]: %s", course_id, e)
+        logger.exception("Failed to resume oikos run %s [LangGraph-free]: %s", run_id, e)
 
         end_time = datetime.now(timezone.utc)
         duration_ms = _compute_duration_ms(run.started_at, end_time=end_time)
 
-        run.status = CourseStatus.FAILED
+        run.status = RunStatus.FAILED
         run.error = str(e)
         run.finished_at = end_time.replace(tzinfo=None)
         run.duration_ms = duration_ms
         db.commit()
 
-        await emit_course_event(
+        await emit_run_event(
             db=db,
-            course_id=run.id,
+            run_id=run.id,
             event_type="error",
             payload={
                 "thread_id": thread.id,
@@ -928,10 +924,10 @@ async def _continue_concierge_langgraph_free(
             },
         )
 
-        await emit_course_event(
+        await emit_run_event(
             db=db,
-            course_id=run.id,
-            event_type="course_updated",
+            run_id=run.id,
+            event_type="run_updated",
             payload={
                 "fiche_id": fiche.id,
                 "status": "failed",
@@ -948,31 +944,31 @@ async def _continue_concierge_langgraph_free(
         return {"status": "error", "error": str(e)}
 
     finally:
-        reset_concierge_context(_concierge_ctx_token)
+        reset_oikos_context(_oikos_ctx_token)
         reset_emitter(_emitter_token)
         current_user_id_var.reset(_user_ctx_token)
 
 
-async def resume_concierge_with_commis_result(
+async def resume_oikos_with_commis_result(
     db: Session,
-    course_id: int,
+    run_id: int,
     commis_result: str,
     job_id: int | None = None,
 ) -> dict[str, Any] | None:
-    """Resume an interrupted concierge run with a commis result.
+    """Resume an interrupted oikos run with a commis result.
 
     Uses FicheRunner.run_continuation() for DB-based resume.
 
     Args:
         db: Database session.
-        course_id: Course ID to resume.
+        run_id: Run ID to resume.
         commis_result: Commis's result string.
         job_id: Optional CommisJob ID to look up tool_call_id.
 
     Returns:
         Dict with {"status": "success"|"waiting"|"error"|"skipped", ...}
     """
-    return await _continue_concierge_langgraph_free(db, course_id, commis_result, job_id)
+    return await _continue_oikos_langgraph_free(db, run_id, commis_result, job_id)
 
 
 def _compute_duration_ms(started_at, *, end_time: datetime | None = None) -> int:
@@ -1065,23 +1061,23 @@ async def reap_expired_barriers(db: Session) -> dict[str, Any]:
             ]
 
             # Trigger batch resume with partial results
-            result = await resume_concierge_batch(
+            result = await resume_oikos_batch(
                 db=db,
-                course_id=barrier.course_id,
+                run_id=barrier.run_id,
                 commis_results=commis_results,
             )
 
             reaped.append(
                 {
                     "barrier_id": barrier.id,
-                    "course_id": barrier.course_id,
+                    "run_id": barrier.run_id,
                     "timeout_count": len(incomplete_jobs),
                     "result": result.get("status") if result else "none",
                 }
             )
 
             logger.info(
-                f"Reaped expired barrier {barrier.id} (run={barrier.course_id}): "
+                f"Reaped expired barrier {barrier.id} (run={barrier.run_id}): "
                 f"{len(incomplete_jobs)} timed out, resume status={result.get('status') if result else 'none'}"
             )
 

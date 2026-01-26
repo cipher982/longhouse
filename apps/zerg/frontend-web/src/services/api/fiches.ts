@@ -4,7 +4,7 @@ import type {
   FicheSummary,
   FicheCreatePayload,
   FicheUpdatePayload,
-  Course,
+  Run,
   DashboardSnapshot,
   ContainerPolicy,
   AvailableToolsResponse,
@@ -19,22 +19,22 @@ type FetchFichesParams = {
   skip?: number;
 };
 
-type DashboardCoursesBundleResponse = {
+type DashboardRunsBundleResponse = {
   fiche_id: number;
-  courses: Course[];
+  runs: Run[];
 };
 
 type DashboardSnapshotResponse = {
   scope: "my" | "all";
   fetched_at: string;
-  courses_limit: number;
+  runs_limit: number;
   fiches: FicheSummary[];
-  courses: DashboardCoursesBundleResponse[];
+  runs: DashboardRunsBundleResponse[];
 };
 
 type FetchDashboardParams = {
   scope?: "my" | "all";
-  coursesLimit?: number;
+  runsLimit?: number;
   skip?: number;
   limit?: number;
 };
@@ -58,13 +58,13 @@ export async function fetchFiches(params: FetchFichesParams = {}): Promise<Fiche
 
 export async function fetchDashboardSnapshot(params: FetchDashboardParams = {}): Promise<DashboardSnapshot> {
   const scope = params.scope ?? "my";
-  const coursesLimit = params.coursesLimit ?? 50;
+  const runsLimit = params.runsLimit ?? 50;
   const limit = params.limit;
   const skip = params.skip;
 
   const searchParams = new URLSearchParams({
     scope,
-    courses_limit: String(coursesLimit),
+    runs_limit: String(runsLimit),
   });
 
   if (typeof limit === "number") {
@@ -78,11 +78,11 @@ export async function fetchDashboardSnapshot(params: FetchDashboardParams = {}):
   return {
     scope: response.scope,
     fetchedAt: response.fetched_at,
-    coursesLimit: response.courses_limit,
+    runsLimit: response.runs_limit,
     fiches: response.fiches,
-    courses: response.courses.map((bundle) => ({
+    runs: response.runs.map((bundle) => ({
       ficheId: bundle.fiche_id,
-      courses: bundle.courses,
+      runs: bundle.runs,
     })),
   };
 }
@@ -115,8 +115,8 @@ export async function runFiche(ficheId: number): Promise<RunFicheResponse> {
   });
 }
 
-export async function fetchFicheCourses(ficheId: number, limit = 20): Promise<Course[]> {
-  return request<Course[]>(`/fiches/${ficheId}/courses?limit=${limit}`);
+export async function fetchFicheRuns(ficheId: number, limit = 20): Promise<Run[]> {
+  return request<Run[]>(`/fiches/${ficheId}/runs?limit=${limit}`);
 }
 
 export async function fetchContainerPolicy(): Promise<ContainerPolicy> {

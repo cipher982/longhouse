@@ -44,7 +44,7 @@ class TestSpawnCommisReturnFormat:
                 ToolIndexEntry(sequence=1, tool_name="ssh_exec", exit_code=0, duration_ms=234, output_bytes=1847, failed=False),
                 ToolIndexEntry(sequence=2, tool_name="ssh_exec", exit_code=1, duration_ms=156, output_bytes=523, failed=True),
             ],
-            course_id=48,
+            run_id=48,
         )
 
         formatted = format_roundabout_result(result)
@@ -62,18 +62,18 @@ class TestSpawnCommisReturnFormat:
             commis_id="test-commis-123",
             duration_seconds=10.5,
             summary="Commis completed",
-            course_id=48,
+            run_id=48,
         )
 
         formatted = format_roundabout_result(result)
 
         # Should include evidence marker
-        assert "[EVIDENCE:course_id=48,job_id=123,commis_id=test-commis-123]" in formatted
+        assert "[EVIDENCE:run_id=48,job_id=123,commis_id=test-commis-123]" in formatted
 
         # Verify marker is parseable
         match = EVIDENCE_MARKER_PATTERN.search(formatted)
         assert match is not None
-        assert match.group(1) == "48"  # course_id
+        assert match.group(1) == "48"  # run_id
         assert match.group(2) == "123"  # job_id
         assert match.group(3) == "test-commis-123"  # commis_id
 
@@ -85,13 +85,13 @@ class TestSpawnCommisReturnFormat:
             commis_id="test-commis-123",
             duration_seconds=5.2,
             error="Commis failed: SSH connection timeout",
-            course_id=48,
+            run_id=48,
         )
 
         formatted = format_roundabout_result(result)
 
         # Should include evidence marker even for failures
-        assert "[EVIDENCE:course_id=48,job_id=123,commis_id=test-commis-123]" in formatted
+        assert "[EVIDENCE:run_id=48,job_id=123,commis_id=test-commis-123]" in formatted
 
         # Should also contain error info
         assert "failed" in formatted.lower()
@@ -106,27 +106,27 @@ class TestSpawnCommisReturnFormat:
             duration_seconds=300.0,
             commis_still_running=True,
             error="Monitor timeout after 300s",
-            course_id=48,
+            run_id=48,
         )
 
         formatted = format_roundabout_result(result)
 
         # Should include evidence marker even for timeouts
-        assert "[EVIDENCE:course_id=48,job_id=123,commis_id=test-commis-123]" in formatted
+        assert "[EVIDENCE:run_id=48,job_id=123,commis_id=test-commis-123]" in formatted
 
         # Should also contain timeout info
         assert "timeout" in formatted.lower()
         assert "STILL RUNNING" in formatted
 
-    def test_format_without_course_id_no_marker(self):
-        """Test that formatted result omits marker when course_id is None."""
+    def test_format_without_run_id_no_marker(self):
+        """Test that formatted result omits marker when run_id is None."""
         result = RoundaboutResult(
             status="complete",
             job_id=123,
             commis_id="test-commis-123",
             duration_seconds=10.5,
             summary="Commis completed",
-            course_id=None,  # No concierge context
+            run_id=None,  # No oikos context
         )
 
         formatted = format_roundabout_result(result)
@@ -152,7 +152,7 @@ class TestEvidenceMountingIntegration:
 
         wrapper = EvidenceMountingLLM(
             base_llm=mock_base_llm,
-            course_id=48,
+            run_id=48,
             owner_id=100,
             db=mock_db,
         )
@@ -166,7 +166,7 @@ class TestEvidenceMountingIntegration:
             # Create messages with evidence marker
             messages = [
                 ToolMessage(
-                    content="Commis completed.\n[EVIDENCE:course_id=48,job_id=123,commis_id=test-commis]",
+                    content="Commis completed.\n[EVIDENCE:run_id=48,job_id=123,commis_id=test-commis]",
                     tool_call_id="tc1",
                     name="spawn_commis",
                 ),
@@ -176,7 +176,7 @@ class TestEvidenceMountingIntegration:
             await wrapper.ainvoke(messages)
 
             # Verify compiler was called with correct parameters
-            mock_compile.assert_called_once_with(course_id=48, owner_id=100, db=mock_db)
+            mock_compile.assert_called_once_with(run_id=48, owner_id=100, db=mock_db)
 
             # Verify base LLM was called with expanded evidence
             mock_base_llm.ainvoke.assert_called_once()
@@ -185,7 +185,7 @@ class TestEvidenceMountingIntegration:
             # Check that evidence was expanded
             expanded_msg = call_args[0]
             assert isinstance(expanded_msg, ToolMessage)
-            assert "[EVIDENCE:course_id=48,job_id=123,commis_id=test-commis]" in expanded_msg.content
+            assert "[EVIDENCE:run_id=48,job_id=123,commis_id=test-commis]" in expanded_msg.content
             assert "--- Evidence for Commis 123 ---" in expanded_msg.content
             assert "Tool 1: ssh_exec" in expanded_msg.content
 
@@ -202,7 +202,7 @@ class TestEvidenceMountingIntegration:
 
         messages = [
             ToolMessage(
-                content="Commis completed.\n[EVIDENCE:course_id=48,job_id=123,commis_id=test-commis]",
+                content="Commis completed.\n[EVIDENCE:run_id=48,job_id=123,commis_id=test-commis]",
                 tool_call_id="tc1",
                 name="spawn_commis",
             ),
@@ -216,7 +216,7 @@ class TestEvidenceMountingIntegration:
         call_args = mock_base_llm.ainvoke.call_args[0][0]
 
         original_msg = call_args[0]
-        assert original_msg.content == "Commis completed.\n[EVIDENCE:course_id=48,job_id=123,commis_id=test-commis]"
+        assert original_msg.content == "Commis completed.\n[EVIDENCE:run_id=48,job_id=123,commis_id=test-commis]"
         assert "--- Evidence for Commis" not in original_msg.content
 
 
@@ -238,11 +238,11 @@ class TestEvidencePersistence:
         mock_base_llm = AsyncMock()
         mock_base_llm.ainvoke = AsyncMock(return_value="Test response")
 
-        wrapper = EvidenceMountingLLM(base_llm=mock_base_llm, course_id=48, owner_id=100, db=mock_db)
+        wrapper = EvidenceMountingLLM(base_llm=mock_base_llm, run_id=48, owner_id=100, db=mock_db)
 
         # Create compact message (what gets persisted)
         compact_message = ToolMessage(
-            content="Commis completed.\n[EVIDENCE:course_id=48,job_id=123,commis_id=test-commis]",
+            content="Commis completed.\n[EVIDENCE:run_id=48,job_id=123,commis_id=test-commis]",
             tool_call_id="tc1",
             name="spawn_commis",
         )
@@ -302,7 +302,7 @@ class TestNonStreamingPath:
         mock_db = MagicMock()
         wrapper = EvidenceMountingLLM(
             base_llm=mock_base_llm,
-            course_id=48,
+            run_id=48,
             owner_id=100,
             db=mock_db,
         )
@@ -317,7 +317,7 @@ class TestNonStreamingPath:
             # Create message with evidence marker
             messages = [
                 ToolMessage(
-                    content="Commis result\n[EVIDENCE:course_id=48,job_id=123,commis_id=test-commis]",
+                    content="Commis result\n[EVIDENCE:run_id=48,job_id=123,commis_id=test-commis]",
                     tool_call_id="tc1",
                     name="spawn_commis",
                 ),
@@ -342,39 +342,39 @@ class TestCriticalScenario:
     This is the PRIMARY PROBLEM the evidence mounting system solves:
     - Commis executes tools successfully (e.g., ssh_exec)
     - Commis's final AI message is empty or garbage ("(No result generated)")
-    - Concierge should still answer correctly using raw tool outputs
+    - Oikos should still answer correctly using raw tool outputs
     """
 
     @pytest.mark.asyncio
     async def test_empty_result_txt_with_tool_outputs(self, db_session, sample_fiche, temp_artifact_path):
-        """Test concierge can answer even when commis result.txt is empty.
+        """Test oikos can answer even when commis result.txt is empty.
 
         This simulates the bug scenario:
         1. Commis runs ssh_exec successfully
         2. Commis's result.txt is empty or "(No result generated)"
         3. EvidenceCompiler should still provide ssh_exec output
-        4. Concierge should receive expanded evidence with tool outputs
+        4. Oikos should receive expanded evidence with tool outputs
         """
         from unittest.mock import AsyncMock
         import json
         from sqlalchemy.orm import Session
-        from zerg.models.models import Course, CommisJob
-        from zerg.models.enums import CourseStatus, CourseTrigger
+        from zerg.models.models import Run, CommisJob
+        from zerg.models.enums import RunStatus, RunTrigger
         from zerg.crud import create_thread
         from zerg.services.evidence_compiler import EvidenceCompiler
         from zerg.services.commis_artifact_store import CommisArtifactStore
 
-        # Create concierge run
+        # Create oikos run
         thread = create_thread(db_session, fiche_id=sample_fiche.id, title="Test Run")
-        concierge_run = Course(
+        oikos_run = Run(
             fiche_id=sample_fiche.id,
             thread_id=thread.id,
-            status=CourseStatus.RUNNING,
-            trigger=CourseTrigger.MANUAL,
+            status=RunStatus.RUNNING,
+            trigger=RunTrigger.MANUAL,
         )
-        db_session.add(concierge_run)
+        db_session.add(oikos_run)
         db_session.commit()
-        db_session.refresh(concierge_run)
+        db_session.refresh(oikos_run)
 
         # Create artifact store
         artifact_store = CommisArtifactStore(base_path=temp_artifact_path)
@@ -406,7 +406,7 @@ class TestCriticalScenario:
         # Create commis job
         job = CommisJob(
             owner_id=sample_fiche.owner_id,
-            concierge_course_id=concierge_run.id,
+            oikos_run_id=oikos_run.id,
             task="Check disk space on server",
             status="success",
             commis_id=commis_id,
@@ -414,7 +414,7 @@ class TestCriticalScenario:
         db_session.add(job)
         db_session.commit()
 
-        # Format roundabout result (what concierge sees)
+        # Format roundabout result (what oikos sees)
         result = RoundaboutResult(
             status="complete",
             job_id=job.id,
@@ -431,7 +431,7 @@ class TestCriticalScenario:
                     failed=False
                 ),
             ],
-            course_id=concierge_run.id,
+            run_id=oikos_run.id,
         )
         compact_payload = format_roundabout_result(result)
 
@@ -446,13 +446,13 @@ class TestCriticalScenario:
         compiler = EvidenceCompiler(artifact_store=artifact_store, db=db_session)
         wrapper = EvidenceMountingLLM(
             base_llm=mock_base_llm,
-            course_id=concierge_run.id,
+            run_id=oikos_run.id,
             owner_id=sample_fiche.owner_id,
             db=db_session,
         )
         wrapper.compiler = compiler  # Use real compiler
 
-        # Create message as concierge would receive it
+        # Create message as oikos would receive it
         messages = [
             ToolMessage(
                 content=compact_payload,
@@ -483,21 +483,21 @@ class TestCriticalScenario:
         import json
         from zerg.services.evidence_compiler import EvidenceCompiler
         from zerg.services.commis_artifact_store import CommisArtifactStore
-        from zerg.models.models import Course, CommisJob
-        from zerg.models.enums import CourseStatus, CourseTrigger
+        from zerg.models.models import Run, CommisJob
+        from zerg.models.enums import RunStatus, RunTrigger
         from zerg.crud import create_thread
 
-        # Create concierge run
+        # Create oikos run
         thread = create_thread(db_session, fiche_id=sample_fiche.id, title="Test Run")
-        concierge_run = Course(
+        oikos_run = Run(
             fiche_id=sample_fiche.id,
             thread_id=thread.id,
-            status=CourseStatus.RUNNING,
-            trigger=CourseTrigger.MANUAL,
+            status=RunStatus.RUNNING,
+            trigger=RunTrigger.MANUAL,
         )
-        db_session.add(concierge_run)
+        db_session.add(oikos_run)
         db_session.commit()
-        db_session.refresh(concierge_run)
+        db_session.refresh(oikos_run)
 
         # Create artifact store and commis
         artifact_store = CommisArtifactStore(base_path=temp_artifact_path)
@@ -541,7 +541,7 @@ class TestCriticalScenario:
         # Create commis job
         job = CommisJob(
             owner_id=sample_fiche.owner_id,
-            concierge_course_id=concierge_run.id,
+            oikos_run_id=oikos_run.id,
             task="Check server status",
             status="success",
             commis_id=commis_id,
@@ -552,7 +552,7 @@ class TestCriticalScenario:
         # Compile evidence
         compiler = EvidenceCompiler(artifact_store=artifact_store, db=db_session)
         evidence_map = compiler.compile(
-            course_id=concierge_run.id,
+            run_id=oikos_run.id,
             owner_id=sample_fiche.owner_id,
             budget_bytes=10000,
         )
@@ -574,21 +574,21 @@ class TestCriticalScenario:
         import json
         from zerg.services.evidence_compiler import EvidenceCompiler
         from zerg.services.commis_artifact_store import CommisArtifactStore
-        from zerg.models.models import Course, CommisJob
-        from zerg.models.enums import CourseStatus, CourseTrigger
+        from zerg.models.models import Run, CommisJob
+        from zerg.models.enums import RunStatus, RunTrigger
         from zerg.crud import create_thread
 
-        # Create concierge run
+        # Create oikos run
         thread = create_thread(db_session, fiche_id=sample_fiche.id, title="Test Run")
-        concierge_run = Course(
+        oikos_run = Run(
             fiche_id=sample_fiche.id,
             thread_id=thread.id,
-            status=CourseStatus.RUNNING,
-            trigger=CourseTrigger.MANUAL,
+            status=RunStatus.RUNNING,
+            trigger=RunTrigger.MANUAL,
         )
-        db_session.add(concierge_run)
+        db_session.add(oikos_run)
         db_session.commit()
-        db_session.refresh(concierge_run)
+        db_session.refresh(oikos_run)
 
         # Create artifact store and commis
         artifact_store = CommisArtifactStore(base_path=temp_artifact_path)
@@ -619,7 +619,7 @@ class TestCriticalScenario:
         # Create commis job
         job = CommisJob(
             owner_id=sample_fiche.owner_id,
-            concierge_course_id=concierge_run.id,
+            oikos_run_id=oikos_run.id,
             task="Get large log file",
             status="success",
             commis_id=commis_id,
@@ -630,7 +630,7 @@ class TestCriticalScenario:
         # Compile evidence with small budget
         compiler = EvidenceCompiler(artifact_store=artifact_store, db=db_session)
         evidence_map = compiler.compile(
-            course_id=concierge_run.id,
+            run_id=oikos_run.id,
             owner_id=sample_fiche.owner_id,
             budget_bytes=5000,  # Small budget to force truncation
         )

@@ -62,7 +62,7 @@ class EvalRunSummary:
 class EvalRunResult:
     """Complete eval run result."""
 
-    course_id: str
+    run_id: str
     variant: str
     timestamp: str
     commit: str
@@ -91,7 +91,7 @@ def get_commit_hash() -> str:
     return "unknown"
 
 
-def generate_course_id(variant: str = "baseline") -> str:
+def generate_run_id(variant: str = "baseline") -> str:
     """Generate a unique run ID.
 
     Format: eval-{timestamp}-{variant}-{commit}
@@ -221,7 +221,7 @@ def merge_results(variant: str, model: str | None = None, commit: str | None = N
 
     # Generate run ID and result object
     commit_hash = commit or get_commit_hash()
-    course_id = generate_course_id(variant)
+    run_id = generate_run_id(variant)
     timestamp = datetime.now(timezone.utc).isoformat()
 
     config = {"variant": variant}
@@ -229,7 +229,7 @@ def merge_results(variant: str, model: str | None = None, commit: str | None = N
         config["model"] = model
 
     result = EvalRunResult(
-        course_id=course_id,
+        run_id=run_id,
         variant=variant,
         timestamp=timestamp,
         commit=commit_hash,
@@ -240,7 +240,7 @@ def merge_results(variant: str, model: str | None = None, commit: str | None = N
 
     # Write to final result file
     results_dir = get_results_dir()
-    result_file = results_dir / f"{course_id}.json"
+    result_file = results_dir / f"{run_id}.json"
 
     with open(result_file, "w") as f:
         json.dump(asdict(result), f, indent=2)
@@ -287,7 +287,7 @@ def load_result(result_file: str) -> EvalRunResult:
         cases.append(case)
 
     return EvalRunResult(
-        course_id=data["course_id"],
+        run_id=data["run_id"],
         variant=data["variant"],
         timestamp=data["timestamp"],
         commit=data["commit"],

@@ -28,7 +28,7 @@ def test_read_fiche_details_basic(client: TestClient, sample_fiche: Fiche):
 
     # The optional keys should be absent when not requested
     assert "threads" not in payload
-    assert "courses" not in payload
+    assert "runs" not in payload
     assert "stats" not in payload
 
 
@@ -36,9 +36,9 @@ def test_read_fiche_details_basic(client: TestClient, sample_fiche: Fiche):
     "include_param, expected_keys",
     [
         ("threads", {"fiche", "threads"}),
-        ("courses", {"fiche", "courses"}),
+        ("runs", {"fiche", "runs"}),
         ("stats", {"fiche", "stats"}),
-        ("threads,courses", {"fiche", "threads", "courses"}),
+        ("threads,runs", {"fiche", "threads", "runs"}),
     ],
 )
 def test_read_fiche_details_include_param(client: TestClient, sample_fiche: Fiche, include_param, expected_keys):

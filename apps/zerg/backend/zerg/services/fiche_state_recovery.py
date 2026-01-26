@@ -5,8 +5,8 @@ This module provides robust fiche state management that prevents the stuck fiche
 by implementing startup recovery procedures based on distributed systems principles.
 
 Handles recovery of:
-- Fiches stuck in "running" state with no active courses
-- Course rows stuck in RUNNING/QUEUED/DEFERRED status
+- Fiches stuck in "running" state with no active runs
+- Run rows stuck in RUNNING/QUEUED/DEFERRED status
 - CommisJob rows stuck in "running" status (queued jobs are resumable)
 - RunnerJob rows stuck in queued/running status
 """
@@ -19,10 +19,10 @@ from typing import List
 from sqlalchemy import text
 
 from zerg.database import get_session_factory
-from zerg.models.enums import CourseStatus
+from zerg.models.enums import RunStatus
 from zerg.models.models import CommisJob
-from zerg.models.models import Course
 from zerg.models.models import Fiche
+from zerg.models.models import Run
 from zerg.models.models import RunnerJob
 
 logger = logging.getLogger(__name__)
@@ -46,17 +46,17 @@ async def perform_startup_fiche_recovery() -> List[int]:
 
     with session_factory() as db:
         try:
-            # Find fiches stuck in running state with no active courses
+            # Find fiches stuck in running state with no active runs
             # This indicates a previous process crash where the lock wasn't released
             stuck_fiches = (
                 db.query(Fiche)
                 .outerjoin(
-                    Course,
-                    (Fiche.id == Course.fiche_id) & (Course.status.in_([CourseStatus.RUNNING.value, CourseStatus.QUEUED.value])),
+                    Run,
+                    (Fiche.id == Run.fiche_id) & (Run.status.in_([RunStatus.RUNNING.value, RunStatus.QUEUED.value])),
                 )
                 .filter(
                     Fiche.status.in_(["running", "RUNNING"]),  # Fiche shows as running
-                    Course.id.is_(None),  # But no active courses exist
+                    Run.id.is_(None),  # But no active runs exist
                 )
                 .all()
             )
@@ -96,80 +96,80 @@ async def perform_startup_fiche_recovery() -> List[int]:
     return recovered_fiche_ids
 
 
-async def perform_startup_course_recovery() -> List[int]:
+async def perform_startup_run_recovery() -> List[int]:
     """
-    Recover orphaned Course rows on application startup.
+    Recover orphaned Run rows on application startup.
 
-    Finds courses stuck in RUNNING, QUEUED, or DEFERRED status and marks them
+    Finds runs stuck in RUNNING, QUEUED, or DEFERRED status and marks them
     as FAILED with a clear error message indicating server restart.
 
     Returns:
-        List of course IDs that were recovered
+        List of run IDs that were recovered
     """
-    logger.info("Starting course recovery process...")
+    logger.info("Starting run recovery process...")
 
     session_factory = get_session_factory()
-    recovered_course_ids = []
+    recovered_run_ids = []
 
     with session_factory() as db:
         try:
-            # Find courses stuck in active states
-            stuck_courses = (
-                db.query(Course)
+            # Find runs stuck in active states
+            stuck_runs = (
+                db.query(Run)
                 .filter(
-                    Course.status.in_(
+                    Run.status.in_(
                         [
-                            CourseStatus.RUNNING.value,
-                            CourseStatus.QUEUED.value,
-                            CourseStatus.DEFERRED.value,
+                            RunStatus.RUNNING.value,
+                            RunStatus.QUEUED.value,
+                            RunStatus.DEFERRED.value,
                         ]
                     )
                 )
                 .all()
             )
 
-            if not stuck_courses:
-                logger.info("✅ No stuck courses found during startup recovery")
-                return recovered_course_ids
+            if not stuck_runs:
+                logger.info("✅ No stuck runs found during startup recovery")
+                return recovered_run_ids
 
-            logger.warning(f"🔧 Found {len(stuck_courses)} courses stuck in active state, recovering...")
+            logger.warning(f"🔧 Found {len(stuck_runs)} runs stuck in active state, recovering...")
 
             now = datetime.now(timezone.utc)
-            for course in stuck_courses:
+            for run in stuck_runs:
                 try:
                     # Calculate duration if started
                     duration_ms = None
-                    if course.started_at:
-                        started = course.started_at
+                    if run.started_at:
+                        started = run.started_at
                         if started.tzinfo is None:
                             started = started.replace(tzinfo=timezone.utc)
                         duration_ms = int((now - started).total_seconds() * 1000)
 
-                    db.query(Course).filter(Course.id == course.id).update(
+                    db.query(Run).filter(Run.id == run.id).update(
                         {
-                            "status": CourseStatus.FAILED.value,
+                            "status": RunStatus.FAILED.value,
                             "finished_at": now,
                             "duration_ms": duration_ms,
                             "error": "Orphaned after server restart - execution state lost",
                         }
                     )
 
-                    recovered_course_ids.append(course.id)
-                    logger.info(f"✅ Recovered course {course.id} (fiche={course.fiche_id}, was {course.status})")
+                    recovered_run_ids.append(run.id)
+                    logger.info(f"✅ Recovered run {run.id} (fiche={run.fiche_id}, was {run.status})")
 
                 except Exception as e:
-                    logger.error(f"❌ Failed to recover course {course.id}: {e}")
+                    logger.error(f"❌ Failed to recover run {run.id}: {e}")
 
-            if recovered_course_ids:
+            if recovered_run_ids:
                 db.commit()
-                logger.info(f"✅ Successfully recovered {len(recovered_course_ids)} courses")
+                logger.info(f"✅ Successfully recovered {len(recovered_run_ids)} runs")
 
         except Exception as e:
-            logger.error(f"❌ Course recovery process failed: {e}")
+            logger.error(f"❌ Run recovery process failed: {e}")
             db.rollback()
             raise
 
-    return recovered_course_ids
+    return recovered_run_ids
 
 
 async def perform_startup_commis_job_recovery() -> List[int]:
@@ -323,22 +323,22 @@ async def initialize_fiche_state_system():
     Initialize the fiche state management system.
 
     This should be called during application startup to:
-    1. Perform recovery of any orphaned courses (MUST happen before fiche recovery)
+    1. Perform recovery of any orphaned runs (MUST happen before fiche recovery)
     2. Perform recovery of any orphaned commis jobs
     3. Perform recovery of any orphaned runner jobs
-    4. Perform recovery of any stuck fiches (after courses are cleared)
+    4. Perform recovery of any stuck fiches (after runs are cleared)
     5. Initialize the proper locking system
 
-    IMPORTANT: Course/job recovery must happen BEFORE fiche recovery because
-    fiche recovery skips fiches with active courses. If we recover fiches first,
-    fiches with stuck courses won't be reset. Then when course recovery marks those
-    courses as FAILED, the fiche stays stuck in "running" forever.
+    IMPORTANT: Run/job recovery must happen BEFORE fiche recovery because
+    fiche recovery skips fiches with active runs. If we recover fiches first,
+    fiches with stuck runs won't be reset. Then when run recovery marks those
+    runs as FAILED, the fiche stays stuck in "running" forever.
     """
     logger.info("Initializing fiche state management system...")
 
     try:
-        # Step 1: Recover courses FIRST (so fiches no longer have "active courses")
-        recovered_courses = await perform_startup_course_recovery()
+        # Step 1: Recover runs FIRST (so fiches no longer have "active runs")
+        recovered_runs = await perform_startup_run_recovery()
 
         # Step 2: Recover commis jobs
         recovered_commis_jobs = await perform_startup_commis_job_recovery()
@@ -346,20 +346,20 @@ async def initialize_fiche_state_system():
         # Step 3: Recover runner jobs
         recovered_runner_jobs = await perform_startup_runner_job_recovery()
 
-        # Step 4: Recover fiches LAST (now will correctly see no active courses)
+        # Step 4: Recover fiches LAST (now will correctly see no active runs)
         recovered_fiches = await perform_startup_fiche_recovery()
 
         # Step 5: Check advisory lock support for future enhancement
         advisory_locks_available = check_postgresql_advisory_lock_support()
 
         # Log summary
-        total_recovered = len(recovered_fiches) + len(recovered_courses) + len(recovered_commis_jobs) + len(recovered_runner_jobs)
+        total_recovered = len(recovered_fiches) + len(recovered_runs) + len(recovered_commis_jobs) + len(recovered_runner_jobs)
 
         if total_recovered > 0:
             logger.info(
                 f"🔧 Startup recovery complete: "
                 f"{len(recovered_fiches)} fiches, "
-                f"{len(recovered_courses)} courses, "
+                f"{len(recovered_runs)} runs, "
                 f"{len(recovered_commis_jobs)} commis jobs, "
                 f"{len(recovered_runner_jobs)} runner jobs"
             )
@@ -371,7 +371,7 @@ async def initialize_fiche_state_system():
 
         return {
             "recovered_fiches": recovered_fiches,
-            "recovered_courses": recovered_courses,
+            "recovered_runs": recovered_runs,
             "recovered_commis_jobs": recovered_commis_jobs,
             "recovered_runner_jobs": recovered_runner_jobs,
             "advisory_locks_available": advisory_locks_available,

@@ -1,20 +1,20 @@
-# Concierge Tools
+# Oikos Tools
 
 ## Overview
 
-The concierge tools layer enables Zerg's concierge/commis architecture by providing tools that allow concierge fiches to spawn, manage, and query commis fiches. This implements Milestone 2 of the commis system architecture.
+The oikos tools layer enables Zerg's oikos/commis architecture by providing tools that allow oikos fiches to spawn, manage, and query commis fiches. This implements Milestone 2 of the commis system architecture.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     Concierge Fiche                         │
+│                     Oikos Fiche                         │
 │  (can delegate tasks, query results, drill into artifacts)  │
 └──────────────────────┬──────────────────────────────────────┘
-                       │ uses concierge tools
+                       │ uses oikos tools
                        ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                   Concierge Tools                           │
+│                   Oikos Tools                           │
 │  - spawn_commis()        - list_commis()                    │
 │  - read_commis_result()  - read_commis_file()                │
 │  - grep_commis()        - get_commis_metadata()             │
@@ -35,7 +35,7 @@ Spawns a disposable commis fiche to execute a task independently.
 
 **Use cases:**
 
-- Delegating sub-tasks from a concierge
+- Delegating sub-tasks from a oikos
 - Parallel execution of multiple tasks
 - Isolating verbose or risky operations
 
@@ -52,7 +52,7 @@ result = spawn_commis(
 
 - A queued summary containing the `job_id`
 
-**Note:** The concierge-facing `spawn_commis` tool is intentionally fire-and-forget (durable-runs model).
+**Note:** The oikos-facing `spawn_commis` tool is intentionally fire-and-forget (durable-runs model).
 Roundabout-style waiting exists in the underlying implementation but is not exposed to the LLM tool schema.
 
 ---
@@ -199,7 +199,7 @@ This is necessary because LangChain tools must be synchronous functions.
 
 To avoid circular imports between:
 
-- `concierge_tools.py` → `CommisRunner`
+- `oikos_tools.py` → `CommisRunner`
 - `CommisRunner` → `AgentRunner`
 - `AgentRunner` → `tools.builtin`
 
@@ -209,7 +209,7 @@ We use **lazy imports** - `CommisRunner` is imported inside the `spawn_commis` f
 
 ### Unit Tests
 
-**Location:** `tests/test_concierge_tools.py`
+**Location:** `tests/test_oikos_tools.py`
 
 **Coverage:**
 
@@ -224,7 +224,7 @@ We use **lazy imports** - `CommisRunner` is imported inside the `spawn_commis` f
 
 ### Integration Tests
 
-**Location:** `tests/test_concierge_tools_integration.py`
+**Location:** `tests/test_oikos_tools_integration.py`
 
 **Tests:**
 
@@ -234,7 +234,7 @@ We use **lazy imports** - `CommisRunner` is imported inside the `spawn_commis` f
 ## Usage Example
 
 ```python
-from zerg.tools.builtin.concierge_tools import (
+from zerg.tools.builtin.oikos_tools import (
     spawn_commis,
     list_commis,
     read_commis_result,
@@ -259,33 +259,33 @@ Run the interactive demo:
 
 ```bash
 cd apps/zerg/backend
-uv run python examples/concierge_tools_demo.py
+uv run python examples/oikos_tools_demo.py
 ```
 
 ## Files Created/Modified
 
 ### Created:
 
-- `zerg/tools/builtin/concierge_tools.py` - Tool implementations
-- `tests/test_concierge_tools.py` - Unit tests
-- `tests/test_concierge_tools_integration.py` - Integration tests
-- `examples/concierge_tools_demo.py` - Demo script
-- `apps/zerg/backend/docs/concierge_tools.md` - This document
+- `zerg/tools/builtin/oikos_tools.py` - Tool implementations
+- `tests/test_oikos_tools.py` - Unit tests
+- `tests/test_oikos_tools_integration.py` - Integration tests
+- `examples/oikos_tools_demo.py` - Demo script
+- `apps/zerg/backend/docs/oikos_tools.md` - This document
 
 ### Modified:
 
-- `zerg/tools/builtin/__init__.py` - Registered concierge tools
+- `zerg/tools/builtin/__init__.py` - Registered oikos tools
 
 ## Next Steps
 
 ### Milestone 3: Fiche API Integration
 
-To expose concierge tools to fiches via the API:
+To expose oikos tools to fiches via the API:
 
-1. **Update fiche configuration** to include concierge tools in allowlist
-2. **Frontend integration** - UI to enable concierge mode for fiches
-3. **Tool group creation** - Add "concierge" tool group to `constants/toolGroups.ts`
-4. **Documentation** - User-facing docs on concierge/commis patterns
+1. **Update fiche configuration** to include oikos tools in allowlist
+2. **Frontend integration** - UI to enable oikos mode for fiches
+3. **Tool group creation** - Add "oikos" tool group to `constants/toolGroups.ts`
+4. **Documentation** - User-facing docs on oikos/commis patterns
 
 ### Potential Enhancements
 

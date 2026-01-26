@@ -65,7 +65,7 @@ class TestFicheErrorHandling:
     @patch("zerg.services.scheduler_service.crud")
     @patch("zerg.services.scheduler_service.event_bus")
     async def test_scheduler_successful_run(self, mock_event_bus, mock_crud, mock_execute, scheduler_service, mock_db_session, mock_fiche):
-        """Test that a scheduled run calls execute_fiche_task and updates next_course_at."""
+        """Test that a scheduled run calls execute_fiche_task and updates next_run_at."""
         fiche_id = 1
         mock_crud.get_fiche.return_value = mock_fiche
         mock_event_bus.publish = AsyncMock()
@@ -85,7 +85,7 @@ class TestFicheErrorHandling:
             thread_type="schedule",
             trigger="schedule",
         )
-        mock_crud.update_fiche.assert_called_with(mock_db_session, fiche_id, next_course_at=next_run_time)
+        mock_crud.update_fiche.assert_called_with(mock_db_session, fiche_id, next_run_at=next_run_time)
         mock_event_bus.publish.assert_awaited()
 
     @patch("zerg.services.scheduler_service.execute_fiche_task", new_callable=AsyncMock)

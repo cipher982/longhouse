@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Debug a trace by showing the full timeline across all tables.
 
-This script queries courses, commis_jobs, and llm_audit_log tables
+This script queries runs, commis_jobs, and llm_audit_log tables
 by trace_id and builds a unified timeline for debugging.
 
 Usage:
@@ -55,11 +55,11 @@ class TimelineEvent:
 def get_trace_data(db, trace_id: uuid.UUID) -> dict:
     """Query all tables for a given trace_id."""
     from zerg.models.llm_audit import LLMAuditLog
-    from zerg.models.models import Course
+    from zerg.models.models import Run
     from zerg.models.models import CommisJob
 
     # Get all runs with this trace
-    runs = db.query(Course).filter(Course.trace_id == trace_id).all()
+    runs = db.query(Run).filter(Run.trace_id == trace_id).all()
 
     # Get all commis jobs with this trace
     commis = db.query(CommisJob).filter(CommisJob.trace_id == trace_id).all()
@@ -86,10 +86,10 @@ def build_timeline(data: dict) -> list[TimelineEvent]:
             events.append(
                 TimelineEvent(
                     timestamp=ts,
-                    event_type="concierge.run.started",
+                    event_type="oikos.run.started",
                     source="run",
                     details={
-                        "course_id": run.id,
+                        "run_id": run.id,
                         "fiche_id": run.fiche_id,
                         "thread_id": run.thread_id,
                         "model": run.model,
@@ -105,10 +105,10 @@ def build_timeline(data: dict) -> list[TimelineEvent]:
             events.append(
                 TimelineEvent(
                     timestamp=ts,
-                    event_type=f"concierge.run.{run.status.value if run.status else 'finished'}",
+                    event_type=f"oikos.run.{run.status.value if run.status else 'finished'}",
                     source="run",
                     details={
-                        "course_id": run.id,
+                        "run_id": run.id,
                         "duration_ms": run.duration_ms,
                         "total_tokens": run.total_tokens,
                         "error": run.error[:100] if run.error else None,
@@ -314,20 +314,20 @@ def format_timeline_output(
 
 def show_recent_traces(db, limit: int = 20) -> None:
     """Show recent traces for discovery."""
-    from zerg.models.models import Course
+    from zerg.models.models import Run
 
     # Get recent runs with trace_id set
     runs = (
-        db.query(Course)
-        .filter(Course.trace_id.isnot(None))
-        .order_by(Course.created_at.desc())
+        db.query(Run)
+        .filter(Run.trace_id.isnot(None))
+        .order_by(Run.created_at.desc())
         .limit(limit)
         .all()
     )
 
     print(f"Recent traces (last {limit}):")
     print("-" * 100)
-    print(f"{'trace_id':<40} {'course_id':<8} {'status':<12} {'model':<20} {'started_at'}")
+    print(f"{'trace_id':<40} {'run_id':<8} {'status':<12} {'model':<20} {'started_at'}")
     print("-" * 100)
 
     for run in runs:

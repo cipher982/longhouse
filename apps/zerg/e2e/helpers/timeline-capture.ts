@@ -1,7 +1,7 @@
 /**
  * TimelineCapture - Helper for capturing timeline events during E2E tests
  *
- * Intercepts SSE events from Jarvis chat to build timeline data structure
+ * Intercepts SSE events from Oikos chat to build timeline data structure
  * similar to frontend TimelineLogger. Exports metrics to JSON for analysis.
  *
  * Usage:
@@ -29,7 +29,7 @@ interface CapturedEvent {
 
 interface TimelineData {
   correlationId: string | null;
-  courseId: number | null;
+  runId: number | null;
   events: CapturedEvent[];
   startTime: number;
   endTime: number;
@@ -43,7 +43,7 @@ interface TimelineMetrics {
   timeline: TimelineData;
   summary: {
     totalDurationMs: number;
-    conciergeThinkingMs?: number;
+    oikosThinkingMs?: number;
     commisExecutionMs?: number;
     toolExecutionMs?: number;
   };
@@ -54,7 +54,7 @@ export class TimelineCapture {
   private events: CapturedEvent[] = [];
   private startTime: number | null = null;
   private correlationId: string | null = null;
-  private courseId: number | null = null;
+  private runId: number | null = null;
   private capturing: boolean = false;
 
   constructor(page: Page) {
@@ -73,7 +73,7 @@ export class TimelineCapture {
     this.events = [];
     this.startTime = Date.now();
     this.correlationId = null;
-    this.courseId = null;
+    this.runId = null;
 
     // Inject event capture script into page context
     await this.page.addInitScript(() => {
@@ -147,7 +147,7 @@ export class TimelineCapture {
     if (capturedEvents.length === 0) {
       return {
         correlationId: this.correlationId,
-        courseId: this.courseId,
+        runId: this.runId,
         events: [],
         startTime: this.startTime || Date.now(),
         endTime: Date.now(),
@@ -156,15 +156,15 @@ export class TimelineCapture {
       };
     }
 
-    // Extract correlation ID and course ID from first event
+    // Extract correlation ID and run ID from first event
     for (const evt of capturedEvents) {
       if (evt.data?.client_correlation_id && !this.correlationId) {
         this.correlationId = evt.data.client_correlation_id;
       }
-      if (evt.data?.payload?.course_id && !this.courseId) {
-        this.courseId = evt.data.payload.course_id;
+      if (evt.data?.payload?.run_id && !this.runId) {
+        this.runId = evt.data.payload.run_id;
       }
-      if (this.correlationId && this.courseId) break;
+      if (this.correlationId && this.runId) break;
     }
 
     // Build timeline events
@@ -196,7 +196,7 @@ export class TimelineCapture {
 
     return {
       correlationId: this.correlationId,
-      courseId: this.courseId,
+      runId: this.runId,
       events: this.events,
       startTime: firstTimestamp,
       endTime: lastTimestamp,
@@ -240,16 +240,16 @@ export class TimelineCapture {
    */
   private calculateSummary(timeline: TimelineData): {
     totalDurationMs: number;
-    conciergeThinkingMs?: number;
+    oikosThinkingMs?: number;
     commisExecutionMs?: number;
     toolExecutionMs?: number;
   } {
     const { phases, totalDurationMs } = timeline;
 
-    // Calculate concierge thinking time (concierge_started → commis_spawned)
-    let conciergeThinkingMs: number | undefined = undefined;
-    if (phases.concierge_started && phases.commis_spawned) {
-      conciergeThinkingMs = phases.commis_spawned.offsetMs - phases.concierge_started.offsetMs;
+    // Calculate oikos thinking time (oikos_started → commis_spawned)
+    let oikosThinkingMs: number | undefined = undefined;
+    if (phases.oikos_started && phases.commis_spawned) {
+      oikosThinkingMs = phases.commis_spawned.offsetMs - phases.oikos_started.offsetMs;
     }
 
     // Calculate commis execution time (commis_spawned → commis_complete)
@@ -269,7 +269,7 @@ export class TimelineCapture {
 
     return {
       totalDurationMs,
-      conciergeThinkingMs,
+      oikosThinkingMs,
       commisExecutionMs,
       toolExecutionMs,
     };
@@ -290,9 +290,9 @@ export class TimelineCapture {
   }
 
   /**
-   * Get course ID
+   * Get run ID
    */
-  getCourseId(): number | null {
-    return this.courseId;
+  getRunId(): number | null {
+    return this.runId;
   }
 }

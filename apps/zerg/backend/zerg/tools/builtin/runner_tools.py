@@ -151,7 +151,7 @@ def runner_exec(
 
     owner_id = ctx.owner_id
     commis_id = ctx.commis_id
-    course_id = ctx.course_id
+    run_id = ctx.run_id
 
     # Validate parameters
     if not target:
@@ -224,7 +224,7 @@ def runner_exec(
                 command=command,
                 timeout_secs=timeout_secs,
                 commis_id=commis_id,
-                course_id=course_id,
+                run_id=run_id,
             )
         )
 

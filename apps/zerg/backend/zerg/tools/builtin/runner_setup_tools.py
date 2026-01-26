@@ -1,7 +1,7 @@
-"""Runner setup tools (Jarvis/Concierge-facing).
+"""Runner setup tools (Oikos-facing).
 
-These tools are meant for the Concierge/Jarvis path, not for commis.
-They enable a chat-first onboarding flow where Jarvis can:
+These tools are meant for the Oikos path, not for commis.
+They enable a chat-first onboarding flow where Oikos can:
 - list existing runners
 - generate a short-lived enrollment token and show install commands
 

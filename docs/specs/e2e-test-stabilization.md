@@ -97,9 +97,9 @@ await safeClick(page, '[data-testid="foo"]');
 **Changes to commit:**
 - `apps/zerg/backend/zerg/database.py` - engine leak fix
 - `apps/zerg/backend/zerg/routers/admin.py` - reset timeout fix
-- `apps/zerg/backend/zerg/routers/jarvis_chat.py` - SSE session fix
-- `apps/zerg/backend/zerg/routers/jarvis_runs.py` - SSE session fix
-- `apps/zerg/backend/zerg/routers/jarvis_supervisor.py` - SSE session fix
+- `apps/zerg/backend/zerg/routers/oikos_chat.py` - SSE session fix
+- `apps/zerg/backend/zerg/routers/oikos_runs.py` - SSE session fix
+- `apps/zerg/backend/zerg/routers/oikos_supervisor.py` - SSE session fix
 - `apps/zerg/backend/zerg/routers/stream.py` - SSE session fix
 
 **Acceptance criteria:**

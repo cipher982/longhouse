@@ -4,7 +4,7 @@ type Schemas = components["schemas"];
 
 export type Fiche = Schemas["Fiche"];
 export type FicheSummary = Fiche;
-export type Course = Schemas["CourseOut"];
+export type Run = Schemas["RunOut"];
 export type Thread = Schemas["Thread"];
 export type ThreadMessage = Schemas["ThreadMessageResponse"] & { created_at?: string };
 export type ThreadUpdatePayload = Schemas["ThreadUpdate"];
@@ -63,17 +63,17 @@ export type FicheCreatePayload = Pick<FicheCreate, "system_instructions" | "task
 
 export type FicheUpdatePayload = FicheUpdate;
 
-export interface DashboardCoursesBundle {
+export interface DashboardRunsBundle {
   ficheId: number;
-  courses: Course[];
+  runs: Run[];
 }
 
 export interface DashboardSnapshot {
   scope: "my" | "all";
   fetchedAt: string;
-  coursesLimit: number;
+  runsLimit: number;
   fiches: FicheSummary[];
-  courses: DashboardCoursesBundle[];
+  runs: DashboardRunsBundle[];
 }
 
 export interface ModelConfig {
@@ -101,7 +101,7 @@ export interface UserContext {
     location?: boolean;
     whoop?: boolean;
     obsidian?: boolean;
-    concierge?: boolean;
+    oikos?: boolean;
     [key: string]: boolean | undefined;
   };
 }

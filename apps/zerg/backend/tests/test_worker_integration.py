@@ -159,13 +159,13 @@ async def test_commis_with_error(db_session, test_user):
 
 
 @pytest.mark.asyncio
-async def test_concierge_can_read_commis_results(db_session, test_user):
-    """Test that a concierge can retrieve and analyze commis results."""
+async def test_oikos_can_read_commis_results(db_session, test_user):
+    """Test that a oikos can retrieve and analyze commis results."""
     with tempfile.TemporaryDirectory() as tmpdir:
         artifact_store = CommisArtifactStore(base_path=tmpdir)
         commis_runner = CommisRunner(artifact_store=artifact_store)
 
-        # Simulate a concierge delegating work to commis
+        # Simulate a oikos delegating work to commis
         delegation_tasks = [
             "Check disk space usage",
             "Check memory usage",
@@ -184,20 +184,20 @@ async def test_concierge_can_read_commis_results(db_session, test_user):
             if result.status == "success":
                 completed_commis.append(result.commis_id)
 
-        # Concierge queries completed commis
+        # Oikos queries completed commis
         commis = artifact_store.list_commis(status="success", limit=10)
         assert len(commis) >= len(completed_commis)
 
-        # Concierge reads each commis's result
+        # Oikos reads each commis's result
         for commis_id in completed_commis:
             metadata = artifact_store.get_commis_metadata(commis_id)
             result_text = artifact_store.get_commis_result(commis_id)
 
-            # Verify concierge can access all info
+            # Verify oikos can access all info
             assert metadata["task"] in delegation_tasks
             assert result_text is not None
 
-            # Concierge can also drill into specific artifacts
+            # Oikos can also drill into specific artifacts
             thread_content = artifact_store.read_commis_file(commis_id, "thread.jsonl")
             assert len(thread_content) > 0
 

@@ -127,13 +127,13 @@ test_chat() {
     # Send chat request, capture SSE stream with timeout
     local response
     if [[ -n "$TIMEOUT_CMD" ]]; then
-        response=$($TIMEOUT_CMD "$timeout_secs" curl -s -N -X POST "$API_URL/api/jarvis/chat" \
+        response=$($TIMEOUT_CMD "$timeout_secs" curl -s -N -X POST "$API_URL/api/oikos/chat" \
             -b "$cookie_jar" \
             -H "Content-Type: application/json" \
             -d "{\"message\": \"$message\", \"message_id\": \"$msg_id\"}" 2>/dev/null) || true
     else
         warn "timeout command not found - chat test may hang (install: brew install coreutils)"
-        response=$(curl -s -N -X POST "$API_URL/api/jarvis/chat" \
+        response=$(curl -s -N -X POST "$API_URL/api/oikos/chat" \
             -b "$cookie_jar" \
             -H "Content-Type: application/json" \
             -d "{\"message\": \"$message\", \"message_id\": \"$msg_id\"}" 2>/dev/null) || true
@@ -283,15 +283,15 @@ run_frontend_checks() {
 
 run_cors_checks() {
     run_test test_cors "Auth endpoint" "$API_URL/api/auth/google" "$FRONTEND_URL"
-    run_test test_cors "Jarvis endpoint" "$API_URL/api/jarvis/chat" "$FRONTEND_URL"
+    run_test test_cors "Oikos endpoint" "$API_URL/api/oikos/chat" "$FRONTEND_URL"
 }
 
 run_auth_gate_checks() {
     run_test test_http "Auth verify (no session)" "$API_URL/api/auth/verify" "401"
     run_test test_http "Users/me (no auth)" "$API_URL/api/users/me" "401"
-    run_test test_http "Jarvis bootstrap (no auth)" "$API_URL/api/jarvis/bootstrap" "401"
-    run_test test_http "Jarvis history (no auth)" "$API_URL/api/jarvis/history" "401"
-    run_test test_http "Jarvis agents (no auth)" "$API_URL/api/jarvis/agents" "401"
+    run_test test_http "Oikos bootstrap (no auth)" "$API_URL/api/oikos/bootstrap" "401"
+    run_test test_http "Oikos history (no auth)" "$API_URL/api/oikos/history" "401"
+    run_test test_http "Oikos agents (no auth)" "$API_URL/api/oikos/agents" "401"
     run_test test_http "Email contacts (no auth)" "$API_URL/api/user/contacts/email" "401"
     run_test test_http "Phone contacts (no auth)" "$API_URL/api/user/contacts/phone" "401"
 }
@@ -367,13 +367,13 @@ run_email_tool_test() {
 
     local response
     if [[ -n "$TIMEOUT_CMD" ]]; then
-        response=$($TIMEOUT_CMD 60 curl -s -N -X POST "$API_URL/api/jarvis/chat" \
+        response=$($TIMEOUT_CMD 60 curl -s -N -X POST "$API_URL/api/oikos/chat" \
             -b "$cookie_jar" \
             -H "Content-Type: application/json" \
             -d "$payload" 2>/dev/null) || true
     else
         warn "timeout command not found - email test may hang (install: brew install coreutils)"
-        response=$(curl -s -N -X POST "$API_URL/api/jarvis/chat" \
+        response=$(curl -s -N -X POST "$API_URL/api/oikos/chat" \
             -b "$cookie_jar" \
             -H "Content-Type: application/json" \
             -d "$payload" 2>/dev/null) || true
@@ -478,9 +478,9 @@ if [[ -n "$SMOKE_TEST_SECRET" ]]; then
 
     if [[ "$LOGIN_STATUS" == "200" ]]; then
         pass "Service login ($LOGIN_STATUS)"
-        run_test test_http_auth "Jarvis bootstrap (authed)" "$API_URL/api/jarvis/bootstrap" "200" "$COOKIE_JAR"
-        run_test test_http_auth "Jarvis history (authed)" "$API_URL/api/jarvis/history" "200" "$COOKIE_JAR"
-        run_test test_http_auth "Jarvis runs (authed)" "$API_URL/api/jarvis/runs?limit=1" "200" "$COOKIE_JAR"
+        run_test test_http_auth "Oikos bootstrap (authed)" "$API_URL/api/oikos/bootstrap" "200" "$COOKIE_JAR"
+        run_test test_http_auth "Oikos history (authed)" "$API_URL/api/oikos/history" "200" "$COOKIE_JAR"
+        run_test test_http_auth "Oikos runs (authed)" "$API_URL/api/oikos/runs?limit=1" "200" "$COOKIE_JAR"
         run_test test_http_auth "User profile (authed)" "$API_URL/api/users/me" "200" "$COOKIE_JAR"
 
         if [[ $RUN_LLM -eq 1 ]]; then

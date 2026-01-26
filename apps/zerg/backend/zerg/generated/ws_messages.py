@@ -165,14 +165,14 @@ class FicheEventData(BaseModel):
 
     id: int = Field(ge=1, description='')
     status: Optional[str] = None
-    last_course_at: Optional[str] = None
-    next_course_at: Optional[str] = None
+    last_run_at: Optional[str] = None
+    next_run_at: Optional[str] = None
     last_error: Optional[str] = None
     name: Optional[str] = None
     description: Optional[str] = None
 
-class CourseUpdateData(BaseModel):
-    """Payload for CourseUpdateData messages"""
+class RunUpdateData(BaseModel):
+    """Payload for RunUpdateData messages"""
 
     id: int = Field(ge=1, description='')
     fiche_id: int = Field(ge=1, description='')
@@ -227,9 +227,9 @@ class NodeLogData(BaseModel):
 class OpsEventData(BaseModel):
     """Payload for OpsEventData messages"""
 
-    type: Literal['course_started', 'course_success', 'course_failed', 'fiche_created', 'fiche_updated', 'thread_message_created', 'budget_denied']
+    type: Literal['run_started', 'run_success', 'run_failed', 'fiche_created', 'fiche_updated', 'thread_message_created', 'budget_denied']
     fiche_id: Optional[int] = Field(default=None, ge=1, description='')
-    course_id: Optional[int] = Field(default=None, ge=1, description='')
+    run_id: Optional[int] = Field(default=None, ge=1, description='')
     thread_id: Optional[int] = Field(default=None, ge=1, description='')
     duration_ms: Optional[int] = Field(default=None, ge=0, description='')
     error: Optional[str] = None
@@ -259,7 +259,7 @@ class MessageType(str, Enum):
     STREAM_END = "stream_end"
     ASSISTANT_ID = "assistant_id"
     FICHE_EVENT = "fiche_event"
-    COURSE_UPDATE = "course_update"
+    RUN_UPDATE = "run_update"
     USER_UPDATE = "user_update"
     NODE_STATE = "node_state"
     EXECUTION_FINISHED = "execution_finished"

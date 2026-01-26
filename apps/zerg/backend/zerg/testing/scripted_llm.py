@@ -1,7 +1,7 @@
 """Scripted LLM implementation for deterministic unit tests.
 
 This module provides a lightweight, scenario-driven chat model used by tests to
-exercise concierge/commis plumbing without calling real LLM APIs.
+exercise oikos/commis plumbing without calling real LLM APIs.
 
 It is intentionally minimal: only the behaviors required by the unit tests are
 implemented.
@@ -29,17 +29,17 @@ from langchain_core.outputs import ChatResult
 
 def detect_role_from_messages(messages: List[BaseMessage]) -> str:
     """Best-effort role detector used by scripted scenarios."""
-    # If we see a spawn_commis call, assume concierge.
+    # If we see a spawn_commis call, assume oikos.
     for msg in messages:
         if isinstance(msg, AIMessage) and msg.tool_calls:
             for call in msg.tool_calls:
                 if call.get("name") == "spawn_commis":
-                    return "concierge"
+                    return "oikos"
 
     # Otherwise, infer from system prompt length (tests use this heuristic).
     first_system = next((m for m in messages if isinstance(m, SystemMessage)), None)
     if first_system and len(str(first_system.content)) > 1000:
-        return "concierge"
+        return "oikos"
 
     return "commis"
 
@@ -76,40 +76,40 @@ def find_matching_scenario(prompt: str, role: str) -> Optional[Dict[str, Any]]:
             }
         return None
 
-    # Concierge: workspace commis scenarios (session continuity, git repos)
-    if role == "concierge" and (is_resume or is_workspace):
+    # Oikos: workspace commis scenarios (session continuity, git repos)
+    if role == "oikos" and (is_resume or is_workspace):
         return {
-            "role": "concierge",
-            "name": "workspace_commis_concierge",
+            "role": "oikos",
+            "name": "workspace_commis_oikos",
             "evidence_keyword": "workspace",
             "resume_session_id": resume_session_id,
         }
 
-    if role == "concierge" and is_math:
+    if role == "oikos" and is_math:
         return {
-            "role": "concierge",
+            "role": "oikos",
             "name": "math_simple",
             "evidence_keyword": None,
         }
 
-    # Concierge: parallel disk checks first, then single-host disk checks.
+    # Oikos: parallel disk checks first, then single-host disk checks.
     if is_disk and is_parallel:
         return {
-            "role": "concierge",
-            "name": "disk_space_parallel_concierge",
+            "role": "oikos",
+            "name": "disk_space_parallel_oikos",
             "evidence_keyword": "45%",
         }
 
-    # Concierge: match disk check and provide a generic fallback for everything else.
+    # Oikos: match disk check and provide a generic fallback for everything else.
     if is_disk and is_cube:
         return {
-            "role": "concierge",
-            "name": "disk_space_concierge",
+            "role": "oikos",
+            "name": "disk_space_oikos",
             "evidence_keyword": "45%",
         }
 
     return {
-        "role": "concierge",
+        "role": "oikos",
         "name": "generic_fallback",
         "evidence_keyword": None,
     }
@@ -127,7 +127,7 @@ class ScriptedChatLLM(BaseChatModel):
     """A deterministic chat model driven by simple prompt scenarios.
 
     Supports both static scenarios (default behavior) and sequenced responses
-    for testing concierge replay behavior where the LLM might produce different
+    for testing oikos replay behavior where the LLM might produce different
     outputs on subsequent calls.
 
     Usage with sequences:
@@ -229,7 +229,7 @@ class ScriptedChatLLM(BaseChatModel):
             scenario = find_matching_scenario(prompt, role)
 
             # Determine final text based on scenario type
-            if scenario and scenario.get("name") == "workspace_commis_concierge":
+            if scenario and scenario.get("name") == "workspace_commis_oikos":
                 # Workspace commis completed - summarize the result
                 final_text = "Workspace commis completed successfully. Repository analyzed and changes captured."
             elif "45%" in content:
@@ -246,12 +246,12 @@ class ScriptedChatLLM(BaseChatModel):
 
         scenario = find_matching_scenario(prompt, role)
 
-        if role == "concierge" and scenario and scenario.get("name") == "math_simple":
+        if role == "oikos" and scenario and scenario.get("name") == "math_simple":
             ai_message = AIMessage(content="4", tool_calls=[])
             return ChatResult(generations=[ChatGeneration(message=ai_message)])
 
         # Workspace commis scenario: spawns spawn_workspace_commis with git repo and optional resume
-        if role == "concierge" and scenario and scenario.get("name") == "workspace_commis_concierge":
+        if role == "oikos" and scenario and scenario.get("name") == "workspace_commis_oikos":
             # Use a public test repo that's small and fast to clone
             args = {
                 "task": "Analyze the repository and list the main files",
@@ -269,7 +269,7 @@ class ScriptedChatLLM(BaseChatModel):
             ai_message = AIMessage(content="", tool_calls=[tool_call])
             return ChatResult(generations=[ChatGeneration(message=ai_message)])
 
-        if role == "concierge" and scenario and scenario.get("name") == "disk_space_parallel_concierge":
+        if role == "oikos" and scenario and scenario.get("name") == "disk_space_parallel_oikos":
             tasks = [
                 "Check disk space on cube and identify what is using space",
                 "Check disk space on clifford and identify what is using space",
@@ -286,7 +286,7 @@ class ScriptedChatLLM(BaseChatModel):
             ai_message = AIMessage(content="", tool_calls=tool_calls)
             return ChatResult(generations=[ChatGeneration(message=ai_message)])
 
-        if role == "concierge" and scenario and scenario.get("name") == "disk_space_concierge":
+        if role == "oikos" and scenario and scenario.get("name") == "disk_space_oikos":
             tool_call = {
                 "id": f"call_{uuid.uuid4().hex[:8]}",
                 "name": "spawn_commis",

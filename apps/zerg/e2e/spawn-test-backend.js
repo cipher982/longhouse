@@ -133,8 +133,8 @@ const backend = spawn('uv', [
         // DATABASE_URL inherited from environment (Postgres)
         LLM_TOKEN_STREAM: process.env.LLM_TOKEN_STREAM || 'true',  // Enable token streaming for E2E tests
         // LIFE_HUB_URL and LIFE_HUB_API_KEY inherited from environment (for session continuity tests)
-        // Workspace path for workspace commis (use temp dir in E2E, not /var/jarvis)
-        JARVIS_WORKSPACE_PATH: process.env.JARVIS_WORKSPACE_PATH || os.tmpdir() + '/zerg-e2e-workspaces',
+        // Workspace path for workspace commis (use temp dir in E2E, not /var/oikos)
+        OIKOS_WORKSPACE_PATH: process.env.OIKOS_WORKSPACE_PATH || os.tmpdir() + '/zerg-e2e-workspaces',
         // Claude config dir for session files (use temp dir in E2E)
         CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR || os.tmpdir() + '/zerg-e2e-claude',
         // Mock hatch CLI for workspace commis in E2E (can't run real Claude Code fiches)

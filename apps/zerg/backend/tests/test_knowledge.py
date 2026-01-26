@@ -811,7 +811,7 @@ class TestKnowledgeSearchToolContext:
         ctx = CommisContext(
             commis_id="test-commis-123",
             owner_id=_dev_user.id,
-            course_id="test-run-123",
+            run_id="test-run-123",
         )
         token = set_commis_context(ctx)
 
@@ -867,7 +867,7 @@ class TestKnowledgeSearchToolContext:
         ctx = CommisContext(
             commis_id="test-commis-123",
             owner_id=_dev_user.id,
-            course_id="test-run-123",
+            run_id="test-run-123",
         )
         token = set_commis_context(ctx)
 
@@ -883,10 +883,10 @@ class TestKnowledgeSearchToolContext:
             reset_commis_context(token)
 
     def test_knowledge_search_with_credential_resolver_context(self, db_session: Session, _dev_user: User):
-        """Test knowledge_search resolves owner_id from CredentialResolver (Concierge path).
+        """Test knowledge_search resolves owner_id from CredentialResolver (Oikos path).
 
         V1.1: This tests the fallback to CredentialResolver when CommisContext is not set,
-        which is the case for Concierge runs (FicheRunner sets CredentialResolver, not CommisContext).
+        which is the case for Oikos runs (FicheRunner sets CredentialResolver, not CommisContext).
         """
         from zerg.connectors.context import reset_credential_resolver
         from zerg.connectors.context import set_credential_resolver
@@ -897,7 +897,7 @@ class TestKnowledgeSearchToolContext:
         source = knowledge_crud.create_knowledge_source(
             db_session,
             owner_id=_dev_user.id,
-            name="Concierge Test Docs",
+            name="Oikos Test Docs",
             source_type="url",
             config={"url": "https://example.com/"},
         )
@@ -906,12 +906,12 @@ class TestKnowledgeSearchToolContext:
             db_session,
             source_id=source.id,
             owner_id=_dev_user.id,
-            path="https://example.com/concierge-doc.md",
+            path="https://example.com/oikos-doc.md",
             content_text="clifford (100.120.197.80) - Primary VPS for production apps",
             title="Server Overview",
         )
 
-        # Set up CredentialResolver context (as FicheRunner does for Concierge runs)
+        # Set up CredentialResolver context (as FicheRunner does for Oikos runs)
         # Note: We use a mock fiche_id since we just need owner_id
         resolver = CredentialResolver(
             fiche_id=999,  # Doesn't need to exist
@@ -927,7 +927,7 @@ class TestKnowledgeSearchToolContext:
             # Should find the document
             assert isinstance(results, list)
             assert len(results) == 1
-            assert results[0]["source"] == "Concierge Test Docs"
+            assert results[0]["source"] == "Oikos Test Docs"
             assert "clifford" in results[0]["snippets"][0].lower()
         finally:
             reset_credential_resolver(token)
@@ -993,7 +993,7 @@ class TestKnowledgeSearchToolContext:
         ctx = CommisContext(
             commis_id="test-commis-456",
             owner_id=_dev_user.id,  # Different from resolver
-            course_id="test-run-456",
+            run_id="test-run-456",
         )
         resolver = CredentialResolver(
             fiche_id=999,

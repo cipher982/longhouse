@@ -30,7 +30,7 @@ test.describe('Session Continuity E2E', () => {
 
     // Send a message that triggers workspace commis scenario
     // The scripted LLM detects "workspace" or "repository" keywords
-    const chatRes = await request.post('/api/jarvis/chat', {
+    const chatRes = await request.post('/api/oikos/chat', {
       data: {
         message: 'Create a workspace and analyze the repository',
         message_id: crypto.randomUUID(),
@@ -39,26 +39,26 @@ test.describe('Session Continuity E2E', () => {
     });
     expect(chatRes.ok()).toBeTruthy();
 
-    // Wait for concierge course to appear
-    let courseId: number | null = null;
+    // Wait for oikos run to appear
+    let runId: number | null = null;
     await expect
       .poll(
         async () => {
-          const coursesRes = await request.get('/api/jarvis/courses?limit=25');
-          if (!coursesRes.ok()) return false;
-          const courses = (await coursesRes.json()) as Array<{
+          const runsRes = await request.get('/api/oikos/runs?limit=25');
+          if (!runsRes.ok()) return false;
+          const runs = (await runsRes.json()) as Array<{
             id: number;
             created_at: string;
             trigger: string;
           }>;
 
-          const candidate = courses.find((course) => {
-            const createdAt = Date.parse(course.created_at);
-            return Number.isFinite(createdAt) && createdAt >= startTime - 2000 && course.trigger !== 'commis';
+          const candidate = runs.find((run) => {
+            const createdAt = Date.parse(run.created_at);
+            return Number.isFinite(createdAt) && createdAt >= startTime - 2000 && run.trigger !== 'commis';
           });
 
           if (candidate) {
-            courseId = candidate.id;
+            runId = candidate.id;
             return true;
           }
           return false;
@@ -67,8 +67,8 @@ test.describe('Session Continuity E2E', () => {
       )
       .toBeTruthy();
 
-    if (!courseId) {
-      throw new Error('Failed to locate concierge course');
+    if (!runId) {
+      throw new Error('Failed to locate oikos run');
     }
 
     // Wait for workspace commis flow: commis_spawned -> commis_complete
@@ -76,7 +76,7 @@ test.describe('Session Continuity E2E', () => {
     await expect
       .poll(
         async () => {
-          const eventsRes = await request.get(`/api/jarvis/courses/${courseId}/events`);
+          const eventsRes = await request.get(`/api/oikos/runs/${runId}/events`);
           if (!eventsRes.ok()) return false;
           const payload = await eventsRes.json();
           events = payload.events ?? [];
@@ -84,7 +84,7 @@ test.describe('Session Continuity E2E', () => {
           const spawnedCount = events.filter((e) => e.event_type === 'commis_spawned').length;
           const completeCount = events.filter((e) => e.event_type === 'commis_complete').length;
 
-          // Workspace commis don't emit concierge_resumed like standard commis
+          // Workspace commis don't emit oikos_resumed like standard commis
           // They complete directly via commis_complete event
           return spawnedCount >= 1 && completeCount >= 1;
         },
@@ -138,7 +138,7 @@ test.describe('Session Continuity E2E', () => {
 
     // Send a message that triggers workspace commis with resume
     // Include the session ID in the message - scripted LLM extracts it
-    const chatRes = await request.post('/api/jarvis/chat', {
+    const chatRes = await request.post('/api/oikos/chat', {
       data: {
         message: `Resume session ${testSessionId} and continue working on the repository`,
         message_id: crypto.randomUUID(),
@@ -147,26 +147,26 @@ test.describe('Session Continuity E2E', () => {
     });
     expect(chatRes.ok()).toBeTruthy();
 
-    // Wait for concierge course
-    let courseId: number | null = null;
+    // Wait for oikos run
+    let runId: number | null = null;
     await expect
       .poll(
         async () => {
-          const coursesRes = await request.get('/api/jarvis/courses?limit=25');
-          if (!coursesRes.ok()) return false;
-          const courses = (await coursesRes.json()) as Array<{
+          const runsRes = await request.get('/api/oikos/runs?limit=25');
+          if (!runsRes.ok()) return false;
+          const runs = (await runsRes.json()) as Array<{
             id: number;
             created_at: string;
             trigger: string;
           }>;
 
-          const candidate = courses.find((course) => {
-            const createdAt = Date.parse(course.created_at);
-            return Number.isFinite(createdAt) && createdAt >= startTime - 2000 && course.trigger !== 'commis';
+          const candidate = runs.find((run) => {
+            const createdAt = Date.parse(run.created_at);
+            return Number.isFinite(createdAt) && createdAt >= startTime - 2000 && run.trigger !== 'commis';
           });
 
           if (candidate) {
-            courseId = candidate.id;
+            runId = candidate.id;
             return true;
           }
           return false;
@@ -175,15 +175,15 @@ test.describe('Session Continuity E2E', () => {
       )
       .toBeTruthy();
 
-    if (!courseId) {
-      throw new Error('Failed to locate concierge course');
+    if (!runId) {
+      throw new Error('Failed to locate oikos run');
     }
 
     // Wait for commis_complete event
     await expect
       .poll(
         async () => {
-          const eventsRes = await request.get(`/api/jarvis/courses/${courseId}/events`);
+          const eventsRes = await request.get(`/api/oikos/runs/${runId}/events`);
           if (!eventsRes.ok()) return false;
           const payload = await eventsRes.json();
           const events = payload.events ?? [];
@@ -194,7 +194,7 @@ test.describe('Session Continuity E2E', () => {
       .toBeTruthy();
 
     // Verify commis completed (session fetch happened even if no errors)
-    const eventsRes = await request.get(`/api/jarvis/courses/${courseId}/events`);
+    const eventsRes = await request.get(`/api/oikos/runs/${runId}/events`);
     const { events } = await eventsRes.json();
     const commisComplete = events.find((e: any) => e.event_type === 'commis_complete');
 
@@ -213,7 +213,7 @@ test.describe('Session Continuity E2E', () => {
     // Use a non-existent session ID (valid UUID format but doesn't exist)
     const nonExistentSessionId = '00000000-0000-0000-0000-000000000000';
 
-    const chatRes = await request.post('/api/jarvis/chat', {
+    const chatRes = await request.post('/api/oikos/chat', {
       data: {
         message: `Resume session ${nonExistentSessionId} and continue the work`,
         message_id: crypto.randomUUID(),
@@ -222,26 +222,26 @@ test.describe('Session Continuity E2E', () => {
     });
     expect(chatRes.ok()).toBeTruthy();
 
-    // Wait for concierge course
-    let courseId: number | null = null;
+    // Wait for oikos run
+    let runId: number | null = null;
     await expect
       .poll(
         async () => {
-          const coursesRes = await request.get('/api/jarvis/courses?limit=25');
-          if (!coursesRes.ok()) return false;
-          const courses = (await coursesRes.json()) as Array<{
+          const runsRes = await request.get('/api/oikos/runs?limit=25');
+          if (!runsRes.ok()) return false;
+          const runs = (await runsRes.json()) as Array<{
             id: number;
             created_at: string;
             trigger: string;
           }>;
 
-          const candidate = courses.find((course) => {
-            const createdAt = Date.parse(course.created_at);
-            return Number.isFinite(createdAt) && createdAt >= startTime - 2000 && course.trigger !== 'commis';
+          const candidate = runs.find((run) => {
+            const createdAt = Date.parse(run.created_at);
+            return Number.isFinite(createdAt) && createdAt >= startTime - 2000 && run.trigger !== 'commis';
           });
 
           if (candidate) {
-            courseId = candidate.id;
+            runId = candidate.id;
             return true;
           }
           return false;
@@ -250,37 +250,37 @@ test.describe('Session Continuity E2E', () => {
       )
       .toBeTruthy();
 
-    if (!courseId) {
-      throw new Error('Failed to locate concierge course');
+    if (!runId) {
+      throw new Error('Failed to locate oikos run');
     }
 
-    // Wait for terminal state (commis_complete or concierge_complete)
+    // Wait for terminal state (commis_complete or oikos_complete)
     // The commis should either:
     // 1. Fail gracefully with an error about session not found
     // 2. Continue as a new session (no resume) and complete
     await expect
       .poll(
         async () => {
-          const eventsRes = await request.get(`/api/jarvis/courses/${courseId}/events`);
+          const eventsRes = await request.get(`/api/oikos/runs/${runId}/events`);
           if (!eventsRes.ok()) return false;
           const payload = await eventsRes.json();
           const events = payload.events ?? [];
 
-          // Either commis completed or concierge completed
+          // Either commis completed or oikos completed
           return events.some(
-            (e: any) => e.event_type === 'commis_complete' || e.event_type === 'concierge_complete'
+            (e: any) => e.event_type === 'commis_complete' || e.event_type === 'oikos_complete'
           );
         },
         { timeout: 60000, intervals: [1000, 2000, 5000] }
       )
       .toBeTruthy();
 
-    // Check course didn't crash the system
-    const statusRes = await request.get(`/api/jarvis/courses/${courseId}`);
+    // Check run didn't crash the system
+    const statusRes = await request.get(`/api/oikos/runs/${runId}`);
     expect(statusRes.ok()).toBeTruthy();
-    const courseStatus = await statusRes.json();
+    const runStatus = await statusRes.json();
 
-    // The course should complete (success or failed, but not stuck)
-    expect(['success', 'failed']).toContain(courseStatus.status);
+    // The run should complete (success or failed, but not stuck)
+    expect(['success', 'failed']).toContain(runStatus.status);
   });
 });

@@ -18,7 +18,7 @@ class LLMAuditLog(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     # Correlation - ON DELETE SET NULL to preserve audit data when parent entities are deleted
-    course_id = Column(Integer, ForeignKey("courses.id", ondelete="SET NULL"), nullable=True, index=True)
+    run_id = Column(Integer, ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True)
     commis_id = Column(String(100), nullable=True, index=True)
     thread_id = Column(Integer, ForeignKey("threads.id", ondelete="SET NULL"), nullable=True)
     owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)

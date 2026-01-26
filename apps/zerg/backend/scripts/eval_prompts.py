@@ -120,7 +120,7 @@ TEST_CASES = [
         description="Commis task should be concise, not over-specified",
         user_query="check disk space on cube",
         expected_behavior={
-            "max_task_length": 100,  # Concierge's task to commis should be brief
+            "max_task_length": 100,  # Oikos's task to commis should be brief
             "task_should_not_contain": ["run df", "execute", "sudo du"],  # Don't tell commis HOW
             "task_should_contain": ["disk", "cube"],  # Just WHAT
         },
@@ -225,11 +225,11 @@ def analyze_session_logs(logs: list[dict], test_case: TestCase) -> dict[str, Any
                 f"Commis spawned: {commis_spawned} (expected: {expected['should_spawn_commis']})"
             )
 
-    # Check for over-specification in concierge's task delegation
+    # Check for over-specification in oikos's task delegation
     if "max_task_length" in expected:
         for log in logs:
             if log.get("phase") == "initial" and log.get("commis_id"):
-                # This is concierge delegating to commis
+                # This is oikos delegating to commis
                 messages = log.get("messages", [])
                 for msg in messages:
                     if msg.get("role") == "human":
@@ -276,7 +276,7 @@ def detect_anti_patterns(logs: list[dict]) -> list[str]:
                         for cmd in ["df -h", "du -", "docker system", "sudo"]
                     ):
                         patterns.append(
-                            f"Over-specification: Concierge told commis exact commands: {task[:100]}..."
+                            f"Over-specification: Oikos told commis exact commands: {task[:100]}..."
                         )
 
     # Pattern 2: Excessive tool iterations for simple tasks
@@ -300,9 +300,9 @@ def detect_anti_patterns(logs: list[dict]) -> list[str]:
                         f"Excessive iterations: Simple task took {tool_iters} tool calls"
                     )
 
-    # Pattern 3: Concierge doing commis tasks
+    # Pattern 3: Oikos doing commis tasks
     for log in logs:
-        if not log.get("commis_id"):  # Concierge
+        if not log.get("commis_id"):  # Oikos
             messages = log.get("messages", [])
             for msg in messages:
                 if msg.get("role") == "ai":
@@ -311,7 +311,7 @@ def detect_anti_patterns(logs: list[dict]) -> list[str]:
                     for tc in tool_calls:
                         if tc.get("name") in ["ssh_exec", "runner_exec"]:
                             patterns.append(
-                                "Concierge used execution tool directly (should spawn commis)"
+                                "Oikos used execution tool directly (should spawn commis)"
                             )
 
     # Pattern 4: Token bloat in system prompts
@@ -422,7 +422,7 @@ def generate_recommendations(report: dict[str, Any]) -> list[str]:
     if common_failures["over_specification"] > 0:
         recommendations.append(
             f"[HIGH] Prevent over-specification: {common_failures['over_specification']} tests had detailed task instructions. "
-            "Concierge should pass user queries nearly verbatim to commis."
+            "Oikos should pass user queries nearly verbatim to commis."
         )
 
     if common_failures["token_inefficiency"] > 0:

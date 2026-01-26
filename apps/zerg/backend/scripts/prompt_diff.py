@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Compare prompts between concierge and commis to identify inconsistencies.
+"""Compare prompts between oikos and commis to identify inconsistencies.
 
 This script highlights differences in guidance, rules, and constraints between
-the concierge and commis prompts that might cause coordination issues.
+the oikos and commis prompts that might cause coordination issues.
 
 Usage:
     uv run scripts/prompt_diff.py               # Show side-by-side comparison
@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from zerg.database import get_db
-from zerg.prompts.composer import build_concierge_prompt, build_commis_prompt
+from zerg.prompts.composer import build_oikos_prompt, build_commis_prompt
 
 
 def find_key_sections(prompt: str) -> dict[str, str]:
@@ -49,11 +49,11 @@ def find_key_sections(prompt: str) -> dict[str, str]:
     return sections
 
 
-def analyze_differences(concierge_prompt: str, commis_prompt: str) -> list[str]:
+def analyze_differences(oikos_prompt: str, commis_prompt: str) -> list[str]:
     """Analyze prompts and identify potential issues."""
     issues = []
 
-    sup_sections = find_key_sections(concierge_prompt)
+    sup_sections = find_key_sections(oikos_prompt)
     work_sections = find_key_sections(commis_prompt)
 
     # Check for instruction conflicts
@@ -61,8 +61,8 @@ def analyze_differences(concierge_prompt: str, commis_prompt: str) -> list[str]:
         spawn_guidance = sup_sections["When to Spawn Commis"]
         if "infrastructure" in spawn_guidance.lower():
             issues.append(
-                "⚠️  Concierge has detailed 'When to Spawn Commis' section, "
-                "but commis may not understand concierge's delegation logic"
+                "⚠️  Oikos has detailed 'When to Spawn Commis' section, "
+                "but commis may not understand oikos's delegation logic"
             )
 
     # Check if commis has execution guidance
@@ -70,14 +70,14 @@ def analyze_differences(concierge_prompt: str, commis_prompt: str) -> list[str]:
         issues.append("⚠️  Commis prompt may lack clear execution guidance")
 
     # Check for contradictory instructions
-    if "minimal" in concierge_prompt.lower() and "minimal" not in commis_prompt.lower():
-        issues.append("⚠️  Concierge emphasizes 'minimal' but commis doesn't - may cause over-engineering")
+    if "minimal" in oikos_prompt.lower() and "minimal" not in commis_prompt.lower():
+        issues.append("⚠️  Oikos emphasizes 'minimal' but commis doesn't - may cause over-engineering")
 
-    if "one command" in commis_prompt.lower() and "one command" not in concierge_prompt.lower():
-        issues.append("✓ Commis has 'one command' constraint, but concierge should be aware when delegating")
+    if "one command" in commis_prompt.lower() and "one command" not in oikos_prompt.lower():
+        issues.append("✓ Commis has 'one command' constraint, but oikos should be aware when delegating")
 
     # Token efficiency
-    sup_len = len(concierge_prompt)
+    sup_len = len(oikos_prompt)
     work_len = len(commis_prompt)
     total_len = sup_len + work_len
 
@@ -89,20 +89,20 @@ def analyze_differences(concierge_prompt: str, commis_prompt: str) -> list[str]:
     work_has_user_context = "Additional Context" in work_sections or "User Context" in work_sections
 
     if sup_has_user_context and work_has_user_context:
-        issues.append("⚠️  Both concierge and commis have user context sections - potential duplication")
+        issues.append("⚠️  Both oikos and commis have user context sections - potential duplication")
 
     return issues
 
 
-def show_side_by_side(concierge_prompt: str, commis_prompt: str) -> None:
+def show_side_by_side(oikos_prompt: str, commis_prompt: str) -> None:
     """Show side-by-side comparison of prompts."""
-    sup_sections = find_key_sections(concierge_prompt)
+    sup_sections = find_key_sections(oikos_prompt)
     work_sections = find_key_sections(commis_prompt)
 
     all_sections = set(sup_sections.keys()) | set(work_sections.keys())
 
     print("\n" + "=" * 100)
-    print("SECTION COMPARISON (Concierge vs Commis)")
+    print("SECTION COMPARISON (Oikos vs Commis)")
     print("=" * 100)
 
     for section in sorted(all_sections):
@@ -121,22 +121,22 @@ def show_side_by_side(concierge_prompt: str, commis_prompt: str) -> None:
 
         if in_sup:
             sup_preview = sup_sections[section][:200].replace("\n", " ")
-            print(f"  Concierge: {sup_preview}...")
+            print(f"  Oikos: {sup_preview}...")
 
         if in_work:
             work_preview = work_sections[section][:200].replace("\n", " ")
             print(f"  Commis: {work_preview}...")
 
 
-def show_unified_diff(concierge_prompt: str, commis_prompt: str) -> None:
+def show_unified_diff(oikos_prompt: str, commis_prompt: str) -> None:
     """Show unified diff of the two prompts."""
-    sup_lines = concierge_prompt.splitlines(keepends=True)
+    sup_lines = oikos_prompt.splitlines(keepends=True)
     work_lines = commis_prompt.splitlines(keepends=True)
 
-    diff = difflib.unified_diff(sup_lines, work_lines, fromfile="concierge", tofile="commis", lineterm="")
+    diff = difflib.unified_diff(sup_lines, work_lines, fromfile="oikos", tofile="commis", lineterm="")
 
     print("\n" + "=" * 100)
-    print("UNIFIED DIFF (Concierge → Commis)")
+    print("UNIFIED DIFF (Oikos → Commis)")
     print("=" * 100)
     print()
 
@@ -146,7 +146,7 @@ def show_unified_diff(concierge_prompt: str, commis_prompt: str) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Compare concierge and commis prompts for inconsistencies",
+        description="Compare oikos and commis prompts for inconsistencies",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -200,7 +200,7 @@ Examples:
             print("ERROR: No users found. Create a user first.", file=sys.stderr)
             sys.exit(1)
 
-        concierge_prompt = build_concierge_prompt(user)
+        oikos_prompt = build_oikos_prompt(user)
         commis_prompt = build_commis_prompt(user)
 
         # If commis artifact specified, read from file
@@ -228,7 +228,7 @@ Examples:
             print("PROMPT ANALYSIS - POTENTIAL ISSUES")
             print("=" * 100)
 
-            issues = analyze_differences(concierge_prompt, commis_prompt)
+            issues = analyze_differences(oikos_prompt, commis_prompt)
 
             if issues:
                 for issue in issues:
@@ -240,17 +240,17 @@ Examples:
             print("\n" + "=" * 100)
             print("METRICS")
             print("=" * 100)
-            print(f"\nConcierge prompt: {len(concierge_prompt):,} chars (~{len(concierge_prompt) // 4:,} tokens)")
+            print(f"\nOikos prompt: {len(oikos_prompt):,} chars (~{len(oikos_prompt) // 4:,} tokens)")
             print(f"Commis prompt: {len(commis_prompt):,} chars (~{len(commis_prompt) // 4:,} tokens)")
             print(
-                f"Combined: {len(concierge_prompt) + len(commis_prompt):,} chars (~{(len(concierge_prompt) + len(commis_prompt)) // 4:,} tokens)"
+                f"Combined: {len(oikos_prompt) + len(commis_prompt):,} chars (~{(len(oikos_prompt) + len(commis_prompt)) // 4:,} tokens)"
             )
 
         if args.sections:
-            show_side_by_side(concierge_prompt, commis_prompt)
+            show_side_by_side(oikos_prompt, commis_prompt)
 
         if args.diff:
-            show_unified_diff(concierge_prompt, commis_prompt)
+            show_unified_diff(oikos_prompt, commis_prompt)
 
     finally:
         db.close()

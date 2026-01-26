@@ -35,8 +35,8 @@
 @import url("./chat.css");
 @import url("./execution-log-stream.css");
 
-/* Jarvis chat (now part of main app) */
-@import url("../jarvis/styles/index.css") layer(components);
+/* Oikos chat (now part of main app) */
+@import url("../oikos/styles/index.css") layer(components);
 
 /* Pages */
 @import url("./profile-admin.css");

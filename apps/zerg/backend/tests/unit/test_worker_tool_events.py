@@ -18,7 +18,7 @@ from zerg.tools.result_utils import redact_sensitive_args
 
 
 class TestCommisToolEventEmission:
-    """Tests for tool event emission from concierge_react_engine._execute_tool."""
+    """Tests for tool event emission from oikos_react_engine._execute_tool."""
 
     @pytest.fixture
     def commis_context(self):
@@ -26,7 +26,7 @@ class TestCommisToolEventEmission:
         ctx = CommisContext(
             commis_id="test-commis-123",
             owner_id=42,
-            course_id="run-abc",
+            run_id="run-abc",
             task="Test task",
         )
         token = set_commis_context(ctx)
@@ -39,7 +39,7 @@ class TestCommisToolEventEmission:
         assert ctx is not None
         assert ctx.commis_id == "test-commis-123"
         assert ctx.owner_id == 42
-        assert ctx.course_id == "run-abc"
+        assert ctx.run_id == "run-abc"
 
     def test_no_context_when_not_set(self):
         """Test that get_commis_context returns None when no context is set."""
@@ -59,7 +59,7 @@ class TestCommisToolEventEmission:
             "event_type": EventType.COMMIS_TOOL_STARTED,
             "commis_id": commis_context.commis_id,
             "owner_id": commis_context.owner_id,
-            "course_id": commis_context.course_id,
+            "run_id": commis_context.run_id,
             "tool_name": "test_tool",
             "tool_call_id": "call_123",
             "tool_args_preview": "{'param': 'value'}",

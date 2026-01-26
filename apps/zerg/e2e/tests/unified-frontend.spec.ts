@@ -13,7 +13,7 @@
  *
  * OR perform manual smoke tests (recommended for now):
  * - http://localhost:30080/ → Landing page
- * - http://localhost:30080/chat → Jarvis chat UI
+ * - http://localhost:30080/chat → Oikos chat UI
  * - http://localhost:30080/dashboard → Zerg dashboard
  * - Cross-navigation between /chat and /dashboard
  *
@@ -50,10 +50,10 @@ test.describe('Unified Frontend Navigation', () => {
   test('chat page loads at /chat', async ({ page }) => {
     await page.goto(`${UNIFIED_URL}/chat`);
 
-    // Wait for Jarvis chat UI to load (text input container)
+    // Wait for Oikos chat UI to load (text input container)
     await expect(page.locator('.text-input-container')).toBeVisible({ timeout: 10000 });
-    // Verify we're in the Jarvis container
-    await expect(page.locator('.jarvis-container')).toBeVisible();
+    // Verify we're in the Oikos container
+    await expect(page.locator('.oikos-container')).toBeVisible();
   });
 
   test('dashboard page loads at /dashboard', async ({ page }) => {
@@ -77,7 +77,7 @@ test.describe('Unified Frontend Navigation', () => {
     await expect(chatTab).toBeVisible();
   });
 
-  test('dashboard link visible in Jarvis chat', async ({ page }) => {
+  test('dashboard link visible in Oikos chat', async ({ page }) => {
     await page.goto(`${UNIFIED_URL}/chat`);
 
     // Wait for chat to load

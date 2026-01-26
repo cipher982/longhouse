@@ -1,15 +1,15 @@
 /**
  * Core User Journey E2E Test
  *
- * Tests the concierge -> response flow using the gpt-scripted model
+ * Tests the oikos -> response flow using the gpt-scripted model
  * for deterministic behavior without real LLM calls.
  *
  * The gpt-scripted model has predefined scenarios that emit specific responses
  * based on message patterns. This enables fully deterministic E2E testing.
  *
- * Primary test: generic_concierge scenario
- * - User sends any message (e.g., "hello jarvis")
- * - Concierge returns direct scripted response
+ * Primary test: generic_oikos scenario
+ * - User sends any message (e.g., "hello oikos")
+ * - Oikos returns direct scripted response
  * - No commis spawning (avoids continuation complexity)
  *
  * For commis flow testing with spawn_commis, see TODO: commis_flow.spec.ts
@@ -20,7 +20,7 @@ import { randomUUID } from 'node:crypto';
 import { test, expect, type Page } from '../fixtures';
 
 /**
- * Navigate to Jarvis chat page and wait for it to be ready
+ * Navigate to Oikos chat page and wait for it to be ready
  */
 async function navigateToChatPage(page: Page): Promise<void> {
   await page.goto('/chat');
@@ -69,16 +69,16 @@ function parseSSEEvents(sseText: string): Array<{ event: string; data: unknown }
 }
 
 /**
- * Query course events from the API
+ * Query run events from the API
  */
-async function getCourseEvents(
+async function getRunEvents(
   request: import('@playwright/test').APIRequestContext,
-  courseId: number,
+  runId: number,
   eventType?: string
 ): Promise<{ events: Array<{ event_type: string; payload: Record<string, unknown> }>; total: number }> {
   const url = eventType
-    ? `/api/jarvis/courses/${courseId}/events?event_type=${eventType}`
-    : `/api/jarvis/courses/${courseId}/events`;
+    ? `/api/oikos/runs/${runId}/events?event_type=${eventType}`
+    : `/api/oikos/runs/${runId}/events`;
 
   const response = await request.get(url);
   expect(response.status()).toBe(200);
@@ -86,20 +86,20 @@ async function getCourseEvents(
 }
 
 test.describe('Core User Journey - Scripted LLM', () => {
-  // Set longer timeout for this test as it involves full concierge flow
+  // Set longer timeout for this test as it involves full oikos flow
   test.setTimeout(120000);
 
-  test('concierge direct response flow with gpt-scripted model', async ({ page, request }) => {
+  test('oikos direct response flow with gpt-scripted model', async ({ page, request }) => {
     console.log('[Core Journey] Starting test');
 
-    // Send a simple message that uses the "generic_concierge" scenario
+    // Send a simple message that uses the "generic_oikos" scenario
     // This scenario returns a direct response without spawning commis,
     // which avoids the continuation flow complexity for this core test.
     //
     // For commis flow testing, see commis_flow.spec.ts (TODO)
-    const chatResponse = await request.post('/api/jarvis/chat', {
+    const chatResponse = await request.post('/api/oikos/chat', {
       data: {
-        message: 'hello jarvis',
+        message: 'hello oikos',
         message_id: randomUUID(),
         model: 'gpt-scripted',
         client_correlation_id: 'e2e-core-journey-test',
@@ -120,18 +120,18 @@ test.describe('Core User Journey - Scripted LLM', () => {
       events.map((e) => e.event)
     );
 
-    // Step 3: Extract course_id from connected event
+    // Step 3: Extract run_id from connected event
     const connectedEvent = events.find((e) => e.event === 'connected');
     expect(connectedEvent).toBeTruthy();
-    const courseId = (connectedEvent?.data as { course_id?: number })?.course_id;
-    expect(courseId).toBeTruthy();
-    console.log('[Core Journey] Course ID:', courseId);
+    const runId = (connectedEvent?.data as { run_id?: number })?.run_id;
+    expect(runId).toBeTruthy();
+    console.log('[Core Journey] Run ID:', runId);
 
-    // Step 4: Verify we got concierge_complete event
-    // The generic_concierge scenario doesn't spawn commis, so we get complete directly
-    const completeEvent = events.find((e) => e.event === 'concierge_complete');
+    // Step 4: Verify we got oikos_complete event
+    // The generic_oikos scenario doesn't spawn commis, so we get complete directly
+    const completeEvent = events.find((e) => e.event === 'oikos_complete');
     expect(completeEvent).toBeTruthy();
-    console.log('[Core Journey] Found concierge_complete event');
+    console.log('[Core Journey] Found oikos_complete event');
 
     // Step 5: Extract and verify response contains expected scripted text
     const completePayload = (completeEvent?.data as { payload?: { result?: string } })?.payload;
@@ -142,48 +142,48 @@ test.describe('Core User Journey - Scripted LLM', () => {
     expect(result.toLowerCase()).toBe('ok');
     console.log('[Core Journey] Expected scripted response text found');
 
-    // Step 6: Query events API to verify course execution was recorded
+    // Step 6: Query events API to verify run execution was recorded
     // Use polling instead of sleep to wait for event persistence (per banana handoff)
-    let allEvents = await getCourseEvents(request, courseId!);
+    let allEvents = await getRunEvents(request, runId!);
 
-    // Poll until trace includes concierge lifecycle evidence (events are persisted async)
+    // Poll until trace includes oikos lifecycle evidence (events are persisted async)
     await expect.poll(
       async () => {
-        allEvents = await getCourseEvents(request, courseId!);
+        allEvents = await getRunEvents(request, runId!);
         const types = allEvents.events.map((e) => e.event_type);
         return {
           total: allEvents.total,
-          hasConciergeStarted: types.includes('concierge_started'),
+          hasOikosStarted: types.includes('oikos_started'),
         };
       },
       { timeout: 20000, intervals: [200, 500, 1000, 2000] }
-    ).toEqual(expect.objectContaining({ hasConciergeStarted: true }));
+    ).toEqual(expect.objectContaining({ hasOikosStarted: true }));
 
-    console.log('[Core Journey] Total events for course:', allEvents.total);
+    console.log('[Core Journey] Total events for run:', allEvents.total);
     console.log(
       '[Core Journey] Event types:',
       allEvents.events.map((e) => e.event_type)
     );
 
-    // Verify we have evidence of concierge execution
-    const hasConciergeStart = allEvents.events.some((e) => e.event_type === 'concierge_started');
-    expect(hasConciergeStart).toBeTruthy();
-    console.log('[Core Journey] concierge_started event found in trace');
+    // Verify we have evidence of oikos execution
+    const hasOikosStart = allEvents.events.some((e) => e.event_type === 'oikos_started');
+    expect(hasOikosStart).toBeTruthy();
+    console.log('[Core Journey] oikos_started event found in trace');
 
     console.log('[Core Journey] Test completed successfully');
   });
 
-  test('course status indicator is present in DOM', async ({ page }) => {
+  test('run status indicator is present in DOM', async ({ page }) => {
     console.log('[Status Indicator] Starting test');
 
     await navigateToChatPage(page);
 
-    // Verify the course status indicator exists in the DOM
-    const statusIndicator = page.locator('[data-testid="course-status"]');
+    // Verify the run status indicator exists in the DOM
+    const statusIndicator = page.locator('[data-testid="run-status"]');
     await expect(statusIndicator).toBeAttached({ timeout: 5000 });
 
     // Verify initial state is idle
-    await expect(statusIndicator).toHaveAttribute('data-course-status', 'idle', { timeout: 5000 });
+    await expect(statusIndicator).toHaveAttribute('data-run-status', 'idle', { timeout: 5000 });
     console.log('[Status Indicator] Initial state is idle');
 
     console.log('[Status Indicator] Test completed successfully');
@@ -195,34 +195,34 @@ test.describe('Core User Journey - Scripted LLM', () => {
     await navigateToChatPage(page);
 
     // Ensure dev-only event bus is available (Playwright uses Vite dev server).
-    await page.waitForFunction(() => (window as any).__jarvis?.eventBus != null, null, { timeout: 15000 });
+    await page.waitForFunction(() => (window as any).__oikos?.eventBus != null, null, { timeout: 15000 });
 
-    const courseId = 101;
+    const runId = 101;
     const toolCallId = 'call-spawn-1';
     const commisId = 'e2e-commis-1';
     const jobId = 9001;
 
     await page.evaluate(
-      ({ courseId, toolCallId, commisId, jobId }) => {
-        const bus = (window as any).__jarvis.eventBus;
+      ({ runId, toolCallId, commisId, jobId }) => {
+        const bus = (window as any).__oikos.eventBus;
         const now = Date.now();
 
-        bus.emit('concierge:started', { courseId, task: 'Test task', timestamp: now });
-        bus.emit('concierge:tool_started', {
-          courseId,
+        bus.emit('oikos:started', { runId, task: 'Test task', timestamp: now });
+        bus.emit('oikos:tool_started', {
+          runId,
           toolName: 'spawn_commis',
           toolCallId,
           argsPreview: 'spawn_commis args',
           args: { task: 'Check disk space on cube' },
           timestamp: now + 1,
         });
-        bus.emit('concierge:commis_spawned', {
+        bus.emit('oikos:commis_spawned', {
           jobId,
           task: 'Check disk space on cube',
           toolCallId,
           timestamp: now + 2,
         });
-        bus.emit('concierge:commis_started', {
+        bus.emit('oikos:commis_started', {
           jobId,
           commisId,
           timestamp: now + 3,
@@ -243,7 +243,7 @@ test.describe('Core User Journey - Scripted LLM', () => {
           timestamp: now + 5,
         });
       },
-      { courseId, toolCallId, commisId, jobId }
+      { runId, toolCallId, commisId, jobId }
     );
 
     const commisCard = page.locator('.commis-tool-card').first();
@@ -264,34 +264,34 @@ test.describe('Core User Journey - Scripted LLM', () => {
     console.log('[Details Drawer] Starting test');
 
     await navigateToChatPage(page);
-    await page.waitForFunction(() => (window as any).__jarvis?.eventBus != null, null, { timeout: 15000 });
+    await page.waitForFunction(() => (window as any).__oikos?.eventBus != null, null, { timeout: 15000 });
 
-    const courseId = 201;
+    const runId = 201;
     const toolCallId = 'call-spawn-details';
     const commisId = 'e2e-commis-details';
     const jobId = 9002;
 
     await page.evaluate(
-      ({ courseId, toolCallId, commisId, jobId }) => {
-        const bus = (window as any).__jarvis.eventBus;
+      ({ runId, toolCallId, commisId, jobId }) => {
+        const bus = (window as any).__oikos.eventBus;
         const now = Date.now();
 
-        bus.emit('concierge:started', { courseId, task: 'Details test', timestamp: now });
-        bus.emit('concierge:tool_started', {
-          courseId,
+        bus.emit('oikos:started', { runId, task: 'Details test', timestamp: now });
+        bus.emit('oikos:tool_started', {
+          runId,
           toolName: 'spawn_commis',
           toolCallId,
           argsPreview: 'spawn_commis args',
           args: { task: 'Test details drawer' },
           timestamp: now + 1,
         });
-        bus.emit('concierge:commis_spawned', {
+        bus.emit('oikos:commis_spawned', {
           jobId,
           task: 'Test details drawer',
           toolCallId,
           timestamp: now + 2,
         });
-        bus.emit('concierge:commis_started', {
+        bus.emit('oikos:commis_started', {
           jobId,
           commisId,
           timestamp: now + 3,
@@ -313,7 +313,7 @@ test.describe('Core User Journey - Scripted LLM', () => {
           timestamp: now + 5,
         });
       },
-      { courseId, toolCallId, commisId, jobId }
+      { runId, toolCallId, commisId, jobId }
     );
 
     const commisCard = page.locator('.commis-tool-card').first();
@@ -338,34 +338,34 @@ test.describe('Core User Journey - Scripted LLM', () => {
     console.log('[Source Badge] Starting test');
 
     await navigateToChatPage(page);
-    await page.waitForFunction(() => (window as any).__jarvis?.eventBus != null, null, { timeout: 15000 });
+    await page.waitForFunction(() => (window as any).__oikos?.eventBus != null, null, { timeout: 15000 });
 
-    const courseId = 202;
+    const runId = 202;
     const toolCallId = 'call-spawn-source';
     const commisId = 'e2e-commis-source';
     const jobId = 9003;
 
     await page.evaluate(
-      ({ courseId, toolCallId, commisId, jobId }) => {
-        const bus = (window as any).__jarvis.eventBus;
+      ({ runId, toolCallId, commisId, jobId }) => {
+        const bus = (window as any).__oikos.eventBus;
         const now = Date.now();
 
-        bus.emit('concierge:started', { courseId, task: 'Source badge test', timestamp: now });
-        bus.emit('concierge:tool_started', {
-          courseId,
+        bus.emit('oikos:started', { runId, task: 'Source badge test', timestamp: now });
+        bus.emit('oikos:tool_started', {
+          runId,
           toolName: 'spawn_commis',
           toolCallId,
           argsPreview: 'spawn_commis args',
           args: { task: 'Test source badge' },
           timestamp: now + 1,
         });
-        bus.emit('concierge:commis_spawned', {
+        bus.emit('oikos:commis_spawned', {
           jobId,
           task: 'Test source badge',
           toolCallId,
           timestamp: now + 2,
         });
-        bus.emit('concierge:commis_started', {
+        bus.emit('oikos:commis_started', {
           jobId,
           commisId,
           timestamp: now + 3,
@@ -378,7 +378,7 @@ test.describe('Core User Journey - Scripted LLM', () => {
           timestamp: now + 4,
         });
       },
-      { courseId, toolCallId, commisId, jobId }
+      { runId, toolCallId, commisId, jobId }
     );
 
     const commisCard = page.locator('.commis-tool-card').first();
@@ -395,34 +395,34 @@ test.describe('Core User Journey - Scripted LLM', () => {
     console.log('[Offline Badge] Starting test');
 
     await navigateToChatPage(page);
-    await page.waitForFunction(() => (window as any).__jarvis?.eventBus != null, null, { timeout: 15000 });
+    await page.waitForFunction(() => (window as any).__oikos?.eventBus != null, null, { timeout: 15000 });
 
-    const courseId = 203;
+    const runId = 203;
     const toolCallId = 'call-spawn-offline';
     const commisId = 'e2e-commis-offline';
     const jobId = 9004;
 
     await page.evaluate(
-      ({ courseId, toolCallId, commisId, jobId }) => {
-        const bus = (window as any).__jarvis.eventBus;
+      ({ runId, toolCallId, commisId, jobId }) => {
+        const bus = (window as any).__oikos.eventBus;
         const now = Date.now();
 
-        bus.emit('concierge:started', { courseId, task: 'Offline badge test', timestamp: now });
-        bus.emit('concierge:tool_started', {
-          courseId,
+        bus.emit('oikos:started', { runId, task: 'Offline badge test', timestamp: now });
+        bus.emit('oikos:tool_started', {
+          runId,
           toolName: 'spawn_commis',
           toolCallId,
           argsPreview: 'spawn_commis args',
           args: { task: 'Test offline badge' },
           timestamp: now + 1,
         });
-        bus.emit('concierge:commis_spawned', {
+        bus.emit('oikos:commis_spawned', {
           jobId,
           task: 'Test offline badge',
           toolCallId,
           timestamp: now + 2,
         });
-        bus.emit('concierge:commis_started', {
+        bus.emit('oikos:commis_started', {
           jobId,
           commisId,
           timestamp: now + 3,
@@ -443,7 +443,7 @@ test.describe('Core User Journey - Scripted LLM', () => {
           timestamp: now + 5,
         });
       },
-      { courseId, toolCallId, commisId, jobId }
+      { runId, toolCallId, commisId, jobId }
     );
 
     const commisCard = page.locator('.commis-tool-card').first();
@@ -460,34 +460,34 @@ test.describe('Core User Journey - Scripted LLM', () => {
     console.log('[Compact Mode] Starting test');
 
     await navigateToChatPage(page);
-    await page.waitForFunction(() => (window as any).__jarvis?.eventBus != null, null, { timeout: 15000 });
+    await page.waitForFunction(() => (window as any).__oikos?.eventBus != null, null, { timeout: 15000 });
 
-    const courseId = 204;
+    const runId = 204;
     const toolCallId = 'call-spawn-compact';
     const commisId = 'e2e-commis-compact';
     const jobId = 9005;
 
     await page.evaluate(
-      ({ courseId, toolCallId, commisId, jobId }) => {
-        const bus = (window as any).__jarvis.eventBus;
+      ({ runId, toolCallId, commisId, jobId }) => {
+        const bus = (window as any).__oikos.eventBus;
         const now = Date.now();
 
-        bus.emit('concierge:started', { courseId, task: 'Compact mode test', timestamp: now });
-        bus.emit('concierge:tool_started', {
-          courseId,
+        bus.emit('oikos:started', { runId, task: 'Compact mode test', timestamp: now });
+        bus.emit('oikos:tool_started', {
+          runId,
           toolName: 'spawn_commis',
           toolCallId,
           argsPreview: 'spawn_commis args',
           args: { task: 'Test compact mode' },
           timestamp: now + 1,
         });
-        bus.emit('concierge:commis_spawned', {
+        bus.emit('oikos:commis_spawned', {
           jobId,
           task: 'Test compact mode',
           toolCallId,
           timestamp: now + 2,
         });
-        bus.emit('concierge:commis_started', {
+        bus.emit('oikos:commis_started', {
           jobId,
           commisId,
           timestamp: now + 3,
@@ -508,7 +508,7 @@ test.describe('Core User Journey - Scripted LLM', () => {
           timestamp: now + 5,
         });
       },
-      { courseId, toolCallId, commisId, jobId }
+      { runId, toolCallId, commisId, jobId }
     );
 
     const commisCard = page.locator('.commis-tool-card').first();
@@ -535,34 +535,34 @@ test.describe('Core User Journey - Scripted LLM', () => {
     console.log('[Copy Button] Starting test');
 
     await navigateToChatPage(page);
-    await page.waitForFunction(() => (window as any).__jarvis?.eventBus != null, null, { timeout: 15000 });
+    await page.waitForFunction(() => (window as any).__oikos?.eventBus != null, null, { timeout: 15000 });
 
-    const courseId = 205;
+    const runId = 205;
     const toolCallId = 'call-spawn-copy';
     const commisId = 'e2e-commis-copy';
     const jobId = 9006;
 
     await page.evaluate(
-      ({ courseId, toolCallId, commisId, jobId }) => {
-        const bus = (window as any).__jarvis.eventBus;
+      ({ runId, toolCallId, commisId, jobId }) => {
+        const bus = (window as any).__oikos.eventBus;
         const now = Date.now();
 
-        bus.emit('concierge:started', { courseId, task: 'Copy button test', timestamp: now });
-        bus.emit('concierge:tool_started', {
-          courseId,
+        bus.emit('oikos:started', { runId, task: 'Copy button test', timestamp: now });
+        bus.emit('oikos:tool_started', {
+          runId,
           toolName: 'spawn_commis',
           toolCallId,
           argsPreview: 'spawn_commis args',
           args: { task: 'Test copy button' },
           timestamp: now + 1,
         });
-        bus.emit('concierge:commis_spawned', {
+        bus.emit('oikos:commis_spawned', {
           jobId,
           task: 'Test copy button',
           toolCallId,
           timestamp: now + 2,
         });
-        bus.emit('concierge:commis_started', {
+        bus.emit('oikos:commis_started', {
           jobId,
           commisId,
           timestamp: now + 3,
@@ -575,7 +575,7 @@ test.describe('Core User Journey - Scripted LLM', () => {
           timestamp: now + 4,
         });
       },
-      { courseId, toolCallId, commisId, jobId }
+      { runId, toolCallId, commisId, jobId }
     );
 
     const commisCard = page.locator('.commis-tool-card').first();
@@ -599,9 +599,9 @@ test.describe('Core User Journey - Scripted LLM', () => {
 test.describe('Core Journey - API Flow', () => {
   test.setTimeout(60000);
 
-  test('concierge_complete event contains result text', async ({ request }) => {
+  test('oikos_complete event contains result text', async ({ request }) => {
     // Send a simple message via API
-    const chatResponse = await request.post('/api/jarvis/chat', {
+    const chatResponse = await request.post('/api/oikos/chat', {
       data: {
         message: 'hello',
         message_id: randomUUID(),
@@ -618,20 +618,20 @@ test.describe('Core Journey - API Flow', () => {
     const connectedEvent = events.find((e) => e.event === 'connected');
     expect(connectedEvent).toBeTruthy();
 
-    // Verify concierge_complete event exists
-    const completeEvent = events.find((e) => e.event === 'concierge_complete');
+    // Verify oikos_complete event exists
+    const completeEvent = events.find((e) => e.event === 'oikos_complete');
     expect(completeEvent).toBeTruthy();
 
     // Verify the payload structure
     const completePayload = (completeEvent?.data as { payload?: { result?: string; status?: string } })?.payload;
     expect(completePayload).toBeTruthy();
     expect(completePayload?.status).toBe('success');
-    console.log('[API Flow] concierge_complete event validated');
+    console.log('[API Flow] oikos_complete event validated');
   });
 
-  test('course events endpoint returns events for a course', async ({ request }) => {
-    // First, create a course
-    const chatResponse = await request.post('/api/jarvis/chat', {
+  test('run events endpoint returns events for a run', async ({ request }) => {
+    // First, create a run
+    const chatResponse = await request.post('/api/oikos/chat', {
       data: {
         message: 'test message',
         message_id: randomUUID(),
@@ -644,17 +644,17 @@ test.describe('Core Journey - API Flow', () => {
     const sseText = await chatResponse.text();
     const events = parseSSEEvents(sseText);
 
-    // Extract course_id
+    // Extract run_id
     const connectedEvent = events.find((e) => e.event === 'connected');
-    const courseId = (connectedEvent?.data as { course_id?: number })?.course_id;
-    expect(courseId).toBeTruthy();
+    const runId = (connectedEvent?.data as { run_id?: number })?.run_id;
+    expect(runId).toBeTruthy();
 
     // Query the events endpoint
-    const eventsResponse = await request.get(`/api/jarvis/courses/${courseId}/events`);
+    const eventsResponse = await request.get(`/api/oikos/runs/${runId}/events`);
     expect(eventsResponse.status()).toBe(200);
 
     const eventsData = await eventsResponse.json();
-    expect(eventsData.course_id).toBe(courseId);
+    expect(eventsData.run_id).toBe(runId);
     expect(eventsData.events).toBeInstanceOf(Array);
     expect(eventsData.total).toBeGreaterThanOrEqual(0);
 

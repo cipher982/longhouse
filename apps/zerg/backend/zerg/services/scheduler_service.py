@@ -212,7 +212,7 @@ class SchedulerService:
                 with db_session(self.session_factory) as db:
                     fiche = crud.get_fiche(db, fiche_id)
                     if fiche:
-                        fiche.next_course_at = next_run
+                        fiche.next_run_at = next_run
 
         except Exception as e:
             logger.error(f"Error scheduling fiche {fiche_id}: {e}")
@@ -224,11 +224,11 @@ class SchedulerService:
             self.scheduler.remove_job(job_id)
             logger.info(f"Removed existing schedule for fiche {fiche_id}")
 
-        # Clear next_course_at in DB as it's no longer scheduled
+        # Clear next_run_at in DB as it's no longer scheduled
         with db_session(self.session_factory) as db:
             fiche = crud.get_fiche(db, fiche_id)
             if fiche:
-                fiche.next_course_at = None
+                fiche.next_run_at = None
 
     async def run_fiche_task(self, fiche_id: int, trigger: str = "schedule"):
         """
@@ -270,20 +270,20 @@ class SchedulerService:
                     raise
 
                 # ------------------------------------------------------------------
-                # Update *next_course_at* after successful run so dashboards show when
-                # the task will fire next.  We do *not* touch last_course_at – helper
+                # Update *next_run_at* after successful run so dashboards show when
+                # the task will fire next.  We do *not* touch last_run_at – helper
                 # already set it.
                 # ------------------------------------------------------------------
                 job = self.scheduler.get_job(f"fiche_{fiche_id}")
                 next_run_time = getattr(job, "next_run_time", None) if job else None
                 if next_run_time:
-                    crud.update_fiche(db, fiche_id, next_course_at=next_run_time)
+                    crud.update_fiche(db, fiche_id, next_run_at=next_run_time)
 
                     await event_bus.publish(
                         EventType.FICHE_UPDATED,
                         {
                             "id": fiche_id,
-                            "next_course_at": next_run_time.isoformat(),
+                            "next_run_at": next_run_time.isoformat(),
                             "thread_id": thread.id,
                         },
                     )

@@ -4,7 +4,7 @@ Revision ID: u5v6w7x8y9z0
 Revises: t4u5v6w7x8y9
 Create Date: 2026-01-14
 
-Adds trace_id to courses, commis_jobs, and llm_audit_log for
+Adds trace_id to runs, commis_jobs, and llm_audit_log for
 unified debugging. Also adds span_id to llm_audit_log for LLM call
 identification.
 """
@@ -20,9 +20,9 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Add trace_id to courses
-    op.add_column("courses", sa.Column("trace_id", postgresql.UUID(as_uuid=True), nullable=True))
-    op.create_index("ix_courses_trace_id", "courses", ["trace_id"])
+    # Add trace_id to runs
+    op.add_column("runs", sa.Column("trace_id", postgresql.UUID(as_uuid=True), nullable=True))
+    op.create_index("ix_runs_trace_id", "runs", ["trace_id"])
 
     # Add trace_id to commis_jobs
     op.add_column("commis_jobs", sa.Column("trace_id", postgresql.UUID(as_uuid=True), nullable=True))
@@ -44,6 +44,6 @@ def downgrade() -> None:
     op.drop_index("ix_commis_jobs_trace_id", table_name="commis_jobs")
     op.drop_column("commis_jobs", "trace_id")
 
-    # Remove from courses
-    op.drop_index("ix_courses_trace_id", table_name="courses")
-    op.drop_column("courses", "trace_id")
+    # Remove from runs
+    op.drop_index("ix_runs_trace_id", table_name="runs")
+    op.drop_column("runs", "trace_id")

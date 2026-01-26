@@ -23,7 +23,7 @@ Authentication landed: users can log in with Google and we issue our own JWT.  *
 Estimated **3–4 dev-days** end-to-end.
 
 
-## 3  Code-base Crash-Course (60 seconds)
+## 3  Code-base Crash-Run (60 seconds)
 
 | Area | Tech | Entry point | Quick mental model |
 |------|------|------------|----------------------|

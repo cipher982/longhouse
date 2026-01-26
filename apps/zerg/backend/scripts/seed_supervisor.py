@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Seed the Concierge Fiche for the concierge/commis architecture.
+"""Seed the Oikos Fiche for the oikos/commis architecture.
 
-This script creates a pre-configured Concierge Fiche that users can interact with
+This script creates a pre-configured Oikos Fiche that users can interact with
 to delegate tasks to commis fiches.
 
 Usage:
-    uv run python scripts/seed_concierge.py
+    uv run python scripts/seed_oikos.py
 
 Optional arguments:
     --user-email EMAIL    Specify user email (default: uses first user or creates dev user)
-    --name NAME          Custom concierge name (default: "Concierge")
+    --name NAME          Custom oikos name (default: "Oikos")
 """
 
 import argparse
@@ -24,7 +24,7 @@ from zerg.database import get_db
 from zerg.models.enums import FicheStatus
 from zerg.models.models import Fiche
 from zerg.models_config import DEFAULT_MODEL_ID
-from zerg.prompts import build_concierge_prompt
+from zerg.prompts import build_oikos_prompt
 
 
 def get_or_create_user(db, email: str = None):
@@ -57,9 +57,9 @@ def get_or_create_user(db, email: str = None):
     return user
 
 
-def seed_concierge(user_email: str = None, name: str = "Concierge"):
-    """Create or update the Concierge Fiche."""
-    print("🌱 Seeding Concierge Fiche...")
+def seed_oikos(user_email: str = None, name: str = "Oikos"):
+    """Create or update the Oikos Fiche."""
+    print("🌱 Seeding Oikos Fiche...")
 
     # Get database session
     db = next(get_db())
@@ -68,22 +68,22 @@ def seed_concierge(user_email: str = None, name: str = "Concierge"):
     user = get_or_create_user(db, user_email)
     print(f"👤 User: {user.email} (ID: {user.id})")
 
-    # Check if concierge already exists
+    # Check if oikos already exists
     existing = db.query(Fiche).filter(
         Fiche.name == name,
         Fiche.owner_id == user.id,
     ).first()
 
-    # Define concierge configuration
-    concierge_config = {
-        "is_concierge": True,
+    # Define oikos configuration
+    oikos_config = {
+        "is_oikos": True,
         "temperature": 0.7,
         "max_tokens": 2000,
     }
 
-    # Concierge tools - carefully selected for delegation and direct tasks
-    concierge_tools = [
-        # Concierge/delegation tools
+    # Oikos tools - carefully selected for delegation and direct tasks
+    oikos_tools = [
+        # Oikos/delegation tools
         "spawn_commis",
         "list_commis",
         "read_commis_result",
@@ -103,7 +103,7 @@ def seed_concierge(user_email: str = None, name: str = "Concierge"):
     ]
 
     # Get the context-aware system prompt (preferred over legacy template)
-    system_prompt = build_concierge_prompt(user)
+    system_prompt = build_oikos_prompt(user)
 
     # Simple task instructions that will be appended to every conversation
     task_instructions = """You are helping the user accomplish their goals.
@@ -116,36 +116,36 @@ Analyze their request and decide:
 Be helpful, concise, and transparent about what you're doing."""
 
     if existing:
-        print(f"  ⚠️  Concierge already exists: {name} (ID: {existing.id})")
+        print(f"  ⚠️  Oikos already exists: {name} (ID: {existing.id})")
         print(f"  🔄 Updating configuration...")
 
         # Update existing fiche
         existing.system_instructions = system_prompt
         existing.task_instructions = task_instructions
-        existing.model = DEFAULT_MODEL_ID  # Concierge should be smart
-        existing.config = concierge_config
-        existing.allowed_tools = concierge_tools
+        existing.model = DEFAULT_MODEL_ID  # Oikos should be smart
+        existing.config = oikos_config
+        existing.allowed_tools = oikos_tools
         existing.status = FicheStatus.IDLE
-        existing.schedule = None  # No automatic scheduling for concierge
+        existing.schedule = None  # No automatic scheduling for oikos
 
         db.add(existing)
         db.commit()
         db.refresh(existing)
 
-        print(f"  ✅ Concierge updated successfully")
+        print(f"  ✅ Oikos updated successfully")
         fiche = existing
     else:
-        print(f"  ✨ Creating new concierge: {name}")
+        print(f"  ✨ Creating new oikos: {name}")
 
-        # Create new concierge fiche
+        # Create new oikos fiche
         fiche = Fiche(
             owner_id=user.id,
             name=name,
             system_instructions=system_prompt,
             task_instructions=task_instructions,
-            model=DEFAULT_MODEL_ID,  # Concierge should be smart
-            config=concierge_config,
-            allowed_tools=concierge_tools,
+            model=DEFAULT_MODEL_ID,  # Oikos should be smart
+            config=oikos_config,
+            allowed_tools=oikos_tools,
             status=FicheStatus.IDLE,
             schedule=None,  # No automatic scheduling
         )
@@ -153,22 +153,22 @@ Be helpful, concise, and transparent about what you're doing."""
         db.commit()
         db.refresh(fiche)
 
-        print(f"  ✅ Concierge created successfully (ID: {fiche.id})")
+        print(f"  ✅ Oikos created successfully (ID: {fiche.id})")
 
-    print(f"\n📋 Concierge Configuration:")
+    print(f"\n📋 Oikos Configuration:")
     print(f"   Name: {fiche.name}")
     print(f"   ID: {fiche.id}")
     print(f"   Owner: {user.email}")
     print(f"   Model: {fiche.model}")
     print(f"   Tools: {len(fiche.allowed_tools)} tools")
-    print(f"     - Concierge: spawn_commis, list_commis, read_commis_result, etc.")
+    print(f"     - Oikos: spawn_commis, list_commis, read_commis_result, etc.")
     print(f"     - Direct: get_current_time, http_request, send_email")
 
-    print(f"\n🚀 Concierge is ready!")
-    print(f"   You can now interact with the concierge through:")
+    print(f"\n🚀 Oikos is ready!")
+    print(f"   You can now interact with the oikos through:")
     print(f"   - Chat UI: Create a thread with this fiche")
     print(f"   - API: POST /api/fiches/{fiche.id}/threads")
-    print(f"   - Jarvis: Configure voice interaction")
+    print(f"   - Oikos: Configure voice interaction")
 
     return fiche
 
@@ -176,26 +176,26 @@ Be helpful, concise, and transparent about what you're doing."""
 def main():
     """Main entry point with argument parsing."""
     parser = argparse.ArgumentParser(
-        description="Seed the Concierge Fiche for concierge/commis architecture"
+        description="Seed the Oikos Fiche for oikos/commis architecture"
     )
     parser.add_argument(
         "--user-email",
         type=str,
-        help="Email of user to own the concierge (default: first user or create dev user)",
+        help="Email of user to own the oikos (default: first user or create dev user)",
     )
     parser.add_argument(
         "--name",
         type=str,
-        default="Concierge",
-        help="Name for the concierge fiche (default: Concierge)",
+        default="Oikos",
+        help="Name for the oikos fiche (default: Oikos)",
     )
 
     args = parser.parse_args()
 
     try:
-        seed_concierge(user_email=args.user_email, name=args.name)
+        seed_oikos(user_email=args.user_email, name=args.name)
     except Exception as e:
-        print(f"\n❌ Error seeding concierge: {e}")
+        print(f"\n❌ Error seeding oikos: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)

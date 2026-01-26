@@ -24,14 +24,14 @@ def upgrade() -> None:
     op.create_index(
         'ix_commis_jobs_idempotency',
         'commis_jobs',
-        ['concierge_course_id', 'tool_call_id'],
+        ['oikos_run_id', 'tool_call_id'],
         unique=True,
-        postgresql_where=sa.text('concierge_course_id IS NOT NULL AND tool_call_id IS NOT NULL')
+        postgresql_where=sa.text('oikos_run_id IS NOT NULL AND tool_call_id IS NOT NULL')
     )
 
 
 def downgrade() -> None:
     """Remove tool_call_id column and indexes."""
-    op.drop_index('ix_commis_jobs_idempotency', table_name='commis_jobs', postgresql_where=sa.text('concierge_course_id IS NOT NULL AND tool_call_id IS NOT NULL'))
+    op.drop_index('ix_commis_jobs_idempotency', table_name='commis_jobs', postgresql_where=sa.text('oikos_run_id IS NOT NULL AND tool_call_id IS NOT NULL'))
     op.drop_index(op.f('ix_commis_jobs_tool_call_id'), table_name='commis_jobs')
     op.drop_column('commis_jobs', 'tool_call_id')

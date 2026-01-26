@@ -22,8 +22,8 @@ export type CommisStatus = "success" | "failed";
 export interface ConnectedPayload {
   /** Connection confirmation message */
   message: string;
-  /** Course ID for this SSE stream */
-  course_id: number;
+  /** Run ID for this SSE stream */
+  run_id: number;
   /** Optional client-provided correlation ID */
   client_correlation_id?: string;
 }
@@ -35,33 +35,33 @@ export interface HeartbeatPayload {
   timestamp?: string;
 }
 
-export interface ConciergeStartedPayload {
-  /** Course ID (may be omitted in legacy events) */
-  course_id?: number;
+export interface OikosStartedPayload {
+  /** Run ID (may be omitted in legacy events) */
+  run_id?: number;
   /** Thread ID for this conversation */
   thread_id: number;
   /** User's task/question */
   task: string;
   /** Unique identifier for the assistant message (stable across tokens/completion) */
   message_id: string;
-  /** For continuation courses, the message_id of the original course's message */
+  /** For continuation runs, the message_id of the original run's message */
   continuation_of_message_id?: string;
   /** End-to-end trace ID for debugging (copy from UI for fiche debugging) */
   trace_id?: string;
 }
 
-export interface ConciergeThinkingPayload {
+export interface OikosThinkingPayload {
   /** Thinking status message */
   message: string;
-  course_id?: number;
+  run_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
 
-export interface ConciergeTokenPayload {
+export interface OikosTokenPayload {
   /** LLM token (may be empty string) */
   token: string;
-  course_id?: number;
+  run_id?: number;
   thread_id?: number;
   /** Unique identifier for the assistant message */
   message_id?: string;
@@ -69,15 +69,15 @@ export interface ConciergeTokenPayload {
   trace_id?: string;
 }
 
-export interface ConciergeCompletePayload {
-  /** Final concierge result */
+export interface OikosCompletePayload {
+  /** Final oikos result */
   result: string;
   /** Completion status ('success' for normal completion, 'cancelled' for user-initiated cancellation) */
   status: "success" | "cancelled";
   /** Execution duration in milliseconds */
   duration_ms?: number;
   usage?: UsageData;
-  course_id?: number;
+  run_id?: number;
   fiche_id?: number;
   thread_id?: number;
   /** URL for debug/inspection */
@@ -88,14 +88,14 @@ export interface ConciergeCompletePayload {
   trace_id?: string;
 }
 
-export interface ConciergeDeferredPayload {
+export interface OikosDeferredPayload {
   /** Deferred status message */
   message: string;
-  /** URL to re-attach to the running course execution */
+  /** URL to re-attach to the running run execution */
   attach_url?: string;
   /** Timeout that triggered deferral */
   timeout_seconds?: number;
-  course_id?: number;
+  run_id?: number;
   fiche_id?: number;
   thread_id?: number;
   /** Unique identifier for the assistant message */
@@ -104,14 +104,14 @@ export interface ConciergeDeferredPayload {
   trace_id?: string;
 }
 
-export interface ConciergeWaitingPayload {
+export interface OikosWaitingPayload {
   /** Waiting status message (e.g., commis spawned) */
   message: string;
   /** Commis job ID (if applicable) */
   job_id?: number;
   /** If false, keep SSE stream open while waiting */
   close_stream?: boolean;
-  course_id?: number;
+  run_id?: number;
   fiche_id?: number;
   thread_id?: number;
   /** Unique identifier for the assistant message */
@@ -120,8 +120,8 @@ export interface ConciergeWaitingPayload {
   trace_id?: string;
 }
 
-export interface ConciergeResumedPayload {
-  course_id?: number;
+export interface OikosResumedPayload {
+  run_id?: number;
   fiche_id?: number;
   thread_id: number;
   /** Unique identifier for the assistant message */
@@ -135,7 +135,7 @@ export interface ErrorPayload {
   error?: string;
   /** Alternative error message field */
   message?: string;
-  course_id?: number;
+  run_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
@@ -149,7 +149,7 @@ export interface CommisSpawnedPayload {
   task: string;
   /** LLM model for commis */
   model?: string;
-  course_id?: number;
+  run_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
@@ -158,7 +158,7 @@ export interface CommisStartedPayload {
   job_id: number;
   /** Commis execution ID */
   commis_id: string;
-  course_id?: number;
+  run_id?: number;
   /** Commis task (may be truncated) */
   task?: string;
   /** End-to-end trace ID for debugging */
@@ -173,7 +173,7 @@ export interface CommisCompletePayload {
   duration_ms?: number;
   /** Error message (only present if status=failed) */
   error?: string;
-  course_id?: number;
+  run_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
@@ -184,7 +184,7 @@ export interface CommisSummaryReadyPayload {
   commis_id?: string;
   /** Extracted commis summary */
   summary: string;
-  course_id?: number;
+  run_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
@@ -196,8 +196,8 @@ export interface CommisToolStartedPayload {
   tool_call_id: string;
   /** Preview of tool arguments (may be truncated) */
   tool_args_preview?: string;
-  /** Required for security (prevents cross-course leakage) */
-  course_id?: number;
+  /** Required for security (prevents cross-run leakage) */
+  run_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
@@ -209,7 +209,7 @@ export interface CommisToolCompletedPayload {
   duration_ms: number;
   /** Preview of tool result (may be truncated) */
   result_preview?: string;
-  course_id?: number;
+  run_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
@@ -221,12 +221,12 @@ export interface CommisToolFailedPayload {
   duration_ms: number;
   /** Error message */
   error: string;
-  course_id?: number;
+  run_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
 
-export interface ConciergeToolStartedPayload {
+export interface OikosToolStartedPayload {
   tool_name: string;
   /** Stable ID linking all events for this tool call */
   tool_call_id: string;
@@ -234,13 +234,13 @@ export interface ConciergeToolStartedPayload {
   tool_args_preview?: string;
   /** Full tool arguments (for persistence/raw view) */
   tool_args?: Record<string, any>;
-  /** Concierge course ID for correlation */
-  course_id?: number;
+  /** Oikos run ID for correlation */
+  run_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
 
-export interface ConciergeToolProgressPayload {
+export interface OikosToolProgressPayload {
   tool_call_id: string;
   /** Progress message (log line) */
   message: string;
@@ -250,12 +250,12 @@ export interface ConciergeToolProgressPayload {
   progress_pct?: number;
   /** Optional structured data (metrics, artifacts preview) */
   data?: Record<string, any>;
-  course_id?: number;
+  run_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
 
-export interface ConciergeToolCompletedPayload {
+export interface OikosToolCompletedPayload {
   tool_name: string;
   tool_call_id: string;
   duration_ms: number;
@@ -263,12 +263,12 @@ export interface ConciergeToolCompletedPayload {
   result_preview?: string;
   /** Full result (for persistence/raw view) */
   result?: Record<string, any>;
-  course_id?: number;
+  run_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
 
-export interface ConciergeToolFailedPayload {
+export interface OikosToolFailedPayload {
   tool_name: string;
   tool_call_id: string;
   duration_ms: number;
@@ -276,7 +276,7 @@ export interface ConciergeToolFailedPayload {
   error: string;
   /** Full error details (stack trace, context) */
   error_details?: Record<string, any>;
-  course_id?: number;
+  run_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
@@ -285,13 +285,13 @@ export interface ConciergeToolFailedPayload {
 export const SSE_EVENT_TYPES = [
   "connected",
   "heartbeat",
-  "concierge_started",
-  "concierge_thinking",
-  "concierge_token",
-  "concierge_complete",
-  "concierge_deferred",
-  "concierge_waiting",
-  "concierge_resumed",
+  "oikos_started",
+  "oikos_thinking",
+  "oikos_token",
+  "oikos_complete",
+  "oikos_deferred",
+  "oikos_waiting",
+  "oikos_resumed",
   "error",
   "commis_spawned",
   "commis_started",
@@ -300,10 +300,10 @@ export const SSE_EVENT_TYPES = [
   "commis_tool_started",
   "commis_tool_completed",
   "commis_tool_failed",
-  "concierge_tool_started",
-  "concierge_tool_progress",
-  "concierge_tool_completed",
-  "concierge_tool_failed",
+  "oikos_tool_started",
+  "oikos_tool_progress",
+  "oikos_tool_completed",
+  "oikos_tool_failed",
 ] as const;
 
 // SSE event type union (derived from SSE_EVENT_TYPES)
@@ -333,13 +333,13 @@ export interface SSEEventWrapper<T> {
 export type SSEPayloadFor<T extends SSEEventType> =
   T extends "connected" ? ConnectedPayload :
   T extends "heartbeat" ? HeartbeatPayload :
-  T extends "concierge_started" ? ConciergeStartedPayload :
-  T extends "concierge_thinking" ? ConciergeThinkingPayload :
-  T extends "concierge_token" ? ConciergeTokenPayload :
-  T extends "concierge_complete" ? ConciergeCompletePayload :
-  T extends "concierge_deferred" ? ConciergeDeferredPayload :
-  T extends "concierge_waiting" ? ConciergeWaitingPayload :
-  T extends "concierge_resumed" ? ConciergeResumedPayload :
+  T extends "oikos_started" ? OikosStartedPayload :
+  T extends "oikos_thinking" ? OikosThinkingPayload :
+  T extends "oikos_token" ? OikosTokenPayload :
+  T extends "oikos_complete" ? OikosCompletePayload :
+  T extends "oikos_deferred" ? OikosDeferredPayload :
+  T extends "oikos_waiting" ? OikosWaitingPayload :
+  T extends "oikos_resumed" ? OikosResumedPayload :
   T extends "error" ? ErrorPayload :
   T extends "commis_spawned" ? CommisSpawnedPayload :
   T extends "commis_started" ? CommisStartedPayload :
@@ -348,10 +348,10 @@ export type SSEPayloadFor<T extends SSEEventType> =
   T extends "commis_tool_started" ? CommisToolStartedPayload :
   T extends "commis_tool_completed" ? CommisToolCompletedPayload :
   T extends "commis_tool_failed" ? CommisToolFailedPayload :
-  T extends "concierge_tool_started" ? ConciergeToolStartedPayload :
-  T extends "concierge_tool_progress" ? ConciergeToolProgressPayload :
-  T extends "concierge_tool_completed" ? ConciergeToolCompletedPayload :
-  T extends "concierge_tool_failed" ? ConciergeToolFailedPayload :
+  T extends "oikos_tool_started" ? OikosToolStartedPayload :
+  T extends "oikos_tool_progress" ? OikosToolProgressPayload :
+  T extends "oikos_tool_completed" ? OikosToolCompletedPayload :
+  T extends "oikos_tool_failed" ? OikosToolFailedPayload :
   never;
 
 // Payload type lookup (for direct payload access after unwrapping)

@@ -6,7 +6,7 @@
 
 ## Overview
 
-Traccar GPS tracking server is running on the clifford VPS to enable Jarvis personal tools to access location data. This replaces the previous unreliable local setup at 192.168.1.5:5055.
+Traccar GPS tracking server is running on the clifford VPS to enable Oikos personal tools to access location data. This replaces the previous unreliable local setup at 192.168.1.5:5055.
 
 ## Deployment Details
 
@@ -99,7 +99,7 @@ curl -u admin:YOUR_PASSWORD http://5.161.97.53:5055/api/positions
 
 You should see JSON with your latest position.
 
-### 5. Update Jarvis Credentials
+### 5. Update Oikos Credentials
 
 Edit: `/Users/davidrose/git/zerg/apps/zerg/backend/scripts/personal_credentials.local.json`
 
@@ -178,7 +178,7 @@ GET /api/positions?deviceId=1
 GET /api/positions?deviceId=1&limit=1
 ```
 
-## Integration with Jarvis
+## Integration with Oikos
 
 The `get_current_location()` tool in `zerg/tools/builtin/personal_tools.py` uses:
 
@@ -187,12 +187,12 @@ The `get_current_location()` tool in `zerg/tools/builtin/personal_tools.py` uses
 3. Fetches latest position via `/api/positions`
 4. Returns lat, lon, address, speed, battery
 
-Example usage in Jarvis:
+Example usage in Oikos:
 
 ```
 User: "Where am I?"
-Jarvis: *calls get_current_location tool*
-Jarvis: "You're at 123 Main St, San Francisco, CA"
+Oikos: *calls get_current_location tool*
+Oikos: "You're at 123 Main St, San Francisco, CA"
 ```
 
 ## Troubleshooting
@@ -300,5 +300,5 @@ sudo du -sh /var/lib/docker/data/traccar/logs/
 - Traccar 6.11.1 installed via Docker
 - Public HTTP access on port 5055
 - Persistent storage configured
-- Integration with Jarvis personal tools
+- Integration with Oikos personal tools
 - Validation script created

@@ -109,7 +109,7 @@ else:
 | `apps/zerg/backend/zerg/config/__init__.py` | `Settings` class with API keys |
 | `apps/zerg/backend/zerg/services/supervisor_react_engine.py` | `_make_llm()` - creates LLM instances |
 | `apps/zerg/backend/zerg/routers/models.py` | `/api/models` endpoint |
-| `apps/zerg/frontend-web/src/jarvis/app/components/ChatHeader.tsx` | Model selector UI (verify actual location) |
+| `apps/zerg/frontend-web/src/oikos/app/components/ChatHeader.tsx` | Model selector UI (verify actual location) |
 | `docker/docker-compose.dev.yml` | Env vars passed to containers |
 | `.env` | API keys |
 

@@ -3,8 +3,6 @@
 from .commis_barrier import CommisBarrier
 from .commis_barrier import CommisBarrierJob
 from .connector import Connector
-from .course import Course
-from .course_event import CourseEvent
 
 # Re-export from split model files
 from .fiche import Fiche
@@ -28,6 +26,8 @@ from .models import UserTask
 from .models import Workflow
 from .models import WorkflowExecution
 from .models import WorkflowTemplate
+from .run import Run
+from .run_event import RunEvent
 
 # Re-export from other modules
 from .sync import SyncOperation
@@ -40,8 +40,8 @@ from .waitlist import WaitlistEntry
 
 __all__ = [
     # Core models (split into separate files)
-    "Course",
-    "CourseEvent",
+    "Run",
+    "RunEvent",
     "Fiche",
     "FicheMessage",
     "CommisBarrier",

@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useWebSocket } from "../../lib/useWebSocket";
-import { logger } from "../../jarvis/core/logger";
+import { logger } from "../../oikos/core/logger";
 
 interface StreamingState {
   streamingMessages: Map<number, string>;

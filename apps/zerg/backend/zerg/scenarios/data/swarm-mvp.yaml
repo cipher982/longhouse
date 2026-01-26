@@ -10,7 +10,7 @@ runs:
     started_at: -18m
     summary: "Needs approval: proceed with Step 2 (deploy)?"
     events:
-      - type: concierge_waiting
+      - type: oikos_waiting
         message: Waiting for approval to proceed
         at: -16m
     messages:

@@ -43,8 +43,8 @@ class _UsageStub:
 async def test_usage_totals_persist_with_metadata(client, db_session, monkeypatch):
     # Ensure allowed model
     monkeypatch.setenv("ALLOWED_MODELS_NON_ADMIN", TEST_COMMIS_MODEL)
-    # Patch ChatOpenAI used by concierge_react_engine to our usage stub
-    import zerg.services.concierge_react_engine as sre
+    # Patch ChatOpenAI used by oikos_react_engine to our usage stub
+    import zerg.services.oikos_react_engine as sre
 
     monkeypatch.setattr(sre, "ChatOpenAI", _UsageStub)
 
@@ -79,7 +79,7 @@ async def test_usage_totals_persist_with_metadata(client, db_session, monkeypatc
     assert resp.status_code == 202, resp.text
 
     # Verify latest run has total_tokens set (cost may be None if pricing map empty)
-    runs = crud.list_courses(db_session, fiche.id, limit=1)
+    runs = crud.list_runs(db_session, fiche.id, limit=1)
     assert runs and runs[0].total_tokens == 17
     # Cost left None unless pricing added
     assert runs[0].total_cost_usd is None
@@ -105,8 +105,8 @@ class _NoUsageStub:
 
 @pytest.mark.asyncio
 async def test_usage_missing_leaves_totals_null(client, db_session, monkeypatch):
-    # Patch ChatOpenAI used by concierge_react_engine to our no-usage stub
-    import zerg.services.concierge_react_engine as sre
+    # Patch ChatOpenAI used by oikos_react_engine to our no-usage stub
+    import zerg.services.oikos_react_engine as sre
 
     monkeypatch.setattr(sre, "ChatOpenAI", _NoUsageStub)
 
@@ -138,5 +138,5 @@ async def test_usage_missing_leaves_totals_null(client, db_session, monkeypatch)
             del app.dependency_overrides[get_current_user]
 
     assert resp.status_code == 202, resp.text
-    runs = crud.list_courses(db_session, fiche.id, limit=1)
+    runs = crud.list_runs(db_session, fiche.id, limit=1)
     assert runs and runs[0].total_tokens is None and runs[0].total_cost_usd is None

@@ -1,4 +1,4 @@
-"""Eval runner for executing test cases against ConciergeService.
+"""Eval runner for executing test cases against OikosService.
 
 This module provides the EvalRunner class which:
 - Executes eval cases in hermetic mode
@@ -13,13 +13,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from zerg.services.concierge_service import ConciergeService
-    from zerg.services.concierge_service import ConciergeCourseResult
+    from zerg.services.oikos_service import OikosService
+    from zerg.services.oikos_service import OikosRunResult
 
 
 @dataclass
 class EvalMetrics:
-    """Metrics captured from a concierge run."""
+    """Metrics captured from a oikos run."""
 
     status: str  # 'success' | 'failed' | 'deferred'
     latency_ms: int
@@ -28,7 +28,7 @@ class EvalMetrics:
     total_tokens: int
     commis_spawned: int
     tools_called: list[str]
-    course_id: int
+    run_id: int
     thread_id: int
     _db_session: object = None  # Injected for commis asserters
 
@@ -36,20 +36,20 @@ class EvalMetrics:
 class EvalRunner:
     """Runner for executing eval test cases.
 
-    This class wraps ConciergeService and provides:
+    This class wraps OikosService and provides:
     - Variant override support (model, reasoning_effort)
     - Metrics collection
     - Hermetic mode enforcement
     """
 
-    def __init__(self, concierge_service: ConciergeService, owner_id: int):
+    def __init__(self, oikos_service: OikosService, owner_id: int):
         """Initialize the eval runner.
 
         Args:
-            concierge_service: ConciergeService instance
+            oikos_service: OikosService instance
             owner_id: User ID to run tests as
         """
-        self.concierge_service = concierge_service
+        self.oikos_service = oikos_service
         self.owner_id = owner_id
         self._overrides = {}
 
@@ -66,13 +66,13 @@ class EvalRunner:
         variant_config = variants.get(variant_name, {})
 
         # Create new instance (no mutation)
-        runner = EvalRunner(self.concierge_service, self.owner_id)
+        runner = EvalRunner(self.oikos_service, self.owner_id)
         runner._overrides = {
             "model": variant_config.get("model"),
             "temperature": variant_config.get("temperature", 0.0),
             "reasoning_effort": variant_config.get("reasoning_effort", "none"),
             "prompt_version": variant_config.get("prompt_version"),
-            "custom_prompt": variant_config.get("overrides", {}).get("concierge_prompt"),
+            "custom_prompt": variant_config.get("overrides", {}).get("oikos_prompt"),
         }
         return runner
 
@@ -107,14 +107,14 @@ class EvalRunner:
 
         # Handle multi-turn conversation
         if messages:
-            # Get concierge fiche and thread using service methods
-            concierge = self.concierge_service.get_or_create_concierge_fiche(self.owner_id)
-            thread = self.concierge_service.get_or_create_concierge_thread(self.owner_id, concierge)
+            # Get oikos fiche and thread using service methods
+            oikos = self.oikos_service.get_or_create_oikos_fiche(self.owner_id)
+            thread = self.oikos_service.get_or_create_oikos_thread(self.owner_id, oikos)
 
             # Clear existing messages (fresh conversation) - keep system message
             from zerg.models.thread import ThreadMessage
 
-            self.concierge_service.db.query(ThreadMessage).filter(
+            self.oikos_service.db.query(ThreadMessage).filter(
                 ThreadMessage.thread_id == thread.id,
                 ThreadMessage.role != "system",
             ).delete()
@@ -130,9 +130,9 @@ class EvalRunner:
                     sent_at=datetime.now(timezone.utc),
                     processed=True,  # Mark as processed (not new)
                 )
-                self.concierge_service.db.add(thread_msg)
+                self.oikos_service.db.add(thread_msg)
 
-            self.concierge_service.db.commit()
+            self.oikos_service.db.commit()
 
             # Last message is the actual task
             final_message = messages[-1]
@@ -141,8 +141,8 @@ class EvalRunner:
 
             task = final_message["content"]
 
-        # Run concierge
-        result: ConciergeCourseResult = await self.concierge_service.run_concierge(
+        # Run oikos
+        result: OikosRunResult = await self.oikos_service.run_oikos(
             owner_id=self.owner_id,
             task=task,
             timeout=timeout,
@@ -153,29 +153,29 @@ class EvalRunner:
         # Drain queued commis jobs in-process so commis/artifact assertions can
         # inspect results deterministically (no background processor in evals).
         # This runs for BOTH hermetic and live mode - live mode uses real LLM for
-        # concierge decisions, but still needs commis to complete synchronously.
-        await self._process_queued_commis_jobs(concierge_course_id=result.course_id)
+        # oikos decisions, but still needs commis to complete synchronously.
+        await self._process_queued_commis_jobs(oikos_run_id=result.run_id)
 
         # Calculate latency
         latency_ms = int((time.time() - start_time) * 1000)
 
         # Get token count from database
-        from zerg.models import Course
+        from zerg.models import Run
 
-        run = self.concierge_service.db.query(Course).filter(Course.id == result.course_id).first()
+        run = self.oikos_service.db.query(Run).filter(Run.id == result.run_id).first()
         total_tokens = run.total_tokens if run and run.total_tokens else 0
 
         # Count commis spawned
         from zerg.models import CommisJob
 
         commis_spawned = (
-            self.concierge_service.db.query(CommisJob).filter(CommisJob.concierge_course_id == result.course_id).count()
+            self.oikos_service.db.query(CommisJob).filter(CommisJob.oikos_run_id == result.run_id).count()
         )
 
         # Collect tools called (from durable run events)
-        from zerg.models.course_event import CourseEvent
+        from zerg.models.run_event import RunEvent
 
-        events = self.concierge_service.db.query(CourseEvent).filter(CourseEvent.course_id == result.course_id).all()
+        events = self.oikos_service.db.query(RunEvent).filter(RunEvent.run_id == result.run_id).all()
         tools_called: list[str] = []
         for event in events:
             payload = event.payload or {}
@@ -194,12 +194,12 @@ class EvalRunner:
             total_tokens=total_tokens,
             commis_spawned=commis_spawned,
             tools_called=tools_called,
-            course_id=result.course_id,
+            run_id=result.run_id,
             thread_id=result.thread_id,
-            _db_session=self.concierge_service.db,
+            _db_session=self.oikos_service.db,
         )
 
-    async def _process_queued_commis_jobs(self, concierge_course_id: int) -> None:
+    async def _process_queued_commis_jobs(self, oikos_run_id: int) -> None:
         """Run queued commis jobs synchronously (eval-only).
 
         In production, commis jobs are processed by the CommisJobProcessor loop.
@@ -212,11 +212,11 @@ class EvalRunner:
         from zerg.services.commis_artifact_store import CommisArtifactStore
         from zerg.services.commis_runner import CommisRunner
 
-        db = self.concierge_service.db
+        db = self.oikos_service.db
 
         jobs = (
             db.query(CommisJob)
-            .filter(CommisJob.concierge_course_id == concierge_course_id, CommisJob.status == "queued")
+            .filter(CommisJob.oikos_run_id == oikos_run_id, CommisJob.status == "queued")
             .order_by(CommisJob.created_at)
             .all()
         )
@@ -250,7 +250,7 @@ class EvalRunner:
                     fiche=None,
                     fiche_config=fiche_config,
                     timeout=60,
-                    event_context={"course_id": concierge_course_id},
+                    event_context={"run_id": oikos_run_id},
                     job_id=job.id,
                 )
 

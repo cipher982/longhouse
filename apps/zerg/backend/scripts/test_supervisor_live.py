@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Live test script for Concierge flow via Jarvis API.
+"""Live test script for Oikos flow via Oikos API.
 
-This script tests the full concierge flow against a running server.
-It simulates what a user would experience through the Jarvis UI.
+This script tests the full oikos flow against a running server.
+It simulates what a user would experience through the Oikos UI.
 
 Usage:
     # Against local dev server (AUTH_DISABLED=1)
-    python scripts/test_concierge_live.py
+    python scripts/test_oikos_live.py
 
     # Against specific server
-    python scripts/test_concierge_live.py --base-url http://localhost:8000
+    python scripts/test_oikos_live.py --base-url http://localhost:8000
 
     # With authentication token
-    python scripts/test_concierge_live.py --token YOUR_JWT_TOKEN
+    python scripts/test_oikos_live.py --token YOUR_JWT_TOKEN
 """
 
 import argparse
@@ -56,23 +56,23 @@ def parse_sse_events(response: requests.Response) -> Generator[dict, None, None]
             data_lines = []
 
 
-def test_concierge_dispatch(base_url: str, headers: dict, task: str) -> dict:
-    """Test POST /api/jarvis/concierge endpoint.
+def test_oikos_dispatch(base_url: str, headers: dict, task: str) -> dict:
+    """Test POST /api/oikos/run endpoint.
 
     Args:
         base_url: Server base URL
         headers: Request headers (with auth if needed)
-        task: Task to send to concierge
+        task: Task to send to oikos
 
     Returns:
-        Response data with course_id, thread_id, stream_url
+        Response data with run_id, thread_id, stream_url
     """
     print(f"\n{'='*60}")
     print(f"DISPATCHING TASK: {task}")
     print(f"{'='*60}")
 
     response = requests.post(
-        f"{base_url}/api/jarvis/concierge",
+        f"{base_url}/api/oikos/run",
         json={"task": task},
         headers=headers,
     )
@@ -83,7 +83,7 @@ def test_concierge_dispatch(base_url: str, headers: dict, task: str) -> dict:
         sys.exit(1)
 
     data = response.json()
-    print(f"Run ID: {data['course_id']}")
+    print(f"Run ID: {data['run_id']}")
     print(f"Thread ID: {data['thread_id']}")
     print(f"Status: {data['status']}")
     print(f"Stream URL: {data['stream_url']}")
@@ -91,20 +91,20 @@ def test_concierge_dispatch(base_url: str, headers: dict, task: str) -> dict:
     return data
 
 
-def test_concierge_events(base_url: str, headers: dict, course_id: int, timeout: int = 60) -> list:
-    """Test GET /api/stream/runs/{course_id} SSE stream.
+def test_oikos_events(base_url: str, headers: dict, run_id: int, timeout: int = 60) -> list:
+    """Test GET /api/stream/runs/{run_id} SSE stream.
 
     Args:
         base_url: Server base URL
         headers: Request headers (with auth if needed)
-        course_id: Concierge run ID to track
+        run_id: Oikos run ID to track
         timeout: Maximum seconds to wait for events
 
     Returns:
         List of events received
     """
     print(f"\n{'='*60}")
-    print(f"LISTENING TO SSE EVENTS (course_id={course_id})")
+    print(f"LISTENING TO SSE EVENTS (run_id={run_id})")
     print(f"{'='*60}")
 
     events = []
@@ -112,7 +112,7 @@ def test_concierge_events(base_url: str, headers: dict, course_id: int, timeout:
 
     try:
         response = requests.get(
-            f"{base_url}/api/stream/runs/{course_id}",
+            f"{base_url}/api/stream/runs/{run_id}",
             headers=headers,
             stream=True,
             timeout=timeout,
@@ -146,8 +146,8 @@ def test_concierge_events(base_url: str, headers: dict, course_id: int, timeout:
                 print(f"  {data}")
 
             # Check for completion events
-            if event_type in ("concierge_complete", "error"):
-                print(f"\n[{elapsed:.1f}s] CONCIERGE COMPLETED")
+            if event_type in ("oikos_complete", "error"):
+                print(f"\n[{elapsed:.1f}s] OIKOS COMPLETED")
                 break
 
             # Safety timeout
@@ -165,23 +165,23 @@ def test_concierge_events(base_url: str, headers: dict, course_id: int, timeout:
     return events
 
 
-def test_cancel(base_url: str, headers: dict, course_id: int) -> dict:
-    """Test POST /api/jarvis/concierge/{course_id}/cancel endpoint.
+def test_cancel(base_url: str, headers: dict, run_id: int) -> dict:
+    """Test POST /api/oikos/run/{run_id}/cancel endpoint.
 
     Args:
         base_url: Server base URL
         headers: Request headers (with auth if needed)
-        course_id: Concierge run ID to cancel
+        run_id: Oikos run ID to cancel
 
     Returns:
         Response data
     """
     print(f"\n{'='*60}")
-    print(f"TESTING CANCEL (course_id={course_id})")
+    print(f"TESTING CANCEL (run_id={run_id})")
     print(f"{'='*60}")
 
     response = requests.post(
-        f"{base_url}/api/jarvis/concierge/{course_id}/cancel",
+        f"{base_url}/api/oikos/run/{run_id}/cancel",
         headers=headers,
     )
 
@@ -191,7 +191,7 @@ def test_cancel(base_url: str, headers: dict, course_id: int) -> dict:
         return {}
 
     data = response.json()
-    print(f"Run ID: {data['course_id']}")
+    print(f"Run ID: {data['run_id']}")
     print(f"Status: {data['status']}")
     print(f"Message: {data['message']}")
 
@@ -199,9 +199,9 @@ def test_cancel(base_url: str, headers: dict, course_id: int) -> dict:
 
 
 def run_disk_health_check(base_url: str, headers: dict) -> None:
-    """Run a disk health check task through the concierge.
+    """Run a disk health check task through the oikos.
 
-    This tests the full flow: concierge -> spawn_commis -> ssh_exec
+    This tests the full flow: oikos -> spawn_commis -> ssh_exec
     """
     task = (
         "Check disk usage on all infrastructure servers (cube, clifford, zerg, slim). "
@@ -210,10 +210,10 @@ def run_disk_health_check(base_url: str, headers: dict) -> None:
     )
 
     # Dispatch the task
-    dispatch_data = test_concierge_dispatch(base_url, headers, task)
+    dispatch_data = test_oikos_dispatch(base_url, headers, task)
 
     # Listen to events
-    events = test_concierge_events(base_url, headers, dispatch_data["course_id"], timeout=120)
+    events = test_oikos_events(base_url, headers, dispatch_data["run_id"], timeout=120)
 
     # Summary
     print(f"\n{'='*60}")
@@ -234,7 +234,7 @@ def run_disk_health_check(base_url: str, headers: dict) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Test Concierge flow against live server")
+    parser = argparse.ArgumentParser(description="Test Oikos flow against live server")
     parser.add_argument(
         "--base-url",
         default="http://localhost:8000",
@@ -266,11 +266,11 @@ def main():
 
     if args.simple:
         task = "What time is it?"
-        dispatch_data = test_concierge_dispatch(args.base_url, headers, task)
-        test_concierge_events(args.base_url, headers, dispatch_data["course_id"], timeout=30)
+        dispatch_data = test_oikos_dispatch(args.base_url, headers, task)
+        test_oikos_events(args.base_url, headers, dispatch_data["run_id"], timeout=30)
     elif args.task:
-        dispatch_data = test_concierge_dispatch(args.base_url, headers, args.task)
-        test_concierge_events(args.base_url, headers, dispatch_data["course_id"], timeout=120)
+        dispatch_data = test_oikos_dispatch(args.base_url, headers, args.task)
+        test_oikos_events(args.base_url, headers, dispatch_data["run_id"], timeout=120)
     else:
         run_disk_health_check(args.base_url, headers)
 

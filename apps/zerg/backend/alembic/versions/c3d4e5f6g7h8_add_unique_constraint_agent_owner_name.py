@@ -42,7 +42,7 @@ def upgrade() -> None:
         print(f"Cleaning up {len(duplicate_ids)} duplicate fiches: {duplicate_ids}")
 
         # Delete related records first (cascade manually to avoid FK violations)
-        for table in ['threads', 'courses', 'fiche_messages', 'threads', 'commis_jobs']:
+        for table in ['threads', 'runs', 'fiche_messages', 'threads', 'commis_jobs']:
             try:
                 conn.execute(sa.text(f"DELETE FROM {table} WHERE fiche_id = ANY(:ids)"), {"ids": duplicate_ids})
             except Exception:

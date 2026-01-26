@@ -4,7 +4,7 @@ Focus on *observable* behaviour rather than internal helper functions:
 
 1. After a webhook callback the connector's ``history_id`` must advance to the
    highest ``history.id`` value returned by the Gmail *history* diff.
-2. A *new* ``X-Goog-Message-Number`` should schedule an additional course
+2. A *new* ``X-Goog-Message-Number`` should schedule an additional run
    (dedup logic only skips identical numbers).
 
 These tests reuse the existing helper stubs from ``test_gmail_webhook_trigger``

@@ -3,19 +3,19 @@
 v2.0 Philosophy: Trust the AI, Remove Scaffolding
 -------------------------------------------------
 The roundabout is a polling loop that provides real-time visibility into commis
-execution without polluting the concierge's long-lived thread context.
+execution without polluting the oikos's long-lived thread context.
 
-Like glancing at a second monitor: the concierge polls commis status periodically,
+Like glancing at a second monitor: the oikos polls commis status periodically,
 and the LLM interprets what it sees to decide the next action.
 
 This is v2.0's "trust the AI" approach:
-- Polling (concierge checking status) = GOOD (like glancing at second monitor)
+- Polling (oikos checking status) = GOOD (like glancing at second monitor)
 - LLM interprets status and decides = GOOD (trust the AI's judgment)
 - Hard guardrails (timeouts, rate limits) = GOOD (safety boundaries, not heuristics)
 - Heuristic decision engine = DEPRECATED (pre-programs LLM decisions)
 
 Implementation:
-- Polling loop every 5 seconds (concierge checking status)
+- Polling loop every 5 seconds (oikos checking status)
 - Status aggregation from database and events
 - Tool event subscription for activity tracking
 - LLM interprets status and decides: wait, exit, cancel, or peek
@@ -161,7 +161,7 @@ class RoundaboutResult:
     decision: RoundaboutDecision | None = None  # The decision that triggered exit
     drill_down_hint: str | None = None  # For peek: what to read next
     tool_index: list[ToolIndexEntry] = field(default_factory=list)  # Execution metadata for tool calls
-    course_id: int | None = None  # Concierge run ID for evidence correlation
+    run_id: int | None = None  # Oikos run ID for evidence correlation
 
 
 def make_heuristic_decision(ctx: DecisionContext) -> tuple[RoundaboutDecision, str]:
@@ -248,7 +248,7 @@ class RoundaboutMonitor:
         db,
         job_id: int,
         owner_id: int,
-        concierge_course_id: int | None = None,
+        oikos_run_id: int | None = None,
         timeout_seconds: float = ROUNDABOUT_HARD_TIMEOUT,
         decision_mode: DecisionMode = DEFAULT_DECISION_MODE,
         llm_poll_interval: int = DEFAULT_LLM_POLL_INTERVAL,
@@ -259,7 +259,7 @@ class RoundaboutMonitor:
         self.db = db
         self.job_id = job_id
         self.owner_id = owner_id
-        self.concierge_course_id = concierge_course_id
+        self.oikos_run_id = oikos_run_id
         self.timeout_seconds = timeout_seconds
 
         # Phase 5: LLM decision configuration (v2.0 default: LLM mode)
@@ -432,7 +432,7 @@ class RoundaboutMonitor:
                 # Evaluation Mode Helper:
                 # In testing/eval mode, the background commis processor is disabled.
                 # If we're waiting for a job that is still 'queued', we drain it
-                # synchronously here so the concierge can proceed with findings.
+                # synchronously here so the oikos can proceed with findings.
                 if get_settings().testing and job.status == "queued":
                     logger.info(f"Eval Mode: Draining job {self.job_id} synchronously in roundabout (immediate)")
                     await self._drain_job_synchronously(job, timeout_seconds=self.timeout_seconds)
@@ -512,7 +512,7 @@ class RoundaboutMonitor:
                 fiche=None,
                 fiche_config={"model": job.model, "owner_id": job.owner_id},
                 timeout=int(timeout_seconds),
-                event_context={"course_id": self.concierge_course_id},
+                event_context={"run_id": self.oikos_run_id},
                 job_id=job.id,
             )
 
@@ -981,7 +981,7 @@ class RoundaboutMonitor:
             error=job.error if job.status == "failed" else None,
             activity_summary=activity_summary,
             tool_index=tool_index,
-            course_id=self.concierge_course_id,
+            run_id=self.oikos_run_id,
         )
 
     def _create_result(self, status: str, error: str | None = None) -> RoundaboutResult:
@@ -1041,15 +1041,15 @@ class RoundaboutMonitor:
 
 
 def format_roundabout_result(result: RoundaboutResult) -> str:
-    """Format roundabout result for concierge thread.
+    """Format roundabout result for oikos thread.
 
-    This is what gets persisted to the concierge's conversation history.
+    This is what gets persisted to the oikos's conversation history.
     Returns a compact payload with:
     - Tool index (execution metadata)
     - Summary (commis's prose, may be empty/garbage)
     - Evidence marker for LLM wrapper expansion
 
-    The evidence marker format is: [EVIDENCE:course_id=48,job_id=123,commis_id=abc-123]
+    The evidence marker format is: [EVIDENCE:run_id=48,job_id=123,commis_id=abc-123]
     """
     lines = []
 
@@ -1091,8 +1091,8 @@ def format_roundabout_result(result: RoundaboutResult) -> str:
             lines.append("")
 
         # Evidence marker for LLM wrapper expansion
-        if result.course_id is not None and result.commis_id is not None:
-            lines.append(f"[EVIDENCE:course_id={result.course_id},job_id={result.job_id},commis_id={result.commis_id}]")
+        if result.run_id is not None and result.commis_id is not None:
+            lines.append(f"[EVIDENCE:run_id={result.run_id},job_id={result.job_id},commis_id={result.commis_id}]")
 
     elif result.status == "failed":
         lines.append(f"Commis job {result.job_id} failed.")
@@ -1105,8 +1105,8 @@ def format_roundabout_result(result: RoundaboutResult) -> str:
         lines.append("")
 
         # Evidence marker for LLM wrapper expansion (even for failures - useful tool output may exist)
-        if result.course_id is not None and result.commis_id is not None:
-            lines.append(f"[EVIDENCE:course_id={result.course_id},job_id={result.job_id},commis_id={result.commis_id}]")
+        if result.run_id is not None and result.commis_id is not None:
+            lines.append(f"[EVIDENCE:run_id={result.run_id},job_id={result.job_id},commis_id={result.commis_id}]")
 
     elif result.status == "monitor_timeout":
         lines.append(f"Monitor timeout: stopped watching job {result.job_id} after {result.duration_seconds:.1f}s.")
@@ -1120,8 +1120,8 @@ def format_roundabout_result(result: RoundaboutResult) -> str:
         lines.append("")
 
         # Evidence marker for LLM wrapper expansion (even for timeouts - partial output may be useful)
-        if result.course_id is not None and result.commis_id is not None:
-            lines.append(f"[EVIDENCE:course_id={result.course_id},job_id={result.job_id},commis_id={result.commis_id}]")
+        if result.run_id is not None and result.commis_id is not None:
+            lines.append(f"[EVIDENCE:run_id={result.run_id},job_id={result.job_id},commis_id={result.commis_id}]")
 
     elif result.status == "early_exit":
         lines.append(f"Exited monitoring of commis job {result.job_id} early.")

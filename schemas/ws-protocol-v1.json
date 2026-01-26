@@ -45,7 +45,7 @@
     },
     "FicheChannel": {
       "address": "fiche:{fiche_id}",
-      "description": "Fiche lifecycle events and course updates",
+      "description": "Fiche lifecycle events and run updates",
       "parameters": {
         "fiche_id": {
           "description": "Numeric identifier of the fiche",
@@ -57,7 +57,7 @@
       },
       "messages": [
         "FicheEvent",
-        "CourseUpdate"
+        "RunUpdate"
       ]
     },
     "UserChannel": {
@@ -81,7 +81,7 @@
       "description": "Workflow execution state, node updates, and logs",
       "parameters": {
         "execution_id": {
-          "description": "Numeric identifier of the execution course",
+          "description": "Numeric identifier of the execution run",
           "examples": [
             "123",
             "456"
@@ -235,12 +235,12 @@
         "fiche_state"
       ]
     },
-    "course_update": {
-      "summary": "Fiche course status update",
+    "run_update": {
+      "summary": "Fiche run status update",
       "payload_schema": {
-        "$ref": "#/components/schemas/CourseUpdateData"
+        "$ref": "#/components/schemas/RunUpdateData"
       },
-      "handler_method": "handle_course_update",
+      "handler_method": "handle_run_update",
       "aliases": []
     },
     "user_update": {
@@ -336,7 +336,7 @@
   ],
   "performance_contracts": {
     "message_size_limits": {
-      "course_update": "max_1kb",
+      "run_update": "max_1kb",
       "stream_chunk": "max_64kb"
     },
     "throughput_requirements": {
@@ -351,7 +351,7 @@
     ],
     "authorization_checks": [
       "fiche_event",
-      "course_update"
+      "run_update"
     ],
     "data_validation": "strict",
     "sanitization_rules": {

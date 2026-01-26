@@ -12,8 +12,8 @@ beforeAll(() => {
     const msg = String(args[0] || '');
     // CommisProgress orphan/edge case warnings - tests deliberately trigger these
     if (msg.includes('[CommisProgress]')) return;
-    // ConciergeToolStore failure warnings - tests deliberately trigger these
-    if (msg.includes('[ConciergeToolStore]')) return;
+    // OikosToolStore failure warnings - tests deliberately trigger these
+    if (msg.includes('[OikosToolStore]')) return;
     originalWarn.apply(console, args);
   };
 

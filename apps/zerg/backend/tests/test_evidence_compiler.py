@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from zerg.crud.crud import create_user
-from zerg.models.models import Course
+from zerg.models.models import Run
 from zerg.models.models import User
 from zerg.models.models import CommisJob
 from zerg.services.evidence_compiler import EvidenceCompiler
@@ -28,20 +28,20 @@ def test_user(db_session: Session) -> User:
 
 
 @pytest.fixture
-def concierge_run(db_session: Session, sample_fiche) -> Course:
-    """Create a concierge run for testing."""
+def oikos_run(db_session: Session, sample_fiche) -> Run:
+    """Create a oikos run for testing."""
     from zerg.crud import create_thread
-    from zerg.models.enums import CourseStatus
-    from zerg.models.enums import CourseTrigger
+    from zerg.models.enums import RunStatus
+    from zerg.models.enums import RunTrigger
 
     # Create a thread for the fiche
     thread = create_thread(db_session, fiche_id=sample_fiche.id, title="Test Run")
 
-    run = Course(
+    run = Run(
         fiche_id=sample_fiche.id,
         thread_id=thread.id,
-        status=CourseStatus.RUNNING,
-        trigger=CourseTrigger.MANUAL,
+        status=RunStatus.RUNNING,
+        trigger=RunTrigger.MANUAL,
     )
     db_session.add(run)
     db_session.commit()
@@ -52,21 +52,21 @@ def concierge_run(db_session: Session, sample_fiche) -> Course:
 class TestEvidenceCompiler:
     """Test suite for EvidenceCompiler."""
 
-    def test_compile_no_commis(self, db_session: Session, sample_fiche, concierge_run: Course):
+    def test_compile_no_commis(self, db_session: Session, sample_fiche, oikos_run: Run):
         """Test compilation with no commis jobs."""
         compiler = EvidenceCompiler(db=db_session)
-        evidence = compiler.compile(course_id=concierge_run.id, owner_id=sample_fiche.owner_id)
+        evidence = compiler.compile(run_id=oikos_run.id, owner_id=sample_fiche.owner_id)
 
         assert evidence == {}
 
     def test_compile_commis_not_started(
-        self, db_session: Session, sample_fiche, concierge_run: Course, temp_artifact_store: CommisArtifactStore
+        self, db_session: Session, sample_fiche, oikos_run: Run, temp_artifact_store: CommisArtifactStore
     ):
         """Test compilation when commis job exists but hasn't started (no commis_id)."""
         # Create commis job without commis_id (not started)
         job = CommisJob(
             owner_id=sample_fiche.owner_id,
-            concierge_course_id=concierge_run.id,
+            oikos_run_id=oikos_run.id,
             task="Test task",
             status="queued",
             commis_id=None,  # Not started
@@ -75,12 +75,12 @@ class TestEvidenceCompiler:
         db_session.commit()
 
         compiler = EvidenceCompiler(artifact_store=temp_artifact_store, db=db_session)
-        evidence = compiler.compile(course_id=concierge_run.id, owner_id=sample_fiche.owner_id)
+        evidence = compiler.compile(run_id=oikos_run.id, owner_id=sample_fiche.owner_id)
 
         assert evidence == {}
 
     def test_compile_single_commis_with_tool_outputs(
-        self, db_session: Session, sample_fiche, concierge_run: Course, temp_artifact_store: CommisArtifactStore
+        self, db_session: Session, sample_fiche, oikos_run: Run, temp_artifact_store: CommisArtifactStore
     ):
         """Test compilation with a single commis that has tool outputs."""
         # Create commis with artifacts
@@ -109,7 +109,7 @@ class TestEvidenceCompiler:
         # Create commis job
         job = CommisJob(
             owner_id=sample_fiche.owner_id,
-            concierge_course_id=concierge_run.id,
+            oikos_run_id=oikos_run.id,
             task="Check disk space",
             status="success",
             commis_id=commis_id,
@@ -118,7 +118,7 @@ class TestEvidenceCompiler:
         db_session.commit()
 
         compiler = EvidenceCompiler(artifact_store=temp_artifact_store, db=db_session)
-        evidence = compiler.compile(course_id=concierge_run.id, owner_id=sample_fiche.owner_id, budget_bytes=10000)
+        evidence = compiler.compile(run_id=oikos_run.id, owner_id=sample_fiche.owner_id, budget_bytes=10000)
 
         assert job.id in evidence
         assert "001_ssh_exec.txt" in evidence[job.id]
@@ -128,7 +128,7 @@ class TestEvidenceCompiler:
         assert "--- End Evidence ---" in evidence[job.id]
 
     def test_compile_for_job_single_commis(
-        self, db_session: Session, sample_fiche, concierge_run: Course, temp_artifact_store: CommisArtifactStore
+        self, db_session: Session, sample_fiche, oikos_run: Run, temp_artifact_store: CommisArtifactStore
     ):
         """Test compile_for_job returns evidence for a single commis."""
         commis_id = temp_artifact_store.create_commis(
@@ -154,7 +154,7 @@ class TestEvidenceCompiler:
 
         job = CommisJob(
             owner_id=sample_fiche.owner_id,
-            concierge_course_id=concierge_run.id,
+            oikos_run_id=oikos_run.id,
             task="Check uptime",
             status="success",
             commis_id=commis_id,
@@ -176,7 +176,7 @@ class TestEvidenceCompiler:
         assert "--- End Evidence ---" in evidence
 
     def test_prioritization_failures_first(
-        self, db_session: Session, sample_fiche, concierge_run: Course, temp_artifact_store: CommisArtifactStore
+        self, db_session: Session, sample_fiche, oikos_run: Run, temp_artifact_store: CommisArtifactStore
     ):
         """Test that failed tool outputs are prioritized first."""
         commis_id = temp_artifact_store.create_commis(
@@ -220,7 +220,7 @@ class TestEvidenceCompiler:
         # Create commis job
         job = CommisJob(
             owner_id=sample_fiche.owner_id,
-            concierge_course_id=concierge_run.id,
+            oikos_run_id=oikos_run.id,
             task="Test failures",
             status="success",
             commis_id=commis_id,
@@ -229,7 +229,7 @@ class TestEvidenceCompiler:
         db_session.commit()
 
         compiler = EvidenceCompiler(artifact_store=temp_artifact_store, db=db_session)
-        evidence = compiler.compile(course_id=concierge_run.id, owner_id=sample_fiche.owner_id, budget_bytes=10000)
+        evidence = compiler.compile(run_id=oikos_run.id, owner_id=sample_fiche.owner_id, budget_bytes=10000)
 
         # Failed output should appear first (with [FAILED] tag)
         evidence_str = evidence[job.id]
@@ -241,7 +241,7 @@ class TestEvidenceCompiler:
         assert failed_pos < success_file_pos, "Failed output should appear before success output"
 
     def test_truncation_with_head_tail(
-        self, db_session: Session, sample_fiche, concierge_run: Course, temp_artifact_store: CommisArtifactStore
+        self, db_session: Session, sample_fiche, oikos_run: Run, temp_artifact_store: CommisArtifactStore
     ):
         """Test that large outputs are truncated with head+tail strategy."""
         commis_id = temp_artifact_store.create_commis(
@@ -270,7 +270,7 @@ class TestEvidenceCompiler:
         # Create commis job
         job = CommisJob(
             owner_id=sample_fiche.owner_id,
-            concierge_course_id=concierge_run.id,
+            oikos_run_id=oikos_run.id,
             task="Test truncation",
             status="success",
             commis_id=commis_id,
@@ -280,7 +280,7 @@ class TestEvidenceCompiler:
 
         # Use small budget to force truncation
         compiler = EvidenceCompiler(artifact_store=temp_artifact_store, db=db_session)
-        evidence = compiler.compile(course_id=concierge_run.id, owner_id=sample_fiche.owner_id, budget_bytes=5000)
+        evidence = compiler.compile(run_id=oikos_run.id, owner_id=sample_fiche.owner_id, budget_bytes=5000)
 
         evidence_str = evidence[job.id]
 
@@ -292,7 +292,7 @@ class TestEvidenceCompiler:
         assert evidence_bytes <= 6000, f"Evidence exceeds budget: {evidence_bytes} bytes"  # Allow margin
 
     def test_budget_enforcement_multiple_commis(
-        self, db_session: Session, sample_fiche, concierge_run: Course, temp_artifact_store: CommisArtifactStore
+        self, db_session: Session, sample_fiche, oikos_run: Run, temp_artifact_store: CommisArtifactStore
     ):
         """Test that budget is divided among multiple commis."""
         # Create two commis
@@ -319,14 +319,14 @@ class TestEvidenceCompiler:
         # Create commis jobs
         job1 = CommisJob(
             owner_id=sample_fiche.owner_id,
-            concierge_course_id=concierge_run.id,
+            oikos_run_id=oikos_run.id,
             task="Commis 1",
             status="success",
             commis_id=commis1_id,
         )
         job2 = CommisJob(
             owner_id=sample_fiche.owner_id,
-            concierge_course_id=concierge_run.id,
+            oikos_run_id=oikos_run.id,
             task="Commis 2",
             status="success",
             commis_id=commis2_id,
@@ -335,7 +335,7 @@ class TestEvidenceCompiler:
         db_session.commit()
 
         compiler = EvidenceCompiler(artifact_store=temp_artifact_store, db=db_session)
-        evidence = compiler.compile(course_id=concierge_run.id, owner_id=sample_fiche.owner_id, budget_bytes=4000)
+        evidence = compiler.compile(run_id=oikos_run.id, owner_id=sample_fiche.owner_id, budget_bytes=4000)
 
         # Both commis should have evidence
         assert len(evidence) == 2
@@ -347,7 +347,7 @@ class TestEvidenceCompiler:
         assert total_bytes <= 5000, f"Total evidence exceeds budget: {total_bytes} bytes"  # Allow margin
 
     def test_owner_id_security_scoping(
-        self, db_session: Session, sample_fiche, concierge_run: Course, temp_artifact_store: CommisArtifactStore
+        self, db_session: Session, sample_fiche, oikos_run: Run, temp_artifact_store: CommisArtifactStore
     ):
         """Test that owner_id prevents cross-user evidence leakage."""
         # Create another user
@@ -365,7 +365,7 @@ class TestEvidenceCompiler:
         # Create commis job
         job = CommisJob(
             owner_id=sample_fiche.owner_id,
-            concierge_course_id=concierge_run.id,
+            oikos_run_id=oikos_run.id,
             task="Private task",
             status="success",
             commis_id=commis_id,
@@ -375,19 +375,19 @@ class TestEvidenceCompiler:
 
         # Try to compile with other_user's owner_id
         compiler = EvidenceCompiler(artifact_store=temp_artifact_store, db=db_session)
-        evidence = compiler.compile(course_id=concierge_run.id, owner_id=other_user.id)
+        evidence = compiler.compile(run_id=oikos_run.id, owner_id=other_user.id)
 
         # Should get no evidence (different owner)
         assert evidence == {}
 
     def test_missing_artifacts_graceful_degradation(
-        self, db_session: Session, sample_fiche, concierge_run: Course, temp_artifact_store: CommisArtifactStore
+        self, db_session: Session, sample_fiche, oikos_run: Run, temp_artifact_store: CommisArtifactStore
     ):
         """Test that missing commis artifacts are handled gracefully."""
         # Create commis job with non-existent commis_id
         job = CommisJob(
             owner_id=sample_fiche.owner_id,
-            concierge_course_id=concierge_run.id,
+            oikos_run_id=oikos_run.id,
             task="Test task",
             status="success",
             commis_id="non-existent-commis",
@@ -396,14 +396,14 @@ class TestEvidenceCompiler:
         db_session.commit()
 
         compiler = EvidenceCompiler(artifact_store=temp_artifact_store, db=db_session)
-        evidence = compiler.compile(course_id=concierge_run.id, owner_id=sample_fiche.owner_id)
+        evidence = compiler.compile(run_id=oikos_run.id, owner_id=sample_fiche.owner_id)
 
         # Should have entry with error message
         assert job.id in evidence
         assert "unavailable" in evidence[job.id].lower()
 
     def test_error_envelope_marked_as_failed(
-        self, db_session: Session, sample_fiche, concierge_run: Course, temp_artifact_store: CommisArtifactStore
+        self, db_session: Session, sample_fiche, oikos_run: Run, temp_artifact_store: CommisArtifactStore
     ):
         """Test that error envelopes (ok=False) are marked as failed."""
         commis_id = temp_artifact_store.create_commis(task="Test errors", config={}, owner_id=sample_fiche.owner_id)
@@ -415,7 +415,7 @@ class TestEvidenceCompiler:
         # Create commis job
         job = CommisJob(
             owner_id=sample_fiche.owner_id,
-            concierge_course_id=concierge_run.id,
+            oikos_run_id=oikos_run.id,
             task="Test errors",
             status="failed",
             commis_id=commis_id,
@@ -424,7 +424,7 @@ class TestEvidenceCompiler:
         db_session.commit()
 
         compiler = EvidenceCompiler(artifact_store=temp_artifact_store, db=db_session)
-        evidence = compiler.compile(course_id=concierge_run.id, owner_id=sample_fiche.owner_id, budget_bytes=10000)
+        evidence = compiler.compile(run_id=oikos_run.id, owner_id=sample_fiche.owner_id, budget_bytes=10000)
 
         # Should be marked as failed
         assert "[FAILED]" in evidence[job.id]

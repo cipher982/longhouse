@@ -1,4 +1,4 @@
-"""Tests for concierge tools."""
+"""Tests for oikos tools."""
 
 import tempfile
 
@@ -8,15 +8,15 @@ from tests.conftest import TEST_MODEL
 from tests.conftest import TEST_COMMIS_MODEL
 from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
-from zerg.tools.builtin.concierge_tools import get_commis_metadata
-from zerg.tools.builtin.concierge_tools import get_commis_evidence
-from zerg.tools.builtin.concierge_tools import get_tool_output
-from zerg.tools.builtin.concierge_tools import grep_commis
-from zerg.tools.builtin.concierge_tools import list_commis
-from zerg.tools.builtin.concierge_tools import read_commis_file
-from zerg.tools.builtin.concierge_tools import read_commis_result
-from zerg.tools.builtin.concierge_tools import spawn_commis
-from zerg.tools.builtin.concierge_tools import spawn_workspace_commis
+from zerg.tools.builtin.oikos_tools import get_commis_metadata
+from zerg.tools.builtin.oikos_tools import get_commis_evidence
+from zerg.tools.builtin.oikos_tools import get_tool_output
+from zerg.tools.builtin.oikos_tools import grep_commis
+from zerg.tools.builtin.oikos_tools import list_commis
+from zerg.tools.builtin.oikos_tools import read_commis_file
+from zerg.tools.builtin.oikos_tools import read_commis_result
+from zerg.tools.builtin.oikos_tools import spawn_commis
+from zerg.tools.builtin.oikos_tools import spawn_workspace_commis
 
 
 @pytest.fixture
@@ -449,7 +449,7 @@ def test_get_commis_evidence_success(credential_context, temp_artifact_path, db_
 
     job = CommisJob(
         owner_id=test_user.id,
-        concierge_course_id=None,
+        oikos_run_id=None,
         task="Check disk usage",
         status="success",
         commis_id=commis_id,
@@ -633,14 +633,14 @@ def test_grep_commis_case_insensitive(credential_context, temp_artifact_path, db
 def test_get_tool_output_success(credential_context, tmp_path, monkeypatch):
     """Fetch stored tool output using artifact_id."""
     from zerg.services.tool_output_store import ToolOutputStore
-    from zerg.tools.builtin import concierge_tools
+    from zerg.tools.builtin import oikos_tools
 
     store = ToolOutputStore(base_path=str(tmp_path))
     artifact_id = store.save_output(
         owner_id=credential_context.owner_id,
         tool_name="runner_exec",
         content="output payload",
-        course_id=12,
+        run_id=12,
         tool_call_id="call-42",
     )
 
@@ -648,7 +648,7 @@ def test_get_tool_output_success(credential_context, tmp_path, monkeypatch):
         def __init__(self):
             super().__init__(base_path=str(tmp_path))
 
-    monkeypatch.setattr(concierge_tools, "ToolOutputStore", TestStore)
+    monkeypatch.setattr(oikos_tools, "ToolOutputStore", TestStore)
 
     result = get_tool_output(artifact_id)
 

@@ -8,15 +8,15 @@ from zerg.utils.time import utc_now_naive
 
 
 def _create_finished_run(db_session: Session, fiche_id: int, thread_id: int, *, tokens: int, cost: float):
-    run_row = crud.create_course(
+    run_row = crud.create_run(
         db_session,
         fiche_id=fiche_id,
         thread_id=thread_id,
         trigger="manual",
         status="queued",
     )
-    crud.mark_course_running(db_session, run_row.id, started_at=utc_now_naive() - timedelta(seconds=5))
-    crud.mark_course_finished(
+    crud.mark_run_running(db_session, run_row.id, started_at=utc_now_naive() - timedelta(seconds=5))
+    crud.mark_run_finished(
         db_session,
         run_row.id,
         finished_at=utc_now_naive(),

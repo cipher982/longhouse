@@ -27,7 +27,7 @@ class OpsTopFiche(BaseModel):
     fiche_id: int
     name: str
     owner_email: str
-    courses: int
+    runs: int
     cost_usd: Optional[float]
     p95_ms: int
 
@@ -35,7 +35,7 @@ class OpsTopFiche(BaseModel):
 class OpsSummary(BaseModel):
     """Operations summary with all KPIs."""
 
-    courses_today: int
+    runs_today: int
     cost_today_usd: Optional[float]
     budget_user: BudgetInfo
     budget_global: BudgetInfo

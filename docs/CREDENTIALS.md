@@ -1,6 +1,6 @@
 # Credentials & Personal Tools
 
-Jarvis supports personal integrations for location, health, and notes using per-user encrypted credentials.
+Oikos supports personal integrations for location, health, and notes using per-user encrypted credentials.
 
 ## Available Personal Tools
 
@@ -73,7 +73,7 @@ python scripts/seed_personal_credentials.py --email your@email.com
 ## Seeding Commands
 
 ```bash
-make seed-fiches       # Seed Jarvis fiches
+make seed-fiches       # Seed Oikos fiches
 make seed-credentials  # Seed personal tool credentials
 make seed-credentials ARGS="--force"  # Overwrite existing
 ```

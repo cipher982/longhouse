@@ -8,7 +8,7 @@ Usage:
     uv run scripts/debug_langgraph.py validate <thread_id>    # Validate message integrity
     uv run scripts/debug_langgraph.py thread <thread_id>      # DB ThreadMessages (compact)
     uv run scripts/debug_langgraph.py batch --stdin           # Batch queries from JSON
-    uv run scripts/debug_langgraph.py resume-dry-run <course_id> # Simulate resume
+    uv run scripts/debug_langgraph.py resume-dry-run <run_id> # Simulate resume
 
 Batch query example (minimal tokens):
     echo '{"queries":[{"op":"thread","thread_id":1},{"op":"validate","thread_id":"1"}]}' | \\
@@ -33,7 +33,7 @@ if backend_path not in sys.path:
 
 from zerg.database import get_session_factory, db_session
 from zerg.services.checkpointer import get_checkpointer
-from zerg.models.models import Course, ThreadMessage
+from zerg.models.models import Run, ThreadMessage
 from langchain_core.messages import BaseMessage, messages_to_dict
 
 class DebugEncoder(json.JSONEncoder):
@@ -394,9 +394,9 @@ async def cmd_resume_dry_run(args):
 
     session_factory = get_session_factory()
     with session_factory() as db:
-        run = db.query(Course).filter(Course.id == args.course_id).first()
+        run = db.query(Run).filter(Run.id == args.run_id).first()
         if not run:
-            print(json.dumps({"error": f"Run {args.course_id} not found"}, cls=DebugEncoder))
+            print(json.dumps({"error": f"Run {args.run_id} not found"}, cls=DebugEncoder))
             return
 
         thread = run.thread
@@ -485,7 +485,7 @@ Examples:
 
     # resume-dry-run - simulate resume
     resume_parser = subparsers.add_parser("resume-dry-run", help="Simulate resume")
-    resume_parser.add_argument("course_id", type=int)
+    resume_parser.add_argument("run_id", type=int)
     resume_parser.add_argument("--result", type=str, default="success")
 
     args = parser.parse_args()

@@ -28,7 +28,7 @@ async def simulate_tool_events():
     # Simulate event data
     commis_id = "2024-12-06T15-30-00_debug-test"
     owner_id = 1
-    course_id = 999
+    run_id = 999
 
     received_events = []
 
@@ -54,7 +54,7 @@ async def simulate_tool_events():
             "event_type": "commis_tool_started",
             "commis_id": commis_id,
             "owner_id": owner_id,
-            "course_id": course_id,
+            "run_id": run_id,
             "tool_name": "ssh_exec",
             "tool_call_id": "call_001",
             "tool_args_preview": "{'host': 'cube', 'command': 'df -h'}",
@@ -73,7 +73,7 @@ async def simulate_tool_events():
             "event_type": "commis_tool_completed",
             "commis_id": commis_id,
             "owner_id": owner_id,
-            "course_id": course_id,
+            "run_id": run_id,
             "tool_name": "ssh_exec",
             "tool_call_id": "call_001",
             "duration_ms": 823,
@@ -92,7 +92,7 @@ async def simulate_tool_events():
             "event_type": "commis_tool_started",
             "commis_id": commis_id,
             "owner_id": owner_id,
-            "course_id": course_id,
+            "run_id": run_id,
             "tool_name": "http_request",
             "tool_call_id": "call_002",
             "tool_args_preview": "{'url': 'https://api.example.com/status'}",
@@ -110,7 +110,7 @@ async def simulate_tool_events():
             "event_type": "commis_tool_failed",
             "commis_id": commis_id,
             "owner_id": owner_id,
-            "course_id": course_id,
+            "run_id": run_id,
             "tool_name": "http_request",
             "tool_call_id": "call_002",
             "duration_ms": 125,
@@ -200,7 +200,7 @@ async def main():
     if types_ok and flow_ok:
         print("✅ All checks passed! Tool event flow is working correctly.")
         print("\nThe events will flow as follows:")
-        print("  1. Commis executes tool → concierge_react_engine emits event")
+        print("  1. Commis executes tool → oikos_react_engine emits event")
         print("  2. Event bus delivers to subscribers")
         print("  3. SSE endpoint receives and forwards to frontend")
         print("  4. Frontend event bus receives and updates UI")

@@ -7,8 +7,8 @@ context (servers, integrations, preferences) to create complete system prompts.
 from zerg.crud import runner_crud
 from zerg.database import get_db
 from zerg.prompts.templates import BASE_COMMIS_PROMPT
-from zerg.prompts.templates import BASE_CONCIERGE_PROMPT
-from zerg.prompts.templates import BASE_JARVIS_PROMPT
+from zerg.prompts.templates import BASE_OIKOS_ASSISTANT_PROMPT
+from zerg.prompts.templates import BASE_OIKOS_PROMPT
 
 
 def format_user_context(ctx: dict) -> str:
@@ -149,24 +149,6 @@ If ssh_exec fails, report the error and stop. Runner daemons provide faster,
 more secure execution when available."""
 
 
-def build_concierge_prompt(user) -> str:
-    """Build complete concierge prompt with user context.
-
-    Args:
-        user: SQLAlchemy User model instance
-
-    Returns:
-        Complete system prompt for concierge fiches
-    """
-    ctx = user.context or {}
-
-    return BASE_CONCIERGE_PROMPT.format(
-        user_context=format_user_context(ctx),
-        servers=format_servers(ctx.get("servers", [])),
-        integrations=format_integrations(ctx.get("integrations", {})),
-    )
-
-
 def build_commis_prompt(user) -> str:
     """Build complete commis prompt with user context.
 
@@ -185,17 +167,27 @@ def build_commis_prompt(user) -> str:
     )
 
 
-def build_jarvis_prompt(user, enabled_tools: list[dict]) -> str:
-    """Build complete Jarvis prompt with user context and tools.
+def build_oikos_prompt(user, enabled_tools: list[dict] | None = None) -> str:
+    """Build complete Oikos prompt with optional tool context.
 
     Args:
         user: SQLAlchemy User model instance
         enabled_tools: List of tool dicts with 'name' and 'description' keys
+            When None, uses the orchestrator prompt with servers/integrations.
 
     Returns:
-        Complete system prompt for Jarvis
+        Complete system prompt for Oikos
     """
     ctx = user.context or {}
+
+    if enabled_tools is None:
+        return BASE_OIKOS_PROMPT.format(
+            user_context=format_user_context(ctx),
+            servers=format_servers(ctx.get("servers", [])),
+            integrations=format_integrations(ctx.get("integrations", {})),
+        )
+
+    enabled_tools = enabled_tools or []
 
     # Format direct tools
     if enabled_tools:
@@ -213,7 +205,7 @@ def build_jarvis_prompt(user, enabled_tools: list[dict]) -> str:
         limitations.append("- Smart home control (no tool configured)")
     limitations_str = "\n".join(limitations) if limitations else "None currently"
 
-    return BASE_JARVIS_PROMPT.format(
+    return BASE_OIKOS_ASSISTANT_PROMPT.format(
         user_context=format_user_context(ctx),
         direct_tools=direct_tools,
         server_names=format_server_names(ctx.get("servers", [])),

@@ -1,4 +1,4 @@
-# Swarm Platform (Jarvis + Zerg Monorepo)
+# Swarm Platform (Oikos + Zerg Monorepo)
 
 # ---------------------------------------------------------------------------
 # Load environment variables from .env
@@ -16,7 +16,7 @@ COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/dock
 # Help – `make` or `make help` (auto-generated from ## comments)
 # ---------------------------------------------------------------------------
 help: ## Show this help message
-	@echo "\n🌐 Swarm Platform (Jarvis + Zerg)"
+	@echo "\n🌐 Swarm Platform (Oikos + Zerg)"
 	@echo "=================================="
 	@echo ""
 	@grep -B0 '## ' Makefile | grep -E '^[a-zA-Z_-]+:' | sed 's/:.*## /: /' | column -t -s ':' | awk '{printf "  %-24s %s\n", $$1":", substr($$0, index($$0,$$2))}' | sort
@@ -193,7 +193,7 @@ test-all: ## Full suite including Playwright E2E
 	$(MAKE) test-unit
 	$(MAKE) test-e2e
 
-test-chat-e2e: ## Run Jarvis chat E2E tests (inside unified SPA)
+test-chat-e2e: ## Run Oikos chat E2E tests (inside unified SPA)
 	@echo "🧪 Running chat E2E tests (unified SPA)..."
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/unified-frontend.spec.ts
 
@@ -367,14 +367,14 @@ generate-sdk: ## Generate OpenAPI types from backend schema
 	@cd apps/zerg/frontend-web && bun run generate:api
 	@echo "✅ SDK generation complete"
 
-seed-fiches: ## Seed baseline Zerg fiches for Jarvis
+seed-fiches: ## Seed baseline Zerg fiches for Oikos
 	@echo "🌱 Seeding fiches..."
 	@BACKEND=$$(docker ps --format "{{.Names}}" | grep "backend" | head -1); \
 	if [ -z "$$BACKEND" ]; then \
 		echo "❌ Backend not running. Start with 'make dev'"; \
 		exit 1; \
 	fi
-	@docker exec $$BACKEND uv run python scripts/seed_jarvis_fiches.py
+	@docker exec $$BACKEND uv run python scripts/seed_oikos_fiches.py
 	@echo "✅ Fiches seeded"
 
 seed-credentials: ## Seed personal tool credentials (Traccar, WHOOP, Obsidian)

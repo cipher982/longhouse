@@ -127,7 +127,7 @@ async def test_non_owner_cannot_read_agents_or_runs(client, db_session):
     owner = _mk_user(db_session, "owner5@local", "USER")
     other = _mk_user(db_session, "other5@local", "USER")
     fiche, thread = _mk_fiche_thread(db_session, owner.id)
-    run = crud.create_course(db_session, fiche_id=fiche.id, thread_id=thread.id, trigger="manual", status="queued")
+    run = crud.create_run(db_session, fiche_id=fiche.id, thread_id=thread.id, trigger="manual", status="queued")
 
     from zerg.dependencies.auth import get_current_user
 

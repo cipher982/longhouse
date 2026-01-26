@@ -14,29 +14,29 @@ Or use the Makefile target (requires backend running):
 import pytest
 
 
-def count_commis_tool_calls(events: list, course_id: int) -> int:
-    """Count commis and concierge tool calls from SSE events for a specific course_id.
+def count_commis_tool_calls(events: list, run_id: int) -> int:
+    """Count commis and oikos tool calls from SSE events for a specific run_id.
 
     Args:
         events: List of SSE events from collect_events()
-        course_id: Run ID to filter events by
+        run_id: Run ID to filter events by
 
     Returns:
-        Number of commis_tool_started + concierge_tool_started events for this run
+        Number of commis_tool_started + oikos_tool_started events for this run
     """
     count = 0
     for event in events:
-        if event["type"] in ("commis_tool_started", "concierge_tool_started"):
-            # Access course_id from nested payload
+        if event["type"] in ("commis_tool_started", "oikos_tool_started"):
+            # Access run_id from nested payload
             payload = event["data"].get("payload", {})
-            event_course_id = payload.get("course_id")
-            if event_course_id == course_id:
+            event_run_id = payload.get("run_id")
+            if event_run_id == run_id:
                 count += 1
     return count
 
 
-def get_concierge_result(events: list) -> str:
-    """Extract the final concierge result from events.
+def get_oikos_result(events: list) -> str:
+    """Extract the final oikos result from events.
 
     Args:
         events: List of SSE events from collect_events()
@@ -45,7 +45,7 @@ def get_concierge_result(events: list) -> str:
         The final result message
     """
     for event in reversed(events):
-        if event["type"] == "concierge_complete":
+        if event["type"] == "oikos_complete":
             # Access result from nested payload
             payload = event["data"].get("payload", {})
             return payload.get("result", "")
@@ -53,7 +53,7 @@ def get_concierge_result(events: list) -> str:
 
 
 @pytest.mark.live
-def test_simple_disk_check_efficiency(concierge_client):
+def test_simple_disk_check_efficiency(oikos_client):
     """Simple disk check should use ≤2 tool calls.
 
     This caught a regression where commis were making 8+ calls for simple tasks.
@@ -63,17 +63,17 @@ def test_simple_disk_check_efficiency(concierge_client):
     task = "Check disk space on localhost using runner_exec or ssh_exec"
 
     # Dispatch and collect events
-    course_id = concierge_client.dispatch(task)
-    events = concierge_client.collect_events(course_id, timeout=90)
+    run_id = oikos_client.dispatch(task)
+    events = oikos_client.collect_events(run_id, timeout=90)
 
     # Count tool calls via SSE
-    tool_calls = count_commis_tool_calls(events, course_id)
+    tool_calls = count_commis_tool_calls(events, run_id)
 
     # Get result for debugging
-    result = get_concierge_result(events)
+    result = get_oikos_result(events)
 
     # Verify success
-    assert result, f"No result returned for run {course_id}"
+    assert result, f"No result returned for run {run_id}"
     assert "disk" in result.lower() or "df" in result.lower(), (
         f"Result doesn't appear to contain disk info. Got: {result[:200]}"
     )
@@ -84,23 +84,23 @@ def test_simple_disk_check_efficiency(concierge_client):
     # Assert efficiency
     assert tool_calls <= 2, (
         f"Simple disk check used {tool_calls} tool calls (expected ≤2). "
-        f"This indicates prompt regression. Run ID: {course_id}"
+        f"This indicates prompt regression. Run ID: {run_id}"
     )
 
 
 @pytest.mark.live
-def test_simple_memory_check_efficiency(concierge_client):
+def test_simple_memory_check_efficiency(oikos_client):
     """Simple memory check should use ≤2 tool calls."""
     task = "Check memory usage on localhost using runner_exec or ssh_exec"
 
-    course_id = concierge_client.dispatch(task)
-    events = concierge_client.collect_events(course_id, timeout=90)
+    run_id = oikos_client.dispatch(task)
+    events = oikos_client.collect_events(run_id, timeout=90)
 
-    tool_calls = count_commis_tool_calls(events, course_id)
-    result = get_concierge_result(events)
+    tool_calls = count_commis_tool_calls(events, run_id)
+    result = get_oikos_result(events)
 
     # Verify success
-    assert result, f"No result returned for run {course_id}"
+    assert result, f"No result returned for run {run_id}"
     assert "memory" in result.lower() or "mem" in result.lower() or "ram" in result.lower(), (
         f"Result doesn't appear to contain memory info. Got: {result[:200]}"
     )
@@ -110,23 +110,23 @@ def test_simple_memory_check_efficiency(concierge_client):
 
     assert tool_calls <= 2, (
         f"Simple memory check used {tool_calls} tool calls (expected ≤2). "
-        f"Run ID: {course_id}"
+        f"Run ID: {run_id}"
     )
 
 
 @pytest.mark.live
-def test_container_list_efficiency(concierge_client):
+def test_container_list_efficiency(oikos_client):
     """Listing containers should use ≤2 tool calls."""
     task = "List running docker containers on localhost"
 
-    course_id = concierge_client.dispatch(task)
-    events = concierge_client.collect_events(course_id, timeout=90)
+    run_id = oikos_client.dispatch(task)
+    events = oikos_client.collect_events(run_id, timeout=90)
 
-    tool_calls = count_commis_tool_calls(events, course_id)
-    result = get_concierge_result(events)
+    tool_calls = count_commis_tool_calls(events, run_id)
+    result = get_oikos_result(events)
 
     # Verify success
-    assert result, f"No result returned for run {course_id}"
+    assert result, f"No result returned for run {run_id}"
     assert "docker" in result.lower() or "container" in result.lower(), (
         f"Result doesn't appear to contain container info. Got: {result[:200]}"
     )
@@ -136,5 +136,5 @@ def test_container_list_efficiency(concierge_client):
 
     assert tool_calls <= 2, (
         f"Container list used {tool_calls} tool calls (expected ≤2). "
-        f"Run ID: {course_id}"
+        f"Run ID: {run_id}"
     )

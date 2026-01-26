@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Debug script: Capture and display EXACT LLM input during concierge resume.
+"""Debug script: Capture and display EXACT LLM input during oikos resume.
 
 This script helps postmortem why the LLM might spawn a second commis after resume.
 It shows the raw messages that would be sent to OpenAI so we can diagnose:
@@ -89,7 +89,7 @@ async def simulate_bug_scenario():
     # This is what the LLM SHOULD see after commis completes:
     print("\n--- EXPECTED message history (after commis completes) ---")
 
-    system_prompt = """You are Jarvis, a helpful AI assistant with access to various tools.
+    system_prompt = """You are Oikos, a helpful AI assistant with access to various tools.
 
 When a user asks for something, you can:
 1. Answer directly if you know the answer
@@ -172,13 +172,13 @@ TO DIAGNOSE:
 """)
 
 
-async def analyze_run(course_id: int):
+async def analyze_run(run_id: int):
     """Analyze a specific run from the database."""
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
     from zerg.config import settings
-    from zerg.models.models import Course, CommisJob
+    from zerg.models.models import Run, CommisJob
     from zerg.services.thread_service import ThreadService
 
     engine = create_engine(settings.database_url)
@@ -186,13 +186,13 @@ async def analyze_run(course_id: int):
     db = SessionLocal()
 
     try:
-        run = db.query(Course).filter(Course.id == course_id).first()
+        run = db.query(Run).filter(Run.id == run_id).first()
         if not run:
-            print(f"Run {course_id} not found")
+            print(f"Run {run_id} not found")
             return
 
         print(f"\n{'='*80}")
-        print(f"ANALYZING: Run {course_id}")
+        print(f"ANALYZING: Run {run_id}")
         print(f"{'='*80}")
         print(f"Status: {run.status}")
         print(f"Thread ID: {run.thread_id}")
@@ -201,7 +201,7 @@ async def analyze_run(course_id: int):
 
         # Get commis for this run
         commis = db.query(CommisJob).filter(
-            CommisJob.concierge_course_id == course_id
+            CommisJob.oikos_run_id == run_id
         ).order_by(CommisJob.created_at).all()
 
         print(f"\nCommis spawned: {len(commis)}")
@@ -249,15 +249,15 @@ async def check_llm_logs():
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="Debug LLM input during concierge resume")
+    parser = argparse.ArgumentParser(description="Debug LLM input during oikos resume")
     parser.add_argument("--run-id", type=int, help="Analyze a specific run from database")
     parser.add_argument("--simulate", action="store_true", help="Simulate the bug scenario")
     parser.add_argument("--check-logs", action="store_true", help="Check LLM request logs")
 
     args = parser.parse_args()
 
-    if args.course_id:
-        await analyze_run(args.course_id)
+    if args.run_id:
+        await analyze_run(args.run_id)
     elif args.check_logs:
         await check_llm_logs()
     else:

@@ -1,5 +1,5 @@
 {
-  "$comment": "Single source of truth for all LLM model configuration across Zerg and Jarvis",
+  "$comment": "Single source of truth for all LLM model configuration across Zerg and Oikos",
 
   "text": {
     "$comment": "Text/chat completion models (Zerg agent orchestration)",
@@ -62,7 +62,7 @@
   },
 
   "realtime": {
-    "$comment": "Realtime/voice models (Jarvis voice interface)",
+    "$comment": "Realtime/voice models (Oikos voice interface)",
     "tiers": {
       "TIER_1": "gpt-4o-realtime-preview",
       "TIER_2": "gpt-4o-mini-realtime-preview"

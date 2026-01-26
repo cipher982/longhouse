@@ -62,7 +62,7 @@ def get_summary(current_user: UserModel = Depends(require_admin), db: Session = 
 def get_timeseries(
     metric: str = Query(
         ...,
-        pattern="^(courses_by_hour|errors_by_hour|cost_by_hour|courses_by_day|errors_by_day|cost_by_day)$",
+        pattern="^(runs_by_hour|errors_by_hour|cost_by_hour|runs_by_day|errors_by_day|cost_by_day)$",
     ),
     window: str = Query("today", pattern="^(today|7d|30d)$"),
     db: Session = Depends(get_db),

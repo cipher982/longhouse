@@ -35,7 +35,7 @@ async def run_test():
     """Run the lazy loading validation test."""
     from zerg.tools import get_registry
     from zerg.tools.catalog import CORE_TOOLS, build_catalog
-    from zerg.services.concierge_react_engine import run_concierge_loop
+    from zerg.services.oikos_react_engine import run_oikos_loop
 
     print("=" * 70)
     print("LAZY LOADING VALIDATION TEST")
@@ -85,19 +85,19 @@ async def run_test():
     ]
 
     print("\n" + "-" * 70)
-    print("TEST: Running concierge with lazy_loading=True")
+    print("TEST: Running oikos with lazy_loading=True")
     print("-" * 70)
     print(f"User message: '{messages[0].content}'")
     print(f"Expected: LLM should need 'get_current_location' (non-core tool)")
     print()
 
     try:
-        result = await run_concierge_loop(
+        result = await run_oikos_loop(
             messages=messages,
             fiche_row=fiche_mock,
             tools=all_tools,
             lazy_loading=True,  # KEY: Enable lazy loading
-            course_id=None,
+            run_id=None,
             owner_id=None,
             trace_id="test-lazy-loading",
         )

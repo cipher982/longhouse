@@ -34,7 +34,7 @@ const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
 const mockOpsSummary = {
-  courses_today: 45,
+  runs_today: 45,
   cost_today_usd: 1.23,
   budget_user: {
     limit_cents: 5000,
@@ -59,7 +59,7 @@ const mockOpsSummary = {
       fiche_id: 1,
       name: "Test Fiche",
       owner_email: "test@example.com",
-      courses: 50,
+      runs: 50,
       cost_usd: 0.125,
       p95_ms: 300,
     },
@@ -67,7 +67,7 @@ const mockOpsSummary = {
       fiche_id: 2,
       name: "Helper Fiche",
       owner_email: "helper@example.com",
-      courses: 30,
+      runs: 30,
       cost_usd: 0.089,
       p95_ms: 250,
     },
@@ -150,7 +150,7 @@ describe("AdminPage", () => {
 
     // Wait for data to load
     await waitFor(() => {
-      expect(screen.getByText("45")).toBeInTheDocument(); // courses_today
+      expect(screen.getByText("45")).toBeInTheDocument(); // runs_today
     });
 
     const errorsHeading = screen.getAllByText("Errors (1h)")[0];
@@ -189,7 +189,7 @@ describe("AdminPage", () => {
 
     // Wait for initial data load
     await waitFor(() => {
-      expect(screen.getAllByText("45").length).toBeGreaterThan(0); // today courses
+      expect(screen.getAllByText("45").length).toBeGreaterThan(0); // today runs
     });
 
     const select = screen.getAllByRole("combobox")[0] as HTMLSelectElement;

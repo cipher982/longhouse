@@ -6,7 +6,7 @@ import {
   runFiche,
   updateFiche,
   fetchModels,
-  type Course,
+  type Run,
   type FicheSummary,
   type DashboardSnapshot,
   type ModelConfig,
@@ -27,15 +27,15 @@ import {
 } from "../components/ui";
 import { useConfirm } from "../components/confirm";
 import { FicheTableRow } from "./dashboard/FicheTableRow";
-import { sortFiches, loadSortConfig, persistSortConfig, type SortKey, type SortConfig, type FicheCoursesState } from "./dashboard/sorting";
-import { applyCourseUpdate, applyFicheStateUpdate } from "./dashboard/websocketHandlers";
+import { sortFiches, loadSortConfig, persistSortConfig, type SortKey, type SortConfig, type FicheRunsState } from "./dashboard/sorting";
+import { applyRunUpdate, applyFicheStateUpdate } from "./dashboard/websocketHandlers";
 
 // App logo (served from public folder)
 const appLogo = "/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png";
 
 type Scope = "my" | "all";
 
-const COURSES_LIMIT = 50;
+const RUNS_LIMIT = 50;
 
 export default function DashboardPage() {
   const navigate = useNavigate();
@@ -45,8 +45,8 @@ export default function DashboardPage() {
   const [scope, setScope] = useState<Scope>("my");
   const [sortConfig, setSortConfig] = useState<SortConfig>(() => loadSortConfig());
   const [expandedFicheId, setExpandedFicheId] = useState<number | null>(null);
-  const dashboardQueryKey = useMemo(() => ["dashboard", scope, COURSES_LIMIT] as const, [scope]);
-  const [expandedCourseHistory, setExpandedCourseHistory] = useState<Set<number>>(new Set());
+  const dashboardQueryKey = useMemo(() => ["dashboard", scope, RUNS_LIMIT] as const, [scope]);
+  const [expandedRunHistory, setExpandedRunHistory] = useState<Set<number>>(new Set());
   const [settingsFicheId, setSettingsFicheId] = useState<number | null>(null);
   const [editingFicheId, setEditingFicheId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState<string>("");
@@ -128,8 +128,8 @@ export default function DashboardPage() {
         return;
       }
 
-      if (eventType === "course_update") {
-        applyDashboardUpdate((current) => applyCourseUpdate(current, ficheId, dataPayload));
+      if (eventType === "run_update") {
+        applyDashboardUpdate((current) => applyRunUpdate(current, ficheId, dataPayload));
         return;
       }
     },
@@ -167,20 +167,20 @@ export default function DashboardPage() {
     error,
   } = useQuery<DashboardSnapshot>({
     queryKey: dashboardQueryKey,
-    queryFn: () => fetchDashboardSnapshot({ scope, coursesLimit: COURSES_LIMIT }),
+    queryFn: () => fetchDashboardSnapshot({ scope, runsLimit: RUNS_LIMIT }),
     refetchInterval: connectionStatus === ConnectionStatus.CONNECTED ? false : 2000,
   });
 
   const fiches: FicheSummary[] = useMemo(() => dashboardData?.fiches ?? [], [dashboardData]);
 
-  const coursesByFiche: FicheCoursesState = useMemo(() => {
+  const runsByFiche: FicheRunsState = useMemo(() => {
     if (!dashboardData) {
       return {};
     }
 
-    const lookup: FicheCoursesState = {};
-    for (const bundle of dashboardData.courses) {
-      lookup[bundle.ficheId] = bundle.courses;
+    const lookup: FicheRunsState = {};
+    for (const bundle of dashboardData.runs) {
+      lookup[bundle.ficheId] = bundle.runs;
     }
 
     for (const fiche of dashboardData.fiches) {
@@ -192,7 +192,7 @@ export default function DashboardPage() {
     return lookup;
   }, [dashboardData]);
 
-  const coursesDataLoading = isLoading && !dashboardData;
+  const runsDataLoading = isLoading && !dashboardData;
 
   // Readiness Contract (see src/lib/readiness-contract.ts):
   // - data-ready="true": Page is INTERACTIVE (can click, type)
@@ -215,8 +215,8 @@ export default function DashboardPage() {
     sendMessageRef.current = sendMessage;
   }, [sendMessage]);
 
-  // Mutation for starting a fiche course (hybrid: optimistic + WebSocket)
-  const startCourseMutation = useMutation({
+  // Mutation for starting a fiche run (hybrid: optimistic + WebSocket)
+  const startRunMutation = useMutation({
     mutationFn: runFiche,
     onMutate: async (ficheId: number) => {
       await queryClient.cancelQueries({ queryKey: dashboardQueryKey });
@@ -242,10 +242,10 @@ export default function DashboardPage() {
       if (context?.previousSnapshot) {
         queryClient.setQueryData(dashboardQueryKey, context.previousSnapshot);
       }
-      console.error("Failed to start course:", err);
+      console.error("Failed to start run:", err);
     },
     onSettled: (_, __, ficheId) => {
-      dispatchDashboardEvent("course", ficheId);
+      dispatchDashboardEvent("run", ficheId);
     },
   });
 
@@ -475,8 +475,8 @@ export default function DashboardPage() {
   }
 
   const sortedFiches = useMemo(() => {
-    return sortFiches(fiches, coursesByFiche, sortConfig);
-  }, [fiches, coursesByFiche, sortConfig]);
+    return sortFiches(fiches, runsByFiche, sortConfig);
+  }, [fiches, runsByFiche, sortConfig]);
 
   if (isLoading) {
     return (
@@ -563,8 +563,8 @@ export default function DashboardPage() {
             {includeOwner && renderHeaderCell("Owner", "owner", sortConfig, handleSort, false)}
             {renderHeaderCell("Status", "status", sortConfig, handleSort)}
             {renderHeaderCell("Created", "created_at", sortConfig, handleSort)}
-            {renderHeaderCell("Last Course", "last_course", sortConfig, handleSort)}
-            {renderHeaderCell("Next Course", "next_course", sortConfig, handleSort)}
+            {renderHeaderCell("Last Run", "last_run", sortConfig, handleSort)}
+            {renderHeaderCell("Next Run", "next_run", sortConfig, handleSort)}
             {renderHeaderCell("Success Rate", "success", sortConfig, handleSort)}
             <Table.Cell isHeader className="actions-header">
               Actions
@@ -575,17 +575,17 @@ export default function DashboardPage() {
               <FicheTableRow
                 key={fiche.id}
                 fiche={fiche}
-                courses={coursesByFiche[fiche.id] || []}
+                runs={runsByFiche[fiche.id] || []}
                 includeOwner={includeOwner}
                 isExpanded={expandedFicheId === fiche.id}
-                isCourseHistoryExpanded={expandedCourseHistory.has(fiche.id)}
-                isPendingCourse={startCourseMutation.isPending && startCourseMutation.variables === fiche.id}
-                coursesDataLoading={coursesDataLoading}
+                isRunHistoryExpanded={expandedRunHistory.has(fiche.id)}
+                isPendingRun={startRunMutation.isPending && startRunMutation.variables === fiche.id}
+                runsDataLoading={runsDataLoading}
                 editingFicheId={editingFicheId}
                 editingName={editingName}
                 onToggleRow={toggleFicheRow}
-                onToggleCourseHistory={toggleCourseHistory}
-                onRunFiche={handleStartCourse}
+                onToggleRunHistory={toggleRunHistory}
+                onRunFiche={handleStartRun}
                 onChatFiche={handleChatFiche}
                 onDebugFiche={handleDebugFiche}
                 onDeleteFiche={handleDeleteFiche}
@@ -593,7 +593,7 @@ export default function DashboardPage() {
                 onSaveNameAndExit={saveNameAndExit}
                 onCancelEditing={cancelEditing}
                 onEditingNameChange={setEditingName}
-                onCourseActionsClick={dispatchDashboardEvent.bind(null, "course-actions")}
+                onRunActionsClick={dispatchDashboardEvent.bind(null, "run-actions")}
               />
             ))}
             {sortedFiches.length === 0 && (
@@ -624,8 +624,8 @@ export default function DashboardPage() {
     setExpandedFicheId((prev) => (prev === ficheId ? null : ficheId));
   }
 
-  function toggleCourseHistory(ficheId: number) {
-    setExpandedCourseHistory((prev) => {
+  function toggleRunHistory(ficheId: number) {
+    setExpandedRunHistory((prev) => {
       const next = new Set(prev);
       if (next.has(ficheId)) {
         next.delete(ficheId);
@@ -646,14 +646,14 @@ export default function DashboardPage() {
     });
   }
 
-  function handleStartCourse(event: ReactMouseEvent<HTMLButtonElement>, ficheId: number, status: string) {
+  function handleStartRun(event: ReactMouseEvent<HTMLButtonElement>, ficheId: number, status: string) {
     event.stopPropagation();
     // Don't run if already running
     if (status === "running") {
       return;
     }
     // Use the optimistic mutation
-    startCourseMutation.mutate(ficheId);
+    startRunMutation.mutate(ficheId);
   }
 
   function handleChatFiche(event: ReactMouseEvent<HTMLButtonElement>, ficheId: number, ficheName: string) {
@@ -710,9 +710,9 @@ const renderHeaderCell: HeaderRenderer = (label, sortKey, sortConfig, onSort, so
   );
 };
 
-type DashboardEventType = "course" | "edit" | "debug" | "delete" | "course-actions";
+type DashboardEventType = "run" | "edit" | "debug" | "delete" | "run-actions";
 
-function dispatchDashboardEvent(type: DashboardEventType, ficheId: number, courseId?: number) {
+function dispatchDashboardEvent(type: DashboardEventType, ficheId: number, runId?: number) {
   if (typeof window === "undefined") {
     return;
   }
@@ -720,7 +720,7 @@ function dispatchDashboardEvent(type: DashboardEventType, ficheId: number, cours
     detail: {
       type,
       ficheId,
-      courseId,
+      runId,
     },
   });
   window.dispatchEvent(event);

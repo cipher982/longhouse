@@ -1,4 +1,4 @@
-"""add correlation_id to courses
+"""add correlation_id to runs
 
 Revision ID: o9p0q1r2s3t4
 Revises: n8o9p0q1r2s3
@@ -18,7 +18,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Add correlation_id column to courses for request tracing
+    # Add correlation_id column to runs for request tracing
     # This enables end-to-end observability from frontend to backend
     # Use IF NOT EXISTS patterns for idempotency
     conn = op.get_bind()
@@ -27,12 +27,12 @@ def upgrade() -> None:
     result = conn.execute(
         sa.text(
             "SELECT column_name FROM information_schema.columns "
-            "WHERE table_name = 'courses' AND column_name = 'correlation_id'"
+            "WHERE table_name = 'runs' AND column_name = 'correlation_id'"
         )
     )
     if result.fetchone() is None:
         op.add_column(
-            "courses",
+            "runs",
             sa.Column("correlation_id", sa.String(), nullable=True),
         )
 
@@ -40,18 +40,18 @@ def upgrade() -> None:
     result = conn.execute(
         sa.text(
             "SELECT indexname FROM pg_indexes "
-            "WHERE tablename = 'courses' AND indexname = 'ix_courses_correlation_id'"
+            "WHERE tablename = 'runs' AND indexname = 'ix_runs_correlation_id'"
         )
     )
     if result.fetchone() is None:
         op.create_index(
-            "ix_courses_correlation_id",
-            "courses",
+            "ix_runs_correlation_id",
+            "runs",
             ["correlation_id"],
             unique=False,
         )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_courses_correlation_id", table_name="courses")
-    op.drop_column("courses", "correlation_id")
+    op.drop_index("ix_runs_correlation_id", table_name="runs")
+    op.drop_column("runs", "correlation_id")

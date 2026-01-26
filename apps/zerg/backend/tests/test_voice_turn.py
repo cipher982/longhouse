@@ -1,4 +1,4 @@
-"""Tests for turn-based voice (STT + concierge)."""
+"""Tests for turn-based voice (STT + oikos)."""
 
 from __future__ import annotations
 
@@ -69,7 +69,7 @@ async def test_stt_service_calls_openai(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_run_voice_turn_happy_path(monkeypatch):
-    """Turn-based voice should combine STT + concierge response."""
+    """Turn-based voice should combine STT + oikos response."""
     import zerg.voice.turn_based as turn_module
 
     class FakeSTT:
@@ -83,25 +83,25 @@ async def test_run_voice_turn_happy_path(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    class FakeConcierge:
+    class FakeOikos:
         def __init__(self, _db):
             pass
 
-        async def run_concierge(self, **kwargs):
-            from zerg.services.concierge_service import ConciergeCourseResult
+        async def run_oikos(self, **kwargs):
+            from zerg.services.oikos_service import OikosRunResult
 
-            return ConciergeCourseResult(course_id=123, thread_id=456, status="success", result="ok")
+            return OikosRunResult(run_id=123, thread_id=456, status="success", result="ok")
 
     monkeypatch.setattr(turn_module, "get_stt_service", lambda: FakeSTT())
     monkeypatch.setattr(turn_module, "db_session", lambda: DummySession())
-    monkeypatch.setattr(turn_module, "ConciergeService", FakeConcierge)
+    monkeypatch.setattr(turn_module, "OikosService", FakeOikos)
 
     result = await turn_module.run_voice_turn(owner_id=1, audio_bytes=b"audio")
 
     assert result.transcript == "hello"
     assert result.response_text == "ok"
     assert result.status == "success"
-    assert result.course_id == 123
+    assert result.run_id == 123
     assert result.thread_id == 456
 
 
@@ -109,7 +109,7 @@ def test_voice_turn_endpoint_success(monkeypatch):
     """API endpoint should return transcript + response."""
     import zerg.voice.router as voice_router
     from zerg.main import app
-    from zerg.routers.jarvis_auth import get_current_jarvis_user
+    from zerg.routers.oikos_auth import get_current_oikos_user
 
     client = TestClient(app)
 
@@ -121,23 +121,23 @@ def test_voice_turn_endpoint_success(monkeypatch):
                 transcript="hello",
                 response_text="ok",
                 status="success",
-                course_id=1,
+                run_id=1,
                 thread_id=2,
                 stt_model="gpt-4o-mini-transcribe",
             )
         ),
     )
 
-    app.dependency_overrides[get_current_jarvis_user] = lambda: SimpleNamespace(id=1)
+    app.dependency_overrides[get_current_oikos_user] = lambda: SimpleNamespace(id=1)
     try:
         response = client.post(
-            "/api/jarvis/voice/turn",
+            "/api/oikos/voice/turn",
             headers={"Authorization": "Bearer test-token"},
             files={"audio": ("sample.wav", b"audio", "audio/wav")},
             data={"return_audio": "true"},
         )
     finally:
-        app.dependency_overrides.pop(get_current_jarvis_user, None)
+        app.dependency_overrides.pop(get_current_oikos_user, None)
 
     assert response.status_code == 200
     data = response.json()

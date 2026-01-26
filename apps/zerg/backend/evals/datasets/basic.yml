@@ -1,5 +1,5 @@
 version: "1.0"
-description: Basic concierge eval - hermetic mode (53 test cases)
+description: Basic oikos eval - hermetic mode (53 test cases)
 
 # Phase 1-2: These cases run in hermetic mode with stubbed LLM responses
 # The stub LLM returns deterministic outputs, so assertions are predictable
@@ -38,10 +38,10 @@ cases:
         value: success
     tags: [quick, conversational]
 
-  # 2. Concierge tool usage - list commis
+  # 2. Oikos tool usage - list commis
   - id: list_commis
     category: tool_usage
-    description: Concierge should call list_commis tool (hermetic mode)
+    description: Oikos should call list_commis tool (hermetic mode)
     input: "List recent commis jobs"
     timeout: 30
     assert:
@@ -55,10 +55,10 @@ cases:
         max: 10000
     tags: [quick, tool_usage]
 
-  # 3. Concierge tool usage - spawn commis
+  # 3. Oikos tool usage - spawn commis
   - id: spawn_commis
     category: infrastructure
-    description: Concierge should delegate via spawn_commis (hermetic mode)
+    description: Oikos should delegate via spawn_commis (hermetic mode)
     input: "Delegate checking disk space on cube"
     timeout: 60
     assert:
@@ -220,7 +220,7 @@ cases:
   # 11. Multi-step - Sequential commis delegation
   - id: multi_step_sequential
     category: multi_step
-    description: Concierge should handle multiple sequential tasks
+    description: Oikos should handle multiple sequential tasks
     input: "First list recent commis, then check time"
     timeout: 60
     assert:

@@ -1,11 +1,11 @@
-"""add_concierge_course_id_to_commis_jobs
+"""add_oikos_run_id_to_commis_jobs
 
 Revision ID: g1h2i3j4k5l6
 Revises: f00aae7c144f
 Create Date: 2025-12-07
 
-Adds concierge_course_id column to commis_jobs table with ON DELETE SET NULL
-to prevent ForeignKeyViolation when concierge runs are cleaned up.
+Adds oikos_run_id column to commis_jobs table with ON DELETE SET NULL
+to prevent ForeignKeyViolation when oikos runs are cleaned up.
 """
 from typing import Sequence, Union
 
@@ -21,7 +21,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Add concierge_course_id column with ON DELETE SET NULL foreign key."""
+    """Add oikos_run_id column with ON DELETE SET NULL foreign key."""
     connection = op.get_bind()
     inspector = sa.inspect(connection)
 
@@ -33,33 +33,33 @@ def upgrade() -> None:
     # Get existing columns
     columns = [col["name"] for col in inspector.get_columns("commis_jobs")]
 
-    if "concierge_course_id" not in columns:
-        print("Adding concierge_course_id column to commis_jobs table")
+    if "oikos_run_id" not in columns:
+        print("Adding oikos_run_id column to commis_jobs table")
         # Add the column without foreign key first
         op.add_column(
             "commis_jobs",
-            sa.Column("concierge_course_id", sa.Integer(), nullable=True, index=True),
+            sa.Column("oikos_run_id", sa.Integer(), nullable=True, index=True),
         )
         # Add foreign key with ON DELETE SET NULL
         op.create_foreign_key(
-            "fk_commis_jobs_concierge_course_id",
+            "fk_commis_jobs_oikos_run_id",
             "commis_jobs",
-            "courses",
-            ["concierge_course_id"],
+            "runs",
+            ["oikos_run_id"],
             ["id"],
             ondelete="SET NULL",
         )
-        print("concierge_course_id column added with ON DELETE SET NULL")
+        print("oikos_run_id column added with ON DELETE SET NULL")
     else:
         # Column exists - check if FK has correct ON DELETE behavior
         # We need to drop and recreate the FK with ON DELETE SET NULL
-        print("concierge_course_id column exists - updating foreign key constraint")
+        print("oikos_run_id column exists - updating foreign key constraint")
 
         # Get existing foreign keys
         fks = inspector.get_foreign_keys("commis_jobs")
         fk_name = None
         for fk in fks:
-            if "concierge_course_id" in fk.get("constrained_columns", []):
+            if "oikos_run_id" in fk.get("constrained_columns", []):
                 fk_name = fk.get("name")
                 break
 
@@ -70,10 +70,10 @@ def upgrade() -> None:
 
         # Create new FK with ON DELETE SET NULL
         op.create_foreign_key(
-            "fk_commis_jobs_concierge_course_id",
+            "fk_commis_jobs_oikos_run_id",
             "commis_jobs",
-            "courses",
-            ["concierge_course_id"],
+            "runs",
+            ["oikos_run_id"],
             ["id"],
             ondelete="SET NULL",
         )
@@ -81,7 +81,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Remove concierge_course_id column from commis_jobs table."""
+    """Remove oikos_run_id column from commis_jobs table."""
     connection = op.get_bind()
     inspector = sa.inspect(connection)
 
@@ -91,9 +91,9 @@ def downgrade() -> None:
 
     columns = [col["name"] for col in inspector.get_columns("commis_jobs")]
 
-    if "concierge_course_id" in columns:
-        print("Removing concierge_course_id column from commis_jobs table")
+    if "oikos_run_id" in columns:
+        print("Removing oikos_run_id column from commis_jobs table")
         # Drop FK first
-        op.drop_constraint("fk_commis_jobs_concierge_course_id", "commis_jobs", type_="foreignkey")
-        op.drop_column("commis_jobs", "concierge_course_id")
-        print("concierge_course_id column removed")
+        op.drop_constraint("fk_commis_jobs_oikos_run_id", "commis_jobs", type_="foreignkey")
+        op.drop_column("commis_jobs", "oikos_run_id")
+        print("oikos_run_id column removed")

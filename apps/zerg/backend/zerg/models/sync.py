@@ -1,6 +1,6 @@
 """Sync operations model for conversation synchronization.
 
-This model stores sync operations from Jarvis clients to enable
+This model stores sync operations from Oikos clients to enable
 offline-first conversation sync with idempotent push operations.
 """
 
@@ -18,7 +18,7 @@ from zerg.database import Base
 
 
 class SyncOperation(Base):
-    """A sync operation from a Jarvis client.
+    """A sync operation from a Oikos client.
 
     Stores conversation sync operations (messages, edits, deletions) with
     idempotent push semantics. Clients generate unique op_id values to

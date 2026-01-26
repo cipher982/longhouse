@@ -10,16 +10,16 @@ import pytest
 from sqlalchemy.orm import Session
 
 from zerg.crud.crud import create_fiche
-from zerg.models.enums import CourseStatus
+from zerg.models.enums import RunStatus
 from zerg.models.models import Fiche
-from zerg.models.models import Course
+from zerg.models.models import Run
 from zerg.models.models import RunnerJob
 from zerg.models.models import Thread
 from zerg.models.models import CommisJob
 from zerg.services.fiche_state_recovery import check_postgresql_advisory_lock_support
 from zerg.services.fiche_state_recovery import initialize_fiche_state_system
 from zerg.services.fiche_state_recovery import perform_startup_fiche_recovery
-from zerg.services.fiche_state_recovery import perform_startup_course_recovery
+from zerg.services.fiche_state_recovery import perform_startup_run_recovery
 from zerg.services.fiche_state_recovery import perform_startup_runner_job_recovery
 from zerg.services.fiche_state_recovery import perform_startup_commis_job_recovery
 
@@ -100,7 +100,7 @@ class TestFicheStateRecovery:
         # Verify fiche1 was fixed
         recovered_fiche = db_session.query(Fiche).filter(Fiche.id == fiche1.id).first()
         assert recovered_fiche.status == "idle"
-        assert "Recovered from stuck coursening state" in recovered_fiche.last_error
+        assert "Recovered from stuck running state" in recovered_fiche.last_error
 
         # Verify fiche2 was untouched
         normal_fiche = db_session.query(Fiche).filter(Fiche.id == fiche2.id).first()
@@ -128,7 +128,7 @@ class TestFicheStateRecovery:
         db_session.query(Fiche).filter(Fiche.id == fiche.id).update({"status": "running"})
 
         # Create an active run for this fiche
-        run = Course(fiche_id=fiche.id, thread_id=thread.id, status="running", trigger="manual")
+        run = Run(fiche_id=fiche.id, thread_id=thread.id, status="running", trigger="manual")
         db_session.add(run)
         db_session.commit()
 
@@ -217,11 +217,11 @@ class TestFicheStateRecovery:
         assert "recovered_runner_jobs" in result
 
     @pytest.mark.asyncio
-    async def test_ordering_fiche_with_stuck_course_is_recovered(self, db_session: Session):
-        """Test that fiches with stuck courses are properly recovered.
+    async def test_ordering_fiche_with_stuck_run_is_recovered(self, db_session: Session):
+        """Test that fiches with stuck runs are properly recovered.
 
         This tests the critical ordering requirement: run recovery must happen
-        BEFORE fiche recovery, otherwise fiches with stuck courses stay in "running"
+        BEFORE fiche recovery, otherwise fiches with stuck runs stay in "running"
         forever.
 
         Scenario:
@@ -242,18 +242,18 @@ class TestFicheStateRecovery:
         )
         db_session.query(Fiche).filter(Fiche.id == fiche.id).update({"status": "running"})
 
-        # Create a stuck course for this fiche
+        # Create a stuck run for this fiche
         thread = Thread(fiche_id=fiche.id, title="Test Thread", thread_type="manual")
         db_session.add(thread)
         db_session.flush()
 
-        stuck_run = Course(fiche_id=fiche.id, thread_id=thread.id, status="RUNNING", trigger="manual")
+        stuck_run = Run(fiche_id=fiche.id, thread_id=thread.id, status="RUNNING", trigger="manual")
         db_session.add(stuck_run)
         db_session.commit()
 
         # Verify initial state
         assert db_session.query(Fiche).filter(Fiche.id == fiche.id).first().status == "running"
-        assert db_session.query(Course).filter(Course.id == stuck_run.id).first().status == "RUNNING"
+        assert db_session.query(Run).filter(Run.id == stuck_run.id).first().status == "RUNNING"
 
         # Run full initialization (the ordering is what we're testing)
         with patch("zerg.services.fiche_state_recovery.get_session_factory", return_value=lambda: db_session):
@@ -263,8 +263,8 @@ class TestFicheStateRecovery:
         db_session.expire_all()
 
         # Run should be recovered to FAILED
-        recovered_run = db_session.query(Course).filter(Course.id == stuck_run.id).first()
-        assert recovered_run.status == CourseStatus.FAILED.value
+        recovered_run = db_session.query(Run).filter(Run.id == stuck_run.id).first()
+        assert recovered_run.status == RunStatus.FAILED.value
         assert stuck_run.id in result["recovered_runs"]
 
         # Fiche should be recovered to idle (this only works if run recovery happened first!)
@@ -274,7 +274,7 @@ class TestFicheStateRecovery:
 
 
 class TestRunRecovery:
-    """Test Course recovery functionality."""
+    """Test Run recovery functionality."""
 
     @pytest.mark.asyncio
     async def test_run_recovery_no_stuck_runs(self, db_session: Session):
@@ -293,19 +293,19 @@ class TestRunRecovery:
         db_session.flush()
 
         # Create a completed run
-        run = Course(fiche_id=fiche.id, thread_id=thread.id, status="SUCCESS", trigger="manual")
+        run = Run(fiche_id=fiche.id, thread_id=thread.id, status="SUCCESS", trigger="manual")
         db_session.add(run)
         db_session.commit()
 
-        # Recovery should find no stuck courses
+        # Recovery should find no stuck runs
         with patch("zerg.services.fiche_state_recovery.get_session_factory", return_value=lambda: db_session):
-            recovered = await perform_startup_course_recovery()
+            recovered = await perform_startup_run_recovery()
 
         assert recovered == []
 
     @pytest.mark.asyncio
     async def test_run_recovery_with_stuck_runs(self, db_session: Session):
-        """Test run recovery finds and fixes stuck courses."""
+        """Test run recovery finds and fixes stuck runs."""
         # Create an fiche and thread
         fiche = create_fiche(
             db_session,
@@ -319,29 +319,29 @@ class TestRunRecovery:
         db_session.add(thread)
         db_session.flush()
 
-        # Create a stuck course
-        stuck_run = Course(fiche_id=fiche.id, thread_id=thread.id, status="RUNNING", trigger="manual")
+        # Create a stuck run
+        stuck_run = Run(fiche_id=fiche.id, thread_id=thread.id, status="RUNNING", trigger="manual")
         db_session.add(stuck_run)
         db_session.flush()
-        stuck_course_id = stuck_run.id
+        stuck_run_id = stuck_run.id
 
         # Create a completed run (should not be affected)
-        completed_run = Course(fiche_id=fiche.id, thread_id=thread.id, status="SUCCESS", trigger="manual")
+        completed_run = Run(fiche_id=fiche.id, thread_id=thread.id, status="SUCCESS", trigger="manual")
         db_session.add(completed_run)
         db_session.commit()
 
         # Run recovery
         with patch("zerg.services.fiche_state_recovery.get_session_factory", return_value=lambda: db_session):
-            recovered = await perform_startup_course_recovery()
+            recovered = await perform_startup_run_recovery()
 
-        # Should have recovered the stuck course
-        assert stuck_course_id in recovered
+        # Should have recovered the stuck run
+        assert stuck_run_id in recovered
         assert completed_run.id not in recovered
 
-        # Verify stuck course was fixed
+        # Verify stuck run was fixed
         db_session.expire_all()
-        fixed_run = db_session.query(Course).filter(Course.id == stuck_course_id).first()
-        assert fixed_run.status == CourseStatus.FAILED.value
+        fixed_run = db_session.query(Run).filter(Run.id == stuck_run_id).first()
+        assert fixed_run.status == RunStatus.FAILED.value
         assert "Orphaned after server restart" in fixed_run.error
 
     @pytest.mark.asyncio
@@ -361,15 +361,15 @@ class TestRunRecovery:
         db_session.flush()
 
         # Create runs in different stuck states
-        queued_run = Course(fiche_id=fiche.id, thread_id=thread.id, status="QUEUED", trigger="manual")
-        deferred_run = Course(fiche_id=fiche.id, thread_id=thread.id, status="DEFERRED", trigger="manual")
+        queued_run = Run(fiche_id=fiche.id, thread_id=thread.id, status="QUEUED", trigger="manual")
+        deferred_run = Run(fiche_id=fiche.id, thread_id=thread.id, status="DEFERRED", trigger="manual")
         db_session.add(queued_run)
         db_session.add(deferred_run)
         db_session.commit()
 
         # Run recovery
         with patch("zerg.services.fiche_state_recovery.get_session_factory", return_value=lambda: db_session):
-            recovered = await perform_startup_course_recovery()
+            recovered = await perform_startup_run_recovery()
 
         # Both should be recovered
         assert queued_run.id in recovered
@@ -395,12 +395,12 @@ class TestCommisJobRecovery:
 
     @pytest.mark.asyncio
     async def test_commis_job_recovery_with_stuck_jobs(self, db_session: Session, test_user):
-        """Test commis job recovery finds and fixes stuck coursening jobs.
+        """Test commis job recovery finds and fixes stuck running jobs.
 
         Note: Only "running" jobs are recovered. "Queued" jobs are NOT recovered
         because CommisJobProcessor is designed to resume them after restart.
         """
-        # Create a stuck coursening job (should be recovered)
+        # Create a stuck running job (should be recovered)
         stuck_job = CommisJob(owner_id=test_user.id, task="Stuck task", status="running")
         db_session.add(stuck_job)
         db_session.flush()
@@ -557,19 +557,19 @@ class TestRecoveryIdempotency:
         db_session.add(thread)
         db_session.flush()
 
-        # Create a stuck course
-        stuck_run = Course(fiche_id=fiche.id, thread_id=thread.id, status="RUNNING", trigger="manual")
+        # Create a stuck run
+        stuck_run = Run(fiche_id=fiche.id, thread_id=thread.id, status="RUNNING", trigger="manual")
         db_session.add(stuck_run)
         db_session.commit()
-        stuck_course_id = stuck_run.id
+        stuck_run_id = stuck_run.id
 
         # Run recovery twice
         with patch("zerg.services.fiche_state_recovery.get_session_factory", return_value=lambda: db_session):
-            recovered1 = await perform_startup_course_recovery()
-            recovered2 = await perform_startup_course_recovery()
+            recovered1 = await perform_startup_run_recovery()
+            recovered2 = await perform_startup_run_recovery()
 
         # First call should recover, second should find nothing
-        assert stuck_course_id in recovered1
+        assert stuck_run_id in recovered1
         assert recovered2 == []
 
     @pytest.mark.asyncio

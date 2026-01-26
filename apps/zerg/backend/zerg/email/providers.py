@@ -40,7 +40,7 @@ class EmailProvider(Protocol):
         The provider is responsible for:
         1. Any watch renewal logic (if applicable)
         2. Detecting new messages / events
-        3. Publishing ``TRIGGER_FIRED`` and scheduling the course
+        3. Publishing ``TRIGGER_FIRED`` and scheduling the run
 
         The signature keeps call-sites uniform across providers so the
         trigger scheduler can delegate without branching.

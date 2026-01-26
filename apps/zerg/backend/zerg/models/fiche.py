@@ -51,9 +51,9 @@ class Fiche(Base):
     # Scheduling metadata
     # Next time this fiche is currently expected to run.  Updated by the
     # SchedulerService whenever a cron job is (re)scheduled.
-    next_course_at = Column(DateTime, nullable=True)
+    next_run_at = Column(DateTime, nullable=True)
     # Last time a scheduled (or manual) run actually finished successfully.
-    last_course_at = Column(DateTime, nullable=True)
+    last_run_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     # --------------------------------------------------
@@ -68,8 +68,8 @@ class Fiche(Base):
     # Define relationship with Thread
     threads = relationship("Thread", back_populates="fiche", cascade="all, delete-orphan")
 
-    # Relationship to execution courses (added in the *Course History* feature).
-    courses = relationship("Course", back_populates="fiche", cascade="all, delete-orphan")
+    # Relationship to execution runs (added in the *Run History* feature).
+    runs = relationship("Run", back_populates="fiche", cascade="all, delete-orphan")
 
 
 class FicheMessage(Base):

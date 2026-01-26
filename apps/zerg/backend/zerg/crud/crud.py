@@ -13,9 +13,9 @@ For new code, prefer direct imports from the domain modules.
 from zerg.models import CanvasLayout  # noqa: F401
 from zerg.models import CommisJob  # noqa: F401
 from zerg.models import Connector  # noqa: F401
-from zerg.models import Course  # noqa: F401
 from zerg.models import Fiche  # noqa: F401
 from zerg.models import FicheMessage  # noqa: F401
+from zerg.models import Run  # noqa: F401
 from zerg.models import Thread  # noqa: F401
 from zerg.models import ThreadMessage  # noqa: F401
 from zerg.models import Trigger  # noqa: F401

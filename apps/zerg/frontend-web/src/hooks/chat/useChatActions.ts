@@ -1,9 +1,9 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
-import { logger } from "../../jarvis/core/logger";
+import { logger } from "../../oikos/core/logger";
 import {
   postThreadMessage,
-  startThreadCourse,
+  startThreadRun,
   startWorkflowExecution,
   Thread,
   ThreadMessage,
@@ -27,9 +27,9 @@ export function useChatActions({ ficheId, effectiveThreadId }: UseChatActionsPar
     mutationFn: async ({ threadId, content }) => {
       logger.debug(`[Chat] Sending message to thread: ${threadId}`);
       const message = await postThreadMessage(threadId, content);
-      logger.debug(`[Chat] Triggering thread course: ${threadId}`);
-      await startThreadCourse(threadId);
-      logger.debug('[Chat] Course started');
+      logger.debug(`[Chat] Triggering thread run: ${threadId}`);
+      await startThreadRun(threadId);
+      logger.debug('[Chat] Run started');
       return message;
     },
     onMutate: async ({ threadId, content }) => {

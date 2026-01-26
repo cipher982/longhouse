@@ -20,7 +20,7 @@ import {
 interface UserPeriodUsage {
   tokens: number;
   cost_usd: number;
-  courses: number;
+  runs: number;
 }
 
 interface AdminUserUsage {
@@ -50,7 +50,7 @@ interface DailyBreakdown {
   date: string;
   tokens: number;
   cost_usd: number;
-  courses: number;
+  runs: number;
 }
 
 interface TopFicheUsage {
@@ -58,7 +58,7 @@ interface TopFicheUsage {
   name: string;
   tokens: number;
   cost_usd: number;
-  courses: number;
+  runs: number;
 }
 
 interface AdminUserDetailResponse {
@@ -71,7 +71,7 @@ interface AdminUserDetailResponse {
 
 // Types for ops data - matching actual backend contract
 interface OpsSummary {
-  courses_today: number;
+  runs_today: number;
   cost_today_usd: number | null;
   budget_user: {
     limit_cents: number;
@@ -98,7 +98,7 @@ interface OpsTopFiche {
   fiche_id: number;
   name: string;
   owner_email: string;
-  courses: number;
+  runs: number;
   cost_usd: number | null;
   p95_ms: number;
 }
@@ -347,7 +347,7 @@ function TopFichesTable({ fiches }: { fiches: OpsTopFiche[] }) {
         <Table.Header>
           <Table.Cell isHeader>Fiche Name</Table.Cell>
           <Table.Cell isHeader>Owner</Table.Cell>
-          <Table.Cell isHeader>Courses</Table.Cell>
+          <Table.Cell isHeader>Runs</Table.Cell>
           <Table.Cell isHeader>Cost (USD)</Table.Cell>
           <Table.Cell isHeader>P95 Latency</Table.Cell>
         </Table.Header>
@@ -356,7 +356,7 @@ function TopFichesTable({ fiches }: { fiches: OpsTopFiche[] }) {
             <Table.Row key={fiche.fiche_id}>
               <Table.Cell className="fiche-name">{fiche.name}</Table.Cell>
               <Table.Cell className="owner-email">{fiche.owner_email}</Table.Cell>
-              <Table.Cell className="courses-count">{fiche.courses}</Table.Cell>
+              <Table.Cell className="runs-count">{fiche.runs}</Table.Cell>
               <Table.Cell className="cost">
                 {fiche.cost_usd !== null ? `$${fiche.cost_usd.toFixed(4)}` : 'N/A'}
               </Table.Cell>
@@ -527,8 +527,8 @@ function UserDetailModal({
                 <span className="value">{formatCost(detail.summary.cost_usd)}</span>
               </div>
               <div className="usage-summary-card">
-                <span className="label">Courses</span>
-                <span className="value">{detail.summary.courses}</span>
+                <span className="label">Runs</span>
+                <span className="value">{detail.summary.runs}</span>
               </div>
             </div>
 
@@ -542,7 +542,7 @@ function UserDetailModal({
                       <th>Date</th>
                       <th className="numeric">Tokens</th>
                       <th className="numeric">Cost</th>
-                      <th className="numeric">Courses</th>
+                      <th className="numeric">Runs</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -551,7 +551,7 @@ function UserDetailModal({
                         <td>{day.date}</td>
                         <td className="numeric">{day.tokens.toLocaleString()}</td>
                         <td className="numeric">{formatCost(day.cost_usd)}</td>
-                        <td className="numeric">{day.courses}</td>
+                        <td className="numeric">{day.runs}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -569,7 +569,7 @@ function UserDetailModal({
                       <th>Fiche</th>
                       <th className="numeric">Tokens</th>
                       <th className="numeric">Cost</th>
-                      <th className="numeric">Courses</th>
+                      <th className="numeric">Runs</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -578,7 +578,7 @@ function UserDetailModal({
                         <td>{fiche.name}</td>
                         <td className="numeric">{fiche.tokens.toLocaleString()}</td>
                         <td className="numeric">{formatCost(fiche.cost_usd)}</td>
-                        <td className="numeric">{fiche.courses}</td>
+                        <td className="numeric">{fiche.runs}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -765,15 +765,15 @@ function AdminPage() {
           {/* Key Metrics - using real backend data */}
           <div className="metrics-grid">
             <MetricCard
-              title="Courses Today"
-              value={summary.courses_today}
+              title="Runs Today"
+              value={summary.runs_today}
               subtitle="Total executions"
               color={metricColors.primary}
             />
             <MetricCard
               title="Errors (1h)"
               value={summary.errors_last_hour}
-              subtitle="Failed courses"
+              subtitle="Failed runs"
               color={metricColors.error}
             />
             <MetricCard
@@ -922,7 +922,7 @@ function AdminPage() {
                       <span className="admin-devtool-title">Trace Explorer</span>
                     </div>
                     <p className="admin-devtool-desc">
-                      Debug concierge courses, commis, and LLM calls with unified trace timelines.
+                      Debug oikos runs, commis, and LLM calls with unified trace timelines.
                     </p>
                   </div>
                 </Link>
@@ -958,7 +958,7 @@ function AdminPage() {
                     Clear User Data
                   </Button>
                   <p className="action-description">
-                    Remove all user-generated data (fiches, courses, workflows) while preserving user accounts
+                    Remove all user-generated data (fiches, runs, workflows) while preserving user accounts
                   </p>
                 </div>
                 <div className="action-group">
@@ -991,7 +991,7 @@ function AdminPage() {
         }
         message={
           modalState.type === "clear_data"
-            ? "This will remove all user-generated data (fiches, courses, workflows) but preserve user accounts. This action cannot be undone."
+            ? "This will remove all user-generated data (fiches, runs, workflows) but preserve user accounts. This action cannot be undone."
             : "This will drop and recreate all database tables. All data will be lost. This action cannot be undone."
         }
         confirmText={resetMutation.isPending ? "Processing..." : "Confirm"}

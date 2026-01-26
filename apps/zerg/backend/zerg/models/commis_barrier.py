@@ -1,7 +1,7 @@
 """Commis barrier models for parallel commis coordination.
 
 Implements the barrier synchronization pattern for multi-commis execution:
-- CommisBarrier: tracks a batch of parallel commis for a concierge course
+- CommisBarrier: tracks a batch of parallel commis for a oikos run
 - CommisBarrierJob: individual commis job in a barrier with result caching
 
 Two-Phase Commit Pattern:
@@ -29,9 +29,9 @@ from zerg.database import Base
 
 
 class CommisBarrier(Base):
-    """Tracks a batch of parallel commis for a concierge course.
+    """Tracks a batch of parallel commis for a oikos run.
 
-    Implements barrier synchronization: concierge waits until ALL commis
+    Implements barrier synchronization: oikos waits until ALL commis
     complete before resuming. Uses atomic counter increment + status guard
     to prevent double-resume race conditions.
 
@@ -39,20 +39,20 @@ class CommisBarrier(Base):
     - waiting: initial state, waiting for commis to complete
     - resuming: claimed by the commis that triggers resume (prevents double)
     - completed: resume finished, barrier is done
-    - failed: concierge or resume failed, barrier abandoned
+    - failed: oikos or resume failed, barrier abandoned
     """
 
     __tablename__ = "commis_barriers"
 
     id = Column(Integer, primary_key=True, index=True)
 
-    # Foreign key to course - one barrier per course
+    # Foreign key to run - one barrier per run
     # ON DELETE CASCADE: if run is deleted, barrier is automatically removed
-    course_id = Column(
+    run_id = Column(
         Integer,
-        ForeignKey("courses.id", ondelete="CASCADE"),
+        ForeignKey("runs.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,  # One barrier per course
+        unique=True,  # One barrier per run
         index=True,
     )
 
@@ -73,7 +73,7 @@ class CommisBarrier(Base):
 
     # Relationships
     jobs = relationship("CommisBarrierJob", back_populates="barrier", cascade="all, delete-orphan")
-    course = relationship("Course", backref="commis_barrier", uselist=False)
+    run = relationship("Run", backref="commis_barrier", uselist=False)
 
 
 class CommisBarrierJob(Base):

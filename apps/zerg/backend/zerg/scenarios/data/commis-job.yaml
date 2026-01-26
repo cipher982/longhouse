@@ -1,8 +1,8 @@
 name: commis-job
 version: 1
-summary: Commis job demo for seeded courses.
+summary: Commis job demo for seeded runs.
 timebase: now
-courses:
+runs:
   - id: repo-audit
     title: Repo audit commis
     status: success

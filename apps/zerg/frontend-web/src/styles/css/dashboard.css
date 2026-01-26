@@ -14,20 +14,20 @@
     overflow-y: auto;
     min-height: 0;
 
-    .course-history-table {
+    .run-history-table {
     width: 100%;
     border-collapse: collapse;
     margin-top: var(--space-3);
     font-size: var(--font-size-sm);
   }
 
-  .course-history-table th,
-  .course-history-table td {
+  .run-history-table th,
+  .run-history-table td {
     padding: var(--space-2) var(--space-3);
     line-height: var(--font-line-height-snug);
   }
 
-  .course-history-table th {
+  .run-history-table th {
     text-align: left;
     font-weight: 500;
     font-size: var(--font-size-xs);
@@ -37,13 +37,13 @@
     border-bottom: 1px solid var(--color-border-subtle);
   }
 
-  .course-history-table td {
+  .run-history-table td {
     color: var(--color-text-primary);
   }
 
   /* Right-align numeric columns */
-  .course-history-table td:nth-child(5),
-  .course-history-table td:nth-child(6) {
+  .run-history-table td:nth-child(5),
+  .run-history-table td:nth-child(6) {
     text-align: right;
     font-variant-numeric: tabular-nums;
   }
@@ -55,12 +55,12 @@
     user-select: none;
   }
 
-  .course-kebab-cell {
+  .run-kebab-cell {
     width: 22px;
     text-align: center;
   }
 
-  .course-toggle-link {
+  .run-toggle-link {
     display: inline-block;
     margin-top: var(--spacing-xs);
     font-size: var(--font-size-xs);
@@ -70,7 +70,7 @@
     user-select: none;
   }
 
-  .course-toggle-link:hover {
+  .run-toggle-link:hover {
     text-decoration: underline;
   }
 
@@ -471,16 +471,16 @@
     transform: translateY(-2px);
   }
 
-  .last-course-indicator {
+  .last-run-indicator {
     margin-left: var(--space-1);
     font-size: var(--font-size-xs);
   }
 
-  .last-course-success {
+  .last-run-success {
     color: var(--color-intent-success);
   }
 
-  .last-course-failure {
+  .last-run-failure {
     color: var(--color-intent-error);
   }
 
@@ -774,7 +774,7 @@
     color: var(--color-text-muted);
   }
 
-  /* Token and course details */
+  /* Token and run details */
   .usage-widget-details {
     font-size: var(--font-size-xs);
     color: var(--color-text-muted);

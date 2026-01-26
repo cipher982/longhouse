@@ -5,7 +5,7 @@ identity (commis) is fixed at construction time, so it always emits the correct
 event type regardless of contextvar state.
 
 Key design principle: The emitter does NOT hold a DB session. Event emission
-uses append_course_event() which opens its own short-lived session. This prevents
+uses append_run_event() which opens its own short-lived session. This prevents
 DB sessions from crossing async/thread boundaries via contextvars.
 """
 
@@ -40,10 +40,10 @@ class CommisEmitter:
     """Emitter for commis tool events - identity baked at construction.
 
     Always emits commis_tool_* events, regardless of contextvar state.
-    This eliminates the contextvar leakage bug where concierge events
+    This eliminates the contextvar leakage bug where oikos events
     could be misclassified as commis events.
 
-    Key principle: No DB session stored. Event emission uses append_course_event()
+    Key principle: No DB session stored. Event emission uses append_run_event()
     which opens its own short-lived session per event.
 
     Attributes
@@ -52,8 +52,8 @@ class CommisEmitter:
         Unique identifier for the commis (e.g., "2024-12-05T16-30-00_disk-check")
     owner_id
         User ID that owns this commis's fiche
-    course_id
-        Course ID for correlating events (concierge course ID)
+    run_id
+        Run ID for correlating events (oikos run ID)
     job_id
         CommisJob ID for roundabout event correlation (critical!)
     tool_calls
@@ -66,7 +66,7 @@ class CommisEmitter:
 
     commis_id: str
     owner_id: int | None
-    course_id: int | None
+    run_id: int | None
     job_id: int | None
     trace_id: str | None = None
 
@@ -81,7 +81,7 @@ class CommisEmitter:
         return True
 
     @property
-    def is_concierge(self) -> bool:
+    def is_oikos(self) -> bool:
         """Always False - this is a commis emitter."""
         return False
 
@@ -126,21 +126,21 @@ class CommisEmitter:
         tool_name: str,
         tool_call_id: str,
         tool_args_preview: str,
-        tool_args: dict | None = None,  # Accept but don't use (concierge uses this)
+        tool_args: dict | None = None,  # Accept but don't use (oikos uses this)
     ) -> None:
         """Emit commis_tool_started event.
 
         Always emits commis_tool_started - identity is fixed at construction.
         """
-        if not self.course_id:
-            logger.debug("Skipping emit_tool_started: no course_id")
+        if not self.run_id:
+            logger.debug("Skipping emit_tool_started: no run_id")
             return
 
-        from zerg.services.event_store import append_course_event
+        from zerg.services.event_store import append_run_event
 
         try:
-            await append_course_event(
-                course_id=self.course_id,
+            await append_run_event(
+                run_id=self.run_id,
                 event_type="commis_tool_started",
                 payload={
                     "commis_id": self.commis_id,
@@ -162,21 +162,21 @@ class CommisEmitter:
         tool_call_id: str,
         duration_ms: int,
         result_preview: str,
-        result: str | None = None,  # Accept but don't use (concierge uses this)
+        result: str | None = None,  # Accept but don't use (oikos uses this)
     ) -> None:
         """Emit commis_tool_completed event.
 
         Always emits commis_tool_completed - identity is fixed at construction.
         """
-        if not self.course_id:
-            logger.debug("Skipping emit_tool_completed: no course_id")
+        if not self.run_id:
+            logger.debug("Skipping emit_tool_completed: no run_id")
             return
 
-        from zerg.services.event_store import append_course_event
+        from zerg.services.event_store import append_run_event
 
         try:
-            await append_course_event(
-                course_id=self.course_id,
+            await append_run_event(
+                run_id=self.run_id,
                 event_type="commis_tool_completed",
                 payload={
                     "commis_id": self.commis_id,
@@ -204,15 +204,15 @@ class CommisEmitter:
 
         Always emits commis_tool_failed - identity is fixed at construction.
         """
-        if not self.course_id:
-            logger.debug("Skipping emit_tool_failed: no course_id")
+        if not self.run_id:
+            logger.debug("Skipping emit_tool_failed: no run_id")
             return
 
-        from zerg.services.event_store import append_course_event
+        from zerg.services.event_store import append_run_event
 
         try:
-            await append_course_event(
-                course_id=self.course_id,
+            await append_run_event(
+                run_id=self.run_id,
                 event_type="commis_tool_failed",
                 payload={
                     "commis_id": self.commis_id,
@@ -248,7 +248,7 @@ class CommisEmitter:
                     "event_type": EventType.COMMIS_HEARTBEAT,
                     "commis_id": self.commis_id,
                     "owner_id": self.owner_id,
-                    "course_id": self.course_id,
+                    "run_id": self.run_id,
                     "job_id": self.job_id,
                     "activity": activity,
                     "phase": phase,

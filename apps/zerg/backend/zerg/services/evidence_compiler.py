@@ -24,7 +24,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from zerg.crud.crud_commis_jobs import get_by_concierge_run
+from zerg.crud.crud_commis_jobs import get_by_oikos_run
 from zerg.services.commis_artifact_store import CommisArtifactStore
 
 logger = logging.getLogger(__name__)
@@ -68,17 +68,17 @@ class EvidenceCompiler:
 
     def compile(
         self,
-        course_id: int,
+        run_id: int,
         owner_id: int,
         budget_bytes: int = 32000,
         db: Session | None = None,
     ) -> dict[int, str]:
-        """Compile evidence for all commis in a concierge run within budget.
+        """Compile evidence for all commis in a oikos run within budget.
 
         Parameters
         ----------
-        course_id
-            Concierge run ID to compile evidence for
+        run_id
+            Oikos run ID to compile evidence for
         owner_id
             User ID for security scoping
         budget_bytes
@@ -93,14 +93,14 @@ class EvidenceCompiler:
         """
         session = db or self.db
         if session is None:
-            logger.warning(f"No database session available for evidence compilation (course_id={course_id})")
+            logger.warning(f"No database session available for evidence compilation (run_id={run_id})")
             return {}
 
-        # Query all commis jobs for this concierge run
-        jobs = get_by_concierge_run(session, concierge_course_id=course_id, owner_id=owner_id)
+        # Query all commis jobs for this oikos run
+        jobs = get_by_oikos_run(session, oikos_run_id=run_id, owner_id=owner_id)
 
         if not jobs:
-            logger.debug(f"No commis jobs found for course_id={course_id}, owner_id={owner_id}")
+            logger.debug(f"No commis jobs found for run_id={run_id}, owner_id={owner_id}")
             return {}
 
         # Calculate per-commis budget

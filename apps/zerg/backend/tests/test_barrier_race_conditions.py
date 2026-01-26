@@ -14,8 +14,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from zerg.crud import crud
-from zerg.models.enums import CourseStatus, CourseTrigger
-from zerg.models.models import Course, CommisJob
+from zerg.models.enums import RunStatus, RunTrigger
+from zerg.models.models import Run, CommisJob
 from zerg.models.commis_barrier import CommisBarrierJob, CommisBarrier
 
 
@@ -30,12 +30,12 @@ def sample_barrier_setup(db_session, sample_fiche):
         active=True,
     )
 
-    # Create concierge run in WAITING status
-    run = Course(
+    # Create oikos run in WAITING status
+    run = Run(
         thread_id=thread.id,
         fiche_id=sample_fiche.id,
-        status=CourseStatus.WAITING,
-        trigger=CourseTrigger.CHAT,
+        status=RunStatus.WAITING,
+        trigger=RunTrigger.CHAT,
         trace_id="12345678-1234-5678-1234-567812345678",
         started_at=datetime.now(timezone.utc).replace(tzinfo=None),
     )
@@ -48,7 +48,7 @@ def sample_barrier_setup(db_session, sample_fiche):
         job = CommisJob(
             task=f"Task {i+1}",
             status="queued",
-            concierge_course_id=run.id,
+            oikos_run_id=run.id,
             owner_id=sample_fiche.owner_id,
         )
         db_session.add(job)
@@ -57,7 +57,7 @@ def sample_barrier_setup(db_session, sample_fiche):
 
     # Create barrier
     barrier = CommisBarrier(
-        course_id=run.id,
+        run_id=run.id,
         expected_count=3,
         completed_count=0,
         status="waiting",
@@ -112,12 +112,12 @@ class TestDoubleResumePrevention:
         db_session.commit()
 
         # Simulate the last commis completing - should trigger resume
-        with patch("zerg.services.commis_resume.resume_concierge_batch", new_callable=AsyncMock) as mock_resume:
+        with patch("zerg.services.commis_resume.resume_oikos_batch", new_callable=AsyncMock) as mock_resume:
             mock_resume.return_value = {"status": "success"}
 
             result = await check_and_resume_if_all_complete(
                 db=db_session,
-                course_id=run.id,
+                run_id=run.id,
                 job_id=jobs[2].id,
                 result="Final result",
             )
@@ -141,7 +141,7 @@ class TestDoubleResumePrevention:
 
         result = await check_and_resume_if_all_complete(
             db=db_session,
-            course_id=run.id,
+            run_id=run.id,
             job_id=jobs[0].id,
             result="Late result",
         )
@@ -170,11 +170,11 @@ class TestTwoPhaseCommit:
             active=True,
         )
 
-        run = Course(
+        run = Run(
             thread_id=thread.id,
             fiche_id=sample_fiche.id,
-            status=CourseStatus.RUNNING,
-            trigger=CourseTrigger.CHAT,
+            status=RunStatus.RUNNING,
+            trigger=RunTrigger.CHAT,
         )
         db_session.add(run)
         db_session.flush()
@@ -183,7 +183,7 @@ class TestTwoPhaseCommit:
         job = CommisJob(
             task="Test task",
             status="created",  # Two-phase: starts as 'created', not 'queued'
-            concierge_course_id=run.id,
+            oikos_run_id=run.id,
             owner_id=sample_fiche.owner_id,
         )
         db_session.add(job)
@@ -229,8 +229,8 @@ class TestTimeoutReaper:
         barrier.deadline_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5)
         db_session.commit()
 
-        # Mock resume to avoid actual concierge execution
-        with patch("zerg.services.commis_resume.resume_concierge_batch", new_callable=AsyncMock) as mock_resume:
+        # Mock resume to avoid actual oikos execution
+        with patch("zerg.services.commis_resume.resume_oikos_batch", new_callable=AsyncMock) as mock_resume:
             mock_resume.return_value = {"status": "success"}
 
             result = await reap_expired_barriers(db_session)
@@ -275,7 +275,7 @@ class TestBarrierErrorHandling:
     @pytest.mark.asyncio
     async def test_barrier_marked_failed_on_error(self, db_session, sample_barrier_setup):
         """Barrier should be marked as failed when resume fails."""
-        from zerg.services.commis_resume import resume_concierge_batch
+        from zerg.services.commis_resume import resume_oikos_batch
 
         run = sample_barrier_setup["run"]
         barrier = sample_barrier_setup["barrier"]
@@ -299,9 +299,9 @@ class TestBarrierErrorHandling:
                 side_effect=Exception("Simulated failure")
             )
 
-            result = await resume_concierge_batch(
+            result = await resume_oikos_batch(
                 db=db_session,
-                course_id=run.id,
+                run_id=run.id,
                 commis_results=commis_results,
             )
 
@@ -319,8 +319,8 @@ class TestBatchReinterrupt:
     @pytest.mark.asyncio
     async def test_barrier_reused_on_reinterrupt(self, db_session, sample_barrier_setup):
         """Existing barrier should be reused when batch continuation spawns more commis."""
-        from zerg.managers.fiche_runner import CourseInterrupted
-        from zerg.services.commis_resume import resume_concierge_batch
+        from zerg.managers.fiche_runner import RunInterrupted
+        from zerg.services.commis_resume import resume_oikos_batch
 
         run = sample_barrier_setup["run"]
         barrier = sample_barrier_setup["barrier"]
@@ -345,7 +345,7 @@ class TestBatchReinterrupt:
             job = CommisJob(
                 task=f"New task {i+1}",
                 status="created",
-                concierge_course_id=run.id,
+                oikos_run_id=run.id,
                 owner_id=run.fiche.owner_id,
             )
             db_session.add(job)
@@ -353,7 +353,7 @@ class TestBatchReinterrupt:
             new_jobs.append(job)
         db_session.commit()
 
-        # Mock batch continuation to raise CourseInterrupted with new commis
+        # Mock batch continuation to raise RunInterrupted with new commis
         interrupt_value = {
             "type": "commis_pending",
             "job_ids": [j.id for j in new_jobs],
@@ -363,14 +363,14 @@ class TestBatchReinterrupt:
         with patch("zerg.managers.fiche_runner.FicheRunner") as mock_runner:
             mock_instance = MagicMock()
             mock_instance.run_batch_continuation = AsyncMock(
-                side_effect=CourseInterrupted(interrupt_value)
+                side_effect=RunInterrupted(interrupt_value)
             )
             mock_instance.usage_total_tokens = 100
             mock_runner.return_value = mock_instance
 
-            result = await resume_concierge_batch(
+            result = await resume_oikos_batch(
                 db=db_session,
-                course_id=run.id,
+                run_id=run.id,
                 commis_results=commis_results,
             )
 

@@ -10,9 +10,9 @@ from typing import Optional
 from pydantic import BaseModel
 from pydantic import ConfigDict
 
-from zerg.models.enums import CourseStatus
-from zerg.models.enums import CourseTrigger
 from zerg.models.enums import FicheStatus
+from zerg.models.enums import RunStatus
+from zerg.models.enums import RunTrigger
 from zerg.schemas.workflow import WorkflowData
 
 
@@ -192,8 +192,8 @@ class Fiche(FicheBase):
     updated_at: datetime
     messages: List[FicheMessage] = []
     # Deprecated field removed – scheduling is implied by `schedule`.
-    next_course_at: Optional[datetime] = None
-    last_course_at: Optional[datetime] = None
+    next_run_at: Optional[datetime] = None
+    last_run_at: Optional[datetime] = None
     last_error: Optional[str] = None
     # Display type for UI (Phase 2 terminology rebrand)
     display_type: str = "fiche"
@@ -208,7 +208,7 @@ class FicheDetails(BaseModel):
     """Envelope object returned by the Fiche *details* REST endpoint.
 
     In Phase 1 we only populate the mandatory ``fiche`` field.  The optional
-    ``threads``, ``courses`` and ``stats`` keys are included so that the response
+    ``threads``, ``runs`` and ``stats`` keys are included so that the response
     shape is forwards-compatible with the richer payloads planned for future
     phases (see *fiche_debug_modal_design.md*).
     """
@@ -217,7 +217,7 @@ class FicheDetails(BaseModel):
     # The following fields will be filled in future phases when the client
     # requests additional includes via the `include` query param.
     threads: Optional[List[Thread]] = None  # noqa: F821 – Thread is declared later in this file
-    courses: Optional[List[Any]] = None  # Placeholder for course log entries
+    runs: Optional[List[Any]] = None  # Placeholder for run log entries
     stats: Optional[Dict[str, Any]] = None
 
 
@@ -264,21 +264,21 @@ class Trigger(TriggerBase):
 
 
 # ------------------------------------------------------------
-# Course output schema (read-only, hence *Out* suffix)
+# Run output schema (read-only, hence *Out* suffix)
 # ------------------------------------------------------------
 
 
-# CourseStatus moved to models.enums for single source of truth
+# RunStatus moved to models.enums for single source of truth
 
 
-class CourseOut(BaseModel):
+class RunOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     fiche_id: int
     thread_id: int
-    status: CourseStatus
-    trigger: CourseTrigger
+    status: RunStatus
+    trigger: RunTrigger
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     duration_ms: Optional[int] = None
@@ -286,7 +286,7 @@ class CourseOut(BaseModel):
     total_cost_usd: Optional[float] = None
     error: Optional[str] = None
     # Display type for UI (Phase 2 terminology rebrand)
-    display_type: str = "course"
+    display_type: str = "run"
 
 
 # ---------------------------------------------------------------------------
@@ -294,17 +294,17 @@ class CourseOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class CourseBundle(BaseModel):
+class RunBundle(BaseModel):
     fiche_id: int
-    courses: List[CourseOut] = []
+    runs: List[RunOut] = []
 
 
 class DashboardSnapshot(BaseModel):
     scope: str
     fetched_at: datetime
-    courses_limit: int
+    runs_limit: int
     fiches: List[Fiche]
-    courses: List[CourseBundle]
+    runs: List[RunBundle]
 
 
 # ------------------------------------------------------------

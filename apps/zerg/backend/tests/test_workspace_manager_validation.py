@@ -3,7 +3,7 @@ import pytest
 from zerg.services.workspace_manager import (
     validate_branch_name,
     validate_git_repo_url,
-    validate_course_id,
+    validate_run_id,
 )
 
 
@@ -66,18 +66,18 @@ def test_validate_branch_name_invalid(branch: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "course_id",
+    "run_id",
     [
         "run_123-abc",
         "RUN_001",
     ],
 )
-def test_validate_course_id_valid(course_id: str) -> None:
-    validate_course_id(course_id)
+def test_validate_run_id_valid(run_id: str) -> None:
+    validate_run_id(run_id)
 
 
 @pytest.mark.parametrize(
-    "course_id",
+    "run_id",
     [
         "",
         "bad/run",
@@ -85,6 +85,6 @@ def test_validate_course_id_valid(course_id: str) -> None:
         "bad id",
     ],
 )
-def test_validate_course_id_invalid(course_id: str) -> None:
+def test_validate_run_id_invalid(run_id: str) -> None:
     with pytest.raises(ValueError):
-        validate_course_id(course_id)
+        validate_run_id(run_id)

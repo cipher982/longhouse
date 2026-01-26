@@ -16,14 +16,14 @@ import {
 // Types for reliability data
 interface SystemHealthResponse {
   commis: Record<string, number>;
-  recent_course_errors: number;
+  recent_run_errors: number;
   recent_commis_errors: number;
   status: "healthy" | "degraded" | "unhealthy";
   checked_at: string;
 }
 
 interface ErrorsResponse {
-  course_errors: Array<{
+  run_errors: Array<{
     id: number;
     error: string | null;
     created_at: string | null;
@@ -36,7 +36,7 @@ interface ErrorsResponse {
     task_preview: string | null;
     trace_id: string | null;
   }>;
-  total_course_errors: number;
+  total_run_errors: number;
   total_commis_errors: number;
   hours: number;
 }
@@ -262,9 +262,9 @@ export default function ReliabilityPage() {
         {/* Key Metrics */}
         <div className="metrics-grid reliability-metrics-grid">
           <MetricCard
-            title="Course Errors (1h)"
-            value={health?.recent_course_errors ?? 0}
-            color={health && health.recent_course_errors > 5 ? metricColors.error : metricColors.success}
+            title="Run Errors (1h)"
+            value={health?.recent_run_errors ?? 0}
+            color={health && health.recent_run_errors > 5 ? metricColors.error : metricColors.success}
           />
           <MetricCard
             title="Commis Errors (1h)"
@@ -302,12 +302,12 @@ export default function ReliabilityPage() {
             <h3 className="reliability-section-title ui-section-title">Recent Errors (24h)</h3>
           </Card.Header>
           <Card.Body>
-            {errors && (errors.total_course_errors > 0 || errors.total_commis_errors > 0) ? (
+            {errors && (errors.total_run_errors > 0 || errors.total_commis_errors > 0) ? (
               <div className="reliability-section-stack">
-                {errors.course_errors.length > 0 && (
+                {errors.run_errors.length > 0 && (
                   <div>
                     <h4 className="reliability-subsection-title ui-subsection-title">
-                      Course Errors ({errors.total_course_errors})
+                      Run Errors ({errors.total_run_errors})
                     </h4>
                     <Table>
                       <Table.Header>
@@ -317,7 +317,7 @@ export default function ReliabilityPage() {
                         <Table.Cell isHeader>Trace</Table.Cell>
                       </Table.Header>
                       <Table.Body>
-                        {errors.course_errors.slice(0, 5).map((err) => (
+                        {errors.run_errors.slice(0, 5).map((err) => (
                           <Table.Row key={err.id}>
                             <Table.Cell>{err.id}</Table.Cell>
                             <Table.Cell>

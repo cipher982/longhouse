@@ -12,7 +12,7 @@ test.describe('Core Commis Flow', () => {
     const startTime = Date.now();
     const message = 'Check disk space on cube';
 
-    const chatPromise = request.post('/api/jarvis/chat', {
+    const chatPromise = request.post('/api/oikos/chat', {
       data: {
         message,
         message_id: crypto.randomUUID(),
@@ -21,20 +21,20 @@ test.describe('Core Commis Flow', () => {
     });
     chatPromise.catch(() => {});
 
-    let courseId: number | null = null;
+    let runId: number | null = null;
     await expect
       .poll(async () => {
-        const coursesRes = await request.get('/api/jarvis/courses?limit=25');
-        if (!coursesRes.ok()) return false;
-        const courses = (await coursesRes.json()) as Array<{ id: number; created_at: string; trigger: string }>;
+        const runsRes = await request.get('/api/oikos/runs?limit=25');
+        if (!runsRes.ok()) return false;
+        const runs = (await runsRes.json()) as Array<{ id: number; created_at: string; trigger: string }>;
 
-        const candidate = courses.find((course) => {
-          const createdAt = Date.parse(course.created_at);
-          return Number.isFinite(createdAt) && createdAt >= startTime - 2000 && course.trigger !== 'commis';
+        const candidate = runs.find((run) => {
+          const createdAt = Date.parse(run.created_at);
+          return Number.isFinite(createdAt) && createdAt >= startTime - 2000 && run.trigger !== 'commis';
         });
 
         if (candidate) {
-          courseId = candidate.id;
+          runId = candidate.id;
           return true;
         }
         return false;
@@ -44,16 +44,16 @@ test.describe('Core Commis Flow', () => {
       })
       .toBeTruthy();
 
-    if (!courseId) {
-      throw new Error('Failed to locate commis course');
+    if (!runId) {
+      throw new Error('Failed to locate commis run');
     }
 
-    // In async model: concierge spawns commis and completes immediately
+    // In async model: oikos spawns commis and completes immediately
     // Commis runs in background, completes later
     let events: Array<{ event_type: string }> = [];
     await expect
       .poll(async () => {
-        const eventsRes = await request.get(`/api/jarvis/courses/${courseId}/events`);
+        const eventsRes = await request.get(`/api/oikos/runs/${runId}/events`);
         if (!eventsRes.ok()) return false;
         const payload = await eventsRes.json();
         events = payload.events ?? [];
@@ -61,7 +61,7 @@ test.describe('Core Commis Flow', () => {
         const spawnedCount = events.filter((e) => e.event_type === 'commis_spawned').length;
         const completeCount = events.filter((e) => e.event_type === 'commis_complete').length;
 
-        // Async model: concierge doesn't wait, so no concierge_resumed
+        // Async model: oikos doesn't wait, so no oikos_resumed
         return spawnedCount >= 1 && completeCount >= 1;
       }, {
         timeout: 60000,
@@ -75,19 +75,19 @@ test.describe('Core Commis Flow', () => {
     expect(spawnedCount).toBeGreaterThanOrEqual(1);
     expect(completeCount).toBeGreaterThanOrEqual(1);
 
-    let courseStatus: { status: string; result?: string } | null = null;
+    let runStatus: { status: string; result?: string } | null = null;
     await expect
       .poll(async () => {
-        const statusRes = await request.get(`/api/jarvis/courses/${courseId}`);
+        const statusRes = await request.get(`/api/oikos/runs/${runId}`);
         if (!statusRes.ok()) return false;
-        courseStatus = await statusRes.json();
-        return courseStatus.status === 'success' || courseStatus.status === 'failed';
+        runStatus = await statusRes.json();
+        return runStatus.status === 'success' || runStatus.status === 'failed';
       }, {
         timeout: 60000,
         intervals: [1000, 2000, 5000],
       })
       .toBeTruthy();
 
-    expect(courseStatus?.status).toBe('success');
+    expect(runStatus?.status).toBe('success');
   });
 });

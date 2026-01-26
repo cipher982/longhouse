@@ -194,32 +194,32 @@ async def send_qa_alert(issue: dict, dashboard_url: str = "https://swarmlet.com/
         logger.info("Queued QA alert (sync fallback) for issue: %s", issue.get("fingerprint", "unknown"))
 
 
-async def send_course_completion_notification(
-    course_id: int,
+async def send_run_completion_notification(
+    run_id: int,
     status: str,
     summary: Optional[str] = None,
     error: Optional[str] = None,
-    course_url: Optional[str] = None,
+    run_url: Optional[str] = None,
     *,
     webhook_url: Optional[str] = None,
 ) -> None:
-    """Send a course completion notification to Discord or Slack.
+    """Send a run completion notification to Discord or Slack.
 
     This is used for cloud fiche execution notifications, allowing users
     to close their laptop and get notified when work completes.
 
     Parameters
     ----------
-    course_id
-        The Course ID
+    run_id
+        The Run ID
     status
-        Course status: "success", "failed", etc.
+        Run status: "success", "failed", etc.
     summary
         Brief summary of the result (for success)
     error
         Error message (for failure)
-    course_url
-        URL to view the course details
+    run_url
+        URL to view the run details
     webhook_url
         Override webhook URL (defaults to NOTIFICATION_WEBHOOK env var)
     """
@@ -247,7 +247,7 @@ async def send_course_completion_notification(
         status_text = status
         details = summary or error or ""
 
-    content_parts = [f"{emoji} **Course {course_id}** {status_text}"]
+    content_parts = [f"{emoji} **Run {run_id}** {status_text}"]
 
     if details:
         # Truncate and format details
@@ -255,15 +255,15 @@ async def send_course_completion_notification(
             details = details[:297] + "..."
         content_parts.append(f"```\n{details}\n```")
 
-    if course_url:
-        content_parts.append(f"[View details]({course_url})")
+    if run_url:
+        content_parts.append(f"[View details]({run_url})")
 
     content = "\n".join(content_parts)
 
     # Fire-and-forget
     try:
         asyncio.create_task(_post_discord(url, content))
-        logger.info(f"Queued completion notification for course {course_id}")
+        logger.info(f"Queued completion notification for run {run_id}")
     except RuntimeError:
         # Fallback for sync contexts where no event loop is running
         import threading
@@ -272,4 +272,4 @@ async def send_course_completion_notification(
             target=lambda: httpx.post(url, json={"content": content}),
             daemon=True,
         ).start()
-        logger.info(f"Queued completion notification for course {course_id} (sync fallback)")
+        logger.info(f"Queued completion notification for run {run_id} (sync fallback)")

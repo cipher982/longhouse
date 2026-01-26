@@ -1,7 +1,7 @@
 /**
  * Voice Turn-Based Tests - Core Suite
  *
- * Validates /api/jarvis/voice/turn using a tiny WAV payload.
+ * Validates /api/oikos/voice/turn using a tiny WAV payload.
  */
 
 import { test, expect } from '../fixtures';
@@ -37,10 +37,10 @@ test.beforeEach(async ({ request }) => {
 });
 
 test.describe('Voice Turn-Based - Core', () => {
-  test('transcribe + concierge response returns payload', async ({ request }) => {
+  test('transcribe + oikos response returns payload', async ({ request }) => {
     const audioBuffer = buildWavBuffer();
 
-    const response = await request.post('/api/jarvis/voice/turn', {
+    const response = await request.post('/api/oikos/voice/turn', {
       multipart: {
         audio: {
           name: 'sample.wav',

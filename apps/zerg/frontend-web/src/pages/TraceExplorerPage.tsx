@@ -16,7 +16,7 @@ import {
 // Types for trace data
 interface TraceListItem {
   trace_id: string;
-  course_id: number;
+  run_id: number;
   status: string | null;
   model: string | null;
   started_at: string | null;
@@ -33,7 +33,7 @@ interface TracesResponse {
 interface TimelineEvent {
   timestamp: string;
   event_type: string;
-  source: "course" | "commis" | "llm";
+  source: "run" | "commis" | "llm";
   details: Record<string, unknown>;
   is_error: boolean;
   duration_ms: number | null;
@@ -45,7 +45,7 @@ interface TraceDetail {
   started_at: string | null;
   duration_seconds: number;
   counts: {
-    courses: number;
+    runs: number;
     commis: number;
     llm_calls: number;
   };
@@ -99,10 +99,10 @@ async function fetchTraceDetail(traceId: string, level: string = "summary"): Pro
 
 // Source color scheme
 const sourceStyles: Record<string, { color: string; bg: string; label: string }> = {
-  course: {
+  run: {
     color: "var(--color-brand-primary)",
     bg: "color-mix(in srgb, var(--color-brand-primary) 15%, transparent)",
-    label: "COURSE",
+    label: "RUN",
   },
   commis: {
     color: "var(--color-intent-success)",
@@ -283,7 +283,7 @@ function TraceDetailView({
         {/* Stats cards */}
         <div className="trace-detail-stats">
           {[
-            { label: "Courses", value: detail.counts.courses, color: sourceStyles.course.color },
+            { label: "Runs", value: detail.counts.runs, color: sourceStyles.run.color },
             { label: "Commis", value: detail.counts.commis, color: sourceStyles.commis.color },
             { label: "LLM Calls", value: detail.counts.llm_calls, color: sourceStyles.llm.color },
           ].map((stat) => (
@@ -401,7 +401,7 @@ export default function TraceExplorerPage() {
     <PageShell size="wide" className="trace-explorer-container">
       <SectionHeader
         title="Trace Explorer"
-        description="Debug concierge courses, commis jobs, and LLM calls with unified trace timelines."
+        description="Debug oikos runs, commis jobs, and LLM calls with unified trace timelines."
       />
 
       {selectedTraceId ? (

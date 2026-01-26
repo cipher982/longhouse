@@ -383,31 +383,31 @@ async def collect_health_data() -> dict[str, Any]:
                 # Failed runs in last hour
                 failed_1h = await conn.fetchval(
                     """
-                    SELECT count(*) FROM zerg.courses
+                    SELECT count(*) FROM zerg.runs
                     WHERE status = 'failed'
                       AND created_at > now() - interval '1 hour'
                     """
                 )
-                data["checks"]["failed_courses_1h"] = {"count": failed_1h}
+                data["checks"]["failed_runs_1h"] = {"count": failed_1h}
 
                 # Failed runs in last 24h
                 failed_24h = await conn.fetchval(
                     """
-                    SELECT count(*) FROM zerg.courses
+                    SELECT count(*) FROM zerg.runs
                     WHERE status = 'failed'
                       AND created_at > now() - interval '24 hours'
                     """
                 )
-                data["checks"]["failed_courses_24h"] = {"count": failed_24h}
+                data["checks"]["failed_runs_24h"] = {"count": failed_24h}
 
                 # Total runs in last hour (for error rate)
                 total_1h = await conn.fetchval(
                     """
-                    SELECT count(*) FROM zerg.courses
+                    SELECT count(*) FROM zerg.runs
                     WHERE created_at > now() - interval '1 hour'
                     """
                 )
-                data["checks"]["total_courses_1h"] = {"count": total_1h}
+                data["checks"]["total_runs_1h"] = {"count": total_1h}
 
                 # Stuck commis (running > 10 min)
                 stuck = await conn.fetchval(
@@ -422,7 +422,7 @@ async def collect_health_data() -> dict[str, Any]:
                 # P95 latency (last 24h)
                 latencies = await conn.fetch(
                     """
-                    SELECT duration_ms FROM zerg.courses
+                    SELECT duration_ms FROM zerg.runs
                     WHERE duration_ms IS NOT NULL
                       AND created_at > now() - interval '24 hours'
                     ORDER BY duration_ms

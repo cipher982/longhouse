@@ -24,17 +24,17 @@ class FicheStatus(str, Enum):
     PROCESSING = "processing"
 
 
-class CourseStatus(str, Enum):
+class RunStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
-    WAITING = "waiting"  # Interrupted waiting for commis completion (concierge resume)
+    WAITING = "waiting"  # Interrupted waiting for commis completion (oikos resume)
     DEFERRED = "deferred"  # Timeout migration: still executing, but caller stopped waiting
     SUCCESS = "success"
     FAILED = "failed"
     CANCELLED = "cancelled"
 
 
-class CourseTrigger(str, Enum):
+class RunTrigger(str, Enum):
     MANUAL = "manual"
     SCHEDULE = "schedule"
     CHAT = "chat"
@@ -47,7 +47,7 @@ class ThreadType(str, Enum):
     CHAT = "chat"
     SCHEDULED = "scheduled"
     MANUAL = "manual"
-    SUPER = "super"  # Concierge thread (Super Siri architecture)
+    SUPER = "super"  # Oikos thread (Super Siri architecture)
 
 
 # New Phase/Result enums for execution state architecture refactor
@@ -99,8 +99,8 @@ class RunnerJobStatus(str, Enum):
 __all__ = [
     "UserRole",
     "FicheStatus",
-    "CourseStatus",
-    "CourseTrigger",
+    "RunStatus",
+    "RunTrigger",
     "ThreadType",
     "Phase",
     "Result",

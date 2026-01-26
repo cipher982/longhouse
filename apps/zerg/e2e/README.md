@@ -10,7 +10,7 @@ From repo root:
 make test-e2e
 make test-e2e-ui
 make test-e2e-single TEST=tests/unified-frontend.spec.ts
-make test-e2e-grep GREP="Jarvis"
+make test-e2e-grep GREP="Oikos"
 ```
 
 ## How it works
@@ -37,7 +37,7 @@ cd apps/zerg/e2e && bunx playwright install
 - `apps/zerg/e2e/playwright.config.js` — ports, web servers, reporters
 - `apps/zerg/e2e/spawn-test-backend.js` — starts backend for tests (uv + uvicorn)
 - `apps/zerg/e2e/tests/unified-frontend.spec.ts` — quick smoke suite
-- `apps/zerg/e2e/tests/chat_*.spec.ts` — Jarvis chat-focused tests
+- `apps/zerg/e2e/tests/chat_*.spec.ts` — Oikos chat-focused tests
 
 ## Reports
 

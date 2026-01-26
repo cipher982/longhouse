@@ -2,11 +2,11 @@
 
 Tests the EventEmitter protocol and its implementations:
 - CommisEmitter (alias: CommisEmitter): Always emits commis_tool_* events
-- ConciergeEmitter (alias: ConciergeEmitter): Always emits concierge_tool_* events
+- OikosEmitter (alias: OikosEmitter): Always emits oikos_tool_* events
 - NullEmitter: No-op emitter for testing
 
 Key property: Emitter identity is baked in at construction and cannot change.
-Note: Emitters no longer hold DB sessions - event emission uses append_course_event()
+Note: Emitters no longer hold DB sessions - event emission uses append_run_event()
 which opens its own short-lived session.
 """
 
@@ -20,7 +20,7 @@ import pytest
 
 from zerg.events import EventEmitter
 from zerg.events import NullEmitter
-from zerg.events import ConciergeEmitter
+from zerg.events import OikosEmitter
 from zerg.events import CommisEmitter
 from zerg.events import get_emitter
 from zerg.events import reset_emitter
@@ -35,18 +35,18 @@ class TestCommisEmitter:
         emitter = CommisEmitter(
             commis_id="test-commis",
             owner_id=1,
-            course_id=100,
+            run_id=100,
             job_id=50,
         )
         assert emitter.is_commis is True
-        assert emitter.is_concierge is False
+        assert emitter.is_oikos is False
 
     def test_implements_protocol(self):
         """CommisEmitter implements EventEmitter protocol."""
         emitter = CommisEmitter(
             commis_id="test-commis",
             owner_id=1,
-            course_id=100,
+            run_id=100,
             job_id=50,
         )
         assert isinstance(emitter, EventEmitter)
@@ -57,12 +57,12 @@ class TestCommisEmitter:
         emitter = CommisEmitter(
             commis_id="test-commis",
             owner_id=1,
-            course_id=100,
+            run_id=100,
             job_id=50,
             trace_id="12345678-1234-5678-1234-567812345678",
         )
 
-        with patch("zerg.services.event_store.append_course_event", new_callable=AsyncMock) as mock_emit:
+        with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
             await emitter.emit_tool_started("test_tool", "call_123", "args preview")
 
             mock_emit.assert_called_once()
@@ -79,11 +79,11 @@ class TestCommisEmitter:
         emitter = CommisEmitter(
             commis_id="test-commis",
             owner_id=1,
-            course_id=100,
+            run_id=100,
             job_id=50,
         )
 
-        with patch("zerg.services.event_store.append_course_event", new_callable=AsyncMock) as mock_emit:
+        with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
             await emitter.emit_tool_completed("test_tool", "call_123", 500, "result preview")
 
             mock_emit.assert_called_once()
@@ -97,11 +97,11 @@ class TestCommisEmitter:
         emitter = CommisEmitter(
             commis_id="test-commis",
             owner_id=1,
-            course_id=100,
+            run_id=100,
             job_id=50,
         )
 
-        with patch("zerg.services.event_store.append_course_event", new_callable=AsyncMock) as mock_emit:
+        with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
             await emitter.emit_tool_failed("test_tool", "call_123", 100, "error message")
 
             mock_emit.assert_called_once()
@@ -110,16 +110,16 @@ class TestCommisEmitter:
             assert call_kwargs["payload"]["error"] == "error message"
 
     @pytest.mark.asyncio
-    async def test_skips_emit_when_no_course_id(self):
-        """Emitter skips emission when course_id is None."""
+    async def test_skips_emit_when_no_run_id(self):
+        """Emitter skips emission when run_id is None."""
         emitter = CommisEmitter(
             commis_id="test-commis",
             owner_id=1,
-            course_id=None,  # No course_id
+            run_id=None,  # No run_id
             job_id=50,
         )
 
-        with patch("zerg.services.event_store.append_course_event", new_callable=AsyncMock) as mock_emit:
+        with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
             await emitter.emit_tool_started("test_tool", "call_123", "args preview")
             mock_emit.assert_not_called()
 
@@ -128,7 +128,7 @@ class TestCommisEmitter:
         emitter = CommisEmitter(
             commis_id="test-commis",
             owner_id=1,
-            course_id=100,
+            run_id=100,
             job_id=50,
         )
 
@@ -148,7 +148,7 @@ class TestCommisEmitter:
         emitter = CommisEmitter(
             commis_id="test-commis",
             owner_id=1,
-            course_id=100,
+            run_id=100,
             job_id=50,
         )
 
@@ -158,91 +158,91 @@ class TestCommisEmitter:
         assert emitter.critical_error_message == "SSH connection failed"
 
 
-class TestConciergeEmitter:
-    """Tests for ConciergeEmitter (aliased as ConciergeEmitter)."""
+class TestOikosEmitter:
+    """Tests for OikosEmitter (aliased as OikosEmitter)."""
 
-    def test_is_concierge_always_true(self):
-        """ConciergeEmitter.is_concierge is always True."""
-        emitter = ConciergeEmitter(
-            course_id=100,
+    def test_is_oikos_always_true(self):
+        """OikosEmitter.is_oikos is always True."""
+        emitter = OikosEmitter(
+            run_id=100,
             owner_id=1,
             message_id="msg-123",
         )
-        assert emitter.is_concierge is True
+        assert emitter.is_oikos is True
         assert emitter.is_commis is False
 
     def test_implements_protocol(self):
-        """ConciergeEmitter implements EventEmitter protocol."""
-        emitter = ConciergeEmitter(
-            course_id=100,
+        """OikosEmitter implements EventEmitter protocol."""
+        emitter = OikosEmitter(
+            run_id=100,
             owner_id=1,
             message_id="msg-123",
         )
         assert isinstance(emitter, EventEmitter)
 
     @pytest.mark.asyncio
-    async def test_emit_tool_started_emits_concierge_event(self):
-        """emit_tool_started always emits concierge_tool_started."""
-        emitter = ConciergeEmitter(
-            course_id=100,
+    async def test_emit_tool_started_emits_oikos_event(self):
+        """emit_tool_started always emits oikos_tool_started."""
+        emitter = OikosEmitter(
+            run_id=100,
             owner_id=1,
             message_id="msg-123",
             trace_id="12345678-1234-5678-1234-567812345678",
         )
 
-        with patch("zerg.services.event_store.append_course_event", new_callable=AsyncMock) as mock_emit:
+        with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
             await emitter.emit_tool_started("spawn_commis", "call_456", "task preview")
 
             mock_emit.assert_called_once()
             call_kwargs = mock_emit.call_args.kwargs
-            assert call_kwargs["event_type"] == "concierge_tool_started"
+            assert call_kwargs["event_type"] == "oikos_tool_started"
             assert call_kwargs["payload"]["owner_id"] == 1
             assert call_kwargs["payload"]["tool_name"] == "spawn_commis"
             assert call_kwargs["payload"]["trace_id"] == "12345678-1234-5678-1234-567812345678"
 
     @pytest.mark.asyncio
-    async def test_emit_tool_completed_emits_concierge_event(self):
-        """emit_tool_completed always emits concierge_tool_completed."""
-        emitter = ConciergeEmitter(
-            course_id=100,
+    async def test_emit_tool_completed_emits_oikos_event(self):
+        """emit_tool_completed always emits oikos_tool_completed."""
+        emitter = OikosEmitter(
+            run_id=100,
             owner_id=1,
             message_id="msg-123",
         )
 
-        with patch("zerg.services.event_store.append_course_event", new_callable=AsyncMock) as mock_emit:
+        with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
             await emitter.emit_tool_completed("spawn_commis", "call_456", 1000, "result preview")
 
             mock_emit.assert_called_once()
             call_kwargs = mock_emit.call_args.kwargs
-            assert call_kwargs["event_type"] == "concierge_tool_completed"
+            assert call_kwargs["event_type"] == "oikos_tool_completed"
             assert call_kwargs["payload"]["duration_ms"] == 1000
 
     @pytest.mark.asyncio
-    async def test_emit_tool_failed_emits_concierge_event(self):
-        """emit_tool_failed always emits concierge_tool_failed."""
-        emitter = ConciergeEmitter(
-            course_id=100,
+    async def test_emit_tool_failed_emits_oikos_event(self):
+        """emit_tool_failed always emits oikos_tool_failed."""
+        emitter = OikosEmitter(
+            run_id=100,
             owner_id=1,
             message_id="msg-123",
         )
 
-        with patch("zerg.services.event_store.append_course_event", new_callable=AsyncMock) as mock_emit:
+        with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
             await emitter.emit_tool_failed("spawn_commis", "call_456", 100, "commis failed")
 
             mock_emit.assert_called_once()
             call_kwargs = mock_emit.call_args.kwargs
-            assert call_kwargs["event_type"] == "concierge_tool_failed"
+            assert call_kwargs["event_type"] == "oikos_tool_failed"
             assert call_kwargs["payload"]["error"] == "commis failed"
 
 
 class TestNullEmitter:
     """Tests for NullEmitter."""
 
-    def test_is_neither_commis_nor_concierge(self):
-        """NullEmitter is neither commis nor concierge."""
+    def test_is_neither_commis_nor_oikos(self):
+        """NullEmitter is neither commis nor oikos."""
         emitter = NullEmitter()
         assert emitter.is_commis is False
-        assert emitter.is_concierge is False
+        assert emitter.is_oikos is False
 
     def test_implements_protocol(self):
         """NullEmitter implements EventEmitter protocol."""
@@ -277,7 +277,7 @@ class TestEmitterContext:
         commis_emitter = CommisEmitter(
             commis_id="test-commis",
             owner_id=1,
-            course_id=100,
+            run_id=100,
             job_id=50,
         )
 
@@ -296,7 +296,7 @@ class TestEmitterContext:
         commis_emitter = CommisEmitter(
             commis_id="test-commis",
             owner_id=1,
-            course_id=100,
+            run_id=100,
             job_id=50,
         )
 
@@ -319,7 +319,7 @@ class TestEmitterContext:
             commis_emitter = CommisEmitter(
                 commis_id="test-commis",
                 owner_id=1,
-                course_id=100,
+                run_id=100,
                 job_id=50,
             )
 
@@ -344,12 +344,12 @@ class TestEmitterIdentityGuarantee:
         emitter = CommisEmitter(
             commis_id="test-commis",
             owner_id=1,
-            course_id=100,
+            run_id=100,
             job_id=50,
         )
 
         # Call all emit methods multiple times
-        with patch("zerg.services.event_store.append_course_event", new_callable=AsyncMock) as mock_emit:
+        with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
             await emitter.emit_tool_started("a", "b", "c")
             await emitter.emit_tool_completed("a", "b", 1, "c")
             await emitter.emit_tool_failed("a", "b", 1, "c")
@@ -360,21 +360,21 @@ class TestEmitterIdentityGuarantee:
                 assert event_type.startswith("commis_"), f"Expected commis_* but got {event_type}"
 
     @pytest.mark.asyncio
-    async def test_concierge_emitter_always_emits_concierge_events(self):
-        """ConciergeEmitter ALWAYS emits concierge_* events, even if confused."""
-        emitter = ConciergeEmitter(
-            course_id=100,
+    async def test_oikos_emitter_always_emits_oikos_events(self):
+        """OikosEmitter ALWAYS emits oikos_* events, even if confused."""
+        emitter = OikosEmitter(
+            run_id=100,
             owner_id=1,
             message_id="msg-123",
         )
 
         # Call all emit methods multiple times
-        with patch("zerg.services.event_store.append_course_event", new_callable=AsyncMock) as mock_emit:
+        with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
             await emitter.emit_tool_started("a", "b", "c")
             await emitter.emit_tool_completed("a", "b", 1, "c")
             await emitter.emit_tool_failed("a", "b", 1, "c")
 
-            # ALL calls should be concierge_* events
+            # ALL calls should be oikos_* events
             for call in mock_emit.call_args_list:
                 event_type = call.kwargs["event_type"]
-                assert event_type.startswith("concierge_"), f"Expected concierge_* but got {event_type}"
+                assert event_type.startswith("oikos_"), f"Expected oikos_* but got {event_type}"

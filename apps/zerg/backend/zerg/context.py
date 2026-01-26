@@ -7,14 +7,14 @@ without modifying function signatures.
 
 Usage:
     # In CommisRunner.run_commis():
-    ctx = CommisContext(commis_id="...", owner_id=1, course_id="...")
+    ctx = CommisContext(commis_id="...", owner_id=1, run_id="...")
     token = set_commis_context(ctx)
     try:
         await fiche.run()
     finally:
         reset_commis_context(token)
 
-    # In concierge_react_engine._call_tool_async():
+    # In oikos_react_engine._call_tool_async():
     ctx = get_commis_context()
     if ctx:
         await emit_tool_started_event(ctx, tool_name, ...)
@@ -59,12 +59,12 @@ class CommisContext:
         Unique identifier for the commis (e.g., "2024-12-05T16-30-00_disk-check")
     owner_id
         User ID that owns this commis's fiche
-    course_id
-        Optional concierge course ID for correlating events
+    run_id
+        Optional oikos run ID for correlating events
     job_id
         Optional CommisJob ID for roundabout event correlation
     trace_id
-        Optional trace ID for end-to-end debugging (inherited from concierge)
+        Optional trace ID for end-to-end debugging (inherited from oikos)
     task
         Task description (first 100 chars)
     tool_calls
@@ -77,7 +77,7 @@ class CommisContext:
 
     commis_id: str
     owner_id: int | None = None
-    course_id: int | None = None
+    run_id: int | None = None
     job_id: int | None = None
     trace_id: str | None = None
     task: str = ""
@@ -129,7 +129,7 @@ _commis_ctx: ContextVar[CommisContext | None] = ContextVar("commis_ctx", default
 def get_commis_context() -> CommisContext | None:
     """Get the current commis context, if running inside a commis.
 
-    Returns None if not in a commis context (e.g., concierge or direct fiche call).
+    Returns None if not in a commis context (e.g., oikos or direct fiche call).
     """
     return _commis_ctx.get()
 

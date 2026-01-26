@@ -16,9 +16,9 @@ from sqlalchemy.orm import Session
 
 from zerg.database import get_db
 from zerg.dependencies.auth import require_admin
-from zerg.models.enums import CourseStatus
+from zerg.models.enums import RunStatus
 from zerg.models.models import CommisJob
-from zerg.models.models import Course
+from zerg.models.models import Run
 from zerg.models.models import Runner
 
 # Secret patterns to redact (same as trace_debugger)
@@ -61,12 +61,12 @@ async def system_health(
     runner_counts = db.query(Runner.status, func.count(Runner.id)).group_by(Runner.status).all()
     commis_pool = {status: count for status, count in runner_counts}
 
-    # Recent errors: count failed courses in last hour
+    # Recent errors: count failed runs in last hour
     error_count = (
-        db.query(func.count(Course.id))
+        db.query(func.count(Run.id))
         .filter(
-            Course.status == CourseStatus.FAILED,
-            Course.created_at >= hour_ago,
+            Run.status == RunStatus.FAILED,
+            Run.created_at >= hour_ago,
         )
         .scalar()
         or 0
@@ -85,7 +85,7 @@ async def system_health(
 
     # Determine overall status
     # Logic:
-    # - unhealthy: Many errors (>10) in both course and commis categories
+    # - unhealthy: Many errors (>10) in both run and commis categories
     # - degraded: Some errors (>5), or all registered runners are offline
     # - healthy: Low errors and at least some runners online (or no runners registered)
     status = "healthy"
@@ -105,7 +105,7 @@ async def system_health(
 
     return {
         "commis": commis_pool,
-        "recent_course_errors": error_count,
+        "recent_run_errors": error_count,
         "recent_commis_errors": commis_error_count,
         "status": status,
         "checked_at": now.isoformat(),
@@ -121,18 +121,18 @@ async def error_analysis(
 ):
     """Error frequency and patterns (admin only).
 
-    Returns recent failed courses with error details for analysis.
+    Returns recent failed runs with error details for analysis.
     """
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-    # Get failed courses
-    course_errors = (
-        db.query(Course)
+    # Get failed runs
+    run_errors = (
+        db.query(Run)
         .filter(
-            Course.status == CourseStatus.FAILED,
-            Course.created_at >= since,
+            Run.status == RunStatus.FAILED,
+            Run.created_at >= since,
         )
-        .order_by(Course.created_at.desc())
+        .order_by(Run.created_at.desc())
         .limit(limit)
         .all()
     )
@@ -150,14 +150,14 @@ async def error_analysis(
     )
 
     return {
-        "course_errors": [
+        "run_errors": [
             {
                 "id": e.id,
                 "error": _redact_string(e.error[:200] if e.error else None),
                 "created_at": e.created_at.isoformat() if e.created_at else None,
                 "trace_id": str(e.trace_id) if e.trace_id else None,
             }
-            for e in course_errors
+            for e in run_errors
         ],
         "commis_errors": [
             {
@@ -169,7 +169,7 @@ async def error_analysis(
             }
             for e in commis_errors
         ],
-        "total_course_errors": len(course_errors),
+        "total_run_errors": len(run_errors),
         "total_commis_errors": len(commis_errors),
         "hours": hours,
     }
@@ -183,24 +183,24 @@ async def performance_metrics(
 ):
     """P50/P95 latency metrics (admin only).
 
-    Returns latency percentiles for concierge courses.
+    Returns latency percentiles for oikos runs.
     Limited to 10000 samples to prevent memory issues.
     """
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-    # Get durations for completed courses, limited and ordered for consistent sampling
-    courses = (
-        db.query(Course.duration_ms)
+    # Get durations for completed runs, limited and ordered for consistent sampling
+    runs = (
+        db.query(Run.duration_ms)
         .filter(
-            Course.created_at >= since,
-            Course.duration_ms.isnot(None),
+            Run.created_at >= since,
+            Run.duration_ms.isnot(None),
         )
-        .order_by(Course.created_at.desc())
+        .order_by(Run.created_at.desc())
         .limit(10000)  # Cap to prevent memory issues
         .all()
     )
 
-    durations = sorted([r.duration_ms for r in courses if r.duration_ms is not None])
+    durations = sorted([r.duration_ms for r in runs if r.duration_ms is not None])
 
     if not durations:
         return {"p50": None, "p95": None, "p99": None, "count": 0, "hours": hours}

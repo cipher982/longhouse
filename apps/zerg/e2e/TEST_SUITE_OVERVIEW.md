@@ -16,7 +16,7 @@ make test-e2e-ui
 ## What to run while iterating
 
 - `tests/unified-frontend.spec.ts` — unified SPA smoke tests (routing + basic UI)
-- `tests/chat_functional.spec.ts` and `tests/chat_token_streaming.spec.ts` — Jarvis chat behavior
+- `tests/chat_functional.spec.ts` and `tests/chat_token_streaming.spec.ts` — Oikos chat behavior
 - `tests/dashboard.basic.spec.ts` — dashboard basics
 - `tests/ws_envelope_e2e.spec.ts` — WS contract sanity
 

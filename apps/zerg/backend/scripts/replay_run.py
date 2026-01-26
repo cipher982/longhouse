@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Golden Run Replay Harness for testing concierge prompt changes.
+"""Golden Run Replay Harness for testing oikos prompt changes.
 
-This script replays a concierge run using a live LLM while mocking tool results.
+This script replays a oikos run using a live LLM while mocking tool results.
 Mode: "Tier 2" - Live LLM + mocked tools (not deterministic replay).
 
 Key properties:
 - **Isolated by default**: runs in a new replay thread so it doesn't pollute the user's
-  long-lived concierge thread (important for repeated prompt iteration).
+  long-lived oikos thread (important for repeated prompt iteration).
 - **Safe by default**: blocks side-effectful tools unless explicitly allowed.
 
 Usage (run from backend directory):
     cd apps/zerg/backend
-    uv run python scripts/replay_run.py <course_id>
-    uv run python scripts/replay_run.py <course_id> --dry-run
+    uv run python scripts/replay_run.py <run_id>
+    uv run python scripts/replay_run.py <run_id> --dry-run
 
 Example:
     uv run python scripts/replay_run.py 42 --dry-run
@@ -44,13 +44,13 @@ from sqlalchemy.exc import OperationalError
 from zerg.crud import crud
 from zerg.database import get_db
 from zerg.managers.fiche_runner import FicheRunner
-from zerg.models.enums import CourseStatus
-from zerg.models.enums import CourseTrigger
+from zerg.models.enums import RunStatus
+from zerg.models.enums import RunTrigger
 from zerg.models.enums import ThreadType
-from zerg.models.models import Course
+from zerg.models.models import Run
 from zerg.models.models import ThreadMessage
 from zerg.models.models import CommisJob
-from zerg.services.concierge_service import ConciergeService
+from zerg.services.oikos_service import OikosService
 from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.tools.unified_access import get_tool_resolver
 
@@ -78,7 +78,7 @@ def normalize_datetime(dt: datetime | None) -> datetime | None:
     """Normalize a datetime to UTC timezone-aware.
 
     Handles the timezone mismatch between:
-    - Course.started_at (naive datetime)
+    - Run.started_at (naive datetime)
     - ThreadMessage.sent_at (timezone-aware datetime)
 
     Args:
@@ -98,9 +98,9 @@ def normalize_datetime(dt: datetime | None) -> datetime | None:
 class MockedSpawnCommis:
     """Mock spawn_commis that returns cached results from original run."""
 
-    def __init__(self, db: Session, original_course_id: int, stats: ReplayStats, *, match_threshold: float = 0.7):
+    def __init__(self, db: Session, original_run_id: int, stats: ReplayStats, *, match_threshold: float = 0.7):
         self.db = db
-        self.original_course_id = original_course_id
+        self.original_run_id = original_run_id
         self.stats = stats
         self.match_threshold = match_threshold
         self.artifact_store = CommisArtifactStore()
@@ -109,7 +109,7 @@ class MockedSpawnCommis:
 
     def _load_original_commis(self) -> dict:
         """Load commis jobs from the original run."""
-        jobs = self.db.query(CommisJob).filter(CommisJob.concierge_course_id == self.original_course_id).all()
+        jobs = self.db.query(CommisJob).filter(CommisJob.oikos_run_id == self.original_run_id).all()
 
         cached = {}
         for job in jobs:
@@ -122,7 +122,7 @@ class MockedSpawnCommis:
                 "error": job.error,
             }
 
-        logger.info(f"Loaded {len(cached)} cached commis results from run {self.original_course_id}")
+        logger.info(f"Loaded {len(cached)} cached commis results from run {self.original_run_id}")
         return cached
 
     def _find_matching_job(self, task: str) -> dict | None:
@@ -291,7 +291,7 @@ class ToolMocker:
 
 
 SAFE_DEFAULT_TOOLS = {
-    # Concierge/commis inspection (read-only)
+    # Oikos/commis inspection (read-only)
     "list_commis",
     "read_commis_result",
     "read_commis_file",
@@ -308,13 +308,13 @@ SAFE_DEFAULT_TOOLS = {
 
 
 def utc_now_naive() -> datetime:
-    """UTC 'naive' timestamp (matches existing DB convention for Course timestamps)."""
+    """UTC 'naive' timestamp (matches existing DB convention for Run timestamps)."""
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def list_recent_runs(db: Session, limit: int = 20) -> None:
-    """Print recent Course rows to help find replay targets."""
-    runs = db.query(Course).order_by(Course.id.desc()).limit(limit).all()
+    """Print recent Run rows to help find replay targets."""
+    runs = db.query(Run).order_by(Run.id.desc()).limit(limit).all()
 
     print("\n" + "=" * 80)
     print(f"RECENT RUNS (showing {len(runs)})")
@@ -328,10 +328,10 @@ def list_recent_runs(db: Session, limit: int = 20) -> None:
         created_at = run.created_at.isoformat() if run.created_at else "-"
         print(f"{run.id:<10} {status:<12} {run.thread_id:<10} {run.fiche_id:<10} {duration:<10} {created_at}")
 
-    print("\nTip: pick a course_id and re-run with: uv run python scripts/replay_run.py <course_id> --dry-run")
+    print("\nTip: pick a run_id and re-run with: uv run python scripts/replay_run.py <run_id> --dry-run")
 
 
-def get_run_time_window(run: Course) -> tuple[datetime | None, datetime | None, bool]:
+def get_run_time_window(run: Run) -> tuple[datetime | None, datetime | None, bool]:
     """Return (start, end, valid) for message-window filtering."""
     run_start = normalize_datetime(run.started_at) or normalize_datetime(run.created_at)
     run_end = normalize_datetime(run.finished_at)
@@ -339,7 +339,7 @@ def get_run_time_window(run: Course) -> tuple[datetime | None, datetime | None, 
     return run_start, run_end, time_window_valid
 
 
-def find_task_message(db: Session, run: Course) -> tuple[ThreadMessage | None, bool]:
+def find_task_message(db: Session, run: Run) -> tuple[ThreadMessage | None, bool]:
     """Find the user message representing the task for this run."""
     run_start, run_end, time_window_valid = get_run_time_window(run)
 
@@ -360,7 +360,7 @@ def find_task_message(db: Session, run: Course) -> tuple[ThreadMessage | None, b
     return (user_msgs[0] if time_window_valid else user_msgs[-1]), time_window_valid
 
 
-def print_header(original_run: Course):
+def print_header(original_run: Run):
     """Print header with original run info."""
     print("\n" + "=" * 80)
     print("GOLDEN RUN REPLAY HARNESS")
@@ -373,16 +373,16 @@ def print_header(original_run: Course):
     print("=" * 80)
 
 
-def get_run_summary(db: Session, run: Course) -> dict:
+def get_run_summary(db: Session, run: Run) -> dict:
     """Extract summary data from a run, scoped to run's time window.
 
     IMPORTANT: Messages are filtered to only those within the run's time window
     (started_at to finished_at) to avoid counting messages from other runs
-    on the same long-lived concierge thread.
+    on the same long-lived oikos thread.
 
     Args:
         db: Database session
-        run: The Course to summarize
+        run: The Run to summarize
 
     Returns:
         Dictionary with task, tool_calls, commis, result, duration_ms, time_window_valid
@@ -414,7 +414,7 @@ def get_run_summary(db: Session, run: Course) -> dict:
     tool_call_count = sum(len(m.tool_calls) for m in messages if m.tool_calls)
 
     # Get commis spawned by this specific run (uses run.id, not time window)
-    commis = db.query(CommisJob).filter(CommisJob.concierge_course_id == run.id).all()
+    commis = db.query(CommisJob).filter(CommisJob.oikos_run_id == run.id).all()
 
     # Get final result (last assistant message with content in the time window)
     assistant_msgs = [m for m in messages if m.role == "assistant" and m.content]
@@ -476,7 +476,7 @@ def print_comparison(original: dict, replay: dict, stats: ReplayStats):
 def build_replay_thread(
     db: Session,
     *,
-    original_run: Course,
+    original_run: Run,
     replay_fiche,
     task_message: ThreadMessage,
     max_context_messages: int | None,
@@ -489,7 +489,7 @@ def build_replay_thread(
         active=False,
         fiche_state={
             "replay": {
-                "original_course_id": original_run.id,
+                "original_run_id": original_run.id,
                 "original_thread_id": original_run.thread_id,
                 "created_at": utc_now_naive().isoformat(),
             }
@@ -563,7 +563,7 @@ def make_blocked_tool(tool_name: str, stats: ReplayStats) -> tuple[Callable, Cal
 
 async def replay_run(
     db: Session,
-    course_id: int,
+    run_id: int,
     *,
     dry_run: bool = False,
     match_threshold: float = 0.7,
@@ -572,11 +572,11 @@ async def replay_run(
     allow_tools: list[str] | None = None,
     cleanup: bool = False,
 ):
-    """Replay a concierge run with mocked tools."""
+    """Replay a oikos run with mocked tools."""
     # Load original run
-    original_run = db.query(Course).filter(Course.id == course_id).first()
+    original_run = db.query(Run).filter(Run.id == run_id).first()
     if not original_run:
-        print(f"❌ Run {course_id} not found")
+        print(f"❌ Run {run_id} not found")
         return
 
     print_header(original_run)
@@ -595,9 +595,9 @@ async def replay_run(
     if not time_window_valid:
         print("\n⚠️  WARNING: Run has no started_at/created_at; time window may include other runs on this thread")
 
-    # Always refresh concierge fiche (pulls latest prompt + tool allowlist from templates/user context)
-    concierge_service = ConciergeService(db)
-    replay_fiche = concierge_service.get_or_create_concierge_fiche(original_run.fiche.owner_id)
+    # Always refresh oikos fiche (pulls latest prompt + tool allowlist from templates/user context)
+    oikos_service = OikosService(db)
+    replay_fiche = oikos_service.get_or_create_oikos_fiche(original_run.fiche.owner_id)
 
     allowed_tool_names = list(getattr(replay_fiche, "allowed_tools", None) or [])
     allow_tools_set = set(allow_tools or [])
@@ -655,11 +655,11 @@ async def replay_run(
         max_context_messages=max_context_messages,
     )
 
-    replay_run_row = Course(
+    replay_run_row = Run(
         fiche_id=replay_fiche.id,
         thread_id=replay_thread.id,
-        status=CourseStatus.RUNNING,
-        trigger=CourseTrigger.API,
+        status=RunStatus.RUNNING,
+        trigger=RunTrigger.API,
         correlation_id=f"replay:{original_run.id}:{utc_now_naive().isoformat()}",
         started_at=utc_now_naive(),
     )
@@ -685,7 +685,7 @@ async def replay_run(
         print(f"Tool policy:  {'ALLOW ALL' if allow_all_tools else 'SAFE DEFAULT'}")
 
     stats = ReplayStats()
-    mock_spawn = MockedSpawnCommis(db, course_id, stats, match_threshold=match_threshold)
+    mock_spawn = MockedSpawnCommis(db, run_id, stats, match_threshold=match_threshold)
 
     start_time = datetime.now(timezone.utc)
 
@@ -712,7 +712,7 @@ async def replay_run(
             end_time = datetime.now(timezone.utc)
             duration_ms = int((end_time - start_time).total_seconds() * 1000)
 
-            replay_run_row.status = CourseStatus.SUCCESS
+            replay_run_row.status = RunStatus.SUCCESS
             replay_run_row.finished_at = end_time.replace(tzinfo=None)
             replay_run_row.duration_ms = duration_ms
             if runner.usage_total_tokens:
@@ -721,7 +721,7 @@ async def replay_run(
             db.commit()
 
             print("\n✅ Replay complete: success")
-            print(f"   Replay course_id: {replay_run_row.id}")
+            print(f"   Replay run_id: {replay_run_row.id}")
 
             replay_summary = get_run_summary(db, replay_run_row)
             replay_summary["result"] = result_text or "(no result)"
@@ -733,7 +733,7 @@ async def replay_run(
             end_time = datetime.now(timezone.utc)
             duration_ms = int((end_time - start_time).total_seconds() * 1000)
 
-            replay_run_row.status = CourseStatus.FAILED
+            replay_run_row.status = RunStatus.FAILED
             replay_run_row.finished_at = end_time.replace(tzinfo=None)
             replay_run_row.duration_ms = duration_ms
             replay_run_row.error = str(e)
@@ -759,8 +759,8 @@ async def replay_run(
 
 def main():
     """CLI entry point."""
-    parser = argparse.ArgumentParser(description="Replay a concierge run with mocked tools to test prompt changes")
-    parser.add_argument("course_id", type=int, nargs="?", help="Run ID to replay")
+    parser = argparse.ArgumentParser(description="Replay a oikos run with mocked tools to test prompt changes")
+    parser.add_argument("run_id", type=int, nargs="?", help="Run ID to replay")
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -798,7 +798,7 @@ def main():
     parser.add_argument(
         "--allow-all-tools",
         action="store_true",
-        help="Allow all concierge tools (dangerous: can send email / make network calls)",
+        help="Allow all oikos tools (dangerous: can send email / make network calls)",
     )
     parser.add_argument(
         "--list-recent",
@@ -830,13 +830,13 @@ def main():
             list_recent_runs(db, limit=args.list_recent)
             return
 
-        if args.course_id is None:
-            parser.error("course_id is required unless --list-recent is used")
+        if args.run_id is None:
+            parser.error("run_id is required unless --list-recent is used")
 
         asyncio.run(
             replay_run(
                 db,
-                args.course_id,
+                args.run_id,
                 dry_run=args.dry_run,
                 match_threshold=args.match_threshold,
                 max_context_messages=args.max_context_messages,

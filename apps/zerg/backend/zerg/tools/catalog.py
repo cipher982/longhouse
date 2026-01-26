@@ -17,8 +17,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
-# Import concierge tool names from the single source of truth
-from zerg.tools.builtin.concierge_tools import CONCIERGE_TOOL_NAMES
+# Import oikos tool names from the single source of truth
+from zerg.tools.builtin.oikos_tools import OIKOS_TOOL_NAMES
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
@@ -30,13 +30,13 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # Core tools are pre-loaded for all fiches. This includes:
-# - All concierge tools (for commis coordination)
+# - All oikos tools (for commis coordination)
 # - Tool discovery tools (for lazy loading)
 # - Common utilities
 #
-# NOTE: CONCIERGE_TOOL_NAMES is imported from concierge_tools.py
+# NOTE: OIKOS_TOOL_NAMES is imported from oikos_tools.py
 # which is the single source of truth. Do NOT duplicate tool names here.
-CORE_TOOLS: frozenset[str] = CONCIERGE_TOOL_NAMES | frozenset(
+CORE_TOOLS: frozenset[str] = OIKOS_TOOL_NAMES | frozenset(
     [
         # User interaction
         "contact_user",
@@ -74,15 +74,15 @@ CATEGORY_PREFIXES = {
     "knowledge_": "knowledge",
     "web_": "web",
     "http_": "web",
-    "spawn_commis": "concierge",
-    "spawn_workspace_commis": "concierge",
-    "list_commis": "concierge",
-    "read_commis": "concierge",
-    "get_commis_evidence": "concierge",
-    "get_tool_output": "concierge",
-    "grep_commis": "concierge",
-    "get_commis": "concierge",
-    "contact_user": "concierge",
+    "spawn_commis": "oikos",
+    "spawn_workspace_commis": "oikos",
+    "list_commis": "oikos",
+    "read_commis": "oikos",
+    "get_commis_evidence": "oikos",
+    "get_tool_output": "oikos",
+    "grep_commis": "oikos",
+    "get_commis": "oikos",
+    "contact_user": "oikos",
     "get_current_": "personal",
     "get_whoop_": "personal",
     "search_notes": "personal",
@@ -283,7 +283,7 @@ def format_catalog_for_prompt(
 
     # Category display order
     category_order = [
-        "concierge",
+        "oikos",
         "web",
         "messaging",
         "github",

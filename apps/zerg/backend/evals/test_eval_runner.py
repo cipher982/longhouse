@@ -2,7 +2,7 @@
 
 This module generates pytest test cases from YAML datasets.
 Each test case:
-1. Runs the concierge with the input task
+1. Runs the oikos with the input task
 2. Captures metrics
 3. Runs all assertions
 4. Reports pass/fail

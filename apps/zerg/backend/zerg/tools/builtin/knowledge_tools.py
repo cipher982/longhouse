@@ -53,7 +53,7 @@ def knowledge_search(query: str, limit: int = 5) -> List[dict]:
     from zerg.crud import knowledge_crud
     from zerg.database import db_session
 
-    # Get current user from execution context (V1.1: supports both Commis and Concierge)
+    # Get current user from execution context (V1.1: supports both Commis and Oikos)
     # Priority: CommisContext > CredentialResolver (set by FicheRunner for all runs)
     owner_id = None
 
@@ -62,7 +62,7 @@ def knowledge_search(query: str, limit: int = 5) -> List[dict]:
     if ctx is not None and ctx.owner_id is not None:
         owner_id = ctx.owner_id
     else:
-        # Fall back to CredentialResolver (set by FicheRunner for Concierge runs)
+        # Fall back to CredentialResolver (set by FicheRunner for Oikos runs)
         resolver = get_credential_resolver()
         if resolver is not None and resolver.owner_id is not None:
             owner_id = resolver.owner_id

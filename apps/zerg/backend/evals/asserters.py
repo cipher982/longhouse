@@ -3,7 +3,7 @@
 This module provides assertion functions that validate eval results:
 - contains: Text contains substring
 - regex: Text matches regex pattern
-- tool_called: Concierge called specific tool
+- tool_called: Oikos called specific tool
 - commis_spawned: Number of commis spawned
 - latency_ms: Execution time bounds
 - total_tokens: Token usage bounds
@@ -258,7 +258,7 @@ def assert_commis_result_contains(
     # Get commis ordered by created_at (ordinal indexing)
     commis = (
         db_session.query(CommisJob)
-        .filter(CommisJob.concierge_course_id == metrics.course_id)
+        .filter(CommisJob.oikos_run_id == metrics.run_id)
         .order_by(CommisJob.created_at)
         .all()
     )
@@ -309,7 +309,7 @@ def assert_commis_tool_called(
         (passed, message) tuple
     """
     from zerg.models.models import CommisJob
-    from zerg.models.course_event import CourseEvent
+    from zerg.models.run_event import RunEvent
 
     if not hasattr(metrics, "_db_session"):
         return False, "DB session not available in metrics"
@@ -319,7 +319,7 @@ def assert_commis_tool_called(
     # Get commis ordered by created_at (ordinal indexing)
     commis = (
         db_session.query(CommisJob)
-        .filter(CommisJob.concierge_course_id == metrics.course_id)
+        .filter(CommisJob.oikos_run_id == metrics.run_id)
         .order_by(CommisJob.created_at)
         .all()
     )
@@ -331,12 +331,12 @@ def assert_commis_tool_called(
     if not job.commis_id:
         return False, f"Commis {commis_id} has no commis_id (not started yet)"
 
-    # Commis tool calls are emitted as AgentRunEvents on the *concierge run*.
-    # See concierge_react_engine._call_tool_async: it uses ctx.course_id (concierge course_id)
+    # Commis tool calls are emitted as AgentRunEvents on the *oikos run*.
+    # See oikos_react_engine._call_tool_async: it uses ctx.run_id (oikos run_id)
     # and includes commis_id + tool_name in the payload.
-    events = db_session.query(CourseEvent).filter(CourseEvent.course_id == metrics.course_id).all()
+    events = db_session.query(RunEvent).filter(RunEvent.run_id == metrics.run_id).all()
 
-    def _matches(event: CourseEvent) -> bool:
+    def _matches(event: RunEvent) -> bool:
         payload = event.payload or {}
         return payload.get("commis_id") == job.commis_id and payload.get("tool_name") == tool
 
@@ -381,7 +381,7 @@ def assert_artifact_exists(
     # Get commis ordered by created_at (ordinal indexing)
     commis = (
         db_session.query(CommisJob)
-        .filter(CommisJob.concierge_course_id == metrics.course_id)
+        .filter(CommisJob.oikos_run_id == metrics.run_id)
         .order_by(CommisJob.created_at)
         .all()
     )
@@ -433,7 +433,7 @@ def assert_artifact_contains(
     # Get commis ordered by created_at (ordinal indexing)
     commis = (
         db_session.query(CommisJob)
-        .filter(CommisJob.concierge_course_id == metrics.course_id)
+        .filter(CommisJob.oikos_run_id == metrics.run_id)
         .order_by(CommisJob.created_at)
         .all()
     )

@@ -1,6 +1,6 @@
 """Trace debugging service for unified trace timeline analysis.
 
-Provides trace_id-based debugging across courses, commis_jobs, and llm_audit_log tables.
+Provides trace_id-based debugging across runs, commis_jobs, and llm_audit_log tables.
 This service extracts the logic from scripts/debug_trace.py into a reusable service class
 for API exposure.
 """
@@ -31,7 +31,7 @@ class TimelineEvent:
 
     timestamp: datetime
     event_type: str
-    source: str  # 'course', 'commis', 'llm'
+    source: str  # 'run', 'commis', 'llm'
     details: dict[str, Any]
     is_error: bool = False
     duration_ms: int | None = None
@@ -58,10 +58,10 @@ class TraceDebugger:
         """Query all tables for a given trace_id with limits to prevent memory issues."""
         from zerg.models.llm_audit import LLMAuditLog
         from zerg.models.models import CommisJob
-        from zerg.models.models import Course
+        from zerg.models.models import Run
 
-        # Get courses with this trace, ordered by created_at desc to get most recent on long traces
-        courses = self.db.query(Course).filter(Course.trace_id == trace_id).order_by(Course.created_at.desc()).limit(max_items).all()
+        # Get runs with this trace, ordered by created_at desc to get most recent on long traces
+        runs = self.db.query(Run).filter(Run.trace_id == trace_id).order_by(Run.created_at.desc()).limit(max_items).all()
 
         # Get commis jobs with this trace, ordered by created_at desc
         commis = (
@@ -78,7 +78,7 @@ class TraceDebugger:
         )
 
         return {
-            "courses": courses,
+            "runs": runs,
             "commis": commis,
             "llm_logs": llm_logs,
         }
@@ -87,43 +87,43 @@ class TraceDebugger:
         """Build a unified timeline from all data sources."""
         events = []
 
-        # Add course events
-        for course in data["courses"]:
-            # Course started
-            if course.started_at:
-                ts = course.started_at.replace(tzinfo=timezone.utc) if course.started_at.tzinfo is None else course.started_at
+        # Add run events
+        for run in data["runs"]:
+            # Run started
+            if run.started_at:
+                ts = run.started_at.replace(tzinfo=timezone.utc) if run.started_at.tzinfo is None else run.started_at
                 events.append(
                     TimelineEvent(
                         timestamp=ts,
-                        event_type="concierge.course.started",
-                        source="course",
+                        event_type="oikos.run.started",
+                        source="run",
                         details={
-                            "course_id": course.id,
-                            "fiche_id": course.fiche_id,
-                            "thread_id": course.thread_id,
-                            "model": course.model,
-                            "status": course.status.value if course.status else None,
+                            "run_id": run.id,
+                            "fiche_id": run.fiche_id,
+                            "thread_id": run.thread_id,
+                            "model": run.model,
+                            "status": run.status.value if run.status else None,
                         },
                     )
                 )
 
-            # Course finished
-            if course.finished_at:
-                ts = course.finished_at.replace(tzinfo=timezone.utc) if course.finished_at.tzinfo is None else course.finished_at
-                is_error = course.status and course.status.value in ("failed", "error")
+            # Run finished
+            if run.finished_at:
+                ts = run.finished_at.replace(tzinfo=timezone.utc) if run.finished_at.tzinfo is None else run.finished_at
+                is_error = run.status and run.status.value in ("failed", "error")
                 events.append(
                     TimelineEvent(
                         timestamp=ts,
-                        event_type=f"concierge.course.{course.status.value if course.status else 'finished'}",
-                        source="course",
+                        event_type=f"oikos.run.{run.status.value if run.status else 'finished'}",
+                        source="run",
                         details={
-                            "course_id": course.id,
-                            "duration_ms": course.duration_ms,
-                            "total_tokens": course.total_tokens,
-                            "error": course.error[:100] if course.error else None,
+                            "run_id": run.id,
+                            "duration_ms": run.duration_ms,
+                            "total_tokens": run.total_tokens,
+                            "error": run.error[:100] if run.error else None,
                         },
                         is_error=is_error,
-                        duration_ms=course.duration_ms,
+                        duration_ms=run.duration_ms,
                     )
                 )
 
@@ -219,10 +219,10 @@ class TraceDebugger:
         """Detect common issues in the trace."""
         anomalies = []
 
-        # Check for failed courses
-        for course in data["courses"]:
-            if course.status and course.status.value == "failed":
-                anomalies.append(f"Course {course.id} FAILED: {course.error or 'no error message'}")
+        # Check for failed runs
+        for run in data["runs"]:
+            if run.status and run.status.value == "failed":
+                anomalies.append(f"Run {run.id} FAILED: {run.error or 'no error message'}")
 
         # Check for failed commis
         for commis in data["commis"]:
@@ -292,7 +292,7 @@ class TraceDebugger:
         query_limit = max(max_events, max_items)
         data = self._get_trace_data(trace_uuid, max_items=query_limit)
 
-        if not data["courses"] and not data["commis"] and not data["llm_logs"]:
+        if not data["runs"] and not data["commis"] and not data["llm_logs"]:
             return None
 
         # Build timeline
@@ -315,9 +315,9 @@ class TraceDebugger:
 
         # Determine overall status
         overall_status = "UNKNOWN"
-        for course in data["courses"]:
-            if course.status:
-                overall_status = course.status.value.upper()
+        for run in data["runs"]:
+            if run.status:
+                overall_status = run.status.value.upper()
                 break
 
         result = {
@@ -326,7 +326,7 @@ class TraceDebugger:
             "started_at": start_time.isoformat() if start_time else None,
             "duration_seconds": duration,
             "counts": {
-                "courses": len(data["courses"]),
+                "runs": len(data["runs"]),
                 "commis": len(data["commis"]),
                 "llm_calls": len(data["llm_logs"]),
             },
@@ -365,23 +365,21 @@ class TraceDebugger:
         Returns:
             List of recent traces with basic info
         """
-        from zerg.models.models import Course
+        from zerg.models.models import Run
 
-        # Get recent courses with trace_id set
-        courses = (
-            self.db.query(Course).filter(Course.trace_id.isnot(None)).order_by(Course.created_at.desc()).offset(offset).limit(limit).all()
-        )
+        # Get recent runs with trace_id set
+        runs = self.db.query(Run).filter(Run.trace_id.isnot(None)).order_by(Run.created_at.desc()).offset(offset).limit(limit).all()
 
         traces = []
-        for course in courses:
+        for run in runs:
             traces.append(
                 {
-                    "trace_id": str(course.trace_id) if course.trace_id else None,
-                    "course_id": course.id,
-                    "status": course.status.value if course.status else None,
-                    "model": course.model,
-                    "started_at": course.started_at.isoformat() if course.started_at else None,
-                    "duration_ms": course.duration_ms,
+                    "trace_id": str(run.trace_id) if run.trace_id else None,
+                    "run_id": run.id,
+                    "status": run.status.value if run.status else None,
+                    "model": run.model,
+                    "started_at": run.started_at.isoformat() if run.started_at else None,
+                    "duration_ms": run.duration_ms,
                 }
             )
 

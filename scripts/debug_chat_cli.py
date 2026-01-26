@@ -22,7 +22,7 @@ async def debug_chat_flow():
 
         try:
             # We need to manually handle the SSE stream from the POST request
-            async with client.stream("POST", f"{API_URL}/jarvis/chat", json=payload) as response:
+            async with client.stream("POST", f"{API_URL}/oikos/chat", json=payload) as response:
                 print(f"Response status: {response.status_code}")
 
                 run_id = None
@@ -64,7 +64,7 @@ async def debug_chat_flow():
 
         print(f"\n[2] Checking Database State for Run {run_id}...")
         # Check original run status
-        res = await client.get(f"{API_URL}/jarvis/runs/{run_id}")
+        res = await client.get(f"{API_URL}/oikos/runs/{run_id}")
         if res.status_code == 200:
             run_data = res.json()
             print(f"  Run {run_id} Status: {run_data['status']}")
@@ -74,7 +74,7 @@ async def debug_chat_flow():
         # Check for continuations
         print("\n[3] Searching for Continuations...")
         # We'll list recent runs and look for continuation_of_run_id == run_id
-        res = await client.get(f"{API_URL}/jarvis/runs?limit=10")
+        res = await client.get(f"{API_URL}/oikos/runs?limit=10")
         if res.status_code == 200:
             runs = res.json()
             # API returns list of summaries directly
@@ -87,7 +87,7 @@ async def debug_chat_flow():
                 print(f"     Summary: {continuation['summary']}")
 
                 # Fetch events for continuation to see if they were emitted
-                events_res = await client.get(f"{API_URL}/jarvis/runs/{cid}/events")
+                events_res = await client.get(f"{API_URL}/oikos/runs/{cid}/events")
                 events = events_res.json().get('events', [])
                 print(f"     Events count: {len(events)}")
                 if events:

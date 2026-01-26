@@ -99,9 +99,9 @@ def test_metrics_jsonl_creation(metrics_artifact_store):
 
 
 def test_read_commis_file_can_access_metrics(metrics_artifact_store):
-    """Verify that read_commis_file can access metrics.jsonl (for concierge access)."""
+    """Verify that read_commis_file can access metrics.jsonl (for oikos access)."""
     # Create a test commis with metrics
-    commis_id = metrics_artifact_store.create_commis("Test concierge access", config={})
+    commis_id = metrics_artifact_store.create_commis("Test oikos access", config={})
     metrics_artifact_store.start_commis(commis_id)
 
     # Create and flush metrics
@@ -123,7 +123,7 @@ def test_read_commis_file_can_access_metrics(metrics_artifact_store):
 
     metrics_artifact_store.complete_commis(commis_id, status="success")
 
-    # Verify concierge can read metrics.jsonl via read_commis_file
+    # Verify oikos can read metrics.jsonl via read_commis_file
     metrics_content = metrics_artifact_store.read_commis_file(commis_id, "metrics.jsonl")
 
     assert metrics_content, "metrics.jsonl should have content"

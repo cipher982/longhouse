@@ -750,7 +750,7 @@ async def configure_test_model(
     db: Session = Depends(get_db),
     current_user=Depends(require_admin),
 ):
-    """Configure the concierge fiche to use a test model.
+    """Configure the oikos fiche to use a test model.
 
     This is a TEST-ONLY endpoint for E2E tests that need deterministic LLM behavior.
     Only available when TESTING=1 is set.
@@ -782,19 +782,19 @@ async def configure_test_model(
         )
 
     try:
-        from zerg.services.concierge_service import ConciergeService
+        from zerg.services.oikos_service import OikosService
 
-        concierge_service = ConciergeService(db)
-        fiche = concierge_service.get_or_create_concierge_fiche(current_user.id)
+        oikos_service = OikosService(db)
+        fiche = oikos_service.get_or_create_oikos_fiche(current_user.id)
 
         # Update fiche model
         fiche.model = request.model
         db.commit()
 
-        logger.info(f"Configured concierge fiche {fiche.id} to use model: {request.model}")
+        logger.info(f"Configured oikos fiche {fiche.id} to use model: {request.model}")
 
         return {
-            "message": f"Concierge fiche configured to use {request.model}",
+            "message": f"Oikos fiche configured to use {request.model}",
             "fiche_id": fiche.id,
             "model": request.model,
         }

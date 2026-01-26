@@ -1,5 +1,5 @@
 import { config } from "../../lib/config";
-import { logger } from "../../jarvis/core/logger";
+import { logger } from "../../oikos/core/logger";
 
 export class ApiError extends Error {
   readonly status: number;

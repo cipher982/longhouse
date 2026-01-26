@@ -322,7 +322,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/threads/{thread_id}/courses": {
+    "/api/threads/{thread_id}/runs": {
         parameters: {
             query?: never;
             header?: never;
@@ -332,10 +332,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Start Thread Course
+         * Start Thread Run
          * @description Process any unprocessed messages in the thread and stream back the result.
          */
-        post: operations["start_thread_course_api_threads__thread_id__courses_post"];
+        post: operations["start_thread_run_api_threads__thread_id__runs_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -498,7 +498,7 @@ export interface paths {
         put?: never;
         /**
          * Configure Test Model
-         * @description Configure the concierge fiche to use a test model.
+         * @description Configure the oikos fiche to use a test model.
          *
          *     This is a TEST-ONLY endpoint for E2E tests that need deterministic LLM behavior.
          *     Only available when TESTING=1 is set.
@@ -1012,7 +1012,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/fiches/{fiche_id}/courses": {
+    "/api/fiches/{fiche_id}/runs": {
         parameters: {
             query?: never;
             header?: never;
@@ -1020,10 +1020,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List Courses
-         * @description Return latest *limit* courses for the given fiche (descending).
+         * List Runs
+         * @description Return latest *limit* runs for the given fiche (descending).
          */
-        get: operations["list_courses_api_fiches__fiche_id__courses_get"];
+        get: operations["list_runs_api_fiches__fiche_id__runs_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1032,15 +1032,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/courses/{course_id}": {
+    "/api/runs/{run_id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Course */
-        get: operations["get_course_api_courses__course_id__get"];
+        /** Get Run */
+        get: operations["get_run_api_runs__run_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2117,7 +2117,7 @@ export interface paths {
         patch: operations["patch_layout_api_graph_layout_patch"];
         trace?: never;
     };
-    "/api/jarvis/fiches": {
+    "/api/oikos/fiches": {
         parameters: {
             query?: never;
             header?: never;
@@ -2125,20 +2125,20 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List Jarvis Fiches
-         * @description List available fiches for Jarvis UI.
+         * List Oikos Fiches
+         * @description List available fiches for Oikos UI.
          *
          *     Returns a minimal summary of all active fiches including their schedules
-         *     and next course times. This powers the fiche selection UI in Jarvis.
+         *     and next run times. This powers the fiche selection UI in Oikos.
          *
          *     Args:
          *         db: Database session
-         *         current_user: Authenticated user (Jarvis service account)
+         *         current_user: Authenticated user (Oikos service account)
          *
          *     Returns:
          *         List of fiche summaries
          */
-        get: operations["list_jarvis_fiches_api_jarvis_fiches_get"];
+        get: operations["list_oikos_fiches_api_oikos_fiches_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2147,7 +2147,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/courses": {
+    "/api/oikos/runs": {
         parameters: {
             query?: never;
             header?: never;
@@ -2155,22 +2155,22 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List Jarvis Courses
-         * @description List recent fiche courses for Jarvis Task Inbox.
+         * List Oikos Runs
+         * @description List recent fiche runs for Oikos Task Inbox.
          *
-         *     Returns recent course history with summaries, filtered by fiche if specified.
-         *     This powers the Task Inbox UI in Jarvis showing all automated activity.
+         *     Returns recent run history with summaries, filtered by fiche if specified.
+         *     This powers the Task Inbox UI in Oikos showing all automated activity.
          *
          *     Args:
-         *         limit: Maximum number of courses to return (default 50)
+         *         limit: Maximum number of runs to return (default 50)
          *         fiche_id: Optional filter by specific fiche
          *         db: Database session
-         *         current_user: Authenticated user (Jarvis service account)
+         *         current_user: Authenticated user (Oikos service account)
          *
          *     Returns:
-         *         List of course summaries ordered by created_at descending
+         *         List of run summaries ordered by created_at descending
          */
-        get: operations["list_jarvis_courses_api_jarvis_courses_get"];
+        get: operations["list_oikos_runs_api_oikos_runs_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2179,7 +2179,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/courses/active": {
+    "/api/oikos/runs/active": {
         parameters: {
             query?: never;
             header?: never;
@@ -2187,22 +2187,22 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Active Course
-         * @description Get the user's currently running concierge course (if any).
+         * Get Active Run
+         * @description Get the user's currently running oikos run (if any).
          *
-         *     Returns the most recent RUNNING, WAITING, or DEFERRED course for the user's concierge fiche.
-         *     Returns 204 No Content if no active course exists.
+         *     Returns the most recent RUNNING, WAITING, or DEFERRED run for the user's oikos fiche.
+         *     Returns 204 No Content if no active run exists.
          *
-         *     This endpoint enables course reconnection after page refresh.
+         *     This endpoint enables run reconnection after page refresh.
          *
          *     Args:
          *         db: Database session
          *         current_user: Authenticated user (multi-tenant filtered)
          *
          *     Returns:
-         *         JSONResponse with course details if found, or 204 No Content
+         *         JSONResponse with run details if found, or 204 No Content
          */
-        get: operations["get_active_course_api_jarvis_courses_active_get"];
+        get: operations["get_active_run_api_oikos_runs_active_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2211,7 +2211,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/courses/{course_id}": {
+    "/api/oikos/runs/{run_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -2219,24 +2219,24 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Course Status
-         * @description Get current status of a specific course.
+         * Get Run Status
+         * @description Get current status of a specific run.
          *
          *     Returns detailed status including timing, errors, and result if completed.
-         *     This endpoint is used for polling course status after async task submission.
+         *     This endpoint is used for polling run status after async task submission.
          *
          *     Args:
-         *         course_id: ID of the course to query
+         *         run_id: ID of the run to query
          *         db: Database session
          *         current_user: Authenticated user (multi-tenant filtered)
          *
          *     Returns:
-         *         Course status with result if completed
+         *         Run status with result if completed
          *
          *     Raises:
-         *         HTTPException: 404 if course not found or not owned by user
+         *         HTTPException: 404 if run not found or not owned by user
          */
-        get: operations["get_course_status_api_jarvis_courses__course_id__get"];
+        get: operations["get_run_status_api_oikos_runs__run_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2245,7 +2245,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/courses/{course_id}/stream": {
+    "/api/oikos/runs/{run_id}/stream": {
         parameters: {
             query?: never;
             header?: never;
@@ -2253,22 +2253,22 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Attach To Course Stream
-         * @description Attach to an existing course's event stream.
+         * Attach To Run Stream
+         * @description Attach to an existing run's event stream.
          *
-         *     For RUNNING courses: Streams events via SSE as they occur.
-         *     For completed courses: Returns a single completion event and closes.
+         *     For RUNNING runs: Streams events via SSE as they occur.
+         *     For completed runs: Returns a single completion event and closes.
          *
-         *     This enables course reconnection after page refresh.
+         *     This enables run reconnection after page refresh.
          *
          *     Args:
-         *         course_id: ID of the course to attach to
+         *         run_id: ID of the run to attach to
          *         current_user: Authenticated user (multi-tenant filtered)
          *
          *     Returns:
          *         EventSourceResponse for SSE streaming
          */
-        get: operations["attach_to_course_stream_api_jarvis_courses__course_id__stream_get"];
+        get: operations["attach_to_run_stream_api_oikos_runs__run_id__stream_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2277,7 +2277,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/courses/{course_id}/events": {
+    "/api/oikos/runs/{run_id}/events": {
         parameters: {
             query?: never;
             header?: never;
@@ -2285,26 +2285,26 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Course Events
-         * @description Get events for a specific course.
+         * Get Run Events
+         * @description Get events for a specific run.
          *
-         *     Returns events stored during course execution, optionally filtered by type.
+         *     Returns events stored during run execution, optionally filtered by type.
          *     This endpoint is useful for E2E testing to verify tool calls and lifecycle events.
          *
          *     Args:
-         *         course_id: ID of the course to query
-         *         event_type: Optional filter by event type (e.g., "concierge_tool_started")
+         *         run_id: ID of the run to query
+         *         event_type: Optional filter by event type (e.g., "oikos_tool_started")
          *         limit: Maximum number of events to return (default 100)
          *         db: Database session
          *         current_user: Authenticated user (multi-tenant filtered)
          *
          *     Returns:
-         *         List of events for the course
+         *         List of events for the run
          *
          *     Raises:
-         *         HTTPException: 404 if course not found or not owned by user
+         *         HTTPException: 404 if run not found or not owned by user
          */
-        get: operations["get_course_events_api_jarvis_courses__course_id__events_get"];
+        get: operations["get_run_events_api_oikos_runs__run_id__events_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2313,7 +2313,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/courses/{course_id}/timeline": {
+    "/api/oikos/runs/{run_id}/timeline": {
         parameters: {
             query?: never;
             header?: never;
@@ -2321,14 +2321,14 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Course Timeline
-         * @description Get timing timeline for a specific course.
+         * Get Run Timeline
+         * @description Get timing timeline for a specific run.
          *
          *     Returns structured timing data with phase-based events and summary statistics.
-         *     This endpoint powers performance profiling and observability for Jarvis chat.
+         *     This endpoint powers performance profiling and observability for Oikos chat.
          *
          *     Args:
-         *         course_id: ID of the course to query
+         *         run_id: ID of the run to query
          *         db: Database session
          *         current_user: Authenticated user (multi-tenant filtered)
          *
@@ -2336,9 +2336,9 @@ export interface paths {
          *         Timeline with events and timing summary
          *
          *     Raises:
-         *         HTTPException: 404 if course not found or not owned by user
+         *         HTTPException: 404 if run not found or not owned by user
          */
-        get: operations["get_course_timeline_api_jarvis_courses__course_id__timeline_get"];
+        get: operations["get_run_timeline_api_oikos_runs__run_id__timeline_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2347,7 +2347,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/dispatch": {
+    "/api/oikos/dispatch": {
         parameters: {
             query?: never;
             header?: never;
@@ -2357,33 +2357,33 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Jarvis Dispatch
-         * @description Dispatch fiche task from Jarvis.
+         * Oikos Dispatch
+         * @description Dispatch fiche task from Oikos.
          *
-         *     Triggers immediate execution of a fiche task and returns course/thread IDs
-         *     for tracking. Jarvis can then listen to the SSE stream for updates.
+         *     Triggers immediate execution of a fiche task and returns run/thread IDs
+         *     for tracking. Oikos can then listen to the SSE stream for updates.
          *
          *     Args:
          *         request: Dispatch request with fiche_id and optional task override
          *         db: Database session
-         *         current_user: Authenticated user (Jarvis service account)
+         *         current_user: Authenticated user (Oikos service account)
          *
          *     Returns:
-         *         JarvisDispatchResponse with course and thread IDs
+         *         OikosDispatchResponse with run and thread IDs
          *
          *     Raises:
          *         404: Fiche not found
          *         409: Fiche already running
          *         500: Execution error
          */
-        post: operations["jarvis_dispatch_api_jarvis_dispatch_post"];
+        post: operations["oikos_dispatch_api_oikos_dispatch_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/concierge": {
+    "/api/oikos/run": {
         parameters: {
             query?: never;
             header?: never;
@@ -2393,18 +2393,18 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Jarvis Concierge
-         * @description Dispatch a task to the concierge fiche.
+         * Oikos Run
+         * @description Dispatch a task to the oikos fiche.
          *
-         *     The concierge is the "one brain" that coordinates commis and maintains
-         *     long-term context. Each user has a single concierge thread that persists
+         *     The oikos is the "one brain" that coordinates commis and maintains
+         *     long-term context. Each user has a single oikos thread that persists
          *     across sessions.
          *
          *     This endpoint:
-         *     1. Finds or creates the user's concierge thread (idempotent)
-         *     2. Creates a new course attached to that thread
-         *     3. Kicks off concierge execution in the background
-         *     4. Returns immediately with course_id and stream_url
+         *     1. Finds or creates the user's oikos thread (idempotent)
+         *     2. Creates a new run attached to that thread
+         *     3. Kicks off oikos execution in the background
+         *     4. Returns immediately with run_id and stream_url
          *
          *     Args:
          *         request: Task and optional context/preferences
@@ -2412,28 +2412,28 @@ export interface paths {
          *         current_user: Authenticated user
          *
          *     Returns:
-         *         JarvisConciergeResponse with course_id, thread_id, and stream_url
+         *         OikosRunResponse with run_id, thread_id, and stream_url
          *
          *     Example:
-         *         POST /api/jarvis/concierge
+         *         POST /api/oikos/run
          *         {"task": "Check my server health"}
          *
          *         Response:
          *         {
-         *             "course_id": 456,
+         *             "run_id": 456,
          *             "thread_id": 789,
          *             "status": "running",
-         *             "stream_url": "/api/stream/courses/456"
+         *             "stream_url": "/api/stream/runs/456"
          *         }
          */
-        post: operations["jarvis_concierge_api_jarvis_concierge_post"];
+        post: operations["oikos_run_api_oikos_run_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/concierge/{course_id}/cancel": {
+    "/api/oikos/run/{run_id}/cancel": {
         parameters: {
             query?: never;
             header?: never;
@@ -2443,31 +2443,31 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Jarvis Concierge Cancel
-         * @description Cancel a running concierge investigation.
+         * Oikos Run Cancel
+         * @description Cancel a running oikos investigation.
          *
-         *     Marks the course as cancelled and emits a cancellation event to SSE subscribers.
-         *     If the course is already complete, returns the current status without error.
+         *     Marks the run as cancelled and emits a cancellation event to SSE subscribers.
+         *     If the run is already complete, returns the current status without error.
          *
          *     Args:
-         *         course_id: The concierge course ID to cancel
+         *         run_id: The oikos run ID to cancel
          *         db: Database session
          *         current_user: Authenticated user
          *
          *     Returns:
-         *         JarvisCancelResponse with course status
+         *         OikosRunCancelResponse with run status
          *
          *     Raises:
-         *         HTTPException 404: If course not found or doesn't belong to user
+         *         HTTPException 404: If run not found or doesn't belong to user
          */
-        post: operations["jarvis_concierge_cancel_api_jarvis_concierge__course_id__cancel_post"];
+        post: operations["oikos_run_cancel_api_oikos_run__run_id__cancel_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/chat": {
+    "/api/oikos/chat": {
         parameters: {
             query?: never;
             header?: never;
@@ -2477,11 +2477,11 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Jarvis Chat
-         * @description Text chat endpoint - streams responses from Concierge.
+         * Oikos Chat
+         * @description Text chat endpoint - streams responses from Oikos.
          *
-         *     This endpoint provides a simpler alternative to /concierge for text-only
-         *     chat. It still uses the Concierge under the hood but returns an SSE stream
+         *     This endpoint provides a simpler alternative to /run for text-only
+         *     chat. It still uses the Oikos under the hood but returns an SSE stream
          *     directly instead of requiring a separate connection.
          *
          *     Args:
@@ -2492,22 +2492,22 @@ export interface paths {
          *         EventSourceResponse streaming chat responses
          *
          *     Example:
-         *         POST /api/jarvis/chat
+         *         POST /api/oikos/chat
          *         {"message": "What's the weather?"}
          *
          *         Streams SSE events:
-         *         - concierge_started: Chat processing started
-         *         - concierge_thinking: Concierge analyzing
-         *         - concierge_complete: Final response with result
+         *         - oikos_started: Chat processing started
+         *         - oikos_thinking: Oikos analyzing
+         *         - oikos_complete: Final response with result
          */
-        post: operations["jarvis_chat_api_jarvis_chat_post"];
+        post: operations["oikos_chat_api_oikos_chat_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/tts": {
+    "/api/oikos/tts": {
         parameters: {
             query?: never;
             header?: never;
@@ -2523,14 +2523,14 @@ export interface paths {
          *     Returns audio data directly in the response body.
          *     Content-Type will be audio/mpeg for MP3 format.
          */
-        post: operations["convert_text_to_speech_api_jarvis_tts_post"];
+        post: operations["convert_text_to_speech_api_oikos_tts_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/tts/json": {
+    "/api/oikos/tts/json": {
         parameters: {
             query?: never;
             header?: never;
@@ -2546,14 +2546,14 @@ export interface paths {
          *     Use this endpoint to check if TTS would succeed without actually
          *     generating the audio. Useful for validation.
          */
-        post: operations["convert_text_to_speech_json_api_jarvis_tts_json_post"];
+        post: operations["convert_text_to_speech_json_api_oikos_tts_json_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/tts/stream": {
+    "/api/oikos/tts/stream": {
         parameters: {
             query?: never;
             header?: never;
@@ -2567,7 +2567,7 @@ export interface paths {
          *     For now, this streams the complete audio once generated.
          *     Future: implement true streaming with ElevenLabs.
          */
-        get: operations["stream_text_to_speech_api_jarvis_tts_stream_get"];
+        get: operations["stream_text_to_speech_api_oikos_tts_stream_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2576,7 +2576,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/tts/status": {
+    "/api/oikos/tts/status": {
         parameters: {
             query?: never;
             header?: never;
@@ -2587,7 +2587,7 @@ export interface paths {
          * Get Tts Status
          * @description Get TTS service status and configuration.
          */
-        get: operations["get_tts_status_api_jarvis_tts_status_get"];
+        get: operations["get_tts_status_api_oikos_tts_status_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2596,7 +2596,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/tts/voices": {
+    "/api/oikos/tts/voices": {
         parameters: {
             query?: never;
             header?: never;
@@ -2613,7 +2613,7 @@ export interface paths {
          *     Returns:
          *         List of available voices with metadata
          */
-        get: operations["list_voices_api_jarvis_tts_voices_get"];
+        get: operations["list_voices_api_oikos_tts_voices_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2622,7 +2622,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/voice/turn": {
+    "/api/oikos/voice/turn": {
         parameters: {
             query?: never;
             header?: never;
@@ -2633,21 +2633,21 @@ export interface paths {
         put?: never;
         /**
          * Voice Turn
-         * @description Turn-based voice: audio -> transcript -> concierge response.
+         * @description Turn-based voice: audio -> transcript -> oikos response.
          *
          *     This endpoint is optimized for "Alexa-style" interactions:
          *     - User speaks once
          *     - System transcribes
-         *     - Concierge responds with text
+         *     - Oikos responds with text
          */
-        post: operations["voice_turn_api_jarvis_voice_turn_post"];
+        post: operations["voice_turn_api_oikos_voice_turn_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/auth": {
+    "/api/oikos/auth": {
         parameters: {
             query?: never;
             header?: never;
@@ -2657,20 +2657,20 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Jarvis Auth
-         * @description Deprecated: Jarvis now uses standard SaaS user authentication.
+         * Oikos Auth
+         * @description Deprecated: Oikos now uses standard SaaS user authentication.
          *
-         *     Jarvis is treated as a normal client (like the dashboard). It authenticates
+         *     Oikos is treated as a normal client (like the dashboard). It authenticates
          *     using the same JWT bearer token as other frontend clients.
          */
-        post: operations["jarvis_auth_api_jarvis_auth_post"];
+        post: operations["oikos_auth_api_oikos_auth_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/events": {
+    "/api/oikos/events": {
         parameters: {
             query?: never;
             header?: never;
@@ -2678,10 +2678,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Jarvis Events
-         * @description Server-Sent Events stream for Jarvis.
+         * Oikos Events
+         * @description Server-Sent Events stream for Oikos.
          *
-         *     Provides real-time updates for fiche and course events. Jarvis listens to this
+         *     Provides real-time updates for fiche and run events. Oikos listens to this
          *     stream to update the Task Inbox UI without polling.
          *
          *     Authentication:
@@ -2693,16 +2693,16 @@ export interface paths {
          *     - connected: Initial connection confirmation
          *     - heartbeat: Keep-alive ping every 30 seconds
          *     - fiche_updated: Fiche status or configuration changed
-         *     - course_created: New fiche course started
-         *     - course_updated: Fiche course status changed (running → success/failed)
+         *     - run_created: New fiche run started
+         *     - run_updated: Fiche run status changed (running → success/failed)
          *
          *     Args:
-         *         current_user: Authenticated user (Jarvis service account)
+         *         current_user: Authenticated user (Oikos service account)
          *
          *     Returns:
          *         EventSourceResponse streaming SSE events
          */
-        get: operations["jarvis_events_api_jarvis_events_get"];
+        get: operations["oikos_events_api_oikos_events_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2711,7 +2711,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/history": {
+    "/api/oikos/history": {
         parameters: {
             query?: never;
             header?: never;
@@ -2719,10 +2719,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Jarvis History
-         * @description Get conversation history from Concierge thread.
+         * Oikos History
+         * @description Get conversation history from Oikos thread.
          *
-         *     Returns paginated message history from the user's concierge thread.
+         *     Returns paginated message history from the user's oikos thread.
          *     Only includes user and assistant messages (filters out system messages).
          *
          *     Args:
@@ -2732,32 +2732,32 @@ export interface paths {
          *         current_user: Authenticated user
          *
          *     Returns:
-         *         JarvisHistoryResponse with messages and total count
+         *         OikosHistoryResponse with messages and total count
          */
-        get: operations["jarvis_history_api_jarvis_history_get"];
+        get: operations["oikos_history_api_oikos_history_get"];
         put?: never;
         post?: never;
         /**
-         * Jarvis Clear History
-         * @description Clear conversation history by deleting all messages from Concierge thread.
+         * Oikos Clear History
+         * @description Clear conversation history by deleting all messages from Oikos thread.
          *
-         *     This clears all conversation messages from the user's Concierge thread.
+         *     This clears all conversation messages from the user's Oikos thread.
          *     The thread itself and the fiche's system instructions are preserved.
          *
-         *     System prompts are injected fresh on every course from fiche.system_instructions,
+         *     System prompts are injected fresh on every run from fiche.system_instructions,
          *     so clearing history doesn't affect the fiche's behavior.
          *
          *     Args:
          *         db: Database session
          *         current_user: Authenticated user
          */
-        delete: operations["jarvis_clear_history_api_jarvis_history_delete"];
+        delete: operations["oikos_clear_history_api_oikos_history_delete"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/bootstrap": {
+    "/api/oikos/bootstrap": {
         parameters: {
             query?: never;
             header?: never;
@@ -2765,15 +2765,15 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Jarvis Bootstrap
-         * @description Get Jarvis bootstrap configuration.
+         * Oikos Bootstrap
+         * @description Get Oikos bootstrap configuration.
          *
          *     Returns the complete system prompt (built from user context),
          *     list of enabled tools, and a safe subset of user context for display.
          *
-         *     This is the single source of truth for Jarvis configuration.
+         *     This is the single source of truth for Oikos configuration.
          */
-        get: operations["jarvis_bootstrap_api_jarvis_bootstrap_get"];
+        get: operations["oikos_bootstrap_api_oikos_bootstrap_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2782,7 +2782,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/concierge/thread": {
+    "/api/oikos/thread": {
         parameters: {
             query?: never;
             header?: never;
@@ -2790,12 +2790,12 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Concierge Thread
-         * @description Get the concierge thread for the current user.
+         * Get Oikos Thread
+         * @description Get the oikos thread for the current user.
          *
-         *     Returns basic information about the user's concierge thread.
+         *     Returns basic information about the user's oikos thread.
          */
-        get: operations["get_concierge_thread_api_jarvis_concierge_thread_get"];
+        get: operations["get_oikos_thread_api_oikos_thread_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2804,7 +2804,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/preferences": {
+    "/api/oikos/preferences": {
         parameters: {
             query?: never;
             header?: never;
@@ -2818,16 +2818,16 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Jarvis Update Preferences
-         * @description Update user's Jarvis preferences.
+         * Oikos Update Preferences
+         * @description Update user's Oikos preferences.
          *
          *     Saves preferences to the user's context in the database.
          *     Only provided fields are updated; others remain unchanged.
          */
-        patch: operations["jarvis_update_preferences_api_jarvis_preferences_patch"];
+        patch: operations["oikos_update_preferences_api_oikos_preferences_patch"];
         trace?: never;
     };
-    "/api/jarvis/session": {
+    "/api/oikos/session": {
         parameters: {
             query?: never;
             header?: never;
@@ -2835,25 +2835,25 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Jarvis Session Get
+         * Oikos Session Get
          * @description Mint an ephemeral OpenAI Realtime session token.
          *
-         *     Directly calls OpenAI's API - no separate jarvis-server needed.
+         *     Directly calls OpenAI's API - no separate oikos-server needed.
          */
-        get: operations["jarvis_session_get_api_jarvis_session_get"];
+        get: operations["oikos_session_get_api_oikos_session_get"];
         put?: never;
         /**
-         * Jarvis Session Post
+         * Oikos Session Post
          * @description Backwards compatibility: some clients may still POST.
          */
-        post: operations["jarvis_session_post_api_jarvis_session_post"];
+        post: operations["oikos_session_post_api_oikos_session_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/conversation/title": {
+    "/api/oikos/conversation/title": {
         parameters: {
             query?: never;
             header?: never;
@@ -2863,19 +2863,19 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Jarvis Conversation Title
+         * Oikos Conversation Title
          * @description Generate a conversation title using OpenAI.
          *
-         *     Directly calls OpenAI's API - no separate jarvis-server needed.
+         *     Directly calls OpenAI's API - no separate oikos-server needed.
          */
-        post: operations["jarvis_conversation_title_api_jarvis_conversation_title_post"];
+        post: operations["oikos_conversation_title_api_oikos_conversation_title_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/internal/courses/{course_id}/resume": {
+    "/api/internal/runs/{run_id}/resume": {
         parameters: {
             query?: never;
             header?: never;
@@ -2885,33 +2885,33 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Resume Course
-         * @description Resume a WAITING course when a commis completes.
+         * Resume Run
+         * @description Resume a WAITING run when a commis completes.
          *
-         *     Called internally when a commis completes while the concierge course was
+         *     Called internally when a commis completes while the oikos run was
          *     WAITING (interrupted by spawn_commis). Uses FicheRunner.run_continuation()
-         *     to continue the concierge loop from persisted history.
+         *     to continue the oikos loop from persisted history.
          *
          *     Args:
-         *         course_id: ID of the WAITING concierge course
+         *         run_id: ID of the WAITING oikos run
          *         payload: Commis completion data
          *         db: Database session
          *
          *     Returns:
-         *         Dict with resumed course info
+         *         Dict with resumed run info
          *
          *     Raises:
-         *         404: Course not found
-         *         500: Error resuming course
+         *         404: Run not found
+         *         500: Error resuming run
          */
-        post: operations["resume_course_api_internal_courses__course_id__resume_post"];
+        post: operations["resume_run_api_internal_runs__run_id__resume_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/sync/push": {
+    "/api/oikos/sync/push": {
         parameters: {
             query?: never;
             header?: never;
@@ -2936,14 +2936,14 @@ export interface paths {
          *     Returns:
          *         PushResponse with acknowledged operation IDs and next cursor
          */
-        post: operations["push_sync_operations_api_jarvis_sync_push_post"];
+        post: operations["push_sync_operations_api_oikos_sync_push_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/sync/pull": {
+    "/api/oikos/sync/pull": {
         parameters: {
             query?: never;
             header?: never;
@@ -2966,7 +2966,7 @@ export interface paths {
          *     Returns:
          *         PullResponse with operations and next cursor
          */
-        get: operations["pull_sync_operations_api_jarvis_sync_pull_get"];
+        get: operations["pull_sync_operations_api_oikos_sync_pull_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2975,7 +2975,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/stream/courses/{course_id}": {
+    "/api/stream/runs/{run_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -2983,28 +2983,28 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Stream Course Replay
-         * @description Stream course events with replay support (Resumable SSE v1).
+         * Stream Run Replay
+         * @description Stream run events with replay support (Resumable SSE v1).
          *
          *     This endpoint enables clients to reconnect and catch up on missed events by:
          *     1. Replaying historical events from the database
          *     2. Continuing with live events via EventBus
          *
-         *     For completed courses: Replays all events and closes the stream.
-         *     For active courses (RUNNING/DEFERRED): Replays historical + streams live events.
+         *     For completed runs: Replays all events and closes the stream.
+         *     For active runs (RUNNING/DEFERRED): Replays historical + streams live events.
          *
          *     Args:
-         *         course_id: Course identifier
+         *         run_id: Run identifier
          *         request: HTTP request (for Last-Event-ID header)
          *         after_event_id: Resume from this event ID (0 = from start)
-         *         include_tokens: Whether to include CONCIERGE_TOKEN events (default: true)
+         *         include_tokens: Whether to include OIKOS_TOKEN events (default: true)
          *         current_user: Authenticated user (multi-tenant filtered)
          *
          *     Returns:
          *         EventSourceResponse for SSE streaming
          *
          *     Raises:
-         *         HTTPException: 404 if course not found or not owned by user
+         *         HTTPException: 404 if run not found or not owned by user
          *
          *     SSE Format:
          *         id: {event.id}
@@ -3013,19 +3013,19 @@ export interface paths {
          *
          *     Examples:
          *         # Start from beginning
-         *         GET /api/stream/courses/123
+         *         GET /api/stream/runs/123
          *
          *         # Resume from last-event-id (standard SSE reconnect)
-         *         GET /api/stream/courses/123
+         *         GET /api/stream/runs/123
          *         Last-Event-ID: 456
          *
          *         # Resume from specific event ID
-         *         GET /api/stream/courses/123?after_event_id=456
+         *         GET /api/stream/runs/123?after_event_id=456
          *
          *         # Skip token events (for bandwidth optimization)
-         *         GET /api/stream/courses/123?include_tokens=false
+         *         GET /api/stream/runs/123?include_tokens=false
          */
-        get: operations["stream_course_replay_api_stream_courses__course_id__get"];
+        get: operations["stream_run_replay_api_stream_runs__run_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3651,7 +3651,7 @@ export interface paths {
          * Get Trace
          * @description Get unified trace timeline (admin only).
          *
-         *     Returns a unified timeline of events across concierge runs, commis, and LLM calls.
+         *     Returns a unified timeline of events across oikos runs, commis, and LLM calls.
          *
          *     Levels:
          *     - summary: High-level timeline with key events (default)
@@ -3700,7 +3700,7 @@ export interface paths {
          * Error Analysis
          * @description Error frequency and patterns (admin only).
          *
-         *     Returns recent failed courses with error details for analysis.
+         *     Returns recent failed runs with error details for analysis.
          */
         get: operations["error_analysis_api_reliability_errors_get"];
         put?: never;
@@ -3722,7 +3722,7 @@ export interface paths {
          * Performance Metrics
          * @description P50/P95 latency metrics (admin only).
          *
-         *     Returns latency percentiles for concierge courses.
+         *     Returns latency percentiles for oikos runs.
          *     Limited to 10000 samples to prevent memory issues.
          */
         get: operations["performance_metrics_api_reliability_performance_get"];
@@ -4079,8 +4079,8 @@ export interface components {
              */
             file: string;
         };
-        /** Body_voice_turn_api_jarvis_voice_turn_post */
-        Body_voice_turn_api_jarvis_voice_turn_post: {
+        /** Body_voice_turn_api_oikos_voice_turn_post */
+        Body_voice_turn_api_oikos_voice_turn_post: {
             /**
              * Audio
              * Format: binary
@@ -4120,7 +4120,7 @@ export interface components {
             tts_voice_id?: string | null;
             /**
              * Model
-             * @description Override concierge model
+             * @description Override oikos model
              */
             model?: string | null;
         };
@@ -4262,27 +4262,6 @@ export interface components {
             result_preview?: string | null;
             /** Error */
             error?: string | null;
-        };
-        /**
-         * ConciergeThreadInfo
-         * @description Concierge thread information.
-         */
-        ConciergeThreadInfo: {
-            /**
-             * Thread Id
-             * @description Thread ID
-             */
-            thread_id: number;
-            /**
-             * Title
-             * @description Thread title
-             */
-            title: string;
-            /**
-             * Message Count
-             * @description Number of messages in thread
-             */
-            message_count: number;
         };
         /**
          * ConfigureTestModelRequest
@@ -4517,104 +4496,6 @@ export interface components {
             /** Context */
             context: Record<string, never>;
         };
-        /** CourseBundle */
-        CourseBundle: {
-            /** Fiche Id */
-            fiche_id: number;
-            /**
-             * Courses
-             * @default []
-             */
-            courses: components["schemas"]["CourseOut"][];
-        };
-        /**
-         * CourseEventRecord
-         * @description Single event from a course.
-         */
-        CourseEventRecord: {
-            /** Id */
-            id: number;
-            /** Event Type */
-            event_type: string;
-            /** Payload */
-            payload: Record<string, never>;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
-        /**
-         * CourseEventsResponse
-         * @description Response for course events query.
-         */
-        CourseEventsResponse: {
-            /** Course Id */
-            course_id: number;
-            /** Events */
-            events: components["schemas"]["CourseEventRecord"][];
-            /** Total */
-            total: number;
-        };
-        /** CourseOut */
-        CourseOut: {
-            /** Id */
-            id: number;
-            /** Fiche Id */
-            fiche_id: number;
-            /** Thread Id */
-            thread_id: number;
-            status: components["schemas"]["CourseStatus"];
-            trigger: components["schemas"]["CourseTrigger"];
-            /** Started At */
-            started_at?: string | null;
-            /** Finished At */
-            finished_at?: string | null;
-            /** Duration Ms */
-            duration_ms?: number | null;
-            /** Total Tokens */
-            total_tokens?: number | null;
-            /** Total Cost Usd */
-            total_cost_usd?: number | null;
-            /** Error */
-            error?: string | null;
-            /**
-             * Display Type
-             * @default course
-             */
-            display_type: string;
-        };
-        /**
-         * CourseStatus
-         * @enum {string}
-         */
-        CourseStatus: "queued" | "running" | "waiting" | "deferred" | "success" | "failed" | "cancelled";
-        /**
-         * CourseStatusResponse
-         * @description Detailed status of a specific course.
-         */
-        CourseStatusResponse: {
-            /** Course Id */
-            course_id: number;
-            /** Status */
-            status: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Finished At */
-            finished_at?: string | null;
-            /** Error */
-            error?: string | null;
-            /** Result */
-            result?: string | null;
-        };
-        /**
-         * CourseTrigger
-         * @enum {string}
-         */
-        CourseTrigger: "manual" | "schedule" | "chat" | "webhook" | "api" | "continuation";
         /**
          * CredentialFieldSchema
          * @description Schema for a single credential field definition.
@@ -4677,8 +4558,8 @@ export interface components {
             tokens: number;
             /** Cost Usd */
             cost_usd: number;
-            /** Courses */
-            courses: number;
+            /** Runs */
+            runs: number;
         };
         /** DashboardSnapshot */
         DashboardSnapshot: {
@@ -4689,12 +4570,12 @@ export interface components {
              * Format: date-time
              */
             fetched_at: string;
-            /** Courses Limit */
-            courses_limit: number;
+            /** Runs Limit */
+            runs_limit: number;
             /** Fiches */
             fiches: components["schemas"]["Fiche"][];
-            /** Courses */
-            courses: components["schemas"]["CourseBundle"][];
+            /** Runs */
+            runs: components["schemas"]["RunBundle"][];
         };
         /**
          * DatabaseResetRequest
@@ -4855,10 +4736,10 @@ export interface components {
              * @default []
              */
             messages: components["schemas"]["FicheMessage"][];
-            /** Next Course At */
-            next_course_at?: string | null;
-            /** Last Course At */
-            last_course_at?: string | null;
+            /** Next Run At */
+            next_run_at?: string | null;
+            /** Last Run At */
+            last_run_at?: string | null;
             /**
              * Display Type
              * @default fiche
@@ -4888,7 +4769,7 @@ export interface components {
          * @description Envelope object returned by the Fiche *details* REST endpoint.
          *
          *     In Phase 1 we only populate the mandatory ``fiche`` field.  The optional
-         *     ``threads``, ``courses`` and ``stats`` keys are included so that the response
+         *     ``threads``, ``runs`` and ``stats`` keys are included so that the response
          *     shape is forwards-compatible with the richer payloads planned for future
          *     phases (see *fiche_debug_modal_design.md*).
          */
@@ -4896,8 +4777,8 @@ export interface components {
             fiche: components["schemas"]["Fiche"];
             /** Threads */
             threads?: components["schemas"]["Thread"][] | null;
-            /** Courses */
-            courses?: unknown[] | null;
+            /** Runs */
+            runs?: unknown[] | null;
             /** Stats */
             stats?: Record<string, never> | null;
         };
@@ -4946,370 +4827,6 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
-        };
-        /**
-         * JarvisAuthRequest
-         * @description Jarvis authentication request with device secret.
-         */
-        JarvisAuthRequest: {
-            /**
-             * Device Secret
-             * @description Device secret for Jarvis authentication
-             */
-            device_secret: string;
-        };
-        /**
-         * JarvisAuthResponse
-         * @description Jarvis authentication response metadata.
-         */
-        JarvisAuthResponse: {
-            /**
-             * Session Expires In
-             * @description Session expiry window in seconds
-             */
-            session_expires_in: number;
-            /**
-             * Session Cookie Name
-             * @description Name of session cookie storing Jarvis session
-             */
-            session_cookie_name: string;
-        };
-        /**
-         * JarvisBootstrapResponse
-         * @description Bootstrap response with prompt, tools, and user context.
-         */
-        JarvisBootstrapResponse: {
-            /**
-             * Prompt
-             * @description Complete Jarvis system prompt
-             */
-            prompt: string;
-            /**
-             * Enabled Tools
-             * @description List of available tools
-             */
-            enabled_tools: Record<string, never>[];
-            /**
-             * User Context
-             * @description User context summary (safe subset)
-             */
-            user_context: Record<string, never>;
-            /**
-             * Available Models
-             * @description Models available for selection
-             */
-            available_models: components["schemas"]["JarvisModelInfo"][];
-            /** @description User's saved preferences */
-            preferences: components["schemas"]["JarvisPreferences"];
-        };
-        /**
-         * JarvisCancelResponse
-         * @description Response from concierge cancellation.
-         */
-        JarvisCancelResponse: {
-            /**
-             * Course Id
-             * @description The cancelled course ID
-             */
-            course_id: number;
-            /**
-             * Status
-             * @description Course status after cancellation
-             */
-            status: string;
-            /**
-             * Message
-             * @description Human-readable status message
-             */
-            message: string;
-        };
-        /**
-         * JarvisChatMessage
-         * @description Single chat message in history.
-         */
-        JarvisChatMessage: {
-            /**
-             * Role
-             * @description Message role: user or assistant
-             */
-            role: string;
-            /**
-             * Content
-             * @description Message content
-             */
-            content: string;
-            /**
-             * Timestamp
-             * Format: date-time
-             * @description Message timestamp
-             */
-            timestamp: string;
-            /**
-             * Usage
-             * @description Optional LLM usage metadata for this assistant response
-             */
-            usage?: Record<string, never> | null;
-            /**
-             * Tool Calls
-             * @description Tool calls made by this assistant message
-             */
-            tool_calls?: components["schemas"]["ToolCallInfo"][] | null;
-        };
-        /**
-         * JarvisChatRequest
-         * @description Request for text chat with Concierge.
-         */
-        JarvisChatRequest: {
-            /**
-             * Message
-             * @description User message text
-             */
-            message: string;
-            /**
-             * Message Id
-             * @description Client-generated message ID (UUID)
-             */
-            message_id: string;
-            /**
-             * Model
-             * @description Model to use for this request (e.g., gpt-5.2)
-             */
-            model?: string | null;
-            /**
-             * Reasoning Effort
-             * @description Reasoning effort: none, low, medium, high
-             */
-            reasoning_effort?: string | null;
-            /**
-             * Replay Scenario
-             * @description Replay scenario name (dev only, requires REPLAY_MODE_ENABLED=true)
-             */
-            replay_scenario?: string | null;
-        };
-        /**
-         * JarvisConciergeRequest
-         * @description Request to dispatch a task to the concierge fiche.
-         */
-        JarvisConciergeRequest: {
-            /**
-             * Task
-             * @description Natural language task for the concierge
-             */
-            task: string;
-            /**
-             * Context
-             * @description Optional context including conversation_id and previous_messages
-             */
-            context?: Record<string, never> | null;
-            /**
-             * Preferences
-             * @description Optional preferences like verbosity and notify_on_complete
-             */
-            preferences?: Record<string, never> | null;
-        };
-        /**
-         * JarvisConciergeResponse
-         * @description Response from concierge dispatch.
-         */
-        JarvisConciergeResponse: {
-            /**
-             * Course Id
-             * @description Concierge course ID for tracking
-             */
-            course_id: number;
-            /**
-             * Thread Id
-             * @description Concierge thread ID (long-lived)
-             */
-            thread_id: number;
-            /**
-             * Status
-             * @description Initial course status
-             */
-            status: string;
-            /**
-             * Stream Url
-             * @description SSE stream URL for progress updates
-             */
-            stream_url: string;
-        };
-        /**
-         * JarvisCourseSummary
-         * @description Minimal course summary for Jarvis Task Inbox.
-         */
-        JarvisCourseSummary: {
-            /** Id */
-            id: number;
-            /** Fiche Id */
-            fiche_id: number;
-            /** Thread Id */
-            thread_id?: number | null;
-            /** Fiche Name */
-            fiche_name: string;
-            /** Status */
-            status: string;
-            /** Summary */
-            summary?: string | null;
-            /** Signal */
-            signal?: string | null;
-            /** Signal Source */
-            signal_source?: string | null;
-            /** Error */
-            error?: string | null;
-            /** Last Event Type */
-            last_event_type?: string | null;
-            /** Last Event Message */
-            last_event_message?: string | null;
-            /** Last Event At */
-            last_event_at?: string | null;
-            /** Continuation Of Course Id */
-            continuation_of_course_id?: number | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-            /** Completed At */
-            completed_at?: string | null;
-        };
-        /**
-         * JarvisDispatchRequest
-         * @description Jarvis dispatch request to trigger fiche execution.
-         */
-        JarvisDispatchRequest: {
-            /**
-             * Fiche Id
-             * @description ID of fiche to execute
-             */
-            fiche_id: number;
-            /**
-             * Task Override
-             * @description Optional task instruction override
-             */
-            task_override?: string | null;
-        };
-        /**
-         * JarvisDispatchResponse
-         * @description Jarvis dispatch response with course/thread IDs.
-         */
-        JarvisDispatchResponse: {
-            /**
-             * Course Id
-             * @description Course ID for tracking execution
-             */
-            course_id: number;
-            /**
-             * Thread Id
-             * @description Thread ID containing conversation
-             */
-            thread_id: number;
-            /**
-             * Status
-             * @description Initial course status
-             */
-            status: string;
-            /**
-             * Fiche Name
-             * @description Name of fiche being executed
-             */
-            fiche_name: string;
-        };
-        /**
-         * JarvisFicheSummary
-         * @description Minimal fiche summary for Jarvis UI.
-         */
-        JarvisFicheSummary: {
-            /** Id */
-            id: number;
-            /** Name */
-            name: string;
-            /** Status */
-            status: string;
-            /** Schedule */
-            schedule?: string | null;
-            /** Next Course At */
-            next_course_at?: string | null;
-            /** Description */
-            description?: string | null;
-        };
-        /**
-         * JarvisHistoryResponse
-         * @description Chat history response.
-         */
-        JarvisHistoryResponse: {
-            /**
-             * Messages
-             * @description List of messages
-             */
-            messages: components["schemas"]["JarvisChatMessage"][];
-            /**
-             * Total
-             * @description Total message count
-             */
-            total: number;
-        };
-        /**
-         * JarvisModelInfo
-         * @description Model information for frontend display.
-         */
-        JarvisModelInfo: {
-            /**
-             * Id
-             * @description Model ID (e.g., gpt-5.2)
-             */
-            id: string;
-            /**
-             * Display Name
-             * @description Human-readable name
-             */
-            display_name: string;
-            /**
-             * Description
-             * @description Brief description
-             */
-            description: string;
-            /**
-             * Capabilities
-             * @description Model capabilities (reasoning, etc.)
-             */
-            capabilities?: Record<string, never> | null;
-        };
-        /**
-         * JarvisPreferences
-         * @description User preferences for Jarvis chat.
-         */
-        JarvisPreferences: {
-            /**
-             * Chat Model
-             * @description Selected model for text chat
-             */
-            chat_model: string;
-            /**
-             * Reasoning Effort
-             * @description Reasoning effort: none, low, medium, high
-             */
-            reasoning_effort: string;
-        };
-        /**
-         * JarvisPreferencesUpdate
-         * @description Request to update user preferences.
-         */
-        JarvisPreferencesUpdate: {
-            /**
-             * Chat Model
-             * @description Model for text chat
-             */
-            chat_model?: string | null;
-            /**
-             * Reasoning Effort
-             * @description Reasoning effort: none, low, medium, high
-             */
-            reasoning_effort?: string | null;
         };
         /**
          * JobInfo
@@ -5631,6 +5148,391 @@ export interface components {
             runner_name: string;
         };
         /**
+         * OikosAuthRequest
+         * @description Oikos authentication request with device secret.
+         */
+        OikosAuthRequest: {
+            /**
+             * Device Secret
+             * @description Device secret for Oikos authentication
+             */
+            device_secret: string;
+        };
+        /**
+         * OikosAuthResponse
+         * @description Oikos authentication response metadata.
+         */
+        OikosAuthResponse: {
+            /**
+             * Session Expires In
+             * @description Session expiry window in seconds
+             */
+            session_expires_in: number;
+            /**
+             * Session Cookie Name
+             * @description Name of session cookie storing Oikos session
+             */
+            session_cookie_name: string;
+        };
+        /**
+         * OikosBootstrapResponse
+         * @description Bootstrap response with prompt, tools, and user context.
+         */
+        OikosBootstrapResponse: {
+            /**
+             * Prompt
+             * @description Complete Oikos system prompt
+             */
+            prompt: string;
+            /**
+             * Enabled Tools
+             * @description List of available tools
+             */
+            enabled_tools: Record<string, never>[];
+            /**
+             * User Context
+             * @description User context summary (safe subset)
+             */
+            user_context: Record<string, never>;
+            /**
+             * Available Models
+             * @description Models available for selection
+             */
+            available_models: components["schemas"]["OikosModelInfo"][];
+            /** @description User's saved preferences */
+            preferences: components["schemas"]["OikosPreferences"];
+        };
+        /**
+         * OikosChatMessage
+         * @description Single chat message in history.
+         */
+        OikosChatMessage: {
+            /**
+             * Role
+             * @description Message role: user or assistant
+             */
+            role: string;
+            /**
+             * Content
+             * @description Message content
+             */
+            content: string;
+            /**
+             * Timestamp
+             * Format: date-time
+             * @description Message timestamp
+             */
+            timestamp: string;
+            /**
+             * Usage
+             * @description Optional LLM usage metadata for this assistant response
+             */
+            usage?: Record<string, never> | null;
+            /**
+             * Tool Calls
+             * @description Tool calls made by this assistant message
+             */
+            tool_calls?: components["schemas"]["ToolCallInfo"][] | null;
+        };
+        /**
+         * OikosChatRequest
+         * @description Request for text chat with Oikos.
+         */
+        OikosChatRequest: {
+            /**
+             * Message
+             * @description User message text
+             */
+            message: string;
+            /**
+             * Message Id
+             * @description Client-generated message ID (UUID)
+             */
+            message_id: string;
+            /**
+             * Model
+             * @description Model to use for this request (e.g., gpt-5.2)
+             */
+            model?: string | null;
+            /**
+             * Reasoning Effort
+             * @description Reasoning effort: none, low, medium, high
+             */
+            reasoning_effort?: string | null;
+            /**
+             * Replay Scenario
+             * @description Replay scenario name (dev only, requires REPLAY_MODE_ENABLED=true)
+             */
+            replay_scenario?: string | null;
+        };
+        /**
+         * OikosDispatchRequest
+         * @description Oikos dispatch request to trigger fiche execution.
+         */
+        OikosDispatchRequest: {
+            /**
+             * Fiche Id
+             * @description ID of fiche to execute
+             */
+            fiche_id: number;
+            /**
+             * Task Override
+             * @description Optional task instruction override
+             */
+            task_override?: string | null;
+        };
+        /**
+         * OikosDispatchResponse
+         * @description Oikos dispatch response with run/thread IDs.
+         */
+        OikosDispatchResponse: {
+            /**
+             * Run Id
+             * @description Run ID for tracking execution
+             */
+            run_id: number;
+            /**
+             * Thread Id
+             * @description Thread ID containing conversation
+             */
+            thread_id: number;
+            /**
+             * Status
+             * @description Initial run status
+             */
+            status: string;
+            /**
+             * Fiche Name
+             * @description Name of fiche being executed
+             */
+            fiche_name: string;
+        };
+        /**
+         * OikosFicheSummary
+         * @description Minimal fiche summary for Oikos UI.
+         */
+        OikosFicheSummary: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Status */
+            status: string;
+            /** Schedule */
+            schedule?: string | null;
+            /** Next Run At */
+            next_run_at?: string | null;
+            /** Description */
+            description?: string | null;
+        };
+        /**
+         * OikosHistoryResponse
+         * @description Chat history response.
+         */
+        OikosHistoryResponse: {
+            /**
+             * Messages
+             * @description List of messages
+             */
+            messages: components["schemas"]["OikosChatMessage"][];
+            /**
+             * Total
+             * @description Total message count
+             */
+            total: number;
+        };
+        /**
+         * OikosModelInfo
+         * @description Model information for frontend display.
+         */
+        OikosModelInfo: {
+            /**
+             * Id
+             * @description Model ID (e.g., gpt-5.2)
+             */
+            id: string;
+            /**
+             * Display Name
+             * @description Human-readable name
+             */
+            display_name: string;
+            /**
+             * Description
+             * @description Brief description
+             */
+            description: string;
+            /**
+             * Capabilities
+             * @description Model capabilities (reasoning, etc.)
+             */
+            capabilities?: Record<string, never> | null;
+        };
+        /**
+         * OikosPreferences
+         * @description User preferences for Oikos chat.
+         */
+        OikosPreferences: {
+            /**
+             * Chat Model
+             * @description Selected model for text chat
+             */
+            chat_model: string;
+            /**
+             * Reasoning Effort
+             * @description Reasoning effort: none, low, medium, high
+             */
+            reasoning_effort: string;
+        };
+        /**
+         * OikosPreferencesUpdate
+         * @description Request to update user preferences.
+         */
+        OikosPreferencesUpdate: {
+            /**
+             * Chat Model
+             * @description Model for text chat
+             */
+            chat_model?: string | null;
+            /**
+             * Reasoning Effort
+             * @description Reasoning effort: none, low, medium, high
+             */
+            reasoning_effort?: string | null;
+        };
+        /**
+         * OikosRunCancelResponse
+         * @description Response from oikos cancellation.
+         */
+        OikosRunCancelResponse: {
+            /**
+             * Run Id
+             * @description The cancelled run ID
+             */
+            run_id: number;
+            /**
+             * Status
+             * @description Run status after cancellation
+             */
+            status: string;
+            /**
+             * Message
+             * @description Human-readable status message
+             */
+            message: string;
+        };
+        /**
+         * OikosRunRequest
+         * @description Request to dispatch a task to the oikos fiche.
+         */
+        OikosRunRequest: {
+            /**
+             * Task
+             * @description Natural language task for the oikos
+             */
+            task: string;
+            /**
+             * Context
+             * @description Optional context including conversation_id and previous_messages
+             */
+            context?: Record<string, never> | null;
+            /**
+             * Preferences
+             * @description Optional preferences like verbosity and notify_on_complete
+             */
+            preferences?: Record<string, never> | null;
+        };
+        /**
+         * OikosRunResponse
+         * @description Response from oikos dispatch.
+         */
+        OikosRunResponse: {
+            /**
+             * Run Id
+             * @description Oikos run ID for tracking
+             */
+            run_id: number;
+            /**
+             * Thread Id
+             * @description Oikos thread ID (long-lived)
+             */
+            thread_id: number;
+            /**
+             * Status
+             * @description Initial run status
+             */
+            status: string;
+            /**
+             * Stream Url
+             * @description SSE stream URL for progress updates
+             */
+            stream_url: string;
+        };
+        /**
+         * OikosRunSummary
+         * @description Minimal run summary for Oikos Task Inbox.
+         */
+        OikosRunSummary: {
+            /** Id */
+            id: number;
+            /** Fiche Id */
+            fiche_id: number;
+            /** Thread Id */
+            thread_id?: number | null;
+            /** Fiche Name */
+            fiche_name: string;
+            /** Status */
+            status: string;
+            /** Summary */
+            summary?: string | null;
+            /** Signal */
+            signal?: string | null;
+            /** Signal Source */
+            signal_source?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Last Event Type */
+            last_event_type?: string | null;
+            /** Last Event Message */
+            last_event_message?: string | null;
+            /** Last Event At */
+            last_event_at?: string | null;
+            /** Continuation Of Run Id */
+            continuation_of_run_id?: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Completed At */
+            completed_at?: string | null;
+        };
+        /**
+         * OikosThreadInfo
+         * @description Oikos thread information.
+         */
+        OikosThreadInfo: {
+            /**
+             * Thread Id
+             * @description Thread ID
+             */
+            thread_id: number;
+            /**
+             * Title
+             * @description Thread title
+             */
+            title: string;
+            /**
+             * Message Count
+             * @description Number of messages in thread
+             */
+            message_count: number;
+        };
+        /**
          * OpsSeriesPoint
          * @description Single point in a time series.
          */
@@ -5645,8 +5547,8 @@ export interface components {
          * @description Operations summary with all KPIs.
          */
         OpsSummary: {
-            /** Courses Today */
-            courses_today: number;
+            /** Runs Today */
+            runs_today: number;
             /** Cost Today Usd */
             cost_today_usd: number | null;
             budget_user: components["schemas"]["BudgetInfo"];
@@ -5674,8 +5576,8 @@ export interface components {
             name: string;
             /** Owner Email */
             owner_email: string;
-            /** Courses */
-            courses: number;
+            /** Runs */
+            runs: number;
             /** Cost Usd */
             cost_usd: number | null;
             /** P95 Ms */
@@ -5697,10 +5599,10 @@ export interface components {
              */
             cost_usd: number;
             /**
-             * Courses
-             * @description Number of courses
+             * Runs
+             * @description Number of runs
              */
-            courses: number;
+            runs: number;
         };
         /**
          * PhoneContactCreate
@@ -5866,6 +5768,104 @@ export interface components {
          * @enum {string}
          */
         ResetType: "clear_data" | "full_rebuild";
+        /** RunBundle */
+        RunBundle: {
+            /** Fiche Id */
+            fiche_id: number;
+            /**
+             * Runs
+             * @default []
+             */
+            runs: components["schemas"]["RunOut"][];
+        };
+        /**
+         * RunEventRecord
+         * @description Single event from a run.
+         */
+        RunEventRecord: {
+            /** Id */
+            id: number;
+            /** Event Type */
+            event_type: string;
+            /** Payload */
+            payload: Record<string, never>;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * RunEventsResponse
+         * @description Response for run events query.
+         */
+        RunEventsResponse: {
+            /** Run Id */
+            run_id: number;
+            /** Events */
+            events: components["schemas"]["RunEventRecord"][];
+            /** Total */
+            total: number;
+        };
+        /** RunOut */
+        RunOut: {
+            /** Id */
+            id: number;
+            /** Fiche Id */
+            fiche_id: number;
+            /** Thread Id */
+            thread_id: number;
+            status: components["schemas"]["RunStatus"];
+            trigger: components["schemas"]["RunTrigger"];
+            /** Started At */
+            started_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** Total Tokens */
+            total_tokens?: number | null;
+            /** Total Cost Usd */
+            total_cost_usd?: number | null;
+            /** Error */
+            error?: string | null;
+            /**
+             * Display Type
+             * @default run
+             */
+            display_type: string;
+        };
+        /**
+         * RunStatus
+         * @enum {string}
+         */
+        RunStatus: "queued" | "running" | "waiting" | "deferred" | "success" | "failed" | "cancelled";
+        /**
+         * RunStatusResponse
+         * @description Detailed status of a specific run.
+         */
+        RunStatusResponse: {
+            /** Run Id */
+            run_id: number;
+            /** Status */
+            status: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Result */
+            result?: string | null;
+        };
+        /**
+         * RunTrigger
+         * @enum {string}
+         */
+        RunTrigger: "manual" | "schedule" | "chat" | "webhook" | "api" | "continuation";
         /**
          * RunnerListResponse
          * @description Response for listing runners.
@@ -6530,26 +6530,26 @@ export interface components {
         };
         /**
          * TimelineResponse
-         * @description Full timeline response for a course.
+         * @description Full timeline response for a run.
          */
         TimelineResponse: {
             /** Correlation Id */
             correlation_id: string | null;
-            /** Course Id */
-            course_id: number;
+            /** Run Id */
+            run_id: number;
             /** Events */
             events: components["schemas"]["TimelineEvent"][];
             summary: components["schemas"]["TimelineSummary"];
         };
         /**
          * TimelineSummary
-         * @description Timing summary for a course.
+         * @description Timing summary for a run.
          */
         TimelineSummary: {
             /** Total Duration Ms */
             total_duration_ms: number;
-            /** Concierge Thinking Ms */
-            concierge_thinking_ms?: number | null;
+            /** Oikos Thinking Ms */
+            oikos_thinking_ms?: number | null;
             /** Commis Execution Ms */
             commis_execution_ms?: number | null;
             /** Tool Execution Ms */
@@ -6590,7 +6590,7 @@ export interface components {
         };
         /**
          * ToolCallInfo
-         * @description Tool call made by concierge.
+         * @description Tool call made by oikos.
          */
         ToolCallInfo: {
             /** Tool Call Id */
@@ -6616,8 +6616,8 @@ export interface components {
             tokens: number;
             /** Cost Usd */
             cost_usd: number;
-            /** Courses */
-            courses: number;
+            /** Runs */
+            runs: number;
         };
         /**
          * TopFichesResponse
@@ -6773,10 +6773,10 @@ export interface components {
              */
             cost_usd: number;
             /**
-             * Courses
-             * @description Number of courses in period
+             * Runs
+             * @description Number of runs in period
              */
-            courses: number;
+            runs: number;
             /** @description Daily budget limit info (always today's limit) */
             limit: components["schemas"]["UsageLimit"];
         };
@@ -6882,8 +6882,8 @@ export interface components {
             response_text?: string | null;
             /** Status */
             status: string;
-            /** Course Id */
-            course_id?: number | null;
+            /** Run Id */
+            run_id?: number | null;
             /** Thread Id */
             thread_id?: number | null;
             /** Error */
@@ -7250,7 +7250,7 @@ export interface operations {
         parameters: {
             query?: {
                 scope?: string;
-                courses_limit?: number;
+                runs_limit?: number;
                 skip?: number;
                 limit?: number;
                 session_factory?: unknown;
@@ -8008,7 +8008,7 @@ export interface operations {
             };
         };
     };
-    start_thread_course_api_threads__thread_id__courses_post: {
+    start_thread_run_api_threads__thread_id__runs_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9165,7 +9165,7 @@ export interface operations {
             };
         };
     };
-    list_courses_api_fiches__fiche_id__courses_get: {
+    list_runs_api_fiches__fiche_id__runs_get: {
         parameters: {
             query?: {
                 limit?: number;
@@ -9185,7 +9185,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CourseOut"][];
+                    "application/json": components["schemas"]["RunOut"][];
                 };
             };
             /** @description Validation Error */
@@ -9199,14 +9199,14 @@ export interface operations {
             };
         };
     };
-    get_course_api_courses__course_id__get: {
+    get_run_api_runs__run_id__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                course_id: number;
+                run_id: number;
             };
             cookie?: never;
         };
@@ -9218,7 +9218,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CourseOut"];
+                    "application/json": components["schemas"]["RunOut"];
                 };
             };
             /** @description Validation Error */
@@ -11263,7 +11263,7 @@ export interface operations {
             };
         };
     };
-    list_jarvis_fiches_api_jarvis_fiches_get: {
+    list_oikos_fiches_api_oikos_fiches_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11282,7 +11282,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JarvisFicheSummary"][];
+                    "application/json": components["schemas"]["OikosFicheSummary"][];
                 };
             };
             /** @description Validation Error */
@@ -11296,7 +11296,7 @@ export interface operations {
             };
         };
     };
-    list_jarvis_courses_api_jarvis_courses_get: {
+    list_oikos_runs_api_oikos_runs_get: {
         parameters: {
             query?: {
                 limit?: number;
@@ -11317,7 +11317,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JarvisCourseSummary"][];
+                    "application/json": components["schemas"]["OikosRunSummary"][];
                 };
             };
             /** @description Validation Error */
@@ -11331,7 +11331,7 @@ export interface operations {
             };
         };
     };
-    get_active_course_api_jarvis_courses_active_get: {
+    get_active_run_api_oikos_runs_active_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11364,7 +11364,7 @@ export interface operations {
             };
         };
     };
-    get_course_status_api_jarvis_courses__course_id__get: {
+    get_run_status_api_oikos_runs__run_id__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11373,7 +11373,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                course_id: number;
+                run_id: number;
             };
             cookie?: never;
         };
@@ -11385,7 +11385,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CourseStatusResponse"];
+                    "application/json": components["schemas"]["RunStatusResponse"];
                 };
             };
             /** @description Validation Error */
@@ -11399,7 +11399,7 @@ export interface operations {
             };
         };
     };
-    attach_to_course_stream_api_jarvis_courses__course_id__stream_get: {
+    attach_to_run_stream_api_oikos_runs__run_id__stream_get: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -11408,7 +11408,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                course_id: number;
+                run_id: number;
             };
             cookie?: never;
         };
@@ -11434,7 +11434,7 @@ export interface operations {
             };
         };
     };
-    get_course_events_api_jarvis_courses__course_id__events_get: {
+    get_run_events_api_oikos_runs__run_id__events_get: {
         parameters: {
             query?: {
                 event_type?: string | null;
@@ -11445,7 +11445,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                course_id: number;
+                run_id: number;
             };
             cookie?: never;
         };
@@ -11457,7 +11457,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CourseEventsResponse"];
+                    "application/json": components["schemas"]["RunEventsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -11471,7 +11471,7 @@ export interface operations {
             };
         };
     };
-    get_course_timeline_api_jarvis_courses__course_id__timeline_get: {
+    get_run_timeline_api_oikos_runs__run_id__timeline_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11480,7 +11480,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                course_id: number;
+                run_id: number;
             };
             cookie?: never;
         };
@@ -11506,7 +11506,7 @@ export interface operations {
             };
         };
     };
-    jarvis_dispatch_api_jarvis_dispatch_post: {
+    oikos_dispatch_api_oikos_dispatch_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11519,7 +11519,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["JarvisDispatchRequest"];
+                "application/json": components["schemas"]["OikosDispatchRequest"];
             };
         };
         responses: {
@@ -11529,7 +11529,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JarvisDispatchResponse"];
+                    "application/json": components["schemas"]["OikosDispatchResponse"];
                 };
             };
             /** @description Validation Error */
@@ -11543,7 +11543,7 @@ export interface operations {
             };
         };
     };
-    jarvis_concierge_api_jarvis_concierge_post: {
+    oikos_run_api_oikos_run_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11556,7 +11556,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["JarvisConciergeRequest"];
+                "application/json": components["schemas"]["OikosRunRequest"];
             };
         };
         responses: {
@@ -11566,7 +11566,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JarvisConciergeResponse"];
+                    "application/json": components["schemas"]["OikosRunResponse"];
                 };
             };
             /** @description Validation Error */
@@ -11580,7 +11580,7 @@ export interface operations {
             };
         };
     };
-    jarvis_concierge_cancel_api_jarvis_concierge__course_id__cancel_post: {
+    oikos_run_cancel_api_oikos_run__run_id__cancel_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11589,7 +11589,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                course_id: number;
+                run_id: number;
             };
             cookie?: never;
         };
@@ -11601,7 +11601,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JarvisCancelResponse"];
+                    "application/json": components["schemas"]["OikosRunCancelResponse"];
                 };
             };
             /** @description Validation Error */
@@ -11615,7 +11615,7 @@ export interface operations {
             };
         };
     };
-    jarvis_chat_api_jarvis_chat_post: {
+    oikos_chat_api_oikos_chat_post: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -11628,7 +11628,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["JarvisChatRequest"];
+                "application/json": components["schemas"]["OikosChatRequest"];
             };
         };
         responses: {
@@ -11652,7 +11652,7 @@ export interface operations {
             };
         };
     };
-    convert_text_to_speech_api_jarvis_tts_post: {
+    convert_text_to_speech_api_oikos_tts_post: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -11687,7 +11687,7 @@ export interface operations {
             };
         };
     };
-    convert_text_to_speech_json_api_jarvis_tts_json_post: {
+    convert_text_to_speech_json_api_oikos_tts_json_post: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -11724,7 +11724,7 @@ export interface operations {
             };
         };
     };
-    stream_text_to_speech_api_jarvis_tts_stream_get: {
+    stream_text_to_speech_api_oikos_tts_stream_get: {
         parameters: {
             query: {
                 text: string;
@@ -11759,7 +11759,7 @@ export interface operations {
             };
         };
     };
-    get_tts_status_api_jarvis_tts_status_get: {
+    get_tts_status_api_oikos_tts_status_get: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -11792,7 +11792,7 @@ export interface operations {
             };
         };
     };
-    list_voices_api_jarvis_tts_voices_get: {
+    list_voices_api_oikos_tts_voices_get: {
         parameters: {
             query?: {
                 provider?: string | null;
@@ -11826,7 +11826,7 @@ export interface operations {
             };
         };
     };
-    voice_turn_api_jarvis_voice_turn_post: {
+    voice_turn_api_oikos_voice_turn_post: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -11839,7 +11839,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "multipart/form-data": components["schemas"]["Body_voice_turn_api_jarvis_voice_turn_post"];
+                "multipart/form-data": components["schemas"]["Body_voice_turn_api_oikos_voice_turn_post"];
             };
         };
         responses: {
@@ -11863,7 +11863,7 @@ export interface operations {
             };
         };
     };
-    jarvis_auth_api_jarvis_auth_post: {
+    oikos_auth_api_oikos_auth_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11874,7 +11874,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["JarvisAuthRequest"];
+                "application/json": components["schemas"]["OikosAuthRequest"];
             };
         };
         responses: {
@@ -11884,7 +11884,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JarvisAuthResponse"];
+                    "application/json": components["schemas"]["OikosAuthResponse"];
                 };
             };
             /** @description Validation Error */
@@ -11898,7 +11898,7 @@ export interface operations {
             };
         };
     };
-    jarvis_events_api_jarvis_events_get: {
+    oikos_events_api_oikos_events_get: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -11931,7 +11931,7 @@ export interface operations {
             };
         };
     };
-    jarvis_history_api_jarvis_history_get: {
+    oikos_history_api_oikos_history_get: {
         parameters: {
             query?: {
                 limit?: number;
@@ -11952,7 +11952,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JarvisHistoryResponse"];
+                    "application/json": components["schemas"]["OikosHistoryResponse"];
                 };
             };
             /** @description Validation Error */
@@ -11966,7 +11966,7 @@ export interface operations {
             };
         };
     };
-    jarvis_clear_history_api_jarvis_history_delete: {
+    oikos_clear_history_api_oikos_history_delete: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11997,7 +11997,7 @@ export interface operations {
             };
         };
     };
-    jarvis_bootstrap_api_jarvis_bootstrap_get: {
+    oikos_bootstrap_api_oikos_bootstrap_get: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -12016,7 +12016,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JarvisBootstrapResponse"];
+                    "application/json": components["schemas"]["OikosBootstrapResponse"];
                 };
             };
             /** @description Validation Error */
@@ -12030,7 +12030,7 @@ export interface operations {
             };
         };
     };
-    get_concierge_thread_api_jarvis_concierge_thread_get: {
+    get_oikos_thread_api_oikos_thread_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -12049,7 +12049,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ConciergeThreadInfo"];
+                    "application/json": components["schemas"]["OikosThreadInfo"];
                 };
             };
             /** @description Validation Error */
@@ -12063,7 +12063,7 @@ export interface operations {
             };
         };
     };
-    jarvis_update_preferences_api_jarvis_preferences_patch: {
+    oikos_update_preferences_api_oikos_preferences_patch: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -12076,7 +12076,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["JarvisPreferencesUpdate"];
+                "application/json": components["schemas"]["OikosPreferencesUpdate"];
             };
         };
         responses: {
@@ -12086,7 +12086,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JarvisPreferences"];
+                    "application/json": components["schemas"]["OikosPreferences"];
                 };
             };
             /** @description Validation Error */
@@ -12100,7 +12100,7 @@ export interface operations {
             };
         };
     };
-    jarvis_session_get_api_jarvis_session_get: {
+    oikos_session_get_api_oikos_session_get: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -12133,7 +12133,7 @@ export interface operations {
             };
         };
     };
-    jarvis_session_post_api_jarvis_session_post: {
+    oikos_session_post_api_oikos_session_post: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -12166,7 +12166,7 @@ export interface operations {
             };
         };
     };
-    jarvis_conversation_title_api_jarvis_conversation_title_post: {
+    oikos_conversation_title_api_oikos_conversation_title_post: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -12199,14 +12199,14 @@ export interface operations {
             };
         };
     };
-    resume_course_api_internal_courses__course_id__resume_post: {
+    resume_run_api_internal_runs__run_id__resume_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                course_id: number;
+                run_id: number;
             };
             cookie?: never;
         };
@@ -12236,7 +12236,7 @@ export interface operations {
             };
         };
     };
-    push_sync_operations_api_jarvis_sync_push_post: {
+    push_sync_operations_api_oikos_sync_push_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -12273,7 +12273,7 @@ export interface operations {
             };
         };
     };
-    pull_sync_operations_api_jarvis_sync_pull_get: {
+    pull_sync_operations_api_oikos_sync_pull_get: {
         parameters: {
             query?: {
                 /** @description Cursor position to pull from */
@@ -12308,7 +12308,7 @@ export interface operations {
             };
         };
     };
-    stream_course_replay_api_stream_courses__course_id__get: {
+    stream_run_replay_api_stream_runs__run_id__get: {
         parameters: {
             query?: {
                 after_event_id?: number;
@@ -12319,7 +12319,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                course_id: number;
+                run_id: number;
             };
             cookie?: never;
         };

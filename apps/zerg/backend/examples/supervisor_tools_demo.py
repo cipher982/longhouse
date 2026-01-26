@@ -1,13 +1,13 @@
-"""Demo of concierge tools usage.
+"""Demo of oikos tools usage.
 
-This script demonstrates how to use the concierge tools to:
+This script demonstrates how to use the oikos tools to:
 1. Spawn commis fiches
 2. List commis
 3. Read commis results
 4. Query commis metadata
 
 Run this script with:
-    uv run python examples/concierge_tools_demo.py
+    uv run python examples/oikos_tools_demo.py
 """
 
 import asyncio
@@ -19,7 +19,7 @@ from zerg.database import SessionLocal
 from zerg.models.models import User
 from zerg.models_config import TIER_3  # Use cheapest model for demo
 from zerg.services.commis_artifact_store import CommisArtifactStore
-from zerg.tools.builtin.concierge_tools import (
+from zerg.tools.builtin.oikos_tools import (
     get_commis_metadata,
     list_commis,
     read_commis_result,
@@ -28,7 +28,7 @@ from zerg.tools.builtin.concierge_tools import (
 
 
 async def main():
-    """Run concierge tools demo."""
+    """Run oikos tools demo."""
     # Set up temporary artifact store
     with tempfile.TemporaryDirectory() as tmpdir:
         import os
@@ -48,7 +48,7 @@ async def main():
             set_credential_resolver(resolver)
 
             print("=" * 60)
-            print("CONCIERGE TOOLS DEMO")
+            print("OIKOS TOOLS DEMO")
             print("=" * 60)
 
             # 1. Spawn a commis

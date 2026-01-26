@@ -112,7 +112,7 @@ class ServerName(str, Enum):
     SLACK = "slack"
     SMS = "sms"
     SSH = "ssh"
-    SUPERVISOR = "concierge"
+    SUPERVISOR = "supervisor"
     TASK = "task"
     TOOL_DISCOVERY = "tool_discovery"
     UUID = "uuid"

@@ -4,10 +4,6 @@ This module contains the standard tools that come with the platform.
 All tools in this module are aggregated into a single list for registry construction.
 """
 
-from zerg.tools.builtin.concierge_tools import CONCIERGE_TOOL_NAMES
-from zerg.tools.builtin.concierge_tools import CONCIERGE_UTILITY_TOOLS
-from zerg.tools.builtin.concierge_tools import TOOLS as CONCIERGE_TOOLS
-from zerg.tools.builtin.concierge_tools import get_concierge_allowed_tools
 from zerg.tools.builtin.connector_tools import TOOLS as CONNECTOR_TOOLS
 from zerg.tools.builtin.contact_user import TOOLS as CONTACT_USER_TOOLS
 from zerg.tools.builtin.container_tools import TOOLS as CONTAINER_TOOLS
@@ -24,6 +20,10 @@ from zerg.tools.builtin.linear_tools import TOOLS as LINEAR_TOOLS
 from zerg.tools.builtin.math_tools import TOOLS as MATH_TOOLS
 from zerg.tools.builtin.memory_tools import TOOLS as MEMORY_TOOLS
 from zerg.tools.builtin.notion_tools import TOOLS as NOTION_TOOLS
+from zerg.tools.builtin.oikos_tools import OIKOS_TOOL_NAMES
+from zerg.tools.builtin.oikos_tools import OIKOS_UTILITY_TOOLS
+from zerg.tools.builtin.oikos_tools import TOOLS as OIKOS_TOOLS
+from zerg.tools.builtin.oikos_tools import get_oikos_allowed_tools
 from zerg.tools.builtin.personal_tools import TOOLS as PERSONAL_TOOLS
 from zerg.tools.builtin.runner_setup_tools import TOOLS as RUNNER_SETUP_TOOLS
 from zerg.tools.builtin.runner_tools import TOOLS as RUNNER_TOOLS
@@ -60,7 +60,7 @@ BUILTIN_TOOLS = (
     + SLACK_TOOLS
     + SMS_TOOLS
     + SSH_TOOLS
-    + CONCIERGE_TOOLS
+    + OIKOS_TOOLS
     + TASK_TOOLS
     + TOOL_DISCOVERY_TOOLS
     + UUID_TOOLS
@@ -70,9 +70,9 @@ BUILTIN_TOOLS = (
 
 __all__ = [
     "BUILTIN_TOOLS",
-    "CONCIERGE_TOOL_NAMES",
-    "CONCIERGE_UTILITY_TOOLS",
-    "get_concierge_allowed_tools",
+    "OIKOS_TOOL_NAMES",
+    "OIKOS_UTILITY_TOOLS",
+    "get_oikos_allowed_tools",
 ]
 
 # ---------------------------------------------------------------------------

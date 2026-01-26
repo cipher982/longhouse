@@ -1,4 +1,4 @@
-"""Text-to-Speech service for Jarvis voice responses.
+"""Text-to-Speech service for Oikos voice responses.
 
 Provides TTS conversion using multiple providers:
 - OpenAI (audio/speech API)
@@ -62,7 +62,7 @@ class TTSConfig:
     elevenlabs_speed: float = 1.0
 
     # Edge TTS settings
-    edge_voice: str = "en-US-GuyNeural"  # Default: masculine voice for Jarvis
+    edge_voice: str = "en-US-GuyNeural"  # Default: masculine voice for Oikos
     edge_lang: str = "en-US"
     edge_rate: str | None = None  # e.g., "+10%", "-5%", None for default
     edge_pitch: str | None = None  # e.g., "+10Hz", "-5Hz", None for default

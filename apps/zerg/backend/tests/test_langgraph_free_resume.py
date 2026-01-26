@@ -1,4 +1,4 @@
-"""Tests for LangGraph-free concierge resume path.
+"""Tests for LangGraph-free oikos resume path.
 
 These tests verify the new resume implementation that uses FicheRunner.run_continuation()
 instead of LangGraph's Command(resume=...) pattern. The default behavior now uses
@@ -8,7 +8,7 @@ Key behaviors tested:
 - Happy path: WAITING run resumes successfully
 - Concurrency: Only one resume succeeds when called concurrently
 - Error handling: Missing tool_call_id fails with proper events
-- Fallback: tool_call_id lookup via concierge_course_id when job_id not passed
+- Fallback: tool_call_id lookup via oikos_run_id when job_id not passed
 - Idempotency: Duplicate ToolMessages prevented on retry
 """
 
@@ -25,12 +25,12 @@ from langchain_core.messages import HumanMessage
 from langchain_core.messages import ToolMessage
 
 from zerg.crud import crud
-from zerg.models.enums import CourseStatus
-from zerg.models.enums import CourseTrigger
-from zerg.models.models import Course
+from zerg.models.enums import RunStatus
+from zerg.models.enums import RunTrigger
+from zerg.models.models import Run
 from zerg.models.models import ThreadMessage
 from zerg.models.models import CommisJob
-from zerg.services.concierge_service import ConciergeService
+from zerg.services.oikos_service import OikosService
 
 
 @pytest.mark.timeout(30)
@@ -40,7 +40,7 @@ class TestLangGraphFreeResumeHappyPath:
     @pytest.mark.asyncio
     async def test_resume_success_with_commis_job(self, db_session, test_user, sample_fiche):
         """Test that resume succeeds when CommisJob has tool_call_id."""
-        from zerg.services.commis_resume import _continue_concierge_langgraph_free
+        from zerg.services.commis_resume import _continue_oikos_langgraph_free
 
         # Create thread with AIMessage containing tool_calls
         thread = crud.create_thread(
@@ -81,11 +81,11 @@ class TestLangGraphFreeResumeHappyPath:
         db_session.commit()
 
         # Create WAITING run
-        waiting_run = Course(
+        waiting_run = Run(
             fiche_id=sample_fiche.id,
             thread_id=thread.id,
-            status=CourseStatus.WAITING,
-            trigger=CourseTrigger.API,
+            status=RunStatus.WAITING,
+            trigger=RunTrigger.API,
             assistant_message_id=str(uuid.uuid4()),
         )
         db_session.add(waiting_run)
@@ -95,7 +95,7 @@ class TestLangGraphFreeResumeHappyPath:
         # Create CommisJob with tool_call_id
         job = CommisJob(
             owner_id=test_user.id,
-            concierge_course_id=waiting_run.id,
+            oikos_run_id=waiting_run.id,
             tool_call_id=tool_call_id,
             task="Test task",
             model="gpt-mock",
@@ -110,16 +110,16 @@ class TestLangGraphFreeResumeHappyPath:
             MagicMock(role="assistant", content="Task completed successfully"),
         ]
 
-        async def mock_run_continuation(self, db, thread, tool_call_id, tool_result, course_id, trace_id=None):
+        async def mock_run_continuation(self, db, thread, tool_call_id, tool_result, run_id, trace_id=None):
             return mock_created_rows
 
         with patch(
             "zerg.managers.fiche_runner.FicheRunner.run_continuation",
             new=mock_run_continuation,
         ):
-            result = await _continue_concierge_langgraph_free(
+            result = await _continue_oikos_langgraph_free(
                 db=db_session,
-                course_id=waiting_run.id,
+                run_id=waiting_run.id,
                 commis_result="Commis completed: test result",
                 job_id=job.id,
             )
@@ -131,12 +131,12 @@ class TestLangGraphFreeResumeHappyPath:
 
         # Verify run status
         db_session.refresh(waiting_run)
-        assert waiting_run.status == CourseStatus.SUCCESS
+        assert waiting_run.status == RunStatus.SUCCESS
 
     @pytest.mark.asyncio
     async def test_resume_skipped_when_not_waiting(self, db_session, test_user, sample_fiche):
         """Test that resume is skipped when run is not WAITING."""
-        from zerg.services.commis_resume import _continue_concierge_langgraph_free
+        from zerg.services.commis_resume import _continue_oikos_langgraph_free
 
         # Create thread
         thread = crud.create_thread(
@@ -147,19 +147,19 @@ class TestLangGraphFreeResumeHappyPath:
         )
 
         # Create SUCCESS run (not WAITING)
-        success_run = Course(
+        success_run = Run(
             fiche_id=sample_fiche.id,
             thread_id=thread.id,
-            status=CourseStatus.SUCCESS,
-            trigger=CourseTrigger.API,
+            status=RunStatus.SUCCESS,
+            trigger=RunTrigger.API,
         )
         db_session.add(success_run)
         db_session.commit()
         db_session.refresh(success_run)
 
-        result = await _continue_concierge_langgraph_free(
+        result = await _continue_oikos_langgraph_free(
             db=db_session,
-            course_id=success_run.id,
+            run_id=success_run.id,
             commis_result="Commis result",
         )
 
@@ -177,12 +177,12 @@ class TestLangGraphFreeResumeConcurrency:
     async def test_concurrent_resume_only_runs_once(self, db_session, test_user):
         """Concurrent resume attempts should only resume once (idempotent)."""
         from zerg.database import get_session_factory
-        from zerg.services.commis_resume import resume_concierge_with_commis_result
+        from zerg.services.commis_resume import resume_oikos_with_commis_result
 
-        # Seed concierge fiche/thread once
-        bootstrap = ConciergeService(db_session)
-        fiche = bootstrap.get_or_create_concierge_fiche(test_user.id)
-        thread = bootstrap.get_or_create_concierge_thread(test_user.id, fiche)
+        # Seed oikos fiche/thread once
+        bootstrap = OikosService(db_session)
+        fiche = bootstrap.get_or_create_oikos_fiche(test_user.id)
+        thread = bootstrap.get_or_create_oikos_thread(test_user.id, fiche)
 
         # Add one user message so DB conversation length is non-zero
         crud.create_thread_message(
@@ -214,11 +214,11 @@ class TestLangGraphFreeResumeConcurrency:
         db_session.commit()
 
         # Create WAITING run
-        run = Course(
+        run = Run(
             fiche_id=fiche.id,
             thread_id=thread.id,
-            status=CourseStatus.WAITING,
-            trigger=CourseTrigger.API,
+            status=RunStatus.WAITING,
+            trigger=RunTrigger.API,
             assistant_message_id=str(uuid.uuid4()),
         )
         db_session.add(run)
@@ -228,7 +228,7 @@ class TestLangGraphFreeResumeConcurrency:
         # Create CommisJob with tool_call_id
         job = CommisJob(
             owner_id=test_user.id,
-            concierge_course_id=run.id,
+            oikos_run_id=run.id,
             tool_call_id=tool_call_id,
             task="Test task",
             model="gpt-mock",
@@ -241,7 +241,7 @@ class TestLangGraphFreeResumeConcurrency:
         # Track how many times run_continuation is called
         call_count = 0
 
-        async def mock_run_continuation(self, db, thread, tool_call_id, tool_result, course_id, trace_id=None):
+        async def mock_run_continuation(self, db, thread, tool_call_id, tool_result, run_id, trace_id=None):
             nonlocal call_count
             call_count += 1
             await asyncio.sleep(0.05)  # Simulate some work
@@ -258,8 +258,8 @@ class TestLangGraphFreeResumeConcurrency:
                 new=mock_run_continuation,
             ):
                 r1, r2 = await asyncio.gather(
-                    resume_concierge_with_commis_result(db=db1, course_id=run.id, commis_result="a", job_id=job.id),
-                    resume_concierge_with_commis_result(db=db2, course_id=run.id, commis_result="b", job_id=job.id),
+                    resume_oikos_with_commis_result(db=db1, run_id=run.id, commis_result="a", job_id=job.id),
+                    resume_oikos_with_commis_result(db=db2, run_id=run.id, commis_result="b", job_id=job.id),
                 )
         finally:
             db1.close()
@@ -297,7 +297,7 @@ class TestLangGraphFreeResumeErrorHandling:
     @pytest.mark.asyncio
     async def test_resume_fails_when_no_tool_call_id(self, db_session, test_user, sample_fiche):
         """Test that resume fails with proper events when tool_call_id is missing."""
-        from zerg.services.commis_resume import _continue_concierge_langgraph_free
+        from zerg.services.commis_resume import _continue_oikos_langgraph_free
 
         # Create thread
         thread = crud.create_thread(
@@ -308,27 +308,27 @@ class TestLangGraphFreeResumeErrorHandling:
         )
 
         # Create WAITING run WITHOUT a CommisJob
-        waiting_run = Course(
+        waiting_run = Run(
             fiche_id=sample_fiche.id,
             thread_id=thread.id,
-            status=CourseStatus.WAITING,
-            trigger=CourseTrigger.API,
+            status=RunStatus.WAITING,
+            trigger=RunTrigger.API,
             assistant_message_id=str(uuid.uuid4()),
         )
         db_session.add(waiting_run)
         db_session.commit()
         db_session.refresh(waiting_run)
 
-        # Mock emit_course_event to track calls (patch where it's used)
+        # Mock emit_run_event to track calls (patch where it's used)
         events_emitted = []
 
-        async def mock_emit_course_event(db, course_id, event_type, payload):
+        async def mock_emit_run_event(db, run_id, event_type, payload):
             events_emitted.append({"type": event_type, "payload": payload})
 
-        with patch("zerg.services.event_store.emit_course_event", side_effect=mock_emit_course_event):
-            result = await _continue_concierge_langgraph_free(
+        with patch("zerg.services.event_store.emit_run_event", side_effect=mock_emit_run_event):
+            result = await _continue_oikos_langgraph_free(
                 db=db_session,
-                course_id=waiting_run.id,
+                run_id=waiting_run.id,
                 commis_result="Commis result",
                 job_id=None,  # No job_id, no CommisJob
             )
@@ -340,17 +340,17 @@ class TestLangGraphFreeResumeErrorHandling:
 
         # Verify run status
         db_session.refresh(waiting_run)
-        assert waiting_run.status == CourseStatus.FAILED
+        assert waiting_run.status == RunStatus.FAILED
 
         # Verify events emitted
         event_types = [e["type"] for e in events_emitted]
         assert "error" in event_types, "Error event should be emitted"
-        assert "course_updated" in event_types, "course_updated event should be emitted"
+        assert "run_updated" in event_types, "run_updated event should be emitted"
 
     @pytest.mark.asyncio
     async def test_tool_call_id_fallback_lookup(self, db_session, test_user, sample_fiche):
-        """Test that tool_call_id is found via concierge_course_id when job_id not passed."""
-        from zerg.services.commis_resume import _continue_concierge_langgraph_free
+        """Test that tool_call_id is found via oikos_run_id when job_id not passed."""
+        from zerg.services.commis_resume import _continue_oikos_langgraph_free
 
         # Create thread with AIMessage containing tool_calls
         thread = crud.create_thread(
@@ -390,21 +390,21 @@ class TestLangGraphFreeResumeErrorHandling:
         db_session.commit()
 
         # Create WAITING run
-        waiting_run = Course(
+        waiting_run = Run(
             fiche_id=sample_fiche.id,
             thread_id=thread.id,
-            status=CourseStatus.WAITING,
-            trigger=CourseTrigger.API,
+            status=RunStatus.WAITING,
+            trigger=RunTrigger.API,
             assistant_message_id=str(uuid.uuid4()),
         )
         db_session.add(waiting_run)
         db_session.commit()
         db_session.refresh(waiting_run)
 
-        # Create CommisJob with concierge_course_id (but don't pass job_id to resume)
+        # Create CommisJob with oikos_run_id (but don't pass job_id to resume)
         job = CommisJob(
             owner_id=test_user.id,
-            concierge_course_id=waiting_run.id,
+            oikos_run_id=waiting_run.id,
             tool_call_id=tool_call_id,
             task="Test task",
             model="gpt-mock",
@@ -417,7 +417,7 @@ class TestLangGraphFreeResumeErrorHandling:
         # Mock FicheRunner.run_continuation
         mock_created_rows = [MagicMock(role="assistant", content="Done")]
 
-        async def mock_run_continuation(self, db, thread, tool_call_id, tool_result, course_id, trace_id=None):
+        async def mock_run_continuation(self, db, thread, tool_call_id, tool_result, run_id, trace_id=None):
             return mock_created_rows
 
         with patch(
@@ -425,11 +425,11 @@ class TestLangGraphFreeResumeErrorHandling:
             new=mock_run_continuation,
         ):
             # Call WITHOUT job_id - should use fallback lookup
-            result = await _continue_concierge_langgraph_free(
+            result = await _continue_oikos_langgraph_free(
                 db=db_session,
-                course_id=waiting_run.id,
+                run_id=waiting_run.id,
                 commis_result="Commis completed",
-                job_id=None,  # Not passed - fallback to concierge_course_id lookup
+                job_id=None,  # Not passed - fallback to oikos_run_id lookup
             )
 
         # Verify success (fallback worked)
@@ -447,7 +447,7 @@ class TestRunContinuationIdempotency:
         from langchain_core.messages import SystemMessage as LcSystemMessage
 
         from zerg.managers.fiche_runner import FicheRunner
-        from zerg.services.concierge_react_engine import ConciergeResult
+        from zerg.services.oikos_react_engine import OikosResult
 
         # Create thread with AIMessage containing pending tool_call
         thread = crud.create_thread(
@@ -486,9 +486,9 @@ class TestRunContinuationIdempotency:
         }
         db_session.commit()
 
-        # Mock run_concierge_loop to return messages including input + new response
+        # Mock run_oikos_loop to return messages including input + new response
         # The result messages should include all input messages + new AIMessage
-        mock_result = ConciergeResult(
+        mock_result = OikosResult(
             messages=[
                 LcSystemMessage(content="system"),
                 LcSystemMessage(content="context"),
@@ -502,7 +502,7 @@ class TestRunContinuationIdempotency:
         )
 
         with patch(
-            "zerg.services.concierge_react_engine.run_concierge_loop",
+            "zerg.services.oikos_react_engine.run_oikos_loop",
             new=AsyncMock(return_value=mock_result),
         ):
             runner = FicheRunner(sample_fiche)
@@ -511,7 +511,7 @@ class TestRunContinuationIdempotency:
                 thread=thread,
                 tool_call_id=tool_call_id,
                 tool_result="Commis completed: test result",
-                course_id=123,
+                run_id=123,
             )
 
         # Verify ToolMessage was created in the database
@@ -536,7 +536,7 @@ class TestRunContinuationIdempotency:
     async def test_run_continuation_idempotent_tool_message(self, db_session, test_user, sample_fiche):
         """Test that run_continuation doesn't create duplicate ToolMessage."""
         from zerg.managers.fiche_runner import FicheRunner
-        from zerg.services.concierge_react_engine import ConciergeResult
+        from zerg.services.oikos_react_engine import OikosResult
 
         # Create thread with AIMessage + existing ToolMessage
         thread = crud.create_thread(
@@ -588,9 +588,9 @@ class TestRunContinuationIdempotency:
         }
         db_session.commit()
 
-        # Mock run_concierge_loop to return a simple result
-        # Patch where it's defined in concierge_react_engine module
-        mock_result = ConciergeResult(
+        # Mock run_oikos_loop to return a simple result
+        # Patch where it's defined in oikos_react_engine module
+        mock_result = OikosResult(
             messages=[
                 AIMessage(content="Task completed successfully."),
             ],
@@ -599,7 +599,7 @@ class TestRunContinuationIdempotency:
         )
 
         with patch(
-            "zerg.services.concierge_react_engine.run_concierge_loop",
+            "zerg.services.oikos_react_engine.run_oikos_loop",
             new=AsyncMock(return_value=mock_result),
         ):
             runner = FicheRunner(sample_fiche)
@@ -608,7 +608,7 @@ class TestRunContinuationIdempotency:
                 thread=thread,
                 tool_call_id=tool_call_id,
                 tool_result="Commis completed: second result (should be ignored)",
-                course_id=123,
+                run_id=123,
             )
 
         # Verify no duplicate ToolMessage

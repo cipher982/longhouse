@@ -57,16 +57,16 @@ async def handle_fiche_subscription(client_id: str, fiche_id: int, message_id: s
         )
 
     topic = f"fiche:{fiche_id}"
-    last_course_at = getattr(fiche, "last_course_at", None)
-    next_course_at = getattr(fiche, "next_course_at", None)
+    last_run_at = getattr(fiche, "last_run_at", None)
+    next_run_at = getattr(fiche, "next_run_at", None)
 
     fiche_data = FicheEventData(
         id=fiche.id,
         status=getattr(fiche, "status", None),
         name=getattr(fiche, "name", None),
         description=getattr(fiche, "system_instructions", None),
-        last_course_at=last_course_at.isoformat() if last_course_at else None,
-        next_course_at=next_course_at.isoformat() if next_course_at else None,
+        last_run_at=last_run_at.isoformat() if last_run_at else None,
+        next_run_at=next_run_at.isoformat() if next_run_at else None,
         last_error=getattr(fiche, "last_error", None),
     )
 

@@ -115,26 +115,26 @@ class WsTokenCallback(AsyncCallbackHandler):
                 self._warned_no_context = True
             return
 
-        # Get concierge context for SSE correlation (may be None for non-concierge calls)
-        from zerg.services.concierge_context import get_concierge_context
+        # Get oikos context for SSE correlation (may be None for non-oikos calls)
+        from zerg.services.oikos_context import get_oikos_context
 
-        ctx = get_concierge_context()
-        course_id = ctx.course_id if ctx else None
+        ctx = get_oikos_context()
+        run_id = ctx.run_id if ctx else None
         message_id = ctx.message_id if ctx else None
 
-        # Publish to event bus for SSE consumers (Jarvis chat)
+        # Publish to event bus for SSE consumers (Oikos chat)
         # NOTE: Tokens are NOT persisted to DB - only published to live subscribers.
         # Persisting every token caused 3x slowdown (blocking commit per token).
-        # Lifecycle events (concierge_started, concierge_complete) are still persisted
+        # Lifecycle events (oikos_started, oikos_complete) are still persisted
         # for resumability - clients can replay from last lifecycle event.
-        if course_id is not None:
+        if run_id is not None:
             try:
                 from zerg.events import EventType
                 from zerg.events import event_bus
 
                 payload = {
-                    "event_type": EventType.CONCIERGE_TOKEN,
-                    "course_id": course_id,
+                    "event_type": EventType.OIKOS_TOKEN,
+                    "run_id": run_id,
                     "thread_id": thread_id,
                     "token": token,
                     "owner_id": user_id,
@@ -142,15 +142,15 @@ class WsTokenCallback(AsyncCallbackHandler):
                 if message_id:
                     payload["message_id"] = message_id
 
-                await event_bus.publish(EventType.CONCIERGE_TOKEN, payload)
+                await event_bus.publish(EventType.OIKOS_TOKEN, payload)
             except Exception:  # noqa: BLE001 – token streaming is best-effort
-                logger.exception("Error publishing token to event bus for run %s", course_id)
-            # For concierge runs, SSE is the primary delivery path - skip WS broadcast
+                logger.exception("Error publishing token to event bus for run %s", run_id)
+            # For oikos runs, SSE is the primary delivery path - skip WS broadcast
             # to avoid redundant Pydantic serialization + lock contention overhead.
             return
 
-        # WebSocket broadcast for non-concierge contexts (dashboard thread view)
-        # Only runs when there's no concierge course_id - keeps this path for legacy compat.
+        # WebSocket broadcast for non-oikos contexts (dashboard thread view)
+        # Only runs when there's no oikos run_id - keeps this path for legacy compat.
         topic = f"user:{user_id}"
 
         try:

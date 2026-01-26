@@ -42,7 +42,7 @@ class MemoryWriteInput(BaseModel):
     content: str = Field(description="Full file content")
     title: str | None = Field(default=None, description="Optional title for the memory file")
     tags: List[str] | None = Field(default=None, description="Optional tags for filtering")
-    metadata: Dict[str, Any] | None = Field(default=None, description="Optional metadata (course_id, thread_id, etc.)")
+    metadata: Dict[str, Any] | None = Field(default=None, description="Optional metadata (run_id, thread_id, etc.)")
 
 
 def memory_write(

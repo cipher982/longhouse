@@ -58,7 +58,6 @@ from zerg.routers.admin_bootstrap import router as admin_bootstrap_router
 from zerg.routers.auth import router as auth_router
 from zerg.routers.connectors import router as connectors_router
 from zerg.routers.contacts import router as contacts_router
-from zerg.routers.courses import router as courses_router
 from zerg.routers.email_webhooks import router as email_webhook_router
 from zerg.routers.email_webhooks_pubsub import router as pubsub_webhook_router
 from zerg.routers.fiche_config import router as fiche_config_router
@@ -66,18 +65,19 @@ from zerg.routers.fiche_connectors import router as fiche_connectors_router
 from zerg.routers.fiches import router as fiches_router
 from zerg.routers.funnel import router as funnel_router
 from zerg.routers.graph_layout import router as graph_router
-from zerg.routers.jarvis import router as jarvis_router
-from zerg.routers.jarvis_internal import router as jarvis_internal_router
 from zerg.routers.jobs import router as jobs_router
 from zerg.routers.knowledge import router as knowledge_router
 from zerg.routers.mcp_servers import router as mcp_servers_router
 from zerg.routers.metrics import router as metrics_router
 from zerg.routers.models import router as models_router
 from zerg.routers.oauth import router as oauth_router
+from zerg.routers.oikos import router as oikos_router
+from zerg.routers.oikos_internal import router as oikos_internal_router
 from zerg.routers.ops import beacon_router as ops_beacon_router
 from zerg.routers.ops import router as ops_router
 from zerg.routers.reliability import router as reliability_router
 from zerg.routers.runners import router as runners_router
+from zerg.routers.runs import router as runs_router
 from zerg.routers.skills import router as skills_router
 from zerg.routers.stream import router as stream_router
 from zerg.routers.sync import router as sync_router
@@ -121,7 +121,7 @@ class StructuredFormatter(logging.Formatter):
     """Formatter that renders structured fields for grep-able telemetry logs.
 
     For logs with 'extra' dict, formats as:
-        2025-12-15 03:19:33 INFO [FICHE] Starting course thread thread_id=1
+        2025-12-15 03:19:33 INFO [FICHE] Starting run thread thread_id=1
     """
 
     def format(self, record):
@@ -292,7 +292,7 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"Auto-seed failed (non-fatal): {e}")
 
-        # Initialize fiche state recovery system (recovers orphaned fiches, courses, jobs)
+        # Initialize fiche state recovery system (recovers orphaned fiches, runs, jobs)
         if not _settings.testing:
             from zerg.services.fiche_state_recovery import initialize_fiche_state_system
 
@@ -334,7 +334,7 @@ async def lifespan(app: FastAPI):
                 failed.append(f"watch_renewal ({e})")
                 logger.exception("Failed to start watch_renewal_service")
 
-            # Commis job processor (critical for concierge commis)
+            # Commis job processor (critical for oikos commis)
             try:
                 from zerg.services.commis_job_processor import commis_job_processor
 
@@ -641,7 +641,7 @@ app.include_router(pubsub_webhook_router, prefix=f"{API_PREFIX}")
 app.include_router(connectors_router, prefix=f"{API_PREFIX}")
 app.include_router(triggers_router, prefix=f"{API_PREFIX}")
 app.include_router(knowledge_router, prefix=f"{API_PREFIX}")
-app.include_router(courses_router, prefix=f"{API_PREFIX}")
+app.include_router(runs_router, prefix=f"{API_PREFIX}")
 app.include_router(runners_router, prefix=f"{API_PREFIX}")  # Runners execution infrastructure
 app.include_router(workflows_router, prefix=f"{API_PREFIX}")
 app.include_router(workflow_executions_router, prefix=f"{API_PREFIX}")
@@ -651,9 +651,9 @@ app.include_router(users_router, prefix=f"{API_PREFIX}")
 app.include_router(contacts_router, prefix=f"{API_PREFIX}")  # User approved contacts for email/SMS
 app.include_router(templates_router, prefix=f"{API_PREFIX}")
 app.include_router(graph_router, prefix=f"{API_PREFIX}")
-app.include_router(jarvis_router)  # Jarvis integration - includes /api/jarvis prefix
-app.include_router(jarvis_internal_router, prefix=f"{API_PREFIX}")  # Internal endpoints for course continuation
-app.include_router(sync_router)  # Conversation sync - includes /api/jarvis/sync prefix
+app.include_router(oikos_router)  # Oikos integration - includes /api/oikos prefix
+app.include_router(oikos_internal_router, prefix=f"{API_PREFIX}")  # Internal endpoints for run continuation
+app.include_router(sync_router)  # Conversation sync - includes /api/oikos/sync prefix
 app.include_router(stream_router)  # Resumable SSE v1 - includes /api/stream prefix
 app.include_router(system_router, prefix=API_PREFIX)
 app.include_router(metrics_router)  # no prefix – Prometheus expects /metrics

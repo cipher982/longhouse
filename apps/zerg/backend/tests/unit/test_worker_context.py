@@ -18,12 +18,12 @@ class TestCommisContext:
         ctx = CommisContext(
             commis_id="test-commis-123",
             owner_id=1,
-            course_id="run-abc",
+            run_id="run-abc",
             task="Check disk space",
         )
         assert ctx.commis_id == "test-commis-123"
         assert ctx.owner_id == 1
-        assert ctx.course_id == "run-abc"
+        assert ctx.run_id == "run-abc"
         assert ctx.task == "Check disk space"
         assert ctx.tool_calls == []
 

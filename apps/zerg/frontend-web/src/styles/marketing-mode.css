@@ -94,7 +94,7 @@
   /* Boost background gradient */
   body.marketing-mode .chat-view-container,
   body.marketing-mode .chat-main,
-  body.marketing-mode .jarvis-chat-view {
+  body.marketing-mode .oikos-chat-view {
     background: linear-gradient(
       145deg,
       #0a0f1e 0%,

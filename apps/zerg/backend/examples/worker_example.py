@@ -1,7 +1,7 @@
 """Example: Using CommisRunner and CommisArtifactStore.
 
 This example demonstrates how to use the commis system to run disposable
-fiche tasks and persist their results for later retrieval by concierges.
+fiche tasks and persist their results for later retrieval by oikos operators.
 """
 
 import asyncio
@@ -53,7 +53,7 @@ async def main():
         print(f"Duration: {result1.duration_ms}ms")
         print(f"Result: {result1.result[:100]}..." if len(result1.result) > 100 else f"Result: {result1.result}")
 
-        # Example 2: Run multiple commis (simulate concierge delegation)
+        # Example 2: Run multiple commis (simulate oikos delegation)
         print("\n=== Example 2: Multiple Commis ===")
         tasks = [
             "Check system disk space",
@@ -72,7 +72,7 @@ async def main():
             commis_ids.append(result.commis_id)
             print(f"  - Completed: {task} ({result.commis_id})")
 
-        # Example 3: Concierge queries commis results
+        # Example 3: Oikos queries commis results
         print("\n=== Example 3: Query Commis Results ===")
         commis = artifact_store.list_commis(status="success", limit=10)
         print(f"Found {len(commis)} successful commis")

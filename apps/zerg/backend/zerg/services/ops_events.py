@@ -1,6 +1,6 @@
 """Ops events bridge: normalize EventBus events to an `ops:events` ticker.
 
-Subscribes to core domain events (courses, fiches, threads) and broadcasts
+Subscribes to core domain events (runs, fiches, threads) and broadcasts
 compact, color-codable frames to the `ops:events` WebSocket topic.
 """
 
@@ -31,20 +31,20 @@ class OpsEventsBridge:
 
     _started: bool = False
 
-    async def _handle_course_event(self, data: Dict[str, Any]) -> None:
-        # Normalize COURSE_* events into course_started/course_success/course_failed
+    async def _handle_run_event(self, data: Dict[str, Any]) -> None:
+        # Normalize RUN_* events into run_started/run_success/run_failed
         status = data.get("status")
         fiche_id = data.get("fiche_id")
-        course_id = data.get("course_id") or data.get("id")
-        if not fiche_id or not course_id:
+        run_id = data.get("run_id") or data.get("id")
+        if not fiche_id or not run_id:
             return
 
         if status == "running":
-            msg_type = "course_started"
+            msg_type = "run_started"
         elif status == "success":
-            msg_type = "course_success"
+            msg_type = "run_success"
         elif status == "failed":
-            msg_type = "course_failed"
+            msg_type = "run_failed"
         else:
             # Ignore queued and unknown statuses for the ticker
             return
@@ -52,7 +52,7 @@ class OpsEventsBridge:
         payload = OpsEventData(
             type=msg_type,
             fiche_id=fiche_id,
-            course_id=course_id,
+            run_id=run_id,
             thread_id=data.get("thread_id"),
             duration_ms=data.get("duration_ms"),
             error=data.get("error"),
@@ -100,8 +100,8 @@ class OpsEventsBridge:
     def start(self) -> None:
         if self._started:
             return
-        event_bus.subscribe(EventType.COURSE_CREATED, self._handle_course_event)
-        event_bus.subscribe(EventType.COURSE_UPDATED, self._handle_course_event)
+        event_bus.subscribe(EventType.RUN_CREATED, self._handle_run_event)
+        event_bus.subscribe(EventType.RUN_UPDATED, self._handle_run_event)
         event_bus.subscribe(EventType.FICHE_CREATED, self._handle_fiche_event)
         event_bus.subscribe(EventType.FICHE_UPDATED, self._handle_fiche_event)
         event_bus.subscribe(EventType.THREAD_MESSAGE_CREATED, self._handle_thread_message)
@@ -113,8 +113,8 @@ class OpsEventsBridge:
         if not self._started:
             return
         try:
-            event_bus.unsubscribe(EventType.COURSE_CREATED, self._handle_course_event)
-            event_bus.unsubscribe(EventType.COURSE_UPDATED, self._handle_course_event)
+            event_bus.unsubscribe(EventType.RUN_CREATED, self._handle_run_event)
+            event_bus.unsubscribe(EventType.RUN_UPDATED, self._handle_run_event)
             event_bus.unsubscribe(EventType.FICHE_CREATED, self._handle_fiche_event)
             event_bus.unsubscribe(EventType.FICHE_UPDATED, self._handle_fiche_event)
             event_bus.unsubscribe(EventType.THREAD_MESSAGE_CREATED, self._handle_thread_message)

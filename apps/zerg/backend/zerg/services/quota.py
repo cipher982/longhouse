@@ -1,4 +1,4 @@
-"""Quota helpers for per-user daily course caps.
+"""Quota helpers for per-user daily run caps.
 
 Centralised, reusable checks to keep routers/services lean.
 """
@@ -17,8 +17,8 @@ from sqlalchemy.orm import Session
 from zerg.config import get_settings
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
-from zerg.models.models import Course as CourseModel
 from zerg.models.models import Fiche as FicheModel
+from zerg.models.models import Run as RunModel
 from zerg.models.models import User as UserModel
 from zerg.services.ops_discord import send_budget_alert
 
@@ -27,15 +27,15 @@ def _is_admin(user: UserModel | None) -> bool:
     return getattr(user, "role", "USER") == "ADMIN"
 
 
-def assert_can_start_course(db: Session, *, user: UserModel) -> None:
-    """Raise 429 when non-admin user exceeds DAILY_COURSES_PER_USER.
+def assert_can_start_run(db: Session, *, user: UserModel) -> None:
+    """Raise 429 when non-admin user exceeds DAILY_RUNS_PER_USER.
 
     Treat 0 or missing env as "disabled" (no limit).
     """
 
     settings = get_settings()
     try:
-        limit = int(getattr(settings, "daily_courses_per_user", 0))
+        limit = int(getattr(settings, "daily_runs_per_user", 0))
     except Exception:  # noqa: BLE001
         limit = 0
 
@@ -43,16 +43,16 @@ def assert_can_start_course(db: Session, *, user: UserModel) -> None:
     if _is_admin(user):
         return
 
-    # Enforce course cap when configured (> 0). If disabled (0), skip this block
+    # Enforce run cap when configured (> 0). If disabled (0), skip this block
     if limit > 0:
         today_utc = datetime.now(timezone.utc).date()
         count_q = (
-            db.query(func.count(CourseModel.id))
-            .join(FicheModel, FicheModel.id == CourseModel.fiche_id)
+            db.query(func.count(RunModel.id))
+            .join(FicheModel, FicheModel.id == RunModel.fiche_id)
             .filter(
                 FicheModel.owner_id == user.id,
-                CourseModel.started_at.isnot(None),
-                func.date(CourseModel.started_at) == today_utc,
+                RunModel.started_at.isnot(None),
+                func.date(RunModel.started_at) == today_utc,
             )
         )
         used = int(count_q.scalar() or 0)
@@ -60,13 +60,13 @@ def assert_can_start_course(db: Session, *, user: UserModel) -> None:
         if used >= limit:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Daily course limit reached ({used}/{limit}). Try again tomorrow or contact admin.",
+                detail=f"Daily run limit reached ({used}/{limit}). Try again tomorrow or contact admin.",
             )
 
     # --------------------------------------------------------------
     # Budget thresholds (user + global) – optional, admins exempt
     # --------------------------------------------------------------
-    # Costs are stored in USD on Course.total_cost_usd. Unknown costs
+    # Costs are stored in USD on Run.total_cost_usd. Unknown costs
     # are left NULL and ignored by SUM().
     try:
         user_budget_cents = int(getattr(settings, "daily_cost_per_user_cents", 0))
@@ -85,12 +85,12 @@ def assert_can_start_course(db: Session, *, user: UserModel) -> None:
 
     # Sum today's user cost
     user_cost_q = (
-        db.query(func.coalesce(func.sum(CourseModel.total_cost_usd), 0.0))
-        .join(FicheModel, FicheModel.id == CourseModel.fiche_id)
+        db.query(func.coalesce(func.sum(RunModel.total_cost_usd), 0.0))
+        .join(FicheModel, FicheModel.id == RunModel.fiche_id)
         .filter(
             FicheModel.owner_id == user.id,
-            CourseModel.finished_at.isnot(None),
-            func.date(CourseModel.finished_at) == today_utc,
+            RunModel.finished_at.isnot(None),
+            func.date(RunModel.finished_at) == today_utc,
         )
     )
     user_cost_usd = float(user_cost_q.scalar() or 0.0)
@@ -98,9 +98,9 @@ def assert_can_start_course(db: Session, *, user: UserModel) -> None:
     # Sum today's global cost
     global_cost_usd = 0.0
     if global_budget_cents > 0:
-        global_cost_q = db.query(func.coalesce(func.sum(CourseModel.total_cost_usd), 0.0)).filter(
-            CourseModel.finished_at.isnot(None),
-            func.date(CourseModel.finished_at) == today_utc,
+        global_cost_q = db.query(func.coalesce(func.sum(RunModel.total_cost_usd), 0.0)).filter(
+            RunModel.finished_at.isnot(None),
+            func.date(RunModel.finished_at) == today_utc,
         )
         global_cost_usd = float(global_cost_q.scalar() or 0.0)
 

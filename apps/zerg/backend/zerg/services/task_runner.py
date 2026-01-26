@@ -1,8 +1,8 @@
-"""Course runner helper – execute a fiche's *task_instructions* once.
+"""Run runner helper – execute a fiche's *task_instructions* once.
 
 This module provides :pyfunc:`execute_fiche_task` which is the single source
-of truth for running a **non-interactive** task course ("▶ Play" button,
-cron/scheduler course, future webhook trigger).
+of truth for running a **non-interactive** task run ("▶ Play" button,
+cron/scheduler run, future webhook trigger).
 
 The helper:
 
@@ -35,7 +35,7 @@ from zerg.events.event_bus import event_bus
 from zerg.managers.fiche_runner import FicheRunner
 from zerg.models.models import Fiche as FicheModel
 from zerg.models.models import Thread as ThreadModel
-from zerg.services.quota import assert_can_start_course
+from zerg.services.quota import assert_can_start_run
 from zerg.services.thread_service import ThreadService
 
 logger = logging.getLogger(__name__)
@@ -78,10 +78,10 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
             raise ValueError("LLM is temporarily disabled by the administrator")
 
     # ------------------------------------------------------------------
-    # Per-user daily course cap (non-admins only)
+    # Per-user daily run cap (non-admins only)
     # ------------------------------------------------------------------
     if owner:
-        assert_can_start_course(db, user=owner)
+        assert_can_start_run(db, user=owner)
 
     # ------------------------------------------------------------------
     # Validate pre-conditions
@@ -98,7 +98,7 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
     if use_advisory:
         from zerg.services.fiche_locks import FicheLockManager
 
-        # Hold the advisory lock for the entire course window.
+        # Hold the advisory lock for the entire run window.
         with FicheLockManager.fiche_lock(db, fiche.id) as acquired:
             if not acquired:
                 raise ValueError("Fiche already running")
@@ -116,14 +116,14 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
             # Create the new thread + seed messages.
             # ------------------------------------------------------------------
             timestamp_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-            title = f"Task Course – {timestamp_str}"
+            title = f"Task Run – {timestamp_str}"
 
             thread = ThreadService.create_thread_with_system_message(
                 db,
                 fiche,
                 title=title,
                 thread_type=thread_type,
-                active=False,  # task courses are not the *active* chat thread
+                active=False,  # task runs are not the *active* chat thread
             )
 
             # Insert the user *task* prompt (unprocessed)
@@ -136,24 +136,24 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
             )
 
             # ------------------------------------------------------------------
-            # Persist a Course row so dashboards can display progress.
+            # Persist a Run row so dashboards can display progress.
             # ------------------------------------------------------------------
             # Use explicit trigger if provided, otherwise infer from thread_type
-            course_trigger = trigger if trigger else (thread_type if thread_type in {"manual", "schedule"} else "api")
-            course_row = crud.create_course(
+            run_trigger = trigger if trigger else (thread_type if thread_type in {"manual", "schedule"} else "api")
+            run_row = crud.create_run(
                 db,
                 fiche_id=fiche.id,
                 thread_id=thread.id,
-                trigger=course_trigger,
+                trigger=run_trigger,
                 status="queued",
             )
 
             await event_bus.publish(
-                EventType.COURSE_CREATED,
+                EventType.RUN_CREATED,
                 {
-                    "event_type": "course_created",
+                    "event_type": "run_created",
                     "fiche_id": fiche.id,
-                    "course_id": course_row.id,
+                    "run_id": run_row.id,
                     "status": "queued",
                     "thread_id": thread.id,
                 },
@@ -161,13 +161,13 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
 
             # Immediately mark as running (no async queue yet)
             start_ts = datetime.now(timezone.utc)
-            crud.mark_course_running(db, course_row.id, started_at=start_ts)
+            crud.mark_run_running(db, run_row.id, started_at=start_ts)
             await event_bus.publish(
-                EventType.COURSE_UPDATED,
+                EventType.RUN_UPDATED,
                 {
-                    "event_type": "course_updated",
+                    "event_type": "run_updated",
                     "fiche_id": fiche.id,
-                    "course_id": course_row.id,
+                    "run_id": run_row.id,
                     "status": "running",
                     "started_at": start_ts.isoformat(),
                     "thread_id": thread.id,
@@ -187,17 +187,17 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
                     await runner.run_thread(db, thread)
 
                 except Exception as exc:
-                    # Persist course failure first
+                    # Persist run failure first
                     end_ts = datetime.now(timezone.utc)
                     duration_ms = int((end_ts - start_ts).total_seconds() * 1000)
-                    crud.mark_course_failed(db, course_row.id, finished_at=end_ts, duration_ms=duration_ms, error=str(exc))
+                    crud.mark_run_failed(db, run_row.id, finished_at=end_ts, duration_ms=duration_ms, error=str(exc))
 
                     await event_bus.publish(
-                        EventType.COURSE_UPDATED,
+                        EventType.RUN_UPDATED,
                         {
-                            "event_type": "course_updated",
+                            "event_type": "run_updated",
                             "fiche_id": fiche.id,
-                            "course_id": course_row.id,
+                            "run_id": run_row.id,
                             "status": "failed",
                             "finished_at": end_ts.isoformat(),
                             "duration_ms": duration_ms,
@@ -220,11 +220,11 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
                         },
                     )
 
-                    logger.exception("Task course failed for fiche %s", fiche.id)
+                    logger.exception("Task run failed for fiche %s", fiche.id)
                     raise
 
                 # ------------------------------------------------------------------
-                # Success – update course + flip fiche back to idle.
+                # Success – update run + flip fiche back to idle.
                 # ------------------------------------------------------------------
                 end_ts = datetime.now(timezone.utc)
                 duration_ms = int((end_ts - start_ts).total_seconds() * 1000)
@@ -241,10 +241,10 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
                         in_price, out_price = prices
                         total_cost_usd = ((runner.usage_prompt_tokens * in_price) + (runner.usage_completion_tokens * out_price)) / 1000.0
 
-                # Mark course as finished (summary auto-extracted if not provided)
-                finished_course = crud.mark_course_finished(
+                # Mark run as finished (summary auto-extracted if not provided)
+                finished_run = crud.mark_run_finished(
                     db,
-                    course_row.id,
+                    run_row.id,
                     finished_at=end_ts,
                     duration_ms=duration_ms,
                     total_tokens=total_tokens,
@@ -252,19 +252,19 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
                 )
 
                 # Refresh to get the auto-extracted summary
-                if finished_course:
-                    db.refresh(finished_course)
+                if finished_run:
+                    db.refresh(finished_run)
 
                 await event_bus.publish(
-                    EventType.COURSE_UPDATED,
+                    EventType.RUN_UPDATED,
                     {
-                        "event_type": "course_updated",
+                        "event_type": "run_updated",
                         "fiche_id": fiche.id,
-                        "course_id": course_row.id,
+                        "run_id": run_row.id,
                         "status": "success",
                         "finished_at": end_ts.isoformat(),
                         "duration_ms": duration_ms,
-                        "summary": finished_course.summary if finished_course else None,
+                        "summary": finished_run.summary if finished_run else None,
                         "thread_id": thread.id,
                     },
                 )
@@ -272,7 +272,7 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
                 # For scheduled fiches, revert to idle (status enum only supports idle/running/error/processing)
                 new_status = "idle"
 
-                crud.update_fiche(db, fiche.id, status=new_status, last_course_at=end_ts, last_error=None)
+                crud.update_fiche(db, fiche.id, status=new_status, last_run_at=end_ts, last_error=None)
                 db.commit()
 
                 await event_bus.publish(
@@ -281,7 +281,7 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
                         "event_type": "fiche_updated",
                         "id": fiche.id,
                         "status": new_status,
-                        "last_course_at": end_ts.isoformat(),
+                        "last_run_at": end_ts.isoformat(),
                         "thread_id": thread.id,
                         "last_error": None,
                     },

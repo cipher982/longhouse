@@ -7,7 +7,7 @@
 
 ## Executive Summary
 
-The Jarvis chat system lacks systematic observability for understanding and optimizing response latency. Current logging is noisy (many low-signal events), timestamps are inconsistent (regenerated at stream time vs event time), and there's no correlation ID to trace requests end-to-end.
+The Oikos chat system lacks systematic observability for understanding and optimizing response latency. Current logging is noisy (many low-signal events), timestamps are inconsistent (regenerated at stream time vs event time), and there's no correlation ID to trace requests end-to-end.
 
 This spec defines:
 1. **Structured timeline logging** - Clear phase-based timing with correlation IDs
@@ -63,9 +63,9 @@ This spec defines:
 Frontend (message send)
 │
 ├─ Generate correlationId (UUID)
-├─ Include in POST /api/jarvis/chat body
+├─ Include in POST /api/oikos/chat body
 │
-Backend (jarvis_supervisor.py)
+Backend (oikos_supervisor.py)
 │
 ├─ Extract correlationId from request
 ├─ Store on AgentRun record
@@ -123,7 +123,7 @@ New console output mode showing clean timeline:
 New endpoint for programmatic timing access:
 
 ```
-GET /api/jarvis/runs/{run_id}/timeline
+GET /api/oikos/runs/{run_id}/timeline
 Authorization: Bearer <token>
 
 Response:
@@ -192,13 +192,13 @@ test('chat response latency - with worker', async ({ page }) => {
 **Changes Implemented:**
 - Frontend: UUID generation already in place (useTextChannel.ts line 69)
 - Backend: Added `correlation_id` column to AgentRun model (apps/zerg/backend/zerg/models/run.py)
-- Backend: Store correlationId from request in jarvis_chat.py endpoint
-- Backend: correlationId already included in ALL SSE events via jarvis_sse.py (line 131)
+- Backend: Store correlationId from request in oikos_chat.py endpoint
+- Backend: correlationId already included in ALL SSE events via oikos_sse.py (line 131)
 - Frontend: correlationId already parsed from SSE wrapper (supervisor-chat-controller.ts line 432)
 
 **Acceptance Criteria:**
 - [x] Message send generates unique correlationId (useTextChannel.ts generates UUID)
-- [x] correlationId sent in POST /api/jarvis/chat request body
+- [x] correlationId sent in POST /api/oikos/chat request body
 - [x] correlationId stored on AgentRun record
 - [x] correlationId appears in SSE connected event (ConnectedPayload.client_correlation_id)
 - [x] correlationId appears in all SSE event wrappers (SSEEventWrapper.client_correlation_id)
@@ -219,12 +219,12 @@ test('chat response latency - with worker', async ({ page }) => {
 **Status:** Complete (2025-12-27)
 
 **Changes Implemented:**
-- Created TimelineLogger class in `apps/zerg/frontend-web/src/jarvis/lib/timeline-logger.ts`
+- Created TimelineLogger class in `apps/zerg/frontend-web/src/oikos/lib/timeline-logger.ts`
 - Listens to EventBus events: supervisor:started, supervisor:thinking, supervisor:complete, worker_spawned, worker_started, worker_complete, worker:tool_started, worker:tool_completed, worker:tool_failed
 - Calculates T+offset from first event (text_channel:sent)
 - Outputs formatted timeline on supervisor:complete or supervisor:error
 - Enabled via URL param `?timeline=true`
-- Integrated in useTextChannel and useJarvisApp to emit text_channel:sent event
+- Integrated in useTextChannel and useOikosApp to emit text_channel:sent event
 - Sets correlationId for timeline tracking
 
 **Acceptance Criteria:**
@@ -247,7 +247,7 @@ test('chat response latency - with worker', async ({ page }) => {
 **Status:** Complete (2025-12-27)
 
 **Changes Implemented:**
-- Added `GET /api/jarvis/runs/{run_id}/timeline` endpoint in jarvis_runs.py
+- Added `GET /api/oikos/runs/{run_id}/timeline` endpoint in oikos_runs.py
 - Queries agent_run_events for the given run
 - Calculates offsets from first event timestamp
 - Computes summary statistics (total, supervisor thinking, worker execution, tool execution)
@@ -265,7 +265,7 @@ test('chat response latency - with worker', async ({ page }) => {
 - [x] Handles empty events gracefully
 - [x] Unit tests cover all scenarios
 
-**Test:** `uv run python -m pytest tests/test_jarvis_runs.py::TestGetRunTimeline -v`
+**Test:** `uv run python -m pytest tests/test_oikos_runs.py::TestGetRunTimeline -v`
 
 **Implementation Notes:**
 - Response includes correlation_id from AgentRun for tracing
@@ -338,13 +338,13 @@ test('chat response latency - with worker', async ({ page }) => {
 ## Files to Modify
 
 ### Frontend
-- `apps/zerg/frontend-web/src/jarvis/core/logger.ts` - Add timeline mode
-- `apps/zerg/frontend-web/src/jarvis/lib/timeline-logger.ts` - New file
-- `apps/zerg/frontend-web/src/jarvis/lib/supervisor-chat-controller.ts` - Generate correlationId
-- `apps/zerg/frontend-web/src/jarvis/lib/event-bus.ts` - Propagate correlationId
+- `apps/zerg/frontend-web/src/oikos/core/logger.ts` - Add timeline mode
+- `apps/zerg/frontend-web/src/oikos/lib/timeline-logger.ts` - New file
+- `apps/zerg/frontend-web/src/oikos/lib/supervisor-chat-controller.ts` - Generate correlationId
+- `apps/zerg/frontend-web/src/oikos/lib/event-bus.ts` - Propagate correlationId
 
 ### Backend
-- `apps/zerg/backend/zerg/routers/jarvis_supervisor.py` - Extract correlationId, new endpoint
+- `apps/zerg/backend/zerg/routers/oikos_supervisor.py` - Extract correlationId, new endpoint
 - `apps/zerg/backend/zerg/services/supervisor_service.py` - Store correlationId on run
 - `apps/zerg/backend/zerg/models/agent_run.py` - Add correlation_id column (if needed)
 - `apps/zerg/backend/zerg/generated/sse_events.py` - Include correlationId in events

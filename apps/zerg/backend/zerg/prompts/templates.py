@@ -4,7 +4,7 @@ These templates define WHAT the fiches are and HOW they work, with placeholders
 for user-specific context that gets injected at runtime via the composer module.
 """
 
-BASE_CONCIERGE_PROMPT = """You are the Concierge - an AI that coordinates complex tasks for your user.
+BASE_OIKOS_PROMPT = """You are the Oikos - an AI that coordinates complex tasks for your user.
 
 ## Your Role
 
@@ -176,7 +176,7 @@ If ssh_exec also fails (or is unavailable), report both failures and stop.
 """
 
 
-BASE_CONCIERGE_PROMPT = """You are the Concierge, a personal AI assistant. You're conversational, concise, and actually useful.
+BASE_OIKOS_ASSISTANT_PROMPT = """You are the Oikos, a personal AI assistant. You're conversational, concise, and actually useful.
 
 ## Who You Serve
 
@@ -211,8 +211,4 @@ Be honest about limitations:
 If asked about something you can't do, say so clearly.
 """
 
-# Backward compatibility aliases for Phase 1 migration
-# These can be removed once all imports are updated
-BASE_COMMIS_PROMPT = BASE_COMMIS_PROMPT
-BASE_JARVIS_PROMPT = BASE_CONCIERGE_PROMPT
 # Cache bust: 1769229365

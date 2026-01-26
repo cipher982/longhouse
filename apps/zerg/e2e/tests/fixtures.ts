@@ -168,8 +168,8 @@ export const test = base.extend<TestFixtures>({
 });
 
 // ---------------------------------------------------------------------------
-// Jarvis chat thread isolation:
-// The Concierge thread is long-lived in normal usage, and per-commis DBs mean
+// Oikos chat thread isolation:
+// The Oikos thread is long-lived in normal usage, and per-commis DBs mean
 // it can persist across tests within the same Playwright commis. Clearing it
 // here keeps tests and perf assertions deterministic without requiring every
 // spec to remember to do it.
@@ -177,14 +177,14 @@ export const test = base.extend<TestFixtures>({
 
 test.beforeEach(async ({ request }, testInfo) => {
   try {
-    const response = await request.delete('/api/jarvis/history');
+    const response = await request.delete('/api/oikos/history');
     if (!response.ok()) {
-      // Avoid failing the entire suite if Jarvis endpoints are temporarily
+      // Avoid failing the entire suite if Oikos endpoints are temporarily
       // unavailable; individual chat specs should still assert correctness.
       // Note: Suppress this warning by default - it's noisy during parallel tests
     }
   } catch {
-    // Silently ignore - Jarvis history cleanup is best-effort, not critical
+    // Silently ignore - Oikos history cleanup is best-effort, not critical
     // Individual chat specs should still assert correctness
   }
 });

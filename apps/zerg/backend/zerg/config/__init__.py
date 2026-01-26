@@ -86,7 +86,7 @@ class Settings:  # noqa: D401 – simple data container
     # Model policy ------------------------------------------------------
     allowed_models_non_admin: str  # csv list
     # Quotas ------------------------------------------------------------
-    daily_courses_per_user: int
+    daily_runs_per_user: int
     # Cost budgets (in cents) ------------------------------------------
     daily_cost_per_user_cents: int
     daily_cost_global_cents: int
@@ -99,9 +99,9 @@ class Settings:  # noqa: D401 – simple data container
     # Database reset security
     db_reset_password: str | None
 
-    # Jarvis integration ------------------------------------------------
-    jarvis_device_secret: str | None
-    jarvis_workspace_path: str  # Base path for cloud workspaces
+    # Oikos integration ------------------------------------------------
+    oikos_device_secret: str | None
+    oikos_workspace_path: str  # Base path for cloud workspaces
 
     # Completion notifications ------------------------------------------
     notification_webhook: str | None  # Discord/Slack webhook for run completion
@@ -136,9 +136,9 @@ class Settings:  # noqa: D401 – simple data container
     # Bootstrap API settings -------------------------------------------
     bootstrap_token: str | None  # Token for CLI-based bootstrap API auth
 
-    # Concierge tool output storage -----------------------------------
-    concierge_tool_output_max_chars: int  # Max tool output chars before storing (0 = disabled)
-    concierge_tool_output_preview_chars: int  # Preview size for stored tool outputs
+    # Oikos tool output storage -----------------------------------
+    oikos_tool_output_max_chars: int  # Max tool output chars before storing (0 = disabled)
+    oikos_tool_output_preview_chars: int  # Preview size for stored tool outputs
 
     # E2E test database isolation --------------------------------------
     e2e_use_postgres_schemas: bool  # Use Postgres schemas for E2E test isolation (vs SQLite files)
@@ -273,15 +273,15 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         max_users=int(os.getenv("MAX_USERS", "20")),
         admin_emails=os.getenv("ADMIN_EMAILS", os.getenv("ADMIN_EMAIL", "")),
         allowed_models_non_admin=os.getenv("ALLOWED_MODELS_NON_ADMIN", ""),
-        daily_courses_per_user=int(os.getenv("DAILY_COURSES_PER_USER", "0")),
+        daily_runs_per_user=int(os.getenv("DAILY_RUNS_PER_USER", "0")),
         daily_cost_per_user_cents=int(os.getenv("DAILY_COST_PER_USER_CENTS", "0")),
         daily_cost_global_cents=int(os.getenv("DAILY_COST_GLOBAL_CENTS", "0")),
         discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL"),
         discord_enable_alerts=_truthy(os.getenv("DISCORD_ENABLE_ALERTS")),
         discord_daily_digest_cron=os.getenv("DISCORD_DAILY_DIGEST_CRON", "0 8 * * *"),
         db_reset_password=os.getenv("DB_RESET_PASSWORD"),
-        jarvis_device_secret=os.getenv("JARVIS_DEVICE_SECRET"),
-        jarvis_workspace_path=os.getenv("JARVIS_WORKSPACE_PATH", "/var/jarvis/workspaces"),
+        oikos_device_secret=os.getenv("OIKOS_DEVICE_SECRET"),
+        oikos_workspace_path=os.getenv("OIKOS_WORKSPACE_PATH", "/var/oikos/workspaces"),
         notification_webhook=os.getenv("NOTIFICATION_WEBHOOK"),
         smoke_test_secret=os.getenv("SMOKE_TEST_SECRET"),
         job_queue_enabled=_truthy(os.getenv("JOB_QUEUE_ENABLED")),
@@ -305,9 +305,9 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         roundabout_llm_timeout=float(os.getenv("ROUNDABOUT_LLM_TIMEOUT", "1.5")),
         # Bootstrap API settings
         bootstrap_token=os.getenv("BOOTSTRAP_TOKEN"),
-        # Concierge tool output storage
-        concierge_tool_output_max_chars=int(os.getenv("CONCIERGE_TOOL_OUTPUT_MAX_CHARS", "8000")),
-        concierge_tool_output_preview_chars=int(os.getenv("CONCIERGE_TOOL_OUTPUT_PREVIEW_CHARS", "1200")),
+        # Oikos tool output storage
+        oikos_tool_output_max_chars=int(os.getenv("OIKOS_TOOL_OUTPUT_MAX_CHARS", "8000")),
+        oikos_tool_output_preview_chars=int(os.getenv("OIKOS_TOOL_OUTPUT_PREVIEW_CHARS", "1200")),
         # E2E test database isolation
         e2e_use_postgres_schemas=_truthy(os.getenv("E2E_USE_POSTGRES_SCHEMAS")),
         e2e_commis_id=os.getenv("E2E_COMMIS_ID"),

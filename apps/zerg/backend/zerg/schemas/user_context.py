@@ -45,7 +45,7 @@ class ToolsConfig(BaseModel):
     location: bool = Field(True, description="Enable location-based features")
     whoop: bool = Field(True, description="Enable Whoop fitness integration")
     obsidian: bool = Field(True, description="Enable Obsidian vault access")
-    concierge: bool = Field(True, description="Enable concierge fiche delegation")
+    oikos: bool = Field(True, description="Enable oikos fiche delegation")
 
     class Config:
         extra = "allow"  # Allow additional tools to be added
@@ -104,7 +104,7 @@ class UserContext(BaseModel):
                     }
                 ],
                 "integrations": {"github": "janedoe", "email": "jane@example.com"},
-                "tools": {"location": True, "whoop": True, "obsidian": True, "concierge": True},
+                "tools": {"location": True, "whoop": True, "obsidian": True, "oikos": True},
                 "custom_instructions": "Prefer TypeScript over JavaScript",
             }
         }

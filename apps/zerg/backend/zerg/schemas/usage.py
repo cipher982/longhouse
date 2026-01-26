@@ -37,7 +37,7 @@ class UserUsageResponse(BaseModel):
     period: Literal["today", "7d", "30d"] = Field(..., description="Time period for usage stats")
     tokens: TokenBreakdown = Field(..., description="Token usage breakdown")
     cost_usd: float = Field(..., description="Total cost in USD")
-    courses: int = Field(..., description="Number of courses in period")
+    runs: int = Field(..., description="Number of runs in period")
     limit: UsageLimit = Field(..., description="Daily budget limit info (always today's limit)")
 
 
@@ -51,7 +51,7 @@ class PeriodUsage(BaseModel):
 
     tokens: int = Field(..., description="Total tokens")
     cost_usd: float = Field(..., description="Total cost in USD")
-    courses: int = Field(..., description="Number of courses")
+    runs: int = Field(..., description="Number of runs")
 
 
 class UserUsageSummary(BaseModel):
@@ -89,7 +89,7 @@ class DailyBreakdown(BaseModel):
     date: date
     tokens: int
     cost_usd: float
-    courses: int
+    runs: int
 
 
 class TopFicheUsage(BaseModel):
@@ -99,7 +99,7 @@ class TopFicheUsage(BaseModel):
     name: str
     tokens: int
     cost_usd: float
-    courses: int
+    runs: int
 
 
 class AdminUserDetailResponse(BaseModel):

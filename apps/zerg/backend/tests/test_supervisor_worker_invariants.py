@@ -1,7 +1,7 @@
-"""Tests for concierge-commis completion invariants.
+"""Tests for oikos-commis completion invariants.
 
 These tests verify critical invariants that prevent "early completion" bugs where
-the concierge responds while commis are still running.
+the oikos responds while commis are still running.
 
 Key invariants:
 1. Resume only works on WAITING runs - prevents accidental completion
@@ -11,18 +11,18 @@ Key invariants:
 
 import pytest
 
-from zerg.models.enums import CourseStatus
-from zerg.models.models import Course
+from zerg.models.enums import RunStatus
+from zerg.models.models import Run
 from zerg.models.models import CommisJob
-from zerg.services.commis_resume import resume_concierge_with_commis_result
+from zerg.services.commis_resume import resume_oikos_with_commis_result
 
 
-class TestConciergeCommisInvariants:
-    """Tests for concierge-commis completion invariants."""
+class TestOikosCommisInvariants:
+    """Tests for oikos-commis completion invariants."""
 
     @pytest.mark.asyncio
     async def test_resume_only_works_on_waiting_runs(self, db_session, sample_fiche, sample_thread):
-        """Verify resume_concierge_with_commis_result only works on WAITING runs.
+        """Verify resume_oikos_with_commis_result only works on WAITING runs.
 
         If the run is in any other state (RUNNING, SUCCESS, FAILED, etc.),
         resume should skip without changing the run status.
@@ -31,8 +31,8 @@ class TestConciergeCommisInvariants:
         thread = sample_thread
 
         # Test each non-WAITING status
-        for status in [CourseStatus.RUNNING, CourseStatus.SUCCESS, CourseStatus.FAILED, CourseStatus.CANCELLED]:
-            run = Course(
+        for status in [RunStatus.RUNNING, RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED]:
+            run = Run(
                 fiche_id=fiche.id,
                 thread_id=thread.id,
                 status=status,
@@ -42,9 +42,9 @@ class TestConciergeCommisInvariants:
             db_session.refresh(run)
 
             # Attempt to resume
-            result = await resume_concierge_with_commis_result(
+            result = await resume_oikos_with_commis_result(
                 db=db_session,
-                course_id=run.id,
+                run_id=run.id,
                 commis_result="Test commis result",
             )
 
@@ -60,9 +60,9 @@ class TestConciergeCommisInvariants:
     @pytest.mark.asyncio
     async def test_resume_skips_nonexistent_run(self, db_session):
         """Verify resume gracefully handles nonexistent run IDs."""
-        result = await resume_concierge_with_commis_result(
+        result = await resume_oikos_with_commis_result(
             db=db_session,
-            course_id=99999,  # Nonexistent
+            run_id=99999,  # Nonexistent
             commis_result="Test result",
         )
 
@@ -80,10 +80,10 @@ class TestConciergeCommisInvariants:
         thread = sample_thread
 
         # Create WAITING run
-        run = Course(
+        run = Run(
             fiche_id=fiche.id,
             thread_id=thread.id,
-            status=CourseStatus.WAITING,
+            status=RunStatus.WAITING,
         )
         db_session.add(run)
         db_session.commit()
@@ -91,16 +91,16 @@ class TestConciergeCommisInvariants:
 
         # Simulate first caller winning the atomic transition
         # by manually transitioning to RUNNING (as the first resume would do)
-        db_session.query(Course).filter(
-            Course.id == run.id,
-            Course.status == CourseStatus.WAITING,
-        ).update({Course.status: CourseStatus.RUNNING})
+        db_session.query(Run).filter(
+            Run.id == run.id,
+            Run.status == RunStatus.WAITING,
+        ).update({Run.status: RunStatus.RUNNING})
         db_session.commit()
 
         # Now a second caller tries to resume - should be skipped
-        result = await resume_concierge_with_commis_result(
+        result = await resume_oikos_with_commis_result(
             db=db_session,
-            course_id=run.id,
+            run_id=run.id,
             commis_result="Second caller result",
         )
 
@@ -120,11 +120,11 @@ class TestConciergeCommisInvariants:
         fiche = sample_fiche
         thread = sample_thread
 
-        # Create a WAITING run (concierge waiting for commis)
-        run = Course(
+        # Create a WAITING run (oikos waiting for commis)
+        run = Run(
             fiche_id=fiche.id,
             thread_id=thread.id,
-            status=CourseStatus.WAITING,
+            status=RunStatus.WAITING,
         )
         db_session.add(run)
         db_session.commit()
@@ -133,7 +133,7 @@ class TestConciergeCommisInvariants:
         # Create a commis job that's still running
         commis_job = CommisJob(
             owner_id=test_user.id,
-            concierge_course_id=run.id,
+            oikos_run_id=run.id,
             task="Test task",
             status="running",  # Still active!
         )
@@ -143,7 +143,7 @@ class TestConciergeCommisInvariants:
         # The invariant: while commis is running, run should stay WAITING
         # (Not SUCCESS, not FAILED)
         db_session.refresh(run)
-        assert run.status == CourseStatus.WAITING
+        assert run.status == RunStatus.WAITING
 
         # If we try to mark it SUCCESS directly, we violate the invariant
         # The application code should never do this, but we document the expectation
@@ -151,7 +151,7 @@ class TestConciergeCommisInvariants:
         # WAITING (commis running) → commis completes → resume called → SUCCESS
 
         # Verify the run is still waiting
-        assert run.status == CourseStatus.WAITING, "Run should stay WAITING while commis is running"
+        assert run.status == RunStatus.WAITING, "Run should stay WAITING while commis is running"
 
         # Now simulate commis completion and resume
         commis_job.status = "success"
@@ -161,20 +161,20 @@ class TestConciergeCommisInvariants:
         # For this test, we just verify the invariant held
 
     @pytest.mark.asyncio
-    async def test_commis_job_linked_to_concierge_run(self, db_session, test_user, sample_fiche, sample_thread):
-        """Verify commis jobs are properly linked to their concierge run.
+    async def test_commis_job_linked_to_oikos_run(self, db_session, test_user, sample_fiche, sample_thread):
+        """Verify commis jobs are properly linked to their oikos run.
 
-        This ensures we can always find which commis belong to which concierge
+        This ensures we can always find which commis belong to which oikos
         run, enabling proper state management.
         """
         fiche = sample_fiche
         thread = sample_thread
 
-        # Create concierge run
-        run = Course(
+        # Create oikos run
+        run = Run(
             fiche_id=fiche.id,
             thread_id=thread.id,
-            status=CourseStatus.WAITING,
+            status=RunStatus.WAITING,
         )
         db_session.add(run)
         db_session.commit()
@@ -184,7 +184,7 @@ class TestConciergeCommisInvariants:
         jobs = [
             CommisJob(
                 owner_id=test_user.id,
-                concierge_course_id=run.id,
+                oikos_run_id=run.id,
                 task=f"Task {i}",
                 status="queued",
             )
@@ -193,15 +193,15 @@ class TestConciergeCommisInvariants:
         db_session.add_all(jobs)
         db_session.commit()
 
-        # Verify all jobs are linked to the concierge run
+        # Verify all jobs are linked to the oikos run
         linked_jobs = db_session.query(CommisJob).filter(
-            CommisJob.concierge_course_id == run.id
+            CommisJob.oikos_run_id == run.id
         ).all()
         assert len(linked_jobs) == 3
 
         # Verify we can check if any commis are still active
         active_commis = db_session.query(CommisJob).filter(
-            CommisJob.concierge_course_id == run.id,
+            CommisJob.oikos_run_id == run.id,
             CommisJob.status.in_(["queued", "running"]),
         ).count()
         assert active_commis == 3
@@ -211,7 +211,7 @@ class TestConciergeCommisInvariants:
         db_session.commit()
 
         active_commis = db_session.query(CommisJob).filter(
-            CommisJob.concierge_course_id == run.id,
+            CommisJob.oikos_run_id == run.id,
             CommisJob.status.in_(["queued", "running"]),
         ).count()
         assert active_commis == 2
@@ -230,10 +230,10 @@ class TestConciergeCommisInvariants:
         thread = sample_thread
 
         # Create WAITING run
-        run = Course(
+        run = Run(
             fiche_id=fiche.id,
             thread_id=thread.id,
-            status=CourseStatus.WAITING,
+            status=RunStatus.WAITING,
         )
         db_session.add(run)
         db_session.commit()
@@ -250,4 +250,4 @@ class TestConciergeCommisInvariants:
 
         # Verify the run is still in WAITING (no direct transition occurred)
         db_session.refresh(run)
-        assert run.status == CourseStatus.WAITING
+        assert run.status == RunStatus.WAITING

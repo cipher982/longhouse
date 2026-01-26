@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Debug script to trace concierge behavior for infrastructure requests.
+"""Debug script to trace oikos behavior for infrastructure requests.
 
-Run with: cd apps/zerg/backend && uv run python scripts/debug_concierge_spawn.py
+Run with: cd apps/zerg/backend && uv run python scripts/debug_oikos_spawn.py
 """
 
 import sys
@@ -11,8 +11,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from zerg.database import default_session_factory
 from zerg.crud import crud
-from zerg.prompts.composer import build_concierge_prompt
-from zerg.services.concierge_service import ConciergeService
+from zerg.prompts.composer import build_oikos_prompt
+from zerg.services.oikos_service import OikosService
 
 
 def main():
@@ -32,13 +32,13 @@ def main():
     else:
         print("⚠️  NO USER CONTEXT - servers won't be in prompt!")
 
-    # Check concierge fiche
+    # Check oikos fiche
     print("\n" + "=" * 60)
-    print("CONCIERGE AGENT")
+    print("OIKOS AGENT")
     print("=" * 60)
 
-    svc = ConciergeService(db)
-    result = svc.get_or_create_concierge_fiche(user.id)
+    svc = OikosService(db)
+    result = svc.get_or_create_oikos_fiche(user.id)
     # Handle both return types
     if isinstance(result, tuple):
         fiche, thread = result
@@ -62,7 +62,7 @@ def main():
     print("=" * 60)
 
     from sqlalchemy import text
-    thread_id = 1  # Concierge thread
+    thread_id = 1  # Oikos thread
     messages = db.execute(text(
         f"SELECT id, role, LEFT(content, 80), sent_at FROM thread_messages WHERE thread_id = {thread_id} ORDER BY sent_at"
     )).fetchall()

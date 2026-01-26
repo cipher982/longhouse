@@ -4,7 +4,7 @@ Revision ID: a4b5c6d7e8f9
 Revises: z3a4b5c6d7e8
 Create Date: 2026-01-25
 
-Adds boolean acknowledged column to track whether the concierge has seen
+Adds boolean acknowledged column to track whether the oikos has seen
 a commis's result. Part of the async inbox model (non-blocking spawn_commis).
 """
 

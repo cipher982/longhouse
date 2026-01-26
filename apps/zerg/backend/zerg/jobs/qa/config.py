@@ -23,9 +23,9 @@ THRESHOLDS = {
     # Latency (milliseconds)
     "p95_latency_warn_ms": 5000,
     "p95_latency_critical_ms": 10000,
-    # Failed courses per hour
-    "failed_courses_1h_warn": 5,
-    "failed_courses_1h_critical": 10,
+    # Failed runs per hour
+    "failed_runs_1h_warn": 5,
+    "failed_runs_1h_critical": 10,
     # Stuck commis
     "stuck_commis_warn": 2,
     "stuck_commis_critical": 5,
@@ -34,7 +34,7 @@ THRESHOLDS = {
 # Alert behavior
 ALERT_COOLDOWN_MINUTES = 60  # Minimum time between alerts for same issue
 CHRONIC_THRESHOLD = 3  # Consecutive occurrences to mark as chronic
-RESOLVE_THRESHOLD = 3  # Consecutive clean courses to resolve an issue
+RESOLVE_THRESHOLD = 3  # Consecutive clean runs to resolve an issue
 
 # Run settings
 RUN_DIR = "/tmp/qa-run"

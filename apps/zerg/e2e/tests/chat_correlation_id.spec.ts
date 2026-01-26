@@ -3,7 +3,7 @@
  *
  * Verifies that:
  * - Frontend generates a unique UUID correlation ID for each message
- * - Backend receives and stores the correlation ID on Course
+ * - Backend receives and stores the correlation ID on Run
  * - All SSE events include the correlation ID for tracing
  */
 
@@ -11,11 +11,11 @@ import { test, expect, type Page } from './fixtures';
 
 test.describe('Chat Correlation ID Flow', () => {
   test('frontend generates UUID correlation ID and sends to backend', async ({ page }) => {
-    // Navigate to Jarvis chat
+    // Navigate to Oikos chat
     await page.goto('/chat', { waitUntil: 'domcontentloaded' });
 
     // Wait for chat UI to load
-    await expect(page.locator('.jarvis-container')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('.oikos-container')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.text-input-container')).toBeVisible({ timeout: 15_000 });
 
     // Track API requests to capture the correlation ID sent to backend
@@ -24,7 +24,7 @@ test.describe('Chat Correlation ID Flow', () => {
 
     page.on('request', (request) => {
       const url = request.url();
-      if (url.includes('/api/jarvis/chat') && request.method() === 'POST') {
+      if (url.includes('/api/oikos/chat') && request.method() === 'POST') {
         chatRequestMade = true;
         const postData = request.postData();
         if (postData) {
@@ -64,22 +64,22 @@ test.describe('Chat Correlation ID Flow', () => {
 
     // Phase 1 acceptance criteria met:
     // 1. Frontend generates unique UUID correlation ID ✓
-    // 2. Correlation ID is sent in POST /api/jarvis/chat request body ✓
-    // 3. Backend stores it on Course (verified by model changes) ✓
-    // 4. Backend includes it in SSE events (verified by jarvis_sse.py code) ✓
+    // 2. Correlation ID is sent in POST /api/oikos/chat request body ✓
+    // 3. Backend stores it on Run (verified by model changes) ✓
+    // 4. Backend includes it in SSE events (verified by oikos_sse.py code) ✓
   });
 
   test('each message gets a unique correlation ID', async ({ page }) => {
     await page.goto('/chat', { waitUntil: 'domcontentloaded' });
 
-    await expect(page.locator('.jarvis-container')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('.oikos-container')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.text-input-container')).toBeVisible({ timeout: 15_000 });
 
     const correlationIds: string[] = [];
 
     page.on('request', (request) => {
       const url = request.url();
-      if (url.includes('/api/jarvis/chat') && request.method() === 'POST') {
+      if (url.includes('/api/oikos/chat') && request.method() === 'POST') {
         const postData = request.postData();
         if (postData) {
           try {
@@ -99,7 +99,7 @@ test.describe('Chat Correlation ID Flow', () => {
     await page.locator(inputSelector).fill('first message');
     const sendButton = page.locator('button.send-button, button[aria-label*="Send"], button:has-text("Send")').first();
 
-    const requestPromise1 = page.waitForRequest(r => r.url().includes('/api/jarvis/chat') && r.method() === 'POST');
+    const requestPromise1 = page.waitForRequest(r => r.url().includes('/api/oikos/chat') && r.method() === 'POST');
     await sendButton.click();
     await requestPromise1;
 
@@ -107,7 +107,7 @@ test.describe('Chat Correlation ID Flow', () => {
     await page.waitForTimeout(500);
 
     // Send second message and wait for API request
-    const requestPromise2 = page.waitForRequest(r => r.url().includes('/api/jarvis/chat') && r.method() === 'POST');
+    const requestPromise2 = page.waitForRequest(r => r.url().includes('/api/oikos/chat') && r.method() === 'POST');
     await page.locator(inputSelector).fill('second message');
     await sendButton.click();
     await requestPromise2;

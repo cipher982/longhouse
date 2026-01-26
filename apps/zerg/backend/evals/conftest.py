@@ -210,7 +210,7 @@ def eval_runner(db_session, test_user, request, eval_case):
     If a variant is specified via --variant flag, it will be applied.
     """
     from evals.runner import EvalRunner
-    from zerg.services.concierge_service import ConciergeService
+    from zerg.services.oikos_service import OikosService
     from zerg.services.auto_seed import _seed_server_knowledge, _seed_user_context
 
     # Evals should reflect a real "dev@local" environment. In tests we create the
@@ -223,8 +223,8 @@ def eval_runner(db_session, test_user, request, eval_case):
     _seed_server_knowledge()
     db_session.expire_all()
 
-    concierge_service = ConciergeService(db_session)
-    runner = EvalRunner(concierge_service, test_user.id)
+    oikos_service = OikosService(db_session)
+    runner = EvalRunner(oikos_service, test_user.id)
 
     # Apply variant overrides (if the dataset defines variants)
     dataset_name, _case = eval_case
@@ -254,7 +254,7 @@ def hermetic_mode():
         os.environ["EVAL_MODE"] = eval_mode
 
     # In live mode, restore real OpenAI for llm_graded assertions
-    # Note: Concierge still uses stub LLM (that's OK - we're testing the grader, not concierge quality)
+    # Note: Oikos still uses stub LLM (that's OK - we're testing the grader, not oikos quality)
     if eval_mode == "live":
         import sys
 
@@ -328,5 +328,5 @@ def pytest_sessionfinish(session, exitstatus):
 # - Database (per-test session via db_session fixture)
 # - Auth (AUTH_DISABLED=1 via TESTING=1)
 #
-# No additional stubs needed for Phase 1 - we're calling ConciergeService
+# No additional stubs needed for Phase 1 - we're calling OikosService
 # directly which uses the existing test infrastructure.

@@ -1,11 +1,11 @@
 asyncapi: 3.0.0
 
 info:
-  title: Jarvis SSE Event Protocol
+  title: Oikos SSE Event Protocol
   version: 1.0.0
   description: |
-    Server-Sent Events (SSE) protocol for real-time updates from Jarvis backend to frontend.
-    Provides typed contracts for concierge execution, commis lifecycle, and tool monitoring.
+    Server-Sent Events (SSE) protocol for real-time updates from Oikos backend to frontend.
+    Provides typed contracts for oikos execution, commis lifecycle, and tool monitoring.
 
     Features:
     - Strongly-typed event payloads
@@ -20,28 +20,28 @@ defaultContentType: application/json
 # ---------------------------------------------------------------------------
 
 channels:
-  CourseEventsChannel:
-    address: /api/jarvis/chat/stream
-    description: Real-time concierge and commis events for a specific course
+  RunEventsChannel:
+    address: /api/oikos/chat/stream
+    description: Real-time oikos and commis events for a specific run
     messages:
       ConnectedEvent:
         $ref: '#/components/messages/ConnectedEvent'
       HeartbeatEvent:
         $ref: '#/components/messages/HeartbeatEvent'
-      ConciergeStartedEvent:
-        $ref: '#/components/messages/ConciergeStartedEvent'
-      ConciergeThinkingEvent:
-        $ref: '#/components/messages/ConciergeThinkingEvent'
-      ConciergeTokenEvent:
-        $ref: '#/components/messages/ConciergeTokenEvent'
-      ConciergeCompleteEvent:
-        $ref: '#/components/messages/ConciergeCompleteEvent'
-      ConciergeDeferredEvent:
-        $ref: '#/components/messages/ConciergeDeferredEvent'
-      ConciergeWaitingEvent:
-        $ref: '#/components/messages/ConciergeWaitingEvent'
-      ConciergeResumedEvent:
-        $ref: '#/components/messages/ConciergeResumedEvent'
+      OikosStartedEvent:
+        $ref: '#/components/messages/OikosStartedEvent'
+      OikosThinkingEvent:
+        $ref: '#/components/messages/OikosThinkingEvent'
+      OikosTokenEvent:
+        $ref: '#/components/messages/OikosTokenEvent'
+      OikosCompleteEvent:
+        $ref: '#/components/messages/OikosCompleteEvent'
+      OikosDeferredEvent:
+        $ref: '#/components/messages/OikosDeferredEvent'
+      OikosWaitingEvent:
+        $ref: '#/components/messages/OikosWaitingEvent'
+      OikosResumedEvent:
+        $ref: '#/components/messages/OikosResumedEvent'
       ErrorEvent:
         $ref: '#/components/messages/ErrorEvent'
       CommisSpawnedEvent:
@@ -58,26 +58,26 @@ channels:
         $ref: '#/components/messages/CommisToolCompletedEvent'
       CommisToolFailedEvent:
         $ref: '#/components/messages/CommisToolFailedEvent'
-      # Concierge tool monitoring (same treatment as commis tools)
-      ConciergeToolStartedEvent:
-        $ref: '#/components/messages/ConciergeToolStartedEvent'
-      ConciergeToolProgressEvent:
-        $ref: '#/components/messages/ConciergeToolProgressEvent'
-      ConciergeToolCompletedEvent:
-        $ref: '#/components/messages/ConciergeToolCompletedEvent'
-      ConciergeToolFailedEvent:
-        $ref: '#/components/messages/ConciergeToolFailedEvent'
+      # Oikos tool monitoring (same treatment as commis tools)
+      OikosToolStartedEvent:
+        $ref: '#/components/messages/OikosToolStartedEvent'
+      OikosToolProgressEvent:
+        $ref: '#/components/messages/OikosToolProgressEvent'
+      OikosToolCompletedEvent:
+        $ref: '#/components/messages/OikosToolCompletedEvent'
+      OikosToolFailedEvent:
+        $ref: '#/components/messages/OikosToolFailedEvent'
 
 # ---------------------------------------------------------------------------
 # Operations - SSE is always server → client (send only)
 # ---------------------------------------------------------------------------
 
 operations:
-  StreamCourseEvents:
+  StreamRunEvents:
     action: send
     channel:
-      $ref: '#/channels/CourseEventsChannel'
-    summary: Stream concierge and commis events for a course
+      $ref: '#/channels/RunEventsChannel'
+    summary: Stream oikos and commis events for a run
 
 # ---------------------------------------------------------------------------
 # Components - Messages and schemas
@@ -100,55 +100,55 @@ components:
         $ref: '#/components/schemas/HeartbeatPayload'
       x-sse-event-type: heartbeat
 
-    # Concierge lifecycle
-    ConciergeStartedEvent:
-      name: concierge_started
-      summary: Concierge began processing task
+    # Oikos lifecycle
+    OikosStartedEvent:
+      name: oikos_started
+      summary: Oikos began processing task
       payload:
-        $ref: '#/components/schemas/ConciergeStartedPayload'
-      x-sse-event-type: concierge_started
+        $ref: '#/components/schemas/OikosStartedPayload'
+      x-sse-event-type: oikos_started
 
-    ConciergeThinkingEvent:
-      name: concierge_thinking
-      summary: Concierge reasoning phase
+    OikosThinkingEvent:
+      name: oikos_thinking
+      summary: Oikos reasoning phase
       payload:
-        $ref: '#/components/schemas/ConciergeThinkingPayload'
-      x-sse-event-type: concierge_thinking
+        $ref: '#/components/schemas/OikosThinkingPayload'
+      x-sse-event-type: oikos_thinking
 
-    ConciergeTokenEvent:
-      name: concierge_token
+    OikosTokenEvent:
+      name: oikos_token
       summary: LLM token stream (high frequency)
       payload:
-        $ref: '#/components/schemas/ConciergeTokenPayload'
-      x-sse-event-type: concierge_token
+        $ref: '#/components/schemas/OikosTokenPayload'
+      x-sse-event-type: oikos_token
 
-    ConciergeCompleteEvent:
-      name: concierge_complete
-      summary: Concierge finished successfully
+    OikosCompleteEvent:
+      name: oikos_complete
+      summary: Oikos finished successfully
       payload:
-        $ref: '#/components/schemas/ConciergeCompletePayload'
-      x-sse-event-type: concierge_complete
+        $ref: '#/components/schemas/OikosCompletePayload'
+      x-sse-event-type: oikos_complete
 
-    ConciergeDeferredEvent:
-      name: concierge_deferred
-      summary: Timeout migration - concierge continues in background
+    OikosDeferredEvent:
+      name: oikos_deferred
+      summary: Timeout migration - oikos continues in background
       payload:
-        $ref: '#/components/schemas/ConciergeDeferredPayload'
-      x-sse-event-type: concierge_deferred
+        $ref: '#/components/schemas/OikosDeferredPayload'
+      x-sse-event-type: oikos_deferred
 
-    ConciergeWaitingEvent:
-      name: concierge_waiting
-      summary: Concierge interrupted waiting for commis completion
+    OikosWaitingEvent:
+      name: oikos_waiting
+      summary: Oikos interrupted waiting for commis completion
       payload:
-        $ref: '#/components/schemas/ConciergeWaitingPayload'
-      x-sse-event-type: concierge_waiting
+        $ref: '#/components/schemas/OikosWaitingPayload'
+      x-sse-event-type: oikos_waiting
 
-    ConciergeResumedEvent:
-      name: concierge_resumed
-      summary: Concierge resumed from interrupt after commis completion
+    OikosResumedEvent:
+      name: oikos_resumed
+      summary: Oikos resumed from interrupt after commis completion
       payload:
-        $ref: '#/components/schemas/ConciergeResumedPayload'
-      x-sse-event-type: concierge_resumed
+        $ref: '#/components/schemas/OikosResumedPayload'
+      x-sse-event-type: oikos_resumed
 
     # Error handling
     ErrorEvent:
@@ -209,34 +209,34 @@ components:
         $ref: '#/components/schemas/CommisToolFailedPayload'
       x-sse-event-type: commis_tool_failed
 
-    # Concierge tool monitoring (uniform treatment with commis tools)
-    ConciergeToolStartedEvent:
-      name: concierge_tool_started
-      summary: Concierge tool call began
+    # Oikos tool monitoring (uniform treatment with commis tools)
+    OikosToolStartedEvent:
+      name: oikos_tool_started
+      summary: Oikos tool call began
       payload:
-        $ref: '#/components/schemas/ConciergeToolStartedPayload'
-      x-sse-event-type: concierge_tool_started
+        $ref: '#/components/schemas/OikosToolStartedPayload'
+      x-sse-event-type: oikos_tool_started
 
-    ConciergeToolProgressEvent:
-      name: concierge_tool_progress
-      summary: Concierge tool progress update (streaming logs)
+    OikosToolProgressEvent:
+      name: oikos_tool_progress
+      summary: Oikos tool progress update (streaming logs)
       payload:
-        $ref: '#/components/schemas/ConciergeToolProgressPayload'
-      x-sse-event-type: concierge_tool_progress
+        $ref: '#/components/schemas/OikosToolProgressPayload'
+      x-sse-event-type: oikos_tool_progress
 
-    ConciergeToolCompletedEvent:
-      name: concierge_tool_completed
-      summary: Concierge tool call succeeded
+    OikosToolCompletedEvent:
+      name: oikos_tool_completed
+      summary: Oikos tool call succeeded
       payload:
-        $ref: '#/components/schemas/ConciergeToolCompletedPayload'
-      x-sse-event-type: concierge_tool_completed
+        $ref: '#/components/schemas/OikosToolCompletedPayload'
+      x-sse-event-type: oikos_tool_completed
 
-    ConciergeToolFailedEvent:
-      name: concierge_tool_failed
-      summary: Concierge tool call failed
+    OikosToolFailedEvent:
+      name: oikos_tool_failed
+      summary: Oikos tool call failed
       payload:
-        $ref: '#/components/schemas/ConciergeToolFailedPayload'
-      x-sse-event-type: concierge_tool_failed
+        $ref: '#/components/schemas/OikosToolFailedPayload'
+      x-sse-event-type: oikos_tool_failed
 
   schemas:
     # ---------------------------------------------------------------------------
@@ -253,11 +253,11 @@ components:
           enum:
             - connected
             - heartbeat
-            - concierge_started
-            - concierge_thinking
-            - concierge_token
-            - concierge_complete
-            - concierge_deferred
+            - oikos_started
+            - oikos_thinking
+            - oikos_token
+            - oikos_complete
+            - oikos_deferred
             - error
             - commis_spawned
             - commis_started
@@ -266,10 +266,10 @@ components:
             - commis_tool_started
             - commis_tool_completed
             - commis_tool_failed
-            - concierge_tool_started
-            - concierge_tool_progress
-            - concierge_tool_completed
-            - concierge_tool_failed
+            - oikos_tool_started
+            - oikos_tool_progress
+            - oikos_tool_completed
+            - oikos_tool_failed
         id:
           type: integer
           description: Event ID for resumption (maps to `id:` line in SSE protocol)
@@ -309,15 +309,15 @@ components:
     # ---------------------------------------------------------------------------
     ConnectedPayload:
       type: object
-      required: [message, course_id]
+      required: [message, run_id]
       properties:
         message:
           type: string
           description: Connection confirmation message
-        course_id:
+        run_id:
           type: integer
           minimum: 1
-          description: Course ID for this SSE stream
+          description: Run ID for this SSE stream
         client_correlation_id:
           type: string
           description: Optional client-provided correlation ID
@@ -334,16 +334,16 @@ components:
           description: ISO 8601 timestamp
 
     # ---------------------------------------------------------------------------
-    # Concierge Event Payloads
+    # Oikos Event Payloads
     # ---------------------------------------------------------------------------
-    ConciergeStartedPayload:
+    OikosStartedPayload:
       type: object
       required: [task, thread_id, message_id]
       properties:
-        course_id:
+        run_id:
           type: integer
           minimum: 1
-          description: Course ID (may be omitted in legacy events)
+          description: Run ID (may be omitted in legacy events)
         thread_id:
           type: integer
           minimum: 1
@@ -359,13 +359,13 @@ components:
         continuation_of_message_id:
           type: string
           format: uuid
-          description: For continuation courses, the message_id of the original course's message
+          description: For continuation runs, the message_id of the original run's message
         trace_id:
           type: string
           format: uuid
           description: End-to-end trace ID for debugging (copy from UI for fiche debugging)
 
-    ConciergeThinkingPayload:
+    OikosThinkingPayload:
       type: object
       required: [message]
       properties:
@@ -373,7 +373,7 @@ components:
           type: string
           minLength: 1
           description: Thinking status message
-        course_id:
+        run_id:
           type: integer
           minimum: 1
         trace_id:
@@ -381,14 +381,14 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    ConciergeTokenPayload:
+    OikosTokenPayload:
       type: object
       required: [token]
       properties:
         token:
           type: string
           description: LLM token (may be empty string)
-        course_id:
+        run_id:
           type: integer
           minimum: 1
         thread_id:
@@ -403,13 +403,13 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    ConciergeCompletePayload:
+    OikosCompletePayload:
       type: object
       required: [result, status]
       properties:
         result:
           type: string
-          description: Final concierge result
+          description: Final oikos result
         status:
           type: string
           enum: [success, cancelled]
@@ -420,7 +420,7 @@ components:
           description: Execution duration in milliseconds
         usage:
           $ref: '#/components/schemas/UsageData'
-        course_id:
+        run_id:
           type: integer
           minimum: 1
         fiche_id:
@@ -441,7 +441,7 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    ConciergeDeferredPayload:
+    OikosDeferredPayload:
       type: object
       required: [message]
       properties:
@@ -451,12 +451,12 @@ components:
           description: Deferred status message
         attach_url:
           type: string
-          description: URL to re-attach to the running course execution
+          description: URL to re-attach to the running run execution
         timeout_seconds:
           type: number
           minimum: 0
           description: Timeout that triggered deferral
-        course_id:
+        run_id:
           type: integer
           minimum: 1
         fiche_id:
@@ -474,7 +474,7 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    ConciergeWaitingPayload:
+    OikosWaitingPayload:
       type: object
       required: [message]
       properties:
@@ -489,7 +489,7 @@ components:
         close_stream:
           type: boolean
           description: If false, keep SSE stream open while waiting
-        course_id:
+        run_id:
           type: integer
           minimum: 1
         fiche_id:
@@ -507,11 +507,11 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    ConciergeResumedPayload:
+    OikosResumedPayload:
       type: object
       required: [thread_id, message_id]
       properties:
-        course_id:
+        run_id:
           type: integer
           minimum: 1
         fiche_id:
@@ -541,7 +541,7 @@ components:
         message:
           type: string
           description: Alternative error message field
-        course_id:
+        run_id:
           type: integer
           minimum: 1
         trace_id:
@@ -570,7 +570,7 @@ components:
         model:
           type: string
           description: LLM model for commis
-        course_id:
+        run_id:
           type: integer
           minimum: 1
         trace_id:
@@ -589,7 +589,7 @@ components:
           type: string
           minLength: 1
           description: Commis execution ID
-        course_id:
+        run_id:
           type: integer
           minimum: 1
         task:
@@ -618,7 +618,7 @@ components:
         error:
           type: string
           description: Error message (only present if status=failed)
-        course_id:
+        run_id:
           type: integer
           minimum: 1
         trace_id:
@@ -640,7 +640,7 @@ components:
           type: string
           minLength: 1
           description: Extracted commis summary
-        course_id:
+        run_id:
           type: integer
           minimum: 1
         trace_id:
@@ -668,10 +668,10 @@ components:
         tool_args_preview:
           type: string
           description: Preview of tool arguments (may be truncated)
-        course_id:
+        run_id:
           type: integer
           minimum: 1
-          description: Required for security (prevents cross-course leakage)
+          description: Required for security (prevents cross-run leakage)
         trace_id:
           type: string
           format: uuid
@@ -696,7 +696,7 @@ components:
         result_preview:
           type: string
           description: Preview of tool result (may be truncated)
-        course_id:
+        run_id:
           type: integer
           minimum: 1
         trace_id:
@@ -724,7 +724,7 @@ components:
           type: string
           minLength: 1
           description: Error message
-        course_id:
+        run_id:
           type: integer
           minimum: 1
         trace_id:
@@ -733,9 +733,9 @@ components:
           description: End-to-end trace ID for debugging
 
     # ---------------------------------------------------------------------------
-    # Concierge Tool Monitoring Payloads
+    # Oikos Tool Monitoring Payloads
     # ---------------------------------------------------------------------------
-    ConciergeToolStartedPayload:
+    OikosToolStartedPayload:
       type: object
       required: [tool_name, tool_call_id]
       properties:
@@ -752,16 +752,16 @@ components:
         tool_args:
           type: object
           description: Full tool arguments (for persistence/raw view)
-        course_id:
+        run_id:
           type: integer
           minimum: 1
-          description: Concierge course ID for correlation
+          description: Oikos run ID for correlation
         trace_id:
           type: string
           format: uuid
           description: End-to-end trace ID for debugging
 
-    ConciergeToolProgressPayload:
+    OikosToolProgressPayload:
       type: object
       required: [tool_call_id, message]
       properties:
@@ -783,7 +783,7 @@ components:
         data:
           type: object
           description: Optional structured data (metrics, artifacts preview)
-        course_id:
+        run_id:
           type: integer
           minimum: 1
         trace_id:
@@ -791,7 +791,7 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    ConciergeToolCompletedPayload:
+    OikosToolCompletedPayload:
       type: object
       required: [tool_name, tool_call_id, duration_ms]
       properties:
@@ -810,7 +810,7 @@ components:
         result:
           type: object
           description: Full result (for persistence/raw view)
-        course_id:
+        run_id:
           type: integer
           minimum: 1
         trace_id:
@@ -818,7 +818,7 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    ConciergeToolFailedPayload:
+    OikosToolFailedPayload:
       type: object
       required: [tool_name, tool_call_id, duration_ms, error]
       properties:
@@ -838,7 +838,7 @@ components:
         error_details:
           type: object
           description: Full error details (stack trace, context)
-        course_id:
+        run_id:
           type: integer
           minimum: 1
         trace_id:
@@ -860,10 +860,10 @@ x-sse-protocol:
 
 x-security-notes:
   - All events include owner_id in backend but it's filtered before SSE emission
-  - Tool events MUST include course_id to prevent cross-course leakage
-  - SSE stream filters events by course_id and owner_id
+  - Tool events MUST include run_id to prevent cross-run leakage
+  - SSE stream filters events by run_id and owner_id
 
 x-performance-notes:
-  - concierge_token events are high-frequency (per-token streaming)
+  - oikos_token events are high-frequency (per-token streaming)
   - Heartbeat sent every 30s to prevent timeout
   - Event IDs enable resumable streams (reconnect with Last-Event-ID header)

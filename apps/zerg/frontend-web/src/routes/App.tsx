@@ -24,7 +24,7 @@ import { AuthGuard } from "../lib/auth";
 // Lazy-loaded pages (heavy dependencies - reduces initial bundle by ~700KB)
 const ChatPage = lazy(() => import("../pages/ChatPage"));
 const CanvasPage = lazy(() => import("../pages/CanvasPage"));
-const JarvisChatPage = lazy(() => import("../pages/JarvisChatPage"));
+const OikosChatPage = lazy(() => import("../pages/OikosChatPage"));
 const SwarmOpsPage = lazy(() => import("../pages/SwarmOpsPage"));
 import { ShelfProvider } from "../lib/useShelfState";
 import { ErrorBoundary } from "../components/ErrorBoundary";
@@ -138,7 +138,7 @@ export default function App() {
           element: (
             <ErrorBoundary>
               <Suspense fallback={<PageLoader />}>
-                <JarvisChatPage />
+                <OikosChatPage />
               </Suspense>
             </ErrorBoundary>
           )

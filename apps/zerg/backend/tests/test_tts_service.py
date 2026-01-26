@@ -383,14 +383,14 @@ class TestTTSRouter:
 
     @pytest.mark.asyncio
     async def test_tts_status_endpoint(self, client, auth_headers):
-        """Test GET /api/jarvis/tts/status endpoint."""
+        """Test GET /api/oikos/tts/status endpoint."""
         # This test requires the full app to be running with test auth
         # For unit tests, we test the service directly
         pass
 
     @pytest.mark.asyncio
     async def test_tts_voices_endpoint(self, client, auth_headers):
-        """Test GET /api/jarvis/tts/voices endpoint."""
+        """Test GET /api/oikos/tts/voices endpoint."""
         pass
 
 
@@ -430,7 +430,7 @@ class TestEdgeTTSIntegration:
         service = TTSService(config)
 
         try:
-            result = await service.convert("Hello, this is a test of Jarvis voice.")
+            result = await service.convert("Hello, this is a test of Oikos voice.")
 
             assert result.success is True
             assert result.provider == "edge"

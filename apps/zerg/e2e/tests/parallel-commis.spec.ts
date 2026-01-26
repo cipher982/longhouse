@@ -13,7 +13,7 @@ test.describe('Parallel Commis Barrier', () => {
     const message = 'Check disk space on cube, clifford, and zerg in parallel';
 
     // Fire-and-forget chat request (SSE response never completes).
-    const chatPromise = request.post('/api/jarvis/chat', {
+    const chatPromise = request.post('/api/oikos/chat', {
       data: {
         message,
         message_id: crypto.randomUUID(),
@@ -22,20 +22,20 @@ test.describe('Parallel Commis Barrier', () => {
     });
     chatPromise.catch(() => {});
 
-    let courseId: number | null = null;
+    let runId: number | null = null;
     await expect
       .poll(async () => {
-        const coursesRes = await request.get('/api/jarvis/courses?limit=50');
-        if (!coursesRes.ok()) return false;
-        const courses = (await coursesRes.json()) as Array<{ id: number; created_at: string }>;
+        const runsRes = await request.get('/api/oikos/runs?limit=50');
+        if (!runsRes.ok()) return false;
+        const runs = (await runsRes.json()) as Array<{ id: number; created_at: string }>;
 
-        const candidate = courses.find((course) => {
-          const createdAt = Date.parse(course.created_at);
+        const candidate = runs.find((run) => {
+          const createdAt = Date.parse(run.created_at);
           return Number.isFinite(createdAt) && createdAt >= startTime - 2000;
         });
 
         if (candidate) {
-          courseId = candidate.id;
+          runId = candidate.id;
           return true;
         }
         return false;
@@ -45,22 +45,22 @@ test.describe('Parallel Commis Barrier', () => {
       })
       .toBeTruthy();
 
-    if (!courseId) {
-      throw new Error('Failed to locate parallel-commis course');
+    if (!runId) {
+      throw new Error('Failed to locate parallel-commis run');
     }
 
     let events: Array<{ event_type: string }> = [];
     await expect
       .poll(async () => {
-        const eventsRes = await request.get(`/api/jarvis/courses/${courseId}/events`);
+        const eventsRes = await request.get(`/api/oikos/runs/${runId}/events`);
         if (!eventsRes.ok()) return false;
         const payload = await eventsRes.json();
         events = payload.events ?? [];
 
         const spawnedCount = events.filter((e) => e.event_type === 'commis_spawned').length;
         const completeCount = events.filter((e) => e.event_type === 'commis_complete').length;
-        const waitingCount = events.filter((e) => e.event_type === 'concierge_waiting').length;
-        const resumedCount = events.filter((e) => e.event_type === 'concierge_resumed').length;
+        const waitingCount = events.filter((e) => e.event_type === 'oikos_waiting').length;
+        const resumedCount = events.filter((e) => e.event_type === 'oikos_resumed').length;
 
         return spawnedCount >= 3 && completeCount >= 3 && waitingCount >= 1 && resumedCount >= 1;
       }, {
@@ -71,28 +71,28 @@ test.describe('Parallel Commis Barrier', () => {
 
     const spawnedCount = events.filter((e) => e.event_type === 'commis_spawned').length;
     const completeCount = events.filter((e) => e.event_type === 'commis_complete').length;
-    const waitingCount = events.filter((e) => e.event_type === 'concierge_waiting').length;
-    const resumedCount = events.filter((e) => e.event_type === 'concierge_resumed').length;
+    const waitingCount = events.filter((e) => e.event_type === 'oikos_waiting').length;
+    const resumedCount = events.filter((e) => e.event_type === 'oikos_resumed').length;
 
     expect(spawnedCount).toBe(3);
     expect(completeCount).toBe(3);
     expect(waitingCount).toBe(1);
     expect(resumedCount).toBe(1);
 
-    let courseStatus: { status: string; result?: string } | null = null;
+    let runStatus: { status: string; result?: string } | null = null;
     await expect
       .poll(async () => {
-        const statusRes = await request.get(`/api/jarvis/courses/${courseId}`);
+        const statusRes = await request.get(`/api/oikos/runs/${runId}`);
         if (!statusRes.ok()) return false;
-        courseStatus = await statusRes.json();
-        return courseStatus.status === 'success' || courseStatus.status === 'failed';
+        runStatus = await statusRes.json();
+        return runStatus.status === 'success' || runStatus.status === 'failed';
       }, {
         timeout: 60000,
         intervals: [1000, 2000, 5000],
       })
       .toBeTruthy();
 
-    expect(courseStatus?.status).toBe('success');
-    expect(courseStatus?.result?.toLowerCase()).toContain('45%');
+    expect(runStatus?.status).toBe('success');
+    expect(runStatus?.result?.toLowerCase()).toContain('45%');
   });
 });

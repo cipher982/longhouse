@@ -1,4 +1,4 @@
-"""Add pending_tool_call_id to courses for async inbox model.
+"""Add pending_tool_call_id to runs for async inbox model.
 
 Revision ID: b5c6d7e8f9g0
 Revises: a4b5c6d7e8f9
@@ -23,14 +23,14 @@ SCHEMA = "zerg"
 
 
 def upgrade() -> None:
-    """Add pending_tool_call_id column to courses table."""
+    """Add pending_tool_call_id column to runs table."""
     op.add_column(
-        "courses",
+        "runs",
         sa.Column("pending_tool_call_id", sa.String(64), nullable=True),
         schema=SCHEMA,
     )
 
 
 def downgrade() -> None:
-    """Remove pending_tool_call_id column from courses table."""
-    op.drop_column("courses", "pending_tool_call_id", schema=SCHEMA)
+    """Remove pending_tool_call_id column from runs table."""
+    op.drop_column("runs", "pending_tool_call_id", schema=SCHEMA)

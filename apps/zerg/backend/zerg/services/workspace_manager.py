@@ -2,12 +2,12 @@
 
 This service manages git workspaces for cloud-based commis execution:
 - Cloning repos to isolated workspace directories
-- Creating unique branches for each course
+- Creating unique branches for each run
 - Capturing diffs after commis execution
 - Cleanup of workspace directories
 
 The workspace lifecycle:
-1. setup() - Clone/fetch repo, create jarvis/<course_id> branch
+1. setup() - Clone/fetch repo, create oikos/<run_id> branch
 2. Commis runs in workspace (via CloudExecutor)
 3. capture_diff() - Get git diff of changes
 4. cleanup() - Remove workspace directory (optional)
@@ -146,38 +146,38 @@ def validate_branch_name(branch: str) -> None:
         )
 
 
-# Pattern for valid course_id: alphanumeric, hyphens, underscores only
-# This prevents git argument injection via malicious course_id
-_VALID_COURSE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+# Pattern for valid run_id: alphanumeric, hyphens, underscores only
+# This prevents git argument injection via malicious run_id
+_VALID_RUN_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
-def validate_course_id(course_id: str) -> None:
-    """Validate course_id for security.
+def validate_run_id(run_id: str) -> None:
+    """Validate run_id for security.
 
-    The course_id is used in branch names (jarvis/{course_id}) and directory paths,
+    The run_id is used in branch names (oikos/{run_id}) and directory paths,
     so it must be alphanumeric with hyphens/underscores only.
 
     Raises
     ------
     ValueError
-        If course_id is invalid
+        If run_id is invalid
     """
-    if not course_id:
-        raise ValueError("course_id cannot be empty")
+    if not run_id:
+        raise ValueError("run_id cannot be empty")
 
-    if not _VALID_COURSE_ID_PATTERN.match(course_id):
-        raise ValueError(f"Invalid course_id: {course_id}. " "Must contain only alphanumeric characters, hyphens, and underscores.")
+    if not _VALID_RUN_ID_PATTERN.match(run_id):
+        raise ValueError(f"Invalid run_id: {run_id}. " "Must contain only alphanumeric characters, hyphens, and underscores.")
 
 
 # Default workspace base path (overridable via env var)
-DEFAULT_WORKSPACE_PATH = "/var/jarvis/workspaces"
+DEFAULT_WORKSPACE_PATH = "/var/oikos/workspaces"
 
 
 @dataclass
 class Workspace:
     """Represents an active git workspace for commis execution."""
 
-    course_id: str
+    run_id: str
     repo_url: str
     path: Path
     branch_name: str
@@ -199,17 +199,17 @@ class WorkspaceManager:
         Parameters
         ----------
         base_path
-            Base directory for workspaces. Defaults to JARVIS_WORKSPACE_PATH env var
-            or /var/jarvis/workspaces.
+            Base directory for workspaces. Defaults to OIKOS_WORKSPACE_PATH env var
+            or /var/oikos/workspaces.
         """
         if base_path is None:
-            base_path = os.getenv("JARVIS_WORKSPACE_PATH", DEFAULT_WORKSPACE_PATH)
+            base_path = os.getenv("OIKOS_WORKSPACE_PATH", DEFAULT_WORKSPACE_PATH)
         self.base_path = Path(base_path)
 
     async def setup(
         self,
         repo_url: str,
-        course_id: str,
+        run_id: str,
         *,
         base_branch: str = "main",
     ) -> Workspace:
@@ -218,15 +218,15 @@ class WorkspaceManager:
         This method:
         1. Creates a unique workspace directory
         2. Clones the repository (or fetches if already exists)
-        3. Creates a new branch: jarvis/<course_id>
+        3. Creates a new branch: oikos/<run_id>
         4. Returns a Workspace object
 
         Parameters
         ----------
         repo_url
             Git repository URL (SSH or HTTPS)
-        course_id
-            Unique identifier for this execution course
+        run_id
+            Unique identifier for this execution run
         base_branch
             Branch to base the work on (default: main)
 
@@ -245,13 +245,13 @@ class WorkspaceManager:
         # Security: Validate inputs before any git operations
         validate_git_repo_url(repo_url)
         validate_branch_name(base_branch)
-        validate_course_id(course_id)  # Also validates jarvis/{course_id} branch name
+        validate_run_id(run_id)  # Also validates oikos/{run_id} branch name
 
         # Create unique workspace directory
-        workspace_dir = self.base_path / course_id
-        branch_name = f"jarvis/{course_id}"
+        workspace_dir = self.base_path / run_id
+        branch_name = f"oikos/{run_id}"
 
-        logger.info(f"Setting up workspace for course {course_id} at {workspace_dir}")
+        logger.info(f"Setting up workspace for run {run_id} at {workspace_dir}")
 
         # Ensure base directory exists
         self.base_path.mkdir(parents=True, exist_ok=True)
@@ -259,7 +259,7 @@ class WorkspaceManager:
         try:
             if workspace_dir.exists():
                 # Workspace exists - fetch and reset
-                logger.debug(f"Workspace exists, fetching latest for {course_id}")
+                logger.debug(f"Workspace exists, fetching latest for {run_id}")
                 await self._git_fetch(workspace_dir)
                 # Auto-detect default branch if using default "main"
                 if base_branch == "main":
@@ -277,11 +277,11 @@ class WorkspaceManager:
                     logger.debug(f"Detected default branch: {base_branch}")
                 await self._git_checkout(workspace_dir, base_branch)
 
-            # Create the jarvis branch
+            # Create the oikos branch
             await self._git_create_branch(workspace_dir, branch_name)
 
             workspace = Workspace(
-                course_id=course_id,
+                run_id=run_id,
                 repo_url=repo_url,
                 path=workspace_dir,
                 branch_name=branch_name,
@@ -292,7 +292,7 @@ class WorkspaceManager:
             return workspace
 
         except Exception as e:
-            logger.exception(f"Failed to set up workspace for {course_id}")
+            logger.exception(f"Failed to set up workspace for {run_id}")
             # Clean up partial workspace on failure
             if workspace_dir.exists():
                 shutil.rmtree(workspace_dir, ignore_errors=True)
@@ -326,9 +326,9 @@ class WorkspaceManager:
         diff = await self._git_diff_staged(workspace.path)
 
         if diff.strip():
-            logger.info(f"Captured diff for {workspace.course_id}: {len(diff)} bytes")
+            logger.info(f"Captured diff for {workspace.run_id}: {len(diff)} bytes")
         else:
-            logger.info(f"No changes in workspace {workspace.course_id}")
+            logger.info(f"No changes in workspace {workspace.run_id}")
 
         return diff
 
@@ -358,20 +358,20 @@ class WorkspaceManager:
             # Check if there are staged changes
             has_changes = await self._git_has_staged_changes(workspace.path)
             if not has_changes:
-                logger.info(f"No changes to commit in {workspace.course_id}")
+                logger.info(f"No changes to commit in {workspace.run_id}")
                 return None
 
             # Generate commit message if not provided
             if not message:
-                message = f"Jarvis course {workspace.course_id}\n\nAutomated changes by cloud commis execution."
+                message = f"Oikos run {workspace.run_id}\n\nAutomated changes by cloud commis execution."
 
             # Commit
             sha = await self._git_commit(workspace.path, message)
-            logger.info(f"Committed changes for {workspace.course_id}: {sha}")
+            logger.info(f"Committed changes for {workspace.run_id}: {sha}")
             return sha
 
         except Exception as e:
-            logger.exception(f"Failed to commit changes for {workspace.course_id}")
+            logger.exception(f"Failed to commit changes for {workspace.run_id}")
             raise RuntimeError(f"Commit failed: {e}") from e
 
     async def push_changes(self, workspace: Workspace) -> bool:
@@ -392,11 +392,11 @@ class WorkspaceManager:
                 workspace.path,
                 ["push", "-u", "origin", workspace.branch_name],
             )
-            logger.info(f"Pushed {workspace.branch_name} for {workspace.course_id}")
+            logger.info(f"Pushed {workspace.branch_name} for {workspace.run_id}")
             return True
 
         except Exception as e:
-            logger.exception(f"Failed to push changes for {workspace.course_id}")
+            logger.exception(f"Failed to push changes for {workspace.run_id}")
             raise RuntimeError(f"Push failed: {e}") from e
 
     async def cleanup(self, workspace: Workspace) -> None:
@@ -410,24 +410,24 @@ class WorkspaceManager:
         try:
             if workspace.path.exists():
                 shutil.rmtree(workspace.path)
-                logger.info(f"Cleaned up workspace {workspace.course_id}")
+                logger.info(f"Cleaned up workspace {workspace.run_id}")
         except Exception as e:
-            logger.warning(f"Failed to cleanup workspace {workspace.course_id}: {e}")
+            logger.warning(f"Failed to cleanup workspace {workspace.run_id}: {e}")
 
-    def get_workspace_path(self, course_id: str) -> Path:
-        """Get the path for a workspace by course_id.
+    def get_workspace_path(self, run_id: str) -> Path:
+        """Get the path for a workspace by run_id.
 
         Parameters
         ----------
-        course_id
-            The course identifier
+        run_id
+            The run identifier
 
         Returns
         -------
         Path
             Workspace directory path
         """
-        return self.base_path / course_id
+        return self.base_path / run_id
 
     # --- Git command helpers ---
 

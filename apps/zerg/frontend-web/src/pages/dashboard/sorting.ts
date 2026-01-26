@@ -1,14 +1,14 @@
-import type { FicheSummary, Course } from "../../services/api";
+import type { FicheSummary, Run } from "../../services/api";
 import { formatDateTimeShort } from "./formatters";
 
-export type SortKey = "name" | "status" | "created_at" | "last_course" | "next_course" | "success";
+export type SortKey = "name" | "status" | "created_at" | "last_run" | "next_run" | "success";
 
 export type SortConfig = {
   key: SortKey;
   ascending: boolean;
 };
 
-export type FicheCoursesState = Record<number, Course[]>;
+export type FicheRunsState = Record<number, Run[]>;
 
 const STATUS_ORDER: Record<string, number> = {
   running: 0,
@@ -32,8 +32,8 @@ export function loadSortConfig(): SortConfig {
     name: "name",
     status: "status",
     created_at: "created_at",
-    last_course: "last_course",
-    next_course: "next_course",
+    last_run: "last_run",
+    next_run: "next_run",
     success: "success",
   };
 
@@ -50,10 +50,10 @@ export function persistSortConfig(config: SortConfig) {
   window.localStorage.setItem(STORAGE_KEY_ASC, config.ascending ? "1" : "0");
 }
 
-export function sortFiches(fiches: FicheSummary[], coursesByFiche: FicheCoursesState, sortConfig: SortConfig): FicheSummary[] {
+export function sortFiches(fiches: FicheSummary[], runsByFiche: FicheRunsState, sortConfig: SortConfig): FicheSummary[] {
   const sorted = [...fiches];
   sorted.sort((left, right) => {
-    const comparison = compareFiches(left, right, coursesByFiche, sortConfig.key);
+    const comparison = compareFiches(left, right, runsByFiche, sortConfig.key);
     if (comparison !== 0) {
       return sortConfig.ascending ? comparison : -comparison;
     }
@@ -66,7 +66,7 @@ export function sortFiches(fiches: FicheSummary[], coursesByFiche: FicheCoursesS
 function compareFiches(
   left: FicheSummary,
   right: FicheSummary,
-  coursesByFiche: FicheCoursesState,
+  runsByFiche: FicheRunsState,
   sortKey: SortKey
 ): number {
   switch (sortKey) {
@@ -78,17 +78,17 @@ function compareFiches(
       return formatDateTimeShort(left.created_at ?? null).localeCompare(
         formatDateTimeShort(right.created_at ?? null)
       );
-    case "last_course":
-      return formatDateTimeShort(left.last_course_at ?? null).localeCompare(
-        formatDateTimeShort(right.last_course_at ?? null)
+    case "last_run":
+      return formatDateTimeShort(left.last_run_at ?? null).localeCompare(
+        formatDateTimeShort(right.last_run_at ?? null)
       );
-    case "next_course":
-      return formatDateTimeShort(left.next_course_at ?? null).localeCompare(
-        formatDateTimeShort(right.next_course_at ?? null)
+    case "next_run":
+      return formatDateTimeShort(left.next_run_at ?? null).localeCompare(
+        formatDateTimeShort(right.next_run_at ?? null)
       );
     case "success": {
-      const leftStats = computeCourseSuccessStats(coursesByFiche[left.id]);
-      const rightStats = computeCourseSuccessStats(coursesByFiche[right.id]);
+      const leftStats = computeRunSuccessStats(runsByFiche[left.id]);
+      const rightStats = computeRunSuccessStats(runsByFiche[right.id]);
       if (leftStats.rate === rightStats.rate) {
         return leftStats.count - rightStats.count;
       }
@@ -99,25 +99,25 @@ function compareFiches(
   }
 }
 
-export function computeCourseSuccessStats(courses?: Course[]): { display: string; rate: number; count: number } {
-  if (!courses || courses.length === 0) {
+export function computeRunSuccessStats(runs?: Run[]): { display: string; rate: number; count: number } {
+  if (!runs || runs.length === 0) {
     return { display: "0.0% (0)", rate: 0, count: 0 };
   }
 
-  const successCount = courses.filter((course) => course.status === "success").length;
-  const successRate = courses.length === 0 ? 0 : (successCount / courses.length) * 100;
+  const successCount = runs.filter((run) => run.status === "success").length;
+  const successRate = runs.length === 0 ? 0 : (successCount / runs.length) * 100;
   return {
-    display: `${successRate.toFixed(1)}% (${courses.length})`,
+    display: `${successRate.toFixed(1)}% (${runs.length})`,
     rate: successRate,
-    count: courses.length,
+    count: runs.length,
   };
 }
 
-export function determineLastCourseIndicator(courses?: Course[]): boolean | null {
-  if (!courses || courses.length === 0) {
+export function determineLastRunIndicator(runs?: Run[]): boolean | null {
+  if (!runs || runs.length === 0) {
     return null;
   }
-  const status = courses[0]?.status;
+  const status = runs[0]?.status;
   if (status === "success") {
     return true;
   }

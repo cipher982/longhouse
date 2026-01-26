@@ -4,7 +4,7 @@ Revision ID: f1a2b3c4d5e6
 Revises: x1y2z3a4b5c6, d4e5f6g7h8i9, p0q1r2s3t4u5, u5v6w7x8y9z0
 Create Date: 2026-01-26
 
-Renames core tables/columns from Agent/Run/Worker to Fiche/Course/Commis.
+Renames core tables/columns from Agent/Run/Worker to Fiche/Run/Commis.
 """
 from __future__ import annotations
 
@@ -62,9 +62,9 @@ def upgrade() -> None:
 
     # Table renames
     _rename_table(inspector, schema, "agents", "fiches")
-    _rename_table(inspector, schema, "agent_runs", "courses")
+    _rename_table(inspector, schema, "agent_runs", "runs")
     _rename_table(inspector, schema, "worker_jobs", "commis_jobs")
-    _rename_table(inspector, schema, "agent_run_events", "course_events")
+    _rename_table(inspector, schema, "agent_run_events", "run_events")
     _rename_table(inspector, schema, "worker_barriers", "commis_barriers")
     _rename_table(inspector, schema, "worker_barrier_jobs", "commis_barrier_jobs")
     _rename_table(inspector, schema, "agent_memory_kv", "fiche_memory_kv")
@@ -79,20 +79,20 @@ def upgrade() -> None:
 
     _rename_column(inspector, schema, "threads", "agent_state", "fiche_state")
 
-    # Course-related renames
-    _rename_column(inspector, schema, "courses", "agent_id", "fiche_id")
-    _rename_column(inspector, schema, "courses", "continuation_of_run_id", "continuation_of_course_id")
+    # Run-related renames
+    _rename_column(inspector, schema, "runs", "agent_id", "fiche_id")
+    _rename_column(inspector, schema, "runs", "continuation_of_run_id", "continuation_of_run_id")
 
-    # Course events table column
-    _rename_column(inspector, schema, "course_events", "agent_run_id", "course_id")
-    _rename_column(inspector, schema, "course_events", "run_id", "course_id")
+    # Run events table column
+    _rename_column(inspector, schema, "run_events", "agent_run_id", "run_id")
+    _rename_column(inspector, schema, "run_events", "run_id", "run_id")
 
     # Commis job columns
     _rename_column(inspector, schema, "commis_jobs", "worker_id", "commis_id")
-    _rename_column(inspector, schema, "commis_jobs", "supervisor_run_id", "concierge_course_id")
+    _rename_column(inspector, schema, "commis_jobs", "supervisor_run_id", "oikos_run_id")
 
     # Commis barriers
-    _rename_column(inspector, schema, "commis_barriers", "run_id", "course_id")
+    _rename_column(inspector, schema, "commis_barriers", "run_id", "run_id")
     _rename_column(inspector, schema, "commis_barrier_jobs", "worker_job_id", "job_id")
     _rename_column(inspector, schema, "commis_barrier_jobs", "worker_barrier_id", "barrier_id")
 
@@ -128,19 +128,19 @@ def downgrade() -> None:
 
     _rename_column(inspector, schema, "threads", "fiche_state", "agent_state")
 
-    # Course-related renames
-    _rename_column(inspector, schema, "courses", "fiche_id", "agent_id")
-    _rename_column(inspector, schema, "courses", "continuation_of_course_id", "continuation_of_run_id")
+    # Run-related renames
+    _rename_column(inspector, schema, "runs", "fiche_id", "agent_id")
+    _rename_column(inspector, schema, "runs", "continuation_of_run_id", "continuation_of_run_id")
 
-    # Course events table column
-    _rename_column(inspector, schema, "course_events", "course_id", "agent_run_id")
+    # Run events table column
+    _rename_column(inspector, schema, "run_events", "run_id", "agent_run_id")
 
     # Commis job columns
     _rename_column(inspector, schema, "commis_jobs", "commis_id", "worker_id")
-    _rename_column(inspector, schema, "commis_jobs", "concierge_course_id", "supervisor_run_id")
+    _rename_column(inspector, schema, "commis_jobs", "oikos_run_id", "supervisor_run_id")
 
     # Commis barriers
-    _rename_column(inspector, schema, "commis_barriers", "course_id", "run_id")
+    _rename_column(inspector, schema, "commis_barriers", "run_id", "run_id")
     _rename_column(inspector, schema, "commis_barrier_jobs", "job_id", "worker_job_id")
     _rename_column(inspector, schema, "commis_barrier_jobs", "barrier_id", "worker_barrier_id")
 
@@ -164,7 +164,7 @@ def downgrade() -> None:
     _rename_table(inspector, schema, "fiche_memory_kv", "agent_memory_kv")
     _rename_table(inspector, schema, "commis_barrier_jobs", "worker_barrier_jobs")
     _rename_table(inspector, schema, "commis_barriers", "worker_barriers")
-    _rename_table(inspector, schema, "course_events", "agent_run_events")
+    _rename_table(inspector, schema, "run_events", "agent_run_events")
     _rename_table(inspector, schema, "commis_jobs", "worker_jobs")
-    _rename_table(inspector, schema, "courses", "agent_runs")
+    _rename_table(inspector, schema, "runs", "agent_runs")
     _rename_table(inspector, schema, "fiches", "agents")

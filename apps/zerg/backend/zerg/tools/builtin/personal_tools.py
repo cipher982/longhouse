@@ -1,6 +1,6 @@
-"""Personal tools for Jarvis integration (Phase 4 v2.1).
+"""Personal tools for Oikos integration (Phase 4 v2.1).
 
-These tools enable Concierge to access personal data sources:
+These tools enable Oikos to access personal data sources:
 - Location: GPS position from Traccar tracking server
 - Health: Recovery/sleep/strain from WHOOP
 - Notes: Search Obsidian vault via Runner
@@ -537,7 +537,7 @@ def search_notes(
     rg_command = f'rg -i -C 1 --max-count 3 --type md "{safe_query}" {expanded_vault} 2>/dev/null | head -n 100'
 
     try:
-        # Execute via runner using concierge-safe method
+        # Execute via runner using oikos-safe method
         # runner_exec requires commis context, so we use the dispatcher directly
         from zerg.crud import runner_crud
         from zerg.database import get_db
@@ -574,8 +574,8 @@ def search_notes(
                     runner_id=runner.id,
                     command=rg_command,
                     timeout_secs=30,
-                    commis_id=None,  # No commis context for Concierge tools
-                    course_id=None,
+                    commis_id=None,  # No commis context for Oikos tools
+                    run_id=None,
                 )
             )
         finally:

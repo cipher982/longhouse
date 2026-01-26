@@ -82,7 +82,7 @@ The Swarmlet landing page has a solid structure and good visual foundation, but 
 1. **3-5 minute product demo video** showing:
    - Quick overview of the platform
    - Building a workflow in the canvas
-   - Chat interface interaction with Jarvis
+   - Chat interface interaction with Oikos
    - Agent execution and results
    - Dashboard management
 
@@ -337,7 +337,7 @@ lets you build AI workflows that actually work."
 
 [1:45-2:30] Chat Interface
 - Switch to chat
-- "Or just ask Jarvis"
+- "Or just ask Oikos"
 - Show natural language interaction
 - Agent executes workflow
 - Results appear in real-time

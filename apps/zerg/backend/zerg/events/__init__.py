@@ -3,13 +3,12 @@
 This package provides:
 - EventBus: Central pub/sub for system events
 - EventEmitter: Protocol for tool event emission with baked-in identity
-- CommisEmitter/ConciergeEmitter: Concrete emitters that always emit correct event types
+- CommisEmitter/OikosEmitter: Concrete emitters that always emit correct event types
 - get_emitter/set_emitter: Contextvar-based emitter transport
 """
 
 from .commis_emitter import CommisEmitter
 from .commis_emitter import ToolCall
-from .concierge_emitter import ConciergeEmitter
 from .emitter_context import get_emitter
 from .emitter_context import reset_emitter
 from .emitter_context import set_emitter
@@ -18,6 +17,7 @@ from .event_bus import EventBus
 from .event_bus import EventType
 from .event_bus import event_bus
 from .null_emitter import NullEmitter
+from .oikos_emitter import OikosEmitter
 
 __all__ = [
     # Event bus
@@ -27,7 +27,7 @@ __all__ = [
     # Emitter protocol and implementations
     "EventEmitter",
     "CommisEmitter",
-    "ConciergeEmitter",
+    "OikosEmitter",
     "NullEmitter",
     "ToolCall",
     # Emitter context management

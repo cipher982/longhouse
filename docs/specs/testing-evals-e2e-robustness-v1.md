@@ -126,7 +126,7 @@ Playwright already runs an isolated backend/frontend by default (`apps/zerg/e2e/
      - a screenshot at end
      - any available backend run identifier(s)
    - If available, also fetch backend timeline:
-     - `GET /api/jarvis/runs/<runId>/timeline` is already used by some tests (see `apps/zerg/e2e/tests/chat_performance_eval.spec.ts`).
+     - `GET /api/oikos/runs/<runId>/timeline` is already used by some tests (see `apps/zerg/e2e/tests/chat_performance_eval.spec.ts`).
 
 ### Implementation shape
 - Add a helper: `apps/zerg/e2e/utils/llm-judge.ts` (or colocate under `apps/zerg/e2e/tests/helpers/`) that exposes:

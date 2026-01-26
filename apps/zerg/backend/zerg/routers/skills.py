@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/skills", tags=["skills"])
 
 # Default workspace base path (same as workspace_manager.py)
-DEFAULT_WORKSPACE_PATH = "/var/jarvis/workspaces"
+DEFAULT_WORKSPACE_PATH = "/var/oikos/workspaces"
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +43,7 @@ DEFAULT_WORKSPACE_PATH = "/var/jarvis/workspaces"
 
 def get_workspace_base_path() -> Path:
     """Get the allowed base path for workspaces."""
-    return Path(os.getenv("JARVIS_WORKSPACE_PATH", DEFAULT_WORKSPACE_PATH))
+    return Path(os.getenv("OIKOS_WORKSPACE_PATH", DEFAULT_WORKSPACE_PATH))
 
 
 def validate_workspace_path(workspace_path: Optional[str]) -> Optional[Path]:

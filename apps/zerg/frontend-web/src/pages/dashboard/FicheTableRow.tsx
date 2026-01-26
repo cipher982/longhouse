@@ -13,23 +13,23 @@ import {
   LoaderIcon,
   AlertTriangleIcon,
 } from "../../components/icons";
-import type { FicheSummary, Course } from "../../services/api";
+import type { FicheSummary, Run } from "../../services/api";
 import { Table, Badge, IconButton } from "../../components/ui";
 import { formatDateTimeShort, formatDuration, capitaliseFirst, formatTokens, formatCost } from "./formatters";
-import { computeCourseSuccessStats, determineLastCourseIndicator } from "./sorting";
+import { computeRunSuccessStats, determineLastRunIndicator } from "./sorting";
 
 interface FicheTableRowProps {
   fiche: FicheSummary;
-  courses: Course[];
+  runs: Run[];
   includeOwner: boolean;
   isExpanded: boolean;
-  isCourseHistoryExpanded: boolean;
-  isPendingCourse: boolean;
-  coursesDataLoading: boolean;
+  isRunHistoryExpanded: boolean;
+  isPendingRun: boolean;
+  runsDataLoading: boolean;
   editingFicheId: number | null;
   editingName: string;
   onToggleRow: (ficheId: number) => void;
-  onToggleCourseHistory: (ficheId: number) => void;
+  onToggleRunHistory: (ficheId: number) => void;
   onRunFiche: (event: ReactMouseEvent<HTMLButtonElement>, ficheId: number, status: string) => void;
   onChatFiche: (event: ReactMouseEvent<HTMLButtonElement>, ficheId: number, ficheName: string) => void;
   onDebugFiche: (event: ReactMouseEvent<HTMLButtonElement>, ficheId: number) => void;
@@ -38,7 +38,7 @@ interface FicheTableRowProps {
   onSaveNameAndExit: (ficheId: number) => void;
   onCancelEditing: () => void;
   onEditingNameChange: (name: string) => void;
-  onCourseActionsClick: (ficheId: number, courseId: number) => void;
+  onRunActionsClick: (ficheId: number, runId: number) => void;
 }
 
 function formatStatus(status: string): ReactElement {
@@ -55,7 +55,7 @@ function formatStatus(status: string): ReactElement {
   }
 }
 
-function formatCourseStatusIcon(status: Course["status"]): ReactElement {
+function formatRunStatusIcon(status: Run["status"]): ReactElement {
   switch (status) {
     case "running":
       return <PlayIcon width={12} height={12} />;
@@ -90,16 +90,16 @@ function renderOwnerCell(fiche: FicheSummary) {
 
 function FicheTableRowComponent({
   fiche,
-  courses,
+  runs,
   includeOwner,
   isExpanded,
-  isCourseHistoryExpanded,
-  isPendingCourse,
-  coursesDataLoading,
+  isRunHistoryExpanded,
+  isPendingRun,
+  runsDataLoading,
   editingFicheId,
   editingName,
   onToggleRow,
-  onToggleCourseHistory,
+  onToggleRunHistory,
   onRunFiche,
   onChatFiche,
   onDebugFiche,
@@ -108,14 +108,14 @@ function FicheTableRowComponent({
   onSaveNameAndExit,
   onCancelEditing,
   onEditingNameChange,
-  onCourseActionsClick,
+  onRunActionsClick,
 }: FicheTableRowProps) {
-  const successStats = computeCourseSuccessStats(courses);
-  const lastCourseIndicator = determineLastCourseIndicator(courses);
+  const successStats = computeRunSuccessStats(runs);
+  const lastRunIndicator = determineLastRunIndicator(runs);
   const isRunning = fiche.status === "running";
   const createdDisplay = formatDateTimeShort(fiche.created_at ?? null);
-  const lastCourseDisplay = formatDateTimeShort(fiche.last_course_at ?? null);
-  const nextCourseDisplay = formatDateTimeShort(fiche.next_course_at ?? null);
+  const lastRunDisplay = formatDateTimeShort(fiche.last_run_at ?? null);
+  const nextRunDisplay = formatDateTimeShort(fiche.next_run_at ?? null);
   const emptyColspan = includeOwner ? 8 : 7;
 
   const handleRowKeyDown = (event: ReactKeyboardEvent<HTMLTableRowElement>) => {
@@ -199,26 +199,26 @@ function FicheTableRowComponent({
               <InfoCircleIcon width={14} height={14} />
             </span>
           )}
-          {lastCourseIndicator !== null && (
+          {lastRunIndicator !== null && (
             <span
-              className={lastCourseIndicator ? "last-course-indicator last-course-success" : "last-course-indicator last-course-failure"}
+              className={lastRunIndicator ? "last-run-indicator last-run-success" : "last-run-indicator last-run-failure"}
             >
-              {lastCourseIndicator
+              {lastRunIndicator
                 ? <> (Last: <CheckCircleIcon width={12} height={12} />)</>
                 : <> (Last: <XCircleIcon width={12} height={12} />)</>}
             </span>
           )}
         </Table.Cell>
         <Table.Cell data-label="Created">{createdDisplay}</Table.Cell>
-        <Table.Cell data-label="Last Course">{lastCourseDisplay}</Table.Cell>
-        <Table.Cell data-label="Next Course">{nextCourseDisplay}</Table.Cell>
+        <Table.Cell data-label="Last Run">{lastRunDisplay}</Table.Cell>
+        <Table.Cell data-label="Next Run">{nextRunDisplay}</Table.Cell>
         <Table.Cell data-label="Success Rate">{successStats.display}</Table.Cell>
         <Table.Cell className="actions-cell" data-label="Actions">
           <div className="actions-cell-inner">
             <IconButton
-              className={clsx("run-btn", (isRunning || isPendingCourse) && "disabled")}
+              className={clsx("run-btn", (isRunning || isPendingRun) && "disabled")}
               data-testid={`run-fiche-${fiche.id}`}
-              disabled={isRunning || isPendingCourse}
+              disabled={isRunning || isPendingRun}
               title={isRunning ? "Fiche is already running" : "Run Fiche"}
               onClick={(event) => onRunFiche(event, fiche.id, fiche.status)}
             >
@@ -255,13 +255,13 @@ function FicheTableRowComponent({
         <tr className="fiche-detail-row" key={`detail-${fiche.id}`}>
           <td colSpan={emptyColspan}>
             <div className="fiche-detail-container">
-              {coursesDataLoading && <span>Loading course history...</span>}
-              {!coursesDataLoading && courses && courses.length === 0 && (
-                <span>No courses recorded yet.</span>
+              {runsDataLoading && <span>Loading run history...</span>}
+              {!runsDataLoading && runs && runs.length === 0 && (
+                <span>No runs recorded yet.</span>
               )}
-              {!coursesDataLoading && courses && courses.length > 0 && (
+              {!runsDataLoading && runs && runs.length > 0 && (
                 <>
-                  <table className="course-history-table">
+                  <table className="run-history-table">
                     <thead>
                       <tr>
                         <th>Status</th>
@@ -274,17 +274,17 @@ function FicheTableRowComponent({
                       </tr>
                     </thead>
                     <tbody>
-                      {courses
-                        .slice(0, isCourseHistoryExpanded ? courses.length : Math.min(courses.length, 5))
-                        .map((course) => (
-                          <tr key={course.id}>
-                            <td>{formatCourseStatusIcon(course.status)}</td>
-                            <td>{formatDateTimeShort(course.started_at ?? null)}</td>
-                            <td>{formatDuration(course.duration_ms)}</td>
-                            <td>{capitaliseFirst(course.trigger)}</td>
-                            <td>{formatTokens(course.total_tokens)}</td>
-                            <td>{formatCost(course.total_cost_usd)}</td>
-                            <td className="course-kebab-cell">
+                      {runs
+                        .slice(0, isRunHistoryExpanded ? runs.length : Math.min(runs.length, 5))
+                        .map((run) => (
+                          <tr key={run.id}>
+                            <td>{formatRunStatusIcon(run.status)}</td>
+                            <td>{formatDateTimeShort(run.started_at ?? null)}</td>
+                            <td>{formatDuration(run.duration_ms)}</td>
+                            <td>{capitaliseFirst(run.trigger)}</td>
+                            <td>{formatTokens(run.total_tokens)}</td>
+                            <td>{formatCost(run.total_cost_usd)}</td>
+                            <td className="run-kebab-cell">
                               <span
                                 className="kebab-menu-btn"
                                 role="button"
@@ -292,13 +292,13 @@ function FicheTableRowComponent({
                                 onClick={(event) => {
                                   event.preventDefault();
                                   event.stopPropagation();
-                                  onCourseActionsClick(fiche.id, course.id);
+                                  onRunActionsClick(fiche.id, run.id);
                                 }}
                                 onKeyDown={(event) => {
                                   if (event.key === "Enter" || event.key === " ") {
                                     event.preventDefault();
                                     event.stopPropagation();
-                                    onCourseActionsClick(fiche.id, course.id);
+                                    onRunActionsClick(fiche.id, run.id);
                                   }
                                 }}
                               >
@@ -309,17 +309,17 @@ function FicheTableRowComponent({
                         ))}
                     </tbody>
                   </table>
-                  {courses.length > 5 && (
+                  {runs.length > 5 && (
                     <a
                       href="#"
-                      className="course-toggle-link"
-                      aria-expanded={isCourseHistoryExpanded ? "true" : "false"}
+                      className="run-toggle-link"
+                      aria-expanded={isRunHistoryExpanded ? "true" : "false"}
                       onClick={(event) => {
                         event.preventDefault();
-                        onToggleCourseHistory(fiche.id);
+                        onToggleRunHistory(fiche.id);
                       }}
                     >
-                      {isCourseHistoryExpanded ? "Show less" : `Show all (${courses.length})`}
+                      {isRunHistoryExpanded ? "Show less" : `Show all (${runs.length})`}
                     </a>
                   )}
                 </>

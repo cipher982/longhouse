@@ -2,7 +2,7 @@
 
 This service manages the filesystem structure for commis artifacts, enabling
 commis to persist all outputs (tool calls, messages, results) to disk for
-later retrieval by concierge fiches.
+later retrieval by oikos fiches.
 
 INVARIANTS:
 - result.txt is canonical. Never delete or auto-truncate.

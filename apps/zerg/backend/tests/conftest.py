@@ -255,16 +255,16 @@ class _StubLlm:
                     user_content = content
                     break
 
-        # Only return tool calls for tool integration tests (fiches with ALL concierge tools)
+        # Only return tool calls for tool integration tests (fiches with ALL oikos tools)
         # This prevents e2e tests from accidentally triggering background commis
         if self._tools:
             import re
 
             tool_names = [t.name if hasattr(t, "name") else str(t) for t in self._tools]
-            concierge_tools = {"spawn_commis", "list_commis", "read_commis_result"}
+            oikos_tools = {"spawn_commis", "list_commis", "read_commis_result"}
 
-            # Only make tool calls if fiche has ALL concierge tools (tool integration tests)
-            if concierge_tools.issubset(set(tool_names)) and user_content:
+            # Only make tool calls if fiche has ALL oikos tools (tool integration tests)
+            if oikos_tools.issubset(set(tool_names)) and user_content:
                 user_lower = user_content.lower()
 
                 # Select tool based on keywords in user message
@@ -376,11 +376,11 @@ _eval_mode = _os.environ.get("EVAL_MODE", "hermetic")
 if _eval_mode != "live":
     langchain_openai.ChatOpenAI = _StubChatOpenAI  # type: ignore[attr-defined]
 
-    # Ensure already-imported concierge engine uses the stub as well.
+    # Ensure already-imported oikos engine uses the stub as well.
     # We overwrite it here defensively so no test ever triggers an external network call.
     import sys as _sys
 
-    _sre_module = _sys.modules.get("zerg.services.concierge_react_engine")
+    _sre_module = _sys.modules.get("zerg.services.oikos_react_engine")
     if _sre_module is not None:  # pragma: no cover – depends on import order
         _sre_module.ChatOpenAI = _StubChatOpenAI  # type: ignore[attr-defined]
 

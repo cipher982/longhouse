@@ -3,7 +3,7 @@
 v2.0 Philosophy: Trust the AI, Remove Scaffolding
 -------------------------------------------------
 This module provides the LLM-based decision layer for roundabout monitoring.
-The concierge polls commis status ("glancing at a second monitor") and the LLM
+The oikos polls commis status ("glancing at a second monitor") and the LLM
 interprets what it sees to decide: wait, exit early, cancel, or peek.
 
 This is the v2.0 default approach. Heuristic mode is deprecated but kept for

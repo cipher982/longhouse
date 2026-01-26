@@ -124,14 +124,14 @@ export interface AssistantIdData {
 export interface FicheEventData {
   id: number;
   status?: string;
-  last_course_at?: string;
-  next_course_at?: string;
+  last_run_at?: string;
+  next_run_at?: string;
   last_error?: string;
   name?: string;
   description?: string;
 }
 
-export interface CourseUpdateData {
+export interface RunUpdateData {
   id: number;
   fiche_id: number;
   thread_id?: number;
@@ -190,9 +190,9 @@ export interface NodeLogData {
 }
 
 export interface OpsEventData {
-  type: "course_started" | "course_success" | "course_failed" | "fiche_created" | "fiche_updated" | "thread_message_created" | "budget_denied";
+  type: "run_started" | "run_success" | "run_failed" | "fiche_created" | "fiche_updated" | "thread_message_created" | "budget_denied";
   fiche_id?: number;
-  course_id?: number;
+  run_id?: number;
   thread_id?: number;
   duration_ms?: number;
   error?: string;
@@ -282,9 +282,9 @@ export interface FicheEvent extends Envelope<FicheEventData> {
   type: 'fiche_event';
 }
 
-/** Fiche course status update */
-export interface CourseUpdate extends Envelope<CourseUpdateData> {
-  type: 'course_update';
+/** Fiche run status update */
+export interface RunUpdate extends Envelope<RunUpdateData> {
+  type: 'run_update';
 }
 
 /** User profile update */
@@ -329,7 +329,7 @@ export type WebSocketMessage =
   | StreamEnd
   | AssistantId
   | FicheEvent
-  | CourseUpdate
+  | RunUpdate
   | UserUpdate
   | NodeState
   | ExecutionFinished

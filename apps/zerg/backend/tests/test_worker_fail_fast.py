@@ -258,7 +258,7 @@ async def test_roundabout_exits_immediately_on_commis_failure(db_session, tmp_pa
 
 @pytest.mark.asyncio
 async def test_error_message_formatting():
-    """Test that error messages are formatted clearly for concierge."""
+    """Test that error messages are formatted clearly for oikos."""
     # Critical SSH error
     error_content = (
         "{'ok': False, 'error_type': 'execution_error', 'user_message': 'SSH key not found at ~/.ssh/id_ed25519'}"

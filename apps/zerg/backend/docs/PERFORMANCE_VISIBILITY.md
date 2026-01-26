@@ -6,15 +6,15 @@ This document describes the three-tier performance visibility system for commis 
 
 The system provides three levels of visibility into commis performance:
 
-1. **Tier 1 (Always Visible)**: User-facing summary in concierge results
+1. **Tier 1 (Always Visible)**: User-facing summary in oikos results
 2. **Tier 2 (Progressive Disclosure)**: Detailed metrics in `metrics.jsonl` for offline analysis
 3. **Tier 3 (Dev Telemetry)**: Real-time structured logs for developer monitoring
 
 ## Tier 1: Always Visible (User-Facing)
 
-**Purpose**: Give concierges immediate visibility into commis execution time.
+**Purpose**: Give oikos operators immediate visibility into commis execution time.
 
-**Implementation**: When a concierge reads a commis result via `read_commis_result`, the response includes execution time at the end.
+**Implementation**: When a oikos reads a commis result via `read_commis_result`, the response includes execution time at the end.
 
 ### Example Output
 
@@ -31,14 +31,14 @@ The result is 42.
 - `CommisRunner` tracks `start_time` and calculates `duration_ms` at completion
 - Duration is stored in `metadata.json` in commis directory
 - `read_commis_result` tool appends duration to result text
-- Concierge LLM sees duration inline with the result
+- Oikos LLM sees duration inline with the result
 
 ### Verification
 
 ```bash
 # Run test
 cd apps/zerg/backend
-uv run pytest tests/test_concierge_tools_integration.py::test_read_commis_result_includes_duration -xvs
+uv run pytest tests/test_oikos_tools_integration.py::test_read_commis_result_includes_duration -xvs
 ```
 
 **Expected**: Test passes, result contains "Execution time: Xms" where X > 0.
@@ -101,16 +101,16 @@ Each line is a JSON object representing a single event:
 }
 ```
 
-### How Concierges Access Metrics
+### How Oikos Accesses Metrics
 
-Concierges can read metrics using the `read_commis_file` tool:
+Oikos can read metrics using the `read_commis_file` tool:
 
 ```python
-# Concierge prompt template includes this hint:
+# Oikos prompt template includes this hint:
 # "For detailed performance metrics, read 'metrics.jsonl' from the commis directory"
 
 result = read_commis_file(job_id="123", file_path="metrics.jsonl")
-# Returns full JSONL content for concierge to analyze
+# Returns full JSONL content for Oikos to analyze
 ```
 
 ### Analysis Examples
@@ -150,7 +150,7 @@ uv run pytest tests/test_metrics_jsonl_tier2.py -xvs
 **Expected**: All 3 tests pass:
 
 - `test_metrics_jsonl_creation` - File exists with valid JSONL
-- `test_read_commis_file_can_access_metrics` - Concierge can access via tool
+- `test_read_commis_file_can_access_metrics` - Oikos can access via tool
 - `test_metrics_collector_context_isolation` - Context vars work correctly
 
 ---
@@ -241,7 +241,7 @@ grep "duration_ms=" logs/backend/backend.log | awk -F'duration_ms=' '{print $2}'
 Structured logs are emitted in two places:
 
 1. **commis_runner.py** - After summary extraction (LLM call)
-2. **concierge_react_engine.py** - After tool execution (tool call)
+2. **oikos_react_engine.py** - After tool execution (tool call)
 
 Both use the same pattern:
 
@@ -290,8 +290,8 @@ uv run pytest tests/test_structured_logs_tier3.py -xvs
 ```bash
 cd apps/zerg/backend
 
-# Tier 1: Duration in concierge results
-uv run pytest tests/test_concierge_tools_integration.py::test_read_commis_result_includes_duration -xvs
+# Tier 1: Duration in oikos results
+uv run pytest tests/test_oikos_tools_integration.py::test_read_commis_result_includes_duration -xvs
 
 # Tier 2: metrics.jsonl structure
 uv run pytest tests/test_metrics_jsonl_tier2.py -xvs
@@ -300,7 +300,7 @@ uv run pytest tests/test_metrics_jsonl_tier2.py -xvs
 uv run pytest tests/test_structured_logs_tier3.py -xvs
 
 # Full integration suite
-uv run pytest tests/test_commis_runner.py tests/test_concierge_tools.py tests/test_concierge_tools_integration.py -x
+uv run pytest tests/test_commis_runner.py tests/test_oikos_tools.py tests/test_oikos_tools_integration.py -x
 ```
 
 ### Expected Results
@@ -389,7 +389,7 @@ grep "event=" logs/backend/backend.log | head -5
 ### Tiered Visibility
 
 1. **Tier 1 (Always)**: Simple, always-on, user-facing summary
-2. **Tier 2 (Progressive)**: Detailed data available when concierge needs it
+2. **Tier 2 (Progressive)**: Detailed data available when oikos needs it
 3. **Tier 3 (Dev)**: Real-time monitoring for developers, opaque to LLMs
 
 ### Non-Intrusive
@@ -407,7 +407,7 @@ grep "event=" logs/backend/backend.log | head -5
 ### Progressive Disclosure
 
 - User sees summary by default (Tier 1)
-- Concierge can drill into details via tools (Tier 2)
+- Oikos can drill into details via tools (Tier 2)
 - Developers monitor real-time via logs (Tier 3)
 
 ---
@@ -420,7 +420,7 @@ grep "event=" logs/backend/backend.log | head -5
 2. **Alerting**: Trigger alerts on slow operations (duration > threshold)
 3. **Aggregation**: Roll up metrics across commis for system-wide visibility
 4. **Cost Tracking**: Add token cost calculations to LLM events
-5. **Tracing**: Link events across concierge -> commis -> tool call chains
+5. **Tracing**: Link events across oikos -> commis -> tool call chains
 6. **Export**: Push metrics to external observability platforms (Prometheus, Datadog)
 
 ### Backwards Compatibility
@@ -437,7 +437,7 @@ All three tiers are backwards compatible:
 
 The three-tier performance visibility system provides:
 
-✅ **Tier 1**: Immediate feedback for concierges ("Execution time: 98ms")
+✅ **Tier 1**: Immediate feedback for oikos operators ("Execution time: 98ms")
 ✅ **Tier 2**: Detailed metrics for analysis (`metrics.jsonl`)
 ✅ **Tier 3**: Real-time monitoring for developers (structured logs)
 

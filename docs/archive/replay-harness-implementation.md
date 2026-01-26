@@ -294,7 +294,7 @@ To fully test, need a running backend with existing runs:
 make dev
 
 # 2. Run a real supervisor task (creates run in DB)
-# (via Jarvis chat or API)
+# (via Oikos chat or API)
 
 # 3. Get run ID from DB or logs
 

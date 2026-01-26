@@ -15,7 +15,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchThreads: vi.fn(),
   fetchThreadMessages: vi.fn(),
   postThreadMessage: vi.fn(),
-  startThreadCourse: vi.fn(),
+  startThreadRun: vi.fn(),
   createThread: vi.fn(),
   updateThread: vi.fn(),
   fetchWorkflows: vi.fn(),
@@ -37,7 +37,7 @@ const {
   fetchThreads: mockFetchThreads,
   fetchThreadMessages: mockFetchThreadMessages,
   postThreadMessage: mockPostThreadMessage,
-  startThreadCourse: mockStartThreadCourse,
+  startThreadRun: mockStartThreadRun,
   createThread: mockCreateThread,
   updateThread: mockUpdateThread,
   fetchWorkflows: mockFetchWorkflows,
@@ -112,8 +112,8 @@ describe("ChatPage", () => {
       last_error: null,
       allowed_tools: [],
       messages: [],
-      next_course_at: null,
-      last_course_at: null,
+      next_run_at: null,
+      last_run_at: null,
     });
     mockFetchThreads.mockImplementation((_ficheId: number, threadType?: string) => {
       // Only return the thread for matching thread_type to avoid duplicate keys
@@ -124,7 +124,7 @@ describe("ChatPage", () => {
     });
     mockFetchThreadMessages.mockResolvedValue([message]);
     mockPostThreadMessage.mockResolvedValue({ ...message, id: 100, content: "New human message" });
-    mockStartThreadCourse.mockResolvedValue(undefined);
+    mockStartThreadRun.mockResolvedValue(undefined);
     mockCreateThread.mockResolvedValue({
       ...thread,
       id: 100,
@@ -173,7 +173,7 @@ describe("ChatPage", () => {
 
     await waitFor(() => {
       expect(mockPostThreadMessage).toHaveBeenCalledWith(42, "New human message");
-      expect(mockStartThreadCourse).toHaveBeenCalledWith(42);
+      expect(mockStartThreadRun).toHaveBeenCalledWith(42);
     });
   });
 

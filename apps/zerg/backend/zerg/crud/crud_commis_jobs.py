@@ -5,28 +5,28 @@ from sqlalchemy.orm import Session
 from zerg.models import CommisJob
 
 
-def get_by_concierge_course(
+def get_by_oikos_run(
     db: Session,
-    concierge_course_id: int,
+    oikos_run_id: int,
     owner_id: int | None = None,
 ) -> list[CommisJob]:
-    """Get all commis jobs for a concierge course.
+    """Get all commis jobs for a oikos run.
 
     Parameters
     ----------
     db
         Database session
-    concierge_course_id
-        Concierge course ID to query
+    oikos_run_id
+        Oikos run ID to query
     owner_id
         Optional owner ID for security filtering
 
     Returns
     -------
     list[CommisJob]
-        List of commis jobs for this concierge course
+        List of commis jobs for this oikos run
     """
-    query = db.query(CommisJob).filter(CommisJob.concierge_course_id == concierge_course_id)
+    query = db.query(CommisJob).filter(CommisJob.oikos_run_id == oikos_run_id)
 
     if owner_id is not None:
         query = query.filter(CommisJob.owner_id == owner_id)
@@ -34,4 +34,4 @@ def get_by_concierge_course(
     return query.all()
 
 
-__all__ = ["get_by_concierge_course"]
+__all__ = ["get_by_oikos_run"]

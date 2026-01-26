@@ -393,11 +393,11 @@
         "status": {
           "type": "string"
         },
-        "last_course_at": {
+        "last_run_at": {
           "type": "string",
           "format": "date-time"
         },
-        "next_course_at": {
+        "next_run_at": {
           "type": "string",
           "format": "date-time"
         },
@@ -412,7 +412,7 @@
         }
       }
     },
-    "CourseUpdateData": {
+    "RunUpdateData": {
       "type": "object",
       "required": [
         "id",
@@ -647,9 +647,9 @@
         "type": {
           "type": "string",
           "enum": [
-            "course_started",
-            "course_success",
-            "course_failed",
+            "run_started",
+            "run_success",
+            "run_failed",
             "fiche_created",
             "fiche_updated",
             "thread_message_created",
@@ -660,7 +660,7 @@
           "type": "integer",
           "minimum": 1
         },
-        "course_id": {
+        "run_id": {
           "type": "integer",
           "minimum": 1
         },

@@ -51,9 +51,9 @@ async def test_user_budget_denies_when_exhausted(client, db_session, monkeypatch
         fiche, thread = _fiche_and_thread(db_session, user.id)
 
         # Simulate prior usage today: $1.00 already used
-        run = crud.create_course(db_session, fiche_id=fiche.id, thread_id=thread.id, trigger="api", status="queued")
-        crud.mark_course_running(db_session, run.id)
-        crud.mark_course_finished(db_session, run.id, total_tokens=10, total_cost_usd=1.00)
+        run = crud.create_run(db_session, fiche_id=fiche.id, thread_id=thread.id, trigger="api", status="queued")
+        crud.mark_run_running(db_session, run.id)
+        crud.mark_run_finished(db_session, run.id, total_tokens=10, total_cost_usd=1.00)
 
         # Next run should be denied for non-admin
         r = client.post(f"/api/threads/{thread.id}/run")
@@ -77,9 +77,9 @@ async def test_admin_exempt_from_budgets(client, db_session, monkeypatch):
         fiche, thread = _fiche_and_thread(db_session, admin.id)
 
         # Simulate high global usage ($2.00) which would otherwise block
-        run = crud.create_course(db_session, fiche_id=fiche.id, thread_id=thread.id, trigger="api", status="queued")
-        crud.mark_course_running(db_session, run.id)
-        crud.mark_course_finished(db_session, run.id, total_tokens=10, total_cost_usd=2.00)
+        run = crud.create_run(db_session, fiche_id=fiche.id, thread_id=thread.id, trigger="api", status="queued")
+        crud.mark_run_running(db_session, run.id)
+        crud.mark_run_finished(db_session, run.id, total_tokens=10, total_cost_usd=2.00)
 
         # Admin should still be allowed to run
         crud.create_thread_message(db=db_session, thread_id=thread.id, role="user", content="next")

@@ -44,7 +44,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
 - [x] Dashboard: swap create-agent loading spinner to shared `Spinner`.
 - [x] App route loader: use shared `Spinner`.
 - [x] Dashboard empty-state logo: move inline sizing to CSS.
-- [x] Jarvis chat loading state: move inline styles into jarvis CSS.
+- [x] Oikos chat loading state: move inline styles into oikos CSS.
 - [x] Landing perf HUD: move inline styles into landing CSS.
 
 ## Phase 2 — Styling & Tokens

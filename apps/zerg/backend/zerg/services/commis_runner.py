@@ -1,7 +1,7 @@
 """Commis Runner – execute fiche tasks as disposable commis with artifact persistence.
 
 This service runs a fiche as a "commis" - a disposable execution unit that persists
-all outputs (tool calls, messages, results) to the filesystem. Concierges can later
+all outputs (tool calls, messages, results) to the filesystem. Oikos can later
 retrieve and analyze commis results.
 
 The CommisRunner is a thin wrapper around FicheRunner that intercepts tool calls
@@ -153,14 +153,14 @@ class CommisRunner:
         logger.info(f"Created commis {commis_id} for task: {task[:50]}...")
 
         # Set up commis context for tool event emission
-        # This context is read by concierge_react_engine._call_tool_async to emit
+        # This context is read by oikos_react_engine._call_tool_async to emit
         # COMMIS_TOOL_STARTED/COMPLETED/FAILED events
         # job_id is critical for roundabout event correlation
-        # trace_id enables end-to-end debugging (inherited from concierge via CommisJob)
+        # trace_id enables end-to-end debugging (inherited from oikos via CommisJob)
         commis_context = CommisContext(
             commis_id=commis_id,
             owner_id=owner_for_events,
-            course_id=event_ctx.get("course_id"),
+            run_id=event_ctx.get("run_id"),
             job_id=job_id,
             trace_id=event_ctx.get("trace_id"),
             task=task[:100],
@@ -173,7 +173,7 @@ class CommisRunner:
         commis_emitter = CommisEmitter(
             commis_id=commis_id,
             owner_id=owner_for_events,
-            course_id=event_ctx.get("course_id"),
+            run_id=event_ctx.get("run_id"),
             job_id=job_id,
             trace_id=trace_id,
         )
@@ -192,10 +192,10 @@ class CommisRunner:
             # Start commis (marks as running)
             if self.artifact_store:
                 self.artifact_store.start_commis(commis_id)
-            if event_context is not None and event_ctx.get("course_id"):
+            if event_context is not None and event_ctx.get("run_id"):
                 await self._emit_event(
                     db=db,
-                    course_id=event_ctx["course_id"],
+                    run_id=event_ctx["run_id"],
                     event_type="commis_started",
                     payload={
                         "job_id": job_id,
@@ -234,7 +234,7 @@ class CommisRunner:
             )
 
             # Run fiche and capture messages (with timeout enforcement)
-            # Use reasoning_effort from config (inherited from concierge) or default to "none"
+            # Use reasoning_effort from config (inherited from oikos) or default to "none"
             commis_reasoning_effort = config.get("reasoning_effort", "none")
             runner = FicheRunner(fiche, reasoning_effort=commis_reasoning_effort)
             try:
@@ -277,10 +277,10 @@ class CommisRunner:
                 if self.artifact_store:
                     self.artifact_store.complete_commis(commis_id, status="failed", error=commis_context.critical_error_message)
 
-                if event_context is not None and event_ctx.get("course_id"):
+                if event_context is not None and event_ctx.get("run_id"):
                     await self._emit_event(
                         db=db,
-                        course_id=event_ctx["course_id"],
+                        run_id=event_ctx["run_id"],
                         event_type="commis_complete",
                         payload={
                             "job_id": job_id,
@@ -293,10 +293,10 @@ class CommisRunner:
                         },
                     )
 
-                    # Resume concierge if it was waiting for this commis (interrupt/resume pattern)
-                    await self._resume_concierge_if_waiting(
+                    # Resume oikos if it was waiting for this commis (interrupt/resume pattern)
+                    await self._resume_oikos_if_waiting(
                         db=db,
-                        course_id=event_ctx["course_id"],
+                        run_id=event_ctx["run_id"],
                         status="failed",
                         error=commis_context.critical_error_message,
                         job_id=job_id,
@@ -331,10 +331,10 @@ class CommisRunner:
             if self.artifact_store:
                 self.artifact_store.update_summary(commis_id, summary, summary_meta)
 
-            if event_context is not None and event_ctx.get("course_id"):
+            if event_context is not None and event_ctx.get("run_id"):
                 await self._emit_event(
                     db=db,
-                    course_id=event_ctx["course_id"],
+                    run_id=event_ctx["run_id"],
                     event_type="commis_complete",
                     payload={
                         "job_id": job_id,
@@ -349,7 +349,7 @@ class CommisRunner:
                 if summary:
                     await self._emit_event(
                         db=db,
-                        course_id=event_ctx["course_id"],
+                        run_id=event_ctx["run_id"],
                         event_type="commis_summary_ready",
                         payload={
                             "job_id": job_id,
@@ -360,10 +360,10 @@ class CommisRunner:
                         },
                     )
 
-                # Resume concierge if it was waiting for this commis (interrupt/resume pattern)
-                await self._resume_concierge_if_waiting(
+                # Resume oikos if it was waiting for this commis (interrupt/resume pattern)
+                await self._resume_oikos_if_waiting(
                     db=db,
-                    course_id=event_ctx["course_id"],
+                    run_id=event_ctx["run_id"],
                     status="success",
                     result_summary=summary or result_text,
                     job_id=job_id,
@@ -405,10 +405,10 @@ class CommisRunner:
 
             logger.exception(f"Commis {commis_id} failed after {duration_ms}ms")
 
-            if event_context is not None and event_ctx.get("course_id"):
+            if event_context is not None and event_ctx.get("run_id"):
                 await self._emit_event(
                     db=db,
-                    course_id=event_ctx["course_id"],
+                    run_id=event_ctx["run_id"],
                     event_type="commis_complete",
                     payload={
                         "job_id": job_id,
@@ -421,10 +421,10 @@ class CommisRunner:
                     },
                 )
 
-                # Resume concierge if it was waiting for this commis (interrupt/resume pattern)
-                await self._resume_concierge_if_waiting(
+                # Resume oikos if it was waiting for this commis (interrupt/resume pattern)
+                await self._resume_oikos_if_waiting(
                     db=db,
-                    course_id=event_ctx["course_id"],
+                    run_id=event_ctx["run_id"],
                     status="failed",
                     error=error_msg,
                     job_id=job_id,
@@ -459,14 +459,14 @@ class CommisRunner:
                     db.rollback()
                     logger.warning("Failed to clean up temporary fiche after failure", exc_info=True)
 
-    async def _emit_event(self, db: Session, course_id: int, event_type: str, payload: dict[str, Any]) -> None:
+    async def _emit_event(self, db: Session, run_id: int, event_type: str, payload: dict[str, Any]) -> None:
         """Best-effort event emission for commis lifecycle using durable event store."""
         try:
-            from zerg.services.event_store import emit_course_event
+            from zerg.services.event_store import emit_run_event
 
-            await emit_course_event(
+            await emit_run_event(
                 db=db,
-                course_id=course_id,
+                run_id=run_id,
                 event_type=event_type,
                 payload=payload,
             )
@@ -850,31 +850,31 @@ Example: "Backup completed 157GB in 17s, no errors found"
                 "error": str(e),
             }
 
-    async def _resume_concierge_if_waiting(
+    async def _resume_oikos_if_waiting(
         self,
         db: Session,
-        course_id: int,
+        run_id: int,
         status: str,
         result_summary: str | None = None,
         error: str | None = None,
         job_id: int | None = None,
     ) -> None:
-        """Resume interrupted concierge if waiting for commis (NON-BLOCKING).
+        """Resume interrupted oikos if waiting for commis (NON-BLOCKING).
 
         Uses barrier pattern for parallel commis:
         - Checks if there's a CommisBarrier for this run
         - If so, updates barrier and triggers batch resume only when ALL commis complete
         - Falls back to single-commis resume for backwards compatibility
 
-        This is fire-and-forget to prevent commis "duration" from including concierge synthesis time.
+        This is fire-and-forget to prevent commis "duration" from including oikos synthesis time.
 
         Parameters
         ----------
         db
             SQLAlchemy session (NOTE: This session belongs to commis_runner - resume
             will need to create its own session)
-        course_id
-            Concierge run ID
+        run_id
+            Oikos run ID
         status
             Commis status: "success" or "failed"
         result_summary
@@ -895,11 +895,11 @@ Example: "Backup completed 157GB in 17s, no errors found"
                 """Background task to resume with fresh DB session."""
                 from zerg.database import get_session_factory
                 from zerg.models.commis_barrier import CommisBarrier
-                from zerg.models.enums import CourseStatus
-                from zerg.models.models import Course
+                from zerg.models.enums import RunStatus
+                from zerg.models.models import Run
                 from zerg.services.commis_resume import check_and_resume_if_all_complete
-                from zerg.services.commis_resume import resume_concierge_batch
-                from zerg.services.commis_resume import resume_concierge_with_commis_result
+                from zerg.services.commis_resume import resume_oikos_batch
+                from zerg.services.commis_resume import resume_oikos_with_commis_result
 
                 # Restore commis_id context for E2E schema routing
                 # (asyncio.create_task with Context() clears all contextvars)
@@ -910,21 +910,21 @@ Example: "Backup completed 157GB in 17s, no errors found"
                 session_factory = get_session_factory()
                 fresh_db = session_factory()
                 try:
-                    # Race-safety: the commis may finish before the concierge flips the run to WAITING.
+                    # Race-safety: the commis may finish before the oikos flips the run to WAITING.
                     # Retry briefly so we don't miss resuming in that window.
                     max_checks = 10
                     check_sleep_s = 0.2
 
                     for _ in range(max_checks):
-                        run = fresh_db.query(Course).filter(Course.id == course_id).first()
+                        run = fresh_db.query(Run).filter(Run.id == run_id).first()
                         if not run:
                             return
 
-                        if run.status == CourseStatus.WAITING:
+                        if run.status == RunStatus.WAITING:
                             break
 
                         # Terminal states - nothing to resume
-                        if run.status in (CourseStatus.SUCCESS, CourseStatus.FAILED, CourseStatus.CANCELLED):
+                        if run.status in (RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED):
                             return
 
                         await asyncio.sleep(check_sleep_s)
@@ -932,8 +932,8 @@ Example: "Backup completed 157GB in 17s, no errors found"
                         fresh_db.expire_all()
                     else:
                         logger.info(
-                            "Concierge run %s never entered WAITING after commis completion; skipping resume",
-                            course_id,
+                            "Oikos run %s never entered WAITING after commis completion; skipping resume",
+                            run_id,
                         )
                         return
 
@@ -945,15 +945,15 @@ Example: "Backup completed 157GB in 17s, no errors found"
                             summary_text = "(No result summary)"
 
                     # Check if this run uses barrier pattern (parallel commis)
-                    barrier = fresh_db.query(CommisBarrier).filter(CommisBarrier.course_id == course_id).first()
+                    barrier = fresh_db.query(CommisBarrier).filter(CommisBarrier.run_id == run_id).first()
 
                     if barrier and job_id:
                         # BARRIER PATTERN: Use atomic barrier check
-                        logger.info(f"Using barrier pattern for run {course_id}, job {job_id}")
+                        logger.info(f"Using barrier pattern for run {run_id}, job {job_id}")
 
                         barrier_result = await check_and_resume_if_all_complete(
                             db=fresh_db,
-                            course_id=course_id,
+                            run_id=run_id,
                             job_id=job_id,
                             result=summary_text,
                             error=error if status == "failed" else None,
@@ -966,30 +966,30 @@ Example: "Backup completed 157GB in 17s, no errors found"
                         if barrier_result["status"] == "resume":
                             # This commis is the last one - trigger batch resume
                             logger.info(
-                                f"Barrier complete for run {course_id}, triggering batch resume "
+                                f"Barrier complete for run {run_id}, triggering batch resume "
                                 f"with {len(barrier_result['commis_results'])} results"
                             )
-                            await resume_concierge_batch(
+                            await resume_oikos_batch(
                                 db=fresh_db,
-                                course_id=course_id,
+                                run_id=run_id,
                                 commis_results=barrier_result["commis_results"],
                             )
                         elif barrier_result["status"] == "waiting":
-                            logger.info(f"Barrier for run {course_id}: {barrier_result['completed']}/{barrier_result['expected']} complete")
+                            logger.info(f"Barrier for run {run_id}: {barrier_result['completed']}/{barrier_result['expected']} complete")
                         else:
-                            logger.debug(f"Barrier check skipped for run {course_id}: {barrier_result.get('reason')}")
+                            logger.debug(f"Barrier check skipped for run {run_id}: {barrier_result.get('reason')}")
                     else:
                         # SINGLE-COMMIS PATH: Fall back to original resume for backwards compatibility
-                        logger.debug(f"No barrier for run {course_id}, using single-commis resume")
-                        await resume_concierge_with_commis_result(
+                        logger.debug(f"No barrier for run {run_id}, using single-commis resume")
+                        await resume_oikos_with_commis_result(
                             db=fresh_db,
-                            course_id=course_id,
+                            run_id=run_id,
                             commis_result=summary_text,
                             job_id=job_id,
                         )
 
                 except Exception as e:
-                    logger.exception(f"Background resume failed for run {course_id}: {e}")
+                    logger.exception(f"Background resume failed for run {run_id}: {e}")
                 finally:
                     fresh_db.close()
                     # Clean up the commis_id context
@@ -999,8 +999,8 @@ Example: "Backup completed 157GB in 17s, no errors found"
             # IMPORTANT: create_task() captures current contextvars.
             #
             # CommisRunner.run_commis() sets CommisContext via contextvars so that commis tool calls
-            # emit COMMIS_TOOL_* events. If we schedule the concierge resume task while that context
-            # is still set, the resume execution inherits it and the concierge's tool calls can be
+            # emit COMMIS_TOOL_* events. If we schedule the oikos resume task while that context
+            # is still set, the resume execution inherits it and the oikos's tool calls can be
             # misclassified/emitted as COMMIS_TOOL_* (e.g., a replayed spawn_commis showing up as a
             # nested tool inside the spawn_commis card).
             import contextvars
@@ -1013,10 +1013,10 @@ Example: "Backup completed 157GB in 17s, no errors found"
                 # "coroutine was never awaited" RuntimeWarnings.
                 coro.close()
                 raise
-            logger.debug(f"Resume task scheduled for run {course_id}")
+            logger.debug(f"Resume task scheduled for run {run_id}")
 
         except Exception as e:
-            logger.exception(f"Failed to schedule resume for run {course_id}: {e}")
+            logger.exception(f"Failed to schedule resume for run {run_id}: {e}")
 
 
 __all__ = ["CommisRunner", "CommisResult"]

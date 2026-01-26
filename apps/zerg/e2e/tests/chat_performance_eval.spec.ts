@@ -4,11 +4,11 @@
  * Profiles REAL user experience latency using:
  * 1. DOM timing - When does the user actually SEE content?
  * 2. Console capture - Frontend TimelineLogger output (?log=timeline)
- * 3. Backend API - Server-side breakdown via /courses/{id}/timeline
+ * 3. Backend API - Server-side breakdown via /runs/{id}/timeline
  *
  * These tests measure what USERS experience, not internal API timing.
  *
- * Phase 1: Granular Concierge Response Profiling
+ * Phase 1: Granular Oikos Response Profiling
  * - Track assistant bubble appearance
  * - Track typing dots visibility
  * - Track first actual token rendering
@@ -34,9 +34,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 /**
- * Phase 1: Concierge Response Metrics
+ * Phase 1: Oikos Response Metrics
  */
-interface ConciergeMetrics {
+interface OikosMetrics {
   bubbleAppearedAt: number | null;     // .message.assistant first visible
   typingDotsShownAt: number | null;    // .thinking-dots visible
   firstTokenAt: number | null;         // Actual text content appears
@@ -75,11 +75,11 @@ interface PerformanceMetrics {
   sendClickedAt: number;
   timeToFirstToken: number | null;
   timeToComplete: number | null;
-  courseId: number | null;
+  runId: number | null;
   backendTimeline: BackendTimelineMetrics | null;
 
-  // Phase 1: Concierge metrics
-  concierge: ConciergeMetrics;
+  // Phase 1: Oikos metrics
+  oikos: OikosMetrics;
 
   // Phase 2: Commis metrics
   commis: CommisMetrics;
@@ -95,11 +95,11 @@ interface TimelineEvent {
 }
 
 interface BackendTimelineMetrics {
-  courseId: number;
+  runId: number;
   correlationId: string | null;
   summary: {
     totalDurationMs: number;
-    conciergeThinkingMs: number | null;
+    oikosThinkingMs: number | null;
     commisExecutionMs: number | null;
     toolExecutionMs: number | null;
   };
@@ -107,7 +107,7 @@ interface BackendTimelineMetrics {
 }
 
 /**
- * Navigate to Jarvis chat with timeline logging enabled
+ * Navigate to Oikos chat with timeline logging enabled
  */
 async function navigateToChatWithTimeline(page: Page): Promise<void> {
   // Enable timeline mode for clean performance logging
@@ -159,22 +159,22 @@ function parseUsageTitle(title: string): {
   return result;
 }
 
-async function fetchBackendTimeline(request: APIRequestContext, courseId: number): Promise<BackendTimelineMetrics | null> {
+async function fetchBackendTimeline(request: APIRequestContext, runId: number): Promise<BackendTimelineMetrics | null> {
   try {
-    const resp = await request.get(`/api/jarvis/courses/${courseId}/timeline`);
+    const resp = await request.get(`/api/oikos/runs/${runId}/timeline`);
     if (!resp.ok()) {
       const body = await resp.text().catch(() => '');
-      console.log(`⚠️ Backend timeline fetch failed (course_id=${courseId}): HTTP ${resp.status()} ${body.slice(0, 200)}`);
+      console.log(`⚠️ Backend timeline fetch failed (run_id=${runId}): HTTP ${resp.status()} ${body.slice(0, 200)}`);
       return null;
     }
 
     const payload = await resp.json() as {
       correlation_id: string | null;
-      course_id: number;
+      run_id: number;
       events: Array<{ phase: string }>;
       summary: {
         total_duration_ms: number;
-        concierge_thinking_ms: number | null;
+        oikos_thinking_ms: number | null;
         commis_execution_ms: number | null;
         tool_execution_ms: number | null;
       };
@@ -186,11 +186,11 @@ async function fetchBackendTimeline(request: APIRequestContext, courseId: number
     }
 
     return {
-      courseId: payload.course_id,
+      runId: payload.run_id,
       correlationId: payload.correlation_id,
       summary: {
         totalDurationMs: payload.summary.total_duration_ms,
-        conciergeThinkingMs: payload.summary.concierge_thinking_ms,
+        oikosThinkingMs: payload.summary.oikos_thinking_ms,
         commisExecutionMs: payload.summary.commis_execution_ms,
         toolExecutionMs: payload.summary.tool_execution_ms,
       },
@@ -214,9 +214,9 @@ async function measureChatPerformance(
     sendClickedAt: 0,
     timeToFirstToken: null,
     timeToComplete: null,
-    courseId: null,
+    runId: null,
     backendTimeline: null,
-    concierge: {
+    oikos: {
       bubbleAppearedAt: null,
       typingDotsShownAt: null,
       firstTokenAt: null,
@@ -267,13 +267,13 @@ async function measureChatPerformance(
   // Track the new assistant message (the one that appears after our send)
   const newAssistantMessage = page.locator('.message.assistant').nth(initialAssistantCount);
 
-  // Phase 1 Tracking: Concierge Response Timeline
+  // Phase 1 Tracking: Oikos Response Timeline
 
   // 1. Wait for assistant bubble to appear
   try {
     await expect(newAssistantMessage).toBeVisible({ timeout: 30000 });
-    metrics.concierge.bubbleAppearedAt = Date.now();
-    const bubbleTime = metrics.concierge.bubbleAppearedAt - metrics.sendClickedAt;
+    metrics.oikos.bubbleAppearedAt = Date.now();
+    const bubbleTime = metrics.oikos.bubbleAppearedAt - metrics.sendClickedAt;
     console.log(`💬 Bubble appeared: ${bubbleTime}ms`);
   } catch {
     console.log('⚠️ Assistant message did not appear within timeout');
@@ -284,8 +284,8 @@ async function measureChatPerformance(
   const typingDots = newAssistantMessage.locator('.thinking-dots');
   try {
     await expect(typingDots).toBeVisible({ timeout: 5000 });
-    metrics.concierge.typingDotsShownAt = Date.now();
-    const typingTime = metrics.concierge.typingDotsShownAt - metrics.sendClickedAt;
+    metrics.oikos.typingDotsShownAt = Date.now();
+    const typingTime = metrics.oikos.typingDotsShownAt - metrics.sendClickedAt;
     console.log(`⏳ Typing dots shown: ${typingTime}ms`);
   } catch {
     // Not all responses show typing dots; ignore.
@@ -309,8 +309,8 @@ async function measureChatPerformance(
       { timeout: 45000 }
     );
 
-    metrics.concierge.firstTokenAt = Date.now();
-    metrics.timeToFirstToken = metrics.concierge.firstTokenAt - metrics.sendClickedAt;
+    metrics.oikos.firstTokenAt = Date.now();
+    metrics.timeToFirstToken = metrics.oikos.firstTokenAt - metrics.sendClickedAt;
     console.log(`⚡ First token visible: ${metrics.timeToFirstToken}ms`);
   } catch {
     console.log('❌ First token never became visible within timeout');
@@ -326,7 +326,7 @@ async function measureChatPerformance(
       console.log(`🔧 Commis panel visible: ${panelTime}ms`);
 
       // Quick snapshot of current commis state
-      const commisCount = await page.locator('.concierge-commis').count();
+      const commisCount = await page.locator('.oikos-commis').count();
       if (commisCount > 0) {
         metrics.commis.firstCommisEventAt = Date.now();
         console.log(`👷 Commis visible: ${commisCount}`);
@@ -354,8 +354,8 @@ async function measureChatPerformance(
       { timeout: 75000 }
     );
 
-    metrics.concierge.streamingCompleteAt = Date.now();
-    metrics.timeToComplete = metrics.concierge.streamingCompleteAt - metrics.sendClickedAt;
+    metrics.oikos.streamingCompleteAt = Date.now();
+    metrics.timeToComplete = metrics.oikos.streamingCompleteAt - metrics.sendClickedAt;
     console.log(`✅ Streaming complete: ${metrics.timeToComplete}ms`);
   } catch {
     console.log('❌ Message never reached final/error/canceled within timeout');
@@ -364,7 +364,7 @@ async function measureChatPerformance(
   // Extract assistant content length (visible text)
   try {
     const assistantText = (await newAssistantMessage.locator('.message-content').innerText()).trim();
-    metrics.concierge.assistantCharCount = assistantText.length;
+    metrics.oikos.assistantCharCount = assistantText.length;
   } catch {
     // ignore
   }
@@ -375,20 +375,20 @@ async function measureChatPerformance(
     const title = await usageEl.getAttribute('title');
     if (title) {
       const parsed = parseUsageTitle(title);
-      metrics.concierge.totalTokens = parsed.totalTokens;
-      metrics.concierge.promptTokens = parsed.promptTokens;
-      metrics.concierge.completionTokens = parsed.completionTokens;
-      metrics.concierge.reasoningTokens = parsed.reasoningTokens;
+      metrics.oikos.totalTokens = parsed.totalTokens;
+      metrics.oikos.promptTokens = parsed.promptTokens;
+      metrics.oikos.completionTokens = parsed.completionTokens;
+      metrics.oikos.reasoningTokens = parsed.reasoningTokens;
     }
   } catch {
     // ignore
   }
 
   // Calculate tokens per second if we have the data
-  if (metrics.concierge.firstTokenAt && metrics.concierge.streamingCompleteAt && metrics.concierge.completionTokens) {
-    const streamDuration = metrics.concierge.streamingCompleteAt - metrics.concierge.firstTokenAt;
+  if (metrics.oikos.firstTokenAt && metrics.oikos.streamingCompleteAt && metrics.oikos.completionTokens) {
+    const streamDuration = metrics.oikos.streamingCompleteAt - metrics.oikos.firstTokenAt;
     if (streamDuration >= 200) {
-      metrics.concierge.tokensPerSecond = (metrics.concierge.completionTokens / streamDuration) * 1000;
+      metrics.oikos.tokensPerSecond = (metrics.oikos.completionTokens / streamDuration) * 1000;
     }
   }
 
@@ -408,25 +408,25 @@ async function measureChatPerformance(
       });
 
       // Best-effort run id extraction from timeline metadata (avoids relying on /runs list).
-      if (metrics.courseId === null && match[3]) {
-        const runMatch = match[3].match(/course_id=(\d+)/);
+      if (metrics.runId === null && match[3]) {
+        const runMatch = match[3].match(/run_id=(\d+)/);
         if (runMatch) {
-          metrics.courseId = parseInt(runMatch[1], 10);
+          metrics.runId = parseInt(runMatch[1], 10);
         }
       }
     }
   }
 
   // Fetch backend timeline summary (best-effort)
-  if (metrics.courseId) {
-    const backendTimeline = await fetchBackendTimeline(request, metrics.courseId);
+  if (metrics.runId) {
+    const backendTimeline = await fetchBackendTimeline(request, metrics.runId);
     metrics.backendTimeline = backendTimeline;
     if (backendTimeline) {
       // Collapse into a single synthetic timeline event for easy log reading
       metrics.timelineEvents.push({
         phase: 'backend_timeline',
         offsetMs: backendTimeline.summary.totalDurationMs,
-        metadata: `concierge=${backendTimeline.summary.conciergeThinkingMs ?? 'n/a'}ms commis=${backendTimeline.summary.commisExecutionMs ?? 'n/a'}ms tool=${backendTimeline.summary.toolExecutionMs ?? 'n/a'}ms`,
+        metadata: `oikos=${backendTimeline.summary.oikosThinkingMs ?? 'n/a'}ms commis=${backendTimeline.summary.commisExecutionMs ?? 'n/a'}ms tool=${backendTimeline.summary.toolExecutionMs ?? 'n/a'}ms`,
       });
     }
   }
@@ -466,38 +466,38 @@ function printMetricsSummary(metrics: PerformanceMetrics): void {
   console.log('⏱️  Basic Timing:');
   console.log(`   Time to First Token: ${metrics.timeToFirstToken}ms`);
   console.log(`   Time to Complete: ${metrics.timeToComplete}ms`);
-  console.log(`   Run ID: ${metrics.courseId ?? 'n/a'}`);
+  console.log(`   Run ID: ${metrics.runId ?? 'n/a'}`);
 
-  // Concierge breakdown
-  console.log('\n🤖 Concierge Response Breakdown:');
-  if (metrics.concierge.bubbleAppearedAt) {
-    const bubbleTime = metrics.concierge.bubbleAppearedAt - metrics.sendClickedAt;
+  // Oikos breakdown
+  console.log('\n🤖 Oikos Response Breakdown:');
+  if (metrics.oikos.bubbleAppearedAt) {
+    const bubbleTime = metrics.oikos.bubbleAppearedAt - metrics.sendClickedAt;
     console.log(`   Bubble appeared: ${bubbleTime}ms`);
   }
-  if (metrics.concierge.typingDotsShownAt) {
-    const typingTime = metrics.concierge.typingDotsShownAt - metrics.sendClickedAt;
+  if (metrics.oikos.typingDotsShownAt) {
+    const typingTime = metrics.oikos.typingDotsShownAt - metrics.sendClickedAt;
     console.log(`   Typing dots: ${typingTime}ms`);
   }
-  if (metrics.concierge.firstTokenAt) {
-    const tokenTime = metrics.concierge.firstTokenAt - metrics.sendClickedAt;
+  if (metrics.oikos.firstTokenAt) {
+    const tokenTime = metrics.oikos.firstTokenAt - metrics.sendClickedAt;
     console.log(`   First token: ${tokenTime}ms`);
   }
-  if (metrics.concierge.streamingCompleteAt) {
-    const completeTime = metrics.concierge.streamingCompleteAt - metrics.sendClickedAt;
+  if (metrics.oikos.streamingCompleteAt) {
+    const completeTime = metrics.oikos.streamingCompleteAt - metrics.sendClickedAt;
     console.log(`   Streaming complete: ${completeTime}ms`);
   }
-  if (metrics.concierge.assistantCharCount !== null) {
-    console.log(`   Visible chars: ${metrics.concierge.assistantCharCount}`);
+  if (metrics.oikos.assistantCharCount !== null) {
+    console.log(`   Visible chars: ${metrics.oikos.assistantCharCount}`);
   }
-  if (metrics.concierge.completionTokens !== null) {
-    console.log(`   Output tokens: ${metrics.concierge.completionTokens}`);
+  if (metrics.oikos.completionTokens !== null) {
+    console.log(`   Output tokens: ${metrics.oikos.completionTokens}`);
   }
-  if (metrics.concierge.tokensPerSecond) {
-    console.log(`   Tokens/sec: ${metrics.concierge.tokensPerSecond.toFixed(1)}`);
+  if (metrics.oikos.tokensPerSecond) {
+    console.log(`   Tokens/sec: ${metrics.oikos.tokensPerSecond.toFixed(1)}`);
   }
   if (metrics.backendTimeline) {
     const t = metrics.backendTimeline.summary;
-    console.log(`   Backend timeline: total=${t.totalDurationMs}ms concierge=${t.conciergeThinkingMs ?? 'n/a'}ms commis=${t.commisExecutionMs ?? 'n/a'}ms tool=${t.toolExecutionMs ?? 'n/a'}ms`);
+    console.log(`   Backend timeline: total=${t.totalDurationMs}ms oikos=${t.oikosThinkingMs ?? 'n/a'}ms commis=${t.commisExecutionMs ?? 'n/a'}ms tool=${t.toolExecutionMs ?? 'n/a'}ms`);
   }
 
   // Commis breakdown (if any)
@@ -575,7 +575,7 @@ test.describe('Chat Performance Evaluation', () => {
     // Key metric: TTFT
     expect(metrics.timeToFirstToken).not.toBeNull();
     console.log(`\n📊 TTFT: ${metrics.timeToFirstToken}ms`);
-    console.log(`   Prompt tokens: ${metrics.concierge.promptTokens ?? 'n/a'}`);
+    console.log(`   Prompt tokens: ${metrics.oikos.promptTokens ?? 'n/a'}`);
 
     // Sanity: Should complete quickly (tiny output)
     expect(metrics.timeToComplete).not.toBeNull();
@@ -616,15 +616,15 @@ test.describe('Chat Performance Evaluation', () => {
     printMetricsSummary(metrics);
 
     // Must have meaningful output to measure throughput
-    expect(metrics.concierge.completionTokens).not.toBeNull();
-    expect(metrics.concierge.completionTokens!).toBeGreaterThan(100);
+    expect(metrics.oikos.completionTokens).not.toBeNull();
+    expect(metrics.oikos.completionTokens!).toBeGreaterThan(100);
 
     // Calculate throughput
-    const streamDuration = (metrics.concierge.streamingCompleteAt ?? 0) - (metrics.concierge.firstTokenAt ?? 0);
-    const tokensPerSec = metrics.concierge.tokensPerSecond;
+    const streamDuration = (metrics.oikos.streamingCompleteAt ?? 0) - (metrics.oikos.firstTokenAt ?? 0);
+    const tokensPerSec = metrics.oikos.tokensPerSecond;
 
     console.log(`\n📊 Throughput Analysis:`);
-    console.log(`   Completion tokens: ${metrics.concierge.completionTokens}`);
+    console.log(`   Completion tokens: ${metrics.oikos.completionTokens}`);
     console.log(`   Stream duration: ${streamDuration}ms`);
     console.log(`   Tokens/sec: ${tokensPerSec?.toFixed(1) ?? 'n/a'}`);
 
@@ -646,7 +646,7 @@ test.describe('Chat Performance Evaluation', () => {
    * TEST 3: Commis Overhead
    *
    * Measures: Additional latency when spawning a commis vs direct response
-   * Purpose: Quantify the cost of the concierge → commis delegation
+   * Purpose: Quantify the cost of the oikos → commis delegation
    *
    * Commis path adds:
    * - Tool call decision: ~500-1000ms
@@ -656,7 +656,7 @@ test.describe('Chat Performance Evaluation', () => {
    */
   test('commis overhead - measures delegation latency cost', async ({ page, request }) => {
     console.log('\n🧪 TEST: Commis Overhead\n');
-    console.log('Purpose: Measure extra latency from concierge → commis delegation\n');
+    console.log('Purpose: Measure extra latency from oikos → commis delegation\n');
 
     // Direct response (no commis)
     console.log('--- Direct response (baseline) ---');
@@ -729,15 +729,15 @@ test.describe('Chat Performance Evaluation', () => {
     printMetricsSummary(metrics);
 
     // All phases should complete
-    expect(metrics.concierge.bubbleAppearedAt).not.toBeNull();
-    expect(metrics.concierge.firstTokenAt).not.toBeNull();
-    expect(metrics.concierge.streamingCompleteAt).not.toBeNull();
+    expect(metrics.oikos.bubbleAppearedAt).not.toBeNull();
+    expect(metrics.oikos.firstTokenAt).not.toBeNull();
+    expect(metrics.oikos.streamingCompleteAt).not.toBeNull();
     expect(metrics.timeToComplete).not.toBeNull();
 
     // Should have meaningful content
-    expect(metrics.concierge.assistantCharCount).not.toBeNull();
-    expect(metrics.concierge.assistantCharCount!).toBeGreaterThan(50);
-    expect(metrics.concierge.assistantCharCount!).toBeLessThan(2000);
+    expect(metrics.oikos.assistantCharCount).not.toBeNull();
+    expect(metrics.oikos.assistantCharCount!).toBeGreaterThan(50);
+    expect(metrics.oikos.assistantCharCount!).toBeLessThan(2000);
 
     // Should complete in reasonable time
     expect(metrics.timeToComplete!).toBeLessThan(60000);

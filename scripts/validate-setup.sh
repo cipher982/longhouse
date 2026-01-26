@@ -93,10 +93,10 @@ else
     check_warn "Dependencies not installed - run: bun install"
 fi
 
-if [ -d "apps/zerg/frontend-web/src/jarvis" ]; then
-    check_pass "Jarvis UI present (unified SPA)"
+if [ -d "apps/zerg/frontend-web/src/oikos" ]; then
+    check_pass "Oikos UI present (unified SPA)"
 else
-    check_fail "Jarvis UI missing (expected apps/zerg/frontend-web/src/jarvis)"
+    check_fail "Oikos UI missing (expected apps/zerg/frontend-web/src/oikos)"
 fi
 
 if [ -f "apps/zerg/backend/.venv/bin/python" ] || [ -f "apps/zerg/backend/uv.lock" ]; then
@@ -114,10 +114,10 @@ if [ -f ".env" ]; then
     check_pass ".env file exists"
 
     # Check critical variables
-    if grep -q "JARVIS_DEVICE_SECRET" .env && ! grep -q "JARVIS_DEVICE_SECRET=\"\"" .env; then
-        check_pass "JARVIS_DEVICE_SECRET configured"
+    if grep -q "OIKOS_DEVICE_SECRET" .env && ! grep -q "OIKOS_DEVICE_SECRET=\"\"" .env; then
+        check_pass "OIKOS_DEVICE_SECRET configured"
     else
-        check_fail "JARVIS_DEVICE_SECRET not set in .env"
+        check_fail "OIKOS_DEVICE_SECRET not set in .env"
     fi
 
     if grep -q "OPENAI_API_KEY.*sk-" .env; then
@@ -150,10 +150,10 @@ echo "4. Key Files"
 echo "------------"
 
 KEY_FILES=(
-    "apps/zerg/backend/zerg/routers/jarvis.py"
-    "apps/zerg/frontend-web/src/pages/JarvisChatPage.tsx"
-    "apps/zerg/frontend-web/src/jarvis/lib/state-manager.ts"
-    "apps/zerg/backend/scripts/seed_jarvis_fiches.py"
+    "apps/zerg/backend/zerg/routers/oikos.py"
+    "apps/zerg/frontend-web/src/pages/OikosChatPage.tsx"
+    "apps/zerg/frontend-web/src/oikos/lib/state-manager.ts"
+    "apps/zerg/backend/scripts/seed_oikos_fiches.py"
     "docs/DEPLOYMENT.md"
 )
 
@@ -175,10 +175,10 @@ if [ -f "apps/zerg/backend/app.db" ]; then
 
     # Check for tables
     TABLES=$(sqlite3 apps/zerg/backend/app.db ".tables" 2>/dev/null || echo "")
-    if echo "$TABLES" | grep -q "courses"; then
-        check_pass "courses table exists"
+    if echo "$TABLES" | grep -q "runs"; then
+        check_pass "runs table exists"
     else
-        check_warn "courses table missing - run: cd apps/zerg/backend && uv run alembic upgrade head"
+        check_warn "runs table missing - run: cd apps/zerg/backend && uv run alembic upgrade head"
     fi
 
     if echo "$TABLES" | grep -q "fiches"; then
@@ -196,7 +196,7 @@ echo "6. Migrations"
 echo "-------------"
 
 if [ -f "apps/zerg/backend/alembic/versions/a1b2c3d4e5f6_add_summary_to_agent_run.py" ]; then
-    check_pass "Course summary migration exists (legacy filename)"
+    check_pass "Run summary migration exists (legacy filename)"
 else
     check_fail "Summary column migration missing"
 fi

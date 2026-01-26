@@ -118,7 +118,7 @@ async def list_tools(
 
     Args:
         category: Optional category filter. Categories include:
-            - concierge: spawn_commis, list_commis, contact_user
+            - oikos: spawn_commis, list_commis, contact_user
             - messaging: send_email, send_sms, send_slack_webhook, etc.
             - github: github_list_issues, github_create_issue, etc.
             - jira: jira_list_issues, jira_create_issue, etc.
@@ -210,7 +210,7 @@ list_tools_tool = StructuredTool.from_function(
     name="list_tools",
     description=(
         "List all available tools, optionally filtered by category. "
-        "Categories: concierge, messaging, github, jira, linear, notion, "
+        "Categories: oikos, messaging, github, jira, linear, notion, "
         "personal, infrastructure, tasks, memory, web, utility. "
         "Use this to browse available capabilities."
     ),

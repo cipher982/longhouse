@@ -6,7 +6,7 @@ to prompt composition in fiches.
 
 import pytest
 
-from zerg.prompts.composer import build_concierge_prompt
+from zerg.prompts.composer import build_oikos_prompt
 from zerg.prompts.composer import build_commis_prompt
 
 # ---------------------------------------------------------------------------
@@ -44,22 +44,22 @@ def test_user_context():
 
 
 # ---------------------------------------------------------------------------
-# Concierge prompt integration
+# Oikos prompt integration
 # ---------------------------------------------------------------------------
 
 
-class TestConciergePromptIntegration:
-    """Test that concierge prompts include user context correctly."""
+class TestOikosPromptIntegration:
+    """Test that oikos prompts include user context correctly."""
 
-    def test_concierge_prompt_includes_user_servers(self, db_session, test_user, test_user_context):
-        """Test that concierge prompt includes user's servers."""
+    def test_oikos_prompt_includes_user_servers(self, db_session, test_user, test_user_context):
+        """Test that oikos prompt includes user's servers."""
         # Set user context with servers
         test_user.context = test_user_context
         db_session.commit()
         db_session.refresh(test_user)
 
-        # Build concierge prompt
-        prompt = build_concierge_prompt(test_user)
+        # Build oikos prompt
+        prompt = build_oikos_prompt(test_user)
 
         # Verify servers appear in prompt
         assert "clifford" in prompt
@@ -69,13 +69,13 @@ class TestConciergePromptIntegration:
         assert "Production VPS" in prompt
         assert "Home GPU server" in prompt
 
-    def test_concierge_prompt_includes_user_info(self, db_session, test_user, test_user_context):
-        """Test that concierge prompt includes user's personal info."""
+    def test_oikos_prompt_includes_user_info(self, db_session, test_user, test_user_context):
+        """Test that oikos prompt includes user's personal info."""
         test_user.context = test_user_context
         db_session.commit()
         db_session.refresh(test_user)
 
-        prompt = build_concierge_prompt(test_user)
+        prompt = build_oikos_prompt(test_user)
 
         # Verify user info appears
         assert "Test User" in prompt
@@ -83,46 +83,46 @@ class TestConciergePromptIntegration:
         assert "San Francisco" in prompt
         assert "Prefer TypeScript" in prompt
 
-    def test_concierge_prompt_includes_integrations(self, db_session, test_user, test_user_context):
-        """Test that concierge prompt includes user's integrations."""
+    def test_oikos_prompt_includes_integrations(self, db_session, test_user, test_user_context):
+        """Test that oikos prompt includes user's integrations."""
         test_user.context = test_user_context
         db_session.commit()
         db_session.refresh(test_user)
 
-        prompt = build_concierge_prompt(test_user)
+        prompt = build_oikos_prompt(test_user)
 
         # Verify integrations appear
         assert "Obsidian" in prompt
         assert "Google Calendar" in prompt
 
-    def test_concierge_fiche_uses_user_context(self, db_session, test_user, test_user_context):
-        """Test that created concierge fiche has user context in system_instructions."""
+    def test_oikos_fiche_uses_user_context(self, db_session, test_user, test_user_context):
+        """Test that created oikos fiche has user context in system_instructions."""
         # Set user context
         test_user.context = test_user_context
         db_session.commit()
 
-        # Create concierge fiche using the service
-        from zerg.services.concierge_service import ConciergeService
+        # Create oikos fiche using the service
+        from zerg.services.oikos_service import OikosService
 
-        service = ConciergeService(db_session)
-        concierge = service.get_or_create_concierge_fiche(test_user.id)
+        service = OikosService(db_session)
+        oikos = service.get_or_create_oikos_fiche(test_user.id)
 
         # Verify fiche was created
-        assert concierge is not None
-        assert concierge.name == "Concierge"
+        assert oikos is not None
+        assert oikos.name == "Oikos"
 
         # Verify system instructions include user context
-        assert "clifford" in concierge.system_instructions
-        assert "Test User" in concierge.system_instructions
-        assert "Obsidian" in concierge.system_instructions
+        assert "clifford" in oikos.system_instructions
+        assert "Test User" in oikos.system_instructions
+        assert "Obsidian" in oikos.system_instructions
 
-    def test_concierge_prompt_updates_with_context_changes(self, db_session, test_user):
+    def test_oikos_prompt_updates_with_context_changes(self, db_session, test_user):
         """Test that prompt changes when context is updated."""
         # Initial context
         test_user.context = {"display_name": "Alice", "servers": []}
         db_session.commit()
 
-        prompt1 = build_concierge_prompt(test_user)
+        prompt1 = build_oikos_prompt(test_user)
         assert "Alice" in prompt1
         assert "(No servers configured)" in prompt1
 
@@ -134,7 +134,7 @@ class TestConciergePromptIntegration:
         db_session.commit()
         db_session.refresh(test_user)
 
-        prompt2 = build_concierge_prompt(test_user)
+        prompt2 = build_oikos_prompt(test_user)
         assert "Alice" in prompt2
         assert "new-server" in prompt2
         assert "(No servers configured)" not in prompt2
@@ -210,7 +210,7 @@ class TestEndToEndContextFlow:
     def test_update_context_affects_new_prompts(self, client, db_session, test_user):
         """Test that updating context via API affects new fiche prompts."""
         # Initial context (empty)
-        initial_prompt = build_concierge_prompt(test_user)
+        initial_prompt = build_oikos_prompt(test_user)
         assert "(No servers configured)" in initial_prompt
 
         # Update context via API
@@ -227,7 +227,7 @@ class TestEndToEndContextFlow:
         db_session.refresh(test_user)
 
         # Build new prompt
-        new_prompt = build_concierge_prompt(test_user)
+        new_prompt = build_oikos_prompt(test_user)
 
         # Verify context appears in new prompt
         assert "Bob" in new_prompt
@@ -252,8 +252,8 @@ class TestEndToEndContextFlow:
         # Refresh user
         db_session.refresh(test_user)
 
-        # Build concierge prompt with current context
-        prompt1 = build_concierge_prompt(test_user)
+        # Build oikos prompt with current context
+        prompt1 = build_oikos_prompt(test_user)
         assert "Charlie" in prompt1
         assert "server1" in prompt1
 
@@ -268,7 +268,7 @@ class TestEndToEndContextFlow:
         db_session.refresh(test_user)
 
         # Build another prompt with updated context
-        prompt2 = build_concierge_prompt(test_user)
+        prompt2 = build_oikos_prompt(test_user)
         assert "Charlie" in prompt2
         assert "server2" in prompt2
 
@@ -281,7 +281,7 @@ class TestEndToEndContextFlow:
         client.patch("/api/users/me/context", json={"context": {"display_name": "Dana"}})
         db_session.refresh(test_user)
 
-        prompt1 = build_concierge_prompt(test_user)
+        prompt1 = build_oikos_prompt(test_user)
         assert "Dana" in prompt1
 
         # Second patch - add servers
@@ -291,7 +291,7 @@ class TestEndToEndContextFlow:
         )
         db_session.refresh(test_user)
 
-        prompt2 = build_concierge_prompt(test_user)
+        prompt2 = build_oikos_prompt(test_user)
         assert "Dana" in prompt2  # from first patch
         assert "server1" in prompt2  # from second patch
 
@@ -299,7 +299,7 @@ class TestEndToEndContextFlow:
         client.patch("/api/users/me/context", json={"context": {"integrations": {"notes": "Obsidian"}}})
         db_session.refresh(test_user)
 
-        prompt3 = build_concierge_prompt(test_user)
+        prompt3 = build_oikos_prompt(test_user)
         assert "Dana" in prompt3
         assert "server1" in prompt3
         assert "Obsidian" in prompt3
@@ -327,8 +327,8 @@ class TestContextIsolation:
         db_session.commit()
 
         # Build prompts for each user
-        prompt1 = build_concierge_prompt(test_user)
-        prompt2 = build_concierge_prompt(other_user)
+        prompt1 = build_oikos_prompt(test_user)
+        prompt2 = build_oikos_prompt(other_user)
 
         # Each prompt should contain only their own context
         assert "User One" in prompt1
@@ -343,7 +343,7 @@ class TestContextIsolation:
 
     def test_fiches_inherit_owner_context(self, db_session, test_user, other_user):
         """Test that fiches get context from their owner, not other users."""
-        from zerg.services.concierge_service import ConciergeService
+        from zerg.services.oikos_service import OikosService
 
         # Set contexts
         test_user.context = {"display_name": "Owner One", "servers": [{"name": "server-a"}]}
@@ -351,9 +351,9 @@ class TestContextIsolation:
         db_session.commit()
 
         # Create fiches for each user
-        service = ConciergeService(db_session)
-        fiche1 = service.get_or_create_concierge_fiche(test_user.id)
-        fiche2 = service.get_or_create_concierge_fiche(other_user.id)
+        service = OikosService(db_session)
+        fiche1 = service.get_or_create_oikos_fiche(test_user.id)
+        fiche2 = service.get_or_create_oikos_fiche(other_user.id)
 
         # Each fiche should have only their owner's context
         assert "Owner One" in fiche1.system_instructions
@@ -387,7 +387,7 @@ class TestContextEdgeCases:
 
         # Verify it can be retrieved
         db_session.refresh(test_user)
-        prompt = build_concierge_prompt(test_user)
+        prompt = build_oikos_prompt(test_user)
         assert "Large Context User" in prompt
         assert "server-0" in prompt
 
@@ -396,14 +396,14 @@ class TestContextEdgeCases:
         test_user.context = {}
         db_session.commit()
 
-        prompt = build_concierge_prompt(test_user)
+        prompt = build_oikos_prompt(test_user)
 
         # Should have default messages
         assert "(No user context configured)" in prompt
         assert "(No servers configured)" in prompt
 
         # Should still have base template
-        assert "Concierge" in prompt
+        assert "Oikos" in prompt
         assert "spawn_commis" in prompt
 
     def test_none_context_produces_valid_prompt(self, db_session, test_user):
@@ -411,11 +411,11 @@ class TestContextEdgeCases:
         test_user.context = None
         db_session.commit()
 
-        prompt = build_concierge_prompt(test_user)
+        prompt = build_oikos_prompt(test_user)
 
         # Should use defaults
         assert "(No user context configured)" in prompt
-        assert "Concierge" in prompt
+        assert "Oikos" in prompt
 
     def test_context_with_special_characters(self, client, db_session, test_user):
         """Test that special characters in context are handled."""
@@ -436,7 +436,7 @@ class TestContextEdgeCases:
         assert response.status_code == 200
 
         db_session.refresh(test_user)
-        prompt = build_concierge_prompt(test_user)
+        prompt = build_oikos_prompt(test_user)
 
         # Characters should be preserved
         assert "Test <User>" in prompt

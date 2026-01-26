@@ -55,7 +55,7 @@ def commis_context(test_user: User):
     ctx = CommisContext(
         commis_id="test-commis",
         owner_id=test_user.id,
-        course_id="test-run",
+        run_id="test-run",
         task="test task",
     )
     token = set_commis_context(ctx)
@@ -77,7 +77,7 @@ class TestJobCRUD:
             command="echo 'test'",
             timeout_secs=30,
             commis_id="test-commis",
-            course_id="test-run",
+            run_id="test-run",
         )
 
         assert job.id is not None
@@ -87,7 +87,7 @@ class TestJobCRUD:
         assert job.timeout_secs == 30
         assert job.status == "queued"
         assert job.commis_id == "test-commis"
-        assert job.course_id == "test-run"
+        assert job.run_id == "test-run"
 
     def test_update_job_started(self, db: Session, test_user: User, test_runner: tuple[Runner, str]):
         """Test marking job as running."""

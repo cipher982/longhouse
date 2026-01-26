@@ -1,6 +1,6 @@
 """Tests for commis summary extraction (Phase 2.5).
 
-Summary extraction enables concierges to scan 50+ commis without context overflow.
+Summary extraction enables oikos operators to scan 50+ commis without context overflow.
 - result.txt is canonical (source of truth)
 - summary is derived, compressed, safe to fail
 - status is system-determined (not from LLM)

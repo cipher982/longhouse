@@ -103,7 +103,7 @@ class TestWorkspaceJobSessionContinuity:
             ),
             patch("zerg.services.commis_artifact_store.CommisArtifactStore"),
         ):
-            await processor._process_workspace_job(job_id, concierge_course_id=None)
+            await processor._process_workspace_job(job_id, oikos_run_id=None)
 
         # Verify prepare_session_for_resume was called with correct args
         mock_prepare.assert_called_once()
@@ -161,7 +161,7 @@ class TestWorkspaceJobSessionContinuity:
             ),
             patch("zerg.services.commis_artifact_store.CommisArtifactStore"),
         ):
-            await processor._process_workspace_job(job_id, concierge_course_id=None)
+            await processor._process_workspace_job(job_id, oikos_run_id=None)
 
         # Verify prepare_session_for_resume was NOT called
         mock_prepare.assert_not_called()
@@ -210,7 +210,7 @@ class TestWorkspaceJobSessionContinuity:
             ),
             patch("zerg.services.commis_artifact_store.CommisArtifactStore"),
         ):
-            await processor._process_workspace_job(job_id, concierge_course_id=None)
+            await processor._process_workspace_job(job_id, oikos_run_id=None)
 
         # Verify ship_session_to_life_hub was called
         mock_ship.assert_called_once()
@@ -264,7 +264,7 @@ class TestWorkspaceJobSessionContinuity:
             ),
             patch("zerg.services.commis_artifact_store.CommisArtifactStore"),
         ):
-            await processor._process_workspace_job(job_id, concierge_course_id=None)
+            await processor._process_workspace_job(job_id, oikos_run_id=None)
 
         # Verify ship_session_to_life_hub was NOT called (only ships on success)
         mock_ship.assert_not_called()
@@ -315,7 +315,7 @@ class TestWorkspaceJobSessionContinuity:
             patch("zerg.services.commis_artifact_store.CommisArtifactStore"),
         ):
             # Should not raise - graceful degradation
-            await processor._process_workspace_job(job_id, concierge_course_id=None)
+            await processor._process_workspace_job(job_id, oikos_run_id=None)
 
         # Verify the job still ran (without resume)
         executor_instance = mock_cloud_executor_class.return_value
@@ -363,7 +363,7 @@ class TestWorkspaceJobSessionContinuity:
             patch("zerg.services.commis_artifact_store.CommisArtifactStore"),
         ):
             # Should not raise - shipping is best-effort
-            await processor._process_workspace_job(job_id, concierge_course_id=None)
+            await processor._process_workspace_job(job_id, oikos_run_id=None)
 
         # Verify job was marked as success (execution succeeded, ship failure doesn't affect status)
         db_session.refresh(job)

@@ -26,7 +26,7 @@ def test_memory_write_and_read(credential_context):
         path="episodes/2026-01-17/test.md",
         content="Hello memory",
         tags=["test"],
-        metadata={"course_id": 42},
+        metadata={"run_id": 42},
     )
 
     assert write_result["ok"] is True
@@ -36,7 +36,7 @@ def test_memory_write_and_read(credential_context):
     assert read_result["ok"] is True
     assert read_result["data"]["content"] == "Hello memory"
     assert read_result["data"]["tags"] == ["test"]
-    assert read_result["data"]["metadata"]["course_id"] == 42
+    assert read_result["data"]["metadata"]["run_id"] == 42
 
 
 def test_memory_write_overwrites_existing(credential_context):

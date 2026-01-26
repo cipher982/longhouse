@@ -28,7 +28,7 @@ def test_llm_call_structured_logging(capture_logs):
     ctx = CommisContext(
         commis_id="test-commis-123",
         owner_id=1,
-        course_id="run-456",
+        run_id="run-456",
         job_id=789,
         task="Test task",
     )
@@ -99,7 +99,7 @@ def test_tool_call_structured_logging(capture_logs):
     ctx = CommisContext(
         commis_id="test-commis-456",
         owner_id=1,
-        course_id="run-789",
+        run_id="run-789",
         job_id=101,
         task="Test tool task",
     )
@@ -122,7 +122,7 @@ def test_tool_call_structured_logging(capture_logs):
             success=True,
         )
 
-        # Emit structured log (simulating what concierge_react_engine does)
+        # Emit structured log (simulating what oikos_react_engine does)
         logger = logging.getLogger("zerg.test")
         log_extra = {
             "event": "tool_call_complete",

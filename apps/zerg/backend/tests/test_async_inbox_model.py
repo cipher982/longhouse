@@ -1,7 +1,7 @@
 """Tests for the async inbox model (non-blocking spawn_commis, wait_for_commis, acknowledgements).
 
 These tests verify the critical bugs fixed in the async inbox model implementation:
-1. wait_for_commis properly raises CourseInterrupted (not swallowed by asyncio.gather)
+1. wait_for_commis properly raises RunInterrupted (not swallowed by asyncio.gather)
 2. pending_tool_call_id is used for resume before falling back to CommisJob lookup
 3. Inbox acknowledgements are only committed after system message is persisted
 """
@@ -25,14 +25,14 @@ def temp_artifact_path(monkeypatch):
 
 
 class TestWaitForCommisInterrupt:
-    """Tests that wait_for_commis properly propagates CourseInterrupted."""
+    """Tests that wait_for_commis properly propagates RunInterrupted."""
 
     @pytest.mark.asyncio
     async def test_wait_for_commis_raises_interrupt_for_running_job(self, db_session, test_user):
-        """wait_for_commis should raise CourseInterrupted when job is still running."""
+        """wait_for_commis should raise RunInterrupted when job is still running."""
         from zerg.models.models import CommisJob
-        from zerg.managers.fiche_runner import CourseInterrupted
-        from zerg.tools.builtin.concierge_tools import wait_for_commis_async
+        from zerg.managers.fiche_runner import RunInterrupted
+        from zerg.tools.builtin.oikos_tools import wait_for_commis_async
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
 
@@ -54,8 +54,8 @@ class TestWaitForCommisInterrupt:
         set_credential_resolver(resolver)
 
         try:
-            # Call wait_for_commis - should raise CourseInterrupted
-            with pytest.raises(CourseInterrupted) as exc_info:
+            # Call wait_for_commis - should raise RunInterrupted
+            with pytest.raises(RunInterrupted) as exc_info:
                 await wait_for_commis_async(str(job.id), _tool_call_id="test-tool-call-123")
 
             # Verify interrupt payload
@@ -70,7 +70,7 @@ class TestWaitForCommisInterrupt:
     async def test_wait_for_commis_returns_result_for_completed_job(self, db_session, test_user, temp_artifact_path):
         """wait_for_commis should return result immediately for completed jobs."""
         from zerg.models.models import CommisJob
-        from zerg.tools.builtin.concierge_tools import wait_for_commis_async
+        from zerg.tools.builtin.oikos_tools import wait_for_commis_async
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
         from zerg.services.commis_artifact_store import CommisArtifactStore
@@ -115,9 +115,9 @@ class TestWaitForCommisInterrupt:
 
     @pytest.mark.asyncio
     async def test_wait_for_commis_interrupt_propagates_through_gather(self, db_session, test_user):
-        """CourseInterrupted from wait_for_commis should propagate through asyncio.gather."""
+        """RunInterrupted from wait_for_commis should propagate through asyncio.gather."""
         from zerg.models.models import CommisJob
-        from zerg.managers.fiche_runner import CourseInterrupted
+        from zerg.managers.fiche_runner import RunInterrupted
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
 
@@ -138,8 +138,8 @@ class TestWaitForCommisInterrupt:
         set_credential_resolver(resolver)
 
         try:
-            # Simulate the tool execution path in concierge_react_engine
-            from zerg.tools.builtin.concierge_tools import wait_for_commis_async
+            # Simulate the tool execution path in oikos_react_engine
+            from zerg.tools.builtin.oikos_tools import wait_for_commis_async
             import asyncio
 
             async def execute_tool():
@@ -148,11 +148,11 @@ class TestWaitForCommisInterrupt:
             # asyncio.gather with return_exceptions=True converts exceptions to results
             results = await asyncio.gather(execute_tool(), return_exceptions=True)
 
-            # The result should be an CourseInterrupted exception
+            # The result should be an RunInterrupted exception
             assert len(results) == 1
-            assert isinstance(results[0], CourseInterrupted)
+            assert isinstance(results[0], RunInterrupted)
 
-            # The fix in concierge_react_engine checks for this and re-raises it
+            # The fix in oikos_react_engine checks for this and re-raises it
             # Let's verify the interrupt value is correct
             interrupt_value = results[0].interrupt_value
             assert interrupt_value["type"] == "wait_for_commis"
@@ -167,18 +167,18 @@ class TestPendingToolCallIdResume:
     @pytest.mark.asyncio
     async def test_pending_tool_call_id_takes_priority_over_commis_job(self, db_session, test_user):
         """pending_tool_call_id should be used before CommisJob.tool_call_id lookup."""
-        from zerg.models.models import Course, CommisJob
-        from zerg.models.course import Course as AgentRunModel
-        from zerg.models.enums import CourseStatus, CourseTrigger
+        from zerg.models.models import Run, CommisJob
+        from zerg.models.run import Run as AgentRunModel
+        from zerg.models.enums import RunStatus, RunTrigger
         from zerg.crud import crud
 
-        # Create concierge fiche and thread
+        # Create oikos fiche and thread
         fiche = crud.create_fiche(
             db=db_session,
             owner_id=test_user.id,
-            name="Test Concierge",
+            name="Test Oikos",
             model=TEST_MODEL,
-            system_instructions="Test concierge",
+            system_instructions="Test oikos",
             task_instructions="",
         )
         from zerg.services.thread_service import ThreadService
@@ -191,11 +191,11 @@ class TestPendingToolCallIdResume:
         )
 
         # Create a WAITING run with pending_tool_call_id
-        run = Course(
+        run = Run(
             fiche_id=fiche.id,
             thread_id=thread.id,
-            status=CourseStatus.WAITING,
-            trigger=CourseTrigger.API,
+            status=RunStatus.WAITING,
+            trigger=RunTrigger.API,
             started_at=datetime.now(timezone.utc).replace(tzinfo=None),
             model=TEST_MODEL,
             pending_tool_call_id="wait-for-commis-tool-call-456",  # From wait_for_commis
@@ -207,7 +207,7 @@ class TestPendingToolCallIdResume:
         # Create a commis job with a DIFFERENT tool_call_id
         commis_job = CommisJob(
             owner_id=test_user.id,
-            concierge_course_id=run.id,
+            oikos_run_id=run.id,
             tool_call_id="spawn-commis-tool-call-789",  # Different ID
             task="Some task",
             model=TEST_COMMIS_MODEL,
@@ -219,7 +219,7 @@ class TestPendingToolCallIdResume:
 
         # Now verify the priority order in commis_resume
         # The pending_tool_call_id should be used, not the CommisJob one
-        from zerg.services.commis_resume import _continue_concierge_langgraph_free
+        from zerg.services.commis_resume import _continue_oikos_langgraph_free
 
         # We can't easily test the full resume flow, but we can check the logic
         # by reading the run and verifying pending_tool_call_id is set
@@ -235,7 +235,7 @@ class TestInboxAcknowledgementAtomicity:
     def test_build_context_returns_jobs_to_acknowledge_without_committing(self, db_session, test_user):
         """_build_recent_commis_context should return job IDs but NOT commit acknowledgements."""
         from zerg.models.models import CommisJob
-        from zerg.services.concierge_service import ConciergeService
+        from zerg.services.oikos_service import OikosService
 
         # Create an unacknowledged completed job
         job = CommisJob(
@@ -252,7 +252,7 @@ class TestInboxAcknowledgementAtomicity:
         db_session.refresh(job)
 
         # Build context
-        service = ConciergeService(db_session)
+        service = OikosService(db_session)
         context, jobs_to_ack = service._build_recent_commis_context(test_user.id)
 
         # Context should be returned
@@ -267,7 +267,7 @@ class TestInboxAcknowledgementAtomicity:
     def test_acknowledge_commis_jobs_marks_jobs_as_acknowledged(self, db_session, test_user):
         """_acknowledge_commis_jobs should mark jobs as acknowledged."""
         from zerg.models.models import CommisJob
-        from zerg.services.concierge_service import ConciergeService
+        from zerg.services.oikos_service import OikosService
 
         # Create multiple unacknowledged jobs
         jobs = []
@@ -291,7 +291,7 @@ class TestInboxAcknowledgementAtomicity:
         job_ids = [job.id for job in jobs]
 
         # Acknowledge them
-        service = ConciergeService(db_session)
+        service = OikosService(db_session)
         service._acknowledge_commis_jobs(job_ids)
 
         # All jobs should now be acknowledged
@@ -301,16 +301,16 @@ class TestInboxAcknowledgementAtomicity:
 
     def test_acknowledge_empty_list_does_nothing(self, db_session, test_user):
         """_acknowledge_commis_jobs with empty list should not error."""
-        from zerg.services.concierge_service import ConciergeService
+        from zerg.services.oikos_service import OikosService
 
-        service = ConciergeService(db_session)
+        service = OikosService(db_session)
         # Should not raise
         service._acknowledge_commis_jobs([])
 
     def test_running_jobs_not_in_acknowledgement_list(self, db_session, test_user):
         """Running jobs should not be in the acknowledgement list."""
         from zerg.models.models import CommisJob
-        from zerg.services.concierge_service import ConciergeService
+        from zerg.services.oikos_service import OikosService
 
         # Create a running job
         running_job = CommisJob(
@@ -327,7 +327,7 @@ class TestInboxAcknowledgementAtomicity:
         db_session.refresh(running_job)
 
         # Build context
-        service = ConciergeService(db_session)
+        service = OikosService(db_session)
         context, jobs_to_ack = service._build_recent_commis_context(test_user.id)
 
         # Running job should be in context but NOT in acknowledgement list
@@ -341,22 +341,22 @@ class TestAsyncInboxModelIntegration:
 
     @pytest.mark.asyncio
     async def test_spawn_commis_non_blocking(self, db_session, test_user):
-        """spawn_commis should return immediately (not raise CourseInterrupted)."""
+        """spawn_commis should return immediately (not raise RunInterrupted)."""
         from zerg.models.models import CommisJob
-        from zerg.tools.builtin.concierge_tools import spawn_standard_commis_async
+        from zerg.tools.builtin.oikos_tools import spawn_standard_commis_async
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
-        from zerg.services.concierge_context import set_concierge_context, reset_concierge_context
+        from zerg.services.oikos_context import set_oikos_context, reset_oikos_context
         from unittest.mock import MagicMock, patch
 
         # Set up credential resolver context
         resolver = CredentialResolver(fiche_id=None, db=db_session, owner_id=test_user.id)
         set_credential_resolver(resolver)
 
-        # Set up concierge context with valid UUID for trace_id
+        # Set up oikos context with valid UUID for trace_id
         test_trace_id = str(uuid.uuid4())
-        token = set_concierge_context(
-            course_id=None,
+        token = set_oikos_context(
+            run_id=None,
             owner_id=test_user.id,
             message_id="test-msg-id",
             trace_id=test_trace_id,
@@ -365,9 +365,9 @@ class TestAsyncInboxModelIntegration:
         )
 
         try:
-            with patch("zerg.tools.builtin.concierge_tools.get_concierge_context") as mock_ctx:
+            with patch("zerg.tools.builtin.oikos_tools.get_oikos_context") as mock_ctx:
                 mock_ctx.return_value = MagicMock(
-                    course_id=None,
+                    run_id=None,
                     owner_id=test_user.id,
                     trace_id=test_trace_id,
                     model=TEST_MODEL,
@@ -392,7 +392,7 @@ class TestAsyncInboxModelIntegration:
                 assert job is not None
                 assert job.status == "queued"
         finally:
-            reset_concierge_context(token)
+            reset_oikos_context(token)
             set_credential_resolver(None)
 
 
@@ -403,7 +403,7 @@ class TestCancelCommis:
     async def test_cancel_commis_sets_status_to_cancelled(self, db_session, test_user):
         """cancel_commis should set job status to 'cancelled'."""
         from zerg.models.models import CommisJob
-        from zerg.tools.builtin.concierge_tools import cancel_commis_async
+        from zerg.tools.builtin.oikos_tools import cancel_commis_async
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
 
@@ -442,7 +442,7 @@ class TestCancelCommis:
     async def test_cancel_already_completed_job_returns_error(self, db_session, test_user):
         """cancel_commis should error for already completed jobs."""
         from zerg.models.models import CommisJob
-        from zerg.tools.builtin.concierge_tools import cancel_commis_async
+        from zerg.tools.builtin.oikos_tools import cancel_commis_async
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
 
@@ -483,7 +483,7 @@ class TestCheckCommisStatus:
     async def test_check_commis_status_specific_job(self, db_session, test_user):
         """check_commis_status with job_id should return job details."""
         from zerg.models.models import CommisJob
-        from zerg.tools.builtin.concierge_tools import check_commis_status_async
+        from zerg.tools.builtin.oikos_tools import check_commis_status_async
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
 
@@ -519,7 +519,7 @@ class TestCheckCommisStatus:
     async def test_check_commis_status_list_active(self, db_session, test_user):
         """check_commis_status without job_id should list all active commis."""
         from zerg.models.models import CommisJob
-        from zerg.tools.builtin.concierge_tools import check_commis_status_async
+        from zerg.tools.builtin.oikos_tools import check_commis_status_async
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
 

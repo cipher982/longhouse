@@ -26,11 +26,10 @@ from zerg.database import get_db
 from zerg.events import EventType
 from zerg.events.decorators import publish_event
 from zerg.events.event_bus import event_bus
-from zerg.metrics import dashboard_snapshot_courses_returned
 from zerg.metrics import dashboard_snapshot_fiches_returned
 from zerg.metrics import dashboard_snapshot_latency_seconds
 from zerg.metrics import dashboard_snapshot_requests_total
-from zerg.schemas.schemas import CourseBundle
+from zerg.metrics import dashboard_snapshot_runs_returned
 from zerg.schemas.schemas import DashboardSnapshot
 from zerg.schemas.schemas import Fiche
 from zerg.schemas.schemas import FicheCreate
@@ -38,6 +37,7 @@ from zerg.schemas.schemas import FicheDetails
 from zerg.schemas.schemas import FicheUpdate
 from zerg.schemas.schemas import MessageCreate
 from zerg.schemas.schemas import MessageResponse
+from zerg.schemas.schemas import RunBundle
 from zerg.utils.time import utc_now_naive
 
 # Use override=True to ensure proper quote stripping even if vars are inherited from parent process
@@ -202,7 +202,7 @@ def read_fiches(
 def read_dashboard_snapshot(
     *,
     scope: str = Query("my", pattern="^(my|all)$"),
-    courses_limit: int = Query(50, ge=0, le=500),
+    runs_limit: int = Query(50, ge=0, le=500),
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
@@ -211,35 +211,35 @@ def read_dashboard_snapshot(
     start = perf_counter()
     status_label = "success"
     fiches: List[Fiche] = []
-    bundles: List[CourseBundle] = []
-    total_courses = 0
+    bundles: List[RunBundle] = []
+    total_runs = 0
 
     try:
         fiches = _get_fiches_for_scope(db, current_user, scope, skip=skip, limit=limit)
 
-        if courses_limit > 0:
+        if runs_limit > 0:
             for fiche in fiches:
-                courses = crud.list_courses(db, fiche.id, limit=courses_limit)
-                bundles.append(CourseBundle(fiche_id=fiche.id, courses=courses))
+                runs = crud.list_runs(db, fiche.id, limit=runs_limit)
+                bundles.append(RunBundle(fiche_id=fiche.id, runs=runs))
         else:
-            bundles = [CourseBundle(fiche_id=fiche.id, courses=[]) for fiche in fiches]
+            bundles = [RunBundle(fiche_id=fiche.id, runs=[]) for fiche in fiches]
 
-        total_courses = sum(len(bundle.courses) for bundle in bundles)
+        total_runs = sum(len(bundle.runs) for bundle in bundles)
 
         logger.info(
-            "Dashboard snapshot fetched (scope=%s, courses_limit=%s, fiches=%s, total_courses=%s)",
+            "Dashboard snapshot fetched (scope=%s, runs_limit=%s, fiches=%s, total_runs=%s)",
             scope,
-            courses_limit,
+            runs_limit,
             len(fiches),
-            total_courses,
+            total_runs,
         )
 
         return DashboardSnapshot(
             scope=scope,
             fetched_at=utc_now_naive(),
-            courses_limit=courses_limit,
+            runs_limit=runs_limit,
             fiches=fiches,
-            courses=bundles,
+            runs=bundles,
         )
     except Exception:
         status_label = "error"
@@ -249,7 +249,7 @@ def read_dashboard_snapshot(
         dashboard_snapshot_requests_total.labels(scope=scope, status=status_label).inc()
         dashboard_snapshot_latency_seconds.observe(duration)
         dashboard_snapshot_fiches_returned.observe(float(len(fiches)))
-        dashboard_snapshot_courses_returned.observe(float(total_courses))
+        dashboard_snapshot_runs_returned.observe(float(total_runs))
 
 
 @router.post("/", response_model=Fiche, status_code=status.HTTP_201_CREATED)
@@ -371,8 +371,8 @@ def read_fiche_details(
     payload: dict[str, Any] = {"fiche": row}
     if "threads" in include_set:
         payload["threads"] = []
-    if "courses" in include_set:
-        payload["courses"] = crud.list_courses(db, fiche_id)  # type: ignore[assignment]
+    if "runs" in include_set:
+        payload["runs"] = crud.list_runs(db, fiche_id)  # type: ignore[assignment]
     if "stats" in include_set:
         payload["stats"] = {}
     return payload
@@ -440,7 +440,7 @@ async def run_fiche_task(fiche_id: int, db: Session = Depends(get_db), current_u
     if fiche is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
 
-    # Authorization: only owner or admin may start a fiche's task course
+    # Authorization: only owner or admin may start a fiche's task run
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
     if not is_admin and fiche.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not fiche owner")

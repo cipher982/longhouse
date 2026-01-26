@@ -79,23 +79,23 @@ async def test_conditional_workflow_high_branch_integration(db, test_user, sampl
         mock_resolver_instance.get_tool = lambda name: mock_tool if name == "random_number" else None
         mock_resolver.return_value = mock_resolver_instance
 
-        # Mock the concierge ReAct loop to return input messages + response
-        from zerg.services.concierge_react_engine import ConciergeResult
+        # Mock the oikos ReAct loop to return input messages + response
+        from zerg.services.oikos_react_engine import OikosResult
 
-        async def mock_run_concierge_loop(messages, **kwargs):
-            """Mock the concierge loop to return input messages + new AIMessage."""
+        async def mock_run_oikos_loop(messages, **kwargs):
+            """Mock the oikos loop to return input messages + new AIMessage."""
             from langchain_core.messages import AIMessage
 
-            # Return ALL messages (input + new) as real concierge loop does
-            return ConciergeResult(
+            # Return ALL messages (input + new) as real oikos loop does
+            return OikosResult(
                 messages=list(messages) + [AIMessage(content="The number 75 is indeed greater than 50!")],
                 usage={"total_tokens": 10},
                 interrupted=False,
             )
 
         with patch(
-            "zerg.services.concierge_react_engine.run_concierge_loop",
-            new=mock_run_concierge_loop,
+            "zerg.services.oikos_react_engine.run_oikos_loop",
+            new=mock_run_oikos_loop,
         ):
 
             # Create and execute workflow - everything else is REAL
@@ -201,23 +201,23 @@ async def test_conditional_workflow_low_branch_integration(db, test_user, sample
         mock_resolver_instance.get_tool = lambda name: mock_tool if name == "random_number" else None
         mock_resolver.return_value = mock_resolver_instance
 
-        # Mock the concierge ReAct loop to return input messages + response
-        from zerg.services.concierge_react_engine import ConciergeResult
+        # Mock the oikos ReAct loop to return input messages + response
+        from zerg.services.oikos_react_engine import OikosResult
 
-        async def mock_run_concierge_loop(messages, **kwargs):
-            """Mock the concierge loop to return input messages + new AIMessage."""
+        async def mock_run_oikos_loop(messages, **kwargs):
+            """Mock the oikos loop to return input messages + new AIMessage."""
             from langchain_core.messages import AIMessage
 
-            # Return ALL messages (input + new) as real concierge loop does
-            return ConciergeResult(
+            # Return ALL messages (input + new) as real oikos loop does
+            return OikosResult(
                 messages=list(messages) + [AIMessage(content="The number 25 is 50 or less.")],
                 usage={"total_tokens": 10},
                 interrupted=False,
             )
 
         with patch(
-            "zerg.services.concierge_react_engine.run_concierge_loop",
-            new=mock_run_concierge_loop,
+            "zerg.services.oikos_react_engine.run_oikos_loop",
+            new=mock_run_oikos_loop,
         ):
 
             # Execute workflow

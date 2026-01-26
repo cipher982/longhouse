@@ -1,11 +1,11 @@
 version: "1.0"
 description: Live mode eval tests - require EVAL_MODE=live (real OpenAI calls, 9 test cases)
 
-# These tests use real LLM calls for both concierge AND grader.
+# These tests use real LLM calls for both oikos AND grader.
 # Run with: make eval-live
 #
 # When EVAL_MODE=live:
-# - Concierge uses real OpenAI (tests actual prompt quality)
+# - Oikos uses real OpenAI (tests actual prompt quality)
 # - LLM grader uses real OpenAI (semantic evaluation)
 #
 # These tests validate AGENT BEHAVIOR, not just infrastructure.
@@ -34,7 +34,7 @@ cases:
         min_score: 0.9
     tags: [conversational, llm_graded, live_only, critical]
 
-  # Test actual concierge response quality
+  # Test actual oikos response quality
   - id: greeting_quality
     category: conversational
     description: Test that greeting response is friendly and helpful

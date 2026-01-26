@@ -1,4 +1,4 @@
-"""Jarvis turn-based voice endpoints."""
+"""Oikos turn-based voice endpoints."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from fastapi import UploadFile
 from pydantic import BaseModel
 
 from zerg.config import get_settings
-from zerg.routers.jarvis_auth import get_current_jarvis_user
+from zerg.routers.oikos_auth import get_current_oikos_user
 from zerg.voice.stt_service import ALLOWED_AUDIO_TYPES
 from zerg.voice.stt_service import MAX_AUDIO_BYTES
 from zerg.voice.tts_service import TTSProvider
@@ -23,7 +23,7 @@ from zerg.voice.turn_based import run_voice_turn
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/voice", tags=["jarvis-voice"])
+router = APIRouter(prefix="/voice", tags=["oikos-voice"])
 
 
 class VoiceAudioResponse(BaseModel):
@@ -43,7 +43,7 @@ class VoiceTurnResponse(BaseModel):
     transcript: str
     response_text: str | None = None
     status: str
-    course_id: int | None = None
+    run_id: int | None = None
     thread_id: int | None = None
     error: str | None = None
     stt_model: str | None = None
@@ -59,15 +59,15 @@ async def voice_turn(
     return_audio: bool = Form(True, description="Include synthesized audio response"),
     tts_provider: str | None = Form(None, description="Override TTS provider (edge, elevenlabs)"),
     tts_voice_id: str | None = Form(None, description="Override TTS voice ID/name"),
-    model: str | None = Form(None, description="Override concierge model"),
-    current_user=Depends(get_current_jarvis_user),
+    model: str | None = Form(None, description="Override oikos model"),
+    current_user=Depends(get_current_oikos_user),
 ) -> VoiceTurnResponse:
-    """Turn-based voice: audio -> transcript -> concierge response.
+    """Turn-based voice: audio -> transcript -> oikos response.
 
     This endpoint is optimized for "Alexa-style" interactions:
     - User speaks once
     - System transcribes
-    - Concierge responds with text
+    - Oikos responds with text
     """
     if not audio:
         raise HTTPException(status_code=400, detail="Audio file is required")
@@ -150,7 +150,7 @@ async def voice_turn(
         transcript=result.transcript,
         response_text=result.response_text,
         status=result.status,
-        course_id=result.course_id,
+        run_id=result.run_id,
         thread_id=result.thread_id,
         error=result.error,
         stt_model=result.stt_model,

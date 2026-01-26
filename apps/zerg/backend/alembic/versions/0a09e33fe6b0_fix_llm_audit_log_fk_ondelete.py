@@ -21,14 +21,14 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     """Fix FK constraints to use ON DELETE SET NULL."""
     # Drop existing FK constraints
-    op.drop_constraint('llm_audit_log_course_id_fkey', 'llm_audit_log', type_='foreignkey')
+    op.drop_constraint('llm_audit_log_run_id_fkey', 'llm_audit_log', type_='foreignkey')
     op.drop_constraint('llm_audit_log_thread_id_fkey', 'llm_audit_log', type_='foreignkey')
     op.drop_constraint('llm_audit_log_owner_id_fkey', 'llm_audit_log', type_='foreignkey')
 
     # Recreate with ON DELETE SET NULL
     op.create_foreign_key(
-        'llm_audit_log_course_id_fkey', 'llm_audit_log', 'courses',
-        ['course_id'], ['id'], ondelete='SET NULL'
+        'llm_audit_log_run_id_fkey', 'llm_audit_log', 'runs',
+        ['run_id'], ['id'], ondelete='SET NULL'
     )
     op.create_foreign_key(
         'llm_audit_log_thread_id_fkey', 'llm_audit_log', 'threads',
@@ -42,13 +42,13 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Revert to original FK constraints (no ON DELETE action)."""
-    op.drop_constraint('llm_audit_log_course_id_fkey', 'llm_audit_log', type_='foreignkey')
+    op.drop_constraint('llm_audit_log_run_id_fkey', 'llm_audit_log', type_='foreignkey')
     op.drop_constraint('llm_audit_log_thread_id_fkey', 'llm_audit_log', type_='foreignkey')
     op.drop_constraint('llm_audit_log_owner_id_fkey', 'llm_audit_log', type_='foreignkey')
 
     op.create_foreign_key(
-        'llm_audit_log_course_id_fkey', 'llm_audit_log', 'courses',
-        ['course_id'], ['id']
+        'llm_audit_log_run_id_fkey', 'llm_audit_log', 'runs',
+        ['run_id'], ['id']
     )
     op.create_foreign_key(
         'llm_audit_log_thread_id_fkey', 'llm_audit_log', 'threads',

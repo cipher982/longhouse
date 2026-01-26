@@ -82,15 +82,15 @@ def load_request_logs(log_dir: Path) -> list[dict]:
 
 
 def group_by_session(logs: list[dict]) -> dict[str, list[dict]]:
-    """Group logs by session based on concierge 'initial' phase timestamps.
+    """Group logs by session based on oikos 'initial' phase timestamps.
 
-    A session starts when a concierge (commis_id=null) makes an 'initial' phase call.
-    All subsequent logs until the next concierge initial are part of that session.
+    A session starts when a oikos (commis_id=null) makes an 'initial' phase call.
+    All subsequent logs until the next oikos initial are part of that session.
     """
     # Sort logs by timestamp first
     sorted_logs = sorted(logs, key=lambda x: x["_meta"]["timestamp"])
 
-    # Find all concierge initial timestamps as session boundaries
+    # Find all oikos initial timestamps as session boundaries
     session_starts = []
     for log in sorted_logs:
         # Use JSON fields directly (more reliable than filename parsing)
@@ -98,11 +98,11 @@ def group_by_session(logs: list[dict]) -> dict[str, list[dict]]:
         commis_id = log.get("commis_id") or log["_meta"]["commis_id"]
         is_response = log.get("type") == "response" or log["_meta"]["is_response"]
 
-        # Concierge initial request marks a new session
+        # Oikos initial request marks a new session
         if phase == "initial" and commis_id is None and not is_response:
             session_starts.append(log["_meta"]["timestamp"])
 
-    # If no concierge initials found, fall back to first timestamp
+    # If no oikos initials found, fall back to first timestamp
     if not session_starts:
         session_starts = [sorted_logs[0]["_meta"]["timestamp"]] if sorted_logs else []
 
@@ -158,7 +158,7 @@ def analyze_session(logs: list[dict], verbose: bool = False) -> None:
         meta = log["_meta"]
         # Prefer JSON body fields over filename-parsed metadata
         phase = log.get("phase") or meta["phase"]
-        commis_id = log.get("commis_id") or meta["commis_id"] or "concierge"
+        commis_id = log.get("commis_id") or meta["commis_id"] or "oikos"
         is_response = log.get("type") == "response" or meta["is_response"]
 
         phase_counts[phase] += 1
@@ -220,7 +220,7 @@ def analyze_session(logs: list[dict], verbose: bool = False) -> None:
         ts = meta["timestamp"]
         # Prefer JSON body fields over filename-parsed metadata
         phase = (log.get("phase") or meta["phase"])[:18]
-        commis_id = (log.get("commis_id") or meta["commis_id"] or "concierge")[:13]
+        commis_id = (log.get("commis_id") or meta["commis_id"] or "oikos")[:13]
         is_response = log.get("type") == "response" or meta["is_response"]
         req_type = "response" if is_response else "request"
 

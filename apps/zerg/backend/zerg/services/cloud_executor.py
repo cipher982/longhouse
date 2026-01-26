@@ -7,7 +7,7 @@ Usage:
     executor = CloudExecutor()
     result = await executor.run_commis(
         task="Fix the typo in README.md",
-        workspace_path="/var/jarvis/workspaces/run-123",
+        workspace_path="/var/oikos/workspaces/run-123",
         model="bedrock/claude-sonnet",
     )
 """

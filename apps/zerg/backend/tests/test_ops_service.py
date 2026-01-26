@@ -10,15 +10,15 @@ from zerg.services.ops_service import get_top_fiches
 def _mk_run(
     db, fiche_id: int, thread_id: int, *, started_at, finished_at=None, status="running", duration_ms=None, cost=None
 ):
-    run = crud.create_course(db, fiche_id=fiche_id, thread_id=thread_id, trigger="api", status="queued")
-    crud.mark_course_running(db, run.id, started_at=started_at)
+    run = crud.create_run(db, fiche_id=fiche_id, thread_id=thread_id, trigger="api", status="queued")
+    crud.mark_run_running(db, run.id, started_at=started_at)
     if finished_at is not None:
         if status == "success":
-            crud.mark_course_finished(db, run.id, finished_at=finished_at, duration_ms=duration_ms, total_cost_usd=cost)
+            crud.mark_run_finished(db, run.id, finished_at=finished_at, duration_ms=duration_ms, total_cost_usd=cost)
         elif status == "failed":
-            crud.mark_course_failed(db, run.id, finished_at=finished_at, duration_ms=duration_ms, error="x")
+            crud.mark_run_failed(db, run.id, finished_at=finished_at, duration_ms=duration_ms, error="x")
         else:
-            crud.mark_course_finished(db, run.id, finished_at=finished_at, duration_ms=duration_ms)
+            crud.mark_run_finished(db, run.id, finished_at=finished_at, duration_ms=duration_ms)
     return run
 
 

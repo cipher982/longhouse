@@ -11,13 +11,6 @@ from .crud_connectors import delete_connector
 from .crud_connectors import get_connector
 from .crud_connectors import get_connectors
 from .crud_connectors import update_connector
-
-# Course operations
-from .crud_courses import create_course
-from .crud_courses import list_courses
-from .crud_courses import mark_course_failed
-from .crud_courses import mark_course_finished
-from .crud_courses import mark_course_running
 from .crud_fiches import create_fiche
 from .crud_fiches import create_fiche_message
 from .crud_fiches import delete_fiche
@@ -32,6 +25,13 @@ from .crud_messages import get_thread_messages
 from .crud_messages import get_unprocessed_messages
 from .crud_messages import mark_message_processed
 from .crud_messages import mark_messages_processed_bulk
+
+# Run operations
+from .crud_runs import create_run
+from .crud_runs import list_runs
+from .crud_runs import mark_run_failed
+from .crud_runs import mark_run_finished
+from .crud_runs import mark_run_running
 
 # Thread operations
 from .crud_threads import create_thread
@@ -98,12 +98,12 @@ __all__ = [
     "get_unprocessed_messages",
     "mark_message_processed",
     "mark_messages_processed_bulk",
-    # Courses
-    "create_course",
-    "list_courses",
-    "mark_course_failed",
-    "mark_course_finished",
-    "mark_course_running",
+    # Runs
+    "create_run",
+    "list_runs",
+    "mark_run_failed",
+    "mark_run_finished",
+    "mark_run_running",
     # Threads
     "create_thread",
     "delete_thread",

@@ -1,7 +1,7 @@
-"""Tests for spawn_commis idempotency during concierge resume replay.
+"""Tests for spawn_commis idempotency during oikos resume replay.
 
 These tests verify the idempotency fix that prevents duplicate commis when:
-1. The concierge loop replays tool calls after interrupt/resume
+1. The oikos loop replays tool calls after interrupt/resume
 2. The LLM slightly rephrases the task on replay (e.g., "check disk" → "check disk space")
 
 The fix uses:
@@ -16,12 +16,12 @@ import pytest
 from tests.conftest import TEST_COMMIS_MODEL
 from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
-from zerg.models.enums import CourseStatus
-from zerg.models.models import Course
+from zerg.models.enums import RunStatus
+from zerg.models.models import Run
 from zerg.models.models import CommisJob
-from zerg.services.concierge_context import reset_concierge_context
-from zerg.services.concierge_context import set_concierge_context
-from zerg.tools.builtin.concierge_tools import spawn_commis_async
+from zerg.services.oikos_context import reset_oikos_context
+from zerg.services.oikos_context import set_oikos_context
+from zerg.tools.builtin.oikos_tools import spawn_commis_async
 
 
 @pytest.fixture
@@ -42,12 +42,12 @@ def credential_context(db_session, test_user):
 
 
 @pytest.fixture
-def concierge_run(db_session, test_user, sample_fiche, sample_thread):
-    """Create a concierge run for testing."""
-    run = Course(
+def oikos_run(db_session, test_user, sample_fiche, sample_thread):
+    """Create a oikos run for testing."""
+    run = Run(
         fiche_id=sample_fiche.id,
         thread_id=sample_thread.id,
-        status=CourseStatus.RUNNING,
+        status=RunStatus.RUNNING,
     )
     db_session.add(run)
     db_session.commit()
@@ -56,15 +56,15 @@ def concierge_run(db_session, test_user, sample_fiche, sample_thread):
 
 
 class TestSpawnCommisIdempotency:
-    """Tests for spawn_commis idempotency during concierge replay."""
+    """Tests for spawn_commis idempotency during oikos replay."""
 
     @pytest.mark.asyncio
     async def test_exact_task_reuse_while_in_progress(
-        self, db_session, test_user, credential_context, temp_artifact_path, concierge_run
+        self, db_session, test_user, credential_context, temp_artifact_path, oikos_run
     ):
         """Verify spawn_commis with exact same task during in-progress reuses job."""
-        token = set_concierge_context(
-            course_id=concierge_run.id,
+        token = set_oikos_context(
+            run_id=oikos_run.id,
             owner_id=test_user.id,
             message_id="test-msg-1",
         )
@@ -81,20 +81,20 @@ class TestSpawnCommisIdempotency:
             # Assert: still only ONE job for this run
             jobs = (
                 db_session.query(CommisJob)
-                .filter(CommisJob.concierge_course_id == concierge_run.id)
+                .filter(CommisJob.oikos_run_id == oikos_run.id)
                 .all()
             )
             assert len(jobs) == 1, f"Expected 1 job, got {len(jobs)} - duplicate spawned on replay"
         finally:
-            reset_concierge_context(token)
+            reset_oikos_context(token)
 
     @pytest.mark.asyncio
     async def test_different_tasks_create_separate_commis(
-        self, db_session, test_user, credential_context, temp_artifact_path, concierge_run
+        self, db_session, test_user, credential_context, temp_artifact_path, oikos_run
     ):
         """Verify spawn_commis with genuinely different tasks creates separate commis."""
-        token = set_concierge_context(
-            course_id=concierge_run.id,
+        token = set_oikos_context(
+            run_id=oikos_run.id,
             owner_id=test_user.id,
             message_id="test-msg-2",
         )
@@ -111,24 +111,24 @@ class TestSpawnCommisIdempotency:
             # Assert: TWO jobs since tasks are different
             jobs = (
                 db_session.query(CommisJob)
-                .filter(CommisJob.concierge_course_id == concierge_run.id)
+                .filter(CommisJob.oikos_run_id == oikos_run.id)
                 .all()
             )
             assert len(jobs) == 2, f"Expected 2 jobs for different tasks, got {len(jobs)}"
         finally:
-            reset_concierge_context(token)
+            reset_oikos_context(token)
 
     @pytest.mark.asyncio
     async def test_completed_job_returns_cached_result(
-        self, db_session, test_user, credential_context, temp_artifact_path, concierge_run
+        self, db_session, test_user, credential_context, temp_artifact_path, oikos_run
     ):
         """Verify spawn_commis with matching completed job returns cached result."""
         import os
 
         from zerg.services.commis_artifact_store import CommisArtifactStore
 
-        token = set_concierge_context(
-            course_id=concierge_run.id,
+        token = set_oikos_context(
+            run_id=oikos_run.id,
             owner_id=test_user.id,
             message_id="test-msg-3",
         )
@@ -138,7 +138,7 @@ class TestSpawnCommisIdempotency:
             commis_id = "test-commis-completed-001"
             job = CommisJob(
                 owner_id=test_user.id,
-                concierge_course_id=concierge_run.id,
+                oikos_run_id=oikos_run.id,
                 task="Check disk space on cube",
                 model=TEST_COMMIS_MODEL,
                 status="success",
@@ -180,16 +180,16 @@ class TestSpawnCommisIdempotency:
             # Verify no new job was created
             jobs = (
                 db_session.query(CommisJob)
-                .filter(CommisJob.concierge_course_id == concierge_run.id)
+                .filter(CommisJob.oikos_run_id == oikos_run.id)
                 .all()
             )
             assert len(jobs) == 1, f"Expected 1 job (cached), got {len(jobs)}"
         finally:
-            reset_concierge_context(token)
+            reset_oikos_context(token)
 
     @pytest.mark.asyncio
     async def test_no_fuzzy_matching_for_similar_tasks(
-        self, db_session, test_user, credential_context, temp_artifact_path, concierge_run
+        self, db_session, test_user, credential_context, temp_artifact_path, oikos_run
     ):
         """Verify spawn_commis uses EXACT task matching only.
 
@@ -202,8 +202,8 @@ class TestSpawnCommisIdempotency:
 
         from zerg.services.commis_artifact_store import CommisArtifactStore
 
-        token = set_concierge_context(
-            course_id=concierge_run.id,
+        token = set_oikos_context(
+            run_id=oikos_run.id,
             owner_id=test_user.id,
             message_id="test-msg-5",
         )
@@ -217,7 +217,7 @@ class TestSpawnCommisIdempotency:
                 task = f"Check disk space on cube server - variant {i}"
                 job = CommisJob(
                     owner_id=test_user.id,
-                    concierge_course_id=concierge_run.id,
+                    oikos_run_id=oikos_run.id,
                     task=task,
                     model=TEST_COMMIS_MODEL,
                     status="success",
@@ -254,31 +254,31 @@ class TestSpawnCommisIdempotency:
             # Verify we now have 3 jobs (2 completed + 1 new queued)
             jobs = (
                 db_session.query(CommisJob)
-                .filter(CommisJob.concierge_course_id == concierge_run.id)
+                .filter(CommisJob.oikos_run_id == oikos_run.id)
                 .all()
             )
             assert len(jobs) == 3, f"Expected 3 jobs (2 completed + 1 new), got {len(jobs)}"
         finally:
-            reset_concierge_context(token)
+            reset_oikos_context(token)
 
     @pytest.mark.asyncio
     async def test_cross_run_isolation(
         self, db_session, test_user, credential_context, temp_artifact_path, sample_fiche, sample_thread
     ):
-        """Verify idempotency is scoped to concierge_course_id.
+        """Verify idempotency is scoped to oikos_run_id.
 
         Jobs from different runs should NOT interfere with each other.
         """
         # Create two separate runs
-        run1 = Course(
+        run1 = Run(
             fiche_id=sample_fiche.id,
             thread_id=sample_thread.id,
-            status=CourseStatus.RUNNING,
+            status=RunStatus.RUNNING,
         )
-        run2 = Course(
+        run2 = Run(
             fiche_id=sample_fiche.id,
             thread_id=sample_thread.id,
-            status=CourseStatus.RUNNING,
+            status=RunStatus.RUNNING,
         )
         db_session.add_all([run1, run2])
         db_session.commit()
@@ -286,8 +286,8 @@ class TestSpawnCommisIdempotency:
         db_session.refresh(run2)
 
         # Spawn commis in run1
-        token1 = set_concierge_context(
-            course_id=run1.id,
+        token1 = set_oikos_context(
+            run_id=run1.id,
             owner_id=test_user.id,
             message_id="test-msg-run1",
         )
@@ -295,11 +295,11 @@ class TestSpawnCommisIdempotency:
             result1 = await spawn_commis_async("Check disk space", model=TEST_COMMIS_MODEL)
             assert "queued successfully" in result1
         finally:
-            reset_concierge_context(token1)
+            reset_oikos_context(token1)
 
         # Spawn same task in run2 - should create separate job (not dedupe across runs)
-        token2 = set_concierge_context(
-            course_id=run2.id,
+        token2 = set_oikos_context(
+            run_id=run2.id,
             owner_id=test_user.id,
             message_id="test-msg-run2",
         )
@@ -307,11 +307,11 @@ class TestSpawnCommisIdempotency:
             result2 = await spawn_commis_async("Check disk space", model=TEST_COMMIS_MODEL)
             assert "queued successfully" in result2
         finally:
-            reset_concierge_context(token2)
+            reset_oikos_context(token2)
 
         # Verify each run has its own job
-        jobs_run1 = db_session.query(CommisJob).filter(CommisJob.concierge_course_id == run1.id).all()
-        jobs_run2 = db_session.query(CommisJob).filter(CommisJob.concierge_course_id == run2.id).all()
+        jobs_run1 = db_session.query(CommisJob).filter(CommisJob.oikos_run_id == run1.id).all()
+        jobs_run2 = db_session.query(CommisJob).filter(CommisJob.oikos_run_id == run2.id).all()
 
         assert len(jobs_run1) == 1, f"Run 1 should have 1 job, got {len(jobs_run1)}"
         assert len(jobs_run2) == 1, f"Run 2 should have 1 job, got {len(jobs_run2)}"

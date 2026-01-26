@@ -18,7 +18,7 @@ class TestFindMatchingScenario:
     """Test scenario matching logic."""
 
     def test_matches_disk_space_check(self):
-        scenario = find_matching_scenario("check disk space on cube", "concierge")
+        scenario = find_matching_scenario("check disk space on cube", "oikos")
         assert scenario is not None
         assert scenario.get("evidence_keyword") == "45%"
 
@@ -29,18 +29,18 @@ class TestFindMatchingScenario:
             "show me storage on cube",
         ]
         for prompt in prompts:
-            scenario = find_matching_scenario(prompt, "concierge")
+            scenario = find_matching_scenario(prompt, "oikos")
             assert scenario is not None, f"Failed to match: {prompt}"
 
     def test_matches_parallel_disk_space(self):
-        scenario = find_matching_scenario("check disk space on cube, clifford, and zerg", "concierge")
+        scenario = find_matching_scenario("check disk space on cube, clifford, and zerg", "oikos")
         assert scenario is not None
-        assert scenario.get("name") == "disk_space_parallel_concierge"
+        assert scenario.get("name") == "disk_space_parallel_oikos"
 
     def test_matches_parallel_disk_space_without_cube(self):
-        scenario = find_matching_scenario("check disk space on clifford and zerg", "concierge")
+        scenario = find_matching_scenario("check disk space on clifford and zerg", "oikos")
         assert scenario is not None
-        assert scenario.get("name") == "disk_space_parallel_concierge"
+        assert scenario.get("name") == "disk_space_parallel_oikos"
 
     def test_commis_matches_disk_task(self):
         scenario = find_matching_scenario(
@@ -49,8 +49,8 @@ class TestFindMatchingScenario:
         assert scenario is not None
         assert scenario.get("role") == "commis"
 
-    def test_concierge_fallback(self):
-        scenario = find_matching_scenario("do something random", "concierge")
+    def test_oikos_fallback(self):
+        scenario = find_matching_scenario("do something random", "oikos")
         assert scenario is not None
         # Should get the generic fallback
 
@@ -69,30 +69,30 @@ class TestDetectRoleFromMessages:
         ]
         assert detect_role_from_messages(messages) == "commis"
 
-    def test_long_system_prompt_is_concierge(self):
+    def test_long_system_prompt_is_oikos(self):
         messages = [
-            SystemMessage(content="You are Jarvis. " + "x" * 2000),  # Long prompt
+            SystemMessage(content="You are Oikos. " + "x" * 2000),  # Long prompt
             HumanMessage(content="Hello"),
         ]
-        assert detect_role_from_messages(messages) == "concierge"
+        assert detect_role_from_messages(messages) == "oikos"
 
-    def test_spawn_commis_call_indicates_concierge(self):
+    def test_spawn_commis_call_indicates_oikos(self):
         messages = [
             HumanMessage(content="Check disk"),
             AIMessage(content="", tool_calls=[{"id": "call_123", "name": "spawn_commis", "args": {}}]),
         ]
-        assert detect_role_from_messages(messages) == "concierge"
+        assert detect_role_from_messages(messages) == "oikos"
 
 
 class TestScriptedChatLLM:
     """Test the ScriptedChatLLM class."""
 
-    def test_concierge_emits_spawn_commis(self):
+    def test_oikos_emits_spawn_commis(self):
         llm = ScriptedChatLLM()
         llm = llm.bind_tools([])  # Bind empty tools
 
         messages = [
-            SystemMessage(content="You are Jarvis. " + "x" * 2000),
+            SystemMessage(content="You are Oikos. " + "x" * 2000),
             HumanMessage(content="check disk space on cube"),
         ]
 
@@ -103,12 +103,12 @@ class TestScriptedChatLLM:
         assert ai_msg.tool_calls
         assert ai_msg.tool_calls[0]["name"] == "spawn_commis"
 
-    def test_concierge_emits_parallel_spawn_commis(self):
+    def test_oikos_emits_parallel_spawn_commis(self):
         llm = ScriptedChatLLM()
         llm = llm.bind_tools([])  # Bind empty tools
 
         messages = [
-            SystemMessage(content="You are Jarvis. " + "x" * 2000),
+            SystemMessage(content="You are Oikos. " + "x" * 2000),
             HumanMessage(content="check disk space on cube, clifford, and zerg in parallel"),
         ]
 
@@ -140,9 +140,9 @@ class TestScriptedChatLLM:
         llm = ScriptedChatLLM()
         llm = llm.bind_tools([])
 
-        # Concierge messages with tool result
+        # Oikos messages with tool result
         messages = [
-            SystemMessage(content="You are Jarvis. " + "x" * 2000),
+            SystemMessage(content="You are Oikos. " + "x" * 2000),
             HumanMessage(content="check disk space on cube"),
             AIMessage(content="", tool_calls=[{"id": "call_123", "name": "spawn_commis", "args": {}}]),
             ToolMessage(content="Commis completed. /dev/sda1 45%", tool_call_id="call_123"),
@@ -160,7 +160,7 @@ class TestScriptedChatLLM:
         llm = llm.bind_tools([])
 
         messages = [
-            SystemMessage(content="You are Jarvis. " + "x" * 2000),
+            SystemMessage(content="You are Oikos. " + "x" * 2000),
             HumanMessage(content="check disk space on cube"),
             AIMessage(content="", tool_calls=[{"id": "call_123", "name": "spawn_commis", "args": {}}]),
             ToolMessage(content="Commis completed.", tool_call_id="call_123"),
@@ -186,11 +186,11 @@ class TestGetScenarioEvidenceKeyword:
     """Test the evidence keyword helper function."""
 
     def test_returns_keyword_for_disk_check(self):
-        keyword = get_scenario_evidence_keyword("check disk space on cube", "concierge")
+        keyword = get_scenario_evidence_keyword("check disk space on cube", "oikos")
         assert keyword == "45%"
 
     def test_returns_none_for_generic(self):
-        keyword = get_scenario_evidence_keyword("random request", "concierge")
+        keyword = get_scenario_evidence_keyword("random request", "oikos")
         assert keyword is None
 
 
@@ -201,7 +201,7 @@ async def test_async_generate():
     llm = llm.bind_tools([])
 
     messages = [
-        SystemMessage(content="You are Jarvis. " + "x" * 2000),
+        SystemMessage(content="You are Oikos. " + "x" * 2000),
         HumanMessage(content="check disk space on cube"),
     ]
 
@@ -213,7 +213,7 @@ async def test_async_generate():
 
 
 class TestSequencedResponses:
-    """Test sequenced response functionality for concierge replay simulation."""
+    """Test sequenced response functionality for oikos replay simulation."""
 
     def test_sequenced_response_on_first_call(self):
         """Test that sequenced response is returned on first matching call."""

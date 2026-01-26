@@ -303,7 +303,7 @@ def create_runner_job(
     command: str,
     timeout_secs: int,
     commis_id: str | None = None,
-    course_id: str | None = None,
+    run_id: str | None = None,
 ) -> RunnerJob:
     """Create a new runner job record.
 
@@ -314,7 +314,7 @@ def create_runner_job(
         command: Shell command to execute
         timeout_secs: Maximum execution time in seconds
         commis_id: Optional commis ID for correlation
-        course_id: Optional run ID for correlation
+        run_id: Optional run ID for correlation
 
     Returns:
         Created job record with status='queued'
@@ -328,7 +328,7 @@ def create_runner_job(
         command=command,
         timeout_secs=timeout_secs,
         commis_id=commis_id,
-        course_id=course_id,
+        run_id=run_id,
         status="queued",
     )
 

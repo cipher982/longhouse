@@ -69,23 +69,23 @@ async def test_basic_fiche_workflow_execution_e2e(db, test_user, sample_fiche):
     db.add(workflow)
     db.commit()
 
-    # Mock only the concierge loop to avoid external LLM dependencies
-    from zerg.services.concierge_react_engine import ConciergeResult
+    # Mock only the oikos loop to avoid external LLM dependencies
+    from zerg.services.oikos_react_engine import OikosResult
 
-    async def mock_run_concierge_loop(messages, **kwargs):
-        """Mock the concierge loop to return input messages + new AIMessage."""
+    async def mock_run_oikos_loop(messages, **kwargs):
+        """Mock the oikos loop to return input messages + new AIMessage."""
         from langchain_core.messages import AIMessage
 
-        # Return ALL messages (input + new) as real concierge loop does
-        return ConciergeResult(
+        # Return ALL messages (input + new) as real oikos loop does
+        return OikosResult(
             messages=list(messages) + [AIMessage(content="Hello! I successfully processed your request.")],
             usage={"total_tokens": 10},
             interrupted=False,
         )
 
     with patch(
-        "zerg.services.concierge_react_engine.run_concierge_loop",
-        new=mock_run_concierge_loop,
+        "zerg.services.oikos_react_engine.run_oikos_loop",
+        new=mock_run_oikos_loop,
     ):
 
         # Execute the workflow - this should work end-to-end
@@ -162,23 +162,23 @@ async def test_basic_workflow_datetime_handling(db, test_user, sample_fiche):
     db.add(workflow)
     db.commit()
 
-    # Mock the concierge loop to avoid LLM calls
-    from zerg.services.concierge_react_engine import ConciergeResult
+    # Mock the oikos loop to avoid LLM calls
+    from zerg.services.oikos_react_engine import OikosResult
 
-    async def mock_run_concierge_loop(messages, **kwargs):
-        """Mock the concierge loop to return input messages + new AIMessage."""
+    async def mock_run_oikos_loop(messages, **kwargs):
+        """Mock the oikos loop to return input messages + new AIMessage."""
         from langchain_core.messages import AIMessage
 
-        # Return ALL messages (input + new) as real concierge loop does
-        return ConciergeResult(
+        # Return ALL messages (input + new) as real oikos loop does
+        return OikosResult(
             messages=list(messages) + [AIMessage(content="Test response")],
             usage={"total_tokens": 10},
             interrupted=False,
         )
 
     with patch(
-        "zerg.services.concierge_react_engine.run_concierge_loop",
-        new=mock_run_concierge_loop,
+        "zerg.services.oikos_react_engine.run_oikos_loop",
+        new=mock_run_oikos_loop,
     ):
 
         # Execute workflow

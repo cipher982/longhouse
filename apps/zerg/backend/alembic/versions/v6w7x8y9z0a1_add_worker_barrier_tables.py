@@ -5,7 +5,7 @@ Revises: u5v6w7x8y9z0
 Create Date: 2026-01-15
 
 Implements barrier synchronization pattern for multi-commis execution:
-- commis_barriers: tracks batch of parallel commis for a concierge run
+- commis_barriers: tracks batch of parallel commis for a oikos run
 - commis_barrier_jobs: individual commis job in a barrier with result caching
 
 Two-Phase Commit Pattern prevents "fast commis" race condition where a
@@ -26,7 +26,7 @@ def upgrade() -> None:
     op.create_table(
         "commis_barriers",
         sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("course_id", sa.Integer(), nullable=False),
+        sa.Column("run_id", sa.Integer(), nullable=False),
         sa.Column("expected_count", sa.Integer(), nullable=False),
         sa.Column("completed_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("status", sa.String(20), nullable=False, server_default="waiting"),
@@ -34,10 +34,10 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), server_default=sa.func.now(), onupdate=sa.func.now(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
-        sa.ForeignKeyConstraint(["course_id"], ["courses.id"], ondelete="CASCADE"),
-        sa.UniqueConstraint("course_id", name="uq_commis_barriers_course_id"),
+        sa.ForeignKeyConstraint(["run_id"], ["runs.id"], ondelete="CASCADE"),
+        sa.UniqueConstraint("run_id", name="uq_commis_barriers_run_id"),
     )
-    op.create_index("ix_commis_barriers_course_id", "commis_barriers", ["course_id"])
+    op.create_index("ix_commis_barriers_run_id", "commis_barriers", ["run_id"])
     op.create_index("ix_commis_barriers_status", "commis_barriers", ["status"])
 
     # Create commis_barrier_jobs table
@@ -72,5 +72,5 @@ def downgrade() -> None:
 
     # Drop commis_barriers table
     op.drop_index("ix_commis_barriers_status", table_name="commis_barriers")
-    op.drop_index("ix_commis_barriers_course_id", table_name="commis_barriers")
+    op.drop_index("ix_commis_barriers_run_id", table_name="commis_barriers")
     op.drop_table("commis_barriers")

@@ -1,4 +1,4 @@
-"""Auto summarizer for concierge runs -> Memory Files."""
+"""Auto summarizer for oikos runs -> Memory Files."""
 
 from __future__ import annotations
 
@@ -95,8 +95,8 @@ async def _generate_summary(task: str, result_text: str) -> dict[str, Any] | Non
     if settings.testing or settings.llm_disabled or not settings.openai_api_key:
         return None
 
-    model = os.getenv("JARVIS_MEMORY_SUMMARY_MODEL", "gpt-5-mini")
-    reasoning_effort = os.getenv("JARVIS_MEMORY_SUMMARY_REASONING_EFFORT", "minimal")
+    model = os.getenv("OIKOS_MEMORY_SUMMARY_MODEL", "gpt-5-mini")
+    reasoning_effort = os.getenv("OIKOS_MEMORY_SUMMARY_REASONING_EFFORT", "minimal")
     base_url = os.getenv("OPENAI_BASE_URL")
 
     client_kwargs = {"api_key": settings.openai_api_key}
@@ -127,7 +127,7 @@ def _build_markdown(
     outcome: str,
     summary_bullets: list[str],
     tags: list[str],
-    course_id: int,
+    run_id: int,
     thread_id: int,
     trace_id: str | None,
     created_at: datetime,
@@ -138,7 +138,7 @@ def _build_markdown(
         f"Date: {date_str}",
         f"Topic: {topic}",
         f"Outcome: {outcome}",
-        f"Refs: thread_id={thread_id}, course_id={course_id}" + (f", trace_id={trace_id}" if trace_id else ""),
+        f"Refs: thread_id={thread_id}, run_id={run_id}" + (f", trace_id={trace_id}" if trace_id else ""),
         f"Tags: {tags}",
         "",
         "Summary:",
@@ -148,16 +148,16 @@ def _build_markdown(
     return "\n".join(lines)
 
 
-async def persist_course_summary(
+async def persist_run_summary(
     *,
     owner_id: int,
     thread_id: int,
-    course_id: int,
+    run_id: int,
     task: str,
     result_text: str,
     trace_id: str | None = None,
 ) -> None:
-    """Persist an episodic memory file for a completed course."""
+    """Persist an episodic memory file for a completed run."""
     try:
         summary_data = await _generate_summary(task, result_text)
     except Exception:
@@ -192,14 +192,14 @@ async def persist_course_summary(
         outcome=outcome or _truncate(result_text),
         summary_bullets=summary_bullets[:6],
         tags=tags,
-        course_id=course_id,
+        run_id=run_id,
         thread_id=thread_id,
         trace_id=trace_id,
         created_at=created_at,
     )
 
     slug = _slugify(title)
-    path = f"episodes/{date_str}/{course_id}-{slug}.md"
+    path = f"episodes/{date_str}/{run_id}-{slug}.md"
 
     session_factory = get_session_factory()
     db = session_factory()
@@ -212,7 +212,7 @@ async def persist_course_summary(
             content=content,
             tags=tags,
             metadata={
-                "course_id": course_id,
+                "run_id": run_id,
                 "thread_id": thread_id,
                 "trace_id": trace_id,
             },
@@ -229,7 +229,7 @@ async def persist_course_summary(
         db.close()
 
 
-def schedule_course_summary(**kwargs: Any) -> None:
+def schedule_run_summary(**kwargs: Any) -> None:
     """Schedule summary persistence without blocking caller."""
     import logging
 
@@ -240,20 +240,20 @@ def schedule_course_summary(**kwargs: Any) -> None:
         logger.debug("Skipping memory summary: testing=%s, llm_disabled=%s", settings.testing, settings.llm_disabled)
         return
 
-    logger.info("Scheduling memory summary for course %s", kwargs.get("course_id"))
+    logger.info("Scheduling memory summary for run %s", kwargs.get("run_id"))
 
     try:
         loop = asyncio.get_running_loop()
-        task = loop.create_task(persist_course_summary(**kwargs))
+        task = loop.create_task(persist_run_summary(**kwargs))
         task.add_done_callback(
-            lambda t: logger.info("Memory summary task completed for course %s", kwargs.get("course_id"))
+            lambda t: logger.info("Memory summary task completed for run %s", kwargs.get("run_id"))
             if not t.exception()
             else logger.error("Memory summary failed: %s", t.exception())
         )
     except RuntimeError:
         # No running loop - spawn in thread
         logger.warning("No event loop, running summary synchronously")
-        asyncio.run(persist_course_summary(**kwargs))
+        asyncio.run(persist_run_summary(**kwargs))
 
 
 def _truncate(text: str | None, max_chars: int = 220) -> str:

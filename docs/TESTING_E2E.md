@@ -42,7 +42,7 @@ This repo currently pins sensible defaults for reproducibility and tunes DB pool
   - `[data-testid="send-message-btn"]`
   - `[data-testid="messages-container"]`
 
-**Jarvis Chat**
+**Oikos Chat**
 - Route: `/chat`
 - Uses class selectors (today):
   - `.text-input`
@@ -156,7 +156,7 @@ For test authorship:
 
 From `bb9b506` message:
 - Canvas: selectors changed (`#agent-shelf`, `.agent-pill` assumptions)
-- Chat: new structure (agent vs Jarvis confusion)
+- Chat: new structure (agent vs Oikos confusion)
 - WebSocket subscription: missing ack behavior
 - Agent settings: UI refactor (“Allowed Tools” → “Integrations”)
 - Perf/load/concurrency: expensive + flake-prone (but these should exist eventually)

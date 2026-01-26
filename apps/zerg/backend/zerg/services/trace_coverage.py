@@ -10,10 +10,10 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from zerg.models.course_event import CourseEvent
 from zerg.models.llm_audit import LLMAuditLog
 from zerg.models.models import CommisJob
-from zerg.models.models import Course
+from zerg.models.models import Run
+from zerg.models.run_event import RunEvent
 
 
 @dataclass
@@ -65,9 +65,9 @@ def build_trace_coverage_report(db: Session, since: datetime | None = None) -> d
     """Build a trace coverage report across core observability tables."""
     now = datetime.now(timezone.utc)
 
-    courses_query = _apply_since(db.query(Course), Course.created_at, since)
-    courses_total = courses_query.count()
-    courses_with_trace = courses_query.filter(Course.trace_id.isnot(None)).count()
+    runs_query = _apply_since(db.query(Run), Run.created_at, since)
+    runs_total = runs_query.count()
+    runs_with_trace = runs_query.filter(Run.trace_id.isnot(None)).count()
 
     jobs_query = _apply_since(db.query(CommisJob), CommisJob.created_at, since)
     jobs_total = jobs_query.count()
@@ -77,15 +77,15 @@ def build_trace_coverage_report(db: Session, since: datetime | None = None) -> d
     audit_total = audit_query.count()
     audit_with_trace = audit_query.filter(LLMAuditLog.trace_id.isnot(None)).count()
 
-    events_query = _apply_since(db.query(CourseEvent), CourseEvent.created_at, since)
-    event_rows = events_query.with_entities(CourseEvent.event_type, CourseEvent.payload).all()
+    events_query = _apply_since(db.query(RunEvent), RunEvent.created_at, since)
+    event_rows = events_query.with_entities(RunEvent.event_type, RunEvent.payload).all()
     events_total, events_with_trace, event_buckets = _event_breakdown(event_rows)
 
     buckets = [
-        _bucket("courses", courses_total, courses_with_trace),
+        _bucket("runs", runs_total, runs_with_trace),
         _bucket("commis_jobs", jobs_total, jobs_with_trace),
         _bucket("llm_audit_log", audit_total, audit_with_trace),
-        _bucket("course_events", events_total, events_with_trace),
+        _bucket("run_events", events_total, events_with_trace),
     ]
 
     return {

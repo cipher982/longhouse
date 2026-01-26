@@ -1,6 +1,6 @@
 # Zerg / Swarmlet
 
-AI agent orchestration platform. Jarvis = voice/text UI. Swarmlet = product name.
+AI agent orchestration platform. Oikos = voice/text UI. Swarmlet = product name.
 
 **Owner**: david010@gmail.com (David Rose)
 
@@ -15,7 +15,7 @@ AI agent orchestration platform. Jarvis = voice/text UI. Swarmlet = product name
 | URL | What |
 |-----|------|
 | localhost:30080/dashboard | Main UI |
-| localhost:30080/chat | Jarvis chat |
+| localhost:30080/chat | Oikos chat |
 | localhost:30080/api/* | Backend API |
 | localhost:30080/traces | Debug traces |
 | localhost:30080/reliability | System health |
@@ -153,17 +153,19 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-24) [gotcha] Tool contracts live in `schemas/tools.yml`; regenerate `apps/zerg/backend/zerg/tools/generated/tool_definitions.py` via `scripts/generate_tool_types.py` instead of editing the generated file.
 - (2026-01-24) [pattern] External jobs loader simplified: `zerg/jobs/loader.py` uses `runpy.run_path()` on `manifest.py` from git repo. Duplicates skip (not fatal), sys.path cleaned after load, git SHA tracked in metadata. Updates require restart.
 - (2026-01-24) [pattern] UX needs multi-level alerting: auto-ack obvious “continue?” prompts, hard-stop attention for risky/ambiguous states; keep “fun” vibe without sacrificing triage speed.
-- (2026-01-24) [gotcha] Jarvis is no longer a separate app; it’s just the chat page, so unify its styles with the main frontend when refactoring.
+- (2026-01-24) [gotcha] Oikos is no longer a separate app; it’s just the chat page, so unify its styles with the main frontend when refactoring.
 - (2026-01-24) [gotcha] Repo policy: work only on main, no worktrees; confirm `git -C /Users/davidrose/git/zerg status -sb` before changes; no stashing unless explicitly requested.
 - (2026-01-24) [tool] Claude Code sessions are stored at `~/.claude/projects/{encoded-cwd}/{sessionId}.jsonl`; `--resume` requires the file locally.
 - (2026-01-24) [tool] `CLAUDE_CONFIG_DIR` overrides the entire `~/.claude/` location, enabling shared config/cache paths across machines.
 - (2026-01-24) [gotcha] `spawn_workspace_worker` is a normal tool (no AgentInterrupted/WAITING), but `worker_spawned` still increments SSE pending_workers, so chat streams can stay open (input disabled) until `worker_complete` even after supervisor_complete.
-- (2026-01-24) [pattern] Jarvis UX: "Human PA" model — kick off tasks, move on, don't block. Workers report back async. Input should re-enable on `supervisor_complete`, not wait for workers. See `AI-Sessions/2026-01-24-jarvis-worker-ux-design.md`.
+- (2026-01-24) [pattern] Oikos UX: "Human PA" model — kick off tasks, move on, don't block. Workers report back async. Input should re-enable on `supervisor_complete`, not wait for workers. See `AI-Sessions/2026-01-24-oikos-worker-ux-design.md`.
 - (2026-01-25) [gotcha] `zerg/main.py` load_dotenv(override=True) clobbered E2E env (ENVIRONMENT=test:e2e), preventing WorkerJobProcessor startup; use override=False in test/e2e.
 - (2026-01-25) [gotcha] Telegram channel `webhook_url` only sets the remote webhook; no local webhook handler is wired yet, so inbound delivery still requires polling.
 - (2026-01-25) [gotcha] Tests patch `zerg.services.openai_realtime.httpx.AsyncClient`; keep `httpx` imported in the compatibility wrapper after moving realtime helpers.
-- (2026-01-25) [pattern] SupervisorService enforces a single ThreadType.SUPER thread per user (“one brain”); each Jarvis message creates an AgentRun tied to that thread.
+- (2026-01-25) [pattern] SupervisorService enforces a single ThreadType.SUPER thread per user (“one brain”); each Oikos message creates an AgentRun tied to that thread.
 - (2026-01-25) [gotcha] Skills loader/registry must use `skill.name` (SkillEntry has no `.name`); `e.name` raises AttributeError during load/sort.
 - (2026-01-25) [gotcha] Phase 4 renames: `models/models.py` also has `Agent` relationships (e.g., ConnectorCredential); not just agent/run/worker files.
 - (2026-01-26) [gotcha] Rebrand work happens in worktree `~/git/zerg-rebrand` on branch `rebrand/french-terminology`; avoid touching main repo for this effort.
 - (2026-01-26) [gotcha] Bulk renames can create duplicate table prefixes (e.g., `commis_commis_barrier_jobs`); normalize to `commis_barrier_jobs` to match migrations.
+- (2026-01-26) [gotcha] Oikos is a singular orchestrator name (Oikos-equivalent); avoid pluralizing—use generic “operators” or “Oikos instance” when needed.
+- (2026-01-26) [gotcha] Bulk rename passes can collapse distinct symbols (e.g., Jarvis + Concierge → Oikos); check for duplicate class/function names and imports after replacement.

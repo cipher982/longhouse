@@ -1,13 +1,13 @@
 """Lazy tool binder for on-demand tool loading.
 
 This module provides the LazyToolBinder class which manages tool loading
-for the concierge ReAct loop. It:
+for the oikos ReAct loop. It:
 
 1. Pre-loads core tools (spawn_commis, contact_user, etc.)
 2. Lazy-loads other tools on first use
 3. Tracks which tools have been loaded for rebinding
 
-Usage in concierge:
+Usage in oikos:
     binder = LazyToolBinder(resolver, allowed_tools)
 
     # Get currently bound tools for LLM
@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 
 class LazyToolBinder:
-    """Manages lazy loading of tools for concierge execution.
+    """Manages lazy loading of tools for oikos execution.
 
     Core tools are loaded upfront. Other tools are loaded on-demand
     when the LLM tries to use them.

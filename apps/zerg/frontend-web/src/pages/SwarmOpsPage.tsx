@@ -7,9 +7,9 @@ import { request } from "../services/api";
 import "../styles/swarm-ops.css";
 
 type AttentionLevel = "auto" | "soft" | "needs" | "hard";
-type CourseFilter = "all" | "attention" | "active" | "done";
+type RunFilter = "all" | "attention" | "active" | "done";
 
-type CourseSummary = {
+type RunSummary = {
   id: number;
   fiche_id: number;
   thread_id?: number;
@@ -22,28 +22,28 @@ type CourseSummary = {
   last_event_type?: string | null;
   last_event_message?: string | null;
   last_event_at?: string | null;
-  continuation_of_course_id?: number | null;
+  continuation_of_run_id?: number | null;
   created_at: string;
   updated_at: string;
   completed_at?: string | null;
 };
 
-type CourseWithAttention = CourseSummary & { attention: AttentionLevel };
+type RunWithAttention = RunSummary & { attention: AttentionLevel };
 
-type CourseEvent = {
+type RunEvent = {
   id: number;
   event_type: string;
   payload: Record<string, unknown>;
   created_at: string;
 };
 
-type CourseEventsResponse = {
-  course_id: number;
-  events: CourseEvent[];
+type RunEventsResponse = {
+  run_id: number;
+  events: RunEvent[];
   total: number;
 };
 
-const COURSE_LIMIT = 120;
+const RUN_LIMIT = 120;
 const ACTIVE_STATUSES = new Set(["queued", "running", "waiting", "deferred"]);
 
 const LEVEL_ORDER: Record<AttentionLevel, number> = {
@@ -93,15 +93,15 @@ function formatRelativeTime(timestamp: string): string {
   return `${diffDays}d ago`;
 }
 
-function classifyAttention(course: CourseSummary): AttentionLevel {
-  const status = (course.status || "").toLowerCase();
-  const signalText = (course.signal || course.summary || "").toLowerCase();
+function classifyAttention(run: RunSummary): AttentionLevel {
+  const status = (run.status || "").toLowerCase();
+  const signalText = (run.signal || run.summary || "").toLowerCase();
 
   if (status === "failed" || status === "cancelled") {
     return "hard";
   }
 
-  if (course.error) {
+  if (run.error) {
     return "hard";
   }
 
@@ -127,7 +127,7 @@ function classifyAttention(course: CourseSummary): AttentionLevel {
   return "auto";
 }
 
-function getEventSummary(event: CourseEvent): string {
+function getEventSummary(event: RunEvent): string {
   const payload = event.payload || {};
   const message = typeof payload.message === "string" ? payload.message : null;
   const summary = typeof payload.summary === "string" ? payload.summary : null;
@@ -146,12 +146,12 @@ function getEventSummary(event: CourseEvent): string {
 export default function SwarmOpsPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const [filter, setFilter] = useState<CourseFilter>("attention");
-  const [selectedCourseId, setSelectedCourseId] = useState<number | null>(null);
+  const [filter, setFilter] = useState<RunFilter>("attention");
+  const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
 
-  const coursesQuery = useQuery({
-    queryKey: ["swarm-ops", "courses", COURSE_LIMIT],
-    queryFn: () => request<CourseSummary[]>(`/jarvis/courses?limit=${COURSE_LIMIT}`),
+  const runsQuery = useQuery({
+    queryKey: ["swarm-ops", "runs", RUN_LIMIT],
+    queryFn: () => request<RunSummary[]>(`/oikos/runs?limit=${RUN_LIMIT}`),
     refetchInterval: 5000,
   });
 
@@ -181,7 +181,7 @@ export default function SwarmOpsPage() {
           window.sessionStorage.setItem(storageKey, "1");
         }
         if (!cancelled) {
-          coursesQuery.refetch();
+          runsQuery.refetch();
         }
       } catch (error) {
         // Ignore demo seeding failures (prod blocks this endpoint).
@@ -195,54 +195,54 @@ export default function SwarmOpsPage() {
     return () => {
       cancelled = true;
     };
-  }, [demoScenario, coursesQuery]);
+  }, [demoScenario, runsQuery]);
 
-  const courses = useMemo<CourseWithAttention[]>(() => {
-    return (coursesQuery.data ?? []).map((course) => ({
-      ...course,
-      attention: classifyAttention(course),
+  const runs = useMemo<RunWithAttention[]>(() => {
+    return (runsQuery.data ?? []).map((run) => ({
+      ...run,
+      attention: classifyAttention(run),
     }));
-  }, [coursesQuery.data]);
+  }, [runsQuery.data]);
 
-  const sortedCourses = useMemo(() => {
-    return [...courses].sort((a, b) => {
+  const sortedRuns = useMemo(() => {
+    return [...runs].sort((a, b) => {
       const levelDiff = LEVEL_ORDER[a.attention] - LEVEL_ORDER[b.attention];
       if (levelDiff !== 0) return levelDiff;
       return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
     });
-  }, [courses]);
+  }, [runs]);
 
-  const visibleCourses = useMemo(() => {
+  const visibleRuns = useMemo(() => {
     switch (filter) {
       case "attention":
-        return sortedCourses.filter((course) => course.attention === "needs" || course.attention === "hard");
+        return sortedRuns.filter((run) => run.attention === "needs" || run.attention === "hard");
       case "active":
-        return sortedCourses.filter((course) => ACTIVE_STATUSES.has(course.status));
+        return sortedRuns.filter((run) => ACTIVE_STATUSES.has(run.status));
       case "done":
-        return sortedCourses.filter((course) => !ACTIVE_STATUSES.has(course.status));
+        return sortedRuns.filter((run) => !ACTIVE_STATUSES.has(run.status));
       default:
-        return sortedCourses;
+        return sortedRuns;
     }
-  }, [filter, sortedCourses]);
+  }, [filter, sortedRuns]);
 
   useEffect(() => {
-    if (sortedCourses.length === 0) {
-      setSelectedCourseId(null);
+    if (sortedRuns.length === 0) {
+      setSelectedRunId(null);
       return;
     }
 
-    if (selectedCourseId === null || !sortedCourses.some((course) => course.id === selectedCourseId)) {
-      setSelectedCourseId(sortedCourses[0].id);
+    if (selectedRunId === null || !sortedRuns.some((run) => run.id === selectedRunId)) {
+      setSelectedRunId(sortedRuns[0].id);
     }
-  }, [sortedCourses, selectedCourseId]);
+  }, [sortedRuns, selectedRunId]);
 
-  const selectedCourse = sortedCourses.find((course) => course.id === selectedCourseId) ?? null;
-  const shouldPollEvents = selectedCourse ? ACTIVE_STATUSES.has(selectedCourse.status) : false;
+  const selectedRun = sortedRuns.find((run) => run.id === selectedRunId) ?? null;
+  const shouldPollEvents = selectedRun ? ACTIVE_STATUSES.has(selectedRun.status) : false;
 
-  const courseEventsQuery = useQuery({
-    queryKey: ["swarm-ops", "events", selectedCourseId],
-    enabled: selectedCourseId != null,
-    queryFn: () => request<CourseEventsResponse>(`/jarvis/courses/${selectedCourseId}/events?limit=120`),
+  const runEventsQuery = useQuery({
+    queryKey: ["swarm-ops", "events", selectedRunId],
+    enabled: selectedRunId != null,
+    queryFn: () => request<RunEventsResponse>(`/oikos/runs/${selectedRunId}/events?limit=120`),
     refetchInterval: shouldPollEvents ? 5000 : false,
   });
 
@@ -253,35 +253,35 @@ export default function SwarmOpsPage() {
       soft: 0,
       auto: 0,
       active: 0,
-      total: courses.length,
+      total: runs.length,
     };
 
-    for (const course of courses) {
-      counts[course.attention] += 1;
-      if (ACTIVE_STATUSES.has(course.status)) {
+    for (const run of runs) {
+      counts[run.attention] += 1;
+      if (ACTIVE_STATUSES.has(run.status)) {
         counts.active += 1;
       }
     }
 
     return counts;
-  }, [courses]);
+  }, [runs]);
 
-  if (coursesQuery.isLoading) {
+  if (runsQuery.isLoading) {
     return (
       <div className="swarm-ops-loading">
         <Spinner size="lg" />
-        <span>Loading course activity...</span>
+        <span>Loading run activity...</span>
       </div>
     );
   }
 
-  if (coursesQuery.error) {
+  if (runsQuery.error) {
     return (
       <div className="swarm-ops-loading">
         <EmptyState
           variant="error"
-          title="Failed to load courses"
-          description={coursesQuery.error instanceof Error ? coursesQuery.error.message : "Unknown error"}
+          title="Failed to load runs"
+          description={runsQuery.error instanceof Error ? runsQuery.error.message : "Unknown error"}
         />
       </div>
     );
@@ -292,7 +292,7 @@ export default function SwarmOpsPage() {
       <div className="swarm-ops-page">
         <SectionHeader
           title="Swarm Ops"
-          description="Triage active courses, jump to context, and keep the swarm flowing."
+          description="Triage active runs, jump to context, and keep the swarm flowing."
           actions={
             <div className="swarm-ops-actions">
               <Button
@@ -341,51 +341,51 @@ export default function SwarmOpsPage() {
             <div className="swarm-ops-summary-value">{attentionCounts.active}</div>
           </Card>
           <Card className="swarm-ops-summary-card">
-            <div className="swarm-ops-summary-label">Total courses</div>
+            <div className="swarm-ops-summary-label">Total runs</div>
             <div className="swarm-ops-summary-value">{attentionCounts.total}</div>
           </Card>
         </div>
 
-        {courses.length === 0 ? (
+        {runs.length === 0 ? (
           <EmptyState
-            title="No courses yet"
-            description="Kick off a task with the Concierge and it will show up here for triage."
+            title="No runs yet"
+            description="Kick off a task with the Oikos and it will show up here for triage."
           />
         ) : (
           <div className="swarm-ops-layout">
             <div className="swarm-ops-list">
               <div className="swarm-ops-list-header">
                 <div>
-                  <div className="swarm-ops-list-title">Course queue</div>
+                  <div className="swarm-ops-list-title">Run queue</div>
                   <div className="swarm-ops-list-subtitle">Sorted by urgency, newest first</div>
                 </div>
-                <div className="swarm-ops-list-count">{visibleCourses.length} shown</div>
+                <div className="swarm-ops-list-count">{visibleRuns.length} shown</div>
               </div>
 
               <div className="swarm-ops-list-body">
-                {visibleCourses.map((course) => {
-                  const statusVariant = STATUS_BADGE_VARIANT[course.status] ?? "neutral";
-                  const isSelected = course.id === selectedCourseId;
-                  const signalText = course.signal || course.summary || "No signal yet";
-                  const signalSourceLabel = course.signal_source ? SIGNAL_SOURCE_LABEL[course.signal_source] ?? "Signal" : null;
-                  const lastEventLine = course.last_event_type
-                    ? `Last: ${course.last_event_type}${course.last_event_at ? ` · ${formatRelativeTime(course.last_event_at)}` : ""}`
+                {visibleRuns.map((run) => {
+                  const statusVariant = STATUS_BADGE_VARIANT[run.status] ?? "neutral";
+                  const isSelected = run.id === selectedRunId;
+                  const signalText = run.signal || run.summary || "No signal yet";
+                  const signalSourceLabel = run.signal_source ? SIGNAL_SOURCE_LABEL[run.signal_source] ?? "Signal" : null;
+                  const lastEventLine = run.last_event_type
+                    ? `Last: ${run.last_event_type}${run.last_event_at ? ` · ${formatRelativeTime(run.last_event_at)}` : ""}`
                     : null;
 
                   return (
                     <button
-                      key={course.id}
+                      key={run.id}
                       type="button"
-                      className={clsx("swarm-ops-item", `swarm-ops-item--${course.attention}`, {
+                      className={clsx("swarm-ops-item", `swarm-ops-item--${run.attention}`, {
                         "swarm-ops-item--active": isSelected,
                       })}
-                      onClick={() => setSelectedCourseId(course.id)}
+                      onClick={() => setSelectedRunId(run.id)}
                       aria-pressed={isSelected}
                     >
                       <div className="swarm-ops-item-main">
                         <div className="swarm-ops-item-title-row">
-                          <span className="swarm-ops-item-title">{course.fiche_name}</span>
-                          <Badge variant={statusVariant}>{course.status}</Badge>
+                          <span className="swarm-ops-item-title">{run.fiche_name}</span>
+                          <Badge variant={statusVariant}>{run.status}</Badge>
                         </div>
                         <div className="swarm-ops-item-summary">
                           {signalText}
@@ -398,10 +398,10 @@ export default function SwarmOpsPage() {
                         )}
                       </div>
                       <div className="swarm-ops-item-meta">
-                        <span className={clsx("swarm-ops-attention-pill", `swarm-ops-attention-pill--${course.attention}`)}>
-                          {LEVEL_LABEL[course.attention]}
+                        <span className={clsx("swarm-ops-attention-pill", `swarm-ops-attention-pill--${run.attention}`)}>
+                          {LEVEL_LABEL[run.attention]}
                         </span>
-                        <span className="swarm-ops-item-time">{formatRelativeTime(course.created_at)}</span>
+                        <span className="swarm-ops-item-time">{formatRelativeTime(run.created_at)}</span>
                       </div>
                     </button>
                   );
@@ -410,17 +410,17 @@ export default function SwarmOpsPage() {
             </div>
 
             <div className="swarm-ops-detail">
-              {selectedCourse ? (
+              {selectedRun ? (
                 <Card className="swarm-ops-detail-card">
                   <Card.Header className="swarm-ops-detail-header">
                     <div>
-                      <div className="swarm-ops-detail-title">{selectedCourse.fiche_name}</div>
+                      <div className="swarm-ops-detail-title">{selectedRun.fiche_name}</div>
                       <div className="swarm-ops-detail-subtitle">
-                        Course #{selectedCourse.id} · {selectedCourse.status} · {formatRelativeTime(selectedCourse.created_at)}
+                        Run #{selectedRun.id} · {selectedRun.status} · {formatRelativeTime(selectedRun.created_at)}
                       </div>
                     </div>
-                    <span className={clsx("swarm-ops-attention-pill", `swarm-ops-attention-pill--${selectedCourse.attention}`)}>
-                      {LEVEL_LABEL[selectedCourse.attention]}
+                    <span className={clsx("swarm-ops-attention-pill", `swarm-ops-attention-pill--${selectedRun.attention}`)}>
+                      {LEVEL_LABEL[selectedRun.attention]}
                     </span>
                   </Card.Header>
 
@@ -428,31 +428,31 @@ export default function SwarmOpsPage() {
                     <div className="swarm-ops-detail-section">
                       <div className="swarm-ops-detail-label">Signal</div>
                       <p className="swarm-ops-detail-summary">
-                        {selectedCourse.signal || selectedCourse.summary || "No signal recorded yet."}
+                        {selectedRun.signal || selectedRun.summary || "No signal recorded yet."}
                       </p>
-                      {selectedCourse.signal_source && (
+                      {selectedRun.signal_source && (
                         <div className="swarm-ops-detail-meta">
-                          Source: {SIGNAL_SOURCE_LABEL[selectedCourse.signal_source] ?? selectedCourse.signal_source}
+                          Source: {SIGNAL_SOURCE_LABEL[selectedRun.signal_source] ?? selectedRun.signal_source}
                         </div>
                       )}
                     </div>
 
-                    {selectedCourse.error && (
+                    {selectedRun.error && (
                       <div className="swarm-ops-detail-section">
                         <div className="swarm-ops-detail-label">Error</div>
-                        <p className="swarm-ops-detail-error">{selectedCourse.error}</p>
+                        <p className="swarm-ops-detail-error">{selectedRun.error}</p>
                       </div>
                     )}
 
-                    {(selectedCourse.last_event_type || selectedCourse.last_event_message) && (
+                    {(selectedRun.last_event_type || selectedRun.last_event_message) && (
                       <div className="swarm-ops-detail-section">
                         <div className="swarm-ops-detail-label">Last event</div>
                         <div className="swarm-ops-detail-meta">
-                          {selectedCourse.last_event_type ?? "event"}
-                          {selectedCourse.last_event_at ? ` · ${formatRelativeTime(selectedCourse.last_event_at)}` : ""}
+                          {selectedRun.last_event_type ?? "event"}
+                          {selectedRun.last_event_at ? ` · ${formatRelativeTime(selectedRun.last_event_at)}` : ""}
                         </div>
-                        {selectedCourse.last_event_message && (
-                          <p className="swarm-ops-detail-summary">{selectedCourse.last_event_message}</p>
+                        {selectedRun.last_event_message && (
+                          <p className="swarm-ops-detail-summary">{selectedRun.last_event_message}</p>
                         )}
                       </div>
                     )}
@@ -461,10 +461,10 @@ export default function SwarmOpsPage() {
                       <Button
                         variant="secondary"
                         size="sm"
-                        disabled={!selectedCourse.thread_id}
+                        disabled={!selectedRun.thread_id}
                         onClick={() => {
-                          if (selectedCourse.thread_id) {
-                            navigate(`/fiche/${selectedCourse.fiche_id}/thread/${selectedCourse.thread_id}`);
+                          if (selectedRun.thread_id) {
+                            navigate(`/fiche/${selectedRun.fiche_id}/thread/${selectedRun.thread_id}`);
                           }
                         }}
                       >
@@ -473,7 +473,7 @@ export default function SwarmOpsPage() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => coursesQuery.refetch()}
+                        onClick={() => runsQuery.refetch()}
                       >
                         Refresh
                       </Button>
@@ -481,14 +481,14 @@ export default function SwarmOpsPage() {
 
                     <div className="swarm-ops-detail-section">
                       <div className="swarm-ops-detail-label">Recent events</div>
-                      {courseEventsQuery.isLoading ? (
+                      {runEventsQuery.isLoading ? (
                         <div className="swarm-ops-events-loading">
                           <Spinner size="sm" />
                           <span>Loading events...</span>
                         </div>
-                      ) : courseEventsQuery.data?.events?.length ? (
+                      ) : runEventsQuery.data?.events?.length ? (
                         <div className="swarm-ops-events">
-                          {courseEventsQuery.data.events.map((event) => {
+                          {runEventsQuery.data.events.map((event) => {
                             const summary = getEventSummary(event);
                             return (
                               <div key={event.id} className="swarm-ops-event">
@@ -510,8 +510,8 @@ export default function SwarmOpsPage() {
               ) : (
                 <Card className="swarm-ops-detail-card swarm-ops-detail-empty">
                   <Card.Body>
-                    <div className="swarm-ops-detail-title">No course selected</div>
-                    <p className="swarm-ops-detail-summary">Pick a course from the left to inspect details.</p>
+                    <div className="swarm-ops-detail-title">No run selected</div>
+                    <p className="swarm-ops-detail-summary">Pick a run from the left to inspect details.</p>
                   </Card.Body>
                 </Card>
               )}

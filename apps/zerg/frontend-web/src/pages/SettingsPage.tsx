@@ -57,7 +57,7 @@ export default function SettingsPage() {
     location: true,
     whoop: true,
     obsidian: true,
-    concierge: true,
+    oikos: true,
   });
 
   // Track if we need to show the "add integration" form
@@ -84,7 +84,7 @@ export default function SettingsPage() {
         location: ctx.tools?.location ?? true,
         whoop: ctx.tools?.whoop ?? true,
         obsidian: ctx.tools?.obsidian ?? true,
-        concierge: ctx.tools?.concierge ?? true,
+        oikos: ctx.tools?.oikos ?? true,
       });
     }
   }, [data]);
@@ -134,7 +134,7 @@ export default function SettingsPage() {
         location: ctx.tools?.location ?? true,
         whoop: ctx.tools?.whoop ?? true,
         obsidian: ctx.tools?.obsidian ?? true,
-        concierge: ctx.tools?.concierge ?? true,
+        oikos: ctx.tools?.oikos ?? true,
       });
     }
   };
@@ -412,14 +412,14 @@ export default function SettingsPage() {
             </Card.Body>
           </Card>
 
-          {/* Concierge Tools */}
+          {/* Oikos Tools */}
           <Card>
             <Card.Header>
-              <h3 className="settings-section-title ui-section-title">Concierge Tools</h3>
+              <h3 className="settings-section-title ui-section-title">Oikos Tools</h3>
             </Card.Header>
             <Card.Body>
               <p className="section-description">
-                Enable or disable tools that Concierge can use to help you
+                Enable or disable tools that Oikos can use to help you
               </p>
 
               <div className="tools-list">
@@ -427,7 +427,7 @@ export default function SettingsPage() {
                   { id: 'location', name: 'Location', desc: 'Get current GPS location via Traccar' },
                   { id: 'whoop', name: 'WHOOP Health Data', desc: 'Get WHOOP health metrics and recovery data' },
                   { id: 'obsidian', name: 'Obsidian Notes', desc: 'Search and read notes from your Obsidian vault' },
-                  { id: 'concierge', name: 'Concierge', desc: 'Delegate complex multi-step tasks to Concierge' }
+                  { id: 'oikos', name: 'Oikos', desc: 'Delegate complex multi-step tasks to Oikos' }
                 ].map(tool => (
                   <div key={tool.id} className="tool-toggle">
                     <label className="tool-label">

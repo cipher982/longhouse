@@ -95,13 +95,13 @@ Base = declarative_base(metadata=_metadata)
 try:
     from zerg.models.models import CanvasLayout  # noqa: F401
     from zerg.models.models import Connector  # noqa: F401
-    from zerg.models.models import Course  # noqa: F401
     from zerg.models.models import Fiche  # noqa: F401
     from zerg.models.models import FicheMemoryKV  # noqa: F401
     from zerg.models.models import FicheMessage  # noqa: F401
     from zerg.models.models import MemoryEmbedding  # noqa: F401
     from zerg.models.models import MemoryFile  # noqa: F401
     from zerg.models.models import NodeExecutionState  # noqa: F401
+    from zerg.models.models import Run  # noqa: F401
     from zerg.models.models import Thread  # noqa: F401
     from zerg.models.models import ThreadMessage  # noqa: F401
     from zerg.models.models import Trigger  # noqa: F401
@@ -535,13 +535,13 @@ def initialize_database(engine: Engine = None) -> None:
     # We need to import the models explicitly to ensure they're registered
     from zerg.models.models import CanvasLayout  # noqa: F401
     from zerg.models.models import Connector  # noqa: F401
-    from zerg.models.models import Course  # noqa: F401
     from zerg.models.models import Fiche  # noqa: F401
     from zerg.models.models import FicheMemoryKV  # noqa: F401
     from zerg.models.models import FicheMessage  # noqa: F401
     from zerg.models.models import MemoryEmbedding  # noqa: F401
     from zerg.models.models import MemoryFile  # noqa: F401
     from zerg.models.models import NodeExecutionState  # noqa: F401
+    from zerg.models.models import Run  # noqa: F401
     from zerg.models.models import Thread  # noqa: F401
     from zerg.models.models import ThreadMessage  # noqa: F401
     from zerg.models.models import Trigger  # noqa: F401

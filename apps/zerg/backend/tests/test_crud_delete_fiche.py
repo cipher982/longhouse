@@ -1,8 +1,8 @@
 from zerg.crud import crud
-from zerg.models.enums import CourseStatus
-from zerg.models.enums import CourseTrigger
+from zerg.models.enums import RunStatus
+from zerg.models.enums import RunTrigger
 from zerg.models.models import Fiche
-from zerg.models.models import Course
+from zerg.models.models import Run
 from zerg.models.models import Thread
 from zerg.models.models import ThreadMessage
 from zerg.models.models import CommisJob
@@ -30,11 +30,11 @@ def test_delete_fiche_deletes_dependents_and_nulls_commis_jobs(db_session):
     db_session.commit()
 
     # Create a run referencing the fiche + thread
-    run = Course(
+    run = Run(
         fiche_id=fiche.id,
         thread_id=thread.id,
-        status=CourseStatus.SUCCESS.value,
-        trigger=CourseTrigger.MANUAL.value,
+        status=RunStatus.SUCCESS.value,
+        trigger=RunTrigger.MANUAL.value,
     )
     db_session.add(run)
     db_session.commit()
@@ -43,7 +43,7 @@ def test_delete_fiche_deletes_dependents_and_nulls_commis_jobs(db_session):
     # Create a commis job that references the run (should be preserved, correlation nulled)
     job = CommisJob(
         owner_id=1,
-        concierge_course_id=run.id,
+        oikos_run_id=run.id,
         task="noop",
         model="gpt-5-mini",
         status="queued",
@@ -56,9 +56,9 @@ def test_delete_fiche_deletes_dependents_and_nulls_commis_jobs(db_session):
     assert ok is True
 
     assert db_session.query(Fiche).filter(Fiche.id == fiche.id).count() == 0
-    assert db_session.query(Course).filter(Course.id == run.id).count() == 0
+    assert db_session.query(Run).filter(Run.id == run.id).count() == 0
     assert db_session.query(Thread).filter(Thread.id == thread.id).count() == 0
     assert db_session.query(ThreadMessage).filter(ThreadMessage.thread_id == thread.id).count() == 0
 
     refreshed_job = db_session.query(CommisJob).filter(CommisJob.id == job.id).one()
-    assert refreshed_job.concierge_course_id is None
+    assert refreshed_job.oikos_run_id is None

@@ -5,8 +5,8 @@ Seed marketing-ready data for landing page screenshots.
 Creates:
 1. Three distinct workflows (Health, Inbox, Home Automation)
 2. Fiches with varied statuses and recent activity
-3. Course records showing execution history
-4. A Concierge thread with a realistic chat conversation
+3. Run records showing execution history
+4. A Oikos thread with a realistic chat conversation
 
 This script is idempotent - it cleans up existing marketing data before seeding.
 
@@ -30,12 +30,12 @@ from langchain_core.messages import ToolMessage
 from zerg.crud import crud
 from zerg.database import db_session
 from zerg.models.enums import FicheStatus
-from zerg.models.enums import CourseStatus
-from zerg.models.enums import CourseTrigger
+from zerg.models.enums import RunStatus
+from zerg.models.enums import RunTrigger
 from zerg.models.enums import ThreadType
 from zerg.models.models import Fiche
 from zerg.models.models import Workflow
-from zerg.models.course import Course
+from zerg.models.run import Run
 from zerg.models.thread import Thread
 from zerg.models_config import DEFAULT_MODEL_ID
 from zerg.models_config import DEFAULT_COMMIS_MODEL_ID
@@ -205,7 +205,7 @@ def cleanup_marketing_data(db, dev_user):
     fiche_names = []
     for wf in ALL_WORKFLOWS:
         fiche_names.extend([a["name"] for a in wf["fiches"]])
-    fiche_names.append("Jarvis")  # Concierge for chat
+    fiche_names.append("Oikos")  # Oikos for chat
 
     fiches = db.query(Fiche).filter(
         Fiche.name.in_(fiche_names),
@@ -220,15 +220,15 @@ def cleanup_marketing_data(db, dev_user):
 
     if fiche_ids:
         # Use raw SQL with proper order to handle FK constraints
-        # 1. Delete run events (references courses)
+        # 1. Delete run events (references runs)
         db.execute(text("""
-            DELETE FROM course_events
-            WHERE course_id IN (SELECT id FROM courses WHERE fiche_id = ANY(:ids))
+            DELETE FROM run_events
+            WHERE run_id IN (SELECT id FROM runs WHERE fiche_id = ANY(:ids))
         """), {"ids": fiche_ids})
 
         # 2. Delete runs (references threads)
         db.execute(text("""
-            DELETE FROM courses WHERE fiche_id = ANY(:ids)
+            DELETE FROM runs WHERE fiche_id = ANY(:ids)
         """), {"ids": fiche_ids})
 
         # 3. Delete messages (self-referential parent_id + references threads)
@@ -251,7 +251,7 @@ def cleanup_marketing_data(db, dev_user):
             print(f"  - Deleted fiche: {fiche.name}")
 
     # Also clean up orphaned marketing thread - SCOPED TO DEV USER via fiche ownership
-    # IMPORTANT: Only clean up MANUAL threads to avoid deleting the real SUPER concierge thread
+    # IMPORTANT: Only clean up MANUAL threads to avoid deleting the real SUPER oikos thread
     db.execute(text("""
         DELETE FROM thread_messages WHERE thread_id IN (
             SELECT t.id FROM threads t
@@ -338,8 +338,8 @@ def seed_fiches_for_workflow(db, user, workflow_def: dict) -> list[Fiche]:
     return fiches
 
 
-def seed_courses(db, fiches: list[Fiche], user):
-    """Create Course records with varied statuses for visual appeal."""
+def seed_runs(db, fiches: list[Fiche], user):
+    """Create Run records with varied statuses for visual appeal."""
     now = datetime.now(timezone.utc)
 
     for i, fiche in enumerate(fiches):
@@ -354,38 +354,38 @@ def seed_courses(db, fiches: list[Fiche], user):
 
         # Vary statuses for visual interest
         if i % 4 == 0:
-            status = CourseStatus.SUCCESS
+            status = RunStatus.SUCCESS
             started = now - timedelta(minutes=30)
             finished = now - timedelta(minutes=25)
             duration = 5 * 60 * 1000  # 5 min
             fiche.status = FicheStatus.IDLE
-            fiche.last_course_at = finished
+            fiche.last_run_at = finished
         elif i % 4 == 1:
-            status = CourseStatus.RUNNING
+            status = RunStatus.RUNNING
             started = now - timedelta(minutes=2)
             finished = None
             duration = None
             fiche.status = FicheStatus.RUNNING
         elif i % 4 == 2:
-            status = CourseStatus.SUCCESS
+            status = RunStatus.SUCCESS
             started = now - timedelta(hours=2)
             finished = now - timedelta(hours=1, minutes=55)
             duration = 5 * 60 * 1000
             fiche.status = FicheStatus.IDLE
-            fiche.last_course_at = finished
+            fiche.last_run_at = finished
         else:
-            status = CourseStatus.SUCCESS
+            status = RunStatus.SUCCESS
             started = now - timedelta(hours=6)
             finished = now - timedelta(hours=5, minutes=58)
             duration = 2 * 60 * 1000
             fiche.status = FicheStatus.IDLE
-            fiche.last_course_at = finished
+            fiche.last_run_at = finished
 
-        run = Course(
+        run = Run(
             fiche_id=fiche.id,
             thread_id=thread.id,
             status=status,
-            trigger=CourseTrigger.SCHEDULE,
+            trigger=RunTrigger.SCHEDULE,
             started_at=started,
             finished_at=finished,
             duration_ms=duration,
@@ -398,21 +398,21 @@ def seed_courses(db, fiches: list[Fiche], user):
     db.commit()
 
 
-def seed_chat_thread(db, concierge: Fiche):
-    """Create a Concierge thread with realistic chat messages.
+def seed_chat_thread(db, oikos: Fiche):
+    """Create a Oikos thread with realistic chat messages.
 
     Uses ThreadService.save_new_messages() to ensure messages are stored
     in the exact same format as the real fiche runner produces.
 
     IMPORTANT: Uses MANUAL thread type to avoid collision with the real
-    concierge thread (which uses SUPER type and has "one per user" constraint).
+    oikos thread (which uses SUPER type and has "one per user" constraint).
     """
     print("  💬 Creating chat conversation...")
 
     thread = Thread(
-        fiche_id=concierge.id,
+        fiche_id=oikos.id,
         title="marketing",  # Short name for URL addressability: /chat?thread=marketing
-        thread_type=ThreadType.MANUAL,  # MANUAL to avoid collision with real concierge
+        thread_type=ThreadType.MANUAL,  # MANUAL to avoid collision with real oikos
         active=True,
     )
     db.add(thread)
@@ -477,28 +477,28 @@ def seed_marketing_data():
 
             print(f"    ✓ Created workflow with {len(canvas['nodes'])} nodes, {len(canvas['edges'])} edges")
 
-        # Seed courses for varied statuses
-        print("\n📈 Seeding courses...")
-        seed_courses(db, all_fiches, dev_user)
+        # Seed runs for varied statuses
+        print("\n📈 Seeding runs...")
+        seed_runs(db, all_fiches, dev_user)
         print(f"    ✓ Created runs for {len(all_fiches)} fiches")
 
-        # Create Concierge for chat
-        print("\n🤖 Creating Concierge for chat...")
-        concierge = Fiche(
+        # Create Oikos for chat
+        print("\n🤖 Creating Oikos for chat...")
+        oikos = Fiche(
             owner_id=dev_user.id,
-            name="Jarvis",
-            system_instructions="You are Jarvis, a helpful AI assistant.",
+            name="Oikos",
+            system_instructions="You are Oikos, a helpful AI assistant.",
             task_instructions="Help the user with their requests.",
             model=DEFAULT_MODEL_ID,
             status=FicheStatus.IDLE,
-            config={"is_concierge": True},
+            config={"is_oikos": True},
         )
-        db.add(concierge)
+        db.add(oikos)
         db.flush()
-        print(f"    ✓ Created Concierge: Jarvis (ID: {concierge.id})")
+        print(f"    ✓ Created Oikos: Oikos (ID: {oikos.id})")
 
         # Create chat thread
-        thread = seed_chat_thread(db, concierge)
+        thread = seed_chat_thread(db, oikos)
 
         db.commit()
 
@@ -506,7 +506,7 @@ def seed_marketing_data():
         print("\n" + "=" * 60)
         print("✅ Marketing data seeded successfully!")
         print(f"   Workflows: {len(ALL_WORKFLOWS)}")
-        print(f"   Fiches: {len(all_fiches) + 1}")  # +1 for Concierge
+        print(f"   Fiches: {len(all_fiches) + 1}")  # +1 for Oikos
         print(f"   Chat thread ID: {thread.id}")
         print("\n📸 Ready for screenshots!")
         print("   - Canvas: /canvas?workflow=health&marketing=true")

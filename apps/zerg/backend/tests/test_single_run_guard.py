@@ -1,4 +1,4 @@
-"""Test single-run guard functionality to prevent concurrent courses."""
+"""Test single-run guard functionality to prevent concurrent runs."""
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session

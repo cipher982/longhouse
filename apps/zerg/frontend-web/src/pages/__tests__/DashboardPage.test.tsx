@@ -11,7 +11,7 @@ import {
   runFiche,
   updateFiche,
   type FicheSummary,
-  type Course,
+  type Run,
   type DashboardSnapshot,
 } from "../../services/api";
 
@@ -50,8 +50,8 @@ function buildFiche(
     created_at: overrides.created_at ?? now,
     updated_at: overrides.updated_at ?? now,
     messages: overrides.messages ?? [],
-    next_course_at: overrides.next_course_at ?? null,
-    last_course_at: overrides.last_course_at ?? null,
+    next_run_at: overrides.next_run_at ?? null,
+    last_run_at: overrides.last_run_at ?? null,
   };
 }
 
@@ -100,16 +100,16 @@ describe("DashboardPage", () => {
     window.localStorage.clear();
   });
 
-  function renderDashboard(initialFiches: FicheSummary[], coursesByFiche?: Record<number, Course[]>) {
-    const coursesLookup = coursesByFiche ?? {};
+  function renderDashboard(initialFiches: FicheSummary[], runsByFiche?: Record<number, Run[]>) {
+    const runsLookup = runsByFiche ?? {};
     const snapshot: DashboardSnapshot = {
       scope: "my",
       fetchedAt: new Date().toISOString(),
-      coursesLimit: 50,
+      runsLimit: 50,
       fiches: initialFiches,
-      courses: initialFiches.map((fiche) => ({
+      runs: initialFiches.map((fiche) => ({
         ficheId: fiche.id,
-        courses: coursesLookup[fiche.id] ?? [],
+        runs: runsLookup[fiche.id] ?? [],
       })),
     };
 
@@ -148,8 +148,8 @@ describe("DashboardPage", () => {
           avatar_url: "https://example.com/avatar.png",
           prefs: {},
         },
-        last_course_at: "2025-09-24T10:00:00.000Z",
-        next_course_at: "2025-09-24T12:00:00.000Z",
+        last_run_at: "2025-09-24T10:00:00.000Z",
+        next_run_at: "2025-09-24T12:00:00.000Z",
       }),
       buildFiche({
         id: 2,
@@ -157,8 +157,8 @@ describe("DashboardPage", () => {
         status: "error",
         owner_id: 9,
         owner: null,
-        last_course_at: null,
-        next_course_at: null,
+        last_run_at: null,
+        next_run_at: null,
         last_error: "Failed to execute",
       }),
     ];
@@ -179,7 +179,7 @@ describe("DashboardPage", () => {
     expect(within(ficheRows[1]).getByText("Beta")).toBeInTheDocument();
   });
 
-  test("expands a fiche row and shows course history", async () => {
+  test("expands a fiche row and shows run history", async () => {
     const fiche = buildFiche({
       id: 1,
       name: "Runner",
@@ -188,7 +188,7 @@ describe("DashboardPage", () => {
       owner: null,
     });
 
-    const courses: Course[] = [
+    const runs: Run[] = [
       {
         id: 42,
         fiche_id: 1,
@@ -269,7 +269,7 @@ describe("DashboardPage", () => {
       },
     ];
 
-    renderDashboard([fiche], { 1: courses });
+    renderDashboard([fiche], { 1: runs });
 
     const row = await screen.findByRole("row", { name: /Runner/ });
     await userEvent.click(row);
@@ -279,11 +279,11 @@ describe("DashboardPage", () => {
     await screen.findByText("Show all (6)");
     const tables = screen.getAllByRole("table");
     expect(tables.length).toBeGreaterThan(1);
-    // Course history table uses SVG icons (CheckCircleIcon) instead of text
-    // Query for table rows to verify course data is displayed
-    const courseHistoryTable = tables[1];
-    const rows = within(courseHistoryTable).getAllByRole("row");
-    // Should have at least header row + some data rows (we have 6 courses in test data)
+    // Run history table uses SVG icons (CheckCircleIcon) instead of text
+    // Query for table rows to verify run data is displayed
+    const runHistoryTable = tables[1];
+    const rows = within(runHistoryTable).getAllByRole("row");
+    // Should have at least header row + some data rows (we have 6 runs in test data)
     expect(rows.length).toBeGreaterThan(1);
 
     await userEvent.click(screen.getByText("Show all (6)"));
@@ -365,8 +365,8 @@ describe("DashboardPage", () => {
         id: 42,
         status: "running",
         last_error: null,
-        last_course_at: "2025-11-08T23:59:00.000Z",
-        next_course_at: null,
+        last_run_at: "2025-11-08T23:59:00.000Z",
+        next_run_at: null,
       },
     };
 

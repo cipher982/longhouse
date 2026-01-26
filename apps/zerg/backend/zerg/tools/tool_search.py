@@ -49,7 +49,7 @@ def set_search_context(
 ) -> None:
     """Set the search context for the current fiche.
 
-    Call this before running concierge to configure search_tools behavior.
+    Call this before running oikos to configure search_tools behavior.
 
     Args:
         allowed_tools: Optional allowlist (supports wildcards like "github_*").
@@ -61,7 +61,7 @@ def set_search_context(
 
 
 def clear_search_context() -> None:
-    """Clear the search context after concierge completes."""
+    """Clear the search context after oikos completes."""
     _search_allowed_tools.set(None)
     _search_max_results.set(20)
 
@@ -389,7 +389,7 @@ async def search_tools_for_fiche(
     """
     index = await get_tool_search_index()
 
-    # Get context-based cap (aligned with MAX_TOOLS_FROM_SEARCH in concierge)
+    # Get context-based cap (aligned with MAX_TOOLS_FROM_SEARCH in oikos)
     context_cap = _search_max_results.get()
     effective_max = min(max_results, context_cap)
 

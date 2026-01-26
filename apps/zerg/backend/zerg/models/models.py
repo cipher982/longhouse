@@ -27,12 +27,12 @@ from zerg.models.enums import Phase
 from zerg.models_config import DEFAULT_COMMIS_MODEL_ID
 
 from .connector import Connector  # noqa: F401
-from .course import Course  # noqa: F401
 
 # Re-export models that have been split into separate files
 from .fiche import Fiche  # noqa: F401
 from .fiche import FicheMessage  # noqa: F401
 from .llm_audit import LLMAuditLog  # noqa: F401
+from .run import Run  # noqa: F401
 from .thread import Thread  # noqa: F401
 from .thread import ThreadMessage  # noqa: F401
 from .trigger import Trigger  # noqa: F401
@@ -113,7 +113,7 @@ class CanvasLayout(Base):
 # ------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Course – lightweight execution telemetry row
+# Run – lightweight execution telemetry row
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
@@ -358,15 +358,15 @@ class AccountConnectorCredential(Base):
 
 
 # ---------------------------------------------------------------------------
-# Commis Jobs – Background task execution for concierge fiches
+# Commis Jobs – Background task execution for oikos fiches
 # ---------------------------------------------------------------------------
 
 
 class CommisJob(Base):
     """Background job for executing commis tasks.
 
-    Commis jobs allow concierge fiches to delegate long-running tasks
-    to background commis without blocking the concierge's execution flow.
+    Commis jobs allow oikos fiches to delegate long-running tasks
+    to background commis without blocking the oikos's execution flow.
     """
 
     __tablename__ = "commis_jobs"
@@ -376,15 +376,15 @@ class CommisJob(Base):
     # Job ownership and security
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
 
-    # Concierge correlation - links commis to concierge course for SSE event streaming
-    # ON DELETE SET NULL: if concierge course is deleted, commis job remains but loses correlation
-    concierge_course_id = Column(Integer, ForeignKey("courses.id", ondelete="SET NULL"), nullable=True, index=True)
+    # Oikos correlation - links commis to oikos run for SSE event streaming
+    # ON DELETE SET NULL: if oikos run is deleted, commis job remains but loses correlation
+    oikos_run_id = Column(Integer, ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True)
 
-    # Tool call idempotency - prevents duplicate commis from concierge resume replay
+    # Tool call idempotency - prevents duplicate commis from oikos resume replay
     # The tool_call_id comes from LangChain's ToolCall structure and is unique per LLM response
     tool_call_id = Column(String(64), nullable=True, index=True)
 
-    # Trace ID for end-to-end debugging (inherited from concierge course)
+    # Trace ID for end-to-end debugging (inherited from oikos run)
     trace_id = Column(UUID(as_uuid=True), nullable=True, index=True)
 
     # Job specification
@@ -400,7 +400,7 @@ class CommisJob(Base):
     status = Column(String(20), nullable=False, default="queued")  # queued, running, success, failed, cancelled
     commis_id = Column(String(255), nullable=True, index=True)  # Set when execution starts
 
-    # Async inbox model - tracks whether concierge has acknowledged this result
+    # Async inbox model - tracks whether oikos has acknowledged this result
     acknowledged = Column(Boolean, nullable=False, default=False, server_default="false")
 
     # Error handling
@@ -420,10 +420,10 @@ class CommisJob(Base):
     __table_args__ = (
         Index(
             "ix_commis_jobs_idempotency",
-            "concierge_course_id",
+            "oikos_run_id",
             "tool_call_id",
             unique=True,
-            postgresql_where=text("concierge_course_id IS NOT NULL AND tool_call_id IS NOT NULL"),
+            postgresql_where=text("oikos_run_id IS NOT NULL AND tool_call_id IS NOT NULL"),
         ),
     )
 
@@ -518,7 +518,7 @@ class RunnerJob(Base):
     owner = relationship("User", backref="runner_jobs")
 
     commis_id = Column(String, nullable=True, index=True)  # Link to CommisArtifactStore
-    course_id = Column(String, nullable=True)  # Link to course context
+    run_id = Column(String, nullable=True)  # Link to run context
 
     # Runner assignment
     runner_id = Column(Integer, ForeignKey("runners.id", ondelete="CASCADE"), nullable=False, index=True)

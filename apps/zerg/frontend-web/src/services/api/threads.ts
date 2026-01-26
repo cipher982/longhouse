@@ -57,8 +57,8 @@ export async function postThreadMessage(threadId: number, content: string): Prom
   });
 }
 
-export async function startThreadCourse(threadId: number): Promise<void> {
-  await request<void>(`/threads/${threadId}/courses`, {
+export async function startThreadRun(threadId: number): Promise<void> {
+  await request<void>(`/threads/${threadId}/runs`, {
     method: "POST",
   });
 }

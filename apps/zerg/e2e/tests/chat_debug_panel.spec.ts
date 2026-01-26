@@ -5,7 +5,7 @@
  * The debug panel is shown only in dev mode (config.isDevelopment).
  *
  * Uses the ready-signals pattern for reliable waiting:
- * - waitForEventBusAvailable: Ensures Jarvis app is mounted and EventBus is ready
+ * - waitForEventBusAvailable: Ensures Oikos app is mounted and EventBus is ready
  * - This replaces arbitrary timeouts with deterministic app-state checks
  */
 
@@ -22,7 +22,7 @@ test.beforeEach(async ({ request }) => {
 async function navigateToChatPage(page: Page): Promise<void> {
   await page.goto('/chat');
 
-  // Wait for EventBus to be available (proves Jarvis app is mounted)
+  // Wait for EventBus to be available (proves Oikos app is mounted)
   // This is more reliable than waiting for arbitrary selectors
   await waitForEventBusAvailable(page, { timeout: 10000 });
 
@@ -35,10 +35,10 @@ async function sendMessage(page: Page, message: string): Promise<void> {
   const inputSelector = page.locator('.text-input');
   const sendButton = page.locator('.send-button');
   await inputSelector.fill(message);
-  // Wait for both UI update AND backend persistence (Jarvis uses /api/jarvis/chat)
+  // Wait for both UI update AND backend persistence (Oikos uses /api/oikos/chat)
   await Promise.all([
     page.waitForResponse(
-      (r) => r.request().method() === 'POST' && r.url().includes('/api/jarvis/chat') && r.status() === 200,
+      (r) => r.request().method() === 'POST' && r.url().includes('/api/oikos/chat') && r.status() === 200,
       { timeout: 15000 }
     ),
     expect(page.locator('.message.user').filter({ hasText: message })).toBeVisible({ timeout: 15000 }),
@@ -134,7 +134,7 @@ test.describe('Reset Memory Tests', () => {
     // Get initial thread info (should have at least 2 messages: system + user)
     // Poll until message_count > 1 since the chat API might be async
     await expect.poll(async () => {
-      const response = await request.get('/api/jarvis/concierge/thread');
+      const response = await request.get('/api/oikos/thread');
       const thread = await response.json();
       console.log('Polling thread state:', thread.message_count);
       return thread.message_count;
@@ -144,7 +144,7 @@ test.describe('Reset Memory Tests', () => {
     const resetButton = page.locator('.debug-panel .sidebar-button').filter({ hasText: 'Reset Memory' });
     await Promise.all([
       page.waitForResponse(
-        (r) => r.request().method() === 'DELETE' && r.url().includes('/api/jarvis/history') && (r.status() === 200 || r.status() === 204),
+        (r) => r.request().method() === 'DELETE' && r.url().includes('/api/oikos/history') && (r.status() === 200 || r.status() === 204),
         { timeout: 15000 }
       ),
       resetButton.click(),
@@ -157,7 +157,7 @@ test.describe('Reset Memory Tests', () => {
     // Verify backend thread is cleared (all messages including system deleted)
     // Use polling to wait for backend state to stabilize
     await expect.poll(async () => {
-      const finalThreadResponse = await request.get('/api/jarvis/concierge/thread');
+      const finalThreadResponse = await request.get('/api/oikos/thread');
       const finalThread = await finalThreadResponse.json();
       console.log('Polling final thread state:', finalThread.message_count);
       return finalThread.message_count;
@@ -178,7 +178,7 @@ test.describe('Reset Memory Tests', () => {
     await expect
       .poll(
         async () => {
-          const response = await request.get('/api/jarvis/concierge/thread');
+          const response = await request.get('/api/oikos/thread');
           const thread = await response.json();
           return thread.message_count;
         },
@@ -204,7 +204,7 @@ test.describe('Reset Memory Tests', () => {
     const resetButton = page.locator('.debug-panel .sidebar-button').filter({ hasText: 'Reset Memory' });
     await Promise.all([
       page.waitForResponse(
-        (r) => r.request().method() === 'DELETE' && r.url().includes('/api/jarvis/history') && (r.status() === 200 || r.status() === 204),
+        (r) => r.request().method() === 'DELETE' && r.url().includes('/api/oikos/history') && (r.status() === 200 || r.status() === 204),
         { timeout: 15000 }
       ),
       resetButton.click(),

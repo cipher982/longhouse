@@ -152,23 +152,23 @@ export function ChatThreadList({
               >
                 ▼
               </span>
-              Automation Courses
+              Automation Runs
             </h4>
             <span className="automation-history-count" data-testid="automation-count">
               {automationThreads.length}
             </span>
           </div>
           <div
-            className={clsx("automation-courses-list", { collapsed: isAutomationCollapsed })}
-            data-testid="automation-courses-list"
+            className={clsx("automation-runs-list", { collapsed: isAutomationCollapsed })}
+            data-testid="automation-runs-list"
           >
             {automationThreads.map((thread) => (
               <div
                 key={thread.id}
-                className={clsx("automation-course-item", {
+                className={clsx("automation-run-item", {
                   selected: thread.id === effectiveThreadId,
                 })}
-                data-testid={`automation-course-${thread.id}`}
+                data-testid={`automation-run-${thread.id}`}
                 data-id={thread.id}
                 data-thread-id={thread.id}
                 data-thread-type={thread.thread_type}
@@ -182,14 +182,14 @@ export function ChatThreadList({
                   }
                 }}
               >
-                <div className="automation-course-title">{thread.title}</div>
-                <div className="automation-course-time">
+                <div className="automation-run-title">{thread.title}</div>
+                <div className="automation-run-time">
                   {formatTimestamp(thread.created_at)}
                 </div>
-                <div className="automation-course-type">
+                <div className="automation-run-type">
                   <span
-                    className={`course-badge course-badge-${thread.thread_type}`}
-                    data-testid={`course-badge-${thread.thread_type}`}
+                    className={`run-badge run-badge-${thread.thread_type}`}
+                    data-testid={`run-badge-${thread.thread_type}`}
                   >
                     {thread.thread_type === "scheduled" ? "🔄 Scheduled" : "▶️ Manual"}
                   </span>
