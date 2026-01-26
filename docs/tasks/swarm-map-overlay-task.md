@@ -23,7 +23,7 @@ Build a demo-ready, fully playable iso-2D Swarm/RTS overlay that integrates with
    - Status: Done (2026-01-26) - Added live/replay toggle and event bus mapping for supervisor + worker events.
 5. **Polish + tests**
    - Success: alerts/markers/legend are legible; unit/integration tests cover mapping + replay; E2E smoke renders map and plays one replay.
-   - Status: In progress (2026-01-26) - Added legend UI, marker expiry rendering, alert/marker state tests, live mapping coverage, SwarmMapPage eventBus integration test, and an E2E smoke for map render + live toggle.
+   - Status: In progress (2026-01-26) - Added legend UI, marker expiry rendering, alert/marker state tests, live mapping coverage, SwarmMapPage eventBus integration test, and an E2E smoke that injects live events.
 
 ## Architecture Notes
 - **Data model**: Map state normalized by `roomId`, `entityId`, `taskId`, `workerId`. Overlay-specific schema for layout (iso grid, anchor points, layers). Replay events are append-only and idempotent.
@@ -51,4 +51,4 @@ Build a demo-ready, fully playable iso-2D Swarm/RTS overlay that integrates with
 - Original repo is `~/git/zerg`; it may contain missing context (e.g., `.env` vars). Avoid editing that repo because main has ongoing work.
 
 ## Next Action
-Run the new Playwright smoke (`tests/swarm-map.smoke.spec.ts`) once backend + Playwright deps are available.
+Run the new Playwright smoke (`tests/swarm-map.smoke.spec.ts`) once backend + Playwright deps are available (previous run timed out before discovery).
