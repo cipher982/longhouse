@@ -128,6 +128,14 @@ jobs:
     - name: Install Playwright browsers
       run: cd apps/zerg/e2e && bunx playwright install chromium
 
+    - name: Debug - List test files
+      run: |
+        echo "=== Test files in apps/zerg/e2e/tests/core/ ==="
+        ls -la apps/zerg/e2e/tests/core/ || echo "Directory not found"
+        echo ""
+        echo "=== Playwright test list (verbose) ==="
+        cd apps/zerg/e2e && VERBOSE=1 bunx playwright test --project=core --list 2>&1 | head -50 || true
+
     - name: Run Core E2E Tests
       run: make test-e2e-core
       env:
