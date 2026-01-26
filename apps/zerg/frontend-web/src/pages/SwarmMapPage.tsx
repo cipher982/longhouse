@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Badge, Button, Card, PageShell, SectionHeader } from "../components/ui";
 import { generateSwarmReplay } from "../swarm/replay";
@@ -14,6 +14,7 @@ export default function SwarmMapPage() {
   const params = new URLSearchParams(location.search);
   const seed = params.get("seed")?.trim() || DEFAULT_SEED;
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const [focusEntityId, setFocusEntityId] = useState<string | null>(null);
 
   const scenario = useMemo(
     () =>
@@ -40,9 +41,23 @@ export default function SwarmMapPage() {
   const tasks = useMemo(() => {
     const list = Array.from(state.tasks.values());
     return list.sort((a, b) => b.updatedAt - a.updatedAt);
-  }, [state.tasks]);
+  }, [state.tasks, timeMs]);
 
   const selectedEntity = selectedEntityId ? state.entities.get(selectedEntityId) : null;
+
+  useEffect(() => {
+    if (selectedEntityId && !state.entities.has(selectedEntityId)) {
+      setSelectedEntityId(null);
+    }
+    if (focusEntityId && !state.entities.has(focusEntityId)) {
+      setFocusEntityId(null);
+    }
+  }, [focusEntityId, selectedEntityId, state.entities, timeMs]);
+
+  const handleFocus = () => {
+    if (!selectedEntityId) return;
+    setFocusEntityId((prev) => (prev === selectedEntityId ? null : selectedEntityId));
+  };
 
   return (
     <PageShell size="full" className="swarm-map-page">
@@ -73,7 +88,12 @@ export default function SwarmMapPage() {
           </div>
           <div className="swarm-task-list">
             {tasks.map((task) => (
-              <button key={task.id} className="swarm-task-row" type="button">
+              <button
+                key={task.id}
+                className="swarm-task-row"
+                type="button"
+                onClick={() => task.entityId && setSelectedEntityId(task.entityId)}
+              >
                 <span className="swarm-task-title">{task.title}</span>
                 <span className={`swarm-task-status swarm-task-status--${task.status}`}>{task.status}</span>
               </button>
@@ -86,6 +106,7 @@ export default function SwarmMapPage() {
             state={state}
             timeMs={timeMs}
             selectedEntityId={selectedEntityId}
+            focusEntityId={focusEntityId}
             onSelectEntity={setSelectedEntityId}
           />
         </Card>
@@ -106,8 +127,8 @@ export default function SwarmMapPage() {
                 <div className="swarm-selection-meta">Room: {selectedEntity.roomId}</div>
                 <div className="swarm-selection-meta">Status: {selectedEntity.status}</div>
                 <div className="swarm-selection-actions">
-                  <Button size="sm" variant="primary">
-                    Focus
+                  <Button size="sm" variant="primary" onClick={handleFocus}>
+                    {focusEntityId === selectedEntity.id ? "Unfocus" : "Focus"}
                   </Button>
                   <Button size="sm" variant="ghost">
                     Nudge Task

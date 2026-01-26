@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent,
+} from "react";
 import clsx from "clsx";
 import { gridToIso } from "./layout";
 import type { SwarmAlert, SwarmEntity, SwarmMapLayout, SwarmMarker, SwarmRoom, SwarmTask } from "./types";
@@ -9,6 +16,7 @@ export type SwarmMapCanvasProps = {
   state: SwarmMapState;
   timeMs: number;
   selectedEntityId?: string | null;
+  focusEntityId?: string | null;
   onSelectEntity?: (entityId: string | null) => void;
 };
 
@@ -37,7 +45,13 @@ const ALERT_COLORS: Record<SwarmAlert["level"], string> = {
   L3: "#F05454",
 };
 
-export function SwarmMapCanvas({ state, timeMs, selectedEntityId, onSelectEntity }: SwarmMapCanvasProps) {
+export function SwarmMapCanvas({
+  state,
+  timeMs,
+  selectedEntityId,
+  focusEntityId,
+  onSelectEntity,
+}: SwarmMapCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewportRef = useRef<Viewport>({ offsetX: 0, offsetY: 0, scale: 1 });
@@ -46,6 +60,7 @@ export function SwarmMapCanvas({ state, timeMs, selectedEntityId, onSelectEntity
   const dragRef = useRef({ dragging: false, moved: 0, lastX: 0, lastY: 0 });
   const pinchRef = useRef<{ distance: number | null }>({ distance: null });
   const rafRef = useRef<number | null>(null);
+  const [hudScale, setHudScale] = useState(1);
 
   const scheduleDraw = useCallback(() => {
     if (rafRef.current != null) return;
@@ -58,6 +73,15 @@ export function SwarmMapCanvas({ state, timeMs, selectedEntityId, onSelectEntity
   useEffect(() => {
     scheduleDraw();
   }, [scheduleDraw, state, timeMs, selectedEntityId]);
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current != null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -73,6 +97,7 @@ export function SwarmMapCanvas({ state, timeMs, selectedEntityId, onSelectEntity
       canvas.style.height = `${rect.height}px`;
       sizeRef.current = { width: rect.width, height: rect.height, dpr };
       centerViewport(state.layout, viewportRef.current, rect.width, rect.height);
+      setHudScale(viewportRef.current.scale);
       scheduleDraw();
     };
 
@@ -131,6 +156,11 @@ export function SwarmMapCanvas({ state, timeMs, selectedEntityId, onSelectEntity
   };
 
   const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      // Ignore if pointer capture was not set.
+    }
     pointersRef.current.delete(event.pointerId);
     if (pointersRef.current.size < 2) {
       pinchRef.current.distance = null;
@@ -161,7 +191,20 @@ export function SwarmMapCanvas({ state, timeMs, selectedEntityId, onSelectEntity
     viewport.offsetX = localX - (localX - viewport.offsetX) * scaleRatio;
     viewport.offsetY = localY - (localY - viewport.offsetY) * scaleRatio;
     viewport.scale = nextScale;
+    setHudScale(nextScale);
   };
+
+  useEffect(() => {
+    if (!focusEntityId) return;
+    const entity = state.entities.get(focusEntityId);
+    if (!entity) return;
+    const { width, height } = sizeRef.current;
+    if (!width || !height) return;
+    const iso = gridToIso(entity.position, state.layout);
+    viewportRef.current.offsetX = width / 2 - iso.x * viewportRef.current.scale;
+    viewportRef.current.offsetY = height / 2 - iso.y * viewportRef.current.scale;
+    scheduleDraw();
+  }, [focusEntityId, timeMs, scheduleDraw, state.layout, state.entities]);
 
   return (
     <div
@@ -177,7 +220,7 @@ export function SwarmMapCanvas({ state, timeMs, selectedEntityId, onSelectEntity
       <div className="swarm-map-hud">
         <div className="swarm-map-hud-row">
           <span>Zoom</span>
-          <strong>{viewportRef.current.scale.toFixed(2)}x</strong>
+          <strong>{hudScale.toFixed(2)}x</strong>
         </div>
         <div className="swarm-map-hud-row">
           <span>t</span>
