@@ -8,6 +8,15 @@ function requireEnv(name: string): string {
   return value;
 }
 
+function normalizeSecret(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if ((trimmed.startsWith("'") && trimmed.endsWith("'")) || (trimmed.startsWith('"') && trimmed.endsWith('"'))) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
 function buildRunId(): string {
   if (process.env.E2E_RUN_ID) return process.env.E2E_RUN_ID;
   const ts = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
@@ -34,7 +43,7 @@ export const test = base.extend<LiveFixtures>({
   },
 
   authToken: async ({ apiBaseUrl, runId, playwright }, use) => {
-    const secret = process.env.SMOKE_TEST_SECRET;
+    const secret = normalizeSecret(process.env.SMOKE_TEST_SECRET);
     if (!secret) {
       test.skip(true, 'SMOKE_TEST_SECRET not set; skipping live prod E2E');
     }
