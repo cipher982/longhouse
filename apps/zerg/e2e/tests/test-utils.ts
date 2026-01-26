@@ -51,7 +51,11 @@ export async function createAgentViaUI(page: Page): Promise<string> {
  */
 export async function createAgentViaAPI(request: APIRequestContext): Promise<string> {
   const response = await request.post('/api/agents', {
-    data: { name: `Test Agent ${Date.now()}` }
+    data: {
+      system_instructions: 'You are a helpful assistant.',
+      task_instructions: 'Answer user questions clearly and briefly.',
+      model: 'gpt-5.2',
+    }
   });
 
   if (response.status() !== 201) {
