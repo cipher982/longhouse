@@ -14,6 +14,7 @@ from typing import Optional
 from typing import Set
 
 from langchain_core.tools import StructuredTool
+from sqlalchemy.orm import Session
 
 from zerg.skills.models import Skill
 from zerg.skills.models import SkillEntry
@@ -44,6 +45,8 @@ class SkillContext:
         workspace_path: Optional[Path] = None,
         allowed_skills: Optional[List[str]] = None,
         available_config: Optional[Set[str]] = None,
+        db: Optional[Session] = None,
+        owner_id: Optional[int] = None,
     ):
         """Initialize skill context.
 
@@ -55,6 +58,8 @@ class SkillContext:
         self.workspace_path = Path(workspace_path) if workspace_path else None
         self.allowed_skills = allowed_skills
         self.available_config = available_config or set()
+        self.db = db
+        self.owner_id = owner_id
         self._registry = SkillRegistry()
         self._loaded = False
 
@@ -63,6 +68,8 @@ class SkillContext:
         self._registry.load_for_workspace(
             workspace_path=self.workspace_path,
             available_config=self.available_config,
+            db=self.db,
+            owner_id=self.owner_id,
         )
         self._loaded = True
 
@@ -206,6 +213,8 @@ class SkillIntegration:
         workspace_path: Optional[Path] = None,
         allowed_skills: Optional[List[str]] = None,
         available_config: Optional[Set[str]] = None,
+        db: Optional[Session] = None,
+        owner_id: Optional[int] = None,
     ):
         """Initialize skill integration.
 
@@ -218,6 +227,8 @@ class SkillIntegration:
             workspace_path=workspace_path,
             allowed_skills=allowed_skills,
             available_config=available_config,
+            db=db,
+            owner_id=owner_id,
         )
 
     def load(self) -> None:

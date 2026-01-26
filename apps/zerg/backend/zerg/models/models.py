@@ -677,6 +677,47 @@ class UserTask(Base):
 
 
 # ---------------------------------------------------------------------------
+# User Skills – DB-backed SKILL.md content per user
+# ---------------------------------------------------------------------------
+
+
+class UserSkill(Base):
+    """User-managed skill stored in the database.
+
+    Content is the full SKILL.md text (YAML frontmatter + markdown body).
+    Name is stored separately for indexing and uniqueness per user.
+    """
+
+    __tablename__ = "user_skills"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Ownership
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Skill identity (unique per user)
+    name = Column(String(128), nullable=False)
+
+    # Canonical SKILL.md content
+    content = Column(Text, nullable=False)
+
+    # Soft toggle for eligibility/visibility
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    # Timestamps
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    owner = relationship("User", backref="user_skills")
+
+    __table_args__ = (
+        UniqueConstraint("owner_id", "name", name="uq_user_skills_owner_name"),
+        Index("ix_user_skills_owner_name", "owner_id", "name"),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Agent Memory – Persistent key-value storage for agents
 # ---------------------------------------------------------------------------
 

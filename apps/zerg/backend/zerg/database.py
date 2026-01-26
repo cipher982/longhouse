@@ -106,6 +106,7 @@ try:
     from zerg.models.models import ThreadMessage  # noqa: F401
     from zerg.models.models import Trigger  # noqa: F401
     from zerg.models.models import User  # noqa: F401
+    from zerg.models.models import UserSkill  # noqa: F401
     from zerg.models.models import UserTask  # noqa: F401
     from zerg.models.models import Workflow  # noqa: F401
     from zerg.models.models import WorkflowExecution  # noqa: F401

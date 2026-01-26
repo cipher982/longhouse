@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -118,6 +119,24 @@ description: Bundled version
         assert "valid-skill" in skills
         assert skills["valid-skill"].source == SkillSource.WORKSPACE
         assert skills["valid-skill"].description == "A valid test skill"
+
+    def test_load_user_skills_db(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Load user skills from DB-backed content."""
+        loader = SkillLoader()
+        content = """---\nname: db-skill\ndescription: DB skill\n---\n\n# Body\n"""
+        rows = [SimpleNamespace(name="db-skill", content=content)]
+
+        def fake_list_user_skills(db, owner_id: int, include_inactive: bool = False):  # noqa: ANN001
+            assert owner_id == 1
+            return rows
+
+        monkeypatch.setattr("zerg.crud.list_user_skills", fake_list_user_skills)
+
+        skills = loader.load_user_skills_db(db=object(), owner_id=1)
+
+        assert len(skills) == 1
+        assert skills[0].name == "db-skill"
+        assert skills[0].source == SkillSource.USER
 
     def test_compute_eligibility_all_met(self, skill_workspace: Path) -> None:
         """Skill is eligible when all requirements are met."""

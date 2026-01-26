@@ -197,3 +197,4 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-26) [gotcha] Resumable SSE closed on `supervisor_complete` with pending workers, dropping worker output/continuations; keep stream open until workers drain (with a short grace window).
 - (2026-01-26) [gotcha] Timestamp prefixes on assistant messages leaked into model outputs; only prefix user messages for temporal context.
 - (2026-01-26) [gotcha] New SSE event types must be added to `EventType` enum or `append_run_event()` won't publish live (modal won't open until reconnect).
+- (2026-01-26) [gotcha] Skills platform exists under `apps/zerg/backend/zerg/skills/` but isn’t wired into supervisor/worker prompts or tool registry (no SkillIntegration usage yet).

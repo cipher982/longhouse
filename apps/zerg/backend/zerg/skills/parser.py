@@ -79,6 +79,22 @@ def parse_skill_file(file_path: Path) -> Tuple[Dict[str, Any], str]:
     return frontmatter, remaining
 
 
+def parse_skill_content(content: str, fallback_name: Optional[str] = None) -> Tuple[Dict[str, Any], str]:
+    """Parse SKILL.md content from a string.
+
+    Args:
+        content: Raw markdown content with optional frontmatter
+        fallback_name: Optional name to use if frontmatter is missing
+
+    Returns:
+        Tuple of (frontmatter_dict, content_without_frontmatter)
+    """
+    frontmatter, remaining = parse_frontmatter(content)
+    if not frontmatter.get("name") and fallback_name:
+        frontmatter["name"] = fallback_name
+    return frontmatter, remaining
+
+
 def validate_manifest(frontmatter: Dict[str, Any]) -> Optional[str]:
     """Validate skill manifest frontmatter.
 
