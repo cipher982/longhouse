@@ -8,6 +8,64 @@ function requireEnv(name: string): string {
   return value;
 }
 
+/** Type for playwright fixture's request factory */
+type RequestFactory = { newContext: (options?: { baseURL?: string; timeout?: number }) => Promise<APIRequestContext> };
+
+/**
+ * Wait for the API to be healthy before running tests.
+ * Polls /health until status is "ok" twice consecutively.
+ * This prevents flaky tests during deploy windows.
+ */
+export async function waitForHealthy(
+  requestFactory: RequestFactory,
+  apiBaseUrl: string,
+  options: { timeoutMs?: number; intervalMs?: number; requiredConsecutive?: number } = {}
+): Promise<void> {
+  const { timeoutMs = 30_000, intervalMs = 2_000, requiredConsecutive = 2 } = options;
+  const startTime = Date.now();
+  let consecutiveOk = 0;
+  let attempt = 0;
+
+  const healthRequest = await requestFactory.newContext({
+    baseURL: apiBaseUrl,
+    timeout: 5_000,
+  });
+
+  try {
+    while (Date.now() - startTime < timeoutMs) {
+      attempt++;
+      try {
+        const response = await healthRequest.get('/health');
+        if (response.ok()) {
+          const data = await response.json();
+          if (data.status === 'healthy' || data.status === 'ok') {
+            consecutiveOk++;
+            if (consecutiveOk >= requiredConsecutive) {
+              console.log(`[health] Ready after ${attempt} attempts (${Date.now() - startTime}ms)`);
+              return;
+            }
+          } else {
+            consecutiveOk = 0;
+          }
+        } else {
+          consecutiveOk = 0;
+        }
+      } catch {
+        consecutiveOk = 0;
+      }
+
+      if (Date.now() - startTime + intervalMs < timeoutMs) {
+        await new Promise((r) => setTimeout(r, intervalMs));
+      }
+    }
+
+    // Timeout reached - log warning but don't fail (tests may still work)
+    console.warn(`[health] Timeout after ${attempt} attempts - proceeding anyway`);
+  } finally {
+    await healthRequest.dispose();
+  }
+}
+
 function normalizeSecret(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const trimmed = value.trim();
@@ -47,6 +105,9 @@ export const test = base.extend<LiveFixtures>({
     if (!secret) {
       test.skip(true, 'SMOKE_TEST_SECRET not set; skipping live prod E2E');
     }
+
+    // Wait for API health before attempting auth (prevents flaky 502s during deploys)
+    await waitForHealthy(playwright.request, apiBaseUrl);
 
     const authRequest = await playwright.request.newContext({
       baseURL: apiBaseUrl,
