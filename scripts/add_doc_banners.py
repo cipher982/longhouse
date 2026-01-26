@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+"""Add archive/completed banners to historical documentation files."""
 import os
 import glob
 
