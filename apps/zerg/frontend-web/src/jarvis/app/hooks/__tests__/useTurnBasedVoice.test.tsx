@@ -2,21 +2,12 @@ import React from "react";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { AppProvider } from "../../context/AppContext";
 import { useTurnBasedVoice } from "../useTurnBasedVoice";
-import { useAppDispatch, useAppState } from "../../context";
+import { AppProvider, useAppDispatch, useAppState } from "../../context";
+import * as api from "../../../../services/api";
 
-const mockVoiceTranscribe = vi.fn();
-const mockVoiceTts = vi.fn();
-
-vi.mock("../../../services/api", async () => {
-  const actual = await vi.importActual<typeof import("../../../services/api")>("../../../services/api");
-  return {
-    ...actual,
-    voiceTranscribe: (...args: unknown[]) => mockVoiceTranscribe(...args),
-    voiceTts: (...args: unknown[]) => mockVoiceTts(...args),
-  };
-});
+let mockVoiceTranscribe: ReturnType<typeof vi.spyOn>;
+let mockVoiceTts: ReturnType<typeof vi.spyOn>;
 
 class MockMediaRecorder {
   static isTypeSupported() {
@@ -62,8 +53,9 @@ function useHarness(sendText?: (text: string, messageId: string) => Promise<void
 
 describe("useTurnBasedVoice", () => {
   beforeEach(() => {
-    mockVoiceTranscribe.mockReset();
-    mockVoiceTts.mockReset();
+    vi.restoreAllMocks();
+    mockVoiceTranscribe = vi.spyOn(api, "voiceTranscribe");
+    mockVoiceTts = vi.spyOn(api, "voiceTts");
 
     Object.defineProperty(globalThis, "MediaRecorder", {
       value: MockMediaRecorder,

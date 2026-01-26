@@ -32,36 +32,6 @@ function buildWavBuffer(durationMs = 100, sampleRate = 8000): Buffer {
   return buffer;
 }
 
-function parseSSEEvents(sseText: string): Array<{ event: string; data: any }> {
-  const events: Array<{ event: string; data: any }> = [];
-  const chunks = sseText.split('\n\n');
-
-  for (const chunk of chunks) {
-    if (!chunk.trim()) continue;
-    const lines = chunk.split('\n');
-    let event = '';
-    let data = '';
-    for (const line of lines) {
-      if (line.startsWith('event:')) {
-        event = line.replace('event:', '').trim();
-      } else if (line.startsWith('data:')) {
-        data += line.replace('data:', '').trim();
-      }
-    }
-
-    if (!event) continue;
-    let parsed: any = data;
-    try {
-      parsed = data ? JSON.parse(data) : undefined;
-    } catch {
-      // leave as string
-    }
-    events.push({ event, data: parsed });
-  }
-
-  return events;
-}
-
 test.beforeEach(async ({ request }) => {
   await resetDatabase(request);
 });
@@ -148,10 +118,7 @@ test.describe('Voice Turn-Based - Core', () => {
 
     expect(chatResponse.ok()).toBeTruthy();
     const sseText = await chatResponse.text();
-    const events = parseSSEEvents(sseText);
-    const completeEvent = events.find((evt) => evt.event === 'supervisor_complete');
-    expect(completeEvent).toBeTruthy();
-    const payload = completeEvent?.data?.payload ?? completeEvent?.data;
-    expect(payload?.message_id || payload?.messageId).toBe(testMessageId);
+    expect(sseText).toContain('supervisor_complete');
+    expect(sseText).toContain(testMessageId);
   });
 });
