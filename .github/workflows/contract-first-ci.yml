@@ -154,6 +154,14 @@ jobs:
       env:
         DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
+    - name: Test backend startup
+      run: |
+        cd apps/zerg/backend
+        echo "=== Testing backend can start ==="
+        timeout 30 uv run python -c "import os; os.environ['TESTING']='1'; os.environ['AUTH_DISABLED']='1'; print('Importing zerg.main...'); from zerg.main import app; print('Backend imports OK'); from zerg.database import default_engine; print('Testing DB...'); conn=default_engine.connect(); conn.execute(__import__('sqlalchemy').text('SELECT 1')); print('DB connection OK'); conn.close()" 2>&1 || echo "❌ Backend startup failed"
+      env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
     - name: Run Core E2E Tests
       run: make test-e2e-core
       env:
