@@ -128,6 +128,13 @@ jobs:
     - name: Install Playwright browsers
       run: cd apps/zerg/e2e && bunx playwright install chromium
 
+    - name: Pre-install backend deps
+      run: |
+        cd apps/zerg/backend
+        echo "Pre-installing backend dependencies for E2E..."
+        uv sync
+        echo "Backend deps ready"
+
     - name: Debug - Check environment
       run: |
         echo "=== Checking required environment variables ==="
