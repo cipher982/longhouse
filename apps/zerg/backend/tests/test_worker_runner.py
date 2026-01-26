@@ -524,8 +524,8 @@ class TestTimestampFix:
         # Content should still be empty, NOT just a timestamp
         assert lc_msg.content == ""
 
-    def test_non_empty_assistant_gets_timestamp(self, db_session, test_user):
-        """Test that non-empty assistant content does get timestamp."""
+    def test_non_empty_assistant_has_no_timestamp(self, db_session, test_user):
+        """Test that non-empty assistant content does not get timestamp."""
         from zerg.crud import crud
         from zerg.services.thread_service import _db_to_langchain
 
@@ -560,11 +560,8 @@ class TestTimestampFix:
 
         lc_msg = _db_to_langchain(msg)
 
-        # Content should have timestamp prefix
-        assert "Hello world" in lc_msg.content
-        # If sent_at is set, should have timestamp
-        if msg.sent_at:
-            assert lc_msg.content.startswith("[")
+        # Content should be unchanged (no timestamp prefix)
+        assert lc_msg.content == "Hello world"
 
     def test_whitespace_only_assistant_no_timestamp(self, db_session, test_user):
         """Test that whitespace-only content doesn't get timestamp."""
