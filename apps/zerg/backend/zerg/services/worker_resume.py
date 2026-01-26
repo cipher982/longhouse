@@ -1143,32 +1143,46 @@ async def trigger_worker_inbox_run(
             logger.info(f"Continuation already exists for run {original_run_id} (race condition): {e}")
             # Re-query and try to merge into the existing continuation
             existing = db.query(AgentRun).filter(AgentRun.continuation_of_run_id == original_run_id).first()
-            if existing and existing.status == RunStatus.RUNNING:
-                # Inject result into running continuation
-                from zerg.crud import crud
+            if existing:
+                if existing.status == RunStatus.RUNNING:
+                    # Inject result into running continuation
+                    from zerg.crud import crud
 
-                if worker_status == "failed":
-                    context_content = (
-                        f"[Worker update] Worker failed on task: {worker_task[:100]}\nError: {worker_error or 'Unknown error'}"
+                    if worker_status == "failed":
+                        context_content = (
+                            f"[Worker update] Worker failed on task: {worker_task[:100]}\nError: {worker_error or 'Unknown error'}"
+                        )
+                    else:
+                        context_content = (
+                            f"[Worker update] Additional worker completed task: {worker_task[:100]}\nResult: {worker_result[:500]}"
+                        )
+                    crud.create_thread_message(
+                        db=db,
+                        thread_id=thread.id,
+                        role="user",
+                        content=context_content,
+                        processed=False,
+                        internal=True,
                     )
-                else:
-                    context_content = (
-                        f"[Worker update] Additional worker completed task: {worker_task[:100]}\nResult: {worker_result[:500]}"
+                    db.commit()
+                    return {
+                        "status": "merged",
+                        "continuation_run_id": existing.id,
+                        "message": "Race recovery: merged into existing continuation",
+                    }
+                elif existing.status in (RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED):
+                    # Existing continuation already finished - recurse to create chain
+                    logger.info(
+                        f"Race recovery: existing continuation {existing.id} is {existing.status.value}, " f"recursing to create chain"
                     )
-                crud.create_thread_message(
-                    db=db,
-                    thread_id=thread.id,
-                    role="user",
-                    content=context_content,
-                    processed=False,
-                    internal=True,
-                )
-                db.commit()
-                return {
-                    "status": "merged",
-                    "continuation_run_id": existing.id,
-                    "message": "Race recovery: merged into existing continuation",
-                }
+                    return await trigger_worker_inbox_run(
+                        db=db,
+                        original_run_id=existing.id,  # Chain off the existing continuation
+                        worker_job_id=worker_job_id,
+                        worker_result=worker_result,
+                        worker_status=worker_status,
+                        worker_error=worker_error,
+                    )
             return {"status": "skipped", "reason": "continuation already exists (race)"}
 
         logger.info(
