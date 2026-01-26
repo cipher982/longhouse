@@ -17,16 +17,35 @@
   margin: 4px 0;
   cursor: pointer;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  position: relative;
+  overflow: hidden;
 }
 
 .tool-card:hover {
   border-color: var(--border-hover, rgba(255, 255, 255, 0.2));
 }
 
+/* Status-based accent bars (pseudo-elements) */
+.tool-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 3px;
+  background: transparent;
+  transition: background 0.15s ease;
+  z-index: 1;
+}
+
 /* Running state - subtle pulse */
 .tool-card--running {
   border-color: var(--color-primary, #3b82f6);
   animation: tool-card-pulse 2s ease-in-out infinite;
+}
+
+.tool-card--running::before {
+  background: var(--color-primary, #3b82f6);
 }
 
 @keyframes tool-card-pulse {
@@ -38,14 +57,18 @@
   }
 }
 
-/* Completed state */
-.tool-card--completed {
-  border-color: var(--color-success, #22c55e);
+/* Completed state - subtle accent only */
+.tool-card--completed::before {
+  background: var(--color-success, #22c55e);
 }
 
-/* Failed state */
+/* Failed state - remains prominent */
 .tool-card--failed {
   border-color: var(--color-error, #ef4444);
+}
+
+.tool-card--failed::before {
+  background: var(--color-error, #ef4444);
 }
 
 /* Header row */
