@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { SwarmLogo } from "../components/SwarmLogo";
-import { ZapIcon, PuzzleIcon, SettingsIcon, MessageCircleIcon } from "../components/icons";
+import { ZapIcon, PuzzleIcon, SettingsIcon, MessageCircleIcon, SparklesIcon } from "../components/icons";
 import { usePublicPageScroll } from "../hooks/usePublicPageScroll";
 import "../styles/info-pages.css";
 
@@ -52,6 +52,11 @@ export default function DocsPage() {
             <h3>Visual Builder</h3>
             <p>Learn the workflow canvas</p>
           </a>
+          <a href="#skills" className="docs-nav-card">
+            <SparklesIcon width={32} height={32} className="docs-nav-icon" />
+            <h3>Skills</h3>
+            <p>Extend agent capabilities</p>
+          </a>
           <a href="#integrations" className="docs-nav-card">
             <SettingsIcon width={32} height={32} className="docs-nav-icon" />
             <h3>Integrations</h3>
@@ -101,6 +106,50 @@ export default function DocsPage() {
           <p>
             Drag from a node's output to another node's input to create connections.
           </p>
+        </section>
+
+        <section id="skills" className="docs-section">
+          <h2>Skills</h2>
+          <p>
+            Skills are reusable capabilities that extend what your agents can do.
+            They provide specialized knowledge, tools, and behaviors that agents can leverage.
+          </p>
+
+          <h3>Built-in Skills</h3>
+          <ul>
+            <li><strong>Web Search</strong> - Search the web for current information</li>
+            <li><strong>GitHub</strong> - Interact with repositories, issues, and PRs</li>
+            <li><strong>Slack</strong> - Send messages and manage channels</li>
+            <li><strong>Quick Search</strong> - Fast web lookup shortcut</li>
+          </ul>
+
+          <h3>How Skills Work</h3>
+          <p>
+            Skills are automatically loaded and made available to your agents. When an agent
+            needs a capability, it can discover and use the appropriate skill. Skills can:
+          </p>
+          <ul>
+            <li>Provide specialized tools (e.g., <code>web_search</code>)</li>
+            <li>Add context to the agent's system prompt</li>
+            <li>Define custom behaviors and workflows</li>
+          </ul>
+
+          <h3>Creating Custom Skills</h3>
+          <p>
+            You can create custom skills by adding a <code>SKILL.md</code> file to your workspace's
+            <code>skills/</code> directory. Each skill has a YAML frontmatter with metadata and
+            markdown content describing the skill's purpose and usage.
+          </p>
+          <pre><code>{`---
+name: my-skill
+description: "What this skill does"
+emoji: "🔧"
+tool_dispatch: tool_name  # Optional: wrap a tool
+---
+
+# My Skill
+
+Instructions and context for the agent.`}</code></pre>
         </section>
 
         <section id="integrations" className="docs-section">
