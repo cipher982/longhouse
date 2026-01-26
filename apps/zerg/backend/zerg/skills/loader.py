@@ -333,6 +333,7 @@ class SkillLoader:
         filter_eligible: bool = False,
         db: Optional[Session] = None,
         owner_id: Optional[int] = None,
+        include_user: bool = True,
     ) -> List[SkillEntry]:
         """Load skills with eligibility information.
 
@@ -346,6 +347,7 @@ class SkillLoader:
         """
         skills = self.load_all_skills(
             workspace_path,
+            include_user=include_user,
             db=db,
             owner_id=owner_id,
         )

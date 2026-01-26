@@ -74,6 +74,7 @@ class SkillRegistry:
         available_config: Optional[Set[str]] = None,
         db: Optional[Session] = None,
         owner_id: Optional[int] = None,
+        include_user: bool = True,
     ) -> None:
         """Load skills for a workspace.
 
@@ -88,6 +89,7 @@ class SkillRegistry:
             available_config=available_config,
             db=db,
             owner_id=owner_id,
+            include_user=include_user,
         )
 
         self._skills = {e.skill.name: e.skill for e in entries}
@@ -101,9 +103,10 @@ class SkillRegistry:
         available_config: Optional[Set[str]] = None,
         db: Optional[Session] = None,
         owner_id: Optional[int] = None,
+        include_user: bool = True,
     ) -> None:
         """Reload skills from current workspace."""
-        self.load_for_workspace(self._workspace_path, available_config, db=db, owner_id=owner_id)
+        self.load_for_workspace(self._workspace_path, available_config, db=db, owner_id=owner_id, include_user=include_user)
 
     def get_skill(self, name: str) -> Optional[Skill]:
         """Get a skill by name."""
@@ -168,6 +171,7 @@ class SkillRegistry:
         self,
         skills: Optional[List[Skill]] = None,
         max_skills: Optional[int] = None,
+        include_content: bool = True,
     ) -> str:
         """Format skills for system prompt injection.
 
@@ -193,7 +197,17 @@ class SkillRegistry:
         lines = ["# Available Skills", ""]
 
         for skill in sorted(skills, key=lambda s: s.name):
-            lines.append(skill.format_for_prompt())
+            if include_content:
+                lines.append(skill.format_for_prompt())
+            else:
+                header = f"## {skill.manifest.emoji} {skill.manifest.name}" if skill.manifest.emoji else f"## {skill.manifest.name}"
+                lines.append(header)
+                if skill.manifest.description:
+                    lines.append("")
+                    lines.append(f"*{skill.manifest.description}*")
+                if skill.manifest.tool_dispatch:
+                    lines.append("")
+                    lines.append(f"Tool: `{skill.manifest.tool_dispatch}`")
             lines.append("")
 
         return "\n".join(lines)

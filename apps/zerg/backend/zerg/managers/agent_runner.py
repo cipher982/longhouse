@@ -22,6 +22,8 @@ import os
 import re
 from dataclasses import dataclass
 from typing import Any
+from typing import List
+from typing import Optional
 from typing import Sequence
 
 from langchain_core.messages import BaseMessage
@@ -216,6 +218,75 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
 
         self.enable_token_stream = get_settings().llm_token_stream
 
+    def _normalize_skill_allowlist(self, raw: Any) -> Optional[List[str]]:
+        """Normalize allowed skills to a list of patterns or None."""
+        if raw is None:
+            return None
+        if isinstance(raw, str):
+            parts = [p.strip() for p in raw.split(",") if p.strip()]
+            return parts or None
+        if isinstance(raw, list):
+            cleaned = [str(p).strip() for p in raw if str(p).strip()]
+            return cleaned or None
+        return None
+
+    def _resolve_skill_settings(
+        self, db: Session, agent_row: AgentModel
+    ) -> tuple[Optional[List[str]], bool, Optional[int], Optional[str], bool]:
+        """Resolve skill settings from agent config and user context."""
+        cfg = dict(getattr(agent_row, "config", {}) or {})
+        allowed = cfg.get("skills_allowlist")
+        include_user = cfg.get("skills_include_user")
+        max_skills = cfg.get("skills_max")
+        workspace_path = cfg.get("skills_workspace_path") or cfg.get("workspace_path")
+        enabled = cfg.get("skills_enabled")
+
+        user = crud.get_user(db, self.agent.owner_id)
+        ctx = user.context if user and isinstance(user.context, dict) else {}
+
+        if allowed is None:
+            allowed = ctx.get("skills_allowlist")
+        if include_user is None:
+            include_user = ctx.get("skills_include_user")
+        if max_skills is None:
+            max_skills = ctx.get("skills_max")
+        if enabled is None:
+            enabled = ctx.get("skills_enabled")
+
+        allowed_list = self._normalize_skill_allowlist(allowed)
+        include_user_flag = bool(include_user) if include_user is not None else False
+
+        max_skills_val: Optional[int] = None
+        if isinstance(max_skills, int):
+            max_skills_val = max_skills
+        elif isinstance(max_skills, str) and max_skills.strip().isdigit():
+            max_skills_val = int(max_skills.strip())
+
+        enabled_flag = True if enabled is None else bool(enabled)
+
+        return allowed_list, include_user_flag, max_skills_val, workspace_path, enabled_flag
+
+    def _build_skill_integration(
+        self,
+        db: Session,
+        agent_row: AgentModel,
+    ) -> tuple[Optional[Any], Optional[int]]:
+        """Build SkillIntegration with resolved settings."""
+        from zerg.skills.integration import SkillIntegration
+
+        allowed_skills, include_user, max_skills, workspace_path, enabled = self._resolve_skill_settings(db, agent_row)
+        if not enabled:
+            return None, None
+
+        integration = SkillIntegration(
+            workspace_path=workspace_path,
+            allowed_skills=allowed_skills,
+            db=db,
+            owner_id=self.agent.owner_id,
+            include_user=include_user,
+        )
+        return integration, max_skills
+
     # ------------------------------------------------------------------
     # Public API – asynchronous
     # ------------------------------------------------------------------
@@ -248,6 +319,17 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
         # Build system message with connector protocols prepended
         protocols = get_connector_protocols()
         system_content = f"{protocols}\n\n{agent_row.system_instructions}"
+
+        skill_integration, skill_max = self._build_skill_integration(db, agent_row)
+        if skill_integration:
+            try:
+                skills_prompt = skill_integration.get_prompt(include_content=False, max_skills=skill_max)
+                if skills_prompt:
+                    system_content = f"{system_content}\n\n{skills_prompt}"
+                    logger.debug("[AgentRunner] Injected skills prompt for agent %s", self.agent.id)
+            except Exception as e:
+                logger.warning("[AgentRunner] Failed to inject skills prompt: %s", e, exc_info=True)
+
         system_msg = SystemMessage(content=system_content)
 
         # Start with system message
@@ -388,6 +470,14 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
             # Get tools for this agent (use DB-loaded agent_row for fresh allowed_tools)
             resolver = get_tool_resolver()
             tools = resolver.filter_by_allowlist(agent_row.allowed_tools)
+            if skill_integration:
+                tool_map = {tool.name: tool for tool in tools}
+                try:
+                    skill_tools = skill_integration.get_tools(tool_map)
+                    if skill_tools:
+                        tools = tools + skill_tools
+                except Exception as e:
+                    logger.warning("[AgentRunner] Failed to build skill tools: %s", e, exc_info=True)
 
             reset_llm_usage()
 
@@ -668,6 +758,17 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
 
         protocols = get_connector_protocols()
         system_content = f"{protocols}\n\n{agent_row.system_instructions}"
+
+        skill_integration, skill_max = self._build_skill_integration(db, agent_row)
+        if skill_integration:
+            try:
+                skills_prompt = skill_integration.get_prompt(include_content=False, max_skills=skill_max)
+                if skills_prompt:
+                    system_content = f"{system_content}\n\n{skills_prompt}"
+                    logger.debug("[AgentRunner] Injected skills prompt for agent %s (continuation)", self.agent.id)
+            except Exception as e:
+                logger.warning("[AgentRunner] Failed to inject skills prompt (continuation): %s", e, exc_info=True)
+
         system_msg = SystemMessage(content=system_content)
 
         # Build full message list for continuation
@@ -731,6 +832,22 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
             resolver = get_tool_resolver()
             allowed_tools = getattr(agent_row, "allowed_tools", None)
             tools = resolver.filter_by_allowlist(allowed_tools)
+            if skill_integration:
+                tool_map = {tool.name: tool for tool in tools}
+                try:
+                    skill_tools = skill_integration.get_tools(tool_map)
+                    if skill_tools:
+                        tools = tools + skill_tools
+                except Exception as e:
+                    logger.warning("[AgentRunner] Failed to build skill tools (batch continuation): %s", e, exc_info=True)
+            if skill_integration:
+                tool_map = {tool.name: tool for tool in tools}
+                try:
+                    skill_tools = skill_integration.get_tools(tool_map)
+                    if skill_tools:
+                        tools = tools + skill_tools
+                except Exception as e:
+                    logger.warning("[AgentRunner] Failed to build skill tools (continuation): %s", e, exc_info=True)
 
             # Reset usage tracking
             from zerg.services.supervisor_react_engine import reset_llm_usage
@@ -940,6 +1057,17 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
 
         protocols = get_connector_protocols()
         system_content = f"{protocols}\n\n{agent_row.system_instructions}"
+
+        skill_integration, skill_max = self._build_skill_integration(db, agent_row)
+        if skill_integration:
+            try:
+                skills_prompt = skill_integration.get_prompt(include_content=False, max_skills=skill_max)
+                if skills_prompt:
+                    system_content = f"{system_content}\n\n{skills_prompt}"
+                    logger.debug("[AgentRunner] Injected skills prompt for agent %s (batch continuation)", self.agent.id)
+            except Exception as e:
+                logger.warning("[AgentRunner] Failed to inject skills prompt (batch continuation): %s", e, exc_info=True)
+
         system_msg = SystemMessage(content=system_content)
 
         # Build full message list for continuation

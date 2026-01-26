@@ -47,6 +47,7 @@ class SkillContext:
         available_config: Optional[Set[str]] = None,
         db: Optional[Session] = None,
         owner_id: Optional[int] = None,
+        include_user: bool = True,
     ):
         """Initialize skill context.
 
@@ -60,6 +61,7 @@ class SkillContext:
         self.available_config = available_config or set()
         self.db = db
         self.owner_id = owner_id
+        self.include_user = include_user
         self._registry = SkillRegistry()
         self._loaded = False
 
@@ -70,6 +72,7 @@ class SkillContext:
             available_config=self.available_config,
             db=self.db,
             owner_id=self.owner_id,
+            include_user=self.include_user,
         )
         self._loaded = True
 
@@ -78,11 +81,11 @@ class SkillContext:
         if not self._loaded:
             self.load()
 
-    def get_prompt(self) -> str:
+    def get_prompt(self, *, include_content: bool = True, max_skills: Optional[int] = None) -> str:
         """Get skills prompt for system prompt injection."""
         self.ensure_loaded()
         skills = self._registry.filter_by_allowlist(self.allowed_skills)
-        return self._registry.format_skills_prompt(skills)
+        return self._registry.format_skills_prompt(skills, max_skills=max_skills, include_content=include_content)
 
     def get_eligible_skills(self) -> List[Skill]:
         """Get eligible skills."""
@@ -123,7 +126,10 @@ def create_skill_tool(
 
     # Look up target tool
     if tool_registry:
-        target_tool = tool_registry.get(target_tool_name)
+        if hasattr(tool_registry, "get_tool"):
+            target_tool = tool_registry.get_tool(target_tool_name)
+        else:
+            target_tool = tool_registry.get(target_tool_name)
         if not target_tool:
             logger.warning(f"Skill {skill.name} dispatches to unknown tool: {target_tool_name}")
             return None
@@ -215,6 +221,7 @@ class SkillIntegration:
         available_config: Optional[Set[str]] = None,
         db: Optional[Session] = None,
         owner_id: Optional[int] = None,
+        include_user: bool = True,
     ):
         """Initialize skill integration.
 
@@ -229,6 +236,7 @@ class SkillIntegration:
             available_config=available_config,
             db=db,
             owner_id=owner_id,
+            include_user=include_user,
         )
 
     def load(self) -> None:
@@ -274,9 +282,9 @@ class SkillIntegration:
 
         return tools
 
-    def get_prompt(self) -> str:
+    def get_prompt(self, *, include_content: bool = True, max_skills: Optional[int] = None) -> str:
         """Get skills prompt."""
-        return self._context.get_prompt()
+        return self._context.get_prompt(include_content=include_content, max_skills=max_skills)
 
     def get_skill_names(self) -> List[str]:
         """Get names of loaded skills."""
