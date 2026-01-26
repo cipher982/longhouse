@@ -60,11 +60,12 @@ def _db_to_langchain(msg_row: ThreadMessageModel) -> BaseMessage:  # pragma: no 
         ts_str = msg_row.sent_at.strftime("%Y-%m-%dT%H:%M:%SZ")
         timestamp_prefix = f"[{ts_str}] "
 
-    # Prepend timestamp to content for user and assistant messages
-    # System and tool messages don't need timestamps (system is static, tools are immediate)
-    # IMPORTANT: Only prepend timestamp if content is non-empty to avoid masking empty responses
+    # Prepend timestamp to user messages only.
+    # System and tool messages don't need timestamps (system is static, tools are immediate).
+    # Avoid prefixing assistant messages to prevent timestamp leakage into model outputs.
+    # IMPORTANT: Only prepend timestamp if content is non-empty to avoid masking empty responses.
     content = msg_row.content or ""
-    if role in ("user", "assistant") and content.strip():
+    if role == "user" and content.strip():
         content = f"{timestamp_prefix}{content}"
 
     if role == "system":
