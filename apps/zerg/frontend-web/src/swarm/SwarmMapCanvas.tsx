@@ -268,7 +268,7 @@ function drawCanvas(
   drawEntities(ctx, state.entities, state.layout, selectedEntityId ?? null);
   drawTasks(ctx, state.tasks, state.entities, state.rooms, state.layout);
   drawAlerts(ctx, state.alerts, state.entities, state.rooms, state.layout);
-  drawMarkers(ctx, state.markers, state.layout);
+  drawMarkers(ctx, state.markers, state.layout, state.now);
 
   ctx.restore();
 }
@@ -381,8 +381,12 @@ function drawMarkers(
   ctx: CanvasRenderingContext2D,
   markers: Map<string, SwarmMarker>,
   layout: SwarmMapLayout,
+  now: number,
 ) {
   markers.forEach((marker) => {
+    if (marker.expiresAt && marker.expiresAt < now) {
+      return;
+    }
     const iso = gridToIso(marker.position, layout);
     ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
     ctx.lineWidth = 1.5;
