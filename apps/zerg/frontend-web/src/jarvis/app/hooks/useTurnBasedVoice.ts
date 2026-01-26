@@ -286,6 +286,10 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
       if (preferences.chat_model) {
         formData.append("model", preferences.chat_model);
       }
+      // Send messageId for backend correlation (unified text/voice architecture)
+      if (placeholders.assistantMessageId) {
+        formData.append("message_id", placeholders.assistantMessageId);
+      }
 
       const response = await voiceTurn(formData);
       if (response.status !== "success") {

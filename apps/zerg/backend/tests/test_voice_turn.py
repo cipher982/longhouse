@@ -240,3 +240,89 @@ def test_voice_turn_empty_transcription_returns_422(monkeypatch):
         app.dependency_overrides.pop(get_current_jarvis_user, None)
 
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_run_voice_turn_passes_message_id(monkeypatch):
+    """Voice turn should pass message_id to supervisor and return it."""
+    import zerg.voice.turn_based as turn_module
+
+    class FakeSTT:
+        async def transcribe_bytes(self, *args, **kwargs):
+            return STTResult(success=True, text="hello", model="gpt-4o-mini-transcribe")
+
+    class DummySession:
+        def __enter__(self):
+            return MagicMock()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    captured_kwargs = {}
+
+    class FakeSupervisor:
+        def __init__(self, _db):
+            pass
+
+        async def run_supervisor(self, **kwargs):
+            captured_kwargs.update(kwargs)
+            from zerg.services.supervisor_service import SupervisorRunResult
+
+            return SupervisorRunResult(run_id=123, thread_id=456, status="success", result="ok")
+
+    monkeypatch.setattr(turn_module, "get_stt_service", lambda: FakeSTT())
+    monkeypatch.setattr(turn_module, "db_session", lambda: DummySession())
+    monkeypatch.setattr(turn_module, "SupervisorService", FakeSupervisor)
+
+    test_message_id = "test-uuid-1234"
+    result = await turn_module.run_voice_turn(
+        owner_id=1,
+        audio_bytes=b"audio",
+        message_id=test_message_id,
+    )
+
+    assert captured_kwargs.get("message_id") == test_message_id
+    assert result.message_id == test_message_id
+    assert result.transcript == "hello"
+
+
+def test_voice_turn_endpoint_with_message_id(monkeypatch):
+    """API endpoint should accept and return message_id."""
+    import zerg.voice.router as voice_router
+    from zerg.main import app
+    from zerg.routers.jarvis_auth import get_current_jarvis_user
+
+    client = TestClient(app)
+
+    test_message_id = "client-uuid-5678"
+    monkeypatch.setattr(
+        voice_router,
+        "run_voice_turn",
+        AsyncMock(
+            return_value=VoiceTurnResult(
+                transcript="hello",
+                response_text="ok",
+                status="success",
+                run_id=1,
+                thread_id=2,
+                stt_model="gpt-4o-mini-transcribe",
+                message_id=test_message_id,
+            )
+        ),
+    )
+
+    app.dependency_overrides[get_current_jarvis_user] = lambda: SimpleNamespace(id=1)
+    try:
+        response = client.post(
+            "/api/jarvis/voice/turn",
+            headers={"Authorization": "Bearer test-token"},
+            files={"audio": ("sample.wav", b"audio", "audio/wav")},
+            data={"return_audio": "true", "message_id": test_message_id},
+        )
+    finally:
+        app.dependency_overrides.pop(get_current_jarvis_user, None)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["message_id"] == test_message_id
+    assert data["transcript"] == "hello"
