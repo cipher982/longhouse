@@ -6,7 +6,7 @@ and the original supervisor run has already finished (SUCCESS/FAILED/CANCELLED).
 Key behaviors tested:
 - Happy path: Worker completion triggers inbox continuation
 - SSE aliasing: Continuation events alias back to original run_id
-- Multiple workers: First creates continuation, subsequent merge
+- Multiple workers: First creates continuation, subsequent updates queue + follow-up
 - Worker failure: Error is reported in continuation
 - Inheritance: Continuation inherits model and trace_id
 - Edge cases: Races, chains, and existing continuations
@@ -374,8 +374,9 @@ class TestMultipleWorkersContinuation:
         assert result2["continuation_run_id"] != continuation_id
 
     @pytest.mark.asyncio
-    async def test_second_worker_merges_into_running_continuation(self, db_session, test_user, sample_agent):
-        """Second worker merges result into running continuation."""
+    async def test_second_worker_queues_followup_when_continuation_running(self, db_session, test_user, sample_agent):
+        """Second worker queues update and schedules follow-up when continuation is running."""
+        from zerg.services import worker_resume
         from zerg.services.worker_resume import trigger_worker_inbox_run
 
         # Create thread
@@ -426,17 +427,24 @@ class TestMultipleWorkersContinuation:
         db_session.refresh(job2)
 
         # Second worker completes while continuation is running
-        result = await trigger_worker_inbox_run(
-            db=db_session,
-            original_run_id=original_run.id,
-            worker_job_id=job2.id,
-            worker_result="Memory: 60%",
-            worker_status="success",
-        )
+        with patch.object(worker_resume, "_schedule_inbox_followup_after_run") as schedule_mock:
+            result = await trigger_worker_inbox_run(
+                db=db_session,
+                original_run_id=original_run.id,
+                worker_job_id=job2.id,
+                worker_result="Memory: 60%",
+                worker_status="success",
+            )
 
-        # Verify merged
-        assert result["status"] == "merged"
+        # Verify queued + follow-up scheduled
+        assert result["status"] == "queued"
         assert result["continuation_run_id"] == running_continuation.id
+        schedule_mock.assert_called_once_with(
+            run_id=running_continuation.id,
+            worker_job_id=job2.id,
+            worker_status="success",
+            worker_error=None,
+        )
 
         # Verify context message was injected (as "user" role so AgentRunner includes it)
         merged_msgs = (
@@ -450,6 +458,7 @@ class TestMultipleWorkersContinuation:
         )
         merged_content = [m.content for m in merged_msgs if "Worker update" in (m.content or "")]
         assert len(merged_content) >= 1
+        assert str(job2.id) in merged_content[0]
 
 
 @pytest.mark.timeout(60)
@@ -744,9 +753,10 @@ class TestIdempotencyAndRaces:
         assert chain_continuation.continuation_of_run_id == first_continuation.id
 
     @pytest.mark.asyncio
-    async def test_race_recovery_merges_into_running_continuation(self, db_session, test_user, sample_agent):
-        """Race condition recovery: IntegrityError triggers merge into running continuation."""
-        from sqlalchemy.exc import IntegrityError
+    async def test_followup_runs_after_running_continuation_finishes(self, db_session, test_user, sample_agent):
+        """Queued worker update triggers a follow-up continuation after running continuation finishes."""
+        from zerg.services import worker_resume
+        from zerg.services.worker_resume import run_inbox_followup_after_run
         from zerg.services.worker_resume import trigger_worker_inbox_run
 
         # Create thread
@@ -782,8 +792,8 @@ class TestIdempotencyAndRaces:
         db_session.commit()
         db_session.refresh(job)
 
-        # Pre-create a RUNNING continuation to simulate race
-        racing_continuation = AgentRun(
+        # Pre-create a RUNNING continuation to simulate an in-flight inbox run
+        running_continuation = AgentRun(
             agent_id=sample_agent.id,
             thread_id=thread.id,
             continuation_of_run_id=original_run.id,
@@ -793,19 +803,45 @@ class TestIdempotencyAndRaces:
             model="gpt-mock",
             assistant_message_id=str(uuid.uuid4()),
         )
-        db_session.add(racing_continuation)
+        db_session.add(running_continuation)
         db_session.commit()
-        db_session.refresh(racing_continuation)
+        db_session.refresh(running_continuation)
 
-        # Now trigger inbox - it will hit unique constraint, recover, and merge
-        result = await trigger_worker_inbox_run(
-            db=db_session,
-            original_run_id=original_run.id,
-            worker_job_id=job.id,
-            worker_result="Test result",
-            worker_status="success",
+        # Queue the worker update while continuation is running
+        with patch.object(worker_resume, "_schedule_inbox_followup_after_run") as schedule_mock:
+            result = await trigger_worker_inbox_run(
+                db=db_session,
+                original_run_id=original_run.id,
+                worker_job_id=job.id,
+                worker_result="Test result",
+                worker_status="success",
+            )
+
+        assert result["status"] == "queued"
+        assert result["continuation_run_id"] == running_continuation.id
+        schedule_mock.assert_called_once()
+
+        # Mark running continuation as finished
+        running_continuation.status = RunStatus.SUCCESS
+        db_session.commit()
+
+        # Follow-up should create a new continuation
+        mock_result = MagicMock()
+        mock_result.status = "success"
+        with patch.object(SupervisorService, "run_supervisor", new=AsyncMock(return_value=mock_result)):
+            followup_result = await run_inbox_followup_after_run(
+                run_id=running_continuation.id,
+                worker_job_id=job.id,
+                worker_status="success",
+                worker_error=None,
+                timeout_s=1,
+            )
+
+        assert followup_result is not None
+        assert followup_result["status"] == "triggered"
+        new_continuation = (
+            db_session.query(AgentRun)
+            .filter(AgentRun.continuation_of_run_id == running_continuation.id)
+            .first()
         )
-
-        # Should merge into the existing running continuation
-        assert result["status"] == "merged"
-        assert result["continuation_run_id"] == racing_continuation.id
+        assert new_continuation is not None

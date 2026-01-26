@@ -11,7 +11,10 @@ Key requirements:
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import logging
+import time
 import uuid
 from datetime import datetime
 from datetime import timedelta
@@ -30,6 +33,129 @@ from zerg.models.worker_barrier import WorkerBarrier
 from zerg.services.supervisor_context import reset_seq
 
 logger = logging.getLogger(__name__)
+
+# Sentinel used when follow-up continuations should read queued worker updates from thread.
+INBOX_QUEUED_RESULT = "(Queued worker updates available in thread)"
+
+# Follow-up wait tuning (best-effort, avoids infinite background tasks)
+INBOX_FOLLOWUP_TIMEOUT_S = 300
+INBOX_FOLLOWUP_SLEEP_S = 0.5
+INBOX_FOLLOWUP_MAX_SLEEP_S = 2.0
+
+
+def _build_worker_update_content(
+    *,
+    worker_job_id: int,
+    worker_task: str,
+    worker_status: str,
+    worker_result: str,
+    worker_error: str | None,
+) -> str:
+    if worker_status == "failed":
+        summary = f"Error: {worker_error or 'Unknown error'}"
+    else:
+        summary = f"Result: {worker_result[:500]}"
+    return (
+        "[Worker update]\n"
+        f"Job ID: {worker_job_id}\n"
+        f"Status: {worker_status}\n"
+        f"Task: {worker_task[:200]}\n"
+        f"{summary}\n\n"
+        "If you need full details, call get_worker_evidence(job_id=...)."
+    )
+
+
+def _queue_worker_update(
+    *,
+    db: Session,
+    thread_id: int,
+    worker_job_id: int,
+    worker_task: str,
+    worker_status: str,
+    worker_result: str,
+    worker_error: str | None,
+) -> None:
+    from zerg.crud import crud
+
+    context_content = _build_worker_update_content(
+        worker_job_id=worker_job_id,
+        worker_task=worker_task,
+        worker_status=worker_status,
+        worker_result=worker_result,
+        worker_error=worker_error,
+    )
+
+    crud.create_thread_message(
+        db=db,
+        thread_id=thread_id,
+        role="user",  # Use "user" role so AgentRunner includes it
+        content=context_content,
+        processed=False,  # Unprocessed so it gets picked up
+        internal=True,  # Internal flag for UI filtering
+    )
+
+
+async def run_inbox_followup_after_run(
+    *,
+    run_id: int,
+    worker_job_id: int,
+    worker_status: str,
+    worker_error: str | None,
+    timeout_s: int = INBOX_FOLLOWUP_TIMEOUT_S,
+) -> dict[str, Any] | None:
+    """Wait for a run to finish, then trigger a continuation for queued worker updates."""
+    from zerg.database import get_session_factory
+
+    start = time.monotonic()
+    sleep_s = INBOX_FOLLOWUP_SLEEP_S
+    session_factory = get_session_factory()
+    db = session_factory()
+    try:
+        while True:
+            run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
+            if not run:
+                return None
+            if run.status in (RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED):
+                break
+            if (time.monotonic() - start) >= timeout_s:
+                logger.info("Inbox follow-up timed out waiting for run %s to finish", run_id)
+                return None
+            await asyncio.sleep(sleep_s)
+            sleep_s = min(sleep_s * 1.5, INBOX_FOLLOWUP_MAX_SLEEP_S)
+            db.expire_all()
+
+        # Trigger continuation using queued updates already in the thread.
+        return await trigger_worker_inbox_run(
+            db=db,
+            original_run_id=run_id,
+            worker_job_id=worker_job_id,
+            worker_result=INBOX_QUEUED_RESULT,
+            worker_status=worker_status,
+            worker_error=worker_error,
+        )
+    finally:
+        db.close()
+
+
+def _schedule_inbox_followup_after_run(
+    *,
+    run_id: int,
+    worker_job_id: int,
+    worker_status: str,
+    worker_error: str | None,
+) -> None:
+    """Fire-and-forget scheduling for follow-up continuations."""
+    coro = run_inbox_followup_after_run(
+        run_id=run_id,
+        worker_job_id=worker_job_id,
+        worker_status=worker_status,
+        worker_error=worker_error,
+    )
+    try:
+        asyncio.create_task(coro, context=contextvars.Context())
+    except Exception:
+        coro.close()
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -1021,7 +1147,7 @@ async def trigger_worker_inbox_run(
     Returns:
         Dict with status and details:
         - {"status": "triggered", "continuation_run_id": N} if continuation created
-        - {"status": "merged", "continuation_run_id": N} if merged into existing continuation
+        - {"status": "queued", "continuation_run_id": N} if update queued until current continuation finishes
         - {"status": "skipped", "reason": "..."} if continuation not needed
         - {"status": "error", "error": "..."} if something went wrong
     """
@@ -1058,38 +1184,33 @@ async def trigger_worker_inbox_run(
         existing_continuation = db.query(AgentRun).filter(AgentRun.continuation_of_run_id == original_run_id).first()
 
         if existing_continuation:
-            # Existing continuation - merge result based on its status
+            # Existing continuation - handle based on its status
             if existing_continuation.status == RunStatus.RUNNING:
-                # Continuation is currently running - inject result as additional context
-                logger.info(f"Merging worker {worker_job_id} result into running continuation {existing_continuation.id}")
-
-                # Build context message
-                if worker_status == "failed":
-                    context_content = (
-                        f"[Worker update] Worker failed on task: {worker_task[:100]}\nError: {worker_error or 'Unknown error'}"
-                    )
-                else:
-                    context_content = (
-                        f"[Worker update] Additional worker completed task: {worker_task[:100]}\nResult: {worker_result[:500]}"
-                    )
-
-                # Inject as internal user message (NOT system - AgentRunner filters those)
-                from zerg.crud import crud
-
-                crud.create_thread_message(
+                # Continuation is running; queue update and trigger follow-up after it finishes.
+                logger.info(
+                    "Queueing worker %s update while continuation %s is running",
+                    worker_job_id,
+                    existing_continuation.id,
+                )
+                _queue_worker_update(
                     db=db,
                     thread_id=thread.id,
-                    role="user",  # Use "user" role so AgentRunner includes it
-                    content=context_content,
-                    processed=False,  # Unprocessed so it gets picked up
-                    internal=True,  # Internal flag for UI filtering
+                    worker_job_id=worker_job_id,
+                    worker_task=worker_task,
+                    worker_status=worker_status,
+                    worker_result=worker_result,
+                    worker_error=worker_error,
                 )
-                db.commit()
-
+                _schedule_inbox_followup_after_run(
+                    run_id=existing_continuation.id,
+                    worker_job_id=worker_job_id,
+                    worker_status=worker_status,
+                    worker_error=worker_error,
+                )
                 return {
-                    "status": "merged",
+                    "status": "queued",
                     "continuation_run_id": existing_continuation.id,
-                    "message": "Injected result into running continuation",
+                    "message": "Queued worker update; follow-up will run after current continuation completes",
                 }
 
             elif existing_continuation.status in (RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED):
@@ -1145,35 +1266,32 @@ async def trigger_worker_inbox_run(
             existing = db.query(AgentRun).filter(AgentRun.continuation_of_run_id == original_run_id).first()
             if existing:
                 if existing.status == RunStatus.RUNNING:
-                    # Inject result into running continuation
-                    from zerg.crud import crud
-
-                    if worker_status == "failed":
-                        context_content = (
-                            f"[Worker update] Worker failed on task: {worker_task[:100]}\nError: {worker_error or 'Unknown error'}"
-                        )
-                    else:
-                        context_content = (
-                            f"[Worker update] Additional worker completed task: {worker_task[:100]}\nResult: {worker_result[:500]}"
-                        )
-                    crud.create_thread_message(
+                    _queue_worker_update(
                         db=db,
                         thread_id=thread.id,
-                        role="user",
-                        content=context_content,
-                        processed=False,
-                        internal=True,
+                        worker_job_id=worker_job_id,
+                        worker_task=worker_task,
+                        worker_status=worker_status,
+                        worker_result=worker_result,
+                        worker_error=worker_error,
                     )
-                    db.commit()
+                    _schedule_inbox_followup_after_run(
+                        run_id=existing.id,
+                        worker_job_id=worker_job_id,
+                        worker_status=worker_status,
+                        worker_error=worker_error,
+                    )
                     return {
-                        "status": "merged",
+                        "status": "queued",
                         "continuation_run_id": existing.id,
-                        "message": "Race recovery: merged into existing continuation",
+                        "message": "Race recovery: queued worker update; follow-up will run after current continuation completes",
                     }
                 elif existing.status in (RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED):
                     # Existing continuation already finished - recurse to create chain
                     logger.info(
-                        f"Race recovery: existing continuation {existing.id} is {existing.status.value}, " f"recursing to create chain"
+                        "Race recovery: existing continuation %s is %s, recursing to create chain",
+                        existing.id,
+                        existing.status.value,
                     )
                     return await trigger_worker_inbox_run(
                         db=db,
@@ -1191,7 +1309,12 @@ async def trigger_worker_inbox_run(
         )
 
         # Build synthetic task for supervisor
-        if worker_status == "failed":
+        if worker_result == INBOX_QUEUED_RESULT:
+            synthetic_task = (
+                "[Worker inbox] One or more background workers completed while another response was running.\n\n"
+                "Please review the latest internal worker updates in the thread and summarize them clearly for the user."
+            )
+        elif worker_status == "failed":
             synthetic_task = (
                 f"[Worker inbox] A background worker failed.\n\n"
                 f"Original task: {worker_task[:200]}\n\n"
