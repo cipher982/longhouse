@@ -622,6 +622,48 @@
     color: var(--color-brand-secondary);
   }
 
+  /* Skills callout */
+  .landing-skills-callout {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-4);
+    max-width: 600px;
+    margin: 0 auto var(--space-12);
+    padding: var(--space-5) var(--space-6);
+    background: linear-gradient(
+      135deg,
+      rgb(99 102 241 / 8%) 0%,
+      rgb(139 92 246 / 5%) 100%
+    );
+    border: 1px solid rgb(99 102 241 / 20%);
+    border-radius: var(--radius-xl);
+    text-align: left;
+  }
+
+  .landing-skills-icon {
+    flex-shrink: 0;
+    color: var(--color-brand-primary);
+    margin-top: var(--space-0-5);
+  }
+
+  .landing-skills-text {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .landing-skills-text strong {
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+  }
+
+  .landing-skills-text span {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    line-height: var(--font-line-height-relaxed);
+  }
+
   /* Trust badges in Integrations */
   .landing-trust-badges {
     display: flex;
