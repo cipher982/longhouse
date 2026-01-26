@@ -4,13 +4,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { AppProvider } from "../../context/AppContext";
 import { useTurnBasedVoice } from "../useTurnBasedVoice";
-import { useAppState } from "../../context";
+import { useAppDispatch, useAppState } from "../../context";
 
-const mockVoiceTurn = vi.fn();
+const mockVoiceTranscribe = vi.fn();
+const mockVoiceTts = vi.fn();
 
-vi.mock("../../../services/api", () => ({
-  voiceTurn: (...args: unknown[]) => mockVoiceTurn(...args),
-}));
+vi.mock("../../../services/api", async () => {
+  const actual = await vi.importActual<typeof import("../../../services/api")>("../../../services/api");
+  return {
+    ...actual,
+    voiceTranscribe: (...args: unknown[]) => mockVoiceTranscribe(...args),
+    voiceTts: (...args: unknown[]) => mockVoiceTts(...args),
+  };
+});
 
 class MockMediaRecorder {
   static isTypeSupported() {
@@ -47,15 +53,17 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return <AppProvider>{children}</AppProvider>;
 }
 
-function useHarness() {
-  const voice = useTurnBasedVoice();
+function useHarness(sendText?: (text: string, messageId: string) => Promise<void>) {
+  const voice = useTurnBasedVoice({ sendText });
   const state = useAppState();
-  return { voice, state };
+  const dispatch = useAppDispatch();
+  return { voice, state, dispatch };
 }
 
 describe("useTurnBasedVoice", () => {
   beforeEach(() => {
-    mockVoiceTurn.mockReset();
+    mockVoiceTranscribe.mockReset();
+    mockVoiceTts.mockReset();
 
     Object.defineProperty(globalThis, "MediaRecorder", {
       value: MockMediaRecorder,
@@ -74,15 +82,14 @@ describe("useTurnBasedVoice", () => {
     });
   });
 
-  it("records audio and sends voice turn", async () => {
-    mockVoiceTurn.mockResolvedValue({
+  it("records audio, transcribes, and sends transcript via SSE", async () => {
+    const sendText = vi.fn().mockResolvedValue(undefined);
+    mockVoiceTranscribe.mockResolvedValue({
       status: "success",
       transcript: "Hello from voice",
-      response_text: "Hi there",
-      tts: null,
     });
 
-    const { result } = renderHook(() => useHarness(), { wrapper });
+    const { result } = renderHook(() => useHarness(sendText), { wrapper });
 
     await act(async () => {
       await result.current.voice.startRecording();
@@ -94,10 +101,53 @@ describe("useTurnBasedVoice", () => {
 
     await waitFor(() => {
       const userMessage = result.current.state.messages.find((msg) => msg.role === "user");
-      const assistantMessage = result.current.state.messages.find((msg) => msg.role === "assistant");
-      expect(mockVoiceTurn).toHaveBeenCalledTimes(1);
+      expect(mockVoiceTranscribe).toHaveBeenCalledTimes(1);
+      expect(sendText).toHaveBeenCalledTimes(1);
       expect(userMessage?.content).toBe("Hello from voice");
-      expect(assistantMessage?.content).toBe("Hi there");
+    });
+  });
+
+  it("requests TTS when assistant message is finalized", async () => {
+    const sendText = vi.fn().mockResolvedValue(undefined);
+    mockVoiceTranscribe.mockResolvedValue({
+      status: "success",
+      transcript: "Hello from voice",
+    });
+    mockVoiceTts.mockResolvedValue({
+      status: "error",
+      error: "tts unavailable",
+    });
+
+    const { result } = renderHook(() => useHarness(sendText), { wrapper });
+
+    await act(async () => {
+      await result.current.voice.startRecording();
+    });
+
+    await act(async () => {
+      result.current.voice.stopRecording();
+    });
+
+    await waitFor(() => {
+      expect(sendText).toHaveBeenCalledTimes(1);
+    });
+
+    const assistant = result.current.state.messages.find((msg) => msg.role === "assistant" && msg.messageId);
+    expect(assistant?.messageId).toBeTruthy();
+
+    await act(async () => {
+      result.current.dispatch({
+        type: "UPDATE_MESSAGE_BY_MESSAGE_ID",
+        messageId: assistant!.messageId!,
+        updates: { content: "Final response", status: "final", timestamp: new Date() },
+      });
+    });
+
+    await waitFor(() => {
+      expect(mockVoiceTts).toHaveBeenCalledWith({
+        text: "Final response",
+        message_id: assistant!.messageId,
+      });
     });
   });
 });

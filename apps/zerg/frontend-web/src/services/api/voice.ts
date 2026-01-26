@@ -21,9 +21,45 @@ export interface VoiceTurnResponse {
   message_id?: string | null;
 }
 
+export interface VoiceTranscribeResponse {
+  transcript: string;
+  status: string;
+  error?: string | null;
+  stt_model?: string | null;
+  message_id?: string | null;
+}
+
+export interface VoiceTtsRequest {
+  text: string;
+  provider?: string | null;
+  voice_id?: string | null;
+  message_id?: string | null;
+}
+
+export interface VoiceTtsResponse {
+  status: string;
+  tts?: VoiceAudioPayload | null;
+  error?: string | null;
+  message_id?: string | null;
+}
+
 export async function voiceTurn(formData: FormData): Promise<VoiceTurnResponse> {
   return request<VoiceTurnResponse>("/jarvis/voice/turn", {
     method: "POST",
     body: formData,
+  });
+}
+
+export async function voiceTranscribe(formData: FormData): Promise<VoiceTranscribeResponse> {
+  return request<VoiceTranscribeResponse>("/jarvis/voice/transcribe", {
+    method: "POST",
+    body: formData,
+  });
+}
+
+export async function voiceTts(payload: VoiceTtsRequest): Promise<VoiceTtsResponse> {
+  return request<VoiceTtsResponse>("/jarvis/voice/tts", {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }
