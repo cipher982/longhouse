@@ -11,6 +11,7 @@ import { HeroSection } from "../components/landing/HeroSection";
 import { HowItWorksSection } from "../components/landing/HowItWorksSection";
 import { DemoSection } from "../components/landing/DemoSection";
 import { IntegrationsSection } from "../components/landing/IntegrationsSection";
+import { SkillsSection } from "../components/landing/SkillsSection";
 import { PricingSection } from "../components/landing/PricingSection";
 import { TrustSection } from "../components/landing/TrustSection";
 import { FooterCTA } from "../components/landing/FooterCTA";
@@ -165,6 +166,7 @@ export default function LandingPage() {
         <HowItWorksSection />
         <DemoSection />
         <IntegrationsSection />
+        <SkillsSection />
         <PricingSection />
         <TrustSection />
         <FooterCTA />

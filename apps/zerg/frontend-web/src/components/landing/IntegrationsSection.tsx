@@ -16,7 +16,6 @@ import {
   ShieldIcon,
   TrashIcon,
   BanIcon,
-  SparklesIcon,
 } from "../icons";
 
 interface Integration {
@@ -131,15 +130,6 @@ export function IntegrationsSection() {
         <p className="landing-integrations-note">
           And anything else via <code>webhooks</code>, <code>REST APIs</code>, or <code>MCP</code>
         </p>
-
-        {/* Skills callout */}
-        <div className="landing-skills-callout">
-          <SparklesIcon width={24} height={24} className="landing-skills-icon" />
-          <div className="landing-skills-text">
-            <strong>Extend with Skills</strong>
-            <span>Reusable capabilities for web search, GitHub, Slack, and more. Create custom skills for your specific workflows.</span>
-          </div>
-        </div>
 
         {/* Trust badges */}
         <Link to="/security" className="landing-trust-badges-link">
