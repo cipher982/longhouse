@@ -86,7 +86,7 @@ User message → `SupervisorService` → `supervisor_react_engine` → (spawn_wo
 # Post-deploy verification (run after push):
 ./scripts/smoke-prod.sh --wait        # Health-polls then validates (fast)
 ./scripts/smoke-prod.sh --wait --full # + LLM, voice, CRUD tests (~60s)
-make test-e2e-prod                    # Live Playwright (needs SMOKE_TEST_SECRET)
+./scripts/run-prod-e2e.sh             # Live Playwright (needs SMOKE_TEST_SECRET)
 ./scripts/get-coolify-logs.sh 1       # Debug deploy issues
 ```
 
