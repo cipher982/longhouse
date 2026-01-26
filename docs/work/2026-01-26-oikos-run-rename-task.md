@@ -14,6 +14,7 @@
 - 2026-01-26: Confirmed **Oikos replaces Jarvis everywhere**, no Jarvis remnants. Oikos is singular; avoid pluralization (use “Oikos instance(s)” or “operators” if needed).
 - 2026-01-26: Completed Jarvis → Oikos rename (paths + symbols), updated API paths to `/api/oikos/run` + `/api/oikos/thread`, fixed prompt composer/template collisions.
 - 2026-01-26: Regenerated WS/SSE, OpenAPI, and tool definitions; OpenAPI required `DATABASE_URL` + `FERNET_SECRET` in env for generation.
+- 2026-01-26: Fixed ruff rename fallout, ran pre-commit hooks, committed full rename.
 
 ## Checklist
 ### Phase A — Prep
@@ -39,10 +40,10 @@
 - [ ] Fix typecheck/lint errors
 
 ### Phase E — Validate + Commit
-- [ ] Run repo hooks / validations
-- [ ] Commit backend+schemas+migration
-- [ ] Commit frontend
-- [ ] Commit tests/docs
+- [x] Run repo hooks / validations (pre-commit)
+- [x] Commit backend+schemas+migration
+- [x] Commit frontend
+- [x] Commit tests/docs
 
 ## Notes
 - No backward compatibility.
