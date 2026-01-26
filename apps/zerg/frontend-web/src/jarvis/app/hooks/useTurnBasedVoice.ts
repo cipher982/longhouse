@@ -278,6 +278,8 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
     setVoiceStatus("processing");
     const placeholders = createPlaceholders();
 
+    logger.info(`[useTurnBasedVoice] Sending voice turn, messageId: ${placeholders.assistantMessageId}`);
+
     try {
       const formData = new FormData();
       const filename = `voice-${Date.now()}.webm`;
@@ -302,6 +304,9 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
         handleSoftError("Didn't catch that — try speaking a bit longer.", undefined, placeholders);
         return;
       }
+
+      logger.info(`[useTurnBasedVoice] Transcript: "${transcript}"`);
+
       if (placeholders.userItemId) {
         dispatch({ type: "UPDATE_MESSAGE", itemId: placeholders.userItemId, content: transcript });
       }
@@ -319,6 +324,9 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
           },
         });
       }
+
+      const preview = assistantText.length > 50 ? assistantText.slice(0, 50) + "..." : assistantText;
+      logger.success(`[useTurnBasedVoice] Response complete: "${preview}" (${assistantText.length} chars)`);
 
       const tts = response.tts;
       if (tts?.audio_base64 && !tts.error) {
