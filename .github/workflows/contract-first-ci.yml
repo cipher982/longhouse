@@ -128,18 +128,30 @@ jobs:
     - name: Install Playwright browsers
       run: cd apps/zerg/e2e && bunx playwright install chromium
 
-    - name: Debug - List test files
+    - name: Debug - Check environment
       run: |
+        echo "=== Checking required environment variables ==="
+        if [ -z "$DATABASE_URL" ]; then
+          echo "❌ DATABASE_URL is NOT set - E2E tests require a database"
+          echo "   Set DATABASE_URL as a GitHub secret or runner env var"
+          exit 1
+        else
+          echo "✓ DATABASE_URL is set (length: ${#DATABASE_URL})"
+        fi
+        echo ""
         echo "=== Test files in apps/zerg/e2e/tests/core/ ==="
         ls -la apps/zerg/e2e/tests/core/ || echo "Directory not found"
         echo ""
         echo "=== Playwright test list (verbose) ==="
         cd apps/zerg/e2e && VERBOSE=1 bunx playwright test --project=core --list 2>&1 | head -50 || true
+      env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
     - name: Run Core E2E Tests
       run: make test-e2e-core
       env:
+        # Database connection for E2E tests
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
         # Life Hub credentials for session continuity tests
         LIFE_HUB_API_KEY: ${{ secrets.LIFE_HUB_API_KEY }}
         LIFE_HUB_URL: https://data.drose.io
-        # DATABASE_URL inherited from runner environment
