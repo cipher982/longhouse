@@ -1302,6 +1302,69 @@ def get_worker_metadata(job_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Session Selection Tool
+# ---------------------------------------------------------------------------
+
+
+async def request_session_selection_async(
+    query: str | None = None,
+    project: str | None = None,
+) -> str:
+    """Request user to select a session from Life Hub history.
+
+    Use this when the user wants to resume a past session but hasn't
+    provided a specific session ID. This opens a modal for them to
+    browse and select a session.
+
+    Args:
+        query: Optional search query to pre-filter sessions
+        project: Optional project name to pre-filter sessions
+
+    Returns:
+        Confirmation that the session picker was opened
+    """
+    # Get supervisor context for run_id and trace_id
+    ctx = get_supervisor_context()
+    if not ctx:
+        return "Error: Cannot request session selection - no supervisor context available"
+
+    # Build filters
+    filters = {}
+    if query:
+        filters["query"] = query
+    if project:
+        filters["project"] = project
+
+    # Emit SSE event to trigger frontend modal
+    from zerg.services.event_store import append_run_event
+
+    if ctx.run_id is not None:
+        await append_run_event(
+            run_id=ctx.run_id,
+            event_type="show_session_picker",
+            payload={
+                "filters": filters if filters else None,
+                "trace_id": ctx.trace_id,
+            },
+        )
+
+    return (
+        "Session picker opened. Waiting for user to select a session. "
+        "Once they select one, they'll send a follow-up message with the session ID."
+    )
+
+
+def request_session_selection(
+    query: str | None = None,
+    project: str | None = None,
+) -> str:
+    """Sync wrapper for request_session_selection_async."""
+    from zerg.utils.async_utils import run_async_safely
+
+    return run_async_safely(request_session_selection_async(query, project))
+
+
+# ---------------------------------------------------------------------------
 # Tool registration and exports
 # ---------------------------------------------------------------------------
 
@@ -1411,6 +1474,15 @@ TOOLS: List[StructuredTool] = [
         description="Wait for a specific worker to complete (blocking). "
         "Use sparingly - the async model is preferred. "
         "Only use when you need the result before proceeding.",
+    ),
+    # Session selection tool
+    StructuredTool.from_function(
+        func=request_session_selection,
+        coroutine=request_session_selection_async,
+        name="request_session_selection",
+        description="Open a session picker modal for the user to select a past AI session. "
+        "Use this when the user wants to resume a session but hasn't provided a specific ID. "
+        "Optionally pre-filter by query text or project name.",
     ),
 ]
 

@@ -7,9 +7,11 @@
  */
 
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TestRouter } from '../../test/test-utils';
+import { SessionPickerProvider } from '../../components/SessionPickerProvider';
 import JarvisChatPage from '../JarvisChatPage';
 import { supervisorToolStore } from '../../jarvis/lib/supervisor-tool-store';
 
@@ -30,12 +32,23 @@ vi.mock('../../services/api', async (importOriginal) => {
 const { fetchThreadByTitle: mockFetchThreadByTitle, fetchThreadMessages: mockFetchThreadMessages } = apiMocks;
 
 function renderJarvisChatPage(initialEntry = '/chat') {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
   return render(
-    <TestRouter initialEntries={[initialEntry]}>
-      <Routes>
-        <Route path="/chat" element={<JarvisChatPage />} />
-      </Routes>
-    </TestRouter>
+    <QueryClientProvider client={queryClient}>
+      <SessionPickerProvider>
+        <TestRouter initialEntries={[initialEntry]}>
+          <Routes>
+            <Route path="/chat" element={<JarvisChatPage />} />
+          </Routes>
+        </TestRouter>
+      </SessionPickerProvider>
+    </QueryClientProvider>
   );
 }
 

@@ -5,6 +5,7 @@ import { BrowserRouter } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "./lib/auth";
 import { ConfirmProvider } from "./components/confirm";
+import { SessionPickerProvider } from "./components/SessionPickerProvider";
 
 // Global stylesheet entrypoint
 import "./styles/app.css";
@@ -133,6 +134,7 @@ ReactDOM.createRoot(container).render(
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <ConfirmProvider>
+          <SessionPickerProvider>
           <BrowserRouter
             future={{
               v7_startTransition: true,
@@ -169,6 +171,7 @@ ReactDOM.createRoot(container).render(
             }}
           />
           </BrowserRouter>
+          </SessionPickerProvider>
         </ConfirmProvider>
       </AuthProvider>
     </QueryClientProvider>

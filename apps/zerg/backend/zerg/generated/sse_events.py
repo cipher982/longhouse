@@ -246,6 +246,13 @@ class SupervisorToolFailedPayload(BaseModel):
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
+class ShowSessionPickerPayload(BaseModel):
+    """Trigger session picker modal in frontend"""
+
+    run_id: Optional[int] = Field(default=None, ge=1, description='Current supervisor run ID')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
+    filters: Optional[Dict[str, Any]] = Field(default=None, description='Optional filters to pre-populate the picker')
+
 class SSEEventType(str, Enum):
     """Enumeration of all SSE event types."""
 
@@ -271,6 +278,7 @@ class SSEEventType(str, Enum):
     SUPERVISOR_TOOL_PROGRESS = "supervisor_tool_progress"
     SUPERVISOR_TOOL_COMPLETED = "supervisor_tool_completed"
     SUPERVISOR_TOOL_FAILED = "supervisor_tool_failed"
+    SHOW_SESSION_PICKER = "show_session_picker"
 
 
 # Typed emitter for SSE events

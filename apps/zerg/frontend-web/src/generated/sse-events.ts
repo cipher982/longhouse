@@ -297,6 +297,16 @@ export interface SupervisorToolFailedPayload {
   trace_id?: string;
 }
 
+/** Trigger session picker modal in frontend */
+export interface ShowSessionPickerPayload {
+  /** Current supervisor run ID */
+  run_id?: number;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
+  /** Optional filters to pre-populate the picker */
+  filters?: Record<string, any>;
+}
+
 // All SSE event types as a constant array (use for validation)
 export const SSE_EVENT_TYPES = [
   "connected",
@@ -321,6 +331,7 @@ export const SSE_EVENT_TYPES = [
   "supervisor_tool_progress",
   "supervisor_tool_completed",
   "supervisor_tool_failed",
+  "show_session_picker",
 ] as const;
 
 // SSE event type union (derived from SSE_EVENT_TYPES)
@@ -370,6 +381,7 @@ export type SSEPayloadFor<T extends SSEEventType> =
   T extends "supervisor_tool_progress" ? SupervisorToolProgressPayload :
   T extends "supervisor_tool_completed" ? SupervisorToolCompletedPayload :
   T extends "supervisor_tool_failed" ? SupervisorToolFailedPayload :
+  T extends "show_session_picker" ? ShowSessionPickerPayload :
   never;
 
 // Payload type lookup (for direct payload access after unwrapping)

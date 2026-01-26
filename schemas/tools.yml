@@ -73,6 +73,7 @@ components:
         - read_worker_result
         - peek_worker_output
         - refresh_connector_status
+        - request_session_selection
         - runner_create_enroll_token
         - runner_exec
         - runner_list
@@ -279,6 +280,8 @@ components:
               const: supervisor
             refresh_connector_status:
               const: connector
+            request_session_selection:
+              const: supervisor
             runner_create_enroll_token:
               const: runner_setup
             runner_exec:
