@@ -14,6 +14,8 @@ export type ForumReplayPlayer = {
   timeMs: number;
   durationMs: number;
   playing: boolean;
+  /** Version counter incremented on each state mutation for stable memoization */
+  stateVersion: number;
   setPlaying: (next: boolean) => void;
   reset: () => void;
   dispatchEvent: (event: ForumReplayEvent) => void;
@@ -33,6 +35,7 @@ export function useForumReplayPlayer(
   const timeRef = useRef<number>(0);
   const rafRef = useRef<number | null>(null);
   const lastFrameRef = useRef<number | null>(null);
+  const versionRef = useRef<number>(0);
 
   const reset = useMemo(() => {
     return () => {
@@ -40,6 +43,7 @@ export function useForumReplayPlayer(
       stateRef.current = cursorRef.current.state;
       timeRef.current = 0;
       lastFrameRef.current = null;
+      versionRef.current += 1;
       forceRender();
     };
   }, [scenario]);
@@ -51,6 +55,7 @@ export function useForumReplayPlayer(
       const now = cursorRef.current.state.now;
       cursorRef.current.now = Math.max(cursorRef.current.now, now);
       timeRef.current = now;
+      versionRef.current += 1;
       forceRender();
     };
   }, []);
@@ -62,6 +67,7 @@ export function useForumReplayPlayer(
       const now = cursorRef.current.state.now;
       cursorRef.current.now = Math.max(cursorRef.current.now, now);
       timeRef.current = now;
+      versionRef.current += 1;
       forceRender();
     };
   }, []);
@@ -107,9 +113,12 @@ export function useForumReplayPlayer(
       const applied = advanceForumReplay(cursorRef.current, targetTime);
       stateRef.current = cursorRef.current.state;
       timeRef.current = cursorRef.current.now;
+      // Always render on each tick so marker expiry and time display stay in sync
+      // even when no new events are applied
       if (applied > 0) {
-        forceRender();
+        versionRef.current += 1;
       }
+      forceRender();
       rafRef.current = requestAnimationFrame(tick);
     };
 
@@ -128,6 +137,7 @@ export function useForumReplayPlayer(
     timeMs: timeRef.current,
     durationMs: scenario.durationMs,
     playing,
+    stateVersion: versionRef.current,
     setPlaying,
     reset,
     dispatchEvent,

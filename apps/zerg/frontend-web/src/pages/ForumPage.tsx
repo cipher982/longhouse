@@ -73,6 +73,7 @@ export default function ForumPage() {
     timeMs,
     durationMs,
     playing,
+    stateVersion,
     setPlaying,
     reset,
     dispatchEvents,
@@ -82,18 +83,19 @@ export default function ForumPage() {
     playing: !isLive,
   });
 
+  // Use stateVersion instead of state.tasks directly since Map reference doesn't change on mutation
   const tasks = useMemo(() => {
     const list = Array.from(state.tasks.values());
     return list.sort((a, b) => b.updatedAt - a.updatedAt);
-  }, [state.tasks, timeMs]);
+  }, [state.tasks, stateVersion]);
 
   const selectedEntity = selectedEntityId ? state.entities.get(selectedEntityId) : null;
   const selectedTask = selectedTaskId ? state.tasks.get(selectedTaskId) : null;
 
+  // Use ref for synchronous access in event handlers
+  // Updated synchronously after dispatchEvents to handle fast back-to-back events
   const stateRef = useRef(state);
-  useEffect(() => {
-    stateRef.current = state;
-  }, [state]);
+  stateRef.current = state;
 
   useEffect(() => {
     if (selectedEntityId && !state.entities.has(selectedEntityId)) {
