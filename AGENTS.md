@@ -73,22 +73,34 @@ User message → `SupervisorService` → `supervisor_react_engine` → (spawn_wo
 6. **Coolify env var changes need redeploy** — restart doesn't pick up new vars.
 7. **AGENTS.md is canonical** — `CLAUDE.md` is a symlink, edit AGENTS.md only.
 
-## Deployment
+## Pushing Changes
 
-**Product**: Swarmlet | **Server**: zerg (Hetzner) | Coolify auto-deploys `main`
+**Prod URLs**: https://swarmlet.com (frontend) | https://api.swarmlet.com (API)
 
-| Service | URL |
-|---------|-----|
-| Frontend | https://swarmlet.com |
-| API | https://api.swarmlet.com |
-
+### Before Push
 ```bash
-# Post-deploy verification (run after push):
-make smoke-prod              # Health-polls then validates (fast)
-make smoke-prod-full         # + LLM, voice, CRUD tests (~60s)
-make test-e2e-prod           # Live Playwright (needs SMOKE_TEST_SECRET)
-./scripts/get-coolify-logs.sh 1  # Debug deploy issues
+make test              # Unit tests (required)
+make test-e2e-core     # Core E2E - must pass 100%
 ```
+
+### After Push
+Coolify auto-deploys `main`. **Always verify your deploy:**
+```bash
+make verify-prod       # Full validation: API + browser (~80s)
+```
+This waits for health, runs API checks (auth, LLM, voice, CRUD), then browser tests.
+
+### If Something Breaks
+```bash
+./scripts/get-coolify-logs.sh 1   # Check deploy logs
+```
+
+### Checklist for Agents
+1. ✅ `make test` passes locally
+2. ✅ `make test-e2e-core` passes locally
+3. ✅ Push to main
+4. ✅ Run `make verify-prod` (~80s)
+5. ✅ Report result to user
 
 ## Deep Dives
 
