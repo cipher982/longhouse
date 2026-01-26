@@ -373,8 +373,8 @@ async def test_stream_resumption_after_reconnect(db_session, test_run, test_user
 
 
 @pytest.mark.asyncio
-async def test_stream_closes_on_supervisor_complete_with_pending_workers(db_session, test_run, test_user, auth_headers):
-    """Stream should close on supervisor_complete even if workers are still pending."""
+async def test_stream_keeps_open_for_pending_workers_and_emits_worker_complete(db_session, test_run, test_user, auth_headers):
+    """Stream should continue after supervisor_complete when workers are pending."""
     from zerg.models.models import WorkerJob
 
     # Create a worker job to reference in worker_spawned payload
@@ -410,6 +410,19 @@ async def test_stream_closes_on_supervisor_complete_with_pending_workers(db_sess
             "supervisor_complete",
             {"result": "done", "owner_id": test_user.id},
         )
+        await asyncio.sleep(0.1)
+        await emit_run_event(
+            db_session,
+            test_run.id,
+            "worker_complete",
+            {
+                "job_id": job.id,
+                "worker_id": "worker-xyz",
+                "status": "success",
+                "duration_ms": 1200,
+                "owner_id": test_user.id,
+            },
+        )
 
     emitter_task = asyncio.create_task(emit_events())
 
@@ -423,3 +436,5 @@ async def test_stream_closes_on_supervisor_complete_with_pending_workers(db_sess
     event_types = [e.get("event") for e in events if e.get("event") != "heartbeat"]
     assert "worker_spawned" in event_types
     assert "supervisor_complete" in event_types
+    assert "worker_complete" in event_types
+    assert event_types.index("supervisor_complete") < event_types.index("worker_complete")
