@@ -17,8 +17,10 @@ Build a demo-ready, fully playable iso-2D Swarm/RTS overlay that integrates with
    - Status: Done (2026-01-26) - Added Swarm map overlay page, canvas renderer, pan/zoom/selection, and replay-driven playback.
 3. **Decision loop UI**
    - Success: task list -> action -> visible map effect (marker/route/status change); selected entity shows actionable controls.
+   - Status: Done (2026-01-26) - Added task list selection, Drop-In actions, and nudge marker/status updates.
 4. **Integration hooks**
    - Success: adapter maps real worker/task events to map entities; mock and real data share the same contract; swap between live and replay via config.
+   - Status: Done (2026-01-26) - Added live/replay toggle and event bus mapping for supervisor + worker events.
 5. **Polish + tests**
    - Success: alerts/markers/legend are legible; unit/integration tests cover mapping + replay; E2E smoke renders map and plays one replay.
 
@@ -41,11 +43,11 @@ Build a demo-ready, fully playable iso-2D Swarm/RTS overlay that integrates with
 - **E2E**: smoke test that loads overlay, starts replay, and asserts visible markers + task list entry.
 
 ## Risks / Open Questions
-- Spec file `docs/specs/swarm-map-rts-ui.md` is missing in this repo; need to import or recreate it.
+- Spec file `docs/specs/swarm-map-rts-ui.md` exists but is a placeholder; replace with full handoff when available.
 - Performance risks on low-end GPUs; must keep draw calls minimal and avoid layout thrash.
 - Event ordering: live task/worker events may arrive out of order; replay must be idempotent.
 - Mobile UX: pinch-zoom + selection overlays need careful hit targets.
 - Original repo is `~/git/zerg`; it may contain missing context (e.g., `.env` vars). Avoid editing that repo because main has ongoing work.
 
 ## Next Action
-Wire the decision loop UI so tasks and actions affect map entities, and connect live worker/task events.
+Polish the overlay visuals (legend, alerts), add integration tests for replay + event mapping, and consider an E2E smoke for map rendering.

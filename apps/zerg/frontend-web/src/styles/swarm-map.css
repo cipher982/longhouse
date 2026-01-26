@@ -67,6 +67,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: var(--space-2);
     padding: var(--space-2) var(--space-3);
     border-radius: 12px;
     background: rgba(20, 26, 36, 0.75);
@@ -84,6 +85,23 @@
 
   .swarm-task-title {
     font-weight: var(--font-weight-medium);
+    flex: 1;
+  }
+
+  .swarm-task-row--selected {
+    border-color: rgba(120, 220, 240, 0.7);
+    box-shadow: 0 0 0 1px rgba(120, 220, 240, 0.3), 0 8px 22px rgba(8, 12, 20, 0.45);
+  }
+
+  .swarm-task-progress {
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+    color: rgba(170, 220, 255, 0.9);
+    background: rgba(60, 110, 160, 0.25);
+    padding: 2px 8px;
+    border-radius: 999px;
+    min-width: 44px;
+    text-align: center;
   }
 
   .swarm-task-status {
@@ -113,6 +131,16 @@
   .swarm-task-status--failed {
     background: rgba(240, 84, 84, 0.2);
     color: #f05454;
+  }
+
+  .swarm-task-empty {
+    padding: var(--space-4);
+    border-radius: 12px;
+    border: 1px dashed rgba(120, 150, 190, 0.3);
+    color: rgba(190, 210, 235, 0.75);
+    font-size: var(--font-size-sm);
+    line-height: 1.5;
+    text-align: center;
   }
 
   .swarm-map-canvas {
