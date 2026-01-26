@@ -6,13 +6,18 @@ import { SwarmMapCanvas } from "../swarm/SwarmMapCanvas";
 import { useSwarmReplayPlayer } from "../swarm/useSwarmReplay";
 import { eventBus } from "../jarvis/lib/event-bus";
 import type {
-  SwarmAlert,
-  SwarmEntity,
   SwarmMarker,
   SwarmReplayEvent,
   SwarmReplayEventInput,
   SwarmTask,
 } from "../swarm/types";
+import {
+  mapSupervisorComplete,
+  mapSupervisorStarted,
+  mapWorkerComplete,
+  mapWorkerSpawned,
+  mapWorkerToolFailed,
+} from "../swarm/live-mapper";
 import "../styles/swarm-map.css";
 
 const DEFAULT_SEED = "swarm-demo";
@@ -70,7 +75,6 @@ export default function SwarmMapPage() {
     playing,
     setPlaying,
     reset,
-    dispatchEvent,
     dispatchEvents,
   } = useSwarmReplayPlayer(scenario, {
     loop: true,
@@ -121,21 +125,6 @@ export default function SwarmMapPage() {
     },
     [],
   );
-
-  const getDefaultRoom = () => {
-    const iterator = stateRef.current.rooms.values().next();
-    return iterator.done ? null : iterator.value;
-  };
-
-  const positionForId = (id: string, bounds: { minCol: number; minRow: number; maxCol: number; maxRow: number }) => {
-    const hash = Array.from(id).reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    const spanCol = Math.max(1, bounds.maxCol - bounds.minCol);
-    const spanRow = Math.max(1, bounds.maxRow - bounds.minRow);
-    return {
-      col: bounds.minCol + (hash % spanCol),
-      row: bounds.minRow + ((hash * 7) % spanRow),
-    };
-  };
 
   const nudgeTask = (task: SwarmTask) => {
     if (task.status === "success" || task.status === "failed" || task.progress >= 1) {
@@ -196,174 +185,56 @@ export default function SwarmMapPage() {
     if (!isLive) return;
 
     const unsubscribers: Array<() => void> = [];
-    const ensureRoom = () => getDefaultRoom();
-
-    const ensureTaskEntity = (taskId: string, roomId: string, timestamp: number) => {
-      const entityId = `task-node-${taskId}`;
-      if (stateRef.current.entities.has(entityId)) return entityId;
-      const room = stateRef.current.rooms.get(roomId);
-      if (!room) return entityId;
-      const entity: SwarmEntity = {
-        id: entityId,
-        type: "task_node",
-        roomId,
-        position: positionForId(entityId, room.bounds),
-        status: "working",
-        label: `Task Node ${taskId}`,
-      };
-      dispatchEvent(makeLocalEvent({ t: timestamp, type: "entity.add", entity }));
-      return entityId;
-    };
 
     unsubscribers.push(
       eventBus.on("supervisor:started", (data) => {
-        const room = ensureRoom();
-        if (!room) return;
-        const taskId = `run-${data.runId}`;
-        const entityId = ensureTaskEntity(taskId, room.id, data.timestamp);
-        if (!stateRef.current.tasks.has(taskId)) {
-          const task: SwarmTask = {
-            id: taskId,
-            title: data.task,
-            status: "running",
-            roomId: room.id,
-            entityId,
-            progress: 0,
-            createdAt: data.timestamp,
-            updatedAt: data.timestamp,
-          };
-          dispatchEvent(makeLocalEvent({ t: data.timestamp, type: "task.add", task }));
+        const events = mapSupervisorStarted(stateRef.current, data).map(makeLocalEvent);
+        if (events.length) {
+          dispatchEvents(events);
         }
       }),
     );
 
     unsubscribers.push(
       eventBus.on("supervisor:worker_spawned", (data) => {
-        const room = ensureRoom();
-        if (!room) return;
-        const workerId = `worker-${data.jobId}`;
-        const entityId = `worker-entity-${data.jobId}`;
-        if (!stateRef.current.entities.has(entityId)) {
-          const entity: SwarmEntity = {
-            id: entityId,
-            type: "worker",
-            roomId: room.id,
-            position: positionForId(entityId, room.bounds),
-            status: "working",
-            label: `Worker ${data.jobId}`,
-          };
-          dispatchEvent(makeLocalEvent({ t: data.timestamp, type: "entity.add", entity }));
-        }
-        if (!stateRef.current.workers.has(workerId)) {
-          dispatchEvent(
-            makeLocalEvent({
-              t: data.timestamp,
-              type: "worker.add",
-              worker: {
-                id: workerId,
-                name: `Worker ${data.jobId}`,
-                status: "busy",
-                roomId: room.id,
-                entityId,
-              },
-            }),
-          );
-        }
-        const taskId = `job-${data.jobId}`;
-        if (!stateRef.current.tasks.has(taskId)) {
-          const task: SwarmTask = {
-            id: taskId,
-            title: data.task,
-            status: "running",
-            roomId: room.id,
-            entityId,
-            workerId,
-            progress: 0,
-            createdAt: data.timestamp,
-            updatedAt: data.timestamp,
-          };
-          dispatchEvent(makeLocalEvent({ t: data.timestamp, type: "task.add", task }));
+        const events = mapWorkerSpawned(stateRef.current, data).map(makeLocalEvent);
+        if (events.length) {
+          dispatchEvents(events);
         }
       }),
     );
 
     unsubscribers.push(
       eventBus.on("supervisor:worker_complete", (data) => {
-        const workerId = `worker-${data.jobId}`;
-        if (stateRef.current.workers.has(workerId)) {
-          dispatchEvent(
-            makeLocalEvent({
-              t: data.timestamp,
-              type: "worker.update",
-              workerId,
-              status: data.status === "success" ? "idle" : "offline",
-            }),
-          );
-        }
-        const taskId = `job-${data.jobId}`;
-        if (stateRef.current.tasks.has(taskId)) {
-          dispatchEvent(
-            makeLocalEvent({
-              t: data.timestamp,
-              type: "task.resolve",
-              taskId,
-              status: data.status === "success" ? "success" : "failed",
-              progress: 1,
-              updatedAt: data.timestamp,
-            }),
-          );
-        }
-        if (data.status !== "success") {
-          const room = ensureRoom();
-          if (!room) return;
-          const alert: SwarmAlert = {
-            id: `alert-worker-${data.jobId}-${data.timestamp}`,
-            level: "L2",
-            message: `Worker ${data.jobId} failed`,
-            roomId: room.id,
-            createdAt: data.timestamp,
-          };
-          dispatchEvent(makeLocalEvent({ t: data.timestamp, type: "alert.raise", alert }));
+        const events = mapWorkerComplete(stateRef.current, data).map(makeLocalEvent);
+        if (events.length) {
+          dispatchEvents(events);
         }
       }),
     );
 
     unsubscribers.push(
       eventBus.on("supervisor:complete", (data) => {
-        const taskId = `run-${data.runId}`;
-        if (!stateRef.current.tasks.has(taskId)) return;
-        dispatchEvent(
-          makeLocalEvent({
-            t: data.timestamp,
-            type: "task.resolve",
-            taskId,
-            status: data.status === "success" ? "success" : "failed",
-            progress: 1,
-            updatedAt: data.timestamp,
-          }),
-        );
+        const events = mapSupervisorComplete(stateRef.current, data).map(makeLocalEvent);
+        if (events.length) {
+          dispatchEvents(events);
+        }
       }),
     );
 
     unsubscribers.push(
       eventBus.on("worker:tool_failed", (data) => {
-        const room = ensureRoom();
-        if (!room) return;
-        const alert: SwarmAlert = {
-          id: `alert-tool-${data.toolCallId}-${data.timestamp}`,
-          level: "L1",
-          message: `${data.toolName} failed`,
-          roomId: room.id,
-          createdAt: data.timestamp,
-        };
-        dispatchEvent(makeLocalEvent({ t: data.timestamp, type: "alert.raise", alert }));
+        const events = mapWorkerToolFailed(stateRef.current, data).map(makeLocalEvent);
+        if (events.length) {
+          dispatchEvents(events);
+        }
       }),
     );
 
     return () => {
       unsubscribers.forEach((unsubscribe) => unsubscribe());
     };
-  }, [dispatchEvent, isLive, makeLocalEvent]);
+  }, [dispatchEvents, isLive, makeLocalEvent]);
 
   return (
     <PageShell size="full" className="swarm-map-page">
