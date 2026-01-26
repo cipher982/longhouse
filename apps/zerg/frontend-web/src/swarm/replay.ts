@@ -4,6 +4,7 @@ import type {
   SwarmMarker,
   SwarmReplayConfig,
   SwarmReplayEvent,
+  SwarmReplayEventInput,
   SwarmReplayScenario,
   SwarmRepoGroup,
   SwarmRoom,
@@ -20,10 +21,6 @@ export type SwarmRng = {
   pick: <T>(items: T[]) => T;
   bool: (chance?: number) => boolean;
 };
-
-type SwarmReplayEventInput = {
-  [K in SwarmReplayEvent["type"]]: Omit<Extract<SwarmReplayEvent, { type: K }>, "id" | "seq">;
-}[SwarmReplayEvent["type"]];
 
 function hashSeed(seed: string): number {
   let hash = 0;
