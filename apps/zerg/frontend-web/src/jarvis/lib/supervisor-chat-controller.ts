@@ -44,6 +44,7 @@ import {
   type SupervisorToolProgressPayload,
   type SupervisorToolCompletedPayload,
   type SupervisorToolFailedPayload,
+  type ShowSessionPickerPayload,
 } from '../../generated/sse-events';
 
 export interface WorkerToolInfo {
@@ -879,6 +880,21 @@ export class SupervisorChatController {
           durationMs: payload.duration_ms,
           error: payload.error,
           errorDetails: payload.error_details,
+          timestamp: Date.now(),
+        });
+        break;
+      }
+
+      case 'show_session_picker': {
+        const payload = wrapper.payload as ShowSessionPickerPayload;
+        this.petWatchdog();
+        logger.debug('[SupervisorChat] Session picker requested', payload.filters);
+        // Emit event for UI to handle - the Jarvis chat component will listen and
+        // use the SessionPickerProvider to show the modal
+        eventBus.emit('supervisor:show_session_picker', {
+          runId: payload.run_id ?? this.currentRunId ?? 0,
+          filters: payload.filters,
+          traceId: payload.trace_id,
           timestamp: Date.now(),
         });
         break;

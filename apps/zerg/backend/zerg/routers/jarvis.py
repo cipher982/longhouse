@@ -11,6 +11,7 @@ Sub-routers:
 - jarvis_supervisor: Supervisor dispatch, events, cancel
 - jarvis_chat: Text chat with streaming
 - jarvis_tts: Text-to-speech for voice responses
+- jarvis_life_hub: Life Hub session listing and preview
 
 Endpoints in this file:
 - /events: General SSE events stream
@@ -51,6 +52,7 @@ from zerg.models.models import ThreadMessage
 from zerg.routers import jarvis_agents
 from zerg.routers import jarvis_chat
 from zerg.routers import jarvis_dispatch
+from zerg.routers import jarvis_life_hub
 from zerg.routers import jarvis_runs
 from zerg.routers import jarvis_supervisor
 from zerg.routers import jarvis_tts
@@ -71,6 +73,7 @@ router.include_router(jarvis_supervisor.router, prefix="", tags=["jarvis"])
 router.include_router(jarvis_chat.router, prefix="", tags=["jarvis"])
 router.include_router(jarvis_tts.router, prefix="", tags=["jarvis-tts"])
 router.include_router(jarvis_voice.router, prefix="", tags=["jarvis-voice"])
+router.include_router(jarvis_life_hub.router, prefix="", tags=["life-hub"])
 
 # ---------------------------------------------------------------------------
 # Deprecated Authentication Endpoint

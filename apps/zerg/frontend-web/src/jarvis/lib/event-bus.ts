@@ -142,6 +142,18 @@ export interface EventMap {
     timestamp: number;
   };
 
+  // Session Picker Events
+  'supervisor:show_session_picker': {
+    runId: number;
+    filters?: {
+      project?: string;
+      query?: string;
+      provider?: string;
+    };
+    traceId?: string;
+    timestamp: number;
+  };
+
   // Test Events (E2E ready signals - DEV mode only)
   // Note: Prefer sticky flags (window.__jarvis.ready) over events for "ready" signals
   'test:chat_ready': { timestamp: number };

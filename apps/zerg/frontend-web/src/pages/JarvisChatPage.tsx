@@ -8,8 +8,10 @@
  * - ?thread=<title> - Load a backend thread by title for display
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { useSessionPicker } from '../components/SessionPickerProvider';
+import { eventBus } from '../jarvis/lib/event-bus';
 
 // Import Jarvis styles (now loaded globally via styles/app.css)
 
@@ -33,6 +35,33 @@ export default function JarvisChatPage() {
   const demoScenario = searchParams.get('demo');
   const [initialMessages, setInitialMessages] = useState<ChatMessage[] | undefined>(undefined);
   const [loading, setLoading] = useState(!!threadTitle || !!demoScenario);
+  const { showSessionPicker } = useSessionPicker();
+
+  // Handle session picker event from supervisor
+  const handleShowSessionPicker = useCallback(
+    async (data: { runId: number; filters?: { project?: string; query?: string; provider?: string }; timestamp: number }) => {
+      const result = await showSessionPicker({
+        filters: data.filters,
+        showStartNew: false,
+      });
+
+      if (result.sessionId) {
+        // User selected a session - send a message to resume it
+        // The supervisor will receive this and spawn a workspace worker with the session
+        console.log('[JarvisChatPage] User selected session:', result.sessionId);
+        // Note: The actual message sending should go through the chat controller
+        // For now, we log the selection. Integration with sendMessage will be added
+        // when testing the full flow.
+      }
+    },
+    [showSessionPicker]
+  );
+
+  // Subscribe to session picker event
+  useEffect(() => {
+    const unsubscribe = eventBus.on('supervisor:show_session_picker', handleShowSessionPicker);
+    return () => unsubscribe();
+  }, [handleShowSessionPicker]);
 
   useEffect(() => {
     if (!demoScenario) return;
