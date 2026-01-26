@@ -32,6 +32,36 @@ function buildWavBuffer(durationMs = 100, sampleRate = 8000): Buffer {
   return buffer;
 }
 
+function parseSSEEvents(sseText: string): Array<{ event: string; data: any }> {
+  const events: Array<{ event: string; data: any }> = [];
+  const chunks = sseText.split('\n\n');
+
+  for (const chunk of chunks) {
+    if (!chunk.trim()) continue;
+    const lines = chunk.split('\n');
+    let event = '';
+    let data = '';
+    for (const line of lines) {
+      if (line.startsWith('event:')) {
+        event = line.replace('event:', '').trim();
+      } else if (line.startsWith('data:')) {
+        data += line.replace('data:', '').trim();
+      }
+    }
+
+    if (!event) continue;
+    let parsed: any = data;
+    try {
+      parsed = data ? JSON.parse(data) : undefined;
+    } catch {
+      // leave as string
+    }
+    events.push({ event, data: parsed });
+  }
+
+  return events;
+}
+
 test.beforeEach(async ({ request }) => {
   await resetDatabase(request);
 });
@@ -86,5 +116,42 @@ test.describe('Voice Turn-Based - Core', () => {
     const data = await response.json();
     expect(data.message_id).toBe(testMessageId);
     expect(data.status).toBe('success');
+  });
+
+  test('transcribe -> chat SSE uses same message_id', async ({ request }) => {
+    const audioBuffer = buildWavBuffer();
+    const testMessageId = 'voice-sse-' + Date.now();
+
+    const transcribeResponse = await request.post('/api/jarvis/voice/transcribe', {
+      multipart: {
+        audio: {
+          name: 'sample.wav',
+          mimeType: 'audio/wav',
+          buffer: audioBuffer,
+        },
+        message_id: testMessageId,
+      },
+    });
+
+    expect(transcribeResponse.ok()).toBeTruthy();
+    const transcribeData = await transcribeResponse.json();
+    expect(transcribeData.status).toBe('success');
+    expect(transcribeData.transcript?.length).toBeGreaterThan(0);
+    expect(transcribeData.message_id).toBe(testMessageId);
+
+    const chatResponse = await request.post('/api/jarvis/chat', {
+      data: {
+        message: transcribeData.transcript,
+        message_id: testMessageId,
+      },
+    });
+
+    expect(chatResponse.ok()).toBeTruthy();
+    const sseText = await chatResponse.text();
+    const events = parseSSEEvents(sseText);
+    const completeEvent = events.find((evt) => evt.event === 'supervisor_complete');
+    expect(completeEvent).toBeTruthy();
+    const payload = completeEvent?.data?.payload ?? completeEvent?.data;
+    expect(payload?.message_id || payload?.messageId).toBe(testMessageId);
   });
 });
