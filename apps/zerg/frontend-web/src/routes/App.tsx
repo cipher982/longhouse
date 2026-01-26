@@ -25,6 +25,7 @@ import { AuthGuard } from "../lib/auth";
 const ChatPage = lazy(() => import("../pages/ChatPage"));
 const CanvasPage = lazy(() => import("../pages/CanvasPage"));
 const JarvisChatPage = lazy(() => import("../pages/JarvisChatPage"));
+const ForumPage = lazy(() => import("../pages/ForumPage"));
 const SwarmOpsPage = lazy(() => import("../pages/SwarmOpsPage"));
 import { ShelfProvider } from "../lib/useShelfState";
 import { ErrorBoundary } from "../components/ErrorBoundary";
@@ -162,7 +163,17 @@ export default function App() {
           )
         },
         {
-          path: "/swarm",
+          path: "/forum",
+          element: (
+            <ErrorBoundary>
+              <Suspense fallback={<PageLoader />}>
+                <ForumPage />
+              </Suspense>
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/swarm/ops",
           element: (
             <ErrorBoundary>
               <Suspense fallback={<PageLoader />}>
