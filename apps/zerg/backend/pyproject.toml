@@ -1,4 +1,4 @@
-# Cache bust: 2026-01-23-asyncpg
+# Cache bust: 2026-01-26-sauron-jobs-deps
 [project]
 name = "zerg"
 version = "0.1.0"
@@ -59,6 +59,11 @@ dependencies = [
     "hatch-agent @ git+https://github.com/cipher982/hatch.git",
     # Telegram Bot API integration for channel plugins
     "python-telegram-bot>=21.0",
+    # External job dependencies (sauron-jobs migration)
+    "pymongo>=4.6.0",
+    "motor>=3.3.0",
+    "google-ads>=26.0.0",
+    "minio>=7.2.0",
 ]
 
 [build-system]
