@@ -70,6 +70,7 @@ export default function App({ embedded = false }: AppProps) {
 
   const turnBasedVoice = useTurnBasedVoice({
     onError: (error) => console.error('[App] Voice error:', error),
+    sendText: jarvisApp.sendText,
   })
 
   // Debug panel toggle

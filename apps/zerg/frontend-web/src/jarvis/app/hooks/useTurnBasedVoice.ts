@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppDispatch, useAppState, type ChatMessage, type VoiceStatus } from "../context";
-import { voiceTurn, ApiError } from "../../../services/api";
+import { voiceTranscribe, voiceTts, ApiError } from "../../../services/api";
 import { uuid } from "../../lib/uuid";
 import { logger } from "../../core";
 
@@ -37,6 +37,7 @@ function base64ToBlob(base64: string, contentType: string): Blob {
 
 export interface UseTurnBasedVoiceOptions {
   onError?: (error: Error) => void;
+  sendText?: (text: string, messageId: string, options?: { model?: string; reasoning_effort?: string }) => Promise<void>;
 }
 
 type VoicePlaceholders = {
@@ -46,10 +47,12 @@ type VoicePlaceholders = {
 
 export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
   const dispatch = useAppDispatch();
-  const { preferences } = useAppState();
+  const { preferences, messages } = useAppState();
   const statusRef = useRef<VoiceStatus>("idle");
   const recordingRef = useRef(false);
   const processingRef = useRef(false);
+  const pendingVoiceMessageIdsRef = useRef<Set<string>>(new Set());
+  const ttsInFlightRef = useRef<Set<string>>(new Set());
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
@@ -66,6 +69,17 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
     statusRef.current = status;
     dispatch({ type: "SET_VOICE_STATUS", status });
   }, [dispatch]);
+
+  const clearPendingVoice = useCallback((messageId?: string) => {
+    if (!messageId) return;
+    pendingVoiceMessageIdsRef.current.delete(messageId);
+    ttsInFlightRef.current.delete(messageId);
+  }, []);
+
+  const markReady = useCallback(() => {
+    processingRef.current = false;
+    setVoiceStatus("ready");
+  }, [setVoiceStatus]);
 
   const cleanupStream = useCallback(() => {
     if (streamRef.current) {
@@ -198,19 +212,22 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
 
   const handleError = useCallback((message: string, error?: Error, context?: VoicePlaceholders) => {
     logger.error(`[useTurnBasedVoice] ${message}`, error);
+    processingRef.current = false;
+    clearPendingVoice(context?.assistantMessageId);
     setVoiceStatus("error");
     updatePlaceholders(`Voice error: ${message}`, context, "error", "Voice input failed");
     options.onError?.(error ?? new Error(message));
-  }, [options, setVoiceStatus, updatePlaceholders]);
+  }, [clearPendingVoice, options, setVoiceStatus, updatePlaceholders]);
 
   const handleSoftError = useCallback((message: string, error?: Error, context?: VoicePlaceholders) => {
     logger.warn(`[useTurnBasedVoice] ${message}`, error);
+    clearPendingVoice(context?.assistantMessageId);
     updatePlaceholders(message, context, "final", "No speech detected");
-    setVoiceStatus("ready");
+    markReady();
     if (error) {
       options.onError?.(error);
     }
-  }, [options, setVoiceStatus, updatePlaceholders]);
+  }, [clearPendingVoice, markReady, options, updatePlaceholders]);
 
   const createPlaceholders = useCallback((): VoicePlaceholders => {
     const userItemId = uuid();
@@ -242,7 +259,7 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
 
   const playAudio = useCallback(async (audioBase64: string, contentType: string) => {
     if (!audioBase64) {
-      setVoiceStatus("ready");
+      markReady();
       return;
     }
 
@@ -258,44 +275,97 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
       audio.onended = () => {
         URL.revokeObjectURL(url);
         cleanupAudio();
-        setVoiceStatus("ready");
+        markReady();
       };
       audio.onerror = () => {
         URL.revokeObjectURL(url);
         cleanupAudio();
-        setVoiceStatus("ready");
+        markReady();
       };
 
       await audio.play();
     } catch (error) {
-      setVoiceStatus("ready");
+      markReady();
       logger.warn("[useTurnBasedVoice] Audio playback failed", error);
     }
-  }, [cleanupAudio, setVoiceStatus]);
+  }, [cleanupAudio, markReady, setVoiceStatus]);
 
-  const sendVoiceTurn = useCallback(async (blob: Blob, contentType: string) => {
+  const requestTtsAndPlay = useCallback(async (messageId: string, text: string) => {
+    try {
+      if (!text.trim()) {
+        markReady();
+        return;
+      }
+
+      const response = await voiceTts({ text, message_id: messageId });
+      if (response.status !== "success") {
+        logger.warn("[useTurnBasedVoice] TTS request failed", response.error);
+        markReady();
+        return;
+      }
+
+      const tts = response.tts;
+      if (tts?.audio_base64 && !tts.error) {
+        await playAudio(tts.audio_base64, tts.content_type || "audio/mpeg");
+      } else {
+        logger.warn("[useTurnBasedVoice] TTS response missing audio", tts?.error);
+        markReady();
+      }
+    } catch (error) {
+      logger.warn("[useTurnBasedVoice] TTS request error", error);
+      markReady();
+    } finally {
+      clearPendingVoice(messageId);
+      ttsInFlightRef.current.delete(messageId);
+    }
+  }, [clearPendingVoice, markReady, playAudio]);
+
+  useEffect(() => {
+    const pending = pendingVoiceMessageIdsRef.current;
+    if (!pending.size) return;
+
+    for (const message of messages) {
+      const messageId = message.messageId;
+      if (!messageId || !pending.has(messageId)) continue;
+
+      if (message.status === "error") {
+        clearPendingVoice(messageId);
+        markReady();
+        continue;
+      }
+
+      if (message.status !== "final") continue;
+      if (!message.content?.trim()) continue;
+      if (ttsInFlightRef.current.has(messageId)) continue;
+
+      ttsInFlightRef.current.add(messageId);
+      void requestTtsAndPlay(messageId, message.content);
+    }
+  }, [clearPendingVoice, markReady, messages, requestTtsAndPlay]);
+
+  const sendVoiceTurn = useCallback(async (blob: Blob, _contentType: string) => {
     processingRef.current = true;
     setVoiceStatus("processing");
     const placeholders = createPlaceholders();
+    const assistantMessageId = placeholders.assistantMessageId;
+    if (assistantMessageId) {
+      pendingVoiceMessageIdsRef.current.add(assistantMessageId);
+    }
 
-    logger.info(`[useTurnBasedVoice] Sending voice turn, messageId: ${placeholders.assistantMessageId}`);
+    logger.info(`[useTurnBasedVoice] Sending voice turn, messageId: ${assistantMessageId}`);
 
     try {
       const formData = new FormData();
       const filename = `voice-${Date.now()}.webm`;
       formData.append("audio", blob, filename);
-      formData.append("return_audio", "true");
-      if (preferences.chat_model) {
-        formData.append("model", preferences.chat_model);
-      }
-      // Send messageId for backend correlation (unified text/voice architecture)
-      if (placeholders.assistantMessageId) {
-        formData.append("message_id", placeholders.assistantMessageId);
+      // Send messageId for backend correlation
+      if (assistantMessageId) {
+        formData.append("message_id", assistantMessageId);
       }
 
-      const response = await voiceTurn(formData);
+      const response = await voiceTranscribe(formData);
       if (response.status !== "success") {
-        handleError(response.error || "Voice turn failed", undefined, placeholders);
+        handleError(response.error || "Voice transcription failed", undefined, placeholders);
         return;
       }
 
@@ -311,33 +381,25 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
         dispatch({ type: "UPDATE_MESSAGE", itemId: placeholders.userItemId, content: transcript });
       }
 
-      const assistantText = response.response_text || "";
-      if (placeholders.assistantMessageId) {
-        dispatch({
-          type: "UPDATE_MESSAGE_BY_MESSAGE_ID",
-          messageId: placeholders.assistantMessageId,
-          updates: {
-            content: assistantText,
-            status: "final",
-            timestamp: new Date(),
-            runId: response.run_id ?? undefined,
-          },
-        });
+      if (!options.sendText || !assistantMessageId) {
+        handleError("Voice chat not initialized", undefined, placeholders);
+        return;
       }
 
-      const preview = assistantText.length > 50 ? assistantText.slice(0, 50) + "..." : assistantText;
-      logger.success(`[useTurnBasedVoice] Response complete: "${preview}" (${assistantText.length} chars)`);
+      await options.sendText(transcript, assistantMessageId, {
+        model: preferences.chat_model,
+        reasoning_effort: preferences.reasoning_effort,
+      });
 
-      const tts = response.tts;
-      if (tts?.audio_base64 && !tts.error) {
-        await playAudio(tts.audio_base64, tts.content_type || "audio/mpeg");
-      } else {
-        setVoiceStatus("ready");
-      }
+      logger.info(`[useTurnBasedVoice] Transcript sent via SSE (messageId: ${assistantMessageId})`);
     } catch (error) {
       if (error instanceof ApiError) {
-        const detail = typeof error.body === "object" && error.body && "detail" in error.body
-          ? String((error.body as { detail?: string }).detail)
+        const detail = typeof error.body === "object" && error.body
+          ? ("error" in error.body
+            ? String((error.body as { error?: string }).error)
+            : "detail" in error.body
+              ? String((error.body as { detail?: string }).detail)
+              : error.message)
           : error.message;
         const friendly = detail === "Empty transcription result" || detail === "Audio too short"
           ? "Didn't catch that — try speaking a bit longer."
@@ -350,10 +412,8 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
       } else {
         handleError("Failed to send voice turn", error as Error, placeholders);
       }
-    } finally {
-      processingRef.current = false;
     }
-  }, [createPlaceholders, dispatch, handleError, handleSoftError, playAudio, preferences.chat_model, setVoiceStatus]);
+  }, [createPlaceholders, dispatch, handleError, handleSoftError, options.sendText, preferences.chat_model, preferences.reasoning_effort, setVoiceStatus]);
 
   const startRecording = useCallback(async () => {
     if (processingRef.current || recordingRef.current) return;
@@ -433,6 +493,8 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
     cleanupStream();
     processingRef.current = false;
     recordingRef.current = false;
+    pendingVoiceMessageIdsRef.current.clear();
+    ttsInFlightRef.current.clear();
     setVoiceStatus("ready");
   }, [cleanupAudio, cleanupStream, setVoiceStatus]);
 
