@@ -219,6 +219,7 @@ export function SessionPickerModal({
   // Refs
   const searchInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const wasOpenRef = useRef(false);
 
   // Debounce search query
   useEffect(() => {
@@ -256,9 +257,17 @@ export function SessionPickerModal({
   // Focus search input when modal opens
   useEffect(() => {
     if (isOpen) {
+      if (!wasOpenRef.current) {
+        setSearchQuery(initialFilters.query || "");
+        setProject(initialFilters.project || "");
+        setProvider(initialFilters.provider || "");
+        setSelectedIndex(0);
+        setSelectedSessionId(null);
+      }
       setTimeout(() => searchInputRef.current?.focus(), 100);
     }
-  }, [isOpen]);
+    wasOpenRef.current = isOpen;
+  }, [isOpen, initialFilters]);
 
   // Keyboard navigation
   const handleKeyDown = useCallback(

@@ -73,6 +73,7 @@ class EventType(str, Enum):
     SUPERVISOR_TOOL_PROGRESS = "supervisor_tool_progress"
     SUPERVISOR_TOOL_COMPLETED = "supervisor_tool_completed"
     SUPERVISOR_TOOL_FAILED = "supervisor_tool_failed"
+    SHOW_SESSION_PICKER = "show_session_picker"
 
     # Heartbeat events (Phase 6: prevent false "no progress" warnings during LLM reasoning)
     SUPERVISOR_HEARTBEAT = "supervisor_heartbeat"
