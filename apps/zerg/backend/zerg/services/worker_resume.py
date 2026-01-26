@@ -444,6 +444,22 @@ async def resume_supervisor_batch(
             },
         )
 
+        # Emit stream_control based on pending workers
+        from zerg.services.supervisor_service import emit_stream_control
+
+        pending_workers_count = (
+            db.query(WorkerJob)
+            .filter(
+                WorkerJob.supervisor_run_id == run.id,
+                WorkerJob.status.in_(["queued", "running"]),
+            )
+            .count()
+        )
+        if pending_workers_count > 0:
+            await emit_stream_control(db, run, "keep_open", "workers_pending", owner_id, ttl_ms=120_000)
+        else:
+            await emit_stream_control(db, run, "close", "all_complete", owner_id)
+
         await emit_run_event(
             db=db,
             run_id=run.id,
@@ -662,6 +678,11 @@ async def resume_supervisor_batch(
             },
         )
 
+        # Emit stream_control:close for errors
+        from zerg.services.supervisor_service import emit_stream_control
+
+        await emit_stream_control(db, run, "close", "error", owner_id)
+
         await emit_run_event(
             db=db,
             run_id=run.id,
@@ -817,6 +838,11 @@ async def _continue_supervisor_langgraph_free(
             },
         )
 
+        # Emit stream_control:close for errors
+        from zerg.services.supervisor_service import emit_stream_control
+
+        await emit_stream_control(db, run, "close", "error", owner_id)
+
         await emit_run_event(
             db=db,
             run_id=run.id,
@@ -938,6 +964,22 @@ async def _continue_supervisor_langgraph_free(
             },
         )
 
+        # Emit stream_control based on pending workers
+        from zerg.services.supervisor_service import emit_stream_control
+
+        pending_workers_count = (
+            db.query(WorkerJob)
+            .filter(
+                WorkerJob.supervisor_run_id == run.id,
+                WorkerJob.status.in_(["queued", "running"]),
+            )
+            .count()
+        )
+        if pending_workers_count > 0:
+            await emit_stream_control(db, run, "keep_open", "workers_pending", owner_id, ttl_ms=120_000)
+        else:
+            await emit_stream_control(db, run, "close", "all_complete", owner_id)
+
         await emit_run_event(
             db=db,
             run_id=run.id,
@@ -1052,6 +1094,11 @@ async def _continue_supervisor_langgraph_free(
                 "trace_id": trace_id,
             },
         )
+
+        # Emit stream_control:close for errors
+        from zerg.services.supervisor_service import emit_stream_control
+
+        await emit_stream_control(db, run, "close", "error", owner_id)
 
         await emit_run_event(
             db=db,
@@ -1307,6 +1354,11 @@ async def trigger_worker_inbox_run(
             f"Created inbox continuation run {continuation_run.id} for original run {original_run_id} "
             f"(worker {worker_job_id} completed)"
         )
+
+        # Emit stream_control:keep_open for continuation start
+        from zerg.services.supervisor_service import emit_stream_control
+
+        await emit_stream_control(db, original_run, "keep_open", "continuation_start", owner_id, ttl_ms=180_000)
 
         # Build synthetic task for supervisor
         if worker_result == INBOX_QUEUED_RESULT:

@@ -64,6 +64,55 @@ class SupervisorRunResult:
     debug_url: str | None = None  # Dashboard deep link
 
 
+async def emit_stream_control(
+    db: Session,
+    run: AgentRun,
+    action: str,  # "keep_open" | "close"
+    reason: str,
+    owner_id: int,
+    ttl_ms: int | None = None,
+) -> None:
+    """Emit stream_control event for explicit stream lifecycle management.
+
+    Only the supervisor service should call this - single emitter pattern.
+
+    Args:
+        db: Database session
+        run: AgentRun instance
+        action: "keep_open" (extends lease) or "close" (terminal)
+        reason: Why this action (workers_pending, continuation_start, all_complete, timeout, error)
+        owner_id: Owner ID for security filtering
+        ttl_ms: Optional lease time for keep_open (max 5 minutes)
+    """
+    from zerg.services.event_store import emit_run_event
+
+    payload: dict = {
+        "action": action,
+        "reason": reason,
+        "run_id": run.id,
+        "owner_id": owner_id,
+    }
+    if ttl_ms:
+        payload["ttl_ms"] = min(ttl_ms, 300_000)  # Cap at 5 min
+    if run.trace_id:
+        payload["trace_id"] = str(run.trace_id)
+
+    # For keep_open, include pending worker count for debugging
+    if action == "keep_open":
+        pending_count = (
+            db.query(WorkerJob)
+            .filter(
+                WorkerJob.supervisor_run_id == run.id,
+                WorkerJob.status.in_(["queued", "running"]),
+            )
+            .count()
+        )
+        payload["pending_workers"] = pending_count
+
+    await emit_run_event(db=db, run_id=run.id, event_type="stream_control", payload=payload)
+    logger.debug(f"Emitted stream_control:{action} (reason={reason}) for run {run.id}")
+
+
 class SupervisorService:
     """Service for managing supervisor agent execution."""
 
@@ -973,6 +1022,20 @@ class SupervisorService:
                 },
             )
 
+            # Emit stream_control based on pending workers
+            pending_workers_count = (
+                self.db.query(WorkerJob)
+                .filter(
+                    WorkerJob.supervisor_run_id == run.id,
+                    WorkerJob.status.in_(["queued", "running"]),
+                )
+                .count()
+            )
+            if pending_workers_count > 0:
+                await emit_stream_control(self.db, run, "keep_open", "workers_pending", owner_id, ttl_ms=120_000)
+            else:
+                await emit_stream_control(self.db, run, "close", "all_complete", owner_id)
+
             # v2.2: Also emit RUN_UPDATED for dashboard visibility
             await emit_run_event(
                 db=self.db,
@@ -1048,6 +1111,9 @@ class SupervisorService:
                 },
             )
 
+            # Emit stream_control:close for cancelled runs
+            await emit_stream_control(self.db, run, "close", "cancelled", owner_id)
+
             # v2.2: Also emit RUN_UPDATED for dashboard visibility
             await emit_run_event(
                 db=self.db,
@@ -1098,6 +1164,9 @@ class SupervisorService:
                     "trace_id": str(run.trace_id) if run.trace_id else None,
                 },
             )
+
+            # Emit stream_control:close for errors
+            await emit_stream_control(self.db, run, "close", "error", owner_id)
 
             # v2.2: Also emit RUN_UPDATED for dashboard visibility
             await emit_run_event(
