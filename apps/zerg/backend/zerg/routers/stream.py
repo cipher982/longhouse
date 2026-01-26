@@ -16,6 +16,7 @@ Key features:
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime
 from datetime import timezone
 from typing import List
@@ -148,6 +149,10 @@ async def _replay_and_stream(
     last_sent_event_id = 0
     pending_workers = 0
     supervisor_done = False
+    saw_supervisor_complete = False
+    continuation_active = False
+    awaiting_continuation_until: float | None = None
+    worker_grace_seconds = 5.0
     overflow_event = asyncio.Event()  # Signal overflow without queue sentinel
     continuation_cache: dict[int, bool] = {}  # Cache for continuation run lookups
 
@@ -315,7 +320,13 @@ async def _replay_and_stream(
                 return
 
             try:
-                event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                timeout_s = 30.0
+                if awaiting_continuation_until is not None:
+                    remaining = awaiting_continuation_until - time.monotonic()
+                    # Wake up at grace expiry instead of waiting a full heartbeat interval.
+                    timeout_s = max(0.1, min(30.0, remaining))
+
+                event = await asyncio.wait_for(queue.get(), timeout=timeout_s)
 
                 event_type = event.get("event_type") or event.get("type") or "event"
 
@@ -337,12 +348,30 @@ async def _replay_and_stream(
                 # Track worker lifecycle for UI telemetry (stream no longer waits on workers)
                 if event_type == "worker_spawned":
                     pending_workers += 1
-                elif event_type == "worker_complete" and pending_workers > 0:
-                    pending_workers -= 1
-                elif event_type == "worker_summary_ready" and pending_workers > 0:
-                    pending_workers -= 1
+                    # Cancel any pending close while new workers are active.
+                    awaiting_continuation_until = None
+                elif event_type in ("worker_complete", "worker_summary_ready"):
+                    if pending_workers > 0:
+                        pending_workers -= 1
+
+                    # If supervisor already finished, start a short grace window
+                    # to allow the inbox continuation to begin streaming.
+                    if pending_workers == 0 and supervisor_done and not continuation_active:
+                        if awaiting_continuation_until is None:
+                            awaiting_continuation_until = time.monotonic() + worker_grace_seconds
+                elif event_type == "supervisor_started":
+                    if saw_supervisor_complete:
+                        continuation_active = True
+                        supervisor_done = False
+                        awaiting_continuation_until = None
                 elif event_type == "supervisor_complete":
+                    saw_supervisor_complete = True
                     supervisor_done = True
+                    if continuation_active:
+                        continuation_active = False
+                    # If workers are still pending, keep stream open for their events.
+                    if pending_workers == 0:
+                        complete = True
                 elif event_type == "supervisor_deferred":
                     # v2.2: Timeout migration default is to close the stream, but some
                     # DEFERRED states (e.g., waiting for worker continuations) should
@@ -352,8 +381,9 @@ async def _replay_and_stream(
                 elif event_type == "error":
                     complete = True
 
-                # Close once supervisor is done (async inbox model doesn't block on workers)
-                if supervisor_done:
+                # If we've drained workers after a supervisor_complete and no continuation
+                # started within the grace window, close the stream.
+                if awaiting_continuation_until is not None and time.monotonic() >= awaiting_continuation_until:
                     complete = True
 
                 # Format payload (strip internal fields)
@@ -390,6 +420,8 @@ async def _replay_and_stream(
                         default=_json_default,
                     ),
                 }
+                if awaiting_continuation_until is not None and time.monotonic() >= awaiting_continuation_until:
+                    complete = True
 
     except asyncio.CancelledError:
         logger.info(f"Stream disconnected for run {run_id}")
