@@ -16,9 +16,19 @@
 
 import { test, expect } from '../fixtures';
 
+function normalizeSecret(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if ((trimmed.startsWith("'") && trimmed.endsWith("'")) || (trimmed.startsWith('"') && trimmed.endsWith('"'))) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
 // These tests only run when SMOKE_TEST_SECRET is configured
 // Skip entire describe block if not in production smoke test mode
-const shouldRun = !!process.env.SMOKE_TEST_SECRET;
+const secret = normalizeSecret(process.env.SMOKE_TEST_SECRET);
+const shouldRun = !!secret;
 
 test.describe('Cross-Origin Authentication - Core', () => {
   test.skip(!shouldRun, 'SMOKE_TEST_SECRET required for cross-origin tests');
@@ -30,7 +40,7 @@ test.describe('Cross-Origin Authentication - Core', () => {
     // 1. Login via service account
     const loginRes = await request.post(`${apiUrl}/api/auth/service-login`, {
       headers: {
-        'X-Service-Secret': process.env.SMOKE_TEST_SECRET!,
+        'X-Service-Secret': secret!,
       },
     });
     expect(loginRes.status()).toBe(200);
@@ -65,7 +75,7 @@ test.describe('Cross-Origin Authentication - Core', () => {
     // 1. Login first
     const loginRes = await request.post(`${apiUrl}/api/auth/service-login`, {
       headers: {
-        'X-Service-Secret': process.env.SMOKE_TEST_SECRET!,
+        'X-Service-Secret': secret!,
       },
     });
     expect(loginRes.status()).toBe(200);
