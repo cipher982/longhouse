@@ -21,11 +21,19 @@ from fastapi import HTTPException
 from fastapi import Query
 from pydantic import BaseModel
 from pydantic import Field
+from sqlalchemy.orm import Session
 
+from zerg.crud import create_user_skill
+from zerg.crud import delete_user_skill
+from zerg.crud import get_user_skill_by_name
+from zerg.crud import update_user_skill
+from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
 from zerg.skills.loader import SkillLoader
 from zerg.skills.models import SkillEntry
 from zerg.skills.models import SkillSource
+from zerg.skills.parser import parse_skill_content
+from zerg.skills.parser import validate_manifest
 from zerg.skills.registry import SkillRegistry
 
 logger = logging.getLogger(__name__)
@@ -163,6 +171,18 @@ class SkillCommandResponse(BaseModel):
     emoji: str = ""
 
 
+class SkillCreateRequest(BaseModel):
+    """Create a user-managed skill."""
+
+    content: str = Field(..., description="Full SKILL.md content")
+
+
+class SkillUpdateRequest(BaseModel):
+    """Update a user-managed skill."""
+
+    content: Optional[str] = Field(default=None, description="Updated SKILL.md content")
+
+
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
@@ -214,6 +234,14 @@ def entry_to_detail_response(entry: SkillEntry) -> SkillDetailResponse:
     )
 
 
+def find_entry(entries: List[SkillEntry], name: str) -> Optional[SkillEntry]:
+    """Find a skill entry by name."""
+    for entry in entries:
+        if entry.skill.name == name:
+            return entry
+    return None
+
+
 # ---------------------------------------------------------------------------
 # API Endpoints
 # ---------------------------------------------------------------------------
@@ -225,6 +253,7 @@ async def list_skills(
     source: Optional[str] = Query(None, description="Filter by source (bundled, user, workspace)"),
     eligible_only: bool = Query(False, description="Only return eligible skills"),
     current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> SkillListResponse:
     """List all available skills.
 
@@ -236,7 +265,7 @@ async def list_skills(
 
     # Validate workspace path (security)
     workspace = validate_workspace_path(workspace_path)
-    entries = loader.load_skill_entries(workspace_path=workspace)
+    entries = loader.load_skill_entries(workspace_path=workspace, db=db, owner_id=current_user.id)
 
     # Filter by source if specified
     if source:
@@ -266,6 +295,7 @@ async def list_skills(
 async def list_skill_commands(
     workspace_path: Optional[str] = Query(None),
     current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> List[SkillCommandResponse]:
     """List user-invocable skill commands.
 
@@ -275,7 +305,12 @@ async def list_skill_commands(
     # Per-request loader (thread-safe)
     loader = SkillLoader()
     workspace = validate_workspace_path(workspace_path)
-    entries = loader.load_skill_entries(workspace_path=workspace, filter_eligible=True)
+    entries = loader.load_skill_entries(
+        workspace_path=workspace,
+        filter_eligible=True,
+        db=db,
+        owner_id=current_user.id,
+    )
 
     commands = []
     for entry in entries:
@@ -296,6 +331,7 @@ async def get_skills_prompt(
     workspace_path: Optional[str] = Query(None),
     allowed: Optional[str] = Query(None, description="Comma-separated skill names/patterns to include"),
     current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> SkillPromptResponse:
     """Generate skills prompt for system prompt injection.
 
@@ -305,7 +341,7 @@ async def get_skills_prompt(
     # Per-request registry (thread-safe)
     registry = SkillRegistry()
     workspace = validate_workspace_path(workspace_path)
-    registry.load_for_workspace(workspace)
+    registry.load_for_workspace(workspace, db=db, owner_id=current_user.id)
 
     allowed_list = allowed.split(",") if allowed else None
     snapshot = registry.get_snapshot(allowed=allowed_list)
@@ -322,6 +358,7 @@ async def get_skill(
     skill_name: str,
     workspace_path: Optional[str] = Query(None),
     current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> SkillDetailResponse:
     """Get detailed information about a specific skill.
 
@@ -330,7 +367,7 @@ async def get_skill(
     # Per-request loader (thread-safe)
     loader = SkillLoader()
     workspace = validate_workspace_path(workspace_path)
-    entries = loader.load_skill_entries(workspace_path=workspace)
+    entries = loader.load_skill_entries(workspace_path=workspace, db=db, owner_id=current_user.id)
 
     for entry in entries:
         if entry.skill.name == skill_name:
@@ -339,10 +376,95 @@ async def get_skill(
     raise HTTPException(status_code=404, detail=f"Skill not found: {skill_name}")
 
 
+@router.post("", response_model=SkillDetailResponse)
+async def create_skill(
+    request: SkillCreateRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SkillDetailResponse:
+    """Create a new user-managed skill."""
+    frontmatter, _ = parse_skill_content(request.content)
+    error = validate_manifest(frontmatter)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+
+    name = frontmatter.get("name", "")
+    try:
+        create_user_skill(
+            db,
+            owner_id=current_user.id,
+            name=name,
+            content=request.content,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    loader = SkillLoader()
+    entries = loader.load_skill_entries(db=db, owner_id=current_user.id)
+    entry = find_entry(entries, name)
+    if not entry:
+        raise HTTPException(status_code=500, detail="Skill created but not found in registry")
+    return entry_to_detail_response(entry)
+
+
+@router.patch("/{skill_name}", response_model=SkillDetailResponse)
+async def update_skill(
+    skill_name: str,
+    request: SkillUpdateRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SkillDetailResponse:
+    """Update an existing user-managed skill."""
+    skill = get_user_skill_by_name(db, owner_id=current_user.id, name=skill_name)
+    if not skill:
+        raise HTTPException(status_code=404, detail=f"User skill not found: {skill_name}")
+
+    if request.content is not None:
+        frontmatter, _ = parse_skill_content(request.content)
+        error = validate_manifest(frontmatter)
+        if error:
+            raise HTTPException(status_code=400, detail=error)
+        name_in_content = frontmatter.get("name", "")
+        if name_in_content != skill_name:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Skill name mismatch: expected '{skill_name}', got '{name_in_content}'",
+            )
+
+    update_user_skill(
+        db,
+        skill=skill,
+        content=request.content,
+    )
+
+    loader = SkillLoader()
+    entries = loader.load_skill_entries(db=db, owner_id=current_user.id)
+    entry = find_entry(entries, skill_name)
+    if not entry:
+        raise HTTPException(status_code=500, detail="Skill updated but not found in registry")
+    return entry_to_detail_response(entry)
+
+
+@router.delete("/{skill_name}")
+async def delete_skill(
+    skill_name: str,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Delete a user-managed skill."""
+    skill = get_user_skill_by_name(db, owner_id=current_user.id, name=skill_name)
+    if not skill:
+        raise HTTPException(status_code=404, detail=f"User skill not found: {skill_name}")
+
+    delete_user_skill(db, skill=skill)
+    return {"message": "Skill deleted", "name": skill_name}
+
+
 @router.post("/reload")
 async def reload_skills(
     workspace_path: Optional[str] = Query(None),
     current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """Reload skills from filesystem.
 
@@ -351,7 +473,7 @@ async def reload_skills(
     # Per-request registry (thread-safe)
     registry = SkillRegistry()
     workspace = validate_workspace_path(workspace_path)
-    registry.load_for_workspace(workspace)
+    registry.load_for_workspace(workspace, db=db, owner_id=current_user.id)
 
     entries = registry.get_all_entries()
     eligible_count = sum(1 for e in entries if e.eligible)
