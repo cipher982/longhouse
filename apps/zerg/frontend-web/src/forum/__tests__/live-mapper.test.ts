@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { generateSwarmReplay } from "../replay";
-import { applySwarmEvents, createSwarmState } from "../state";
+import { generateForumReplay } from "../replay";
+import { applyForumEvents, createForumState } from "../state";
 import {
   mapSupervisorComplete,
   mapSupervisorStarted,
@@ -8,9 +8,9 @@ import {
   mapWorkerSpawned,
   mapWorkerToolFailed,
 } from "../live-mapper";
-import type { SwarmReplayEventInput } from "../types";
+import type { ForumReplayEventInput } from "../types";
 
-const scenario = generateSwarmReplay({
+const scenario = generateForumReplay({
   seed: "live-map",
   durationMs: 2000,
   tickMs: 1000,
@@ -24,7 +24,7 @@ const scenario = generateSwarmReplay({
 
 const createSequencer = () => {
   let seq = 0;
-  return (events: SwarmReplayEventInput[]) =>
+  return (events: ForumReplayEventInput[]) =>
     events.map((event) => ({
       ...event,
       id: `evt-${seq}`,
@@ -33,14 +33,14 @@ const createSequencer = () => {
 };
 
 const createBaseState = () =>
-  createSwarmState({
+  createForumState({
     layout: scenario.layout,
     workspaces: scenario.workspaces,
     repoGroups: scenario.repoGroups,
     rooms: scenario.rooms,
   });
 
-describe("swarm live mapper", () => {
+describe("forum live mapper", () => {
   it("maps supervisor start into task + node", () => {
     const state = createBaseState();
     const toReplayEvents = createSequencer();
@@ -50,7 +50,7 @@ describe("swarm live mapper", () => {
       timestamp: 1000,
     });
 
-    applySwarmEvents(state, toReplayEvents(inputs));
+    applyForumEvents(state, toReplayEvents(inputs));
 
     const task = state.tasks.get("run-42");
     expect(task?.title).toBe("Ship logs");
@@ -66,7 +66,7 @@ describe("swarm live mapper", () => {
       task: "Lint repo",
       timestamp: 1100,
     });
-    applySwarmEvents(state, toReplayEvents(spawnInputs));
+    applyForumEvents(state, toReplayEvents(spawnInputs));
 
     expect(state.workers.has("worker-7")).toBe(true);
     expect(state.tasks.has("job-7")).toBe(true);
@@ -76,7 +76,7 @@ describe("swarm live mapper", () => {
       status: "failed",
       timestamp: 1200,
     });
-    applySwarmEvents(state, toReplayEvents(completeInputs));
+    applyForumEvents(state, toReplayEvents(completeInputs));
 
     const task = state.tasks.get("job-7");
     expect(task?.status).toBe("failed");
@@ -91,7 +91,7 @@ describe("swarm live mapper", () => {
       task: "Plan sprint",
       timestamp: 900,
     });
-    applySwarmEvents(state, toReplayEvents(startInputs));
+    applyForumEvents(state, toReplayEvents(startInputs));
 
     const completeInputs = mapSupervisorComplete(state, {
       runId: 3,
@@ -99,7 +99,7 @@ describe("swarm live mapper", () => {
       status: "success",
       timestamp: 1500,
     });
-    applySwarmEvents(state, toReplayEvents(completeInputs));
+    applyForumEvents(state, toReplayEvents(completeInputs));
 
     expect(state.tasks.get("run-3")?.status).toBe("success");
   });
@@ -115,7 +115,7 @@ describe("swarm live mapper", () => {
       error: "boom",
       timestamp: 1300,
     });
-    applySwarmEvents(state, toReplayEvents(inputs));
+    applyForumEvents(state, toReplayEvents(inputs));
 
     expect(state.alerts.size).toBe(1);
   });
