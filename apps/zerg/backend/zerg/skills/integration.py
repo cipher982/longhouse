@@ -143,6 +143,7 @@ def create_skill_tool(
             func=skill_tool_wrapper,
             name=f"skill_{skill.name}",
             description=f"[Skill: {skill.name}] {skill.description}",
+            args_schema=getattr(target_tool, "args_schema", None),
         )
 
     return None
