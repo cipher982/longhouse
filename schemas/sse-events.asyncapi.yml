@@ -71,6 +71,8 @@ channels:
         $ref: '#/components/messages/SupervisorToolFailedEvent'
       ShowSessionPickerEvent:
         $ref: '#/components/messages/ShowSessionPickerEvent'
+      StreamControlEvent:
+        $ref: '#/components/messages/StreamControlEvent'
 
 # ---------------------------------------------------------------------------
 # Operations - SSE is always server → client (send only)
@@ -256,6 +258,13 @@ components:
         $ref: '#/components/schemas/ShowSessionPickerPayload'
       x-sse-event-type: show_session_picker
 
+    StreamControlEvent:
+      name: stream_control
+      summary: Explicit stream lifecycle control - keep_open extends lease, close is terminal
+      payload:
+        $ref: '#/components/schemas/StreamControlPayload'
+      x-sse-event-type: stream_control
+
   schemas:
     # ---------------------------------------------------------------------------
     # SSE Envelope Structure
@@ -290,6 +299,7 @@ components:
             - supervisor_tool_completed
             - supervisor_tool_failed
             - show_session_picker
+            - stream_control
         id:
           type: integer
           description: Event ID for resumption (maps to `id:` line in SSE protocol)
@@ -926,6 +936,39 @@ components:
             provider:
               type: string
               description: Filter by provider (claude, codex, gemini)
+
+    # ---------------------------------------------------------------------------
+    # Stream Control Payloads
+    # ---------------------------------------------------------------------------
+    StreamControlPayload:
+      type: object
+      required: [action, reason, run_id]
+      description: Explicit stream lifecycle control - keep_open extends lease, close is terminal end-marker
+      properties:
+        action:
+          type: string
+          enum: [keep_open, close]
+          description: keep_open extends stream lease; close is terminal end-marker
+        reason:
+          type: string
+          description: Why this action (workers_pending, continuation_start, all_complete, timeout, error)
+        ttl_ms:
+          type: integer
+          minimum: 0
+          maximum: 300000
+          description: Lease time in ms (max 5 min); stream closes if no activity/renewal
+        run_id:
+          type: integer
+          minimum: 1
+          description: Run ID this control applies to
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
+        pending_workers:
+          type: integer
+          minimum: 0
+          description: Current pending worker count (for debugging)
 
 # ---------------------------------------------------------------------------
 # Extensions for code generation

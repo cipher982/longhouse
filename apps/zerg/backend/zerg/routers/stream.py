@@ -102,6 +102,9 @@ def _load_historical_events(
 # Client should reconnect with Last-Event-ID for resumable replay
 STREAM_QUEUE_MAX_SIZE = 1000
 
+# Maximum TTL for stream_control:keep_open (5 minutes)
+MAX_STREAM_TTL_MS = 300_000
+
 
 async def _replay_and_stream(
     run_id: int,
@@ -156,9 +159,36 @@ async def _replay_and_stream(
     overflow_event = asyncio.Event()  # Signal overflow without queue sentinel
     continuation_cache: dict[int, bool] = {}  # Cache for continuation run lookups
 
+    # Stream control state (explicit lifecycle management)
+    close_event_id: int | None = None  # event_id of stream_control:close (if seen)
+    stream_lease_until: float | None = None  # TTL expiry timestamp from keep_open
+
     def _apply_event_state(event_type: str, event: dict, *, from_replay: bool = False) -> None:
         """Update stream lifecycle state from an event."""
         nonlocal pending_workers, supervisor_done, saw_supervisor_complete, continuation_active, awaiting_continuation_until, complete
+        nonlocal close_event_id, stream_lease_until
+
+        # Handle stream_control events (explicit lifecycle control)
+        if event_type == "stream_control":
+            action = event.get("action")
+            ttl_ms = event.get("ttl_ms")
+            current_event_id = event.get("event_id") or event.get("_event_id")
+
+            if action == "close":
+                close_event_id = current_event_id
+                logger.debug(f"Stream control: close marker set at event_id={close_event_id} for run {run_id}")
+                # Don't set complete=True yet - wait until we've streamed up to this event
+                return
+
+            if action == "keep_open":
+                # Extend lease (or set initial) - only for live events, not replay
+                if ttl_ms and not from_replay:
+                    capped_ttl = min(ttl_ms, MAX_STREAM_TTL_MS)
+                    stream_lease_until = time.monotonic() + (capped_ttl / 1000.0)
+                    logger.debug(f"Stream control: lease extended to {capped_ttl}ms for run {run_id}")
+                # Cancel any pending close from heuristics
+                awaiting_continuation_until = None
+                return
 
         if event_type == "worker_spawned":
             pending_workers += 1
@@ -293,6 +323,8 @@ async def _replay_and_stream(
     event_bus.subscribe(EventType.SUPERVISOR_TOOL_STARTED, event_handler)
     event_bus.subscribe(EventType.SUPERVISOR_TOOL_COMPLETED, event_handler)
     event_bus.subscribe(EventType.SUPERVISOR_TOOL_FAILED, event_handler)
+    # Stream lifecycle control
+    event_bus.subscribe(EventType.STREAM_CONTROL, event_handler)
 
     try:
         # 2. Optionally load and replay historical events
@@ -304,7 +336,9 @@ async def _replay_and_stream(
             # Yield historical events with SSE id: field
             for event_id, event_type, payload, timestamp_str in historical_events:
                 last_sent_event_id = event_id
-                _apply_event_state(event_type, payload, from_replay=True)
+                # Inject event_id for stream_control tracking
+                payload_with_id = {**payload, "_event_id": event_id}
+                _apply_event_state(event_type, payload_with_id, from_replay=True)
 
                 yield {
                     "id": str(event_id),  # SSE last-event-id for resumption
@@ -330,9 +364,15 @@ async def _replay_and_stream(
                 "data": json.dumps(connected_payload, default=_json_default),
             }
 
-        # 4. If replay already includes a terminal supervisor_complete and no pending workers, close early
-        if saw_supervisor_complete and pending_workers == 0 and not continuation_active:
-            logger.debug(f"Stream closed after replay for run {run_id} (no pending workers)")
+        # 4a. If we saw stream_control:close during replay and streamed past it, close now
+        if close_event_id is not None and last_sent_event_id >= close_event_id:
+            logger.debug(f"Stream closed after replay - reached close marker (event_id={close_event_id}) for run {run_id}")
+            return
+
+        # 4b. If replay already includes a terminal supervisor_complete and no pending workers, close early
+        # (Heuristic fallback for runs without stream_control events)
+        if saw_supervisor_complete and pending_workers == 0 and not continuation_active and close_event_id is None:
+            logger.debug(f"Stream closed after replay for run {run_id} (no pending workers, heuristic fallback)")
             return
 
         # 5. If run is complete (not RUNNING / DEFERRED / WAITING), close stream
@@ -431,6 +471,11 @@ async def _replay_and_stream(
                     sse_event["id"] = str(event_id)
                 yield sse_event
 
+                # Check if we've reached the close marker (stream_control:close)
+                if close_event_id is not None and event_id and event_id >= close_event_id:
+                    logger.debug(f"Stream reached close marker (event_id={close_event_id}) for run {run_id}")
+                    complete = True
+
             except asyncio.TimeoutError:
                 # Send heartbeat to keep connection alive
                 yield {
@@ -442,7 +487,12 @@ async def _replay_and_stream(
                         default=_json_default,
                     ),
                 }
-                if awaiting_continuation_until is not None and time.monotonic() >= awaiting_continuation_until:
+                # Check TTL lease expiry (from stream_control:keep_open)
+                if stream_lease_until is not None and time.monotonic() >= stream_lease_until:
+                    logger.debug(f"Stream lease expired for run {run_id}")
+                    complete = True
+                # Legacy: heuristic fallback for runs without stream_control
+                elif awaiting_continuation_until is not None and time.monotonic() >= awaiting_continuation_until:
                     complete = True
 
     except asyncio.CancelledError:
@@ -469,6 +519,7 @@ async def _replay_and_stream(
         event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_STARTED, event_handler)
         event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_COMPLETED, event_handler)
         event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_FAILED, event_handler)
+        event_bus.unsubscribe(EventType.STREAM_CONTROL, event_handler)
 
 
 async def stream_run_events_live(

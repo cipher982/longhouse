@@ -253,6 +253,16 @@ class ShowSessionPickerPayload(BaseModel):
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
     filters: Optional[Dict[str, Any]] = Field(default=None, description='Optional filters to pre-populate the picker')
 
+class StreamControlPayload(BaseModel):
+    """Explicit stream lifecycle control - keep_open extends lease, close is terminal end-marker"""
+
+    action: Literal['keep_open', 'close'] = Field(description='keep_open extends stream lease; close is terminal end-marker')
+    reason: str = Field(description='Why this action (workers_pending, continuation_start, all_complete, timeout, error)')
+    ttl_ms: Optional[int] = Field(default=None, ge=0, le=300000, description='Lease time in ms (max 5 min); stream closes if no activity/renewal')
+    run_id: int = Field(ge=1, description='Run ID this control applies to')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
+    pending_workers: Optional[int] = Field(default=None, ge=0, description='Current pending worker count (for debugging)')
+
 class SSEEventType(str, Enum):
     """Enumeration of all SSE event types."""
 
@@ -279,6 +289,7 @@ class SSEEventType(str, Enum):
     SUPERVISOR_TOOL_COMPLETED = "supervisor_tool_completed"
     SUPERVISOR_TOOL_FAILED = "supervisor_tool_failed"
     SHOW_SESSION_PICKER = "show_session_picker"
+    STREAM_CONTROL = "stream_control"
 
 
 # Typed emitter for SSE events

@@ -307,6 +307,22 @@ export interface ShowSessionPickerPayload {
   filters?: Record<string, any>;
 }
 
+/** Explicit stream lifecycle control - keep_open extends lease, close is terminal end-marker */
+export interface StreamControlPayload {
+  /** keep_open extends stream lease; close is terminal end-marker */
+  action: "keep_open" | "close";
+  /** Why this action (workers_pending, continuation_start, all_complete, timeout, error) */
+  reason: string;
+  /** Lease time in ms (max 5 min); stream closes if no activity/renewal */
+  ttl_ms?: number;
+  /** Run ID this control applies to */
+  run_id: number;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
+  /** Current pending worker count (for debugging) */
+  pending_workers?: number;
+}
+
 // All SSE event types as a constant array (use for validation)
 export const SSE_EVENT_TYPES = [
   "connected",
@@ -332,6 +348,7 @@ export const SSE_EVENT_TYPES = [
   "supervisor_tool_completed",
   "supervisor_tool_failed",
   "show_session_picker",
+  "stream_control",
 ] as const;
 
 // SSE event type union (derived from SSE_EVENT_TYPES)
@@ -382,6 +399,7 @@ export type SSEPayloadFor<T extends SSEEventType> =
   T extends "supervisor_tool_completed" ? SupervisorToolCompletedPayload :
   T extends "supervisor_tool_failed" ? SupervisorToolFailedPayload :
   T extends "show_session_picker" ? ShowSessionPickerPayload :
+  T extends "stream_control" ? StreamControlPayload :
   never;
 
 // Payload type lookup (for direct payload access after unwrapping)

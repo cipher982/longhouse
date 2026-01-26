@@ -79,6 +79,9 @@ class EventType(str, Enum):
     SUPERVISOR_HEARTBEAT = "supervisor_heartbeat"
     WORKER_HEARTBEAT = "worker_heartbeat"
 
+    # Stream lifecycle control (explicit keep_open/close signals)
+    STREAM_CONTROL = "stream_control"
+
     SESSION_ENDED = "session_ended"  # External session (Claude Code, Codex, etc.) ended
 
 
