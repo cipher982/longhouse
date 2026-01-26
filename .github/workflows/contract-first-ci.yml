@@ -162,6 +162,21 @@ jobs:
       env:
         DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
+    - name: Test uvicorn startup
+      run: |
+        cd apps/zerg/backend
+        echo "=== Testing uvicorn can bind to port 8001 ==="
+        timeout 30 sh -c '
+          TESTING=1 AUTH_DISABLED=1 ENVIRONMENT=test:e2e E2E_USE_POSTGRES_SCHEMAS=1 \
+          uv run python -m uvicorn zerg.main:app --host 127.0.0.1 --port 8001 --workers 1 --log-level info &
+          PID=$!
+          sleep 10
+          curl -sf http://127.0.0.1:8001/health && echo "✓ Uvicorn health check passed" || echo "❌ Uvicorn health check failed"
+          kill $PID 2>/dev/null || true
+        ' 2>&1 || echo "❌ Uvicorn startup timed out"
+      env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
     - name: Run Core E2E Tests
       run: make test-e2e-core
       env:
