@@ -8,12 +8,12 @@ import {
 } from "react";
 import clsx from "clsx";
 import { gridToIso } from "./layout";
-import type { SwarmAlert, SwarmEntity, SwarmMapLayout, SwarmMarker, SwarmRoom, SwarmTask } from "./types";
-import type { SwarmMapState } from "./state";
-import "../styles/swarm-map.css";
+import type { ForumAlert, ForumEntity, ForumMapLayout, ForumMarker, ForumRoom, ForumTask } from "./types";
+import type { ForumMapState } from "./state";
+import "../styles/forum-map.css";
 
-export type SwarmMapCanvasProps = {
-  state: SwarmMapState;
+export type ForumCanvasProps = {
+  state: ForumMapState;
   timeMs: number;
   selectedEntityId?: string | null;
   focusEntityId?: string | null;
@@ -31,27 +31,27 @@ type PointerState = {
   y: number;
 };
 
-const ENTITY_COLORS: Record<SwarmEntity["type"], string> = {
+const ENTITY_COLORS: Record<ForumEntity["type"], string> = {
   unit: "#5CE0FF",
   structure: "#F7B955",
   worker: "#7B7CFF",
   task_node: "#36EBA8",
 };
 
-const ALERT_COLORS: Record<SwarmAlert["level"], string> = {
+const ALERT_COLORS: Record<ForumAlert["level"], string> = {
   L0: "#46E2F2",
   L1: "#F7C055",
   L2: "#F48B4A",
   L3: "#F05454",
 };
 
-export function SwarmMapCanvas({
+export function ForumCanvas({
   state,
   timeMs,
   selectedEntityId,
   focusEntityId,
   onSelectEntity,
-}: SwarmMapCanvasProps) {
+}: ForumCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewportRef = useRef<Viewport>({ offsetX: 0, offsetY: 0, scale: 1 });
@@ -170,7 +170,7 @@ export function SwarmMapCanvas({
 
     if (moved < 6) {
       const point = getPointerPosition(event);
-      const hit: SwarmEntity | null = pickEntityAtPoint(state, viewportRef.current, point.x, point.y);
+      const hit: ForumEntity | null = pickEntityAtPoint(state, viewportRef.current, point.x, point.y);
       onSelectEntity?.(hit ? hit.id : null);
     }
   };
@@ -209,7 +209,7 @@ export function SwarmMapCanvas({
   return (
     <div
       ref={containerRef}
-      className={clsx("swarm-map-canvas")}
+      className={clsx("forum-map-canvas")}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -217,12 +217,12 @@ export function SwarmMapCanvas({
       onWheel={onWheel}
     >
       <canvas ref={canvasRef} />
-      <div className="swarm-map-hud">
-        <div className="swarm-map-hud-row">
+      <div className="forum-map-hud">
+        <div className="forum-map-hud-row">
           <span>Zoom</span>
           <strong>{hudScale.toFixed(2)}x</strong>
         </div>
-        <div className="swarm-map-hud-row">
+        <div className="forum-map-hud-row">
           <span>t</span>
           <strong>{Math.round(timeMs / 100) / 10}s</strong>
         </div>
@@ -231,7 +231,7 @@ export function SwarmMapCanvas({
   );
 }
 
-function centerViewport(layout: SwarmMapLayout, viewport: Viewport, width: number, height: number) {
+function centerViewport(layout: ForumMapLayout, viewport: Viewport, width: number, height: number) {
   const centerGrid = {
     col: Math.round(layout.grid.cols / 2),
     row: Math.round(layout.grid.rows / 2),
@@ -244,7 +244,7 @@ function centerViewport(layout: SwarmMapLayout, viewport: Viewport, width: numbe
 
 function drawCanvas(
   canvas: HTMLCanvasElement | null,
-  state: SwarmMapState,
+  state: ForumMapState,
   viewport: Viewport,
   size: { width: number; height: number; dpr: number },
   selectedEntityId?: string | null,
@@ -273,7 +273,7 @@ function drawCanvas(
   ctx.restore();
 }
 
-function drawGrid(ctx: CanvasRenderingContext2D, layout: SwarmMapLayout) {
+function drawGrid(ctx: CanvasRenderingContext2D, layout: ForumMapLayout) {
   ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
   ctx.lineWidth = 1;
   for (let col = 0; col < layout.grid.cols; col += 1) {
@@ -294,7 +294,7 @@ function drawGrid(ctx: CanvasRenderingContext2D, layout: SwarmMapLayout) {
   }
 }
 
-function drawRooms(ctx: CanvasRenderingContext2D, rooms: Map<string, SwarmRoom>, layout: SwarmMapLayout) {
+function drawRooms(ctx: CanvasRenderingContext2D, rooms: Map<string, ForumRoom>, layout: ForumMapLayout) {
   let index = 0;
   rooms.forEach((room) => {
     const corners = [
@@ -320,8 +320,8 @@ function drawRooms(ctx: CanvasRenderingContext2D, rooms: Map<string, SwarmRoom>,
 
 function drawEntities(
   ctx: CanvasRenderingContext2D,
-  entities: Map<string, SwarmEntity>,
-  layout: SwarmMapLayout,
+  entities: Map<string, ForumEntity>,
+  layout: ForumMapLayout,
   selectedEntityId: string | null,
 ) {
   entities.forEach((entity) => {
@@ -344,10 +344,10 @@ function drawEntities(
 
 function drawTasks(
   ctx: CanvasRenderingContext2D,
-  tasks: Map<string, SwarmTask>,
-  entities: Map<string, SwarmEntity>,
-  rooms: Map<string, SwarmRoom>,
-  layout: SwarmMapLayout,
+  tasks: Map<string, ForumTask>,
+  entities: Map<string, ForumEntity>,
+  rooms: Map<string, ForumRoom>,
+  layout: ForumMapLayout,
 ) {
   tasks.forEach((task) => {
     const position = resolveTaskPosition(task, entities, rooms, layout);
@@ -362,10 +362,10 @@ function drawTasks(
 
 function drawAlerts(
   ctx: CanvasRenderingContext2D,
-  alerts: Map<string, SwarmAlert>,
-  entities: Map<string, SwarmEntity>,
-  rooms: Map<string, SwarmRoom>,
-  layout: SwarmMapLayout,
+  alerts: Map<string, ForumAlert>,
+  entities: Map<string, ForumEntity>,
+  rooms: Map<string, ForumRoom>,
+  layout: ForumMapLayout,
 ) {
   alerts.forEach((alert) => {
     const position = resolveAlertPosition(alert, entities, rooms, layout);
@@ -379,8 +379,8 @@ function drawAlerts(
 
 function drawMarkers(
   ctx: CanvasRenderingContext2D,
-  markers: Map<string, SwarmMarker>,
-  layout: SwarmMapLayout,
+  markers: Map<string, ForumMarker>,
+  layout: ForumMapLayout,
   now: number,
 ) {
   markers.forEach((marker) => {
@@ -400,10 +400,10 @@ function drawMarkers(
 }
 
 function resolveTaskPosition(
-  task: SwarmTask,
-  entities: Map<string, SwarmEntity>,
-  rooms: Map<string, SwarmRoom>,
-  layout: SwarmMapLayout,
+  task: ForumTask,
+  entities: Map<string, ForumEntity>,
+  rooms: Map<string, ForumRoom>,
+  layout: ForumMapLayout,
 ) {
   const entity = task.entityId ? entities.get(task.entityId) : null;
   if (entity) return gridToIso(entity.position, layout);
@@ -413,10 +413,10 @@ function resolveTaskPosition(
 }
 
 function resolveAlertPosition(
-  alert: SwarmAlert,
-  entities: Map<string, SwarmEntity>,
-  rooms: Map<string, SwarmRoom>,
-  layout: SwarmMapLayout,
+  alert: ForumAlert,
+  entities: Map<string, ForumEntity>,
+  rooms: Map<string, ForumRoom>,
+  layout: ForumMapLayout,
 ) {
   const entity = alert.entityId ? entities.get(alert.entityId) : null;
   if (entity) return gridToIso(entity.position, layout);
@@ -426,12 +426,12 @@ function resolveAlertPosition(
 }
 
 function pickEntityAtPoint(
-  state: SwarmMapState,
+  state: ForumMapState,
   viewport: Viewport,
   x: number,
   y: number,
-): SwarmEntity | null {
-  let closest: SwarmEntity | null = null;
+): ForumEntity | null {
+  let closest: ForumEntity | null = null;
   let closestDistance = Number.POSITIVE_INFINITY;
   state.entities.forEach((entity) => {
     const iso = gridToIso(entity.position, state.layout);

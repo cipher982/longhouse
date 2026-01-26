@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { generateSwarmReplay, hydrateSwarmReplay } from "../replay";
+import { generateForumReplay, hydrateForumReplay } from "../replay";
 
 const baseConfig = {
   seed: "demo-seed",
@@ -13,16 +13,16 @@ const baseConfig = {
   repoGroupsPerWorkspace: 2,
 };
 
-describe("swarm replay", () => {
+describe("forum replay", () => {
   it("generates deterministic replays for the same seed", () => {
-    const scenarioA = generateSwarmReplay(baseConfig);
-    const scenarioB = generateSwarmReplay(baseConfig);
+    const scenarioA = generateForumReplay(baseConfig);
+    const scenarioB = generateForumReplay(baseConfig);
     expect(JSON.stringify(scenarioA)).toEqual(JSON.stringify(scenarioB));
   });
 
   it("hydrates expected entity counts", () => {
-    const scenario = generateSwarmReplay(baseConfig);
-    const state = hydrateSwarmReplay(scenario);
+    const scenario = generateForumReplay(baseConfig);
+    const state = hydrateForumReplay(scenario);
     const expectedEntitiesPerRoom = baseConfig.unitsPerRoom + 2 + baseConfig.workersPerRoom;
     expect(state.rooms.size).toBe(baseConfig.roomCount);
     expect(state.entities.size).toBe(baseConfig.roomCount * expectedEntitiesPerRoom);

@@ -1,28 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Badge, Button, Card, PageShell, SectionHeader } from "../components/ui";
-import { generateSwarmReplay } from "../swarm/replay";
-import { SwarmMapCanvas } from "../swarm/SwarmMapCanvas";
-import { useSwarmReplayPlayer } from "../swarm/useSwarmReplay";
+import { generateForumReplay } from "../forum/replay";
+import { ForumCanvas } from "../forum/ForumCanvas";
+import { useForumReplayPlayer } from "../forum/useForumReplay";
 import { eventBus } from "../jarvis/lib/event-bus";
 import type {
-  SwarmMarker,
-  SwarmReplayEvent,
-  SwarmReplayEventInput,
-  SwarmTask,
-} from "../swarm/types";
+  ForumMarker,
+  ForumReplayEvent,
+  ForumReplayEventInput,
+  ForumTask,
+} from "../forum/types";
 import {
   mapSupervisorComplete,
   mapSupervisorStarted,
   mapWorkerComplete,
   mapWorkerSpawned,
   mapWorkerToolFailed,
-} from "../swarm/live-mapper";
-import "../styles/swarm-map.css";
+} from "../forum/live-mapper";
+import "../styles/forum.css";
 
-const DEFAULT_SEED = "swarm-demo";
+const DEFAULT_SEED = "forum-demo";
 
-export default function SwarmMapPage() {
+export default function ForumPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const params = new URLSearchParams(location.search);
@@ -36,7 +36,7 @@ export default function SwarmMapPage() {
 
   const replayScenario = useMemo(
     () =>
-      generateSwarmReplay({
+      generateForumReplay({
         seed,
         durationMs: 90_000,
         tickMs: 1_000,
@@ -52,8 +52,8 @@ export default function SwarmMapPage() {
 
   const liveScenario = useMemo(
     () =>
-      generateSwarmReplay({
-        seed: "swarm-live",
+      generateForumReplay({
+        seed: "forum-live",
         durationMs: 120_000,
         tickMs: 1_000,
         roomCount: 2,
@@ -76,7 +76,7 @@ export default function SwarmMapPage() {
     setPlaying,
     reset,
     dispatchEvents,
-  } = useSwarmReplayPlayer(scenario, {
+  } = useForumReplayPlayer(scenario, {
     loop: true,
     speed: 1,
     playing: !isLive,
@@ -114,27 +114,27 @@ export default function SwarmMapPage() {
 
   const localSeqRef = useRef(0);
   const makeLocalEvent = useCallback(
-    (event: SwarmReplayEventInput): SwarmReplayEvent => {
+    (event: ForumReplayEventInput): ForumReplayEvent => {
       const seq = localSeqRef.current;
       localSeqRef.current += 1;
       return {
         ...event,
         id: `local-${Date.now()}-${seq}`,
         seq,
-      } as SwarmReplayEvent;
+      } as ForumReplayEvent;
     },
     [],
   );
 
-  const nudgeTask = (task: SwarmTask) => {
+  const nudgeTask = (task: ForumTask) => {
     if (task.status === "success" || task.status === "failed" || task.progress >= 1) {
       return;
     }
     const now = Math.max(timeMs, stateRef.current.now);
     const nextProgress = Math.min(1, task.progress + 0.2);
-    const events: SwarmReplayEvent[] = [];
+    const events: ForumReplayEvent[] = [];
 
-    const marker: SwarmMarker = {
+    const marker: ForumMarker = {
       id: `marker-${task.id}-${now}`,
       type: "focus",
       roomId: task.roomId,
@@ -237,12 +237,12 @@ export default function SwarmMapPage() {
   }, [dispatchEvents, isLive, makeLocalEvent]);
 
   return (
-    <PageShell size="full" className="swarm-map-page">
+    <PageShell size="full" className="forum-map-page">
       <SectionHeader
-        title="Swarm Map"
-        description="Decision-driven overlay for the Swarm runtime"
+        title="The Forum"
+        description="Decision-driven command overlay"
         actions={
-          <div className="swarm-map-actions">
+          <div className="forum-map-actions">
             <Button variant="secondary" size="sm" onClick={() => setPlaying(!playing)} disabled={isLive}>
               {playing ? "Pause" : "Play"}
             </Button>
@@ -253,29 +253,29 @@ export default function SwarmMapPage() {
               {isLive ? "Live Signals" : "Replay Mode"}
             </Button>
             <Button variant="ghost" size="sm" onClick={() => navigate("/swarm/ops")}>
-              Swarm Ops
+              Ops List
             </Button>
           </div>
         }
       />
 
-      <div className="swarm-map-grid">
-        <Card className="swarm-map-panel swarm-map-panel--left">
-          <div className="swarm-panel-header">
+      <div className="forum-map-grid">
+        <Card className="forum-map-panel forum-map-panel--left">
+          <div className="forum-panel-header">
             <div>
-              <div className="swarm-panel-title">Command List</div>
-              <div className="swarm-panel-subtitle">{tasks.length} tasks in motion</div>
+              <div className="forum-panel-title">Command List</div>
+              <div className="forum-panel-subtitle">{tasks.length} tasks in motion</div>
             </div>
             <Badge variant={isLive ? "success" : "neutral"}>{isLive ? "Live" : `${Math.round((timeMs / durationMs) * 100)}%`}</Badge>
           </div>
-          <div className="swarm-task-list">
+          <div className="forum-task-list">
             {tasks.length === 0 ? (
-              <div className="swarm-task-empty">No tasks yet. Awaiting live signals or replay ticks.</div>
+              <div className="forum-task-empty">No tasks yet. Awaiting live signals or replay ticks.</div>
             ) : (
               tasks.map((task) => (
                 <button
                   key={task.id}
-                  className={`swarm-task-row${task.id === selectedTaskId ? " swarm-task-row--selected" : ""}`}
+                  className={`forum-task-row${task.id === selectedTaskId ? " forum-task-row--selected" : ""}`}
                   type="button"
                   onClick={() => {
                     setSelectedTaskId(task.id);
@@ -284,17 +284,17 @@ export default function SwarmMapPage() {
                     }
                   }}
                 >
-                  <span className="swarm-task-title">{task.title}</span>
-                  <span className="swarm-task-progress">{Math.round(task.progress * 100)}%</span>
-                  <span className={`swarm-task-status swarm-task-status--${task.status}`}>{task.status}</span>
+                  <span className="forum-task-title">{task.title}</span>
+                  <span className="forum-task-progress">{Math.round(task.progress * 100)}%</span>
+                  <span className={`forum-task-status forum-task-status--${task.status}`}>{task.status}</span>
                 </button>
               ))
             )}
           </div>
         </Card>
 
-        <Card className="swarm-map-panel swarm-map-panel--center">
-          <SwarmMapCanvas
+        <Card className="forum-map-panel forum-map-panel--center">
+          <ForumCanvas
             state={state}
             timeMs={timeMs}
             selectedEntityId={selectedEntityId}
@@ -303,22 +303,22 @@ export default function SwarmMapPage() {
           />
         </Card>
 
-        <Card className="swarm-map-panel swarm-map-panel--right">
-          <div className="swarm-panel-header">
+        <Card className="forum-map-panel forum-map-panel--right">
+          <div className="forum-panel-header">
             <div>
-              <div className="swarm-panel-title">Drop-In</div>
-              <div className="swarm-panel-subtitle">Selection details</div>
+              <div className="forum-panel-title">Drop-In</div>
+              <div className="forum-panel-subtitle">Selection details</div>
             </div>
             {selectedEntity || selectedTask ? <Badge variant="success">Active</Badge> : <Badge variant="neutral">Idle</Badge>}
           </div>
-          <div className="swarm-selection">
+          <div className="forum-selection">
             {selectedEntity ? (
               <>
-                <div className="swarm-selection-title">{selectedEntity.label ?? selectedEntity.id}</div>
-                <div className="swarm-selection-meta">Type: {selectedEntity.type}</div>
-                <div className="swarm-selection-meta">Room: {selectedEntity.roomId}</div>
-                <div className="swarm-selection-meta">Status: {selectedEntity.status}</div>
-                <div className="swarm-selection-actions">
+                <div className="forum-selection-title">{selectedEntity.label ?? selectedEntity.id}</div>
+                <div className="forum-selection-meta">Type: {selectedEntity.type}</div>
+                <div className="forum-selection-meta">Room: {selectedEntity.roomId}</div>
+                <div className="forum-selection-meta">Status: {selectedEntity.status}</div>
+                <div className="forum-selection-actions">
                   <Button size="sm" variant="primary" onClick={handleFocus}>
                     {focusEntityId === selectedEntity.id ? "Unfocus" : "Focus"}
                   </Button>
@@ -327,11 +327,11 @@ export default function SwarmMapPage() {
             ) : null}
 
             {selectedTask ? (
-              <div className="swarm-selection-task">
-                <div className="swarm-selection-title">Task: {selectedTask.title}</div>
-                <div className="swarm-selection-meta">Status: {selectedTask.status}</div>
-                <div className="swarm-selection-meta">Progress: {Math.round(selectedTask.progress * 100)}%</div>
-                <div className="swarm-selection-actions">
+              <div className="forum-selection-task">
+                <div className="forum-selection-title">Task: {selectedTask.title}</div>
+                <div className="forum-selection-meta">Status: {selectedTask.status}</div>
+                <div className="forum-selection-meta">Progress: {Math.round(selectedTask.progress * 100)}%</div>
+                <div className="forum-selection-actions">
                   <Button size="sm" variant="ghost" onClick={() => nudgeTask(selectedTask)}>
                     Nudge Task
                   </Button>
@@ -340,34 +340,34 @@ export default function SwarmMapPage() {
             ) : null}
 
             {!selectedEntity && !selectedTask ? (
-              <div className="swarm-selection-empty">Select a unit or task to inspect.</div>
+              <div className="forum-selection-empty">Select a unit or task to inspect.</div>
             ) : null}
           </div>
-          <div className="swarm-legend">
-            <div className="swarm-legend-title">Legend</div>
-            <div className="swarm-legend-grid">
-              <div className="swarm-legend-item">
-                <span className="swarm-legend-swatch swarm-legend-swatch--unit" />
+          <div className="forum-legend">
+            <div className="forum-legend-title">Legend</div>
+            <div className="forum-legend-grid">
+              <div className="forum-legend-item">
+                <span className="forum-legend-swatch forum-legend-swatch--unit" />
                 Unit
               </div>
-              <div className="swarm-legend-item">
-                <span className="swarm-legend-swatch swarm-legend-swatch--structure" />
+              <div className="forum-legend-item">
+                <span className="forum-legend-swatch forum-legend-swatch--structure" />
                 Structure
               </div>
-              <div className="swarm-legend-item">
-                <span className="swarm-legend-swatch swarm-legend-swatch--worker" />
+              <div className="forum-legend-item">
+                <span className="forum-legend-swatch forum-legend-swatch--worker" />
                 Worker
               </div>
-              <div className="swarm-legend-item">
-                <span className="swarm-legend-swatch swarm-legend-swatch--task" />
+              <div className="forum-legend-item">
+                <span className="forum-legend-swatch forum-legend-swatch--task" />
                 Task Node
               </div>
-              <div className="swarm-legend-item">
-                <span className="swarm-legend-swatch swarm-legend-swatch--alert" />
+              <div className="forum-legend-item">
+                <span className="forum-legend-swatch forum-legend-swatch--alert" />
                 Alert Ring
               </div>
-              <div className="swarm-legend-item">
-                <span className="swarm-legend-swatch swarm-legend-swatch--marker" />
+              <div className="forum-legend-item">
+                <span className="forum-legend-swatch forum-legend-swatch--marker" />
                 Marker Ping
               </div>
             </div>

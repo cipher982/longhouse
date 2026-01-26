@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { createSwarmReplayCursor, advanceSwarmReplay, generateSwarmReplay } from "../replay";
+import { createForumReplayCursor, advanceForumReplay, generateForumReplay } from "../replay";
 
-const scenario = generateSwarmReplay({
+const scenario = generateForumReplay({
   seed: "cursor-seed",
   durationMs: 2000,
   tickMs: 1000,
@@ -11,11 +11,11 @@ const scenario = generateSwarmReplay({
   workersPerRoom: 1,
 });
 
-describe("swarm replay cursor", () => {
+describe("forum replay cursor", () => {
   it("advances incrementally", () => {
-    const cursor = createSwarmReplayCursor(scenario);
+    const cursor = createForumReplayCursor(scenario);
     const initialTasks = cursor.state.tasks.size;
-    const applied = advanceSwarmReplay(cursor, 1000);
+    const applied = advanceForumReplay(cursor, 1000);
     expect(applied).toBeGreaterThan(0);
     expect(cursor.state.tasks.size).toBe(initialTasks);
     expect(cursor.now).toBeGreaterThanOrEqual(1000);

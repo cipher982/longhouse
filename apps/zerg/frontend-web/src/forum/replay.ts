@@ -1,21 +1,21 @@
 import type {
-  SwarmAlert,
-  SwarmEntity,
-  SwarmMarker,
-  SwarmReplayConfig,
-  SwarmReplayEvent,
-  SwarmReplayEventInput,
-  SwarmReplayScenario,
-  SwarmRepoGroup,
-  SwarmRoom,
-  SwarmTask,
-  SwarmWorker,
-  SwarmWorkspace,
+  ForumAlert,
+  ForumEntity,
+  ForumMarker,
+  ForumReplayConfig,
+  ForumReplayEvent,
+  ForumReplayEventInput,
+  ForumReplayScenario,
+  ForumRepoGroup,
+  ForumRoom,
+  ForumTask,
+  ForumWorker,
+  ForumWorkspace,
 } from "./types";
-import { applySwarmEvents, createSwarmState, type SwarmMapState } from "./state";
-import type { SwarmBounds, SwarmGridPoint, SwarmMapLayout } from "./types";
+import { applyForumEvents, createForumState, type ForumMapState } from "./state";
+import type { ForumBounds, ForumGridPoint, ForumMapLayout } from "./types";
 
-export type SwarmRng = {
+export type ForumRng = {
   next: () => number;
   int: (min: number, max: number) => number;
   pick: <T>(items: T[]) => T;
@@ -31,7 +31,7 @@ function hashSeed(seed: string): number {
   return hash >>> 0;
 }
 
-export function createSeededRng(seed: string): SwarmRng {
+export function createSeededRng(seed: string): ForumRng {
   let t = hashSeed(seed) || 1;
   const next = () => {
     t += 0x6d2b79f5;
@@ -57,19 +57,19 @@ export function createSeededRng(seed: string): SwarmRng {
   };
 }
 
-function createLayout(rng: SwarmRng): SwarmMapLayout {
+function createLayout(rng: ForumRng): ForumMapLayout {
   const cols = rng.int(24, 32);
   const rows = rng.int(18, 26);
   return {
     id: "layout-main",
-    name: "Swarm Field",
+    name: "Forum Field",
     grid: { cols, rows },
     tile: { width: 64, height: 32 },
     origin: { x: cols * 18, y: 40 },
   };
 }
 
-function createBoundsForRoom(index: number, total: number, layout: SwarmMapLayout, rng: SwarmRng): SwarmBounds {
+function createBoundsForRoom(index: number, total: number, layout: ForumMapLayout, rng: ForumRng): ForumBounds {
   const columns = Math.ceil(Math.sqrt(total));
   const rows = Math.ceil(total / columns);
   const colIndex = index % columns;
@@ -89,19 +89,19 @@ function createBoundsForRoom(index: number, total: number, layout: SwarmMapLayou
   };
 }
 
-function randomPointInBounds(rng: SwarmRng, bounds: SwarmBounds): SwarmGridPoint {
+function randomPointInBounds(rng: ForumRng, bounds: ForumBounds): ForumGridPoint {
   return {
     col: rng.int(bounds.minCol, bounds.maxCol),
     row: rng.int(bounds.minRow, bounds.maxRow),
   };
 }
 
-function createWorkspaces(config: Required<Pick<SwarmReplayConfig, "workspaceCount" | "repoGroupsPerWorkspace">>): {
-  workspaces: SwarmWorkspace[];
-  repoGroups: SwarmRepoGroup[];
+function createWorkspaces(config: Required<Pick<ForumReplayConfig, "workspaceCount" | "repoGroupsPerWorkspace">>): {
+  workspaces: ForumWorkspace[];
+  repoGroups: ForumRepoGroup[];
 } {
-  const workspaces: SwarmWorkspace[] = [];
-  const repoGroups: SwarmRepoGroup[] = [];
+  const workspaces: ForumWorkspace[] = [];
+  const repoGroups: ForumRepoGroup[] = [];
 
   for (let w = 0; w < config.workspaceCount; w += 1) {
     const workspaceId = `ws-${w + 1}`;
@@ -128,12 +128,12 @@ function createWorkspaces(config: Required<Pick<SwarmReplayConfig, "workspaceCou
 
 function createRooms(
   roomCount: number,
-  layout: SwarmMapLayout,
-  workspaces: SwarmWorkspace[],
-  repoGroups: SwarmRepoGroup[],
-  rng: SwarmRng,
-): SwarmRoom[] {
-  const rooms: SwarmRoom[] = [];
+  layout: ForumMapLayout,
+  workspaces: ForumWorkspace[],
+  repoGroups: ForumRepoGroup[],
+  rng: ForumRng,
+): ForumRoom[] {
+  const rooms: ForumRoom[] = [];
   for (let i = 0; i < roomCount; i += 1) {
     const bounds = createBoundsForRoom(i, roomCount, layout, rng);
     const center = {
@@ -142,7 +142,7 @@ function createRooms(
     };
     const workspace = workspaces[i % workspaces.length];
     const repoGroup = repoGroups[i % repoGroups.length];
-    const room: SwarmRoom = {
+    const room: ForumRoom = {
       id: `room-${i + 1}`,
       name: `Room ${i + 1}`,
       workspaceId: workspace.id,
@@ -159,16 +159,16 @@ function createRooms(
 }
 
 function createInitialEntities(
-  rooms: SwarmRoom[],
+  rooms: ForumRoom[],
   unitsPerRoom: number,
   workersPerRoom: number,
-  rng: SwarmRng,
+  rng: ForumRng,
 ): {
-  entities: SwarmEntity[];
-  workers: SwarmWorker[];
+  entities: ForumEntity[];
+  workers: ForumWorker[];
 } {
-  const entities: SwarmEntity[] = [];
-  const workers: SwarmWorker[] = [];
+  const entities: ForumEntity[] = [];
+  const workers: ForumWorker[] = [];
 
   rooms.forEach((room, roomIndex) => {
     for (let i = 0; i < unitsPerRoom; i += 1) {
@@ -217,17 +217,17 @@ function createInitialEntities(
 }
 
 function createInitialTasks(
-  rooms: SwarmRoom[],
+  rooms: ForumRoom[],
   tasksPerRoom: number,
-  workers: SwarmWorker[],
-  rng: SwarmRng,
+  workers: ForumWorker[],
+  rng: ForumRng,
   startTime: number,
-): SwarmTask[] {
-  const tasks: SwarmTask[] = [];
+): ForumTask[] {
+  const tasks: ForumTask[] = [];
   rooms.forEach((room, roomIndex) => {
     for (let i = 0; i < tasksPerRoom; i += 1) {
       const worker = workers.length ? workers[(roomIndex * tasksPerRoom + i) % workers.length] : undefined;
-      const task: SwarmTask = {
+      const task: ForumTask = {
         id: `task-${roomIndex + 1}-${i + 1}`,
         title: `Task ${roomIndex + 1}.${i + 1}`,
         status: rng.bool(0.4) ? "running" : "queued",
@@ -244,7 +244,7 @@ function createInitialTasks(
   return tasks;
 }
 
-export function generateSwarmReplay(config: SwarmReplayConfig): SwarmReplayScenario {
+export function generateForumReplay(config: ForumReplayConfig): ForumReplayScenario {
   const rng = createSeededRng(config.seed);
   const durationMs = config.durationMs ?? 60_000;
   const tickMs = config.tickMs ?? 1_000;
@@ -263,15 +263,15 @@ export function generateSwarmReplay(config: SwarmReplayConfig): SwarmReplayScena
   const { entities, workers } = createInitialEntities(rooms, unitsPerRoom, workersPerRoom, rng);
   const tasks = createInitialTasks(rooms, tasksPerRoom, workers, rng, startTime);
 
-  const events: SwarmReplayEvent[] = [];
+  const events: ForumReplayEvent[] = [];
   let seq = 0;
 
-  const pushEvent = (event: SwarmReplayEventInput) => {
+  const pushEvent = (event: ForumReplayEventInput) => {
     events.push({
       ...event,
       id: `evt-${seq}`,
       seq,
-    } as SwarmReplayEvent);
+    } as ForumReplayEvent);
     seq += 1;
   };
 
@@ -332,7 +332,7 @@ export function generateSwarmReplay(config: SwarmReplayConfig): SwarmReplayScena
             updatedAt: t,
           });
           if (!success) {
-            const alert: SwarmAlert = {
+            const alert: ForumAlert = {
               id: `alert-${task.id}-${t}`,
               level: "L2",
               message: `Task ${task.id} failed in ${task.roomId}`,
@@ -356,7 +356,7 @@ export function generateSwarmReplay(config: SwarmReplayConfig): SwarmReplayScena
 
     if (tasks.length && rng.bool(0.2)) {
       const task = rng.pick(tasks);
-      const alert: SwarmAlert = {
+      const alert: ForumAlert = {
         id: `alert-${task.id}-${t}-ping`,
         level: rng.bool(0.3) ? "L3" : "L1",
         message: `Attention on ${task.title}`,
@@ -369,7 +369,7 @@ export function generateSwarmReplay(config: SwarmReplayConfig): SwarmReplayScena
 
     if (rng.bool(0.1)) {
       const room = rng.pick(rooms);
-      const marker: SwarmMarker = {
+      const marker: ForumMarker = {
         id: `marker-${room.id}-${t}`,
         type: "ping",
         roomId: room.id,
@@ -395,8 +395,8 @@ export function generateSwarmReplay(config: SwarmReplayConfig): SwarmReplayScena
   };
 }
 
-export function hydrateSwarmReplay(scenario: SwarmReplayScenario, untilMs = scenario.durationMs): SwarmMapState {
-  const state = createSwarmState({
+export function hydrateForumReplay(scenario: ForumReplayScenario, untilMs = scenario.durationMs): ForumMapState {
+  const state = createForumState({
     layout: scenario.layout,
     workspaces: scenario.workspaces,
     repoGroups: scenario.repoGroups,
@@ -405,26 +405,26 @@ export function hydrateSwarmReplay(scenario: SwarmReplayScenario, untilMs = scen
   const events = scenario.events
     .filter((event) => event.t <= untilMs)
     .sort((a, b) => (a.t === b.t ? a.seq - b.seq : a.t - b.t));
-  return applySwarmEvents(state, events);
+  return applyForumEvents(state, events);
 }
 
-export function getReplayEventsUpTo(scenario: SwarmReplayScenario, timeMs: number): SwarmReplayEvent[] {
+export function getReplayEventsUpTo(scenario: ForumReplayScenario, timeMs: number): ForumReplayEvent[] {
   return scenario.events
     .filter((event) => event.t <= timeMs)
     .sort((a, b) => (a.t === b.t ? a.seq - b.seq : a.t - b.t));
 }
 
-export type SwarmReplayCursor = {
-  scenario: SwarmReplayScenario;
-  state: SwarmMapState;
-  events: SwarmReplayEvent[];
+export type ForumReplayCursor = {
+  scenario: ForumReplayScenario;
+  state: ForumMapState;
+  events: ForumReplayEvent[];
   index: number;
   now: number;
 };
 
-export function createSwarmReplayCursor(scenario: SwarmReplayScenario): SwarmReplayCursor {
+export function createForumReplayCursor(scenario: ForumReplayScenario): ForumReplayCursor {
   const events = [...scenario.events].sort((a, b) => (a.t === b.t ? a.seq - b.seq : a.t - b.t));
-  const state = createSwarmState({
+  const state = createForumState({
     layout: scenario.layout,
     workspaces: scenario.workspaces,
     repoGroups: scenario.repoGroups,
@@ -432,16 +432,16 @@ export function createSwarmReplayCursor(scenario: SwarmReplayScenario): SwarmRep
   });
   let index = 0;
   while (index < events.length && events[index].t <= 0) {
-    applySwarmEvents(state, [events[index]]);
+    applyForumEvents(state, [events[index]]);
     index += 1;
   }
   return { scenario, state, events, index, now: 0 };
 }
 
-export function advanceSwarmReplay(cursor: SwarmReplayCursor, targetTime: number): number {
+export function advanceForumReplay(cursor: ForumReplayCursor, targetTime: number): number {
   let applied = 0;
   while (cursor.index < cursor.events.length && cursor.events[cursor.index].t <= targetTime) {
-    applySwarmEvents(cursor.state, [cursor.events[cursor.index]]);
+    applyForumEvents(cursor.state, [cursor.events[cursor.index]]);
     cursor.index += 1;
     applied += 1;
   }

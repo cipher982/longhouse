@@ -1,39 +1,39 @@
 import type {
-  SwarmAlert,
-  SwarmEntity,
-  SwarmMapLayout,
-  SwarmMarker,
-  SwarmRepoGroup,
-  SwarmReplayEvent,
-  SwarmRoom,
-  SwarmTask,
-  SwarmWorker,
-  SwarmWorkspace,
+  ForumAlert,
+  ForumEntity,
+  ForumMapLayout,
+  ForumMarker,
+  ForumRepoGroup,
+  ForumReplayEvent,
+  ForumRoom,
+  ForumTask,
+  ForumWorker,
+  ForumWorkspace,
 } from "./types";
 
-export type SwarmMapState = {
-  layout: SwarmMapLayout;
-  workspaces: Map<string, SwarmWorkspace>;
-  repoGroups: Map<string, SwarmRepoGroup>;
-  rooms: Map<string, SwarmRoom>;
-  entities: Map<string, SwarmEntity>;
-  tasks: Map<string, SwarmTask>;
-  workers: Map<string, SwarmWorker>;
-  alerts: Map<string, SwarmAlert>;
-  markers: Map<string, SwarmMarker>;
+export type ForumMapState = {
+  layout: ForumMapLayout;
+  workspaces: Map<string, ForumWorkspace>;
+  repoGroups: Map<string, ForumRepoGroup>;
+  rooms: Map<string, ForumRoom>;
+  entities: Map<string, ForumEntity>;
+  tasks: Map<string, ForumTask>;
+  workers: Map<string, ForumWorker>;
+  alerts: Map<string, ForumAlert>;
+  markers: Map<string, ForumMarker>;
   appliedEvents: Set<string>;
   now: number;
 };
 
-export function createSwarmState(base: {
-  layout: SwarmMapLayout;
-  workspaces?: SwarmWorkspace[];
-  repoGroups?: SwarmRepoGroup[];
-  rooms?: SwarmRoom[];
-}): SwarmMapState {
-  const workspaces = new Map<string, SwarmWorkspace>();
-  const repoGroups = new Map<string, SwarmRepoGroup>();
-  const rooms = new Map<string, SwarmRoom>();
+export function createForumState(base: {
+  layout: ForumMapLayout;
+  workspaces?: ForumWorkspace[];
+  repoGroups?: ForumRepoGroup[];
+  rooms?: ForumRoom[];
+}): ForumMapState {
+  const workspaces = new Map<string, ForumWorkspace>();
+  const repoGroups = new Map<string, ForumRepoGroup>();
+  const rooms = new Map<string, ForumRoom>();
 
   for (const workspace of base.workspaces ?? []) {
     workspaces.set(workspace.id, workspace);
@@ -62,14 +62,14 @@ export function createSwarmState(base: {
   };
 }
 
-export function applySwarmEvents(state: SwarmMapState, events: SwarmReplayEvent[]): SwarmMapState {
+export function applyForumEvents(state: ForumMapState, events: ForumReplayEvent[]): ForumMapState {
   for (const event of events) {
-    applySwarmEvent(state, event);
+    applyForumEvent(state, event);
   }
   return state;
 }
 
-export function applySwarmEvent(state: SwarmMapState, event: SwarmReplayEvent): void {
+export function applyForumEvent(state: ForumMapState, event: ForumReplayEvent): void {
   if (state.appliedEvents.has(event.id)) {
     return;
   }

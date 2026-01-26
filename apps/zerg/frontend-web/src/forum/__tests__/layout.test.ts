@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { clampToBounds, gridToIso, isoToGrid } from "../layout";
-import type { SwarmMapLayout } from "../types";
+import type { ForumMapLayout } from "../types";
 
-const layout: SwarmMapLayout = {
+const layout: ForumMapLayout = {
   id: "layout-test",
   name: "Test",
   grid: { cols: 20, rows: 20 },
@@ -10,7 +10,7 @@ const layout: SwarmMapLayout = {
   origin: { x: 0, y: 0 },
 };
 
-describe("swarm layout", () => {
+describe("forum layout", () => {
   it("round-trips grid to iso", () => {
     const point = { col: 7, row: 4 };
     const iso = gridToIso(point, layout);

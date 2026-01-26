@@ -1,42 +1,42 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { advanceSwarmReplay, createSwarmReplayCursor, type SwarmReplayCursor } from "./replay";
-import type { SwarmReplayScenario, SwarmReplayEvent } from "./types";
-import { applySwarmEvent, type SwarmMapState } from "./state";
+import { advanceForumReplay, createForumReplayCursor, type ForumReplayCursor } from "./replay";
+import type { ForumReplayScenario, ForumReplayEvent } from "./types";
+import { applyForumEvent, type ForumMapState } from "./state";
 
-export type SwarmReplayPlayerOptions = {
+export type ForumReplayPlayerOptions = {
   loop?: boolean;
   speed?: number;
   playing?: boolean;
 };
 
-export type SwarmReplayPlayer = {
-  state: SwarmMapState;
+export type ForumReplayPlayer = {
+  state: ForumMapState;
   timeMs: number;
   durationMs: number;
   playing: boolean;
   setPlaying: (next: boolean) => void;
   reset: () => void;
-  dispatchEvent: (event: SwarmReplayEvent) => void;
-  dispatchEvents: (events: SwarmReplayEvent[]) => void;
+  dispatchEvent: (event: ForumReplayEvent) => void;
+  dispatchEvents: (events: ForumReplayEvent[]) => void;
 };
 
-export function useSwarmReplayPlayer(
-  scenario: SwarmReplayScenario,
-  options: SwarmReplayPlayerOptions = {},
-): SwarmReplayPlayer {
+export function useForumReplayPlayer(
+  scenario: ForumReplayScenario,
+  options: ForumReplayPlayerOptions = {},
+): ForumReplayPlayer {
   const { loop = true, speed = 1, playing: defaultPlaying = true } = options;
   const [playing, setPlaying] = useState(defaultPlaying);
   const [, forceRender] = useReducer((x) => x + 1, 0);
 
-  const cursorRef = useRef<SwarmReplayCursor>(createSwarmReplayCursor(scenario));
-  const stateRef = useRef<SwarmMapState>(cursorRef.current.state);
+  const cursorRef = useRef<ForumReplayCursor>(createForumReplayCursor(scenario));
+  const stateRef = useRef<ForumMapState>(cursorRef.current.state);
   const timeRef = useRef<number>(0);
   const rafRef = useRef<number | null>(null);
   const lastFrameRef = useRef<number | null>(null);
 
   const reset = useMemo(() => {
     return () => {
-      cursorRef.current = createSwarmReplayCursor(scenario);
+      cursorRef.current = createForumReplayCursor(scenario);
       stateRef.current = cursorRef.current.state;
       timeRef.current = 0;
       lastFrameRef.current = null;
@@ -45,8 +45,8 @@ export function useSwarmReplayPlayer(
   }, [scenario]);
 
   const dispatchEvent = useMemo(() => {
-    return (event: SwarmReplayEvent) => {
-      applySwarmEvent(cursorRef.current.state, event);
+    return (event: ForumReplayEvent) => {
+      applyForumEvent(cursorRef.current.state, event);
       stateRef.current = cursorRef.current.state;
       const now = cursorRef.current.state.now;
       cursorRef.current.now = Math.max(cursorRef.current.now, now);
@@ -56,8 +56,8 @@ export function useSwarmReplayPlayer(
   }, []);
 
   const dispatchEvents = useMemo(() => {
-    return (events: SwarmReplayEvent[]) => {
-      events.forEach((event) => applySwarmEvent(cursorRef.current.state, event));
+    return (events: ForumReplayEvent[]) => {
+      events.forEach((event) => applyForumEvent(cursorRef.current.state, event));
       stateRef.current = cursorRef.current.state;
       const now = cursorRef.current.state.now;
       cursorRef.current.now = Math.max(cursorRef.current.now, now);
@@ -93,7 +93,7 @@ export function useSwarmReplayPlayer(
       if (targetTime >= scenario.durationMs) {
         if (loop) {
           const overflow = scenario.durationMs > 0 ? targetTime % scenario.durationMs : 0;
-          cursorRef.current = createSwarmReplayCursor(scenario);
+          cursorRef.current = createForumReplayCursor(scenario);
           stateRef.current = cursorRef.current.state;
           timeRef.current = 0;
           lastFrameRef.current = now;
@@ -104,7 +104,7 @@ export function useSwarmReplayPlayer(
         }
       }
 
-      const applied = advanceSwarmReplay(cursorRef.current, targetTime);
+      const applied = advanceForumReplay(cursorRef.current, targetTime);
       stateRef.current = cursorRef.current.state;
       timeRef.current = cursorRef.current.now;
       if (applied > 0) {

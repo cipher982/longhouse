@@ -1,17 +1,17 @@
 @layer pages {
-  .swarm-map-page {
+  .forum-map-page {
     display: flex;
     flex-direction: column;
     gap: var(--space-6);
   }
 
-  .swarm-map-actions {
+  .forum-map-actions {
     display: flex;
     gap: var(--space-3);
     flex-wrap: wrap;
   }
 
-  .swarm-map-grid {
+  .forum-map-grid {
     display: grid;
     grid-template-columns: minmax(260px, 320px) minmax(0, 1fr) minmax(240px, 300px);
     gap: var(--space-4);
@@ -19,7 +19,7 @@
     min-height: 70vh;
   }
 
-  .swarm-map-panel {
+  .forum-map-panel {
     padding: 0;
     overflow: hidden;
     display: flex;
@@ -28,13 +28,13 @@
     border: 1px solid rgba(120, 150, 190, 0.2);
   }
 
-  .swarm-map-panel--center {
+  .forum-map-panel--center {
     background: linear-gradient(135deg, rgba(12, 16, 24, 0.98), rgba(11, 14, 20, 0.98));
     border: 1px solid rgba(88, 120, 170, 0.25);
     position: relative;
   }
 
-  .swarm-panel-header {
+  .forum-panel-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -42,20 +42,20 @@
     border-bottom: 1px solid rgba(120, 150, 190, 0.15);
   }
 
-  .swarm-panel-title {
+  .forum-panel-title {
     font-family: var(--font-display);
     font-size: var(--font-size-lg);
     font-weight: var(--font-weight-semibold);
     color: var(--color-ink-strong, #eef2ff);
   }
 
-  .swarm-panel-subtitle {
+  .forum-panel-subtitle {
     font-size: var(--font-size-xs);
     color: rgba(190, 208, 234, 0.7);
     margin-top: var(--space-1);
   }
 
-  .swarm-task-list {
+  .forum-task-list {
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
@@ -63,7 +63,7 @@
     overflow-y: auto;
   }
 
-  .swarm-task-row {
+  .forum-task-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -78,27 +78,27 @@
     transition: transform 0.18s ease, border 0.18s ease;
   }
 
-  .swarm-task-row:hover {
+  .forum-task-row:hover {
     border-color: rgba(110, 200, 230, 0.5);
     transform: translateY(-1px);
   }
 
-  .swarm-task-row:focus-visible {
+  .forum-task-row:focus-visible {
     outline: 2px solid rgba(120, 220, 240, 0.75);
     outline-offset: 2px;
   }
 
-  .swarm-task-title {
+  .forum-task-title {
     font-weight: var(--font-weight-medium);
     flex: 1;
   }
 
-  .swarm-task-row--selected {
+  .forum-task-row--selected {
     border-color: rgba(120, 220, 240, 0.7);
     box-shadow: 0 0 0 1px rgba(120, 220, 240, 0.3), 0 8px 22px rgba(8, 12, 20, 0.45);
   }
 
-  .swarm-task-progress {
+  .forum-task-progress {
     font-size: 0.68rem;
     letter-spacing: 0.04em;
     color: rgba(170, 220, 255, 0.9);
@@ -110,7 +110,7 @@
     flex-shrink: 0;
   }
 
-  .swarm-task-status {
+  .forum-task-status {
     text-transform: uppercase;
     font-size: 0.68rem;
     letter-spacing: 0.08em;
@@ -119,28 +119,28 @@
     flex-shrink: 0;
   }
 
-  .swarm-task-status--queued,
-  .swarm-task-status--waiting {
+  .forum-task-status--queued,
+  .forum-task-status--waiting {
     background: rgba(120, 150, 190, 0.25);
     color: rgba(210, 225, 245, 0.9);
   }
 
-  .swarm-task-status--running {
+  .forum-task-status--running {
     background: rgba(54, 235, 168, 0.2);
     color: #36eba8;
   }
 
-  .swarm-task-status--success {
+  .forum-task-status--success {
     background: rgba(72, 190, 120, 0.2);
     color: #6ae2a2;
   }
 
-  .swarm-task-status--failed {
+  .forum-task-status--failed {
     background: rgba(240, 84, 84, 0.2);
     color: #f05454;
   }
 
-  .swarm-task-empty {
+  .forum-task-empty {
     padding: var(--space-4);
     border-radius: 12px;
     border: 1px dashed rgba(120, 150, 190, 0.3);
@@ -150,7 +150,7 @@
     text-align: center;
   }
 
-  .swarm-map-canvas {
+  .forum-map-canvas {
     position: relative;
     width: 100%;
     height: 100%;
@@ -164,17 +164,17 @@
     cursor: grab;
   }
 
-  .swarm-map-canvas:active {
+  .forum-map-canvas:active {
     cursor: grabbing;
   }
 
-  .swarm-map-canvas canvas {
+  .forum-map-canvas canvas {
     width: 100%;
     height: 100%;
     display: block;
   }
 
-  .swarm-map-hud {
+  .forum-map-hud {
     position: absolute;
     bottom: var(--space-3);
     right: var(--space-3);
@@ -188,43 +188,43 @@
     gap: var(--space-1);
   }
 
-  .swarm-map-hud-row {
+  .forum-map-hud-row {
     display: flex;
     justify-content: space-between;
     gap: var(--space-4);
   }
 
-  .swarm-selection {
+  .forum-selection {
     padding: var(--space-3) var(--space-4) var(--space-4);
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
   }
 
-  .swarm-selection-title {
+  .forum-selection-title {
     font-size: var(--font-size-md);
     font-weight: var(--font-weight-semibold);
     color: rgba(235, 245, 255, 0.95);
   }
 
-  .swarm-selection-meta {
+  .forum-selection-meta {
     color: rgba(190, 210, 235, 0.8);
     font-size: var(--font-size-sm);
   }
 
-  .swarm-selection-actions {
+  .forum-selection-actions {
     display: flex;
     gap: var(--space-2);
     margin-top: var(--space-2);
   }
 
-  .swarm-selection-empty {
+  .forum-selection-empty {
     color: rgba(180, 200, 220, 0.7);
     font-size: var(--font-size-sm);
     line-height: 1.5;
   }
 
-  .swarm-legend {
+  .forum-legend {
     padding: var(--space-3) var(--space-4) var(--space-4);
     border-top: 1px solid rgba(120, 150, 190, 0.15);
     display: flex;
@@ -232,19 +232,19 @@
     gap: var(--space-2);
   }
 
-  .swarm-legend-title {
+  .forum-legend-title {
     font-size: var(--font-size-xs);
     text-transform: uppercase;
     letter-spacing: 0.12em;
     color: rgba(170, 200, 230, 0.7);
   }
 
-  .swarm-legend-grid {
+  .forum-legend-grid {
     display: grid;
     gap: var(--space-2);
   }
 
-  .swarm-legend-item {
+  .forum-legend-item {
     display: flex;
     align-items: center;
     gap: var(--space-2);
@@ -252,7 +252,7 @@
     color: rgba(210, 230, 245, 0.85);
   }
 
-  .swarm-legend-swatch {
+  .forum-legend-swatch {
     width: 12px;
     height: 12px;
     border-radius: 4px;
@@ -261,50 +261,50 @@
     flex-shrink: 0;
   }
 
-  .swarm-legend-swatch--unit {
+  .forum-legend-swatch--unit {
     background: #5ce0ff;
   }
 
-  .swarm-legend-swatch--structure {
+  .forum-legend-swatch--structure {
     background: #f7b955;
   }
 
-  .swarm-legend-swatch--worker {
+  .forum-legend-swatch--worker {
     background: #7b7cff;
   }
 
-  .swarm-legend-swatch--task {
+  .forum-legend-swatch--task {
     background: #36eba8;
   }
 
-  .swarm-legend-swatch--alert {
+  .forum-legend-swatch--alert {
     background: transparent;
     border: 2px solid #f48b4a;
     border-radius: 50%;
   }
 
-  .swarm-legend-swatch--marker {
+  .forum-legend-swatch--marker {
     background: transparent;
     border: 1px dashed rgba(220, 235, 255, 0.6);
   }
 
   @media (width <= 1100px) {
-    .swarm-map-grid {
+    .forum-map-grid {
       grid-template-columns: 1fr;
     }
 
-    .swarm-map-panel--center {
+    .forum-map-panel--center {
       order: -1;
     }
   }
 
   @media (width <= 720px) {
-    .swarm-map-actions {
+    .forum-map-actions {
       flex-direction: column;
       align-items: flex-start;
     }
 
-    .swarm-map-canvas {
+    .forum-map-canvas {
       min-height: 420px;
     }
   }
