@@ -174,3 +174,5 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-25) [pattern] Worker inbox continuation: `trigger_worker_inbox_run()` in worker_resume.py handles workers completing after supervisor SUCCESS. Creates continuation run with `RunTrigger.CONTINUATION`, SSE events alias back via `continuation_of_run_id`. Multiple workers: first creates continuation, subsequent merge or chain.
 - (2026-01-25) [gotcha] AgentRunner filters out DB-stored system messages; injected `role="system"` thread messages are ignored by LLM context unless you change the filtering.
 - (2026-01-25) [gotcha] Legacy continuations may have null `root_run_id`; chain continuations will alias to the wrong run unless you backfill or fall back to `continuation_of_run_id`.
+- (2026-01-26) [pattern] When a continuation is already RUNNING, queue worker updates as internal user messages and trigger a follow-up continuation after it completes (don’t inject mid-run).
+- (2026-01-26) [pattern] Avoid manual browser-hub testing; use scripted prod E2E with `auth/service-login` + Playwright for real flows.
