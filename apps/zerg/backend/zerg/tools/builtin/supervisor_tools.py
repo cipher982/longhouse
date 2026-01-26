@@ -1344,6 +1344,7 @@ async def request_session_selection_async(
             event_type="show_session_picker",
             payload={
                 "filters": filters if filters else None,
+                "owner_id": ctx.owner_id,
                 "trace_id": ctx.trace_id,
             },
         )
