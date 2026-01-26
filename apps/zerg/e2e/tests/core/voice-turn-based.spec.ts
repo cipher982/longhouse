@@ -64,4 +64,27 @@ test.describe('Voice Turn-Based - Core', () => {
     expect(typeof data.tts.audio_base64).toBe('string');
     expect(data.tts.audio_base64.length).toBeGreaterThan(0);
   });
+
+  test('message_id passthrough for history correlation', async ({ request }) => {
+    const audioBuffer = buildWavBuffer();
+    const testMessageId = 'e2e-test-uuid-' + Date.now();
+
+    const response = await request.post('/api/jarvis/voice/turn', {
+      multipart: {
+        audio: {
+          name: 'sample.wav',
+          mimeType: 'audio/wav',
+          buffer: audioBuffer,
+        },
+        return_audio: 'false',
+        message_id: testMessageId,
+      },
+    });
+
+    expect(response.ok()).toBeTruthy();
+
+    const data = await response.json();
+    expect(data.message_id).toBe(testMessageId);
+    expect(data.status).toBe('success');
+  });
 });

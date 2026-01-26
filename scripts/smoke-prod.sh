@@ -184,6 +184,88 @@ test_chat() {
     return 0
 }
 
+# Test voice turn (STT + supervisor response)
+test_voice() {
+    local name="$1"
+    local cookie_jar="$2"
+    local timeout_secs="${3:-30}"
+
+    local msg_id
+    msg_id=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "smoke-voice-$(date +%s)")
+
+    # Create minimal valid WAV file (44-byte header + 1600 bytes of silence = 100ms at 8kHz 16-bit mono)
+    local wav_file
+    wav_file=$(mktemp)
+    # WAV header (44 bytes) - 8kHz, 16-bit, mono, 1600 samples
+    printf 'RIFF' > "$wav_file"
+    printf '\x24\x08\x00\x00' >> "$wav_file"  # file size - 8
+    printf 'WAVE' >> "$wav_file"
+    printf 'fmt ' >> "$wav_file"
+    printf '\x10\x00\x00\x00' >> "$wav_file"  # fmt chunk size (16)
+    printf '\x01\x00' >> "$wav_file"          # PCM format
+    printf '\x01\x00' >> "$wav_file"          # 1 channel
+    printf '\x40\x1f\x00\x00' >> "$wav_file"  # 8000 Hz sample rate
+    printf '\x80\x3e\x00\x00' >> "$wav_file"  # byte rate (8000 * 2)
+    printf '\x02\x00' >> "$wav_file"          # block align
+    printf '\x10\x00' >> "$wav_file"          # 16 bits per sample
+    printf 'data' >> "$wav_file"
+    printf '\x40\x06\x00\x00' >> "$wav_file"  # data size (1600)
+    # Silence data (1600 bytes of zeros)
+    dd if=/dev/zero bs=1600 count=1 >> "$wav_file" 2>/dev/null
+
+    # Send voice request
+    local response
+    if [[ -n "$TIMEOUT_CMD" ]]; then
+        response=$($TIMEOUT_CMD "$timeout_secs" curl -s -X POST "$API_URL/api/jarvis/voice/turn" \
+            -b "$cookie_jar" \
+            -F "audio=@${wav_file};type=audio/wav" \
+            -F "return_audio=false" \
+            -F "message_id=$msg_id" 2>/dev/null) || true
+    else
+        response=$(curl -s -X POST "$API_URL/api/jarvis/voice/turn" \
+            -b "$cookie_jar" \
+            -F "audio=@${wav_file};type=audio/wav" \
+            -F "return_audio=false" \
+            -F "message_id=$msg_id" 2>/dev/null) || true
+    fi
+
+    rm -f "$wav_file"
+
+    if [[ -z "$response" ]]; then
+        fail "$name (no response / timeout)"
+        return 1
+    fi
+
+    # Check message_id passthrough
+    local returned_msg_id
+    returned_msg_id=$(echo "$response" | jq -r '.message_id // empty' 2>/dev/null)
+    if [[ "$returned_msg_id" != "$msg_id" ]]; then
+        fail "$name (message_id mismatch: expected $msg_id, got $returned_msg_id)"
+        return 1
+    fi
+
+    # Check status
+    local status
+    status=$(echo "$response" | jq -r '.status // empty' 2>/dev/null)
+    if [[ "$status" != "success" ]]; then
+        local error
+        error=$(echo "$response" | jq -r '.error // "unknown"' 2>/dev/null)
+        fail "$name (status=$status, error=$error)"
+        return 1
+    fi
+
+    # Check transcript exists
+    local transcript
+    transcript=$(echo "$response" | jq -r '.transcript // empty' 2>/dev/null)
+    if [[ -z "$transcript" ]]; then
+        fail "$name (empty transcript)"
+        return 1
+    fi
+
+    pass "$name (transcript: \"${transcript:0:30}...\")"
+    return 0
+}
+
 # Test JSON field
 test_json() {
     local name="$1"
@@ -517,6 +599,7 @@ if [[ -n "$SMOKE_TEST_SECRET" ]]; then
             section "LLM"
             run_test test_chat "Basic chat (2+2)" "$COOKIE_JAR" "What is 2+2? Reply with just the number." 30 '(^|[^0-9])4($|[^0-9])'
             run_test test_chat "Basic chat (France capital)" "$COOKIE_JAR" "What is the capital of France? Reply with just the city." 30 '(^|[^A-Za-z])Paris($|[^A-Za-z])'
+            run_test test_voice "Voice turn (message_id passthrough)" "$COOKIE_JAR" 45
         else
             info "LLM test skipped (--no-llm)"
         fi
