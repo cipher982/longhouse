@@ -9,7 +9,7 @@ import { Page, expect, Locator } from '@playwright/test';
 export interface CanvasNode {
   element: Locator;
   boundingBox: any;
-  type: 'agent' | 'tool' | 'trigger';
+  type: 'fiche' | 'tool' | 'trigger';
 }
 
 export interface ExecutionMonitor {
@@ -38,29 +38,29 @@ export async function navigateToCanvas(page: Page): Promise<void> {
 }
 
 /**
- * Wait for agent shelf to load with specified minimum count
+ * Wait for fiche shelf to load with specified minimum count
  */
-export async function waitForAgentShelf(page: Page, minCount: number = 1): Promise<void> {
-  const agentPills = page.locator('#agent-shelf .agent-pill');
-  await expect(agentPills.first()).toBeVisible({ timeout: 10000 });
-  const pillCount = await agentPills.count();
+export async function waitForFicheShelf(page: Page, minCount: number = 1): Promise<void> {
+  const fichePills = page.locator('#fiche-shelf .fiche-pill');
+  await expect(fichePills.first()).toBeVisible({ timeout: 10000 });
+  const pillCount = await fichePills.count();
   expect(pillCount).toBeGreaterThanOrEqual(minCount);
 }
 
 /**
- * Drag an agent from shelf to canvas at specified position
+ * Drag an fiche from shelf to canvas at specified position
  */
-export async function dragAgentToCanvas(
+export async function dragFicheToCanvas(
   page: Page,
-  agentIndex: number = 0,
+  ficheIndex: number = 0,
   position: { x: number; y: number } = { x: 200, y: 150 }
 ): Promise<void> {
-  const agentPill = page.locator('#agent-shelf .agent-pill').nth(agentIndex);
+  const fichePill = page.locator('#fiche-shelf .fiche-pill').nth(ficheIndex);
   const canvasArea = page.locator('#canvas-container canvas');
 
   const nodeCountBefore = await page.locator('.canvas-node, .generic-node').count();
 
-  await agentPill.dragTo(canvasArea, { targetPosition: position });
+  await fichePill.dragTo(canvasArea, { targetPosition: position });
 
   // Wait for a new node to appear instead of arbitrary timeout
   await expect(page.locator('.canvas-node, .generic-node')).toHaveCount(nodeCountBefore + 1, { timeout: 5000 });
@@ -131,12 +131,12 @@ export async function getCanvasNodes(page: Page): Promise<CanvasNode[]> {
 /**
  * Determine node type based on element attributes
  */
-async function determineNodeType(element: Locator): Promise<'agent' | 'tool' | 'trigger'> {
+async function determineNodeType(element: Locator): Promise<'fiche' | 'tool' | 'trigger'> {
   const classList = await element.getAttribute('class') || '';
   const content = await element.textContent() || '';
 
-  if (classList.includes('agent') || content.includes('Agent')) {
-    return 'agent';
+  if (classList.includes('fiche') || content.includes('Fiche')) {
+    return 'fiche';
   } else if (classList.includes('tool') || content.includes('HTTP') || content.includes('Request')) {
     return 'tool';
   } else {
@@ -349,28 +349,28 @@ export function analyzeExecutionResults(monitor: ExecutionMonitor): {
 }
 
 /**
- * Complete workflow creation pattern: agent + tool + connection
+ * Complete workflow creation pattern: fiche + tool + connection
  */
-export async function createAgentToolWorkflow(
+export async function createFicheToolWorkflow(
   page: Page,
   options: {
-    agentIndex?: number;
+    ficheIndex?: number;
     toolName?: string;
-    agentPosition?: { x: number; y: number };
+    fichePosition?: { x: number; y: number };
     toolPosition?: { x: number; y: number };
     toolConfig?: Record<string, string>;
   } = {}
-): Promise<{ agentNode: CanvasNode; toolNode: CanvasNode }> {
+): Promise<{ ficheNode: CanvasNode; toolNode: CanvasNode }> {
   const {
-    agentIndex = 0,
+    ficheIndex = 0,
     toolName = 'HTTP Request',
-    agentPosition = { x: 200, y: 150 },
+    fichePosition = { x: 200, y: 150 },
     toolPosition = { x: 400, y: 150 },
     toolConfig = {}
   } = options;
 
-  // Drag agent to canvas
-  await dragAgentToCanvas(page, agentIndex, agentPosition);
+  // Drag fiche to canvas
+  await dragFicheToCanvas(page, ficheIndex, fichePosition);
 
   // Drag tool to canvas
   await dragToolToCanvas(page, toolName, toolPosition);
@@ -381,22 +381,22 @@ export async function createAgentToolWorkflow(
     throw new Error(`Expected at least 2 nodes, got ${nodes.length}`);
   }
 
-  const agentNode = nodes.find(n => n.type === 'agent');
+  const ficheNode = nodes.find(n => n.type === 'fiche');
   const toolNode = nodes.find(n => n.type === 'tool');
 
-  if (!agentNode || !toolNode) {
-    throw new Error('Could not identify agent and tool nodes');
+  if (!ficheNode || !toolNode) {
+    throw new Error('Could not identify fiche and tool nodes');
   }
 
   // Connect nodes
-  await connectNodes(page, agentNode, toolNode);
+  await connectNodes(page, ficheNode, toolNode);
 
   // Configure tool if config provided
   if (Object.keys(toolConfig).length > 0) {
     await configureTool(page, toolNode, toolConfig);
   }
 
-  return { agentNode, toolNode };
+  return { ficheNode, toolNode };
 }
 
 /**

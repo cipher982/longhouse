@@ -1,11 +1,11 @@
-"""Cloud Executor – run headless agent execution via subprocess.
+"""Cloud Executor – run headless commis execution via subprocess.
 
-This service runs agents as headless subprocesses using the `hatch` CLI tool.
+This service runs commis as headless subprocesses using the `hatch` CLI tool.
 It enables 24/7 cloud execution independent of laptop connectivity.
 
 Usage:
     executor = CloudExecutor()
-    result = await executor.run_agent(
+    result = await executor.run_commis(
         task="Fix the typo in README.md",
         workspace_path="/var/jarvis/workspaces/run-123",
         model="bedrock/claude-sonnet",
@@ -26,7 +26,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Default timeout for agent execution (1 hour)
+# Default timeout for commis execution (1 hour)
 DEFAULT_TIMEOUT_SECONDS = 3600
 
 # Default model for cloud execution (backend/model format)
@@ -73,10 +73,10 @@ def normalize_model_id(model: str) -> tuple[str, str]:
 
 @dataclass
 class CloudExecutionResult:
-    """Result from cloud agent execution."""
+    """Result from cloud commis execution."""
 
     status: str  # "success", "failed", "timeout"
-    output: str  # stdout from agent
+    output: str  # stdout from commis
     error: str | None = None  # stderr or error message
     exit_code: int = 0
     duration_ms: int = 0
@@ -86,7 +86,7 @@ class CloudExecutionResult:
 
 
 class CloudExecutor:
-    """Execute agents as headless subprocesses using hatch CLI."""
+    """Execute commis as headless subprocesses using hatch CLI."""
 
     def __init__(
         self,
@@ -100,12 +100,12 @@ class CloudExecutor:
         hatch_path
             Path to hatch executable. If None, uses 'hatch' from PATH.
         default_model
-            Default model to use if not specified in run_agent().
+            Default model to use if not specified in run_commis().
         """
         self.hatch_path = hatch_path or "hatch"
         self.default_model = default_model
 
-    async def run_agent(
+    async def run_commis(
         self,
         task: str,
         workspace_path: str | Path,
@@ -126,9 +126,9 @@ class CloudExecutor:
         Parameters
         ----------
         task
-            Natural language task for the agent to execute
+            Natural language task for the commis to execute
         workspace_path
-            Directory where agent should run (working directory)
+            Directory where commis should run (working directory)
         model
             LLM model to use (default: bedrock/claude-sonnet)
         timeout

@@ -10,12 +10,12 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.fixture
-def test_thread(db_session, sample_agent):
+def test_thread(db_session, sample_fiche):
     """Create a test thread for WebSocket testing"""
     from zerg.models.models import Thread
 
     thread = Thread(
-        agent_id=sample_agent.id,
+        fiche_id=sample_fiche.id,
         title="WebSocket Test Thread",
         active=True,
         memory_strategy="buffer",

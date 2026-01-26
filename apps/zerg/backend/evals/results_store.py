@@ -2,7 +2,7 @@
 
 This module provides:
 - JSON serialization of eval results
-- Per-worker temp file merging (xdist-safe)
+- Per-commis temp file merging (xdist-safe)
 - Result file naming with variant + commit hash
 """
 
@@ -39,7 +39,7 @@ class CaseResult:
     status: str  # 'passed' | 'failed' | 'skipped'
     latency_ms: int
     total_tokens: int
-    workers_spawned: int
+    commis_spawned: int
     assertions: list[AssertionResult]
     failure_reason: str | None = None
 
@@ -62,7 +62,7 @@ class EvalRunSummary:
 class EvalRunResult:
     """Complete eval run result."""
 
-    run_id: str
+    course_id: str
     variant: str
     timestamp: str
     commit: str
@@ -91,7 +91,7 @@ def get_commit_hash() -> str:
     return "unknown"
 
 
-def generate_run_id(variant: str = "baseline") -> str:
+def generate_course_id(variant: str = "baseline") -> str:
     """Generate a unique run ID.
 
     Format: eval-{timestamp}-{variant}-{commit}
@@ -124,7 +124,7 @@ def get_results_dir() -> Path:
 
 
 def get_temp_results_dir() -> Path:
-    """Get the temp results directory for per-worker files.
+    """Get the temp results directory for per-commis files.
 
     Returns:
         Path to temp results directory
@@ -134,30 +134,30 @@ def get_temp_results_dir() -> Path:
     return temp_dir
 
 
-def save_result_temp(worker_id: str, case_result: CaseResult) -> None:
-    """Save a single case result to per-worker temp file.
+def save_result_temp(commis_id: str, case_result: CaseResult) -> None:
+    """Save a single case result to per-commis temp file.
 
     This is called during test execution (potentially in parallel via pytest-xdist).
-    Each worker writes to its own temp file to avoid race conditions.
+    Each commis writes to its own temp file to avoid race conditions.
 
     Args:
-        worker_id: Pytest worker ID (e.g., 'gw0', 'gw1', or 'master')
+        commis_id: Pytest commis ID (e.g., 'gw0', 'gw1', or 'master')
         case_result: Result to save
     """
     temp_dir = get_temp_results_dir()
-    temp_file = temp_dir / f"{worker_id}.jsonl"
+    temp_file = temp_dir / f"{commis_id}.jsonl"
 
-    # Append to worker's temp file (JSONL format - one JSON object per line)
+    # Append to commis's temp file (JSONL format - one JSON object per line)
     with open(temp_file, "a") as f:
         json.dump(asdict(case_result), f)
         f.write("\n")
 
 
 def merge_results(variant: str, model: str | None = None, commit: str | None = None) -> str:
-    """Merge per-worker temp files into final result JSON.
+    """Merge per-commis temp files into final result JSON.
 
     This should be called ONCE after all tests complete (in pytest_sessionfinish).
-    Only the master node should call this (not xdist workers).
+    Only the master node should call this (not xdist commis).
 
     Args:
         variant: Variant name used for this run
@@ -187,7 +187,7 @@ def merge_results(variant: str, model: str | None = None, commit: str | None = N
                         status=case_data["status"],
                         latency_ms=case_data["latency_ms"],
                         total_tokens=case_data["total_tokens"],
-                        workers_spawned=case_data["workers_spawned"],
+                        commis_spawned=case_data["commis_spawned"],
                         assertions=assertions,
                         failure_reason=case_data.get("failure_reason"),
                     )
@@ -221,7 +221,7 @@ def merge_results(variant: str, model: str | None = None, commit: str | None = N
 
     # Generate run ID and result object
     commit_hash = commit or get_commit_hash()
-    run_id = generate_run_id(variant)
+    course_id = generate_course_id(variant)
     timestamp = datetime.now(timezone.utc).isoformat()
 
     config = {"variant": variant}
@@ -229,7 +229,7 @@ def merge_results(variant: str, model: str | None = None, commit: str | None = N
         config["model"] = model
 
     result = EvalRunResult(
-        run_id=run_id,
+        course_id=course_id,
         variant=variant,
         timestamp=timestamp,
         commit=commit_hash,
@@ -240,7 +240,7 @@ def merge_results(variant: str, model: str | None = None, commit: str | None = N
 
     # Write to final result file
     results_dir = get_results_dir()
-    result_file = results_dir / f"{run_id}.json"
+    result_file = results_dir / f"{course_id}.json"
 
     with open(result_file, "w") as f:
         json.dump(asdict(result), f, indent=2)
@@ -280,14 +280,14 @@ def load_result(result_file: str) -> EvalRunResult:
             status=case_data["status"],
             latency_ms=case_data["latency_ms"],
             total_tokens=case_data["total_tokens"],
-            workers_spawned=case_data["workers_spawned"],
+            commis_spawned=case_data["commis_spawned"],
             assertions=assertions,
             failure_reason=case_data.get("failure_reason"),
         )
         cases.append(case)
 
     return EvalRunResult(
-        run_id=data["run_id"],
+        course_id=data["course_id"],
         variant=data["variant"],
         timestamp=data["timestamp"],
         commit=data["commit"],
@@ -297,10 +297,10 @@ def load_result(result_file: str) -> EvalRunResult:
     )
 
 
-def get_worker_id() -> str:
-    """Get the current pytest-xdist worker ID.
+def get_commis_id() -> str:
+    """Get the current pytest-xdist commis ID.
 
     Returns:
-        Worker ID (e.g., 'gw0', 'gw1', or 'master' if not using xdist)
+        Commis ID (e.g., 'gw0', 'gw1', or 'master' if not using xdist)
     """
-    return os.environ.get("PYTEST_XDIST_WORKER", "master")
+    return os.environ.get("PYTEST_XDIST_COMMIS", "master")

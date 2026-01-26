@@ -29,16 +29,16 @@ const tabs: TabConfig[] = [
   {
     id: "dashboard",
     label: "Dashboard",
-    description: "Monitor all your agents in one place. See status, runs, and success rates at a glance.",
+    description: "Monitor all your fiches in one place. See status, courses, and success rates at a glance.",
     image: "/images/landing/dashboard-preview.png",
-    alt: "Dashboard showing agent status, runs, and monitoring",
+    alt: "Dashboard showing fiche status, courses, and monitoring",
   },
   {
     id: "canvas",
     label: "Workflow Builder",
-    description: "Drag and drop to build workflows. Connect triggers, agents, and actions visually.",
+    description: "Drag and drop to build workflows. Connect triggers, fiches, and actions visually.",
     image: "/images/landing/canvas-preview.png",
-    alt: "Visual workflow canvas with connected agent nodes",
+    alt: "Visual workflow canvas with connected fiche nodes",
   },
 ];
 

@@ -32,7 +32,7 @@ interface UserUsageResponse {
   period: "today" | "7d" | "30d";
   tokens: TokenBreakdown;
   cost_usd: number;
-  runs: number;
+  courses: number;
   limit: UsageLimit;
 }
 
@@ -181,7 +181,7 @@ export default function UsageWidget() {
     return null;
   }
 
-  const { tokens, cost_usd, runs, limit } = usage;
+  const { tokens, cost_usd, courses, limit } = usage;
   const isUnlimited = limit.status === "unlimited";
   const progressColor = getProgressColor(limit.used_percent);
 
@@ -236,7 +236,7 @@ export default function UsageWidget() {
         </span>
         <span className="usage-widget-detail-separator">·</span>
         <span className="usage-widget-detail">
-          {runs} run{runs !== 1 ? "s" : ""}
+          {courses} course{courses !== 1 ? "s" : ""}
         </span>
       </div>
 

@@ -1,8 +1,8 @@
-"""End-to-end smoke-test for Gmail webhook → trigger → agent execution.
+"""End-to-end smoke-test for Gmail webhook → trigger → fiche execution.
 
 The scenario:
 
-1. Create an *agent* and an associated *email* trigger referencing a Gmail connector.
+1. Create an *fiche* and an associated *email* trigger referencing a Gmail connector.
 2. Connect Gmail to store a refresh token (monkey-patched).
 3. Fire the Gmail webhook callback with connector id in channel token.
 """
@@ -40,17 +40,17 @@ def _patch_google_token_exchange(monkeypatch):
 async def test_gmail_webhook_triggers_agent(client, db_session, _dev_user):
     """Full flow: trigger creation → Gmail connect → webhook callback."""
 
-    # 1) Create agent ----------------------------------------------------
-    agent_payload = {
-        "name": "Gmail Agent",
+    # 1) Create fiche ----------------------------------------------------
+    fiche_payload = {
+        "name": "Gmail Fiche",
         "system_instructions": "sys",
         "task_instructions": "task",
         "model": "gpt-mock",
     }
 
-    resp = client.post("/api/agents/", json=agent_payload)
+    resp = client.post("/api/fiches/", json=fiche_payload)
     assert resp.status_code == 201, resp.text
-    agent_id = resp.json()["id"]
+    fiche_id = resp.json()["id"]
 
     # 2) Create Gmail connector + email trigger ------------------------
     from zerg.crud import crud as _crud
@@ -71,7 +71,7 @@ async def test_gmail_webhook_triggers_agent(client, db_session, _dev_user):
         )
     trg_resp = client.post(
         "/api/triggers/",
-        json={"agent_id": agent_id, "type": "email", "config": {"connector_id": conn.id}},
+        json={"fiche_id": fiche_id, "type": "email", "config": {"connector_id": conn.id}},
     )
     assert trg_resp.status_code == 201, trg_resp.text
 
@@ -99,14 +99,14 @@ async def test_gmail_webhook_triggers_agent(client, db_session, _dev_user):
     monkeypatch.setattr(gmail_api_mod, "list_history", _stub_list_history)
     monkeypatch.setattr(gmail_api_mod, "get_message_metadata", _stub_get_meta)
 
-    called = {"count": 0, "agent_id": None}
+    called = {"count": 0, "fiche_id": None}
 
-    async def _stub_run_agent_task(aid: int, trigger: str = "schedule"):  # noqa: D401 – stub async
+    async def _stub_run_fiche_task(aid: int, trigger: str = "schedule"):  # noqa: D401 – stub async
         called["count"] += 1
-        called["agent_id"] = aid
+        called["fiche_id"] = aid
 
-    original_run = scheduler_service.run_agent_task
-    scheduler_service.run_agent_task = _stub_run_agent_task  # type: ignore[assignment]
+    original_run = scheduler_service.run_fiche_task
+    scheduler_service.run_fiche_task = _stub_run_fiche_task  # type: ignore[assignment]
 
     try:
         # 5) Fire Gmail webhook (msg_no=1) -----------------------------
@@ -118,7 +118,7 @@ async def test_gmail_webhook_triggers_agent(client, db_session, _dev_user):
         await asyncio.sleep(0.2)
 
         assert called["count"] == 1
-        assert called["agent_id"] == agent_id
+        assert called["fiche_id"] == fiche_id
 
         # Inspect stored last_msg_no before second callback
         from zerg.models.models import Connector as ConnectorModel
@@ -134,5 +134,5 @@ async def test_gmail_webhook_triggers_agent(client, db_session, _dev_user):
         await asyncio.sleep(0)
         assert called["count"] == 1, "Second webhook with same msg_no should not trigger run"
     finally:
-        scheduler_service.run_agent_task = original_run  # type: ignore[assignment]
+        scheduler_service.run_fiche_task = original_run  # type: ignore[assignment]
         monkeypatch.undo()

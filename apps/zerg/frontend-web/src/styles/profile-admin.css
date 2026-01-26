@@ -472,25 +472,25 @@
     color: var(--color-text-muted);
   }
 
-  /* Top Agents Table */
-  .top-agents-table {
+  /* Top Fiches Table */
+  .top-fiches-table {
     max-height: 400px;
     overflow: auto;
   }
 
-  .top-agents-table table {
+  .top-fiches-table table {
     width: 100%;
     border-collapse: collapse;
   }
 
-  .top-agents-table th,
-  .top-agents-table td {
+  .top-fiches-table th,
+  .top-fiches-table td {
     padding: 12px 16px;
     text-align: left;
     border-bottom: 1px solid var(--border-color);
   }
 
-  .top-agents-table th {
+  .top-fiches-table th {
     position: sticky;
     top: 0;
     background: var(--dark-lighter);
@@ -502,17 +502,17 @@
     z-index: 1;
   }
 
-  .top-agents-table td {
+  .top-fiches-table td {
     color: var(--text);
     font-size: 14px;
   }
 
-  .agent-name {
+  .fiche-name {
     font-weight: 500;
     color: var(--primary);
   }
 
-  .runs-count {
+  .courses-count {
     font-family: Monaco, Menlo, monospace;
   }
 
@@ -621,7 +621,7 @@
     color: var(--primary);
   }
 
-  .top-agents-table tr:hover {
+  .top-fiches-table tr:hover {
     background: rgb(255 255 255 / 5%);
   }
 

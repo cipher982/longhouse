@@ -2,7 +2,7 @@
  * CANVAS WORKFLOWS TESTS - Visual Workflow Builder
  *
  * Tests the canvas page where users can build AI workflows by
- * dragging agents and tools onto a React Flow canvas.
+ * dragging fiches and tools onto a React Flow canvas.
  *
  * Strategy:
  * - Each test validates ONE invariant
@@ -11,9 +11,9 @@
  * - Tests are isolated (reset DB per test)
  *
  * Coverage:
- * - CANVAS LOAD: Page renders, agent shelf displays
- * - AGENT SHELF: Agents load, can be filtered
- * - DRAG/DROP: Agents/tools can be dropped onto canvas
+ * - CANVAS LOAD: Page renders, fiche shelf displays
+ * - AGENT SHELF: Fiches load, can be filtered
+ * - DRAG/DROP: Fiches/tools can be dropped onto canvas
  * - NODE OPS: Nodes can be moved, deleted, duplicated
  * - WORKFLOW: Auto-save, persistence, Run button state
  */
@@ -33,7 +33,7 @@ test.beforeEach(async ({ request }) => {
 
 /**
  * Navigate to canvas page and wait for it to be ready.
- * Waits for the canvas container and agent shelf to be visible.
+ * Waits for the canvas container and fiche shelf to be visible.
  *
  * CRITICAL: Use Promise.all to attach waitForResponse BEFORE navigation
  * to avoid race condition where response arrives before listener is attached.
@@ -42,7 +42,7 @@ async function navigateToCanvas(page: Page): Promise<void> {
   // Attach response listener BEFORE navigation to avoid race condition
   await Promise.all([
     page.waitForResponse(
-      (r) => r.url().includes('/api/agents') && r.status() === 200,
+      (r) => r.url().includes('/api/fiches') && r.status() === 200,
       { timeout: 10000 }
     ),
     page.goto('/canvas'),
@@ -53,20 +53,20 @@ async function navigateToCanvas(page: Page): Promise<void> {
 }
 
 /**
- * Create an agent via API and return its ID.
+ * Create an fiche via API and return its ID.
  */
-async function createAgentViaAPI(request: any, suffix = ''): Promise<number> {
-  const response = await request.post('/api/agents', {
+async function createFicheViaAPI(request: any, suffix = ''): Promise<number> {
+  const response = await request.post('/api/fiches', {
     data: {
-      name: `Test Agent${suffix}`,
-      system_instructions: 'You are a test agent for E2E testing.',
+      name: `Test Fiche${suffix}`,
+      system_instructions: 'You are a test fiche for E2E testing.',
       task_instructions: 'Execute tasks as requested.',
       model: 'gpt-mock',
     },
   });
   expect(response.status()).toBe(201);
-  const agent = await response.json();
-  return agent.id;
+  const fiche = await response.json();
+  return fiche.id;
 }
 
 /**
@@ -94,15 +94,15 @@ async function waitForWorkflowSave(page: Page): Promise<void> {
 // ============================================================================
 
 test.describe('Canvas Page Load', () => {
-  test('CANVAS 1: Page loads with agent shelf visible', async ({ page }) => {
+  test('CANVAS 1: Page loads with fiche shelf visible', async ({ page }) => {
     await navigateToCanvas(page);
 
-    // Agent shelf should be visible
-    const shelf = page.locator('[data-testid="agent-shelf"]');
+    // Fiche shelf should be visible
+    const shelf = page.locator('[data-testid="fiche-shelf"]');
     await expect(shelf).toBeVisible();
 
-    // Should have at least the Agents section header
-    await expect(shelf).toContainText('Agents');
+    // Should have at least the Fiches section header
+    await expect(shelf).toContainText('Fiches');
   });
 
   test('CANVAS 2: Page loads with tool palette visible', async ({ page }) => {
@@ -148,43 +148,43 @@ test.describe('Canvas Page Load', () => {
 });
 
 // ============================================================================
-// AGENT SHELF TESTS - Agent list and filtering
+// AGENT SHELF TESTS - Fiche list and filtering
 // ============================================================================
 
-test.describe('Agent Shelf', () => {
-  test('SHELF 1: Agents appear in shelf after creation', async ({ page, request }) => {
-    // Create an agent via API
-    await createAgentViaAPI(request);
+test.describe('Fiche Shelf', () => {
+  test('SHELF 1: Fiches appear in shelf after creation', async ({ page, request }) => {
+    // Create an fiche via API
+    await createFicheViaAPI(request);
 
     await navigateToCanvas(page);
 
-    // Agent shelf should show at least 1 agent
-    const agentItems = page.locator('[data-testid="agent-shelf"] .agent-pill');
-    await expect.poll(async () => await agentItems.count(), { timeout: 10000 }).toBeGreaterThan(0);
+    // Fiche shelf should show at least 1 fiche
+    const ficheItems = page.locator('[data-testid="fiche-shelf"] .fiche-pill');
+    await expect.poll(async () => await ficheItems.count(), { timeout: 10000 }).toBeGreaterThan(0);
   });
 
-  test('SHELF 2: Search filters agents', async ({ page, request }) => {
-    // Skip: Test isolation issue - agents created via `request` fixture don't appear
-    // in browser's agent shelf view. The X-Test-Worker header coordination between
+  test('SHELF 2: Search filters fiches', async ({ page, request }) => {
+    // Skip: Test isolation issue - fiches created via `request` fixture don't appear
+    // in browser's fiche shelf view. The X-Test-Commis header coordination between
     // Playwright's request context and browser fetch needs investigation.
     // The search functionality itself works (verified manually) - issue is test setup.
     test.skip();
 
-    // Create two agents with distinct names
-    const response1 = await request.post('/api/agents', {
+    // Create two fiches with distinct names
+    const response1 = await request.post('/api/fiches', {
       data: {
         name: 'FilterAlpha',
-        system_instructions: 'Test agent for search',
+        system_instructions: 'Test fiche for search',
         task_instructions: 'Execute tasks',
         model: 'gpt-mock',
       },
     });
     expect(response1.status()).toBe(201);
 
-    const response2 = await request.post('/api/agents', {
+    const response2 = await request.post('/api/fiches', {
       data: {
         name: 'FilterBeta',
-        system_instructions: 'Test agent for search',
+        system_instructions: 'Test fiche for search',
         task_instructions: 'Execute tasks',
         model: 'gpt-mock',
       },
@@ -193,51 +193,51 @@ test.describe('Agent Shelf', () => {
 
     await navigateToCanvas(page);
 
-    // Wait for agents to appear in shelf (shelf polls every 2s)
-    const agentShelf = page.locator('[data-testid="agent-shelf"]');
-    const agentPills = page.locator('[data-testid="agent-shelf"] .agent-pill');
+    // Wait for fiches to appear in shelf (shelf polls every 2s)
+    const ficheShelf = page.locator('[data-testid="fiche-shelf"]');
+    const fichePills = page.locator('[data-testid="fiche-shelf"] .fiche-pill');
 
-    // Wait until we see at least 2 agents
-    await expect.poll(async () => await agentPills.count(), { timeout: 15000 }).toBeGreaterThanOrEqual(2);
+    // Wait until we see at least 2 fiches
+    await expect.poll(async () => await fichePills.count(), { timeout: 15000 }).toBeGreaterThanOrEqual(2);
 
-    // Verify both of our agents are visible
-    await expect(agentShelf).toContainText('FilterAlpha', { timeout: 5000 });
-    await expect(agentShelf).toContainText('FilterBeta', { timeout: 2000 });
+    // Verify both of our fiches are visible
+    await expect(ficheShelf).toContainText('FilterAlpha', { timeout: 5000 });
+    await expect(ficheShelf).toContainText('FilterBeta', { timeout: 2000 });
 
-    const initialCount = await agentPills.count();
+    const initialCount = await fichePills.count();
 
-    // Search for "FilterAlpha" - should filter to just that agent
+    // Search for "FilterAlpha" - should filter to just that fiche
     const searchInput = page.locator('#canvas-shelf-search');
     await searchInput.fill('FilterAlpha');
 
     // Wait for filter to reduce the count
     await expect.poll(async () => {
-      const count = await agentPills.count();
+      const count = await fichePills.count();
       return count;
     }, { timeout: 5000 }).toBe(1);
 
-    // Verify the visible agent is FilterAlpha
-    await expect(agentPills.first()).toContainText('FilterAlpha');
+    // Verify the visible fiche is FilterAlpha
+    await expect(fichePills.first()).toContainText('FilterAlpha');
 
     // Clear search and verify the original count is restored
     await searchInput.clear();
-    await expect.poll(async () => await agentPills.count(), { timeout: 5000 }).toBe(initialCount);
+    await expect.poll(async () => await fichePills.count(), { timeout: 5000 }).toBe(initialCount);
   });
 
-  test('SHELF 3: Agents section can be collapsed', async ({ page, request }) => {
-    await createAgentViaAPI(request);
+  test('SHELF 3: Fiches section can be collapsed', async ({ page, request }) => {
+    await createFicheViaAPI(request);
     await navigateToCanvas(page);
 
-    // Find the agents toggle button by its aria-controls attribute
-    const agentsToggle = page.locator('[aria-controls="shelf-agent-list"]');
-    await expect(agentsToggle).toBeVisible();
+    // Find the fiches toggle button by its aria-controls attribute
+    const fichesToggle = page.locator('[aria-controls="shelf-fiche-list"]');
+    await expect(fichesToggle).toBeVisible();
 
     // Collapse the section
-    await agentsToggle.click();
+    await fichesToggle.click();
 
-    // Agent list should be hidden (content area collapsed)
-    const agentsList = page.locator('#shelf-agent-list');
-    await expect(agentsList).toBeHidden();
+    // Fiche list should be hidden (content area collapsed)
+    const fichesList = page.locator('#shelf-fiche-list');
+    await expect(fichesList).toBeHidden();
   });
 
   test('SHELF 4: Tools section shows built-in tools', async ({ page }) => {
@@ -258,15 +258,15 @@ test.describe('Agent Shelf', () => {
 // ============================================================================
 
 test.describe('Drag and Drop', () => {
-  test('DROP 1: Drag agent onto canvas creates node', async ({ page, request }) => {
-    // Create an agent
-    const agentId = await createAgentViaAPI(request);
+  test('DROP 1: Drag fiche onto canvas creates node', async ({ page, request }) => {
+    // Create an fiche
+    const ficheId = await createFicheViaAPI(request);
 
     await navigateToCanvas(page);
 
-    // Wait for agent to appear in shelf
-    const agentPill = page.locator(`[data-testid="shelf-agent-${agentId}"]`);
-    await expect(agentPill).toBeVisible({ timeout: 10000 });
+    // Wait for fiche to appear in shelf
+    const fichePill = page.locator(`[data-testid="shelf-fiche-${ficheId}"]`);
+    await expect(fichePill).toBeVisible({ timeout: 10000 });
 
     // Get the drop target (React Flow pane)
     const pane = getReactFlowPane(page);
@@ -274,7 +274,7 @@ test.describe('Drag and Drop', () => {
     expect(paneBox).toBeTruthy();
 
     // Perform drag and drop
-    await agentPill.dragTo(pane, {
+    await fichePill.dragTo(pane, {
       targetPosition: { x: paneBox!.width / 2, y: paneBox!.height / 2 },
     });
 
@@ -312,24 +312,24 @@ test.describe('Drag and Drop', () => {
   });
 
   test('DROP 3: Multiple nodes can be added', async ({ page, request }) => {
-    const agentId = await createAgentViaAPI(request);
+    const ficheId = await createFicheViaAPI(request);
     await navigateToCanvas(page);
 
-    const agentPill = page.locator(`[data-testid="shelf-agent-${agentId}"]`);
-    await expect(agentPill).toBeVisible({ timeout: 10000 });
+    const fichePill = page.locator(`[data-testid="shelf-fiche-${ficheId}"]`);
+    await expect(fichePill).toBeVisible({ timeout: 10000 });
 
     const pane = getReactFlowPane(page);
     const paneBox = await pane.boundingBox();
     expect(paneBox).toBeTruthy();
 
     // Add first node (left side)
-    await agentPill.dragTo(pane, {
+    await fichePill.dragTo(pane, {
       targetPosition: { x: paneBox!.width / 3, y: paneBox!.height / 2 },
     });
     await waitForWorkflowSave(page);
 
     // Add second node (right side)
-    await agentPill.dragTo(pane, {
+    await fichePill.dragTo(pane, {
       targetPosition: { x: (paneBox!.width * 2) / 3, y: paneBox!.height / 2 },
     });
     await waitForWorkflowSave(page);
@@ -346,18 +346,18 @@ test.describe('Drag and Drop', () => {
 
 test.describe('Node Operations', () => {
   test('NODE 1: Node can be moved by dragging', async ({ page, request }) => {
-    const agentId = await createAgentViaAPI(request);
+    const ficheId = await createFicheViaAPI(request);
     await navigateToCanvas(page);
 
     // Add a node first
-    const agentPill = page.locator(`[data-testid="shelf-agent-${agentId}"]`);
-    await expect(agentPill).toBeVisible({ timeout: 10000 });
+    const fichePill = page.locator(`[data-testid="shelf-fiche-${ficheId}"]`);
+    await expect(fichePill).toBeVisible({ timeout: 10000 });
 
     const pane = getReactFlowPane(page);
     const paneBox = await pane.boundingBox();
     expect(paneBox).toBeTruthy();
 
-    await agentPill.dragTo(pane, {
+    await fichePill.dragTo(pane, {
       targetPosition: { x: paneBox!.width / 3, y: paneBox!.height / 2 },
     });
     await waitForWorkflowSave(page);
@@ -399,15 +399,15 @@ test.describe('Node Operations', () => {
   });
 
   test('NODE 2: Right-click shows context menu', async ({ page, request }) => {
-    const agentId = await createAgentViaAPI(request);
+    const ficheId = await createFicheViaAPI(request);
     await navigateToCanvas(page);
 
     // Add a node
-    const agentPill = page.locator(`[data-testid="shelf-agent-${agentId}"]`);
-    await expect(agentPill).toBeVisible({ timeout: 10000 });
+    const fichePill = page.locator(`[data-testid="shelf-fiche-${ficheId}"]`);
+    await expect(fichePill).toBeVisible({ timeout: 10000 });
 
     const pane = getReactFlowPane(page);
-    await agentPill.dragTo(pane);
+    await fichePill.dragTo(pane);
     await waitForWorkflowSave(page);
 
     // Right-click on node
@@ -424,15 +424,15 @@ test.describe('Node Operations', () => {
   });
 
 	  test('NODE 3: Delete node via context menu', async ({ page, request }) => {
-	    const agentId = await createAgentViaAPI(request);
+	    const ficheId = await createFicheViaAPI(request);
 	    await navigateToCanvas(page);
 
     // Add a node
-    const agentPill = page.locator(`[data-testid="shelf-agent-${agentId}"]`);
-    await expect(agentPill).toBeVisible({ timeout: 10000 });
+    const fichePill = page.locator(`[data-testid="shelf-fiche-${ficheId}"]`);
+    await expect(fichePill).toBeVisible({ timeout: 10000 });
 
     const pane = getReactFlowPane(page);
-    await agentPill.dragTo(pane);
+    await fichePill.dragTo(pane);
     await waitForWorkflowSave(page);
 
     // Verify node exists
@@ -456,15 +456,15 @@ test.describe('Node Operations', () => {
 	  });
 
   test('NODE 4: Duplicate node via context menu', async ({ page, request }) => {
-    const agentId = await createAgentViaAPI(request);
+    const ficheId = await createFicheViaAPI(request);
     await navigateToCanvas(page);
 
     // Add a node
-    const agentPill = page.locator(`[data-testid="shelf-agent-${agentId}"]`);
-    await expect(agentPill).toBeVisible({ timeout: 10000 });
+    const fichePill = page.locator(`[data-testid="shelf-fiche-${ficheId}"]`);
+    await expect(fichePill).toBeVisible({ timeout: 10000 });
 
     const pane = getReactFlowPane(page);
-    await agentPill.dragTo(pane);
+    await fichePill.dragTo(pane);
     await waitForWorkflowSave(page);
 
     // Verify one node exists
@@ -492,15 +492,15 @@ test.describe('Node Operations', () => {
 
 test.describe('Workflow Persistence', () => {
   test('PERSIST 1: Workflow auto-saves after adding node', async ({ page, request }) => {
-    const agentId = await createAgentViaAPI(request);
+    const ficheId = await createFicheViaAPI(request);
     await navigateToCanvas(page);
 
     // Add a node
-    const agentPill = page.locator(`[data-testid="shelf-agent-${agentId}"]`);
-    await expect(agentPill).toBeVisible({ timeout: 10000 });
+    const fichePill = page.locator(`[data-testid="shelf-fiche-${ficheId}"]`);
+    await expect(fichePill).toBeVisible({ timeout: 10000 });
 
     const pane = getReactFlowPane(page);
-    await agentPill.dragTo(pane);
+    await fichePill.dragTo(pane);
 
     // Should see a save request
     const saveResponse = await page.waitForResponse(
@@ -515,15 +515,15 @@ test.describe('Workflow Persistence', () => {
   });
 
 	  test('PERSIST 2: Nodes persist after page reload', async ({ page, request }) => {
-	    const agentId = await createAgentViaAPI(request);
+	    const ficheId = await createFicheViaAPI(request);
 	    await navigateToCanvas(page);
 
     // Add a node
-    const agentPill = page.locator(`[data-testid="shelf-agent-${agentId}"]`);
-    await expect(agentPill).toBeVisible({ timeout: 10000 });
+    const fichePill = page.locator(`[data-testid="shelf-fiche-${ficheId}"]`);
+    await expect(fichePill).toBeVisible({ timeout: 10000 });
 
     const pane = getReactFlowPane(page);
-    await agentPill.dragTo(pane);
+    await fichePill.dragTo(pane);
     await waitForWorkflowSave(page);
 
 	    // Verify node exists
@@ -551,15 +551,15 @@ test.describe('Workflow Persistence', () => {
 	  });
 
   test('PERSIST 3: Nodes persist after navigation away and back', async ({ page, request }) => {
-    const agentId = await createAgentViaAPI(request);
+    const ficheId = await createFicheViaAPI(request);
     await navigateToCanvas(page);
 
     // Add a node
-    const agentPill = page.locator(`[data-testid="shelf-agent-${agentId}"]`);
-    await expect(agentPill).toBeVisible({ timeout: 10000 });
+    const fichePill = page.locator(`[data-testid="shelf-fiche-${ficheId}"]`);
+    await expect(fichePill).toBeVisible({ timeout: 10000 });
 
     const pane = getReactFlowPane(page);
-    await agentPill.dragTo(pane);
+    await fichePill.dragTo(pane);
     await waitForWorkflowSave(page);
 
     // Verify node exists
@@ -568,7 +568,7 @@ test.describe('Workflow Persistence', () => {
 
     // Navigate to dashboard
     await page.goto('/dashboard');
-    await expect(page.locator('[data-testid="create-agent-btn"]')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="create-fiche-btn"]')).toBeVisible({ timeout: 10000 });
 
     // Navigate back to canvas
     await page.goto('/canvas');
@@ -661,15 +661,15 @@ test.describe('Run Button State', () => {
   });
 
   test('RUN 2: Run button enabled when nodes exist', async ({ page, request }) => {
-    const agentId = await createAgentViaAPI(request);
+    const ficheId = await createFicheViaAPI(request);
     await navigateToCanvas(page);
 
     // Add a node
-    const agentPill = page.locator(`[data-testid="shelf-agent-${agentId}"]`);
-    await expect(agentPill).toBeVisible({ timeout: 10000 });
+    const fichePill = page.locator(`[data-testid="shelf-fiche-${ficheId}"]`);
+    await expect(fichePill).toBeVisible({ timeout: 10000 });
 
     const pane = getReactFlowPane(page);
-    await agentPill.dragTo(pane);
+    await fichePill.dragTo(pane);
     await waitForWorkflowSave(page);
 
     // Run button should now be enabled (use specific selector)
@@ -678,15 +678,15 @@ test.describe('Run Button State', () => {
   });
 
   test('RUN 3: Run button disabled again after clearing canvas', async ({ page, request }) => {
-    const agentId = await createAgentViaAPI(request);
+    const ficheId = await createFicheViaAPI(request);
     await navigateToCanvas(page);
 
     // Add a node
-    const agentPill = page.locator(`[data-testid="shelf-agent-${agentId}"]`);
-    await expect(agentPill).toBeVisible({ timeout: 10000 });
+    const fichePill = page.locator(`[data-testid="shelf-fiche-${ficheId}"]`);
+    await expect(fichePill).toBeVisible({ timeout: 10000 });
 
     const pane = getReactFlowPane(page);
-    await agentPill.dragTo(pane);
+    await fichePill.dragTo(pane);
     await waitForWorkflowSave(page);
 
     // Run button should be enabled (use specific selector)

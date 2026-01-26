@@ -95,7 +95,7 @@ def test_auth_guard_requires_jwt(monkeypatch, client: TestClient):
     # Switch to production mode
     monkeypatch.setattr(auth_dep, "AUTH_DISABLED", False)
 
-    resp = client.get("/api/agents")
+    resp = client.get("/api/fiches")
     assert resp.status_code == 401
 
 
@@ -109,7 +109,7 @@ def test_auth_guard_dev_bypass(monkeypatch, client: TestClient, db_session):
 
     monkeypatch.setattr(auth_dep, "AUTH_DISABLED", True)
 
-    resp = client.get("/api/agents")
+    resp = client.get("/api/fiches")
     assert resp.status_code == 200
 
     # Ensure the dev user exists in DB

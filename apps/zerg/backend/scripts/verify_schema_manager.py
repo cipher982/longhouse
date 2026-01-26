@@ -4,7 +4,7 @@ Manual verification script for e2e_schema_manager.py functions.
 
 Tests:
 1. get_schema_name() generates correct names
-2. recreate_worker_schema() creates fresh schema with tables
+2. recreate_commis_schema() creates fresh schema with tables
 3. drop_schema() removes a specific schema
 4. drop_all_e2e_schemas() cleans up all test schemas
 """
@@ -19,7 +19,7 @@ sys.path.insert(0, str(backend_path))
 from sqlalchemy import text, create_engine
 from zerg.e2e_schema_manager import (
     get_schema_name,
-    recreate_worker_schema,
+    recreate_commis_schema,
     drop_schema,
     drop_all_e2e_schemas,
 )
@@ -35,29 +35,29 @@ def main():
 
     # Test 1: Schema name generation
     print("\n1️⃣ Testing get_schema_name()")
-    assert get_schema_name("0") == "e2e_worker_0"
-    assert get_schema_name("42") == "e2e_worker_42"
-    assert get_schema_name("test_123") == "e2e_worker_test_123"  # Underscores allowed
-    assert get_schema_name("test-123") == "e2e_worker_test123"  # Sanitized (dash removed)
+    assert get_schema_name("0") == "e2e_commis_0"
+    assert get_schema_name("42") == "e2e_commis_42"
+    assert get_schema_name("test_123") == "e2e_commis_test_123"  # Underscores allowed
+    assert get_schema_name("test-123") == "e2e_commis_test123"  # Sanitized (dash removed)
     print("✅ Schema names generated correctly")
 
-    # Test 2: Create worker schema
-    print("\n2️⃣ Testing recreate_worker_schema()")
-    schema_name = recreate_worker_schema(engine, "test_verify")
-    assert schema_name == "e2e_worker_test_verify"
+    # Test 2: Create commis schema
+    print("\n2️⃣ Testing recreate_commis_schema()")
+    schema_name = recreate_commis_schema(engine, "test_verify")
+    assert schema_name == "e2e_commis_test_verify"
 
     # Verify schema exists
     with engine.connect() as conn:
         result = conn.execute(text("""
             SELECT schema_name FROM information_schema.schemata
-            WHERE schema_name = 'e2e_worker_test_verify'
+            WHERE schema_name = 'e2e_commis_test_verify'
         """))
         assert result.fetchone() is not None
 
         # Verify tables exist in schema
         result = conn.execute(text("""
             SELECT table_name FROM information_schema.tables
-            WHERE table_schema = 'e2e_worker_test_verify'
+            WHERE table_schema = 'e2e_commis_test_verify'
         """))
         tables = [row[0] for row in result.fetchall()]
         print(f"   Tables created: {len(tables)} ({', '.join(tables[:5])}...)")
@@ -73,7 +73,7 @@ def main():
     with engine.connect() as conn:
         result = conn.execute(text("""
             SELECT schema_name FROM information_schema.schemata
-            WHERE schema_name = 'e2e_worker_test_verify'
+            WHERE schema_name = 'e2e_commis_test_verify'
         """))
         assert result.fetchone() is None
 
@@ -82,13 +82,13 @@ def main():
     # Test 4: Create multiple schemas and drop all
     print("\n4️⃣ Testing drop_all_e2e_schemas()")
     for i in range(3):
-        recreate_worker_schema(engine, f"bulk_test_{i}")
+        recreate_commis_schema(engine, f"bulk_test_{i}")
 
     # Verify schemas exist
     with engine.connect() as conn:
         result = conn.execute(text("""
             SELECT schema_name FROM information_schema.schemata
-            WHERE schema_name LIKE 'e2e_worker_bulk_test_%'
+            WHERE schema_name LIKE 'e2e_commis_bulk_test_%'
         """))
         schemas = [row[0] for row in result.fetchall()]
         print(f"   Created {len(schemas)} test schemas")
@@ -103,7 +103,7 @@ def main():
     with engine.connect() as conn:
         result = conn.execute(text("""
             SELECT schema_name FROM information_schema.schemata
-            WHERE schema_name LIKE 'e2e_worker_%'
+            WHERE schema_name LIKE 'e2e_commis_%'
         """))
         remaining = [row[0] for row in result.fetchall()]
         assert len(remaining) == 0, f"Schemas still exist: {remaining}"

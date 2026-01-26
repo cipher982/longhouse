@@ -4,7 +4,7 @@
   "info": {
     "title": "Zerg WebSocket Protocol",
     "version": "1.0.0",
-    "description": "Comprehensive WebSocket protocol for the Zerg Agent Platform.\nConsolidates message types, payload schemas, and routing patterns into\na single source of truth for contract-first development.\n\nFeatures:\n- Topic-based routing with parameterized channels\n- Strongly-typed message payloads\n- Bidirectional operations (send/receive)\n- Alias support for message evolution\n- Handler method mapping for code generation\n"
+    "description": "Comprehensive WebSocket protocol for the Zerg Fiche Platform.\nConsolidates message types, payload schemas, and routing patterns into\na single source of truth for contract-first development.\n\nFeatures:\n- Topic-based routing with parameterized channels\n- Strongly-typed message payloads\n- Bidirectional operations (send/receive)\n- Alias support for message evolution\n- Handler method mapping for code generation\n"
   },
   "channels": {
     "SystemChannel": {
@@ -43,12 +43,12 @@
         "AssistantId"
       ]
     },
-    "AgentChannel": {
-      "address": "agent:{agent_id}",
-      "description": "Agent lifecycle events and run updates",
+    "FicheChannel": {
+      "address": "fiche:{fiche_id}",
+      "description": "Fiche lifecycle events and course updates",
       "parameters": {
-        "agent_id": {
-          "description": "Numeric identifier of the agent",
+        "fiche_id": {
+          "description": "Numeric identifier of the fiche",
           "examples": [
             "17",
             "42"
@@ -56,8 +56,8 @@
         }
       },
       "messages": [
-        "AgentEvent",
-        "RunUpdate"
+        "FicheEvent",
+        "CourseUpdate"
       ]
     },
     "UserChannel": {
@@ -81,7 +81,7 @@
       "description": "Workflow execution state, node updates, and logs",
       "parameters": {
         "execution_id": {
-          "description": "Numeric identifier of the execution run",
+          "description": "Numeric identifier of the execution course",
           "examples": [
             "123",
             "456"
@@ -222,25 +222,25 @@
       "handler_method": "handle_assistant_id",
       "aliases": []
     },
-    "agent_event": {
-      "summary": "Agent lifecycle or status event",
+    "fiche_event": {
+      "summary": "Fiche lifecycle or status event",
       "payload_schema": {
-        "$ref": "#/components/schemas/AgentEventData"
+        "$ref": "#/components/schemas/FicheEventData"
       },
-      "handler_method": "handle_agent_event",
+      "handler_method": "handle_fiche_event",
       "aliases": [
-        "agent_created",
-        "agent_updated",
-        "agent_deleted",
-        "agent_state"
+        "fiche_created",
+        "fiche_updated",
+        "fiche_deleted",
+        "fiche_state"
       ]
     },
-    "run_update": {
-      "summary": "Agent run status update",
+    "course_update": {
+      "summary": "Fiche course status update",
       "payload_schema": {
-        "$ref": "#/components/schemas/RunUpdateData"
+        "$ref": "#/components/schemas/CourseUpdateData"
       },
-      "handler_method": "handle_run_update",
+      "handler_method": "handle_course_update",
       "aliases": []
     },
     "user_update": {
@@ -299,10 +299,10 @@
       },
       "messages": []
     },
-    "AgentOperations": {
+    "FicheOperations": {
       "action": "send",
       "channel": {
-        "$ref": "#/channels/AgentChannel"
+        "$ref": "#/channels/FicheChannel"
       },
       "messages": []
     },
@@ -336,7 +336,7 @@
   ],
   "performance_contracts": {
     "message_size_limits": {
-      "run_update": "max_1kb",
+      "course_update": "max_1kb",
       "stream_chunk": "max_64kb"
     },
     "throughput_requirements": {
@@ -350,8 +350,8 @@
       "subscribe"
     ],
     "authorization_checks": [
-      "agent_event",
-      "run_update"
+      "fiche_event",
+      "course_update"
     ],
     "data_validation": "strict",
     "sanitization_rules": {

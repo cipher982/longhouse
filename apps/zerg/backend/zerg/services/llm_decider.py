@@ -3,7 +3,7 @@
 v2.0 Philosophy: Trust the AI, Remove Scaffolding
 -------------------------------------------------
 This module provides the LLM-based decision layer for roundabout monitoring.
-The supervisor polls worker status ("glancing at a second monitor") and the LLM
+The concierge polls commis status ("glancing at a second monitor") and the LLM
 interprets what it sees to decide: wait, exit early, cancel, or peek.
 
 This is the v2.0 default approach. Heuristic mode is deprecated but kept for
@@ -243,13 +243,13 @@ def build_llm_prompt(payload: LLMDecisionPayload) -> tuple[str, str]:
     Returns:
         Tuple of (system_prompt, user_prompt)
     """
-    system_prompt = """You are a worker monitoring assistant. Given the current state of a background task, decide the next action.
+    system_prompt = """You are a commis monitoring assistant. Given the current state of a background task, decide the next action.
 
 Return EXACTLY ONE word from: wait, exit, cancel, peek
 
 Decision rules:
 - wait: Default. Continue monitoring if task is progressing normally.
-- exit: Return immediately if the worker appears to have completed its task and produced useful output. Use your semantic understanding to recognize completion regardless of specific wording.
+- exit: Return immediately if the commis appears to have completed its task and produced useful output. Use your semantic understanding to recognize completion regardless of specific wording.
 - cancel: Abort if stuck, repeated failures, or clearly wrong path.
 - peek: Request more details if you need full logs. Use sparingly.
 
@@ -265,7 +265,7 @@ When in doubt, return "wait". Be conservative with exit/cancel."""
 
     # Format payload as compact JSON for user prompt
     user_content = json.dumps(asdict(payload), indent=2)
-    user_prompt = f"""Worker monitoring check:
+    user_prompt = f"""Commis monitoring check:
 
 {user_content}
 

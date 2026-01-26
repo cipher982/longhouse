@@ -1,10 +1,10 @@
 import { createContext, useContext, useState, ReactNode, useEffect } from 'react';
 
 /**
- * Shared mobile drawer state for Canvas agent shelf and Chat thread sidebar.
+ * Shared mobile drawer state for Canvas fiche shelf and Chat thread sidebar.
  *
  * DESIGN NOTE: This uses a single shared `isShelfOpen` boolean for both the canvas
- * agent shelf and chat thread sidebar. This means:
+ * fiche shelf and chat thread sidebar. This means:
  *
  * - Both drawers toggle together (opening canvas drawer closes chat drawer)
  * - Single hamburger button controls both on mobile
@@ -61,7 +61,7 @@ export function ShelfProvider({ children }: { children: ReactNode }) {
     if (!isShelfOpen) return;
 
     const handleClickOutside = (event: MouseEvent | TouchEvent) => {
-      const shelfElement = document.getElementById('agent-shelf');
+      const shelfElement = document.getElementById('fiche-shelf');
       const target = event.target as Node;
 
       // Close shelf if click is outside the shelf element

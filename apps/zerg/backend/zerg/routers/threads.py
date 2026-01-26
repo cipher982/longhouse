@@ -29,15 +29,15 @@ from zerg.generated.ws_messages import Envelope
 from zerg.generated.ws_messages import StreamChunkData
 from zerg.generated.ws_messages import StreamEndData
 from zerg.generated.ws_messages import StreamStartData
-from zerg.managers.agent_runner import AgentRunner
+from zerg.managers.fiche_runner import FicheRunner
 from zerg.schemas.schemas import Thread
 from zerg.schemas.schemas import ThreadCreate
 from zerg.schemas.schemas import ThreadMessageCreate
 from zerg.schemas.schemas import ThreadMessageResponse
 from zerg.schemas.schemas import ThreadSummary
 from zerg.schemas.schemas import ThreadUpdate
-from zerg.services.quota import assert_can_start_run
-from zerg.services.run_history import execute_thread_run_with_history
+from zerg.services.course_history import execute_thread_course_with_history
+from zerg.services.quota import assert_can_start_course
 
 # Thread service façade
 from zerg.services.thread_service import ThreadService
@@ -57,7 +57,7 @@ router = APIRouter(
 @router.get("/", response_model=List[ThreadSummary])
 @router.get("", response_model=List[ThreadSummary])
 def read_threads(
-    agent_id: Optional[int] = None,
+    fiche_id: Optional[int] = None,
     thread_type: Optional[str] = None,
     title: Optional[str] = None,
     skip: int = 0,
@@ -65,7 +65,7 @@ def read_threads(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Get all threads, optionally filtered by agent_id, thread_type, and/or title.
+    """Get all threads, optionally filtered by fiche_id, thread_type, and/or title.
 
     If `title` is provided, returns threads matching that title.
     """
@@ -74,7 +74,7 @@ def read_threads(
     threads = crud.get_threads(
         db,
         owner_id=owner_id,
-        agent_id=agent_id,
+        fiche_id=fiche_id,
         thread_type=thread_type,
         title=title,
         skip=skip,
@@ -89,34 +89,34 @@ def read_threads(
 @router.post("", response_model=Thread, status_code=status.HTTP_201_CREATED)
 def create_thread(thread: ThreadCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """Create a new thread"""
-    # Ensure agent exists and fetch row
-    agent_row = crud.get_agent(db, agent_id=thread.agent_id)
-    if agent_row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    # Ensure fiche exists and fetch row
+    fiche_row = crud.get_fiche(db, fiche_id=thread.fiche_id)
+    if fiche_row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
 
-    # Authorization: only owner (or admin) can create a thread for an agent
+    # Authorization: only owner (or admin) can create a thread for a fiche
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
-    if not is_admin and agent_row.owner_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not agent owner")
+    if not is_admin and fiche_row.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not fiche owner")
 
     # Delegate creation to ThreadService so the mandatory system message is
     # inserted atomically.
     created_thread = ThreadService.create_thread_with_system_message(
         db,
-        agent_row,
+        fiche_row,
         title=thread.title,
         thread_type=thread.thread_type or "chat",
         active=thread.active,
     )
 
-    # If the request supplied agent_state or memory_strategy we update the
+    # If the request supplied fiche_state or memory_strategy we update the
     # thread accordingly (ThreadService currently doesn't take those extras
     # to keep the helper minimal).
-    if thread.agent_state or thread.memory_strategy != "buffer":
+    if thread.fiche_state or thread.memory_strategy != "buffer":
         _ = crud.update_thread(
             db,
             thread_id=created_thread.id,
-            agent_state=thread.agent_state,
+            fiche_state=thread.fiche_state,
             memory_strategy=thread.memory_strategy,
         )
 
@@ -130,9 +130,9 @@ def read_thread(thread_id: int, db: Session = Depends(get_db), current_user=Depe
     if db_thread is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
     # Authorization: only owner or admin can read
-    agent = crud.get_agent(db, agent_id=db_thread.agent_id)
+    fiche = crud.get_fiche(db, fiche_id=db_thread.fiche_id)
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
-    if not is_admin and agent and agent.owner_id != current_user.id:
+    if not is_admin and fiche and fiche.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not thread owner")
     return db_thread
 
@@ -144,9 +144,9 @@ def update_thread(thread_id: int, thread: ThreadUpdate, db: Session = Depends(ge
     if db_thread is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
 
-    agent = crud.get_agent(db, agent_id=db_thread.agent_id)
+    fiche = crud.get_fiche(db, fiche_id=db_thread.fiche_id)
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
-    if not is_admin and agent and agent.owner_id != current_user.id:
+    if not is_admin and fiche and fiche.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not thread owner")
 
     db_thread = crud.update_thread(
@@ -154,7 +154,7 @@ def update_thread(thread_id: int, thread: ThreadUpdate, db: Session = Depends(ge
         thread_id=thread_id,
         title=thread.title,
         active=thread.active,
-        agent_state=thread.agent_state,
+        fiche_state=thread.fiche_state,
         memory_strategy=thread.memory_strategy,
         thread_type=thread.thread_type,
     )
@@ -168,9 +168,9 @@ def delete_thread(thread_id: int, db: Session = Depends(get_db), current_user=De
     if db_thread is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
 
-    agent = crud.get_agent(db, agent_id=db_thread.agent_id)
+    fiche = crud.get_fiche(db, fiche_id=db_thread.fiche_id)
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
-    if not is_admin and agent and agent.owner_id != current_user.id:
+    if not is_admin and fiche and fiche.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not thread owner")
 
     if not crud.delete_thread(db, thread_id=thread_id):
@@ -201,9 +201,9 @@ def read_thread_messages(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
 
     # Authorization: only owner or admin can read messages
-    agent = crud.get_agent(db, agent_id=db_thread.agent_id)
+    fiche = crud.get_fiche(db, fiche_id=db_thread.fiche_id)
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
-    if not is_admin and agent and agent.owner_id != current_user.id:
+    if not is_admin and fiche and fiche.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not thread owner")
 
     # Fetch ORM messages and map to response schema including tool metadata
@@ -263,9 +263,9 @@ def create_thread_message(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
 
     # Authorization: only owner or admin can post messages
-    agent = crud.get_agent(db, agent_id=db_thread.agent_id)
+    fiche = crud.get_fiche(db, fiche_id=db_thread.fiche_id)
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
-    if not is_admin and agent and agent.owner_id != current_user.id:
+    if not is_admin and fiche and fiche.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not thread owner")
 
     # Create the message (note: by default, processed=False for user messages)
@@ -281,30 +281,30 @@ def create_thread_message(
     return new_message
 
 
-@router.post("/{thread_id}/run", status_code=status.HTTP_202_ACCEPTED)
-async def run_thread(thread_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+@router.post("/{thread_id}/courses", status_code=status.HTTP_202_ACCEPTED)
+async def start_thread_course(thread_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """Process any unprocessed messages in the thread and stream back the result."""
 
-    # Enforce per-user daily run cap (non-admins are restricted)
-    assert_can_start_run(db, user=current_user)
+    # Enforce per-user daily course cap (non-admins are restricted)
+    assert_can_start_course(db, user=current_user)
 
-    # Validate thread & agent and ownership
+    # Validate thread & fiche and ownership
     thread = crud.get_thread(db, thread_id=thread_id)
     if thread is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
-    agent = crud.get_agent(db, agent_id=thread.agent_id)
+    fiche = crud.get_fiche(db, fiche_id=thread.fiche_id)
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
-    if not is_admin and agent and agent.owner_id != current_user.id:
+    if not is_admin and fiche and fiche.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not thread owner")
 
     messages = crud.get_unprocessed_messages(db, thread_id=thread_id)
     if not messages:
         return {"status": "No unprocessed messages"}
 
-    if agent is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    if fiche is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
 
-    runner = AgentRunner(agent)
+    runner = FicheRunner(fiche)
 
     # User-scoped topic for ALL streaming events
     user_id = current_user.id
@@ -323,10 +323,16 @@ async def run_thread(thread_id: int, db: Session = Depends(get_db), current_user
         )
         await topic_manager.broadcast_to_topic(topic, envelope.model_dump())
 
-        # Execute the agent turn and record run history/events
-        created_rows = await execute_thread_run_with_history(db=db, agent=agent, thread=thread, runner=runner, trigger="chat")
+        # Execute the fiche turn and record course history/events
+        created_rows = await execute_thread_course_with_history(
+            db=db,
+            fiche=fiche,
+            thread=thread,
+            runner=runner,
+            trigger="chat",
+        )
 
-        # We maintain a single *stream* sequence for the entire agent turn so the
+        # We maintain a single *stream* sequence for the entire fiche turn so the
         # frontend can group chunks under one progress indicator.
 
         for row in created_rows:

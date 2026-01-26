@@ -21,7 +21,7 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     # Expand trigger column to 50 chars to accommodate 'continuation' (12 chars)
     # and future trigger types
-    op.alter_column('agent_runs', 'trigger',
+    op.alter_column('courses', 'trigger',
                existing_type=sa.String(length=8),
                type_=sa.String(length=50),
                existing_nullable=False)

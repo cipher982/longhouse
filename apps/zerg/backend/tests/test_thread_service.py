@@ -6,9 +6,9 @@ from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 from langchain_core.messages import ToolMessage
 
-from tests.conftest import TEST_WORKER_MODEL
+from tests.conftest import TEST_COMMIS_MODEL
 from zerg.crud import crud as _crud
-from zerg.models.models import Agent
+from zerg.models.models import Fiche
 from zerg.services.thread_service import ThreadService
 
 # Regex pattern for ISO 8601 timestamp prefix: [YYYY-MM-DDTHH:MM:SSZ]
@@ -20,24 +20,24 @@ def _create_test_agent(db_session):
         db_session, email="dev@local", provider=None, role="ADMIN"
     )
 
-    return Agent(
+    return Fiche(
         owner_id=owner.id,
         name="TestAgent",
         system_instructions="You are helpful.",
         task_instructions="",
-        model=TEST_WORKER_MODEL,
+        model=TEST_COMMIS_MODEL,
     )
 
 
 def test_create_thread_with_system_message(db_session):
-    # Arrange: store agent in DB
-    agent = _create_test_agent(db_session)
-    db_session.add(agent)
+    # Arrange: store fiche in DB
+    fiche = _create_test_agent(db_session)
+    db_session.add(fiche)
     db_session.commit()
-    db_session.refresh(agent)
+    db_session.refresh(fiche)
 
     # Act
-    thread = ThreadService.create_thread_with_system_message(db_session, agent, title="Hello")
+    thread = ThreadService.create_thread_with_system_message(db_session, fiche, title="Hello")
 
     # Assert – thread exists and first message is system prompt
     assert thread.id is not None
@@ -47,13 +47,13 @@ def test_create_thread_with_system_message(db_session):
 
 
 def test_save_and_retrieve_messages(db_session):
-    # Prepare agent + thread
-    agent = _create_test_agent(db_session)
-    db_session.add(agent)
+    # Prepare fiche + thread
+    fiche = _create_test_agent(db_session)
+    db_session.add(fiche)
     db_session.commit()
-    db_session.refresh(agent)
+    db_session.refresh(fiche)
 
-    thread = ThreadService.create_thread_with_system_message(db_session, agent, title="Conversation")
+    thread = ThreadService.create_thread_with_system_message(db_session, fiche, title="Conversation")
 
     # Save additional messages
     new_msgs = [
@@ -89,13 +89,13 @@ def test_save_and_retrieve_messages(db_session):
 
 def test_timestamp_format_in_messages(db_session):
     """Verify that user and assistant messages have ISO 8601 timestamp prefix."""
-    # Prepare agent + thread
-    agent = _create_test_agent(db_session)
-    db_session.add(agent)
+    # Prepare fiche + thread
+    fiche = _create_test_agent(db_session)
+    db_session.add(fiche)
     db_session.commit()
-    db_session.refresh(agent)
+    db_session.refresh(fiche)
 
-    thread = ThreadService.create_thread_with_system_message(db_session, agent, title="Timestamp Test")
+    thread = ThreadService.create_thread_with_system_message(db_session, fiche, title="Timestamp Test")
 
     # Save messages
     new_msgs = [

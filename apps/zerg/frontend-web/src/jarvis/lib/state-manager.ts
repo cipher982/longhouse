@@ -64,7 +64,7 @@ export interface AppState {
 
   // Jarvis-Zerg integration
   jarvisClient: JarvisAPIClient | null; // Type from @jarvis/core
-  cachedAgents: unknown[];
+  cachedFiches: unknown[];
   bootstrap: BootstrapData | null;
 
   // UI state
@@ -90,7 +90,7 @@ export type StateChangeEvent =
   | { type: 'CONNECTION_ERROR'; error: Error }
   | { type: 'TOAST'; message: string; variant: 'success' | 'error' | 'info' }
   | { type: 'MESSAGE_FINALIZED'; message: { id: string; role: 'assistant'; content: string; timestamp: Date; skipAnimation?: boolean; messageId?: string } }
-  | { type: 'ASSISTANT_STATUS_CHANGED_BY_MESSAGE_ID'; messageId: string; status: string; content?: string; usage?: { prompt_tokens?: number | null; completion_tokens?: number | null; total_tokens?: number | null; reasoning_tokens?: number | null }; runId?: number }
+  | { type: 'ASSISTANT_STATUS_CHANGED_BY_MESSAGE_ID'; messageId: string; status: string; content?: string; usage?: { prompt_tokens?: number | null; completion_tokens?: number | null; total_tokens?: number | null; reasoning_tokens?: number | null }; courseId?: number }
   | { type: 'USER_VOICE_COMMITTED'; itemId: string }
   | { type: 'USER_VOICE_TRANSCRIPT'; itemId: string; transcript: string }
   | { type: 'HISTORY_LOADED'; history: unknown[] }
@@ -128,7 +128,7 @@ export class StateManager {
 
       // Jarvis-Zerg integration
       jarvisClient: null,
-      cachedAgents: [],
+      cachedFiches: [],
       bootstrap: null,
 
       // UI state
@@ -224,16 +224,16 @@ export class StateManager {
    * Update assistant message status via messageId
    * This is the primary method for updating assistant messages during streaming.
    * For normal runs: messageId is client-generated upfront.
-   * For continuation runs: messageId is backend-generated, received in supervisor_started.
+   * For continuation runs: messageId is backend-generated, received in concierge_started.
    */
   updateAssistantStatusByMessageId(
     messageId: string,
     status: string,
     content?: string,
     usage?: { prompt_tokens?: number | null; completion_tokens?: number | null; total_tokens?: number | null; reasoning_tokens?: number | null },
-    runId?: number
+    courseId?: number
   ): void {
-    this.notifyListeners({ type: 'ASSISTANT_STATUS_CHANGED_BY_MESSAGE_ID', messageId, status, content, usage, runId });
+    this.notifyListeners({ type: 'ASSISTANT_STATUS_CHANGED_BY_MESSAGE_ID', messageId, status, content, usage, courseId });
   }
 
   /**
@@ -296,10 +296,10 @@ export class StateManager {
   }
 
   /**
-   * Update cached agents
+   * Update cached fiches
    */
-  setCachedAgents(agents: unknown[]): void {
-    this.state.cachedAgents = agents;
+  setCachedFiches(fiches: unknown[]): void {
+    this.state.cachedFiches = fiches;
   }
 
   /**

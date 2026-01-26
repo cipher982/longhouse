@@ -1,14 +1,14 @@
-"""Build connector status for injection into agent prompts.
+"""Build connector status for injection into fiche prompts.
 
 This module provides functions to query connector configuration and build
-structured status information for agent context injection.
+structured status information for fiche context injection.
 
 The status builder:
 - Queries credential tables to check which connectors are configured
 - Checks test_status field to determine credential validity
 - Enriches with metadata from the connector registry
 - Returns structured status for all connectors (connected, not_configured, invalid_credentials)
-- Builds XML-formatted context strings for agent prompts
+- Builds XML-formatted context strings for fiche prompts
 - Checks platform-level credentials for email/SMS as fallback
 """
 
@@ -198,7 +198,7 @@ def get_capabilities_for_connector(connector_type: ConnectorType) -> list[str]:
 def get_unavailable_tools(
     db: "Session",
     owner_id: int,
-    agent_id: int | None = None,
+    fiche_id: int | None = None,
 ) -> set[str]:
     """Return tool names that require disconnected connectors.
 
@@ -208,12 +208,12 @@ def get_unavailable_tools(
     Args:
         db: Database session
         owner_id: User ID who owns the credentials
-        agent_id: Optional agent ID for agent-level overrides
+        fiche_id: Optional fiche ID for fiche-level overrides
 
     Returns:
-        Set of tool names to exclude from the agent's available tools
+        Set of tool names to exclude from the fiche's available tools
     """
-    status = build_connector_status(db, owner_id, agent_id)
+    status = build_connector_status(db, owner_id, fiche_id)
     unavailable_tools: set[str] = set()
 
     for connector_type in ConnectorType:
@@ -229,7 +229,7 @@ def get_unavailable_tools(
 def build_connector_status(
     db: "Session",
     owner_id: int,
-    agent_id: int | None = None,
+    fiche_id: int | None = None,
 ) -> dict[str, Any]:
     """Build connector status dict for all connectors.
 
@@ -244,7 +244,7 @@ def build_connector_status(
     Args:
         db: Database session
         owner_id: User ID who owns the credentials
-        agent_id: Optional agent ID for agent-level overrides
+        fiche_id: Optional fiche ID for fiche-level overrides
 
     Returns:
         Dictionary mapping connector type to status info. Format:
@@ -286,22 +286,22 @@ def build_connector_status(
         connector_type_str = connector_type.value
 
         # Query credential rows in resolution order:
-        # 1. Agent-level override (if agent_id provided)
+        # 1. Fiche-level override (if fiche_id provided)
         # 2. Account-level credential
         cred_row = None
 
-        if agent_id is not None:
-            # Check agent-level override first
+        if fiche_id is not None:
+            # Check fiche-level override first
             cred_row = (
                 db.query(ConnectorCredential)
                 .filter(
-                    ConnectorCredential.agent_id == agent_id,
+                    ConnectorCredential.fiche_id == fiche_id,
                     ConnectorCredential.connector_type == connector_type_str,
                 )
                 .first()
             )
 
-        # Fallback to account-level if no agent override
+        # Fallback to account-level if no fiche override
         if cred_row is None:
             cred_row = (
                 db.query(AccountConnectorCredential)
@@ -362,33 +362,33 @@ def build_connector_status(
                 }
 
     logger.debug(
-        "Built connector status for owner_id=%d agent_id=%s",
+        "Built connector status for owner_id=%d fiche_id=%s",
         owner_id,
-        agent_id,
+        fiche_id,
     )
 
     return status_dict
 
 
-def build_agent_context(
+def build_fiche_context(
     db: "Session",
     owner_id: int,
-    agent_id: int | None = None,
+    fiche_id: int | None = None,
     *,
     allowed_tools: list[str] | None = None,
     compact_json: bool = True,
 ) -> str:
-    """Build the full context injection string for an agent turn.
+    """Build the full context injection string for a fiche turn.
 
     This function creates the XML-formatted context block that gets injected
-    into every agent conversation turn, providing:
+    into every fiche conversation turn, providing:
     - Current timestamp for temporal awareness
     - Connector status with captured_at timestamp
 
     Args:
         db: Database session
         owner_id: User ID who owns the credentials
-        agent_id: Optional agent ID for agent-level overrides
+        fiche_id: Optional fiche ID for fiche-level overrides
 
     Returns:
         XML-formatted string with current_time and connector_status blocks
@@ -414,11 +414,11 @@ def build_agent_context(
     connector_status = build_connector_status(
         db=db,
         owner_id=owner_id,
-        agent_id=agent_id,
+        fiche_id=fiche_id,
     )
 
-    # Reduce context bloat: only include connectors that matter for this agent's tool allowlist.
-    # For example, workers typically do not need personal connectors (WHOOP/Obsidian) when they
+    # Reduce context bloat: only include connectors that matter for this fiche's tool allowlist.
+    # For example, commis typically do not need personal connectors (WHOOP/Obsidian) when they
     # only have infra tools enabled.
     if allowed_tools:
         allowed = set(allowed_tools)

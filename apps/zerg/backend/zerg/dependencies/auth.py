@@ -135,7 +135,7 @@ def require_internal_call(request: Request):
     1. In production, requires X-Internal-Token header matching INTERNAL_API_SECRET
     2. In dev mode (auth disabled), allows all calls (trusted environment)
 
-    This is a security measure for endpoints like /internal/runs/{run_id}/continue
+    This is a security measure for endpoints like /internal/runs/{course_id}/continue
     that are called by background tasks.
     """
     settings = get_settings()

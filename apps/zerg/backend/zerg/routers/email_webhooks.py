@@ -44,7 +44,7 @@ from zerg.database import get_db
 # Replace direct env look-up with unified Settings helper
 _settings = get_settings()
 
-# Event publication and agent execution are handled by the Gmail provider.
+# Event publication and fiche execution are handled by the Gmail provider.
 # The router keeps webhook latency minimal by enqueuing connector processing.
 
 logger = logging.getLogger(__name__)

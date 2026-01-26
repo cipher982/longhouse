@@ -16,20 +16,20 @@ async function waitForExecutionCompletion(page: Page, timeout = 30000) {
   await expect(runBtn).not.toHaveClass(/loading/, { timeout });
 }
 
-// Helper to create a test agent via API
-async function createTestAgent(request: any, workerId: string) {
-  const agentResponse = await request.post('/api/agents', {
+// Helper to create a test fiche via API
+async function createTestFiche(request: any, commisId: string) {
+  const ficheResponse = await request.post('/api/fiches', {
     data: {
-      name: `Test Agent ${workerId}-${Date.now()}`,
-      system_instructions: 'You are a test agent',
+      name: `Test Fiche ${commisId}-${Date.now()}`,
+      system_instructions: 'You are a test fiche',
       task_instructions: 'Execute tasks as requested',
       model: 'gpt-mock',
     }
   });
 
-  expect(agentResponse.status()).toBe(201);
-  const agent = await agentResponse.json();
-  return agent;
+  expect(ficheResponse.status()).toBe(201);
+  const fiche = await ficheResponse.json();
+  return fiche;
 }
 
 // Helper to navigate to canvas
@@ -49,15 +49,15 @@ async function navigateToCanvas(page: Page) {
   await page.waitForTimeout(1000); // Let React Flow initialize
 }
 
-// Helper to add an agent node to workflow
-async function addAgentNodeToWorkflow(page: Page, agentName: string) {
-  // Ensure agent shelf is visible
-  const agentShelf = page.locator('#agent-shelf');
-  await expect(agentShelf).toBeVisible();
+// Helper to add an fiche node to workflow
+async function addFicheNodeToWorkflow(page: Page, ficheName: string) {
+  // Ensure fiche shelf is visible
+  const ficheShelf = page.locator('#fiche-shelf');
+  await expect(ficheShelf).toBeVisible();
 
-  // Find the agent pill
-  const agentPill = page.locator('#agent-shelf .agent-shelf-item').filter({ hasText: agentName }).first();
-  await expect(agentPill).toBeVisible({ timeout: 10000 });
+  // Find the fiche pill
+  const fichePill = page.locator('#fiche-shelf .fiche-shelf-item').filter({ hasText: ficheName }).first();
+  await expect(fichePill).toBeVisible({ timeout: 10000 });
 
   // Get canvas container for drop target
   const canvasContainer = page.locator('#canvas-container');
@@ -67,8 +67,8 @@ async function addAgentNodeToWorkflow(page: Page, agentName: string) {
     throw new Error('Cannot get canvas bounding box');
   }
 
-  // Drag agent to center of canvas
-  await agentPill.dragTo(canvasContainer, {
+  // Drag fiche to center of canvas
+  await fichePill.dragTo(canvasContainer, {
     targetPosition: { x: canvasBbox.width / 2, y: canvasBbox.height / 2 }
   });
 
@@ -89,16 +89,16 @@ test.describe('Workflow Execution End-to-End Tests', () => {
   });
 
   test('Create workflow and execute simple workflow', async ({ page, request }, testInfo) => {
-    const workerId = String(testInfo.parallelIndex);
+    const commisId = String(testInfo.parallelIndex);
 
-    // Create test agent via API
-    const agent = await createTestAgent(request, workerId);
+    // Create test fiche via API
+    const fiche = await createTestFiche(request, commisId);
 
     // Navigate to canvas
     await navigateToCanvas(page);
 
-    // Add agent node to canvas
-    await addAgentNodeToWorkflow(page, agent.name);
+    // Add fiche node to canvas
+    await addFicheNodeToWorkflow(page, fiche.name);
 
     // Find and click the run button
     const runBtn = page.locator('.run-button');
@@ -116,16 +116,16 @@ test.describe('Workflow Execution End-to-End Tests', () => {
   });
 
   test('Workflow execution with real-time log streaming', async ({ page, request }, testInfo) => {
-    const workerId = String(testInfo.parallelIndex);
+    const commisId = String(testInfo.parallelIndex);
 
-    // Create test agent via API
-    const agent = await createTestAgent(request, workerId);
+    // Create test fiche via API
+    const fiche = await createTestFiche(request, commisId);
 
     // Navigate to canvas
     await navigateToCanvas(page);
 
-    // Add agent node to canvas
-    await addAgentNodeToWorkflow(page, agent.name);
+    // Add fiche node to canvas
+    await addFicheNodeToWorkflow(page, fiche.name);
 
     // Find and click the run button
     const runBtn = page.locator('.run-button');
@@ -158,16 +158,16 @@ test.describe('Workflow Execution End-to-End Tests', () => {
   });
 
   test('Workflow execution logs panel can be toggled', async ({ page, request }, testInfo) => {
-    const workerId = String(testInfo.parallelIndex);
+    const commisId = String(testInfo.parallelIndex);
 
-    // Create test agent via API
-    const agent = await createTestAgent(request, workerId);
+    // Create test fiche via API
+    const fiche = await createTestFiche(request, commisId);
 
     // Navigate to canvas
     await navigateToCanvas(page);
 
-    // Add agent node to canvas
-    await addAgentNodeToWorkflow(page, agent.name);
+    // Add fiche node to canvas
+    await addFicheNodeToWorkflow(page, fiche.name);
 
     // Find and click the run button
     const runBtn = page.locator('.run-button');
@@ -194,16 +194,16 @@ test.describe('Workflow Execution End-to-End Tests', () => {
   });
 
   test('Workflow execution status indicator updates correctly', async ({ page, request }, testInfo) => {
-    const workerId = String(testInfo.parallelIndex);
+    const commisId = String(testInfo.parallelIndex);
 
-    // Create test agent via API
-    const agent = await createTestAgent(request, workerId);
+    // Create test fiche via API
+    const fiche = await createTestFiche(request, commisId);
 
     // Navigate to canvas
     await navigateToCanvas(page);
 
-    // Add agent node to canvas
-    await addAgentNodeToWorkflow(page, agent.name);
+    // Add fiche node to canvas
+    await addFicheNodeToWorkflow(page, fiche.name);
 
     // Find and click the run button
     const runBtn = page.locator('.run-button');
@@ -231,16 +231,16 @@ test.describe('Workflow Execution End-to-End Tests', () => {
   });
 
   test('Workflow save and load persistence', async ({ page, request }, testInfo) => {
-    const workerId = String(testInfo.parallelIndex);
+    const commisId = String(testInfo.parallelIndex);
 
-    // Create test agent via API
-    const agent = await createTestAgent(request, workerId);
+    // Create test fiche via API
+    const fiche = await createTestFiche(request, commisId);
 
     // Navigate to canvas
     await navigateToCanvas(page);
 
-    // Add agent node to canvas
-    await addAgentNodeToWorkflow(page, agent.name);
+    // Add fiche node to canvas
+    await addFicheNodeToWorkflow(page, fiche.name);
 
     // Wait for auto-save (debounced 1 second according to CanvasPage.tsx line 890)
     await page.waitForTimeout(2000);

@@ -1,7 +1,7 @@
 """LLM usage aggregation service.
 
-Provides user-facing and admin-facing usage statistics based on AgentRun data.
-All costs are derived from AgentRun.total_cost_usd (NULL costs are excluded from sums).
+Provides user-facing and admin-facing usage statistics based on Course data.
+All costs are derived from Course.total_cost_usd (NULL costs are excluded from sums).
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
-from zerg.models.models import Agent as AgentModel
-from zerg.models.models import AgentRun as AgentRunModel
+from zerg.models.models import Course as CourseModel
+from zerg.models.models import Fiche as FicheModel
 from zerg.schemas.usage import TokenBreakdown
 from zerg.schemas.usage import UsageLimit
 from zerg.schemas.usage import UserUsageResponse
@@ -63,19 +63,19 @@ def _usage_range_for_period(period: Literal["today", "7d", "30d"]) -> tuple[date
 
 
 def _get_user_usage_range(db: Session, user_id: int, start_dt: datetime, end_dt: datetime) -> dict:
-    """Aggregate token/cost/run stats for a user within [start_dt, end_dt)."""
+    """Aggregate token/cost/course stats for a user within [start_dt, end_dt)."""
     result = (
         db.query(
-            func.coalesce(func.sum(func.coalesce(AgentRunModel.total_tokens, 0)), 0).label("total_tokens"),
-            func.coalesce(func.sum(func.coalesce(AgentRunModel.total_cost_usd, 0.0)), 0.0).label("total_cost"),
-            func.count(AgentRunModel.id).label("run_count"),
+            func.coalesce(func.sum(func.coalesce(CourseModel.total_tokens, 0)), 0).label("total_tokens"),
+            func.coalesce(func.sum(func.coalesce(CourseModel.total_cost_usd, 0.0)), 0.0).label("total_cost"),
+            func.count(CourseModel.id).label("course_count"),
         )
-        .join(AgentModel, AgentModel.id == AgentRunModel.agent_id)
+        .join(FicheModel, FicheModel.id == CourseModel.fiche_id)
         .filter(
-            AgentModel.owner_id == user_id,
-            AgentRunModel.started_at.isnot(None),
-            AgentRunModel.started_at >= start_dt,
-            AgentRunModel.started_at < end_dt,
+            FicheModel.owner_id == user_id,
+            CourseModel.started_at.isnot(None),
+            CourseModel.started_at >= start_dt,
+            CourseModel.started_at < end_dt,
         )
         .first()
     )
@@ -83,7 +83,7 @@ def _get_user_usage_range(db: Session, user_id: int, start_dt: datetime, end_dt:
     return {
         "tokens": int(result.total_tokens) if result else 0,
         "cost_usd": round(float(result.total_cost), 4) if result else 0.0,
-        "runs": int(result.run_count) if result else 0,
+        "courses": int(result.course_count) if result else 0,
     }
 
 
@@ -141,7 +141,7 @@ def get_user_usage(
         )
 
     # Token breakdown (prompt/completion) - we don't currently track these
-    # separately on AgentRun, so they'll be None
+    # separately on Course, so they'll be None
     tokens = TokenBreakdown(
         prompt=None,  # Not tracked separately yet
         completion=None,  # Not tracked separately yet
@@ -152,7 +152,7 @@ def get_user_usage(
         period=period,
         tokens=tokens,
         cost_usd=period_usage["cost_usd"],
-        runs=period_usage["runs"],
+        courses=period_usage["courses"],
         limit=limit,
     )
 
@@ -199,34 +199,34 @@ def get_all_users_usage(
 
     total = int(db.query(func.count(UserModel.id)).filter(*user_filters).scalar() or 0)
 
-    # Limit the joined run rows to the last 30 days to keep the join small.
-    run_join_cond = and_(
-        AgentRunModel.agent_id == AgentModel.id,
-        AgentRunModel.started_at.isnot(None),
-        AgentRunModel.started_at >= start_30d,
-        AgentRunModel.started_at < tomorrow_start,
+    # Limit the joined course rows to the last 30 days to keep the join small.
+    course_join_cond = and_(
+        CourseModel.fiche_id == FicheModel.id,
+        CourseModel.started_at.isnot(None),
+        CourseModel.started_at >= start_30d,
+        CourseModel.started_at < tomorrow_start,
     )
 
     def _sum_when(cond, value, *, else_value):
         return func.coalesce(func.sum(case((cond, value), else_=else_value)), else_value)
 
     # Today aggregates
-    today_cond = and_(AgentRunModel.started_at >= today_start, AgentRunModel.started_at < tomorrow_start)
-    tokens_today = _sum_when(today_cond, func.coalesce(AgentRunModel.total_tokens, 0), else_value=0).label("tokens_today")
-    cost_today = _sum_when(today_cond, func.coalesce(AgentRunModel.total_cost_usd, 0.0), else_value=0.0).label("cost_today")
-    runs_today = _sum_when(today_cond, 1, else_value=0).label("runs_today")
+    today_cond = and_(CourseModel.started_at >= today_start, CourseModel.started_at < tomorrow_start)
+    tokens_today = _sum_when(today_cond, func.coalesce(CourseModel.total_tokens, 0), else_value=0).label("tokens_today")
+    cost_today = _sum_when(today_cond, func.coalesce(CourseModel.total_cost_usd, 0.0), else_value=0.0).label("cost_today")
+    courses_today = _sum_when(today_cond, 1, else_value=0).label("courses_today")
 
     # 7d aggregates
-    seven_cond = and_(AgentRunModel.started_at >= start_7d, AgentRunModel.started_at < tomorrow_start)
-    tokens_7d = _sum_when(seven_cond, func.coalesce(AgentRunModel.total_tokens, 0), else_value=0).label("tokens_7d")
-    cost_7d = _sum_when(seven_cond, func.coalesce(AgentRunModel.total_cost_usd, 0.0), else_value=0.0).label("cost_7d")
-    runs_7d = _sum_when(seven_cond, 1, else_value=0).label("runs_7d")
+    seven_cond = and_(CourseModel.started_at >= start_7d, CourseModel.started_at < tomorrow_start)
+    tokens_7d = _sum_when(seven_cond, func.coalesce(CourseModel.total_tokens, 0), else_value=0).label("tokens_7d")
+    cost_7d = _sum_when(seven_cond, func.coalesce(CourseModel.total_cost_usd, 0.0), else_value=0.0).label("cost_7d")
+    courses_7d = _sum_when(seven_cond, 1, else_value=0).label("courses_7d")
 
     # 30d aggregates
-    thirty_cond = and_(AgentRunModel.started_at >= start_30d, AgentRunModel.started_at < tomorrow_start)
-    tokens_30d = _sum_when(thirty_cond, func.coalesce(AgentRunModel.total_tokens, 0), else_value=0).label("tokens_30d")
-    cost_30d = _sum_when(thirty_cond, func.coalesce(AgentRunModel.total_cost_usd, 0.0), else_value=0.0).label("cost_30d")
-    runs_30d = _sum_when(thirty_cond, 1, else_value=0).label("runs_30d")
+    thirty_cond = and_(CourseModel.started_at >= start_30d, CourseModel.started_at < tomorrow_start)
+    tokens_30d = _sum_when(thirty_cond, func.coalesce(CourseModel.total_tokens, 0), else_value=0).label("tokens_30d")
+    cost_30d = _sum_when(thirty_cond, func.coalesce(CourseModel.total_cost_usd, 0.0), else_value=0.0).label("cost_30d")
+    courses_30d = _sum_when(thirty_cond, 1, else_value=0).label("courses_30d")
 
     query = (
         db.query(
@@ -238,16 +238,16 @@ def get_all_users_usage(
             UserModel.created_at,
             tokens_today,
             cost_today,
-            runs_today,
+            courses_today,
             tokens_7d,
             cost_7d,
-            runs_7d,
+            courses_7d,
             tokens_30d,
             cost_30d,
-            runs_30d,
+            courses_30d,
         )
-        .outerjoin(AgentModel, AgentModel.owner_id == UserModel.id)
-        .outerjoin(AgentRunModel, run_join_cond)
+        .outerjoin(FicheModel, FicheModel.owner_id == UserModel.id)
+        .outerjoin(CourseModel, course_join_cond)
         .filter(*user_filters)
         .group_by(
             UserModel.id,
@@ -285,17 +285,17 @@ def get_all_users_usage(
                     "today": {
                         "tokens": int(row.tokens_today or 0),
                         "cost_usd": round(float(row.cost_today or 0.0), 4),
-                        "runs": int(row.runs_today or 0),
+                        "courses": int(row.courses_today or 0),
                     },
                     "seven_days": {
                         "tokens": int(row.tokens_7d or 0),
                         "cost_usd": round(float(row.cost_7d or 0.0), 4),
-                        "runs": int(row.runs_7d or 0),
+                        "courses": int(row.courses_7d or 0),
                     },
                     "thirty_days": {
                         "tokens": int(row.tokens_30d or 0),
                         "cost_usd": round(float(row.cost_30d or 0.0), 4),
-                        "runs": int(row.runs_30d or 0),
+                        "courses": int(row.courses_30d or 0),
                     },
                 },
             }
@@ -317,7 +317,7 @@ def get_user_usage_detail(
         period: Time period for breakdown - "today", "7d", or "30d"
 
     Returns:
-        Dict with user info, period summary, daily breakdown, top agents
+        Dict with user info, period summary, daily breakdown, top fiches
     """
     from zerg.models.models import User as UserModel
 
@@ -338,64 +338,64 @@ def get_user_usage_detail(
     # Get daily breakdown
     daily_query = (
         db.query(
-            func.date(AgentRunModel.started_at).label("run_date"),
-            func.coalesce(func.sum(func.coalesce(AgentRunModel.total_tokens, 0)), 0).label("tokens"),
-            func.coalesce(func.sum(func.coalesce(AgentRunModel.total_cost_usd, 0.0)), 0.0).label("cost_usd"),
-            func.count(AgentRunModel.id).label("runs"),
+            func.date(CourseModel.started_at).label("course_date"),
+            func.coalesce(func.sum(func.coalesce(CourseModel.total_tokens, 0)), 0).label("tokens"),
+            func.coalesce(func.sum(func.coalesce(CourseModel.total_cost_usd, 0.0)), 0.0).label("cost_usd"),
+            func.count(CourseModel.id).label("courses"),
         )
-        .join(AgentModel, AgentModel.id == AgentRunModel.agent_id)
+        .join(FicheModel, FicheModel.id == CourseModel.fiche_id)
         .filter(
-            AgentModel.owner_id == user_id,
-            AgentRunModel.started_at.isnot(None),
-            AgentRunModel.started_at >= start_dt,
-            AgentRunModel.started_at < end_dt,
+            FicheModel.owner_id == user_id,
+            CourseModel.started_at.isnot(None),
+            CourseModel.started_at >= start_dt,
+            CourseModel.started_at < end_dt,
         )
-        .group_by(func.date(AgentRunModel.started_at))
-        .order_by(func.date(AgentRunModel.started_at).desc())
+        .group_by(func.date(CourseModel.started_at))
+        .order_by(func.date(CourseModel.started_at).desc())
         .all()
     )
 
     daily_breakdown = [
         {
-            "date": row.run_date,
+            "date": row.course_date,
             "tokens": int(row.tokens),
             "cost_usd": round(float(row.cost_usd), 4),
-            "runs": int(row.runs),
+            "courses": int(row.courses),
         }
         for row in daily_query
     ]
 
-    # Get top agents by cost
-    top_agents_query = (
+    # Get top fiches by cost
+    top_fiches_query = (
         db.query(
-            AgentModel.id.label("agent_id"),
-            AgentModel.name,
-            func.coalesce(func.sum(func.coalesce(AgentRunModel.total_tokens, 0)), 0).label("tokens"),
-            func.coalesce(func.sum(func.coalesce(AgentRunModel.total_cost_usd, 0.0)), 0.0).label("cost_usd"),
-            func.count(AgentRunModel.id).label("runs"),
+            FicheModel.id.label("fiche_id"),
+            FicheModel.name,
+            func.coalesce(func.sum(func.coalesce(CourseModel.total_tokens, 0)), 0).label("tokens"),
+            func.coalesce(func.sum(func.coalesce(CourseModel.total_cost_usd, 0.0)), 0.0).label("cost_usd"),
+            func.count(CourseModel.id).label("courses"),
         )
-        .join(AgentRunModel, AgentModel.id == AgentRunModel.agent_id)
+        .join(CourseModel, FicheModel.id == CourseModel.fiche_id)
         .filter(
-            AgentModel.owner_id == user_id,
-            AgentRunModel.started_at.isnot(None),
-            AgentRunModel.started_at >= start_dt,
-            AgentRunModel.started_at < end_dt,
+            FicheModel.owner_id == user_id,
+            CourseModel.started_at.isnot(None),
+            CourseModel.started_at >= start_dt,
+            CourseModel.started_at < end_dt,
         )
-        .group_by(AgentModel.id, AgentModel.name)
-        .order_by(func.sum(func.coalesce(AgentRunModel.total_cost_usd, 0.0)).desc())
+        .group_by(FicheModel.id, FicheModel.name)
+        .order_by(func.sum(func.coalesce(CourseModel.total_cost_usd, 0.0)).desc())
         .limit(10)
         .all()
     )
 
-    top_agents = [
+    top_fiches = [
         {
-            "agent_id": row.agent_id,
+            "fiche_id": row.fiche_id,
             "name": row.name,
             "tokens": int(row.tokens),
             "cost_usd": round(float(row.cost_usd), 4),
-            "runs": int(row.runs),
+            "courses": int(row.courses),
         }
-        for row in top_agents_query
+        for row in top_fiches_query
     ]
 
     # Get usage for all periods for the user row
@@ -418,7 +418,7 @@ def get_user_usage_detail(
             },
         },
         "period": period,
-        "summary": {"tokens": summary["tokens"], "cost_usd": summary["cost_usd"], "runs": summary["runs"]},
+        "summary": {"tokens": summary["tokens"], "cost_usd": summary["cost_usd"], "courses": summary["courses"]},
         "daily_breakdown": daily_breakdown,
-        "top_agents": top_agents,
+        "top_fiches": top_fiches,
     }

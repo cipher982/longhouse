@@ -1,6 +1,6 @@
-"""E2E test for worker SSH fallback behavior.
+"""E2E test for commis SSH fallback behavior.
 
-This test verifies that workers correctly fall back from runner_exec to ssh_exec
+This test verifies that commis correctly fall back from runner_exec to ssh_exec
 when runner_exec fails with a validation error (e.g., "Runner not found").
 
 The test uses mocked tools to simulate the fallback scenario without requiring
@@ -11,42 +11,42 @@ import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from zerg.services.worker_runner import WorkerRunner
-from zerg.services.worker_artifact_store import WorkerArtifactStore
-from tests.conftest import TEST_WORKER_MODEL
+from zerg.services.commis_runner import CommisRunner
+from zerg.services.commis_artifact_store import CommisArtifactStore
+from tests.conftest import TEST_COMMIS_MODEL
 
 
-class TestWorkerSSHFallback:
-    """Tests for worker SSH fallback when runner_exec fails.
+class TestCommisSSHFallback:
+    """Tests for commis SSH fallback when runner_exec fails.
 
     These tests verify the LOGIC of SSH fallback, not the full E2E flow.
     We test that:
     1. runner_exec failures are non-critical (allows fallback)
-    2. Workers can succeed even when runner_exec fails
+    2. Commis can succeed even when runner_exec fails
     3. Both runner and SSH tool calls are recorded
     """
 
     @pytest.mark.asyncio
-    async def test_worker_succeeds_despite_runner_failure(self, db_session, test_user):
-        """Test that worker can succeed even when runner_exec fails.
+    async def test_commis_succeeds_despite_runner_failure(self, db_session, test_user):
+        """Test that commis can succeed even when runner_exec fails.
 
         This simpler test verifies the core logic without full E2E complexity.
         """
         from zerg.crud import crud
         from unittest.mock import patch, MagicMock
 
-        # Create agent with both tools
-        agent = crud.create_agent(
+        # Create fiche with both tools
+        fiche = crud.create_fiche(
             db=db_session,
             owner_id=test_user.id,
-            name="Test Worker",
-            model=TEST_WORKER_MODEL,
-            system_instructions="You are a worker",
+            name="Test Commis",
+            model=TEST_COMMIS_MODEL,
+            system_instructions="You are a commis",
             task_instructions="",
         )
-        agent.allowed_tools = ["runner_exec", "ssh_exec", "get_current_time"]
+        fiche.allowed_tools = ["runner_exec", "ssh_exec", "get_current_time"]
         db_session.commit()
-        db_session.refresh(agent)
+        db_session.refresh(fiche)
 
         # Mock runner_exec to fail
         def mock_runner_exec(target, command, **kwargs):
@@ -70,7 +70,7 @@ class TestWorkerSSHFallback:
                 },
             }
 
-        # Mock the AgentRunner to simulate tool calls
+        # Mock the FicheRunner to simulate tool calls
         async def mock_run_thread(db, thread):
             from zerg.crud import crud
 
@@ -79,7 +79,7 @@ class TestWorkerSSHFallback:
                 db=db,
                 thread_id=thread.id,
                 role="system",
-                content="You are a worker",
+                content="You are a commis",
                 processed=True,
             )
 
@@ -123,22 +123,22 @@ class TestWorkerSSHFallback:
 
             return crud.get_thread_messages(db, thread_id=thread.id)
 
-        from zerg.services.worker_artifact_store import WorkerArtifactStore
-        from zerg.services.worker_runner import WorkerRunner
+        from zerg.services.commis_artifact_store import CommisArtifactStore
+        from zerg.services.commis_runner import CommisRunner
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            store = WorkerArtifactStore(base_path=tmpdir)
+            store = CommisArtifactStore(base_path=tmpdir)
 
-            with patch("zerg.managers.agent_runner.AgentRunner.run_thread", side_effect=mock_run_thread):
-                runner = WorkerRunner(artifact_store=store)
-                result = await runner.run_worker(
+            with patch("zerg.managers.fiche_runner.FicheRunner.run_thread", side_effect=mock_run_thread):
+                runner = CommisRunner(artifact_store=store)
+                result = await runner.run_commis(
                     db=db_session,
                     task="Check disk space on cube",
-                    agent=agent,
+                    fiche=fiche,
                 )
 
-            # Worker should succeed
+            # Commis should succeed
             assert result.status == "success"
             assert result.error is None
 
@@ -176,21 +176,21 @@ class TestCriticalErrorDetection:
 
 
 class TestPromptInstructions:
-    """Test that worker prompts mention available tools."""
+    """Test that commis prompts mention available tools."""
 
-    def test_worker_prompt_mentions_exec_tools(self):
-        """Test that worker system prompt has placeholder for exec tools."""
-        from zerg.prompts.templates import BASE_WORKER_PROMPT
+    def test_commis_prompt_mentions_exec_tools(self):
+        """Test that commis system prompt has placeholder for exec tools."""
+        from zerg.prompts.templates import BASE_COMMIS_PROMPT
 
-        # Worker prompt uses {online_runners} placeholder which is dynamically filled
+        # Commis prompt uses {online_runners} placeholder which is dynamically filled
         # with runner_exec and ssh_exec instructions based on available runners
-        assert "{online_runners}" in BASE_WORKER_PROMPT
+        assert "{online_runners}" in BASE_COMMIS_PROMPT
 
-    def test_composed_worker_prompt_mentions_exec_tools(self):
-        """Test that composed worker prompt includes runner_exec and ssh_exec."""
+    def test_composed_commis_prompt_mentions_exec_tools(self):
+        """Test that composed commis prompt includes runner_exec and ssh_exec."""
         from unittest.mock import patch
 
-        from zerg.prompts.composer import build_worker_prompt
+        from zerg.prompts.composer import build_commis_prompt
 
         class MockUser:
             id = 1
@@ -198,7 +198,7 @@ class TestPromptInstructions:
 
         with patch("zerg.prompts.composer.format_online_runners") as mock_runners:
             mock_runners.return_value = '**Use runner_exec** for targets.\n**ssh_exec as fallback**'
-            prompt = build_worker_prompt(MockUser())
+            prompt = build_commis_prompt(MockUser())
             assert "runner_exec" in prompt.lower()
             assert "ssh_exec" in prompt.lower()
 
@@ -229,27 +229,27 @@ class TestEndToEndFallbackFlow:
     """Integration test for complete fallback flow."""
 
     @pytest.mark.asyncio
-    async def test_worker_with_fallback_simulation(self, db_session, test_user):
-        """Test worker with simulated fallback scenario.
+    async def test_commis_with_fallback_simulation(self, db_session, test_user):
+        """Test commis with simulated fallback scenario.
 
-        This test verifies that when runner_exec fails, the worker doesn't
+        This test verifies that when runner_exec fails, the commis doesn't
         immediately fail, allowing it to try alternative approaches.
         """
         from zerg.crud import crud
 
-        agent = crud.create_agent(
+        fiche = crud.create_fiche(
             db=db_session,
             owner_id=test_user.id,
-            name="Infrastructure Worker",
-            model=TEST_WORKER_MODEL,
-            system_instructions="You are a worker with SSH access.",
+            name="Infrastructure Commis",
+            model=TEST_COMMIS_MODEL,
+            system_instructions="You are a commis with SSH access.",
             task_instructions="",
         )
-        agent.allowed_tools = ["runner_exec", "ssh_exec", "get_current_time"]
+        fiche.allowed_tools = ["runner_exec", "ssh_exec", "get_current_time"]
         db_session.commit()
-        db_session.refresh(agent)
+        db_session.refresh(fiche)
 
-        # Mock AgentRunner to simulate the fallback flow
+        # Mock FicheRunner to simulate the fallback flow
         async def mock_run_thread(db, thread):
             from zerg.crud import crud
 
@@ -258,7 +258,7 @@ class TestEndToEndFallbackFlow:
                 db=db,
                 thread_id=thread.id,
                 role="system",
-                content="You are a worker with SSH access.",
+                content="You are a commis with SSH access.",
                 processed=True,
             )
 
@@ -300,19 +300,19 @@ class TestEndToEndFallbackFlow:
 
             return crud.get_thread_messages(db, thread_id=thread.id)
 
-        from zerg.services.worker_artifact_store import WorkerArtifactStore
-        from zerg.services.worker_runner import WorkerRunner
+        from zerg.services.commis_artifact_store import CommisArtifactStore
+        from zerg.services.commis_runner import CommisRunner
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            store = WorkerArtifactStore(base_path=tmpdir)
+            store = CommisArtifactStore(base_path=tmpdir)
 
-            with patch("zerg.managers.agent_runner.AgentRunner.run_thread", side_effect=mock_run_thread):
-                runner = WorkerRunner(artifact_store=store)
-                result = await runner.run_worker(
+            with patch("zerg.managers.fiche_runner.FicheRunner.run_thread", side_effect=mock_run_thread):
+                runner = CommisRunner(artifact_store=store)
+                result = await runner.run_commis(
                     db=db_session,
                     task="Check disk space on cube server",
-                    agent=agent,
+                    fiche=fiche,
                 )
 
             # Verify successful completion

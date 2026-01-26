@@ -1,4 +1,4 @@
-"""Tests for WorkerArtifactStore service."""
+"""Tests for CommisArtifactStore service."""
 
 import json
 import tempfile
@@ -9,26 +9,26 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import TEST_MODEL
-from zerg.services.worker_artifact_store import WorkerArtifactStore
+from zerg.services.commis_artifact_store import CommisArtifactStore
 
 
 @pytest.fixture
 def temp_store():
     """Create a temporary artifact store for testing."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        yield WorkerArtifactStore(base_path=tmpdir)
+        yield CommisArtifactStore(base_path=tmpdir)
 
 
-def test_create_worker(temp_store):
-    """Test creating a worker directory structure."""
-    worker_id = temp_store.create_worker(
+def test_create_commis(temp_store):
+    """Test creating a commis directory structure."""
+    commis_id = temp_store.create_commis(
         task="Check disk space on all servers",
         config={"model": TEST_MODEL, "timeout": 300},
     )
 
-    # Verify worker_id format
-    assert "_" in worker_id
-    timestamp_part, slug_part, suffix = worker_id.split("_", 2)
+    # Verify commis_id format
+    assert "_" in commis_id
+    timestamp_part, slug_part, suffix = commis_id.split("_", 2)
     assert "T" in timestamp_part  # ISO timestamp format
     # Slug is truncated to 30 chars, may vary depending on task length
     assert slug_part.startswith("check-disk-space")
@@ -36,16 +36,16 @@ def test_create_worker(temp_store):
     assert len(suffix) == 6
 
     # Verify directory structure
-    worker_dir = temp_store.base_path / worker_id
-    assert worker_dir.exists()
-    assert (worker_dir / "tool_calls").exists()
-    assert (worker_dir / "metadata.json").exists()
+    commis_dir = temp_store.base_path / commis_id
+    assert commis_dir.exists()
+    assert (commis_dir / "tool_calls").exists()
+    assert (commis_dir / "metadata.json").exists()
 
     # Verify metadata content
-    with open(worker_dir / "metadata.json", "r") as f:
+    with open(commis_dir / "metadata.json", "r") as f:
         metadata = json.load(f)
 
-    assert metadata["worker_id"] == worker_id
+    assert metadata["commis_id"] == commis_id
     assert metadata["task"] == "Check disk space on all servers"
     assert metadata["config"]["model"] == TEST_MODEL
     assert metadata["status"] == "created"
@@ -56,7 +56,7 @@ def test_create_worker(temp_store):
     # Verify index updated
     index = temp_store._read_index()
     assert len(index) == 1
-    assert index[0]["worker_id"] == worker_id
+    assert index[0]["commis_id"] == commis_id
 
 
 def test_slugify(temp_store):
@@ -70,8 +70,8 @@ def test_slugify(temp_store):
     ]
 
     for task, expected_slug in test_cases:
-        worker_id = temp_store.create_worker(task)
-        _, slug_part, _ = worker_id.split("_", 2)
+        commis_id = temp_store.create_commis(task)
+        _, slug_part, _ = commis_id.split("_", 2)
         # Slug is truncated to 30 chars max
         expected_truncated = expected_slug[:30]
         assert slug_part == expected_truncated
@@ -79,26 +79,26 @@ def test_slugify(temp_store):
 
 def test_save_tool_output(temp_store):
     """Test saving tool outputs."""
-    worker_id = temp_store.create_worker("Test task")
+    commis_id = temp_store.create_commis("Test task")
 
     # Save multiple tool outputs
-    path1 = temp_store.save_tool_output(worker_id, "ssh_exec", "Output from SSH command", sequence=1)
-    path2 = temp_store.save_tool_output(worker_id, "http_request", '{"status": "ok"}', sequence=2)
+    path1 = temp_store.save_tool_output(commis_id, "ssh_exec", "Output from SSH command", sequence=1)
+    path2 = temp_store.save_tool_output(commis_id, "http_request", '{"status": "ok"}', sequence=2)
 
     assert path1 == "tool_calls/001_ssh_exec.txt"
     assert path2 == "tool_calls/002_http_request.txt"
 
     # Verify files exist and content correct
-    worker_dir = temp_store.base_path / worker_id
-    with open(worker_dir / path1, "r") as f:
+    commis_dir = temp_store.base_path / commis_id
+    with open(commis_dir / path1, "r") as f:
         assert f.read() == "Output from SSH command"
-    with open(worker_dir / path2, "r") as f:
+    with open(commis_dir / path2, "r") as f:
         assert f.read() == '{"status": "ok"}'
 
 
 def test_save_message(temp_store):
     """Test saving messages to thread.jsonl."""
-    worker_id = temp_store.create_worker("Test task")
+    commis_id = temp_store.create_commis("Test task")
 
     # Save multiple messages
     messages = [
@@ -109,11 +109,11 @@ def test_save_message(temp_store):
     ]
 
     for msg in messages:
-        temp_store.save_message(worker_id, msg)
+        temp_store.save_message(commis_id, msg)
 
     # Verify thread.jsonl content
-    worker_dir = temp_store.base_path / worker_id
-    thread_path = worker_dir / "thread.jsonl"
+    commis_dir = temp_store.base_path / commis_id
+    thread_path = commis_dir / "thread.jsonl"
     assert thread_path.exists()
 
     # Read and verify each line
@@ -129,215 +129,215 @@ def test_save_message(temp_store):
 
 def test_save_result(temp_store):
     """Test saving final result."""
-    worker_id = temp_store.create_worker("Test task")
+    commis_id = temp_store.create_commis("Test task")
 
     result_text = "The disk space check completed successfully. All servers have adequate space."
-    temp_store.save_result(worker_id, result_text)
+    temp_store.save_result(commis_id, result_text)
 
     # Verify result.txt
-    worker_dir = temp_store.base_path / worker_id
-    result_path = worker_dir / "result.txt"
+    commis_dir = temp_store.base_path / commis_id
+    result_path = commis_dir / "result.txt"
     assert result_path.exists()
 
     with open(result_path, "r") as f:
         assert f.read() == result_text
 
 
-def test_start_and_complete_worker(temp_store):
-    """Test worker lifecycle: create -> start -> complete."""
-    worker_id = temp_store.create_worker("Test task")
+def test_start_and_complete_commis(temp_store):
+    """Test commis lifecycle: create -> start -> complete."""
+    commis_id = temp_store.create_commis("Test task")
 
-    # Start worker
-    temp_store.start_worker(worker_id)
-    metadata = temp_store.get_worker_metadata(worker_id)
+    # Start commis
+    temp_store.start_commis(commis_id)
+    metadata = temp_store.get_commis_metadata(commis_id)
     assert metadata["status"] == "running"
     assert metadata["started_at"] is not None
 
-    # Complete worker
-    temp_store.complete_worker(worker_id, status="success")
-    metadata = temp_store.get_worker_metadata(worker_id)
+    # Complete commis
+    temp_store.complete_commis(commis_id, status="success")
+    metadata = temp_store.get_commis_metadata(commis_id)
     assert metadata["status"] == "success"
     assert metadata["finished_at"] is not None
     assert metadata["duration_ms"] is not None
     assert metadata["duration_ms"] >= 0
 
 
-def test_complete_worker_with_error(temp_store):
-    """Test completing worker with error."""
-    worker_id = temp_store.create_worker("Test task")
-    temp_store.start_worker(worker_id)
+def test_complete_commis_with_error(temp_store):
+    """Test completing commis with error."""
+    commis_id = temp_store.create_commis("Test task")
+    temp_store.start_commis(commis_id)
 
     error_msg = "Connection timeout to server"
-    temp_store.complete_worker(worker_id, status="failed", error=error_msg)
+    temp_store.complete_commis(commis_id, status="failed", error=error_msg)
 
-    metadata = temp_store.get_worker_metadata(worker_id)
+    metadata = temp_store.get_commis_metadata(commis_id)
     assert metadata["status"] == "failed"
     assert metadata["error"] == error_msg
     assert metadata["finished_at"] is not None
 
 
-def test_get_worker_metadata(temp_store):
-    """Test reading worker metadata."""
-    worker_id = temp_store.create_worker("Test task", config={"model": TEST_MODEL, "timeout": 300})
+def test_get_commis_metadata(temp_store):
+    """Test reading commis metadata."""
+    commis_id = temp_store.create_commis("Test task", config={"model": TEST_MODEL, "timeout": 300})
 
-    metadata = temp_store.get_worker_metadata(worker_id)
-    assert metadata["worker_id"] == worker_id
+    metadata = temp_store.get_commis_metadata(commis_id)
+    assert metadata["commis_id"] == commis_id
     assert metadata["task"] == "Test task"
     assert metadata["config"]["model"] == TEST_MODEL
     assert metadata["status"] == "created"
 
 
-def test_get_worker_metadata_not_found(temp_store):
-    """Test reading metadata for non-existent worker."""
+def test_get_commis_metadata_not_found(temp_store):
+    """Test reading metadata for non-existent commis."""
     with pytest.raises(FileNotFoundError):
-        temp_store.get_worker_metadata("nonexistent-worker")
+        temp_store.get_commis_metadata("nonexistent-commis")
 
 
-def test_get_worker_result(temp_store):
-    """Test reading worker result."""
-    worker_id = temp_store.create_worker("Test task")
+def test_get_commis_result(temp_store):
+    """Test reading commis result."""
+    commis_id = temp_store.create_commis("Test task")
     result_text = "Task completed successfully"
-    temp_store.save_result(worker_id, result_text)
+    temp_store.save_result(commis_id, result_text)
 
-    result = temp_store.get_worker_result(worker_id)
+    result = temp_store.get_commis_result(commis_id)
     assert result == result_text
 
 
-def test_get_worker_result_not_found(temp_store):
+def test_get_commis_result_not_found(temp_store):
     """Test reading result when file doesn't exist."""
-    worker_id = temp_store.create_worker("Test task")
+    commis_id = temp_store.create_commis("Test task")
 
     with pytest.raises(FileNotFoundError):
-        temp_store.get_worker_result(worker_id)
+        temp_store.get_commis_result(commis_id)
 
 
 def test_read_commis_file(temp_store):
-    """Test reading arbitrary files from worker directory."""
-    worker_id = temp_store.create_worker("Test task")
-    temp_store.save_tool_output(worker_id, "ssh_exec", "SSH output", sequence=1)
+    """Test reading arbitrary files from commis directory."""
+    commis_id = temp_store.create_commis("Test task")
+    temp_store.save_tool_output(commis_id, "ssh_exec", "SSH output", sequence=1)
 
     # Read tool output file
-    content = temp_store.read_commis_file(worker_id, "tool_calls/001_ssh_exec.txt")
+    content = temp_store.read_commis_file(commis_id, "tool_calls/001_ssh_exec.txt")
     assert content == "SSH output"
 
     # Read metadata
-    metadata_content = temp_store.read_commis_file(worker_id, "metadata.json")
+    metadata_content = temp_store.read_commis_file(commis_id, "metadata.json")
     metadata = json.loads(metadata_content)
-    assert metadata["worker_id"] == worker_id
+    assert metadata["commis_id"] == commis_id
 
 
 def test_read_commis_file_security(temp_store):
     """Test security: prevent directory traversal."""
-    worker_id = temp_store.create_worker("Test task")
+    commis_id = temp_store.create_commis("Test task")
 
     # Attempt directory traversal
     with pytest.raises(ValueError, match="Invalid relative path"):
-        temp_store.read_commis_file(worker_id, "../../../etc/passwd")
+        temp_store.read_commis_file(commis_id, "../../../etc/passwd")
 
     with pytest.raises(ValueError, match="Invalid relative path"):
-        temp_store.read_commis_file(worker_id, "/etc/passwd")
+        temp_store.read_commis_file(commis_id, "/etc/passwd")
 
 
 def test_list_commis(temp_store):
-    """Test listing workers."""
-    # Create multiple workers
-    worker_ids = []
+    """Test listing commis."""
+    # Create multiple commis
+    commis_ids = []
     for i in range(5):
-        worker_id = temp_store.create_worker(f"Task {i}")
-        worker_ids.append(worker_id)
+        commis_id = temp_store.create_commis(f"Task {i}")
+        commis_ids.append(commis_id)
 
-    # List all workers
-    workers = temp_store.list_commis(limit=10)
-    assert len(workers) == 5
+    # List all commis
+    commis = temp_store.list_commis(limit=10)
+    assert len(commis) == 5
 
     # Verify sorted by created_at descending (newest first)
-    for i in range(len(workers) - 1):
-        assert workers[i]["created_at"] >= workers[i + 1]["created_at"]
+    for i in range(len(commis) - 1):
+        assert commis[i]["created_at"] >= commis[i + 1]["created_at"]
 
 
 def test_list_commis_with_limit(temp_store):
-    """Test listing workers with limit."""
-    # Create multiple workers
+    """Test listing commis with limit."""
+    # Create multiple commis
     for i in range(5):
-        temp_store.create_worker(f"Task {i}")
+        temp_store.create_commis(f"Task {i}")
 
     # List with limit
-    workers = temp_store.list_commis(limit=3)
-    assert len(workers) == 3
+    commis = temp_store.list_commis(limit=3)
+    assert len(commis) == 3
 
 
 def test_list_commis_filter_by_status(temp_store):
-    """Test filtering workers by status."""
-    # Create workers with different statuses
-    worker1 = temp_store.create_worker("Task 1")
-    temp_store.start_worker(worker1)
-    temp_store.complete_worker(worker1, status="success")
+    """Test filtering commis by status."""
+    # Create commis with different statuses
+    commis1 = temp_store.create_commis("Task 1")
+    temp_store.start_commis(commis1)
+    temp_store.complete_commis(commis1, status="success")
 
-    worker2 = temp_store.create_worker("Task 2")
-    temp_store.start_worker(worker2)
-    temp_store.complete_worker(worker2, status="failed", error="Test error")
+    commis2 = temp_store.create_commis("Task 2")
+    temp_store.start_commis(commis2)
+    temp_store.complete_commis(commis2, status="failed", error="Test error")
 
-    worker3 = temp_store.create_worker("Task 3")
-    temp_store.start_worker(worker3)
+    commis3 = temp_store.create_commis("Task 3")
+    temp_store.start_commis(commis3)
 
     # Filter by success
-    success_workers = temp_store.list_commis(status="success")
-    assert len(success_workers) == 1
-    assert success_workers[0]["worker_id"] == worker1
+    success_commis = temp_store.list_commis(status="success")
+    assert len(success_commis) == 1
+    assert success_commis[0]["commis_id"] == commis1
 
     # Filter by failed
-    failed_workers = temp_store.list_commis(status="failed")
-    assert len(failed_workers) == 1
-    assert failed_workers[0]["worker_id"] == worker2
+    failed_commis = temp_store.list_commis(status="failed")
+    assert len(failed_commis) == 1
+    assert failed_commis[0]["commis_id"] == commis2
 
     # Filter by running
-    running_workers = temp_store.list_commis(status="running")
-    assert len(running_workers) == 1
-    assert running_workers[0]["worker_id"] == worker3
+    running_commis = temp_store.list_commis(status="running")
+    assert len(running_commis) == 1
+    assert running_commis[0]["commis_id"] == commis3
 
 
 def test_list_commis_filter_by_since(temp_store):
-    """Test filtering workers by creation time."""
-    # Create workers at different times
-    worker1 = temp_store.create_worker("Task 1")
+    """Test filtering commis by creation time."""
+    # Create commis at different times
+    commis1 = temp_store.create_commis("Task 1")
 
-    # Get timestamp after first worker
+    # Get timestamp after first commis
     cutoff_time = datetime.now(timezone.utc)
 
-    # Create more workers
-    worker2 = temp_store.create_worker("Task 2")
-    worker3 = temp_store.create_worker("Task 3")
+    # Create more commis
+    commis2 = temp_store.create_commis("Task 2")
+    commis3 = temp_store.create_commis("Task 3")
 
     # Filter by since
-    recent_workers = temp_store.list_commis(since=cutoff_time)
-    worker_ids = [w["worker_id"] for w in recent_workers]
+    recent_commis = temp_store.list_commis(since=cutoff_time)
+    commis_ids = [w["commis_id"] for w in recent_commis]
 
-    # Should only include worker2 and worker3 (created after cutoff)
-    # Note: Due to timestamp precision, worker1 might be included if created
-    # at exactly the same time, so we check that at least worker2/worker3 are there
-    assert worker2 in worker_ids
-    assert worker3 in worker_ids
+    # Should only include commis2 and commis3 (created after cutoff)
+    # Note: Due to timestamp precision, commis1 might be included if created
+    # at exactly the same time, so we check that at least commis2/commis3 are there
+    assert commis2 in commis_ids
+    assert commis3 in commis_ids
 
 
-def test_search_workers(temp_store):
-    """Test searching across worker artifacts."""
-    # Create workers with searchable content
-    worker1 = temp_store.create_worker("Disk check")
-    temp_store.save_result(worker1, "Disk usage is at 45% on server cube")
+def test_search_commis(temp_store):
+    """Test searching across commis artifacts."""
+    # Create commis with searchable content
+    commis1 = temp_store.create_commis("Disk check")
+    temp_store.save_result(commis1, "Disk usage is at 45% on server cube")
 
-    worker2 = temp_store.create_worker("Memory check")
-    temp_store.save_result(worker2, "Memory usage is at 67% on server clifford")
+    commis2 = temp_store.create_commis("Memory check")
+    temp_store.save_result(commis2, "Memory usage is at 67% on server clifford")
 
-    worker3 = temp_store.create_worker("CPU check")
-    temp_store.save_result(worker3, "CPU usage is at 23% on server cube")
+    commis3 = temp_store.create_commis("CPU check")
+    temp_store.save_result(commis3, "CPU usage is at 23% on server cube")
 
     # Search for "cube" - use wildcard glob since result.txt is at root
-    matches = temp_store.search_workers("cube", file_glob="*.txt")
+    matches = temp_store.search_commis("cube", file_glob="*.txt")
     assert len(matches) == 2
 
-    worker_ids = [m["worker_id"] for m in matches]
-    assert worker1 in worker_ids
-    assert worker3 in worker_ids
+    commis_ids = [m["commis_id"] for m in matches]
+    assert commis1 in commis_ids
+    assert commis3 in commis_ids
 
     # Verify match content
     for match in matches:
@@ -346,37 +346,37 @@ def test_search_workers(temp_store):
         assert "line" in match
 
 
-def test_search_workers_filters_by_ids(temp_store):
-    """Search can be restricted to specific worker IDs."""
-    worker1 = temp_store.create_worker("Disk check")
-    temp_store.save_result(worker1, "Disk usage is at 45% on server cube")
+def test_search_commis_filters_by_ids(temp_store):
+    """Search can be restricted to specific commis IDs."""
+    commis1 = temp_store.create_commis("Disk check")
+    temp_store.save_result(commis1, "Disk usage is at 45% on server cube")
 
-    worker2 = temp_store.create_worker("CPU check")
-    temp_store.save_result(worker2, "CPU usage is high on server cube")
+    commis2 = temp_store.create_commis("CPU check")
+    temp_store.save_result(commis2, "CPU usage is high on server cube")
 
-    # Limit search to worker2 only
-    matches = temp_store.search_workers("cube", file_glob="*.txt", worker_ids=[worker2])
+    # Limit search to commis2 only
+    matches = temp_store.search_commis("cube", file_glob="*.txt", commis_ids=[commis2])
 
     assert len(matches) == 1
-    assert matches[0]["worker_id"] == worker2
+    assert matches[0]["commis_id"] == commis2
 
 
-def test_worker_collision(temp_store):
-    """Test that worker_id collision is detected."""
+def test_commis_collision(temp_store):
+    """Test that commis_id collision is detected."""
     from unittest.mock import patch
 
-    # Create first worker
-    worker_id = temp_store.create_worker("Test task")
+    # Create first commis
+    commis_id = temp_store.create_commis("Test task")
 
-    # Mock _generate_worker_id to return the same ID
-    with patch.object(temp_store, "_generate_worker_id", return_value=worker_id):
+    # Mock _generate_commis_id to return the same ID
+    with patch.object(temp_store, "_generate_commis_id", return_value=commis_id):
         # Should raise ValueError on collision
-        with pytest.raises(ValueError, match="Worker directory already exists"):
-            temp_store.create_worker("Test task")
+        with pytest.raises(ValueError, match="Commis directory already exists"):
+            temp_store.create_commis("Test task")
 
 
-def test_worker_id_unique_with_same_timestamp(monkeypatch, temp_store):
-    """Worker IDs should remain unique even with identical timestamps."""
+def test_commis_id_unique_with_same_timestamp(monkeypatch, temp_store):
+    """Commis IDs should remain unique even with identical timestamps."""
     fixed_time = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 
     class FixedDatetime(datetime):
@@ -384,33 +384,33 @@ def test_worker_id_unique_with_same_timestamp(monkeypatch, temp_store):
         def now(cls, tz=None):  # noqa: ANN001 - test helper
             return fixed_time
 
-    monkeypatch.setattr("zerg.services.worker_artifact_store.datetime", FixedDatetime)
+    monkeypatch.setattr("zerg.services.commis_artifact_store.datetime", FixedDatetime)
 
-    worker1 = temp_store.create_worker("Same task")
-    worker2 = temp_store.create_worker("Same task")
+    commis1 = temp_store.create_commis("Same task")
+    commis2 = temp_store.create_commis("Same task")
 
-    assert worker1 != worker2
-    assert (temp_store.base_path / worker1).exists()
-    assert (temp_store.base_path / worker2).exists()
+    assert commis1 != commis2
+    assert (temp_store.base_path / commis1).exists()
+    assert (temp_store.base_path / commis2).exists()
 
 
 def test_index_persistence(temp_store):
     """Test that index persists across operations."""
-    # Create worker
-    worker_id = temp_store.create_worker("Test task")
+    # Create commis
+    commis_id = temp_store.create_commis("Test task")
 
     # Verify index has entry
     index = temp_store._read_index()
     assert len(index) == 1
-    assert index[0]["worker_id"] == worker_id
+    assert index[0]["commis_id"] == commis_id
 
-    # Start worker (should update index)
-    temp_store.start_worker(worker_id)
+    # Start commis (should update index)
+    temp_store.start_commis(commis_id)
     index = temp_store._read_index()
     assert index[0]["status"] == "running"
 
-    # Complete worker (should update index)
-    temp_store.complete_worker(worker_id, status="success")
+    # Complete commis (should update index)
+    temp_store.complete_commis(commis_id, status="success")
     index = temp_store._read_index()
     assert index[0]["status"] == "success"
     assert index[0]["finished_at"] is not None
@@ -445,11 +445,11 @@ def test_index_updates_are_atomic_under_concurrency(temp_store, monkeypatch):
     monkeypatch.setattr(temp_store, "_read_index", blocked_read)
     monkeypatch.setattr(temp_store, "_write_index", blocked_write)
 
-    def update(worker_id):
-        temp_store._update_index(worker_id, {"worker_id": worker_id, "status": "created"})
+    def update(commis_id):
+        temp_store._update_index(commis_id, {"commis_id": commis_id, "status": "created"})
 
-    t1 = threading.Thread(target=update, args=("worker-one",))
-    t2 = threading.Thread(target=update, args=("worker-two",))
+    t1 = threading.Thread(target=update, args=("commis-one",))
+    t2 = threading.Thread(target=update, args=("commis-two",))
 
     t1.start()
     t2.start()
@@ -463,27 +463,27 @@ def test_index_updates_are_atomic_under_concurrency(temp_store, monkeypatch):
 
     # Final index must contain both entries
     final_index = original_read()
-    worker_ids = {entry.get("worker_id") for entry in final_index}
-    assert {"worker-one", "worker-two"}.issubset(worker_ids)
+    commis_ids = {entry.get("commis_id") for entry in final_index}
+    assert {"commis-one", "commis-two"}.issubset(commis_ids)
 
 
 def test_multiple_stores_same_path():
     """Test that multiple store instances can access same data."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Create worker with first store instance
-        store1 = WorkerArtifactStore(base_path=tmpdir)
-        worker_id = store1.create_worker("Test task")
-        store1.save_result(worker_id, "Result from store1")
+        # Create commis with first store instance
+        store1 = CommisArtifactStore(base_path=tmpdir)
+        commis_id = store1.create_commis("Test task")
+        store1.save_result(commis_id, "Result from store1")
 
-        # Access same worker with second store instance
-        store2 = WorkerArtifactStore(base_path=tmpdir)
-        result = store2.get_worker_result(worker_id)
+        # Access same commis with second store instance
+        store2 = CommisArtifactStore(base_path=tmpdir)
+        result = store2.get_commis_result(commis_id)
         assert result == "Result from store1"
 
-        # List workers from second instance
-        workers = store2.list_commis()
-        assert len(workers) == 1
-        assert workers[0]["worker_id"] == worker_id
+        # List commis from second instance
+        commis = store2.list_commis()
+        assert len(commis) == 1
+        assert commis[0]["commis_id"] == commis_id
 
 
 def test_env_var_base_path(monkeypatch):
@@ -492,9 +492,9 @@ def test_env_var_base_path(monkeypatch):
         monkeypatch.setenv("SWARMLET_DATA_PATH", tmpdir)
 
         # Create store without explicit base_path
-        store = WorkerArtifactStore()
+        store = CommisArtifactStore()
         assert str(store.base_path) == tmpdir
 
         # Verify it works
-        worker_id = store.create_worker("Test task")
-        assert Path(tmpdir, worker_id).exists()
+        commis_id = store.create_commis("Test task")
+        assert Path(tmpdir, commis_id).exists()

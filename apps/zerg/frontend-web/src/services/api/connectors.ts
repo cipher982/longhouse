@@ -17,45 +17,45 @@ export type {
   AccountConnectorStatus,
 };
 
-// Agent-level connectors
-export async function fetchAgentConnectors(agentId: number): Promise<ConnectorStatus[]> {
-  return request<ConnectorStatus[]>(`/agents/${agentId}/connectors`);
+// Fiche-level connectors
+export async function fetchFicheConnectors(ficheId: number): Promise<ConnectorStatus[]> {
+  return request<ConnectorStatus[]>(`/fiches/${ficheId}/connectors`);
 }
 
-export async function configureAgentConnector(
-  agentId: number,
+export async function configureFicheConnector(
+  ficheId: number,
   payload: ConnectorConfigureRequest
 ): Promise<ConnectorSuccessResponse> {
-  return request<ConnectorSuccessResponse>(`/agents/${agentId}/connectors`, {
+  return request<ConnectorSuccessResponse>(`/fiches/${ficheId}/connectors`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
-export async function testAgentConnectorBeforeSave(
-  agentId: number,
+export async function testFicheConnectorBeforeSave(
+  ficheId: number,
   payload: ConnectorTestRequest
 ): Promise<ConnectorTestResponse> {
-  return request<ConnectorTestResponse>(`/agents/${agentId}/connectors/test`, {
+  return request<ConnectorTestResponse>(`/fiches/${ficheId}/connectors/test`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
-export async function testAgentConnector(
-  agentId: number,
+export async function testFicheConnector(
+  ficheId: number,
   connectorType: string
 ): Promise<ConnectorTestResponse> {
-  return request<ConnectorTestResponse>(`/agents/${agentId}/connectors/${connectorType}/test`, {
+  return request<ConnectorTestResponse>(`/fiches/${ficheId}/connectors/${connectorType}/test`, {
     method: "POST",
   });
 }
 
-export async function deleteAgentConnector(
-  agentId: number,
+export async function deleteFicheConnector(
+  ficheId: number,
   connectorType: string
 ): Promise<void> {
-  return request<void>(`/agents/${agentId}/connectors/${connectorType}`, {
+  return request<void>(`/fiches/${ficheId}/connectors/${connectorType}`, {
     method: "DELETE",
   });
 }

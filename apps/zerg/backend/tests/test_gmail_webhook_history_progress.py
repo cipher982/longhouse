@@ -4,7 +4,7 @@ Focus on *observable* behaviour rather than internal helper functions:
 
 1. After a webhook callback the connector's ``history_id`` must advance to the
    highest ``history.id`` value returned by the Gmail *history* diff.
-2. A *new* ``X-Goog-Message-Number`` should schedule an additional agent run
+2. A *new* ``X-Goog-Message-Number`` should schedule an additional course
    (dedup logic only skips identical numbers).
 
 These tests reuse the existing helper stubs from ``test_gmail_webhook_trigger``
@@ -62,11 +62,11 @@ async def test_history_id_advancement_and_dedup(client, db_session, _dev_user, m
     config["history_id"] = 0
     _crud.update_connector(db_session, conn.id, config=config)
 
-    # --------------------------------- 3) Prepare agent + gmail trigger
-    agent_id = client.post(
-        "/api/agents/",
+    # --------------------------------- 3) Prepare fiche + gmail trigger
+    fiche_id = client.post(
+        "/api/fiches/",
         json={
-            "name": "Gmail Progress Agent",
+            "name": "Gmail Progress Fiche",
             "system_instructions": "sys",
             "task_instructions": "task",
             "model": "gpt-mock",
@@ -75,7 +75,7 @@ async def test_history_id_advancement_and_dedup(client, db_session, _dev_user, m
 
     client.post(
         "/api/triggers/",
-        json={"agent_id": agent_id, "type": "email", "config": {"connector_id": conn.id}},
+        json={"fiche_id": fiche_id, "type": "email", "config": {"connector_id": conn.id}},
     )
 
     # --------------------------------- 4) Stub list_history with *stateful* behaviour
@@ -102,15 +102,15 @@ async def test_history_id_advancement_and_dedup(client, db_session, _dev_user, m
         lambda _a, _m: {"id": _m, "labelIds": ["INBOX"], "headers": {"From": "a", "Subject": "b"}},
     )
 
-    # --------------------------------- 5) Count agent executions
+    # --------------------------------- 5) Count fiche executions
     exec_counter = {"runs": 0}
 
     async def _stub_run(aid: int, trigger: str = "schedule"):  # noqa: D401 – async stub
         exec_counter["runs"] += 1
         exec_counter["last_aid"] = aid
 
-    original_runner = scheduler_service.run_agent_task
-    scheduler_service.run_agent_task = _stub_run  # type: ignore[assignment]
+    original_runner = scheduler_service.run_fiche_task
+    scheduler_service.run_fiche_task = _stub_run  # type: ignore[assignment]
 
     try:
         # -------------------------- first webhook (msg_no=1) – should run
@@ -149,4 +149,4 @@ async def test_history_id_advancement_and_dedup(client, db_session, _dev_user, m
             assert conn_final.config.get("history_id") == 1002
 
     finally:
-        scheduler_service.run_agent_task = original_runner  # type: ignore[assignment]
+        scheduler_service.run_fiche_task = original_runner  # type: ignore[assignment]

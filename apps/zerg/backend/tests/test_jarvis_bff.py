@@ -54,7 +54,7 @@ class TestBootstrapEndpoint:
         # Check prompt contains user context
         assert "David" in data["prompt"]
 
-        # Check tools list (v2.1: route_to_supervisor removed)
+        # Check tools list (v2.1: route_to_concierge removed)
         tool_names = [t["name"] for t in data["enabled_tools"]]
         assert "get_current_location" in tool_names
 
@@ -80,7 +80,7 @@ class TestBootstrapEndpoint:
 
     def test_bootstrap_filters_disabled_tools(self, client, test_user, db_session):
         """Bootstrap respects user tool configuration."""
-        # v2.1: route_to_supervisor has been removed, only 3 tools remain
+        # v2.1: route_to_concierge has been removed, only 3 tools remain
         test_user.context = {
             "display_name": "David",
             "tools": {
@@ -97,7 +97,7 @@ class TestBootstrapEndpoint:
         assert response.status_code == 200
         data = response.json()
 
-        # Check only enabled tools are returned (v2.1: route_to_supervisor removed)
+        # Check only enabled tools are returned (v2.1: route_to_concierge removed)
         tool_names = [t["name"] for t in data["enabled_tools"]]
         assert "get_current_location" in tool_names
         assert "get_whoop_data" not in tool_names
@@ -118,7 +118,7 @@ class TestBootstrapEndpoint:
         assert response.status_code == 200
         data = response.json()
 
-        # Should have all 3 tools (v2.1: route_to_supervisor removed)
+        # Should have all 3 tools (v2.1: route_to_concierge removed)
         tool_names = [t["name"] for t in data["enabled_tools"]]
         assert "get_current_location" in tool_names
         assert "get_whoop_data" in tool_names
@@ -182,7 +182,7 @@ class TestSessionEndpoint:
 
 
 # NOTE: /api/jarvis/tool endpoint was removed - MCP tools were disabled in production
-# and tool execution now goes through the supervisor/worker system.
+# and tool execution now goes through the concierge/commis system.
 
 
 class TestBootstrapPromptIntegration:
@@ -219,7 +219,7 @@ class TestBootstrapPromptIntegration:
         data = response.json()
         tool_names = {t["name"] for t in data["enabled_tools"]}
 
-        # Should have the expected tools (v2.1: route_to_supervisor removed)
+        # Should have the expected tools (v2.1: route_to_concierge removed)
         assert "get_current_location" in tool_names
         assert "get_whoop_data" in tool_names
         assert "search_notes" in tool_names
@@ -281,12 +281,12 @@ class TestHistoryEndpoint:
     def test_history_returns_messages(self, client, test_user, db_session):
         """History endpoint returns conversation messages."""
         from zerg.crud import crud
-        from zerg.services.supervisor_service import SupervisorService
+        from zerg.services.concierge_service import ConciergeService
 
-        # Create supervisor thread with messages
-        supervisor_service = SupervisorService(db_session)
-        agent = supervisor_service.get_or_create_supervisor_agent(test_user.id)
-        thread = supervisor_service.get_or_create_supervisor_thread(test_user.id, agent)
+        # Create concierge thread with messages
+        concierge_service = ConciergeService(db_session)
+        fiche = concierge_service.get_or_create_concierge_fiche(test_user.id)
+        thread = concierge_service.get_or_create_concierge_thread(test_user.id, fiche)
 
         # Add some messages
         crud.create_thread_message(
@@ -326,12 +326,12 @@ class TestHistoryEndpoint:
     def test_history_pagination(self, client, test_user, db_session):
         """History endpoint supports pagination."""
         from zerg.crud import crud
-        from zerg.services.supervisor_service import SupervisorService
+        from zerg.services.concierge_service import ConciergeService
 
-        # Create supervisor thread with multiple messages
-        supervisor_service = SupervisorService(db_session)
-        agent = supervisor_service.get_or_create_supervisor_agent(test_user.id)
-        thread = supervisor_service.get_or_create_supervisor_thread(test_user.id, agent)
+        # Create concierge thread with multiple messages
+        concierge_service = ConciergeService(db_session)
+        fiche = concierge_service.get_or_create_concierge_fiche(test_user.id)
+        thread = concierge_service.get_or_create_concierge_thread(test_user.id, fiche)
 
         # Add 5 message pairs (10 messages total)
         for i in range(5):
@@ -368,12 +368,12 @@ class TestHistoryEndpoint:
     def test_history_filters_system_messages(self, client, test_user, db_session):
         """History endpoint only returns user and assistant messages."""
         from zerg.crud import crud
-        from zerg.services.supervisor_service import SupervisorService
+        from zerg.services.concierge_service import ConciergeService
 
-        # Create supervisor thread (has system message by default)
-        supervisor_service = SupervisorService(db_session)
-        agent = supervisor_service.get_or_create_supervisor_agent(test_user.id)
-        thread = supervisor_service.get_or_create_supervisor_thread(test_user.id, agent)
+        # Create concierge thread (has system message by default)
+        concierge_service = ConciergeService(db_session)
+        fiche = concierge_service.get_or_create_concierge_fiche(test_user.id)
+        thread = concierge_service.get_or_create_concierge_thread(test_user.id, fiche)
 
         # Add user message
         crud.create_thread_message(

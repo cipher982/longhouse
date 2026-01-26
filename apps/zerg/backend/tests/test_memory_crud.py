@@ -17,7 +17,7 @@ def test_memory_upsert_and_get(db_session, test_user):
         title="Test Episode",
         content="We debugged runner_exec auth.",
         tags=["zerg", "infra"],
-        metadata={"run_id": 123},
+        metadata={"course_id": 123},
     )
 
     assert created.id is not None
@@ -26,7 +26,7 @@ def test_memory_upsert_and_get(db_session, test_user):
     assert created.title == "Test Episode"
     assert created.content == "We debugged runner_exec auth."
     assert created.tags == ["zerg", "infra"]
-    assert created.file_metadata["run_id"] == 123
+    assert created.file_metadata["course_id"] == 123
 
     fetched = memory_crud.get_memory_file_by_path(db_session, owner_id=test_user.id, path=path)
     assert fetched is not None

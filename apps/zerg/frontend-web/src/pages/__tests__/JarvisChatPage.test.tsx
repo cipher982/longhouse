@@ -11,7 +11,7 @@ import { Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TestRouter } from '../../test/test-utils';
 import JarvisChatPage from '../JarvisChatPage';
-import { supervisorToolStore } from '../../jarvis/lib/supervisor-tool-store';
+import { conciergeToolStore } from '../../jarvis/lib/concierge-tool-store';
 
 // Mock the API functions
 const apiMocks = vi.hoisted(() => ({
@@ -42,22 +42,22 @@ function renderJarvisChatPage(initialEntry = '/chat') {
 describe('JarvisChatPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    supervisorToolStore.clearTools();
+    conciergeToolStore.clearTools();
   });
 
   afterEach(() => {
     cleanup();
-    supervisorToolStore.clearTools();
+    conciergeToolStore.clearTools();
   });
 
   describe('Tool Call Hydration', () => {
-    it('hydrates tool calls from API response into supervisor tool store', async () => {
+    it('hydrates tool calls from API response into concierge tool store', async () => {
       const now = new Date().toISOString();
 
       // Mock thread lookup
       mockFetchThreadByTitle.mockResolvedValue({
         id: 1,
-        agent_id: 1,
+        fiche_id: 1,
         title: 'test-thread',
         active: true,
         created_at: now,
@@ -125,7 +125,7 @@ describe('JarvisChatPage', () => {
 
       // Verify the tool store was populated with the tool call
       await waitFor(() => {
-        const state = supervisorToolStore.getState();
+        const state = conciergeToolStore.getState();
         expect(state.tools.size).toBe(1);
 
         // Check the tool was hydrated correctly
@@ -134,8 +134,8 @@ describe('JarvisChatPage', () => {
         expect(tool?.toolName).toBe('get_weather');
         expect(tool?.status).toBe('completed');
         expect(tool?.args).toEqual({ location: 'San Francisco' });
-        // Synthetic runId should be negative message ID
-        expect(tool?.runId).toBe(-2);
+        // Synthetic courseId should be negative message ID
+        expect(tool?.courseId).toBe(-2);
       });
     });
 
@@ -144,7 +144,7 @@ describe('JarvisChatPage', () => {
 
       mockFetchThreadByTitle.mockResolvedValue({
         id: 1,
-        agent_id: 1,
+        fiche_id: 1,
         title: 'multi-tool-thread',
         active: true,
         created_at: now,
@@ -178,7 +178,7 @@ describe('JarvisChatPage', () => {
       renderJarvisChatPage('/chat?thread=multi-tool-thread');
 
       await waitFor(() => {
-        const state = supervisorToolStore.getState();
+        const state = conciergeToolStore.getState();
         expect(state.tools.size).toBe(2);
 
         const weatherTool = state.tools.get('call_weather');
@@ -187,9 +187,9 @@ describe('JarvisChatPage', () => {
         expect(weatherTool?.toolName).toBe('get_weather');
         expect(locationTool?.toolName).toBe('get_current_location');
 
-        // Both should have same synthetic runId (from same message)
-        expect(weatherTool?.runId).toBe(-2);
-        expect(locationTool?.runId).toBe(-2);
+        // Both should have same synthetic courseId (from same message)
+        expect(weatherTool?.courseId).toBe(-2);
+        expect(locationTool?.courseId).toBe(-2);
       });
     });
 
@@ -198,7 +198,7 @@ describe('JarvisChatPage', () => {
 
       mockFetchThreadByTitle.mockResolvedValue({
         id: 1,
-        agent_id: 1,
+        fiche_id: 1,
         title: 'no-tools-thread',
         active: true,
         created_at: now,
@@ -235,7 +235,7 @@ describe('JarvisChatPage', () => {
 
       // Tool store should be empty
       await waitFor(() => {
-        const state = supervisorToolStore.getState();
+        const state = conciergeToolStore.getState();
         expect(state.tools.size).toBe(0);
       });
     });
@@ -244,22 +244,22 @@ describe('JarvisChatPage', () => {
       const now = new Date().toISOString();
 
       // Pre-populate the store with some tools
-      supervisorToolStore.loadTools([
+      conciergeToolStore.loadTools([
         {
           toolCallId: 'old_call',
           toolName: 'old_tool',
           status: 'completed',
-          runId: -999,
+          courseId: -999,
           startedAt: Date.now(),
           logs: [],
         },
       ]);
 
-      expect(supervisorToolStore.getState().tools.size).toBe(1);
+      expect(conciergeToolStore.getState().tools.size).toBe(1);
 
       mockFetchThreadByTitle.mockResolvedValue({
         id: 2,
-        agent_id: 1,
+        fiche_id: 1,
         title: 'new-thread',
         active: true,
         created_at: now,
@@ -282,7 +282,7 @@ describe('JarvisChatPage', () => {
       renderJarvisChatPage('/chat?thread=new-thread');
 
       await waitFor(() => {
-        const state = supervisorToolStore.getState();
+        const state = conciergeToolStore.getState();
         // Old tool should be cleared, only new tool present
         expect(state.tools.size).toBe(1);
         expect(state.tools.has('old_call')).toBe(false);
@@ -295,7 +295,7 @@ describe('JarvisChatPage', () => {
 
       mockFetchThreadByTitle.mockResolvedValue({
         id: 1,
-        agent_id: 1,
+        fiche_id: 1,
         title: 'display-test',
         active: true,
         created_at: now,
@@ -331,7 +331,7 @@ describe('JarvisChatPage', () => {
       // The ToolCard component renders the tool name
       await waitFor(() => {
         // The tool store should be populated
-        expect(supervisorToolStore.getState().tools.size).toBe(1);
+        expect(conciergeToolStore.getState().tools.size).toBe(1);
       });
 
       // The actual rendering of ToolCard happens via ActivityStream
@@ -353,17 +353,17 @@ describe('JarvisChatPage', () => {
        *
        * The root cause was that on page refresh:
        * 1. API returns messages WITH tool_calls
-       * 2. But JarvisChatPage wasn't extracting them or setting runId
-       * 3. supervisorToolStore was empty (no SSE events to populate it)
+       * 2. But JarvisChatPage wasn't extracting them or setting courseId
+       * 3. conciergeToolStore was empty (no SSE events to populate it)
        * 4. So ChatContainer found no tools to render
        *
-       * The fix hydrates tool_calls from the API into the supervisor tool store.
+       * The fix hydrates tool_calls from the API into the concierge tool store.
        */
       const now = new Date().toISOString();
 
       mockFetchThreadByTitle.mockResolvedValue({
         id: 1,
-        agent_id: 1,
+        fiche_id: 1,
         title: 'refresh-test',
         active: true,
         created_at: now,
@@ -417,7 +417,7 @@ describe('JarvisChatPage', () => {
 
       // Verify tool store is populated (the core fix)
       await waitFor(() => {
-        const state = supervisorToolStore.getState();
+        const state = conciergeToolStore.getState();
         expect(state.tools.size).toBe(1);
 
         const tool = state.tools.get('call_whoop');

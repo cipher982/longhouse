@@ -1,5 +1,5 @@
 /**
- * Shared ConnectorCard component for both agent-level and account-level connectors.
+ * Shared ConnectorCard component for both fiche-level and account-level connectors.
  * Compact design with service icons and inline actions.
  */
 

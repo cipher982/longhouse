@@ -53,7 +53,7 @@ await safeClick(page, '[data-testid="foo"]');
 - `agent_settings_autosave.spec.ts:52`
 
 ### 4. Backend 500 Error
-`/api/admin/debug/db-schema` returns 500 when called with `X-Test-Worker: guardrail_a`:
+`/api/admin/debug/db-schema` returns 500 when called with `X-Test-Commis: guardrail_a`:
 - Endpoint: `routers/admin.py:629`
 - Test: `worker_isolation_guardrail.spec.ts:46`
 

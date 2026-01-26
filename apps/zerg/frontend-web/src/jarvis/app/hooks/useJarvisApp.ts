@@ -4,7 +4,7 @@
  * This hook manages the entire Jarvis application lifecycle:
  * - Initialization (JarvisClient, bootstrap, context, history)
  * - Voice connection (mic, session, voice controller)
- * - Text messaging (via SupervisorChatController)
+ * - Text messaging (via ConciergeChatController)
  * - State synchronization (directly to React context, no stateManager bridge)
  *
  * Replaces the old architecture:
@@ -24,16 +24,16 @@ import { voiceController, type VoiceEvent } from '../../lib/voice-controller'
 import { audioController } from '../../lib/audio-controller'
 import { sessionHandler } from '../../lib/session-handler'
 import { feedbackSystem } from '../../lib/feedback-system'
-import { SupervisorChatController } from '../../lib/supervisor-chat-controller'
+import { ConciergeChatController } from '../../lib/concierge-chat-controller'
 import { bootstrapSession, type BootstrapResult } from '../../lib/session-bootstrap'
 import { contextLoader } from '../../contexts/context-loader'
-import { workerProgressStore } from '../../lib/worker-progress-store'
-import { supervisorToolStore, type SupervisorToolCall } from '../../lib/supervisor-tool-store'
+import { commisProgressStore } from '../../lib/commis-progress-store'
+import { conciergeToolStore, type ConciergeToolCall } from '../../lib/concierge-tool-store'
 import type { VoiceAgentConfig } from '../../contexts/types'
 import { getZergApiUrl, CONFIG, toAbsoluteUrl } from '../../lib/config'
 import { uuid } from '../../lib/uuid'
-// Keep stateManager for streaming events from supervisor-chat-controller
-// TODO: Refactor supervisor-chat-controller to use callbacks instead
+// Keep stateManager for streaming events from concierge-chat-controller
+// TODO: Refactor concierge-chat-controller to use callbacks instead
 import { stateManager, type StateChangeEvent } from '../../lib/state-manager'
 import { eventBus } from '../../lib/event-bus'
 import { timelineLogger } from '../../lib/timeline-logger'
@@ -105,12 +105,12 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
   })
 
   // Refs for singleton instances
-  const supervisorChatRef = useRef<SupervisorChatController | null>(null)
+  const conciergeChatRef = useRef<ConciergeChatController | null>(null)
   const lastBootstrapResultRef = useRef<BootstrapResult | null>(null)
-  const lastSupervisorTurnsRef = useRef<ConversationTurn[]>([])
+  const lastConciergeTurnsRef = useRef<ConversationTurn[]>([])
   const initStartedRef = useRef(false)
   // Track if messages were pre-hydrated (e.g., from JarvisChatPage with ?thread= param)
-  // If pre-hydrated, we should skip loading supervisor thread to avoid state clobbering
+  // If pre-hydrated, we should skip loading concierge thread to avoid state clobbering
   const messagesPreHydratedRef = useRef(appState.messages.length > 0)
 
   // Helper to update internal state
@@ -138,7 +138,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
       if (isAuthed) {
         logger.info('[useJarvisApp] JarvisClient authenticated')
       } else {
-        logger.warn('[useJarvisApp] Not authenticated - log in to enable supervisor features')
+        logger.warn('[useJarvisApp] Not authenticated - log in to enable concierge features')
       }
 
       return jarvisClient
@@ -186,20 +186,20 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
       const currentContext = await contextLoader.loadContext(contextName)
       updateState({ currentContext })
 
-      // Skip loading supervisor thread if messages were pre-hydrated (e.g., ?thread= param)
+      // Skip loading concierge thread if messages were pre-hydrated (e.g., ?thread= param)
       // This prevents state clobbering where we'd show messages from one thread
-      // but set conversation state to the supervisor thread
+      // but set conversation state to the concierge thread
       if (messagesPreHydratedRef.current) {
-        logger.info('[useJarvisApp] Skipping supervisor thread load - messages pre-hydrated')
+        logger.info('[useJarvisApp] Skipping concierge thread load - messages pre-hydrated')
         dispatch({ type: 'SET_CONVERSATION_ID', id: null })
         dispatch({
           type: 'SET_CONVERSATIONS',
           conversations: [{ id: 'prehydrated', name: 'Loaded Thread', meta: 'Pre-hydrated', active: true }],
         })
       } else {
-        // Fetch actual supervisor thread info
+        // Fetch actual concierge thread info
         try {
-          const threadResponse = await fetch(toAbsoluteUrl(`${CONFIG.JARVIS_API_BASE}/supervisor/thread`), {
+          const threadResponse = await fetch(toAbsoluteUrl(`${CONFIG.JARVIS_API_BASE}/concierge/thread`), {
             credentials: 'include',
           })
 
@@ -215,13 +215,13 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
                 active: true
               }],
             })
-            logger.info(`[useJarvisApp] Supervisor thread loaded: ${threadInfo.title} (${threadInfo.message_count} messages)`)
+            logger.info(`[useJarvisApp] Concierge thread loaded: ${threadInfo.title} (${threadInfo.message_count} messages)`)
           } else {
             // Fallback to default if endpoint fails
             dispatch({ type: 'SET_CONVERSATION_ID', id: null })
             dispatch({
               type: 'SET_CONVERSATIONS',
-              conversations: [{ id: 'server', name: 'Supervisor', meta: 'Thread', active: true }],
+              conversations: [{ id: 'server', name: 'Concierge', meta: 'Thread', active: true }],
             })
           }
         } catch (threadError) {
@@ -229,7 +229,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
           dispatch({ type: 'SET_CONVERSATION_ID', id: null })
           dispatch({
             type: 'SET_CONVERSATIONS',
-            conversations: [{ id: 'server', name: 'Supervisor', meta: 'Thread', active: true }],
+            conversations: [{ id: 'server', name: 'Concierge', meta: 'Thread', active: true }],
           })
         }
       }
@@ -242,8 +242,8 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
     }
   }, [dispatch, updateState])
 
-  const loadSupervisorHistory = useCallback(async () => {
-    if (!supervisorChatRef.current) return []
+  const loadConciergeHistory = useCallback(async () => {
+    if (!conciergeChatRef.current) return []
 
     // Skip loading if messages were pre-hydrated (e.g., from JarvisChatPage with ?thread=)
     if (messagesPreHydratedRef.current) {
@@ -252,21 +252,21 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
     }
 
     try {
-      logger.info('[useJarvisApp] Loading Supervisor chat history...')
-      const messages = await supervisorChatRef.current.loadHistory(50)
+      logger.info('[useJarvisApp] Loading Concierge chat history...')
+      const messages = await conciergeChatRef.current.loadHistory(50)
 
       if (messages.length > 0) {
         // Extract and hydrate tool calls from history
-        const historicalTools: SupervisorToolCall[] = []
+        const historicalTools: ConciergeToolCall[] = []
         for (const msg of messages) {
           if (msg.role === 'assistant' && msg.tool_calls) {
             for (const tc of msg.tool_calls) {
               // Convert API format to store format
-              const tool: SupervisorToolCall = {
+              const tool: ConciergeToolCall = {
                 toolCallId: tc.tool_call_id,
                 toolName: tc.tool_name,
                 status: 'completed', // Historical tools are always completed
-                runId: 0, // Historical - no run association needed
+                courseId: 0, // Historical - no course association needed
                 startedAt: msg.timestamp.getTime(),
                 completedAt: msg.timestamp.getTime(),
                 args: tc.args,
@@ -275,9 +275,9 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
                 logs: [],
               }
 
-              // For spawn_commis, include worker metadata
-              if (tc.tool_name === 'spawn_commis' && tc.worker) {
-                const nestedTools = tc.worker.tools.map(wt => ({
+              // For spawn_commis, include commis metadata
+              if (tc.tool_name === 'spawn_commis' && tc.commis) {
+                const nestedTools = tc.commis.tools.map(wt => ({
                   toolCallId: `${tc.tool_call_id}-${wt.tool_name}`,
                   toolName: wt.tool_name,
                   status: wt.status as 'running' | 'completed' | 'failed',
@@ -287,8 +287,8 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
                 }))
 
                 tool.result = {
-                  workerStatus: tc.worker.status,
-                  workerSummary: tc.worker.summary,
+                  commisStatus: tc.commis.status,
+                  commisSummary: tc.commis.summary,
                   nestedTools,
                 }
               }
@@ -298,9 +298,9 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
           }
         }
 
-        // Hydrate the supervisor tool store with historical tools
+        // Hydrate the concierge tool store with historical tools
         if (historicalTools.length > 0) {
-          supervisorToolStore.loadTools(historicalTools)
+          conciergeToolStore.loadTools(historicalTools)
           logger.info(`[useJarvisApp] Hydrated ${historicalTools.length} historical tool calls`)
         }
 
@@ -314,7 +314,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
           assistantUsage: msg.role === 'assistant' ? msg.usage : undefined,
         }))
 
-        lastSupervisorTurnsRef.current = history
+        lastConciergeTurnsRef.current = history
 
         // Convert to ChatMessages for React context
         const chatMessages: ChatMessage[] = []
@@ -343,7 +343,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
         return history
       }
 
-      lastSupervisorTurnsRef.current = []
+      lastConciergeTurnsRef.current = []
       return []
     } catch (error) {
       logger.warn('[useJarvisApp] Failed to load history (non-fatal):', error)
@@ -351,53 +351,53 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
     }
   }, [dispatch])
 
-  const checkForActiveRun = useCallback(async () => {
+  const checkForActiveCourse = useCallback(async () => {
     try {
-      logger.info('[useJarvisApp] Checking for active run...')
-      const response = await fetch(toAbsoluteUrl(`${CONFIG.JARVIS_API_BASE}/runs/active`), {
+      logger.info('[useJarvisApp] Checking for active course...')
+      const response = await fetch(toAbsoluteUrl(`${CONFIG.JARVIS_API_BASE}/courses/active`), {
         credentials: 'include',
       })
 
       if (response.status === 204) {
-        logger.info('[useJarvisApp] No active run found')
+        logger.info('[useJarvisApp] No active course found')
         return null
       }
 
       if (!response.ok) {
-        throw new Error(`Failed to check active run: ${response.status}`)
+        throw new Error(`Failed to check active course: ${response.status}`)
       }
 
       const data = await response.json()
-      logger.info(`[useJarvisApp] Found active run: ${data.run_id}`)
-      return data.run_id
+      logger.info(`[useJarvisApp] Found active course: ${data.course_id}`)
+      return data.course_id
     } catch (error) {
-      logger.warn('[useJarvisApp] Failed to check for active run:', error)
+      logger.warn('[useJarvisApp] Failed to check for active course:', error)
       return null
     }
   }, [])
 
-  const reconnectToRun = useCallback(async (runId: number) => {
-    if (!supervisorChatRef.current) {
-      logger.warn('[useJarvisApp] Cannot reconnect - supervisor chat not initialized')
+  const reconnectToCourse = useCallback(async (courseId: number) => {
+    if (!conciergeChatRef.current) {
+      logger.warn('[useJarvisApp] Cannot reconnect - concierge chat not initialized')
       return
     }
 
     try {
-      logger.info(`[useJarvisApp] Reconnecting to run ${runId}...`)
+      logger.info(`[useJarvisApp] Reconnecting to course ${courseId}...`)
       updateState({ reconnecting: true })
-      await supervisorChatRef.current.attachToRun(runId)
-      logger.info(`[useJarvisApp] Reconnected to run ${runId}`)
+      await conciergeChatRef.current.attachToCourse(courseId)
+      logger.info(`[useJarvisApp] Reconnected to course ${courseId}`)
 
       // Reload history to show the response that completed during reconnection
       // The response is stored in the database, so this will pick it up
       logger.info('[useJarvisApp] Reloading history after reconnection...')
-      await loadSupervisorHistory()
+      await loadConciergeHistory()
     } catch (error) {
-      logger.error('[useJarvisApp] Failed to reconnect to run:', error)
+      logger.error('[useJarvisApp] Failed to reconnect to course:', error)
     } finally {
       updateState({ reconnecting: false })
     }
-  }, [updateState, loadSupervisorHistory])
+  }, [updateState, loadConciergeHistory])
 
   // Main initialization
   const initialize = useCallback(async () => {
@@ -416,21 +416,21 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
       // 3. Initialize context
       await initializeContext()
 
-      // 4. Initialize SupervisorChatController
-      supervisorChatRef.current = new SupervisorChatController({ maxRetries: 3 })
-      await supervisorChatRef.current.initialize()
+      // 4. Initialize ConciergeChatController
+      conciergeChatRef.current = new ConciergeChatController({ maxRetries: 3 })
+      await conciergeChatRef.current.initialize()
 
-      // 5. Check for active run and reconnect if found.
+      // 5. Check for active course and reconnect if found.
       // Do this before loading history so a refresh can reattach to a running SSE stream ASAP.
-      const activeRunId = await checkForActiveRun()
-      if (activeRunId) {
-        logger.info(`[useJarvisApp] Found active run ${activeRunId}, reconnecting...`)
+      const activeCourseId = await checkForActiveCourse()
+      if (activeCourseId) {
+        logger.info(`[useJarvisApp] Found active course ${activeCourseId}, reconnecting...`)
         // Show UI immediately before SSE connects
-        workerProgressStore.setReconnecting(activeRunId)
-        await reconnectToRun(activeRunId)
+        commisProgressStore.setReconnecting(activeCourseId)
+        await reconnectToCourse(activeCourseId)
       } else {
-        // No active run → load history for the chat UI.
-        await loadSupervisorHistory()
+        // No active course → load history for the chat UI.
+        await loadConciergeHistory()
       }
 
       // 6. Set up voice listeners (streaming listeners are set up in a separate effect)
@@ -444,7 +444,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
       optionsRef.current.onError?.(error as Error)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- setupVoiceListeners defined below, circular dep intentional
-  }, [state.initialized, initializeJarvisClient, fetchBootstrap, initializeContext, loadSupervisorHistory, checkForActiveRun, reconnectToRun, updateState])
+  }, [state.initialized, initializeJarvisClient, fetchBootstrap, initializeContext, loadConciergeHistory, checkForActiveCourse, reconnectToCourse, updateState])
 
   // Set up voice controller event listeners
   const setupVoiceListeners = useCallback(() => {
@@ -470,7 +470,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
             dispatch({ type: 'SET_USER_TRANSCRIPT_PREVIEW', text: event.text })
           } else {
             dispatch({ type: 'SET_USER_TRANSCRIPT_PREVIEW', text: '' })
-            // Send final transcript to supervisor
+            // Send final transcript to concierge
             handleUserTranscript(event.text)
           }
           break
@@ -493,7 +493,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- handleUserTranscript defined below, circular dep intentional
   }, [dispatch, setVoiceStatus])
 
-  // Set up stateManager listeners for streaming events from supervisor-chat-controller
+  // Set up stateManager listeners for streaming events from concierge-chat-controller
   const setupStreamingListeners = useCallback(() => {
     const handleStateChange = (event: StateChangeEvent) => {
       switch (event.type) {
@@ -526,7 +526,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
               status: event.status as any,
               ...(event.content !== undefined ? { content: event.content } : {}),
               ...(event.usage !== undefined ? { usage: event.usage } : {}),
-              ...(event.runId !== undefined ? { runId: event.runId } : {}),
+              ...(event.courseId !== undefined ? { courseId: event.courseId } : {}),
             },
           })
           break
@@ -575,15 +575,15 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
       }
 
       // 3. Load history if needed
-      if (!lastSupervisorTurnsRef.current.length) {
-        await loadSupervisorHistory()
+      if (!lastConciergeTurnsRef.current.length) {
+        await loadConciergeHistory()
       }
 
       // 4. Bootstrap session
       const bootstrapResult = await bootstrapSession({
         context: state.currentContext,
         conversationId: null,
-        history: lastSupervisorTurnsRef.current,
+        history: lastConciergeTurnsRef.current,
         mediaStream: micStream,
         audioElement: undefined,
         tools: [], // v2.1: Realtime is I/O only, no tools
@@ -632,7 +632,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
       optionsRef.current.onError?.(error as Error)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- setupSessionEvents defined below, circular dep intentional
-  }, [state.connecting, state.connected, state.currentContext, dispatch, updateState, setVoiceStatus, loadSupervisorHistory])
+  }, [state.connecting, state.connected, state.currentContext, dispatch, updateState, setVoiceStatus, loadConciergeHistory])
 
   const disconnect = useCallback(async () => {
     logger.info('[useJarvisApp] Disconnecting...')
@@ -640,7 +640,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
     audioController.setListeningMode(false)
 
     try {
-      supervisorChatRef.current?.cancel()
+      conciergeChatRef.current?.cancel()
       await sessionHandler.disconnect()
 
       voiceController.setSession(null)
@@ -684,7 +684,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
         voiceController.handleSpeechStop()
       }
 
-      // v2.1: Ignore Realtime responses - Supervisor is the only brain
+      // v2.1: Ignore Realtime responses - Concierge is the only brain
       if (t.startsWith('response.')) {
         logger.warn(`[useJarvisApp] Ignoring Realtime response event: ${t}`)
         return
@@ -744,8 +744,8 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
     messageId?: string,
     options?: { model?: string; reasoning_effort?: string }
   ) => {
-    if (!supervisorChatRef.current) {
-      throw new Error('Supervisor chat not initialized')
+    if (!conciergeChatRef.current) {
+      throw new Error('Concierge chat not initialized')
     }
 
     const msgId = messageId || uuid()
@@ -765,14 +765,14 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
     const reasoning_effort = options?.reasoning_effort || prefs.reasoning_effort
 
     logger.info(`[useJarvisApp] Sending text, model: ${model}, messageId: ${msgId}`)
-    await supervisorChatRef.current.sendMessage(text, msgId, { model, reasoning_effort })
+    await conciergeChatRef.current.sendMessage(text, msgId, { model, reasoning_effort })
   }, [state.bootstrap])
 
   const clearHistory = useCallback(async () => {
-    if (!supervisorChatRef.current) return
+    if (!conciergeChatRef.current) return
 
     try {
-      await supervisorChatRef.current.clearHistory()
+      await conciergeChatRef.current.clearHistory()
       dispatch({ type: 'SET_MESSAGES', messages: [] })
       logger.info('[useJarvisApp] History cleared')
     } catch (error) {

@@ -1,6 +1,6 @@
-"""Tests for LangGraph-free supervisor resume path.
+"""Tests for LangGraph-free concierge resume path.
 
-These tests verify the new resume implementation that uses AgentRunner.run_continuation()
+These tests verify the new resume implementation that uses FicheRunner.run_continuation()
 instead of LangGraph's Command(resume=...) pattern. The default behavior now uses
 the LangGraph-free path.
 
@@ -8,7 +8,7 @@ Key behaviors tested:
 - Happy path: WAITING run resumes successfully
 - Concurrency: Only one resume succeeds when called concurrently
 - Error handling: Missing tool_call_id fails with proper events
-- Fallback: tool_call_id lookup via supervisor_run_id when job_id not passed
+- Fallback: tool_call_id lookup via concierge_course_id when job_id not passed
 - Idempotency: Duplicate ToolMessages prevented on retry
 """
 
@@ -25,12 +25,12 @@ from langchain_core.messages import HumanMessage
 from langchain_core.messages import ToolMessage
 
 from zerg.crud import crud
-from zerg.models.enums import RunStatus
-from zerg.models.enums import RunTrigger
-from zerg.models.models import AgentRun
+from zerg.models.enums import CourseStatus
+from zerg.models.enums import CourseTrigger
+from zerg.models.models import Course
 from zerg.models.models import ThreadMessage
-from zerg.models.models import WorkerJob
-from zerg.services.supervisor_service import SupervisorService
+from zerg.models.models import CommisJob
+from zerg.services.concierge_service import ConciergeService
 
 
 @pytest.mark.timeout(30)
@@ -38,14 +38,14 @@ class TestLangGraphFreeResumeHappyPath:
     """Test basic happy path for LangGraph-free resume."""
 
     @pytest.mark.asyncio
-    async def test_resume_success_with_worker_job(self, db_session, test_user, sample_agent):
-        """Test that resume succeeds when WorkerJob has tool_call_id."""
-        from zerg.services.worker_resume import _continue_supervisor_langgraph_free
+    async def test_resume_success_with_commis_job(self, db_session, test_user, sample_fiche):
+        """Test that resume succeeds when CommisJob has tool_call_id."""
+        from zerg.services.commis_resume import _continue_concierge_langgraph_free
 
         # Create thread with AIMessage containing tool_calls
         thread = crud.create_thread(
             db=db_session,
-            agent_id=sample_agent.id,
+            fiche_id=sample_fiche.id,
             title="Test thread",
             active=True,
         )
@@ -81,21 +81,21 @@ class TestLangGraphFreeResumeHappyPath:
         db_session.commit()
 
         # Create WAITING run
-        waiting_run = AgentRun(
-            agent_id=sample_agent.id,
+        waiting_run = Course(
+            fiche_id=sample_fiche.id,
             thread_id=thread.id,
-            status=RunStatus.WAITING,
-            trigger=RunTrigger.API,
+            status=CourseStatus.WAITING,
+            trigger=CourseTrigger.API,
             assistant_message_id=str(uuid.uuid4()),
         )
         db_session.add(waiting_run)
         db_session.commit()
         db_session.refresh(waiting_run)
 
-        # Create WorkerJob with tool_call_id
-        job = WorkerJob(
+        # Create CommisJob with tool_call_id
+        job = CommisJob(
             owner_id=test_user.id,
-            supervisor_run_id=waiting_run.id,
+            concierge_course_id=waiting_run.id,
             tool_call_id=tool_call_id,
             task="Test task",
             model="gpt-mock",
@@ -105,22 +105,22 @@ class TestLangGraphFreeResumeHappyPath:
         db_session.commit()
         db_session.refresh(job)
 
-        # Mock AgentRunner.run_continuation to return success
+        # Mock FicheRunner.run_continuation to return success
         mock_created_rows = [
             MagicMock(role="assistant", content="Task completed successfully"),
         ]
 
-        async def mock_run_continuation(self, db, thread, tool_call_id, tool_result, run_id, trace_id=None):
+        async def mock_run_continuation(self, db, thread, tool_call_id, tool_result, course_id, trace_id=None):
             return mock_created_rows
 
         with patch(
-            "zerg.managers.agent_runner.AgentRunner.run_continuation",
+            "zerg.managers.fiche_runner.FicheRunner.run_continuation",
             new=mock_run_continuation,
         ):
-            result = await _continue_supervisor_langgraph_free(
+            result = await _continue_concierge_langgraph_free(
                 db=db_session,
-                run_id=waiting_run.id,
-                worker_result="Worker completed: test result",
+                course_id=waiting_run.id,
+                commis_result="Commis completed: test result",
                 job_id=job.id,
             )
 
@@ -131,36 +131,36 @@ class TestLangGraphFreeResumeHappyPath:
 
         # Verify run status
         db_session.refresh(waiting_run)
-        assert waiting_run.status == RunStatus.SUCCESS
+        assert waiting_run.status == CourseStatus.SUCCESS
 
     @pytest.mark.asyncio
-    async def test_resume_skipped_when_not_waiting(self, db_session, test_user, sample_agent):
+    async def test_resume_skipped_when_not_waiting(self, db_session, test_user, sample_fiche):
         """Test that resume is skipped when run is not WAITING."""
-        from zerg.services.worker_resume import _continue_supervisor_langgraph_free
+        from zerg.services.commis_resume import _continue_concierge_langgraph_free
 
         # Create thread
         thread = crud.create_thread(
             db=db_session,
-            agent_id=sample_agent.id,
+            fiche_id=sample_fiche.id,
             title="Test thread",
             active=True,
         )
 
         # Create SUCCESS run (not WAITING)
-        success_run = AgentRun(
-            agent_id=sample_agent.id,
+        success_run = Course(
+            fiche_id=sample_fiche.id,
             thread_id=thread.id,
-            status=RunStatus.SUCCESS,
-            trigger=RunTrigger.API,
+            status=CourseStatus.SUCCESS,
+            trigger=CourseTrigger.API,
         )
         db_session.add(success_run)
         db_session.commit()
         db_session.refresh(success_run)
 
-        result = await _continue_supervisor_langgraph_free(
+        result = await _continue_concierge_langgraph_free(
             db=db_session,
-            run_id=success_run.id,
-            worker_result="Worker result",
+            course_id=success_run.id,
+            commis_result="Commis result",
         )
 
         # Verify skipped
@@ -177,12 +177,12 @@ class TestLangGraphFreeResumeConcurrency:
     async def test_concurrent_resume_only_runs_once(self, db_session, test_user):
         """Concurrent resume attempts should only resume once (idempotent)."""
         from zerg.database import get_session_factory
-        from zerg.services.worker_resume import resume_supervisor_with_worker_result
+        from zerg.services.commis_resume import resume_concierge_with_commis_result
 
-        # Seed supervisor agent/thread once
-        bootstrap = SupervisorService(db_session)
-        agent = bootstrap.get_or_create_supervisor_agent(test_user.id)
-        thread = bootstrap.get_or_create_supervisor_thread(test_user.id, agent)
+        # Seed concierge fiche/thread once
+        bootstrap = ConciergeService(db_session)
+        fiche = bootstrap.get_or_create_concierge_fiche(test_user.id)
+        thread = bootstrap.get_or_create_concierge_thread(test_user.id, fiche)
 
         # Add one user message so DB conversation length is non-zero
         crud.create_thread_message(
@@ -214,21 +214,21 @@ class TestLangGraphFreeResumeConcurrency:
         db_session.commit()
 
         # Create WAITING run
-        run = AgentRun(
-            agent_id=agent.id,
+        run = Course(
+            fiche_id=fiche.id,
             thread_id=thread.id,
-            status=RunStatus.WAITING,
-            trigger=RunTrigger.API,
+            status=CourseStatus.WAITING,
+            trigger=CourseTrigger.API,
             assistant_message_id=str(uuid.uuid4()),
         )
         db_session.add(run)
         db_session.commit()
         db_session.refresh(run)
 
-        # Create WorkerJob with tool_call_id
-        job = WorkerJob(
+        # Create CommisJob with tool_call_id
+        job = CommisJob(
             owner_id=test_user.id,
-            supervisor_run_id=run.id,
+            concierge_course_id=run.id,
             tool_call_id=tool_call_id,
             task="Test task",
             model="gpt-mock",
@@ -241,7 +241,7 @@ class TestLangGraphFreeResumeConcurrency:
         # Track how many times run_continuation is called
         call_count = 0
 
-        async def mock_run_continuation(self, db, thread, tool_call_id, tool_result, run_id, trace_id=None):
+        async def mock_run_continuation(self, db, thread, tool_call_id, tool_result, course_id, trace_id=None):
             nonlocal call_count
             call_count += 1
             await asyncio.sleep(0.05)  # Simulate some work
@@ -254,12 +254,12 @@ class TestLangGraphFreeResumeConcurrency:
 
         try:
             with patch(
-                "zerg.managers.agent_runner.AgentRunner.run_continuation",
+                "zerg.managers.fiche_runner.FicheRunner.run_continuation",
                 new=mock_run_continuation,
             ):
                 r1, r2 = await asyncio.gather(
-                    resume_supervisor_with_worker_result(db=db1, run_id=run.id, worker_result="a", job_id=job.id),
-                    resume_supervisor_with_worker_result(db=db2, run_id=run.id, worker_result="b", job_id=job.id),
+                    resume_concierge_with_commis_result(db=db1, course_id=run.id, commis_result="a", job_id=job.id),
+                    resume_concierge_with_commis_result(db=db2, course_id=run.id, commis_result="b", job_id=job.id),
                 )
         finally:
             db1.close()
@@ -295,42 +295,42 @@ class TestLangGraphFreeResumeErrorHandling:
     """Test error handling in LangGraph-free resume path."""
 
     @pytest.mark.asyncio
-    async def test_resume_fails_when_no_tool_call_id(self, db_session, test_user, sample_agent):
+    async def test_resume_fails_when_no_tool_call_id(self, db_session, test_user, sample_fiche):
         """Test that resume fails with proper events when tool_call_id is missing."""
-        from zerg.services.worker_resume import _continue_supervisor_langgraph_free
+        from zerg.services.commis_resume import _continue_concierge_langgraph_free
 
         # Create thread
         thread = crud.create_thread(
             db=db_session,
-            agent_id=sample_agent.id,
+            fiche_id=sample_fiche.id,
             title="Test thread",
             active=True,
         )
 
-        # Create WAITING run WITHOUT a WorkerJob
-        waiting_run = AgentRun(
-            agent_id=sample_agent.id,
+        # Create WAITING run WITHOUT a CommisJob
+        waiting_run = Course(
+            fiche_id=sample_fiche.id,
             thread_id=thread.id,
-            status=RunStatus.WAITING,
-            trigger=RunTrigger.API,
+            status=CourseStatus.WAITING,
+            trigger=CourseTrigger.API,
             assistant_message_id=str(uuid.uuid4()),
         )
         db_session.add(waiting_run)
         db_session.commit()
         db_session.refresh(waiting_run)
 
-        # Mock emit_run_event to track calls (patch where it's used)
+        # Mock emit_course_event to track calls (patch where it's used)
         events_emitted = []
 
-        async def mock_emit_run_event(db, run_id, event_type, payload):
+        async def mock_emit_course_event(db, course_id, event_type, payload):
             events_emitted.append({"type": event_type, "payload": payload})
 
-        with patch("zerg.services.event_store.emit_run_event", side_effect=mock_emit_run_event):
-            result = await _continue_supervisor_langgraph_free(
+        with patch("zerg.services.event_store.emit_course_event", side_effect=mock_emit_course_event):
+            result = await _continue_concierge_langgraph_free(
                 db=db_session,
-                run_id=waiting_run.id,
-                worker_result="Worker result",
-                job_id=None,  # No job_id, no WorkerJob
+                course_id=waiting_run.id,
+                commis_result="Commis result",
+                job_id=None,  # No job_id, no CommisJob
             )
 
         # Verify error result
@@ -340,22 +340,22 @@ class TestLangGraphFreeResumeErrorHandling:
 
         # Verify run status
         db_session.refresh(waiting_run)
-        assert waiting_run.status == RunStatus.FAILED
+        assert waiting_run.status == CourseStatus.FAILED
 
         # Verify events emitted
         event_types = [e["type"] for e in events_emitted]
         assert "error" in event_types, "Error event should be emitted"
-        assert "run_updated" in event_types, "run_updated event should be emitted"
+        assert "course_updated" in event_types, "course_updated event should be emitted"
 
     @pytest.mark.asyncio
-    async def test_tool_call_id_fallback_lookup(self, db_session, test_user, sample_agent):
-        """Test that tool_call_id is found via supervisor_run_id when job_id not passed."""
-        from zerg.services.worker_resume import _continue_supervisor_langgraph_free
+    async def test_tool_call_id_fallback_lookup(self, db_session, test_user, sample_fiche):
+        """Test that tool_call_id is found via concierge_course_id when job_id not passed."""
+        from zerg.services.commis_resume import _continue_concierge_langgraph_free
 
         # Create thread with AIMessage containing tool_calls
         thread = crud.create_thread(
             db=db_session,
-            agent_id=sample_agent.id,
+            fiche_id=sample_fiche.id,
             title="Test thread",
             active=True,
         )
@@ -390,21 +390,21 @@ class TestLangGraphFreeResumeErrorHandling:
         db_session.commit()
 
         # Create WAITING run
-        waiting_run = AgentRun(
-            agent_id=sample_agent.id,
+        waiting_run = Course(
+            fiche_id=sample_fiche.id,
             thread_id=thread.id,
-            status=RunStatus.WAITING,
-            trigger=RunTrigger.API,
+            status=CourseStatus.WAITING,
+            trigger=CourseTrigger.API,
             assistant_message_id=str(uuid.uuid4()),
         )
         db_session.add(waiting_run)
         db_session.commit()
         db_session.refresh(waiting_run)
 
-        # Create WorkerJob with supervisor_run_id (but don't pass job_id to resume)
-        job = WorkerJob(
+        # Create CommisJob with concierge_course_id (but don't pass job_id to resume)
+        job = CommisJob(
             owner_id=test_user.id,
-            supervisor_run_id=waiting_run.id,
+            concierge_course_id=waiting_run.id,
             tool_call_id=tool_call_id,
             task="Test task",
             model="gpt-mock",
@@ -414,22 +414,22 @@ class TestLangGraphFreeResumeErrorHandling:
         db_session.commit()
         db_session.refresh(job)
 
-        # Mock AgentRunner.run_continuation
+        # Mock FicheRunner.run_continuation
         mock_created_rows = [MagicMock(role="assistant", content="Done")]
 
-        async def mock_run_continuation(self, db, thread, tool_call_id, tool_result, run_id, trace_id=None):
+        async def mock_run_continuation(self, db, thread, tool_call_id, tool_result, course_id, trace_id=None):
             return mock_created_rows
 
         with patch(
-            "zerg.managers.agent_runner.AgentRunner.run_continuation",
+            "zerg.managers.fiche_runner.FicheRunner.run_continuation",
             new=mock_run_continuation,
         ):
             # Call WITHOUT job_id - should use fallback lookup
-            result = await _continue_supervisor_langgraph_free(
+            result = await _continue_concierge_langgraph_free(
                 db=db_session,
-                run_id=waiting_run.id,
-                worker_result="Worker completed",
-                job_id=None,  # Not passed - fallback to supervisor_run_id lookup
+                course_id=waiting_run.id,
+                commis_result="Commis completed",
+                job_id=None,  # Not passed - fallback to concierge_course_id lookup
             )
 
         # Verify success (fallback worked)
@@ -439,20 +439,20 @@ class TestLangGraphFreeResumeErrorHandling:
 
 @pytest.mark.timeout(30)
 class TestRunContinuationIdempotency:
-    """Test AgentRunner.run_continuation() idempotency."""
+    """Test FicheRunner.run_continuation() idempotency."""
 
     @pytest.mark.asyncio
-    async def test_run_continuation_creates_tool_message(self, db_session, test_user, sample_agent):
-        """Test that run_continuation creates ToolMessage for worker result."""
+    async def test_run_continuation_creates_tool_message(self, db_session, test_user, sample_fiche):
+        """Test that run_continuation creates ToolMessage for commis result."""
         from langchain_core.messages import SystemMessage as LcSystemMessage
 
-        from zerg.managers.agent_runner import AgentRunner
-        from zerg.services.supervisor_react_engine import SupervisorResult
+        from zerg.managers.fiche_runner import FicheRunner
+        from zerg.services.concierge_react_engine import ConciergeResult
 
         # Create thread with AIMessage containing pending tool_call
         thread = crud.create_thread(
             db=db_session,
-            agent_id=sample_agent.id,
+            fiche_id=sample_fiche.id,
             title="Test thread",
             active=True,
         )
@@ -486,15 +486,15 @@ class TestRunContinuationIdempotency:
         }
         db_session.commit()
 
-        # Mock run_supervisor_loop to return messages including input + new response
+        # Mock run_concierge_loop to return messages including input + new response
         # The result messages should include all input messages + new AIMessage
-        mock_result = SupervisorResult(
+        mock_result = ConciergeResult(
             messages=[
                 LcSystemMessage(content="system"),
                 LcSystemMessage(content="context"),
                 HumanMessage(content="Run a task"),
                 AIMessage(content="", tool_calls=[{"id": tool_call_id, "name": "spawn_commis", "args": {"task": "test"}}]),
-                ToolMessage(content="Worker completed:\n\ntest result", tool_call_id=tool_call_id, name="spawn_commis"),
+                ToolMessage(content="Commis completed:\n\ntest result", tool_call_id=tool_call_id, name="spawn_commis"),
                 AIMessage(content="Task completed successfully."),
             ],
             usage={"total_tokens": 100},
@@ -502,16 +502,16 @@ class TestRunContinuationIdempotency:
         )
 
         with patch(
-            "zerg.services.supervisor_react_engine.run_supervisor_loop",
+            "zerg.services.concierge_react_engine.run_concierge_loop",
             new=AsyncMock(return_value=mock_result),
         ):
-            runner = AgentRunner(sample_agent)
+            runner = FicheRunner(sample_fiche)
             created_rows = await runner.run_continuation(
                 db=db_session,
                 thread=thread,
                 tool_call_id=tool_call_id,
-                tool_result="Worker completed: test result",
-                run_id=123,
+                tool_result="Commis completed: test result",
+                course_id=123,
             )
 
         # Verify ToolMessage was created in the database
@@ -525,23 +525,23 @@ class TestRunContinuationIdempotency:
         )
         assert len(tool_msgs) >= 1, "ToolMessage should be created"
 
-        # Verify at least one tool message contains our worker result
-        found_worker_result = any(
-            "Worker completed" in (msg.content or "")
+        # Verify at least one tool message contains our commis result
+        found_commis_result = any(
+            "Commis completed" in (msg.content or "")
             for msg in tool_msgs
         )
-        assert found_worker_result, "Should find ToolMessage with worker result content"
+        assert found_commis_result, "Should find ToolMessage with commis result content"
 
     @pytest.mark.asyncio
-    async def test_run_continuation_idempotent_tool_message(self, db_session, test_user, sample_agent):
+    async def test_run_continuation_idempotent_tool_message(self, db_session, test_user, sample_fiche):
         """Test that run_continuation doesn't create duplicate ToolMessage."""
-        from zerg.managers.agent_runner import AgentRunner
-        from zerg.services.supervisor_react_engine import SupervisorResult
+        from zerg.managers.fiche_runner import FicheRunner
+        from zerg.services.concierge_react_engine import ConciergeResult
 
         # Create thread with AIMessage + existing ToolMessage
         thread = crud.create_thread(
             db=db_session,
-            agent_id=sample_agent.id,
+            fiche_id=sample_fiche.id,
             title="Test thread",
             active=True,
         )
@@ -579,7 +579,7 @@ class TestRunContinuationIdempotency:
             db=db_session,
             thread_id=thread.id,
             role="tool",
-            content="Worker completed:\n\nFirst result",
+            content="Commis completed:\n\nFirst result",
             processed=True,
         )
         existing_tool_msg.message_metadata = {
@@ -588,9 +588,9 @@ class TestRunContinuationIdempotency:
         }
         db_session.commit()
 
-        # Mock run_supervisor_loop to return a simple result
-        # Patch where it's defined in supervisor_react_engine module
-        mock_result = SupervisorResult(
+        # Mock run_concierge_loop to return a simple result
+        # Patch where it's defined in concierge_react_engine module
+        mock_result = ConciergeResult(
             messages=[
                 AIMessage(content="Task completed successfully."),
             ],
@@ -599,16 +599,16 @@ class TestRunContinuationIdempotency:
         )
 
         with patch(
-            "zerg.services.supervisor_react_engine.run_supervisor_loop",
+            "zerg.services.concierge_react_engine.run_concierge_loop",
             new=AsyncMock(return_value=mock_result),
         ):
-            runner = AgentRunner(sample_agent)
+            runner = FicheRunner(sample_fiche)
             created_rows = await runner.run_continuation(
                 db=db_session,
                 thread=thread,
                 tool_call_id=tool_call_id,
-                tool_result="Worker completed: second result (should be ignored)",
-                run_id=123,
+                tool_result="Commis completed: second result (should be ignored)",
+                course_id=123,
             )
 
         # Verify no duplicate ToolMessage

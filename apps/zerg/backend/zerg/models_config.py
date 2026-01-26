@@ -115,8 +115,8 @@ TIER_3: str = _TIERS["TIER_3"]  # Basic, cheapest (gpt-5-nano)
 # MODEL CACHE - Built at import time
 # =============================================================================
 
-DEFAULT_MODEL_ID: str = _TIERS[_DEFAULTS["agent"]]
-DEFAULT_WORKER_MODEL_ID: str = _TIERS[_DEFAULTS["worker"]]
+DEFAULT_MODEL_ID: str = _TIERS[_DEFAULTS["fiche"]]
+DEFAULT_COMMIS_MODEL_ID: str = _TIERS[_DEFAULTS["commis"]]
 TEST_MODEL_ID: str = _TIERS[_DEFAULTS["test"]]
 
 AVAILABLE_MODELS: List[ModelConfig] = []
@@ -150,10 +150,10 @@ def get_model_for_use_case(use_case: str) -> str:
     Get the appropriate model ID for a use case.
 
     Use cases (defined in config/models.json):
-    - agent_conversation: TIER_1 (quality critical)
+    - fiche_conversation: TIER_1 (quality critical)
     - routing_decision: TIER_1 (small output but high-stakes decision)
     - tool_selection: TIER_1 (quality critical)
-    - worker_task: TIER_2 (cost-sensitive batch work)
+    - commis_task: TIER_2 (cost-sensitive batch work)
     - summarization: TIER_2 (cost-sensitive)
     - bulk_classification: TIER_3 (high volume, simple)
     - ci_test: TIER_3 (fast/cheap for CI)
@@ -162,26 +162,6 @@ def get_model_for_use_case(use_case: str) -> str:
     if not tier:
         raise ValueError(f"Unknown use case: {use_case}. Valid: {list(_USE_CASES.keys())}")
     return _TIERS[tier]
-
-
-# =============================================================================
-# BACKWARDS COMPATIBLE ACCESSORS
-# =============================================================================
-
-
-def get_default_model_id_str() -> str:
-    """Get the default model ID as a string."""
-    return DEFAULT_MODEL_ID
-
-
-def get_default_worker_model_id_str() -> str:
-    """Get the default worker model ID as a string."""
-    return DEFAULT_WORKER_MODEL_ID
-
-
-def get_test_model_id_str() -> str:
-    """Get the test model ID as a string."""
-    return TEST_MODEL_ID
 
 
 # =============================================================================

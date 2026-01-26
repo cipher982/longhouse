@@ -100,8 +100,8 @@ class RunnerJobResponse(BaseModel):
 
     id: str  # UUID
     owner_id: int
-    worker_id: Optional[str] = None
-    run_id: Optional[str] = None
+    commis_id: Optional[str] = None
+    course_id: Optional[str] = None
     runner_id: int
     command: str
     timeout_secs: int

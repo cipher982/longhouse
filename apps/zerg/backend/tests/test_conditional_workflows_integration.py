@@ -16,7 +16,7 @@ from zerg.schemas.workflow import WorkflowNode
 from zerg.services.workflow_engine import workflow_engine
 
 
-def create_conditional_workflow_data(agent_id: int) -> WorkflowData:
+def create_conditional_workflow_data(fiche_id: int) -> WorkflowData:
     """Create a test workflow with conditional logic - same as original test."""
     return WorkflowData(
         nodes=[
@@ -34,38 +34,38 @@ def create_conditional_workflow_data(agent_id: int) -> WorkflowData:
                 position=Position(x=300, y=100),
                 config={"condition": "${tool-1} > 50", "condition_type": "expression"},
             ),
-            # Agent node for "high" branch (true)
+            # Fiche node for "high" branch (true)
             WorkflowNode(
-                id="agent-high",
-                type="agent",
+                id="fiche-high",
+                type="fiche",
                 position=Position(x=500, y=50),
-                config={"agent_id": agent_id, "message": "The number ${tool-1} is greater than 50!"},
+                config={"fiche_id": fiche_id, "message": "The number ${tool-1} is greater than 50!"},
             ),
-            # Agent node for "low" branch (false)
+            # Fiche node for "low" branch (false)
             WorkflowNode(
-                id="agent-low",
-                type="agent",
+                id="fiche-low",
+                type="fiche",
                 position=Position(x=500, y=150),
-                config={"agent_id": agent_id, "message": "The number ${tool-1} is 50 or less."},
+                config={"fiche_id": fiche_id, "message": "The number ${tool-1} is 50 or less."},
             ),
         ],
         edges=[
             WorkflowEdge(from_node_id="tool-1", to_node_id="conditional-1", config={}),
-            WorkflowEdge(from_node_id="conditional-1", to_node_id="agent-high", config={"branch": "true"}),
-            WorkflowEdge(from_node_id="conditional-1", to_node_id="agent-low", config={"branch": "false"}),
+            WorkflowEdge(from_node_id="conditional-1", to_node_id="fiche-high", config={"branch": "true"}),
+            WorkflowEdge(from_node_id="conditional-1", to_node_id="fiche-low", config={"branch": "false"}),
         ],
     )
 
 
 @pytest.mark.asyncio
-async def test_conditional_workflow_high_branch_integration(db, test_user, sample_agent):
+async def test_conditional_workflow_high_branch_integration(db, test_user, sample_fiche):
     """
     REAL integration test - mock only LLM API, run everything else real.
 
     This tests:
     - Real tool execution (mocked for determinism)
     - Real conditional logic
-    - Real AgentRunner with real ThreadMessage handling
+    - Real FicheRunner with real ThreadMessage handling
     - Real database operations
     - Real serialization/deserialization
     """
@@ -79,27 +79,27 @@ async def test_conditional_workflow_high_branch_integration(db, test_user, sampl
         mock_resolver_instance.get_tool = lambda name: mock_tool if name == "random_number" else None
         mock_resolver.return_value = mock_resolver_instance
 
-        # Mock the supervisor ReAct loop to return input messages + response
-        from zerg.services.supervisor_react_engine import SupervisorResult
+        # Mock the concierge ReAct loop to return input messages + response
+        from zerg.services.concierge_react_engine import ConciergeResult
 
-        async def mock_run_supervisor_loop(messages, **kwargs):
-            """Mock the supervisor loop to return input messages + new AIMessage."""
+        async def mock_run_concierge_loop(messages, **kwargs):
+            """Mock the concierge loop to return input messages + new AIMessage."""
             from langchain_core.messages import AIMessage
 
-            # Return ALL messages (input + new) as real supervisor loop does
-            return SupervisorResult(
+            # Return ALL messages (input + new) as real concierge loop does
+            return ConciergeResult(
                 messages=list(messages) + [AIMessage(content="The number 75 is indeed greater than 50!")],
                 usage={"total_tokens": 10},
                 interrupted=False,
             )
 
         with patch(
-            "zerg.services.supervisor_react_engine.run_supervisor_loop",
-            new=mock_run_supervisor_loop,
+            "zerg.services.concierge_react_engine.run_concierge_loop",
+            new=mock_run_concierge_loop,
         ):
 
             # Create and execute workflow - everything else is REAL
-            workflow_data = create_conditional_workflow_data(sample_agent.id)
+            workflow_data = create_conditional_workflow_data(sample_fiche.id)
             workflow = Workflow(
                 owner_id=test_user.id,
                 name="Integration Test Conditional Workflow",
@@ -135,12 +135,12 @@ async def test_conditional_workflow_high_branch_integration(db, test_user, sampl
 
             node_states = db.query(NodeExecutionState).filter_by(workflow_execution_id=execution_id).all()
 
-            # Should have executed: tool-1, conditional-1, agent-high (NOT agent-low)
+            # Should have executed: tool-1, conditional-1, fiche-high (NOT fiche-low)
             executed_nodes = {state.node_id for state in node_states}
             assert "tool-1" in executed_nodes
             assert "conditional-1" in executed_nodes
-            assert "agent-high" in executed_nodes
-            assert "agent-low" not in executed_nodes  # Should NOT execute low branch
+            assert "fiche-high" in executed_nodes
+            assert "fiche-low" not in executed_nodes  # Should NOT execute low branch
 
             # All executed nodes should be completed
             for state in node_states:
@@ -148,12 +148,12 @@ async def test_conditional_workflow_high_branch_integration(db, test_user, sampl
                 assert state.result == "success"
                 assert state.error_message is None
 
-            # REAL agent execution with REAL ThreadMessage creation and serialization
-            agent_state = next(s for s in node_states if s.node_id == "agent-high")
-            assert agent_state.output is not None
+            # REAL fiche execution with REAL ThreadMessage creation and serialization
+            fiche_state = next(s for s in node_states if s.node_id == "fiche-high")
+            assert fiche_state.output is not None
 
             # This is the EXACT code path that was failing in production
-            messages = agent_state.output["value"]["messages"]
+            messages = fiche_state.output["value"]["messages"]
             assert len(messages) > 0
 
             # Verify REAL ThreadMessage serialization (the bug that was missed)
@@ -174,7 +174,7 @@ async def test_conditional_workflow_high_branch_integration(db, test_user, sampl
 
             thread = db.query(Thread).filter_by(id=thread_id).first()
             assert thread is not None
-            assert thread.agent_id == sample_agent.id
+            assert thread.fiche_id == sample_fiche.id
 
             # Check that real ThreadMessage was created
             thread_messages = db.query(ThreadMessage).filter_by(thread_id=thread_id).all()
@@ -189,7 +189,7 @@ async def test_conditional_workflow_high_branch_integration(db, test_user, sampl
 
 
 @pytest.mark.asyncio
-async def test_conditional_workflow_low_branch_integration(db, test_user, sample_agent):
+async def test_conditional_workflow_low_branch_integration(db, test_user, sample_fiche):
     """Test low branch with real integration."""
 
     # Mock tool to return low value
@@ -201,27 +201,27 @@ async def test_conditional_workflow_low_branch_integration(db, test_user, sample
         mock_resolver_instance.get_tool = lambda name: mock_tool if name == "random_number" else None
         mock_resolver.return_value = mock_resolver_instance
 
-        # Mock the supervisor ReAct loop to return input messages + response
-        from zerg.services.supervisor_react_engine import SupervisorResult
+        # Mock the concierge ReAct loop to return input messages + response
+        from zerg.services.concierge_react_engine import ConciergeResult
 
-        async def mock_run_supervisor_loop(messages, **kwargs):
-            """Mock the supervisor loop to return input messages + new AIMessage."""
+        async def mock_run_concierge_loop(messages, **kwargs):
+            """Mock the concierge loop to return input messages + new AIMessage."""
             from langchain_core.messages import AIMessage
 
-            # Return ALL messages (input + new) as real supervisor loop does
-            return SupervisorResult(
+            # Return ALL messages (input + new) as real concierge loop does
+            return ConciergeResult(
                 messages=list(messages) + [AIMessage(content="The number 25 is 50 or less.")],
                 usage={"total_tokens": 10},
                 interrupted=False,
             )
 
         with patch(
-            "zerg.services.supervisor_react_engine.run_supervisor_loop",
-            new=mock_run_supervisor_loop,
+            "zerg.services.concierge_react_engine.run_concierge_loop",
+            new=mock_run_concierge_loop,
         ):
 
             # Execute workflow
-            workflow_data = create_conditional_workflow_data(sample_agent.id)
+            workflow_data = create_conditional_workflow_data(sample_fiche.id)
             workflow = Workflow(
                 owner_id=test_user.id,
                 name="Integration Test Low Branch",
@@ -242,15 +242,15 @@ async def test_conditional_workflow_low_branch_integration(db, test_user, sample
             executed_nodes = {state.node_id for state in node_states}
             assert "tool-1" in executed_nodes
             assert "conditional-1" in executed_nodes
-            assert "agent-low" in executed_nodes  # Should execute LOW branch
-            assert "agent-high" not in executed_nodes  # Should NOT execute high branch
+            assert "fiche-low" in executed_nodes  # Should execute LOW branch
+            assert "fiche-high" not in executed_nodes  # Should NOT execute high branch
 
             print("✅ Low branch integration test passed")
 
 
 @pytest.mark.asyncio
-async def test_agent_workflow_error_handling_integration(db, test_user, sample_agent):
-    """Test error handling with real services - no AgentRunner mocking."""
+async def test_fiche_workflow_error_handling_integration(db, test_user, sample_fiche):
+    """Test error handling with real services - no FicheRunner mocking."""
 
     # Create workflow that will cause an error (non-existent tool)
     workflow_data = WorkflowData(

@@ -2,7 +2,7 @@ import contextlib
 
 import pytest
 
-from tests.conftest import TEST_WORKER_MODEL
+from tests.conftest import TEST_COMMIS_MODEL
 from zerg.crud import crud
 from zerg.main import app
 
@@ -17,23 +17,23 @@ def _ensure_user_role(db_session, email: str, role: str):
     return user
 
 
-def _agent_and_thread(db_session, owner_id: int):
-    agent = crud.create_agent(
+def _fiche_and_thread(db_session, owner_id: int):
+    fiche = crud.create_fiche(
         db_session,
         owner_id=owner_id,
-        name="budget-agent",
+        name="budget-fiche",
         system_instructions="sys",
         task_instructions="task",
-        model=TEST_WORKER_MODEL,
+        model=TEST_COMMIS_MODEL,
         schedule=None,
         config={},
     )
     thread = crud.create_thread(
-        db=db_session, agent_id=agent.id, title="t", active=True, agent_state={}, memory_strategy="buffer"
+        db=db_session, fiche_id=fiche.id, title="t", active=True, fiche_state={}, memory_strategy="buffer"
     )
     # Seed one user message so run endpoint has work
     crud.create_thread_message(db=db_session, thread_id=thread.id, role="user", content="hi")
-    return agent, thread
+    return fiche, thread
 
 
 @pytest.mark.asyncio
@@ -48,12 +48,12 @@ async def test_user_budget_denies_when_exhausted(client, db_session, monkeypatch
 
     app.dependency_overrides[get_current_user] = lambda: user
     try:
-        agent, thread = _agent_and_thread(db_session, user.id)
+        fiche, thread = _fiche_and_thread(db_session, user.id)
 
         # Simulate prior usage today: $1.00 already used
-        run = crud.create_run(db_session, agent_id=agent.id, thread_id=thread.id, trigger="api", status="queued")
-        crud.mark_running(db_session, run.id)
-        crud.mark_finished(db_session, run.id, total_tokens=10, total_cost_usd=1.00)
+        run = crud.create_course(db_session, fiche_id=fiche.id, thread_id=thread.id, trigger="api", status="queued")
+        crud.mark_course_running(db_session, run.id)
+        crud.mark_course_finished(db_session, run.id, total_tokens=10, total_cost_usd=1.00)
 
         # Next run should be denied for non-admin
         r = client.post(f"/api/threads/{thread.id}/run")
@@ -74,12 +74,12 @@ async def test_admin_exempt_from_budgets(client, db_session, monkeypatch):
 
     app.dependency_overrides[get_current_user] = lambda: admin
     try:
-        agent, thread = _agent_and_thread(db_session, admin.id)
+        fiche, thread = _fiche_and_thread(db_session, admin.id)
 
         # Simulate high global usage ($2.00) which would otherwise block
-        run = crud.create_run(db_session, agent_id=agent.id, thread_id=thread.id, trigger="api", status="queued")
-        crud.mark_running(db_session, run.id)
-        crud.mark_finished(db_session, run.id, total_tokens=10, total_cost_usd=2.00)
+        run = crud.create_course(db_session, fiche_id=fiche.id, thread_id=thread.id, trigger="api", status="queued")
+        crud.mark_course_running(db_session, run.id)
+        crud.mark_course_finished(db_session, run.id, total_tokens=10, total_cost_usd=2.00)
 
         # Admin should still be allowed to run
         crud.create_thread_message(db=db_session, thread_id=thread.id, role="user", content="next")

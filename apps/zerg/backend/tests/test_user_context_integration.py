@@ -1,13 +1,13 @@
 """Integration tests for user context system.
 
 Tests the end-to-end flow of user context from API updates through
-to prompt composition in agents.
+to prompt composition in fiches.
 """
 
 import pytest
 
-from zerg.prompts.composer import build_supervisor_prompt
-from zerg.prompts.composer import build_worker_prompt
+from zerg.prompts.composer import build_concierge_prompt
+from zerg.prompts.composer import build_commis_prompt
 
 # ---------------------------------------------------------------------------
 # Test fixtures
@@ -44,22 +44,22 @@ def test_user_context():
 
 
 # ---------------------------------------------------------------------------
-# Supervisor prompt integration
+# Concierge prompt integration
 # ---------------------------------------------------------------------------
 
 
-class TestSupervisorPromptIntegration:
-    """Test that supervisor prompts include user context correctly."""
+class TestConciergePromptIntegration:
+    """Test that concierge prompts include user context correctly."""
 
-    def test_supervisor_prompt_includes_user_servers(self, db_session, test_user, test_user_context):
-        """Test that supervisor prompt includes user's servers."""
+    def test_concierge_prompt_includes_user_servers(self, db_session, test_user, test_user_context):
+        """Test that concierge prompt includes user's servers."""
         # Set user context with servers
         test_user.context = test_user_context
         db_session.commit()
         db_session.refresh(test_user)
 
-        # Build supervisor prompt
-        prompt = build_supervisor_prompt(test_user)
+        # Build concierge prompt
+        prompt = build_concierge_prompt(test_user)
 
         # Verify servers appear in prompt
         assert "clifford" in prompt
@@ -69,13 +69,13 @@ class TestSupervisorPromptIntegration:
         assert "Production VPS" in prompt
         assert "Home GPU server" in prompt
 
-    def test_supervisor_prompt_includes_user_info(self, db_session, test_user, test_user_context):
-        """Test that supervisor prompt includes user's personal info."""
+    def test_concierge_prompt_includes_user_info(self, db_session, test_user, test_user_context):
+        """Test that concierge prompt includes user's personal info."""
         test_user.context = test_user_context
         db_session.commit()
         db_session.refresh(test_user)
 
-        prompt = build_supervisor_prompt(test_user)
+        prompt = build_concierge_prompt(test_user)
 
         # Verify user info appears
         assert "Test User" in prompt
@@ -83,46 +83,46 @@ class TestSupervisorPromptIntegration:
         assert "San Francisco" in prompt
         assert "Prefer TypeScript" in prompt
 
-    def test_supervisor_prompt_includes_integrations(self, db_session, test_user, test_user_context):
-        """Test that supervisor prompt includes user's integrations."""
+    def test_concierge_prompt_includes_integrations(self, db_session, test_user, test_user_context):
+        """Test that concierge prompt includes user's integrations."""
         test_user.context = test_user_context
         db_session.commit()
         db_session.refresh(test_user)
 
-        prompt = build_supervisor_prompt(test_user)
+        prompt = build_concierge_prompt(test_user)
 
         # Verify integrations appear
         assert "Obsidian" in prompt
         assert "Google Calendar" in prompt
 
-    def test_supervisor_agent_uses_user_context(self, db_session, test_user, test_user_context):
-        """Test that created supervisor agent has user context in system_instructions."""
+    def test_concierge_fiche_uses_user_context(self, db_session, test_user, test_user_context):
+        """Test that created concierge fiche has user context in system_instructions."""
         # Set user context
         test_user.context = test_user_context
         db_session.commit()
 
-        # Create supervisor agent using the service
-        from zerg.services.supervisor_service import SupervisorService
+        # Create concierge fiche using the service
+        from zerg.services.concierge_service import ConciergeService
 
-        service = SupervisorService(db_session)
-        supervisor = service.get_or_create_supervisor_agent(test_user.id)
+        service = ConciergeService(db_session)
+        concierge = service.get_or_create_concierge_fiche(test_user.id)
 
-        # Verify agent was created
-        assert supervisor is not None
-        assert supervisor.name == "Supervisor"
+        # Verify fiche was created
+        assert concierge is not None
+        assert concierge.name == "Concierge"
 
         # Verify system instructions include user context
-        assert "clifford" in supervisor.system_instructions
-        assert "Test User" in supervisor.system_instructions
-        assert "Obsidian" in supervisor.system_instructions
+        assert "clifford" in concierge.system_instructions
+        assert "Test User" in concierge.system_instructions
+        assert "Obsidian" in concierge.system_instructions
 
-    def test_supervisor_prompt_updates_with_context_changes(self, db_session, test_user):
+    def test_concierge_prompt_updates_with_context_changes(self, db_session, test_user):
         """Test that prompt changes when context is updated."""
         # Initial context
         test_user.context = {"display_name": "Alice", "servers": []}
         db_session.commit()
 
-        prompt1 = build_supervisor_prompt(test_user)
+        prompt1 = build_concierge_prompt(test_user)
         assert "Alice" in prompt1
         assert "(No servers configured)" in prompt1
 
@@ -134,7 +134,7 @@ class TestSupervisorPromptIntegration:
         db_session.commit()
         db_session.refresh(test_user)
 
-        prompt2 = build_supervisor_prompt(test_user)
+        prompt2 = build_concierge_prompt(test_user)
         assert "Alice" in prompt2
         assert "new-server" in prompt2
         assert "(No servers configured)" not in prompt2
@@ -144,59 +144,59 @@ class TestSupervisorPromptIntegration:
 
 
 # ---------------------------------------------------------------------------
-# Worker prompt integration
+# Commis prompt integration
 # ---------------------------------------------------------------------------
 
 
-class TestWorkerPromptIntegration:
-    """Test that worker prompts include user context correctly."""
+class TestCommisPromptIntegration:
+    """Test that commis prompts include user context correctly."""
 
-    def test_worker_prompt_includes_user_servers(self, db_session, test_user, test_user_context):
-        """Test that worker prompt includes user's servers."""
+    def test_commis_prompt_includes_user_servers(self, db_session, test_user, test_user_context):
+        """Test that commis prompt includes user's servers."""
         test_user.context = test_user_context
         db_session.commit()
         db_session.refresh(test_user)
 
-        prompt = build_worker_prompt(test_user)
+        prompt = build_commis_prompt(test_user)
 
         # Verify servers appear in prompt
         assert "clifford" in prompt
         assert "5.161.97.53" in prompt
         assert "cube" in prompt
 
-    def test_worker_prompt_includes_user_context(self, db_session, test_user, test_user_context):
-        """Test that worker prompt includes user context."""
+    def test_commis_prompt_includes_user_context(self, db_session, test_user, test_user_context):
+        """Test that commis prompt includes user context."""
         test_user.context = test_user_context
         db_session.commit()
         db_session.refresh(test_user)
 
-        prompt = build_worker_prompt(test_user)
+        prompt = build_commis_prompt(test_user)
 
         # Verify user info appears
         assert "Test User" in prompt
         assert "developer" in prompt
 
     @pytest.mark.asyncio
-    async def test_worker_runner_uses_user_context(self, db_session, test_user, test_user_context):
-        """Test that worker runner includes user context in worker prompt."""
+    async def test_commis_runner_uses_user_context(self, db_session, test_user, test_user_context):
+        """Test that commis runner includes user context in commis prompt."""
 
         # Set user context
         test_user.context = test_user_context
         db_session.commit()
 
-        # Create a worker config and verify prompt building
-        # This tests that the worker system would get user context without actually running
-        worker_prompt = build_worker_prompt(test_user)
+        # Create a commis config and verify prompt building
+        # This tests that the commis system would get user context without actually running
+        commis_prompt = build_commis_prompt(test_user)
 
-        # Verify user context appears in worker prompt
-        assert "clifford" in worker_prompt
-        assert "5.161.97.53" in worker_prompt
-        assert "Test User" in worker_prompt
-        assert "developer" in worker_prompt
+        # Verify user context appears in commis prompt
+        assert "clifford" in commis_prompt
+        assert "5.161.97.53" in commis_prompt
+        assert "Test User" in commis_prompt
+        assert "developer" in commis_prompt
 
-        # Verify base worker template is present (now uses Commis terminology)
-        assert "Commis" in worker_prompt
-        assert "ssh_exec" in worker_prompt
+        # Verify base commis template is present (now uses Commis terminology)
+        assert "Commis" in commis_prompt
+        assert "ssh_exec" in commis_prompt
 
 
 # ---------------------------------------------------------------------------
@@ -205,12 +205,12 @@ class TestWorkerPromptIntegration:
 
 
 class TestEndToEndContextFlow:
-    """Test complete flow from API update to agent execution."""
+    """Test complete flow from API update to fiche execution."""
 
     def test_update_context_affects_new_prompts(self, client, db_session, test_user):
-        """Test that updating context via API affects new agent prompts."""
+        """Test that updating context via API affects new fiche prompts."""
         # Initial context (empty)
-        initial_prompt = build_supervisor_prompt(test_user)
+        initial_prompt = build_concierge_prompt(test_user)
         assert "(No servers configured)" in initial_prompt
 
         # Update context via API
@@ -227,7 +227,7 @@ class TestEndToEndContextFlow:
         db_session.refresh(test_user)
 
         # Build new prompt
-        new_prompt = build_supervisor_prompt(test_user)
+        new_prompt = build_concierge_prompt(test_user)
 
         # Verify context appears in new prompt
         assert "Bob" in new_prompt
@@ -238,8 +238,8 @@ class TestEndToEndContextFlow:
         # Prompts should be different
         assert initial_prompt != new_prompt
 
-    def test_context_persists_across_agent_creation(self, client, db_session, test_user):
-        """Test that context persists when creating multiple agents."""
+    def test_context_persists_across_fiche_creation(self, client, db_session, test_user):
+        """Test that context persists when creating multiple fiches."""
         # Set context via API
         context_data = {
             "context": {
@@ -252,8 +252,8 @@ class TestEndToEndContextFlow:
         # Refresh user
         db_session.refresh(test_user)
 
-        # Build supervisor prompt with current context
-        prompt1 = build_supervisor_prompt(test_user)
+        # Build concierge prompt with current context
+        prompt1 = build_concierge_prompt(test_user)
         assert "Charlie" in prompt1
         assert "server1" in prompt1
 
@@ -268,20 +268,20 @@ class TestEndToEndContextFlow:
         db_session.refresh(test_user)
 
         # Build another prompt with updated context
-        prompt2 = build_supervisor_prompt(test_user)
+        prompt2 = build_concierge_prompt(test_user)
         assert "Charlie" in prompt2
         assert "server2" in prompt2
 
         # Prompts should be different due to different servers
         assert prompt1 != prompt2
 
-    def test_patch_accumulates_context_for_agents(self, client, db_session, test_user):
-        """Test that PATCH accumulates context that appears in agents."""
+    def test_patch_accumulates_context_for_fiches(self, client, db_session, test_user):
+        """Test that PATCH accumulates context that appears in fiches."""
         # First patch - add user info
         client.patch("/api/users/me/context", json={"context": {"display_name": "Dana"}})
         db_session.refresh(test_user)
 
-        prompt1 = build_supervisor_prompt(test_user)
+        prompt1 = build_concierge_prompt(test_user)
         assert "Dana" in prompt1
 
         # Second patch - add servers
@@ -291,7 +291,7 @@ class TestEndToEndContextFlow:
         )
         db_session.refresh(test_user)
 
-        prompt2 = build_supervisor_prompt(test_user)
+        prompt2 = build_concierge_prompt(test_user)
         assert "Dana" in prompt2  # from first patch
         assert "server1" in prompt2  # from second patch
 
@@ -299,7 +299,7 @@ class TestEndToEndContextFlow:
         client.patch("/api/users/me/context", json={"context": {"integrations": {"notes": "Obsidian"}}})
         db_session.refresh(test_user)
 
-        prompt3 = build_supervisor_prompt(test_user)
+        prompt3 = build_concierge_prompt(test_user)
         assert "Dana" in prompt3
         assert "server1" in prompt3
         assert "Obsidian" in prompt3
@@ -327,8 +327,8 @@ class TestContextIsolation:
         db_session.commit()
 
         # Build prompts for each user
-        prompt1 = build_supervisor_prompt(test_user)
-        prompt2 = build_supervisor_prompt(other_user)
+        prompt1 = build_concierge_prompt(test_user)
+        prompt2 = build_concierge_prompt(other_user)
 
         # Each prompt should contain only their own context
         assert "User One" in prompt1
@@ -341,28 +341,28 @@ class TestContextIsolation:
         assert "User One" not in prompt2
         assert "user1-server" not in prompt2
 
-    def test_agents_inherit_owner_context(self, db_session, test_user, other_user):
-        """Test that agents get context from their owner, not other users."""
-        from zerg.services.supervisor_service import SupervisorService
+    def test_fiches_inherit_owner_context(self, db_session, test_user, other_user):
+        """Test that fiches get context from their owner, not other users."""
+        from zerg.services.concierge_service import ConciergeService
 
         # Set contexts
         test_user.context = {"display_name": "Owner One", "servers": [{"name": "server-a"}]}
         other_user.context = {"display_name": "Owner Two", "servers": [{"name": "server-b"}]}
         db_session.commit()
 
-        # Create agents for each user
-        service = SupervisorService(db_session)
-        agent1 = service.get_or_create_supervisor_agent(test_user.id)
-        agent2 = service.get_or_create_supervisor_agent(other_user.id)
+        # Create fiches for each user
+        service = ConciergeService(db_session)
+        fiche1 = service.get_or_create_concierge_fiche(test_user.id)
+        fiche2 = service.get_or_create_concierge_fiche(other_user.id)
 
-        # Each agent should have only their owner's context
-        assert "Owner One" in agent1.system_instructions
-        assert "server-a" in agent1.system_instructions
-        assert "Owner Two" not in agent1.system_instructions
+        # Each fiche should have only their owner's context
+        assert "Owner One" in fiche1.system_instructions
+        assert "server-a" in fiche1.system_instructions
+        assert "Owner Two" not in fiche1.system_instructions
 
-        assert "Owner Two" in agent2.system_instructions
-        assert "server-b" in agent2.system_instructions
-        assert "Owner One" not in agent2.system_instructions
+        assert "Owner Two" in fiche2.system_instructions
+        assert "server-b" in fiche2.system_instructions
+        assert "Owner One" not in fiche2.system_instructions
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +387,7 @@ class TestContextEdgeCases:
 
         # Verify it can be retrieved
         db_session.refresh(test_user)
-        prompt = build_supervisor_prompt(test_user)
+        prompt = build_concierge_prompt(test_user)
         assert "Large Context User" in prompt
         assert "server-0" in prompt
 
@@ -396,7 +396,7 @@ class TestContextEdgeCases:
         test_user.context = {}
         db_session.commit()
 
-        prompt = build_supervisor_prompt(test_user)
+        prompt = build_concierge_prompt(test_user)
 
         # Should have default messages
         assert "(No user context configured)" in prompt
@@ -411,7 +411,7 @@ class TestContextEdgeCases:
         test_user.context = None
         db_session.commit()
 
-        prompt = build_supervisor_prompt(test_user)
+        prompt = build_concierge_prompt(test_user)
 
         # Should use defaults
         assert "(No user context configured)" in prompt
@@ -436,7 +436,7 @@ class TestContextEdgeCases:
         assert response.status_code == 200
 
         db_session.refresh(test_user)
-        prompt = build_supervisor_prompt(test_user)
+        prompt = build_concierge_prompt(test_user)
 
         # Characters should be preserved
         assert "Test <User>" in prompt

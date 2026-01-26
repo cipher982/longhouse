@@ -5,9 +5,9 @@
  * Click to copy - use this ID with `make debug-trace TRACE=<id>` for debugging.
  *
  * The trace_id is:
- * - Set when a supervisor run starts
- * - Cleared after a run completes (with fade delay)
- * - Persistent during run for easy copying
+ * - Set when a concierge course starts
+ * - Cleared after a course completes (with fade delay)
+ * - Persistent during course for easy copying
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -29,9 +29,9 @@ export function TraceIdDisplay({ devOnly = true }: TraceIdDisplayProps): React.R
   const shouldRender = !(devOnly && !isDev);
 
   useEffect(() => {
-    // Subscribe to supervisor events
-    const unsubStarted = eventBus.on('supervisor:started', (data) => {
-      // Clear any pending fade timeout when a new run starts
+    // Subscribe to concierge events
+    const unsubStarted = eventBus.on('concierge:started', (data) => {
+      // Clear any pending fade timeout when a new course starts
       if (fadeTimeoutRef.current) {
         clearTimeout(fadeTimeoutRef.current);
         fadeTimeoutRef.current = null;
@@ -43,9 +43,9 @@ export function TraceIdDisplay({ devOnly = true }: TraceIdDisplayProps): React.R
       }
     });
 
-    const unsubComplete = eventBus.on('supervisor:complete', (data) => {
+    const unsubComplete = eventBus.on('concierge:complete', (data) => {
       // Keep trace_id visible for a moment after completion for easy copying
-      // Then fade out (but keep traceId for debugging until next run)
+      // Then fade out (but keep traceId for debugging until next course)
       if (data.traceId) {
         setTraceId(data.traceId);
       }
@@ -60,14 +60,14 @@ export function TraceIdDisplay({ devOnly = true }: TraceIdDisplayProps): React.R
       }, 5000);
     });
 
-    const unsubError = eventBus.on('supervisor:error', (data) => {
+    const unsubError = eventBus.on('concierge:error', (data) => {
       // Keep trace_id on errors - it's especially useful for debugging
       if (data.traceId) {
         setTraceId(data.traceId);
       }
     });
 
-    const unsubCleared = eventBus.on('supervisor:cleared', () => {
+    const unsubCleared = eventBus.on('concierge:cleared', () => {
       if (fadeTimeoutRef.current) {
         clearTimeout(fadeTimeoutRef.current);
         fadeTimeoutRef.current = null;

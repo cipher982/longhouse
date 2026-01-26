@@ -1,6 +1,6 @@
-"""Runner setup tools (Jarvis/Supervisor-facing).
+"""Runner setup tools (Jarvis/Concierge-facing).
 
-These tools are meant for the Supervisor/Jarvis path, not for workers.
+These tools are meant for the Concierge/Jarvis path, not for commis.
 They enable a chat-first onboarding flow where Jarvis can:
 - list existing runners
 - generate a short-lived enrollment token and show install commands
@@ -118,7 +118,7 @@ TOOLS: List[StructuredTool] = [
         name="runner_create_enroll_token",
         description=(
             "Create a one-time enrollment token and show setup commands to install a Runner. "
-            "Use this when the user needs to connect their infrastructure for agents to run commands."
+            "Use this when the user needs to connect their infrastructure for fiches to run commands."
         ),
     ),
 ]

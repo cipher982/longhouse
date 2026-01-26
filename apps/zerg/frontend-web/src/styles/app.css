@@ -13,7 +13,7 @@
 @import url("./css/util.css") layer(system);
 @import url("./css/buttons.css") layer(system);
 @import url("./css/forms.css") layer(system);
-@import url("./css/agent_shelf.css") layer(system);
+@import url("./css/fiche_shelf.css") layer(system);
 @import url("./css/canvas.css") layer(system);
 @import url("./css/dashboard.css") layer(system);
 @import url("./css/toast.css") layer(system);
@@ -41,7 +41,7 @@
 /* Pages */
 @import url("./profile-admin.css");
 @import url("./settings.css");
-@import url("./css/agent-settings.css");
+@import url("./css/fiche-settings.css");
 @import url("./marketing-mode.css");
 @import url("./reliability.css");
 @import url("./trace-explorer.css");

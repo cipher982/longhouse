@@ -782,11 +782,11 @@ class TestKnowledgeAPI:
 class TestKnowledgeSearchToolContext:
     """Tests for knowledge_search tool context resolution (V1.1)."""
 
-    def test_knowledge_search_with_worker_context(self, db_session: Session, _dev_user: User):
-        """Test knowledge_search resolves owner_id from WorkerContext."""
-        from zerg.context import WorkerContext
-        from zerg.context import reset_worker_context
-        from zerg.context import set_worker_context
+    def test_knowledge_search_with_commis_context(self, db_session: Session, _dev_user: User):
+        """Test knowledge_search resolves owner_id from CommisContext."""
+        from zerg.context import CommisContext
+        from zerg.context import reset_commis_context
+        from zerg.context import set_commis_context
         from zerg.tools.builtin.knowledge_tools import knowledge_search
 
         # Create a source with documents
@@ -807,13 +807,13 @@ class TestKnowledgeSearchToolContext:
             title="Server Overview",
         )
 
-        # Set up worker context with the user's owner_id
-        ctx = WorkerContext(
-            worker_id="test-worker-123",
+        # Set up commis context with the user's owner_id
+        ctx = CommisContext(
+            commis_id="test-commis-123",
             owner_id=_dev_user.id,
-            run_id="test-run-123",
+            course_id="test-run-123",
         )
-        token = set_worker_context(ctx)
+        token = set_commis_context(ctx)
 
         try:
             # Call knowledge_search - should resolve owner_id from context
@@ -825,13 +825,13 @@ class TestKnowledgeSearchToolContext:
             assert results[0]["source"] == "Test Infra Docs"
             assert "cube" in results[0]["snippets"][0].lower()
         finally:
-            reset_worker_context(token)
+            reset_commis_context(token)
 
     def test_knowledge_search_without_context_returns_error(self, db_session: Session, _dev_user: User):
         """Test knowledge_search returns structured error without context."""
         from zerg.tools.builtin.knowledge_tools import knowledge_search
 
-        # No worker context set - should return error
+        # No commis context set - should return error
         results = knowledge_search("anything", limit=5)
 
         assert isinstance(results, list)
@@ -841,9 +841,9 @@ class TestKnowledgeSearchToolContext:
 
     def test_knowledge_search_no_results(self, db_session: Session, _dev_user: User):
         """Test knowledge_search with no matching documents."""
-        from zerg.context import WorkerContext
-        from zerg.context import reset_worker_context
-        from zerg.context import set_worker_context
+        from zerg.context import CommisContext
+        from zerg.context import reset_commis_context
+        from zerg.context import set_commis_context
         from zerg.tools.builtin.knowledge_tools import knowledge_search
 
         # Create a source but no matching documents
@@ -864,12 +864,12 @@ class TestKnowledgeSearchToolContext:
             title="Unrelated",
         )
 
-        ctx = WorkerContext(
-            worker_id="test-worker-123",
+        ctx = CommisContext(
+            commis_id="test-commis-123",
             owner_id=_dev_user.id,
-            run_id="test-run-123",
+            course_id="test-run-123",
         )
-        token = set_worker_context(ctx)
+        token = set_commis_context(ctx)
 
         try:
             results = knowledge_search("nonexistent_query_xyz", limit=5)
@@ -880,13 +880,13 @@ class TestKnowledgeSearchToolContext:
             assert "message" in results[0]
             assert "no results" in results[0]["message"].lower()
         finally:
-            reset_worker_context(token)
+            reset_commis_context(token)
 
     def test_knowledge_search_with_credential_resolver_context(self, db_session: Session, _dev_user: User):
-        """Test knowledge_search resolves owner_id from CredentialResolver (Supervisor path).
+        """Test knowledge_search resolves owner_id from CredentialResolver (Concierge path).
 
-        V1.1: This tests the fallback to CredentialResolver when WorkerContext is not set,
-        which is the case for Supervisor runs (AgentRunner sets CredentialResolver, not WorkerContext).
+        V1.1: This tests the fallback to CredentialResolver when CommisContext is not set,
+        which is the case for Concierge runs (FicheRunner sets CredentialResolver, not CommisContext).
         """
         from zerg.connectors.context import reset_credential_resolver
         from zerg.connectors.context import set_credential_resolver
@@ -897,7 +897,7 @@ class TestKnowledgeSearchToolContext:
         source = knowledge_crud.create_knowledge_source(
             db_session,
             owner_id=_dev_user.id,
-            name="Supervisor Test Docs",
+            name="Concierge Test Docs",
             source_type="url",
             config={"url": "https://example.com/"},
         )
@@ -906,15 +906,15 @@ class TestKnowledgeSearchToolContext:
             db_session,
             source_id=source.id,
             owner_id=_dev_user.id,
-            path="https://example.com/supervisor-doc.md",
+            path="https://example.com/concierge-doc.md",
             content_text="clifford (100.120.197.80) - Primary VPS for production apps",
             title="Server Overview",
         )
 
-        # Set up CredentialResolver context (as AgentRunner does for Supervisor runs)
-        # Note: We use a mock agent_id since we just need owner_id
+        # Set up CredentialResolver context (as FicheRunner does for Concierge runs)
+        # Note: We use a mock fiche_id since we just need owner_id
         resolver = CredentialResolver(
-            agent_id=999,  # Doesn't need to exist
+            fiche_id=999,  # Doesn't need to exist
             db=db_session,
             owner_id=_dev_user.id,
         )
@@ -927,27 +927,27 @@ class TestKnowledgeSearchToolContext:
             # Should find the document
             assert isinstance(results, list)
             assert len(results) == 1
-            assert results[0]["source"] == "Supervisor Test Docs"
+            assert results[0]["source"] == "Concierge Test Docs"
             assert "clifford" in results[0]["snippets"][0].lower()
         finally:
             reset_credential_resolver(token)
 
-    def test_knowledge_search_prefers_worker_context_over_resolver(self, db_session: Session, _dev_user: User):
-        """Test knowledge_search prefers WorkerContext when both contexts are set.
+    def test_knowledge_search_prefers_commis_context_over_resolver(self, db_session: Session, _dev_user: User):
+        """Test knowledge_search prefers CommisContext when both contexts are set.
 
-        V1.1: When both contexts are available (edge case), WorkerContext should take precedence.
-        Uses different owner_ids to prove WorkerContext is actually used.
+        V1.1: When both contexts are available (edge case), CommisContext should take precedence.
+        Uses different owner_ids to prove CommisContext is actually used.
         """
         from zerg.connectors.context import reset_credential_resolver
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
-        from zerg.context import WorkerContext
-        from zerg.context import reset_worker_context
-        from zerg.context import set_worker_context
+        from zerg.context import CommisContext
+        from zerg.context import reset_commis_context
+        from zerg.context import set_commis_context
         from zerg.models.models import User as UserModel
         from zerg.tools.builtin.knowledge_tools import knowledge_search
 
-        # Create a second user to prove WorkerContext takes precedence
+        # Create a second user to prove CommisContext takes precedence
         other_user = UserModel(
             email="other-user@test.com",
             is_active=True,
@@ -955,21 +955,21 @@ class TestKnowledgeSearchToolContext:
         db_session.add(other_user)
         db_session.flush()
 
-        # Create source for _dev_user (WorkerContext user)
-        worker_source = knowledge_crud.create_knowledge_source(
+        # Create source for _dev_user (CommisContext user)
+        commis_source = knowledge_crud.create_knowledge_source(
             db_session,
             owner_id=_dev_user.id,
-            name="Worker User Source",
+            name="Commis User Source",
             source_type="url",
             config={"url": "https://example.com/"},
         )
         knowledge_crud.upsert_knowledge_document(
             db_session,
-            source_id=worker_source.id,
+            source_id=commis_source.id,
             owner_id=_dev_user.id,
-            path="https://example.com/worker-doc.md",
-            content_text="bremen NAS - Synology storage server - WORKER DOC",
-            title="Worker Storage Overview",
+            path="https://example.com/commis-doc.md",
+            content_text="bremen NAS - Synology storage server - COMMIS DOC",
+            title="Commis Storage Overview",
         )
 
         # Create source for other_user (CredentialResolver user)
@@ -989,30 +989,30 @@ class TestKnowledgeSearchToolContext:
             title="Resolver Storage Overview",
         )
 
-        # Set WorkerContext with _dev_user, CredentialResolver with other_user
-        ctx = WorkerContext(
-            worker_id="test-worker-456",
+        # Set CommisContext with _dev_user, CredentialResolver with other_user
+        ctx = CommisContext(
+            commis_id="test-commis-456",
             owner_id=_dev_user.id,  # Different from resolver
-            run_id="test-run-456",
+            course_id="test-run-456",
         )
         resolver = CredentialResolver(
-            agent_id=999,
+            fiche_id=999,
             db=db_session,
-            owner_id=other_user.id,  # Different from worker context
+            owner_id=other_user.id,  # Different from commis context
         )
 
-        worker_token = set_worker_context(ctx)
+        commis_token = set_commis_context(ctx)
         resolver_token = set_credential_resolver(resolver)
 
         try:
-            # Call knowledge_search - should resolve owner_id from WorkerContext (_dev_user)
+            # Call knowledge_search - should resolve owner_id from CommisContext (_dev_user)
             results = knowledge_search("bremen", limit=5)
 
-            # Should find ONLY the WorkerContext user's document, not the resolver user's
+            # Should find ONLY the CommisContext user's document, not the resolver user's
             assert isinstance(results, list)
             assert len(results) == 1
-            assert results[0]["source"] == "Worker User Source"
-            assert "WORKER DOC" in results[0]["snippets"][0]
+            assert results[0]["source"] == "Commis User Source"
+            assert "COMMIS DOC" in results[0]["snippets"][0]
         finally:
-            reset_worker_context(worker_token)
+            reset_commis_context(commis_token)
             reset_credential_resolver(resolver_token)

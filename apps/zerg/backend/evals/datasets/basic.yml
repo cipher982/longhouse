@@ -1,5 +1,5 @@
 version: "1.0"
-description: Basic supervisor eval - hermetic mode (53 test cases)
+description: Basic concierge eval - hermetic mode (53 test cases)
 
 # Phase 1-2: These cases run in hermetic mode with stubbed LLM responses
 # The stub LLM returns deterministic outputs, so assertions are predictable
@@ -23,14 +23,14 @@ cases:
   # 1. Conversational - Simple greeting
   - id: greeting_simple
     category: conversational
-    description: Basic greeting should respond without spawning worker
+    description: Basic greeting should respond without spawning commis
     input: "Hello, how are you?"
     timeout: 30
     assert:
       - type: contains
         value: "stub-response"
         case_insensitive: true
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: latency_ms
         max: 10000
@@ -38,27 +38,27 @@ cases:
         value: success
     tags: [quick, conversational]
 
-  # 2. Supervisor tool usage - list workers
+  # 2. Concierge tool usage - list commis
   - id: list_commis
     category: tool_usage
-    description: Supervisor should call list_commis tool (hermetic mode)
-    input: "List recent worker jobs"
+    description: Concierge should call list_commis tool (hermetic mode)
+    input: "List recent commis jobs"
     timeout: 30
     assert:
       - type: status
         value: success
       - type: tool_called
         value: "list_commis"
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: latency_ms
         max: 10000
     tags: [quick, tool_usage]
 
-  # 3. Supervisor tool usage - spawn worker
+  # 3. Concierge tool usage - spawn commis
   - id: spawn_commis
     category: infrastructure
-    description: Supervisor should delegate via spawn_commis (hermetic mode)
+    description: Concierge should delegate via spawn_commis (hermetic mode)
     input: "Delegate checking disk space on cube"
     timeout: 60
     assert:
@@ -66,20 +66,20 @@ cases:
         value: success
       - type: tool_called
         value: "spawn_commis"
-      - type: worker_spawned
+      - type: commis_spawned
         min: 1
-      - type: worker_result_contains
-        worker_id: 0
+      - type: commis_result_contains
+        commis_id: 0
         value: "stub-response"
         case_insensitive: true
       - type: artifact_exists
-        worker_id: 0
+        commis_id: 0
         value: "metadata.json"
       - type: artifact_exists
-        worker_id: 0
+        commis_id: 0
         value: "result.txt"
       - type: artifact_contains
-        worker_id: 0
+        commis_id: 0
         path: "metadata.json"
         value: "\"status\""
       - type: latency_ms
@@ -103,7 +103,7 @@ cases:
   # In hermetic mode, stub LLM decides whether to call tools based on keywords
   - id: check_infrastructure
     category: infrastructure
-    description: Infrastructure request (hermetic mode - no real worker)
+    description: Infrastructure request (hermetic mode - no real commis)
     input: "Check disk space on cube"
     timeout: 60
     assert:
@@ -113,37 +113,37 @@ cases:
         max: 15000
     tags: [infrastructure]
 
-  # 6. Worker tool usage - verify worker tool events + artifacts
-  - id: worker_tool_called_time
+  # 6. Commis tool usage - verify commis tool events + artifacts
+  - id: commis_tool_called_time
     category: tool_usage
-    description: Worker should call get_current_time (hermetic, scripted worker)
-    input: "Delegate [eval:scripted_worker] get current time"
+    description: Commis should call get_current_time (hermetic, scripted commis)
+    input: "Delegate [eval:scripted_commis] get current time"
     timeout: 60
     assert:
       - type: status
         value: success
       - type: tool_called
         value: "spawn_commis"
-      - type: worker_spawned
+      - type: commis_spawned
         min: 1
-      - type: worker_tool_called
-        worker_id: 0
+      - type: commis_tool_called
+        commis_id: 0
         value: "get_current_time"
         min: 1
       - type: artifact_exists
-        worker_id: 0
+        commis_id: 0
         value: "tool_calls/001_get_current_time.txt"
       - type: artifact_contains
-        worker_id: 0
+        commis_id: 0
         path: "tool_calls/001_get_current_time.txt"
         value: "T"
-      - type: worker_result_contains
-        worker_id: 0
+      - type: commis_result_contains
+        commis_id: 0
         value: "Current time"
         case_insensitive: true
       - type: latency_ms
         max: 15000
-    tags: [tool_usage, worker, quick]
+    tags: [tool_usage, commis, quick]
 
   # 7. Performance - Token budget check
   - id: token_budget_simple
@@ -176,7 +176,7 @@ cases:
     assert:
       - type: status
         value: success
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: latency_ms
         max: 10000
@@ -211,17 +211,17 @@ cases:
     assert:
       - type: status
         value: success
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: latency_ms
         max: 10000
     tags: [edge_case]
 
-  # 11. Multi-step - Sequential worker delegation
+  # 11. Multi-step - Sequential commis delegation
   - id: multi_step_sequential
     category: multi_step
-    description: Supervisor should handle multiple sequential tasks
-    input: "First list recent workers, then check time"
+    description: Concierge should handle multiple sequential tasks
+    input: "First list recent commis, then check time"
     timeout: 60
     assert:
       - type: status
@@ -239,7 +239,7 @@ cases:
     assert:
       - type: status
         value: success
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: latency_ms
         max: 10000
@@ -268,7 +268,7 @@ cases:
     assert:
       - type: status
         value: success
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: latency_ms
         max: 8000
@@ -296,7 +296,7 @@ cases:
     assert:
       - type: status
         value: success
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: latency_ms
         max: 8000
@@ -311,7 +311,7 @@ cases:
     assert:
       - type: status
         value: success
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: latency_ms
         max: 10000
@@ -347,7 +347,7 @@ cases:
     assert:
       - type: status
         value: success
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: latency_ms
         max: 8000
@@ -362,7 +362,7 @@ cases:
     assert:
       - type: status
         value: success
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: latency_ms
         max: 8000
@@ -377,7 +377,7 @@ cases:
     assert:
       - type: status
         value: success
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: latency_ms
         max: 8000
@@ -392,7 +392,7 @@ cases:
     assert:
       - type: status
         value: success
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: latency_ms
         max: 8000
@@ -407,7 +407,7 @@ cases:
     assert:
       - type: status
         value: success
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: latency_ms
         max: 10000
@@ -629,7 +629,7 @@ cases:
     assert:
       - type: status
         value: success
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: latency_ms
         max: 10000
@@ -644,7 +644,7 @@ cases:
     assert:
       - type: status
         value: success
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: latency_ms
         max: 10000
@@ -659,7 +659,7 @@ cases:
     assert:
       - type: status
         value: success
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: latency_ms
         max: 8000
@@ -687,7 +687,7 @@ cases:
     assert:
       - type: status
         value: success
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: latency_ms
         max: 10000
@@ -706,7 +706,7 @@ cases:
     assert:
       - type: status
         value: success
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: latency_ms
         max: 10000
@@ -777,7 +777,7 @@ cases:
     assert:
       - type: status
         value: success
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: latency_ms
         max: 5000
@@ -794,7 +794,7 @@ cases:
     assert:
       - type: status
         value: success
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: latency_ms
         max: 8000
@@ -802,16 +802,16 @@ cases:
         max: 3000
     tags: [performance, fast]
 
-  # 51. Performance - No redundant workers
-  - id: perf_no_redundant_workers
+  # 51. Performance - No redundant commis
+  - id: perf_no_redundant_commis
     category: performance
-    description: Should not spawn unnecessary workers
+    description: Should not spawn unnecessary commis
     input: "Tell me about your capabilities"
     timeout: 30
     assert:
       - type: status
         value: success
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: latency_ms
         max: 10000
@@ -820,8 +820,8 @@ cases:
   # 52. Performance - Quick delegation
   - id: perf_quick_delegation
     category: performance
-    description: Fast worker spawning for simple tasks
-    input: "Delegate checking time to a worker"
+    description: Fast commis spawning for simple tasks
+    input: "Delegate checking time to a commis"
     timeout: 60
     assert:
       - type: status

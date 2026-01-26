@@ -1,21 +1,21 @@
-"""Tests for the SupervisorService - manages supervisor agent and thread lifecycle."""
+"""Tests for the ConciergeService - manages concierge fiche and thread lifecycle."""
 
 import tempfile
 
 import pytest
 
-from tests.conftest import TEST_WORKER_MODEL
+from tests.conftest import TEST_COMMIS_MODEL
 from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
-from zerg.models.enums import RunStatus
-from zerg.models.models import AgentRun
-from zerg.services.supervisor_context import get_next_seq
-from zerg.services.supervisor_context import get_supervisor_context
-from zerg.services.supervisor_context import reset_seq
-from zerg.services.supervisor_context import reset_supervisor_context
-from zerg.services.supervisor_context import set_supervisor_context
-from zerg.services.supervisor_service import SUPERVISOR_THREAD_TYPE
-from zerg.services.supervisor_service import SupervisorService
+from zerg.models.enums import CourseStatus
+from zerg.models.models import Course
+from zerg.services.concierge_context import get_next_seq
+from zerg.services.concierge_context import get_concierge_context
+from zerg.services.concierge_context import reset_seq
+from zerg.services.concierge_context import reset_concierge_context
+from zerg.services.concierge_context import set_concierge_context
+from zerg.services.concierge_service import CONCIERGE_THREAD_TYPE
+from zerg.services.concierge_service import ConciergeService
 
 
 @pytest.fixture
@@ -29,98 +29,98 @@ def temp_artifact_path(monkeypatch):
 @pytest.fixture
 def credential_context(db_session, test_user):
     """Set up credential resolver context for tools."""
-    resolver = CredentialResolver(agent_id=1, db=db_session, owner_id=test_user.id)
+    resolver = CredentialResolver(fiche_id=1, db=db_session, owner_id=test_user.id)
     token = set_credential_resolver(resolver)
     yield resolver
     set_credential_resolver(None)
 
 
-class TestSupervisorService:
-    """Test suite for SupervisorService."""
+class TestConciergeService:
+    """Test suite for ConciergeService."""
 
-    def test_get_or_create_supervisor_agent_creates_new(self, db_session, test_user):
-        """Test that a new supervisor agent is created when none exists."""
-        service = SupervisorService(db_session)
+    def test_get_or_create_concierge_fiche_creates_new(self, db_session, test_user):
+        """Test that a new concierge fiche is created when none exists."""
+        service = ConciergeService(db_session)
 
-        agent = service.get_or_create_supervisor_agent(test_user.id)
+        fiche = service.get_or_create_concierge_fiche(test_user.id)
 
-        assert agent is not None
-        assert agent.name == "Supervisor"
-        assert agent.owner_id == test_user.id
-        assert agent.config.get("is_supervisor") is True
-        assert "spawn_commis" in agent.allowed_tools
-        assert "list_commis" in agent.allowed_tools
-        # V1.1: knowledge_search should be available to supervisor
-        assert "knowledge_search" in agent.allowed_tools
-        # V1.2: web research tools should be available to supervisor
-        assert "web_search" in agent.allowed_tools
-        assert "web_fetch" in agent.allowed_tools
+        assert fiche is not None
+        assert fiche.name == "Concierge"
+        assert fiche.owner_id == test_user.id
+        assert fiche.config.get("is_concierge") is True
+        assert "spawn_commis" in fiche.allowed_tools
+        assert "list_commis" in fiche.allowed_tools
+        # V1.1: knowledge_search should be available to concierge
+        assert "knowledge_search" in fiche.allowed_tools
+        # V1.2: web research tools should be available to concierge
+        assert "web_search" in fiche.allowed_tools
+        assert "web_fetch" in fiche.allowed_tools
 
-    def test_get_or_create_supervisor_agent_returns_existing(self, db_session, test_user):
-        """Test that existing supervisor agent is returned on subsequent calls."""
-        service = SupervisorService(db_session)
+    def test_get_or_create_concierge_fiche_returns_existing(self, db_session, test_user):
+        """Test that existing concierge fiche is returned on subsequent calls."""
+        service = ConciergeService(db_session)
 
         # Create first time
-        agent1 = service.get_or_create_supervisor_agent(test_user.id)
+        agent1 = service.get_or_create_concierge_fiche(test_user.id)
         agent1_id = agent1.id
 
-        # Get again - should return same agent
-        agent2 = service.get_or_create_supervisor_agent(test_user.id)
+        # Get again - should return same fiche
+        agent2 = service.get_or_create_concierge_fiche(test_user.id)
 
         assert agent2.id == agent1_id
 
-    def test_get_or_create_supervisor_thread_creates_new(self, db_session, test_user):
-        """Test that a new supervisor thread is created when none exists."""
-        service = SupervisorService(db_session)
+    def test_get_or_create_concierge_thread_creates_new(self, db_session, test_user):
+        """Test that a new concierge thread is created when none exists."""
+        service = ConciergeService(db_session)
 
-        agent = service.get_or_create_supervisor_agent(test_user.id)
-        thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+        fiche = service.get_or_create_concierge_fiche(test_user.id)
+        thread = service.get_or_create_concierge_thread(test_user.id, fiche)
 
         assert thread is not None
-        assert thread.thread_type == SUPERVISOR_THREAD_TYPE
-        assert thread.agent_id == agent.id
-        assert thread.title == "Supervisor"
+        assert thread.thread_type == CONCIERGE_THREAD_TYPE
+        assert thread.fiche_id == fiche.id
+        assert thread.title == "Concierge"
 
-    def test_get_or_create_supervisor_thread_returns_existing(self, db_session, test_user):
-        """Test that existing supervisor thread is returned on subsequent calls."""
-        service = SupervisorService(db_session)
+    def test_get_or_create_concierge_thread_returns_existing(self, db_session, test_user):
+        """Test that existing concierge thread is returned on subsequent calls."""
+        service = ConciergeService(db_session)
 
-        agent = service.get_or_create_supervisor_agent(test_user.id)
+        fiche = service.get_or_create_concierge_fiche(test_user.id)
 
         # Create first time
-        thread1 = service.get_or_create_supervisor_thread(test_user.id, agent)
+        thread1 = service.get_or_create_concierge_thread(test_user.id, fiche)
         thread1_id = thread1.id
 
         # Get again - should return same thread (one brain per user)
-        thread2 = service.get_or_create_supervisor_thread(test_user.id, agent)
+        thread2 = service.get_or_create_concierge_thread(test_user.id, fiche)
 
         assert thread2.id == thread1_id
 
-    def test_supervisor_per_user_isolation(self, db_session, test_user, other_user):
-        """Test that each user gets their own supervisor agent and thread."""
-        service = SupervisorService(db_session)
+    def test_concierge_per_user_isolation(self, db_session, test_user, other_user):
+        """Test that each user gets their own concierge fiche and thread."""
+        service = ConciergeService(db_session)
 
-        # Get supervisor for test_user
-        agent1 = service.get_or_create_supervisor_agent(test_user.id)
-        thread1 = service.get_or_create_supervisor_thread(test_user.id, agent1)
+        # Get concierge for test_user
+        fiche1 = service.get_or_create_concierge_fiche(test_user.id)
+        thread1 = service.get_or_create_concierge_thread(test_user.id, fiche1)
 
-        # Get supervisor for other_user
-        agent2 = service.get_or_create_supervisor_agent(other_user.id)
-        thread2 = service.get_or_create_supervisor_thread(other_user.id, agent2)
+        # Get concierge for other_user
+        fiche2 = service.get_or_create_concierge_fiche(other_user.id)
+        thread2 = service.get_or_create_concierge_thread(other_user.id, fiche2)
 
-        # Should be different agents and threads
-        assert agent1.id != agent2.id
+        # Should be different fiches and threads
+        assert fiche1.id != fiche2.id
         assert thread1.id != thread2.id
 
         # Each owned by their respective user
-        assert agent1.owner_id == test_user.id
-        assert agent2.owner_id == other_user.id
+        assert fiche1.owner_id == test_user.id
+        assert fiche2.owner_id == other_user.id
 
-    def test_supervisor_agent_has_correct_tools(self, db_session, test_user):
-        """Test that supervisor agent is configured with correct tools."""
-        service = SupervisorService(db_session)
+    def test_concierge_fiche_has_correct_tools(self, db_session, test_user):
+        """Test that concierge fiche is configured with correct tools."""
+        service = ConciergeService(db_session)
 
-        agent = service.get_or_create_supervisor_agent(test_user.id)
+        fiche = service.get_or_create_concierge_fiche(test_user.id)
 
         expected_tools = [
             "spawn_commis",
@@ -135,208 +135,208 @@ class TestSupervisorService:
         ]
 
         for tool in expected_tools:
-            assert tool in agent.allowed_tools, f"Missing tool: {tool}"
+            assert tool in fiche.allowed_tools, f"Missing tool: {tool}"
 
-    def test_get_or_create_supervisor_thread_creates_agent_if_needed(self, db_session, test_user):
-        """Test that thread creation also creates agent if not provided."""
-        service = SupervisorService(db_session)
+    def test_get_or_create_concierge_thread_creates_fiche_if_needed(self, db_session, test_user):
+        """Test that thread creation also creates fiche if not provided."""
+        service = ConciergeService(db_session)
 
-        # Call without providing agent - should create both
-        thread = service.get_or_create_supervisor_thread(test_user.id, agent=None)
+        # Call without providing fiche - should create both
+        thread = service.get_or_create_concierge_thread(test_user.id, fiche=None)
 
         assert thread is not None
-        assert thread.thread_type == SUPERVISOR_THREAD_TYPE
+        assert thread.thread_type == CONCIERGE_THREAD_TYPE
 
-        # Verify agent was created
-        agent = service.get_or_create_supervisor_agent(test_user.id)
-        assert thread.agent_id == agent.id
+        # Verify fiche was created
+        fiche = service.get_or_create_concierge_fiche(test_user.id)
+        assert thread.fiche_id == fiche.id
 
 
-class TestSupervisorContext:
-    """Tests for supervisor context (run_id threading)."""
+class TestConciergeContext:
+    """Tests for concierge context (course_id threading)."""
 
-    def test_supervisor_context_default_is_none(self):
-        """Test that supervisor context defaults to None."""
-        assert get_supervisor_context() is None
+    def test_concierge_context_default_is_none(self):
+        """Test that concierge context defaults to None."""
+        assert get_concierge_context() is None
 
-    def test_supervisor_context_set_and_get(self):
-        """Test setting and getting supervisor context."""
-        token = set_supervisor_context(run_id=123, owner_id=1, message_id="test-msg-1")
+    def test_concierge_context_set_and_get(self):
+        """Test setting and getting concierge context."""
+        token = set_concierge_context(course_id=123, owner_id=1, message_id="test-msg-1")
         try:
-            ctx = get_supervisor_context()
+            ctx = get_concierge_context()
             assert ctx is not None
-            assert ctx.run_id == 123
+            assert ctx.course_id == 123
             assert ctx.owner_id == 1
             assert ctx.message_id == "test-msg-1"
         finally:
-            reset_supervisor_context(token)
+            reset_concierge_context(token)
 
         # After reset, should be back to default
-        assert get_supervisor_context() is None
+        assert get_concierge_context() is None
 
-    def test_supervisor_context_reset_restores_previous(self):
+    def test_concierge_context_reset_restores_previous(self):
         """Test that reset restores previous value."""
         # Set first value
-        token1 = set_supervisor_context(run_id=100, owner_id=1, message_id="msg-100")
-        ctx1 = get_supervisor_context()
+        token1 = set_concierge_context(course_id=100, owner_id=1, message_id="msg-100")
+        ctx1 = get_concierge_context()
         assert ctx1 is not None
-        assert ctx1.run_id == 100
+        assert ctx1.course_id == 100
 
         # Set second value
-        token2 = set_supervisor_context(run_id=200, owner_id=1, message_id="msg-200")
-        ctx2 = get_supervisor_context()
+        token2 = set_concierge_context(course_id=200, owner_id=1, message_id="msg-200")
+        ctx2 = get_concierge_context()
         assert ctx2 is not None
-        assert ctx2.run_id == 200
+        assert ctx2.course_id == 200
 
         # Reset second - should restore first
-        reset_supervisor_context(token2)
-        ctx_after = get_supervisor_context()
+        reset_concierge_context(token2)
+        ctx_after = get_concierge_context()
         assert ctx_after is not None
-        assert ctx_after.run_id == 100
+        assert ctx_after.course_id == 100
 
         # Reset first - should restore None
-        reset_supervisor_context(token1)
-        assert get_supervisor_context() is None
+        reset_concierge_context(token1)
+        assert get_concierge_context() is None
 
     def test_seq_counter_starts_at_one(self):
-        """Test that seq counter starts at 1 for a new run_id."""
-        run_id = 999
+        """Test that seq counter starts at 1 for a new course_id."""
+        course_id = 999
         try:
-            assert get_next_seq(run_id) == 1
+            assert get_next_seq(course_id) == 1
         finally:
-            reset_seq(run_id)
+            reset_seq(course_id)
 
     def test_seq_counter_increments(self):
         """Test that seq counter increments monotonically."""
-        run_id = 1001
+        course_id = 1001
         try:
-            assert get_next_seq(run_id) == 1
-            assert get_next_seq(run_id) == 2
-            assert get_next_seq(run_id) == 3
+            assert get_next_seq(course_id) == 1
+            assert get_next_seq(course_id) == 2
+            assert get_next_seq(course_id) == 3
         finally:
-            reset_seq(run_id)
+            reset_seq(course_id)
 
     def test_seq_counter_per_run_isolation(self):
-        """Test that different run_ids have separate counters."""
-        run_id_a = 2001
-        run_id_b = 2002
+        """Test that different course_ids have separate counters."""
+        course_id_a = 2001
+        course_id_b = 2002
         try:
             # Both should start at 1
-            assert get_next_seq(run_id_a) == 1
-            assert get_next_seq(run_id_b) == 1
+            assert get_next_seq(course_id_a) == 1
+            assert get_next_seq(course_id_b) == 1
 
             # Incrementing one doesn't affect the other
-            assert get_next_seq(run_id_a) == 2
-            assert get_next_seq(run_id_a) == 3
-            assert get_next_seq(run_id_b) == 2
+            assert get_next_seq(course_id_a) == 2
+            assert get_next_seq(course_id_a) == 3
+            assert get_next_seq(course_id_b) == 2
         finally:
-            reset_seq(run_id_a)
-            reset_seq(run_id_b)
+            reset_seq(course_id_a)
+            reset_seq(course_id_b)
 
     def test_seq_reset_clears_counter(self):
-        """Test that reset_seq clears the counter for a run_id."""
-        run_id = 3001
+        """Test that reset_seq clears the counter for a course_id."""
+        course_id = 3001
         try:
-            assert get_next_seq(run_id) == 1
-            assert get_next_seq(run_id) == 2
-            reset_seq(run_id)
+            assert get_next_seq(course_id) == 1
+            assert get_next_seq(course_id) == 2
+            reset_seq(course_id)
             # After reset, should start at 1 again
-            assert get_next_seq(run_id) == 1
+            assert get_next_seq(course_id) == 1
         finally:
-            reset_seq(run_id)
+            reset_seq(course_id)
 
 
-class TestWorkerSupervisorCorrelation:
-    """Tests for worker-supervisor correlation via run_id."""
+class TestCommisConciergeCorrelation:
+    """Tests for commis-concierge correlation via course_id."""
 
-    def test_spawn_commis_stores_supervisor_run_id(self, db_session, test_user, credential_context, temp_artifact_path):
-        """Test that spawn_commis stores supervisor_run_id from context."""
-        from tests.conftest import TEST_WORKER_MODEL
-        from zerg.models.models import WorkerJob
-        from zerg.tools.builtin.supervisor_tools import spawn_commis
+    def test_spawn_commis_stores_concierge_course_id(self, db_session, test_user, credential_context, temp_artifact_path):
+        """Test that spawn_commis stores concierge_course_id from context."""
+        from tests.conftest import TEST_COMMIS_MODEL
+        from zerg.models.models import CommisJob
+        from zerg.tools.builtin.concierge_tools import spawn_commis
 
-        # Create a real supervisor agent and run for FK constraint
-        service = SupervisorService(db_session)
-        agent = service.get_or_create_supervisor_agent(test_user.id)
-        thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+        # Create a real concierge fiche and run for FK constraint
+        service = ConciergeService(db_session)
+        fiche = service.get_or_create_concierge_fiche(test_user.id)
+        thread = service.get_or_create_concierge_thread(test_user.id, fiche)
 
         # Create a run
-        from zerg.models.enums import RunTrigger
+        from zerg.models.enums import CourseTrigger
 
-        run = AgentRun(
-            agent_id=agent.id,
+        run = Course(
+            fiche_id=fiche.id,
             thread_id=thread.id,
-            status=RunStatus.RUNNING,
-            trigger=RunTrigger.API,
+            status=CourseStatus.RUNNING,
+            trigger=CourseTrigger.API,
         )
         db_session.add(run)
         db_session.commit()
         db_session.refresh(run)
 
-        # Set supervisor context with real run_id
-        token = set_supervisor_context(run_id=run.id, owner_id=test_user.id, message_id="test-message-id")
+        # Set concierge context with real course_id
+        token = set_concierge_context(course_id=run.id, owner_id=test_user.id, message_id="test-message-id")
         try:
-            result = spawn_commis(task="Test task", model=TEST_WORKER_MODEL)
+            result = spawn_commis(task="Test task", model=TEST_COMMIS_MODEL)
             assert "queued successfully" in result
 
             # Find the created job
-            job = db_session.query(WorkerJob).filter(WorkerJob.task == "Test task").first()
+            job = db_session.query(CommisJob).filter(CommisJob.task == "Test task").first()
             assert job is not None
-            assert job.supervisor_run_id == run.id
+            assert job.concierge_course_id == run.id
         finally:
-            reset_supervisor_context(token)
+            reset_concierge_context(token)
 
-    def test_spawn_commis_without_context_has_null_supervisor_run_id(
+    def test_spawn_commis_without_context_has_null_concierge_course_id(
         self, db_session, test_user, credential_context, temp_artifact_path
     ):
-        """Test that spawn_commis without context sets supervisor_run_id to None."""
-        from tests.conftest import TEST_WORKER_MODEL
-        from zerg.models.models import WorkerJob
-        from zerg.tools.builtin.supervisor_tools import spawn_commis
+        """Test that spawn_commis without context sets concierge_course_id to None."""
+        from tests.conftest import TEST_COMMIS_MODEL
+        from zerg.models.models import CommisJob
+        from zerg.tools.builtin.concierge_tools import spawn_commis
 
-        # Ensure no supervisor context
-        assert get_supervisor_context() is None
+        # Ensure no concierge context
+        assert get_concierge_context() is None
 
-        result = spawn_commis(task="Standalone task", model=TEST_WORKER_MODEL)
+        result = spawn_commis(task="Standalone task", model=TEST_COMMIS_MODEL)
         assert "queued successfully" in result
 
         # Find the created job
-        job = db_session.query(WorkerJob).filter(WorkerJob.task == "Standalone task").first()
+        job = db_session.query(CommisJob).filter(CommisJob.task == "Standalone task").first()
         assert job is not None
-        assert job.supervisor_run_id is None
+        assert job.concierge_course_id is None
 
-    # NOTE: test_run_continuation_inherits_model was removed during the supervisor
+    # NOTE: test_run_continuation_inherits_model was removed during the concierge
     # resume refactor (Jan 2026). The continuation pattern now uses
-    # AgentInterrupted + AgentRunner.run_continuation instead of separate runs.
-    # See: docs/work/supervisor-continuation-refactor.md
+    # CourseInterrupted + FicheRunner.run_continuation instead of separate runs.
+    # See: docs/work/concierge-continuation-refactor.md
 
 
-class TestRecentWorkerHistoryInjection:
-    """Tests for v2.0 recent worker history auto-injection.
+class TestRecentCommisHistoryInjection:
+    """Tests for v2.0 recent commis history auto-injection.
 
-    This feature injects recent worker results into supervisor context
-    to prevent redundant worker spawns.
+    This feature injects recent commis results into concierge context
+    to prevent redundant commis spawns.
     """
 
-    def test_build_recent_worker_context_no_workers(self, db_session, test_user):
-        """Should return None when no recent workers exist."""
-        service = SupervisorService(db_session)
-        context, jobs_to_ack = service._build_recent_worker_context(test_user.id)
+    def test_build_recent_commis_context_no_commis(self, db_session, test_user):
+        """Should return None when no recent commis exist."""
+        service = ConciergeService(db_session)
+        context, jobs_to_ack = service._build_recent_commis_context(test_user.id)
         assert context is None
         assert jobs_to_ack == []
 
-    def test_build_recent_worker_context_with_workers(self, db_session, test_user, temp_artifact_path):
-        """Should return formatted context when recent workers exist."""
+    def test_build_recent_commis_context_with_commis(self, db_session, test_user, temp_artifact_path):
+        """Should return formatted context when recent commis exist."""
         from datetime import datetime
         from datetime import timezone
 
-        from zerg.models.models import WorkerJob
+        from zerg.models.models import CommisJob
 
-        # Create a recent worker job
-        job = WorkerJob(
+        # Create a recent commis job
+        job = CommisJob(
             owner_id=test_user.id,
             task="Check disk usage on cube",
-            model=TEST_WORKER_MODEL,
+            model=TEST_COMMIS_MODEL,
             status="success",
             created_at=datetime.now(timezone.utc),
         )
@@ -344,66 +344,66 @@ class TestRecentWorkerHistoryInjection:
         db_session.commit()
         db_session.refresh(job)
 
-        service = SupervisorService(db_session)
-        context, jobs_to_ack = service._build_recent_worker_context(test_user.id)
+        service = ConciergeService(db_session)
+        context, jobs_to_ack = service._build_recent_commis_context(test_user.id)
 
         assert context is not None
-        assert "Worker Inbox" in context
+        assert "Commis Inbox" in context
         assert f"Job {job.id}" in context
         assert "SUCCESS" in context
         assert "Check disk usage" in context
         # Unacknowledged job should be in the list to acknowledge
         assert job.id in jobs_to_ack
 
-    def test_build_recent_worker_context_respects_limit(self, db_session, test_user, temp_artifact_path):
-        """Should only return up to RECENT_WORKER_HISTORY_LIMIT workers."""
+    def test_build_recent_commis_context_respects_limit(self, db_session, test_user, temp_artifact_path):
+        """Should only return up to RECENT_COMMIS_HISTORY_LIMIT commis."""
         from datetime import datetime
         from datetime import timezone
 
-        from zerg.models.models import WorkerJob
-        from zerg.services.supervisor_service import RECENT_WORKER_HISTORY_LIMIT
+        from zerg.models.models import CommisJob
+        from zerg.services.concierge_service import RECENT_COMMIS_HISTORY_LIMIT
 
-        # Create more workers than the limit
-        for i in range(RECENT_WORKER_HISTORY_LIMIT + 3):
-            job = WorkerJob(
+        # Create more commis than the limit
+        for i in range(RECENT_COMMIS_HISTORY_LIMIT + 3):
+            job = CommisJob(
                 owner_id=test_user.id,
                 task=f"Task {i}",
-                model=TEST_WORKER_MODEL,
+                model=TEST_COMMIS_MODEL,
                 status="success",
                 created_at=datetime.now(timezone.utc),
             )
             db_session.add(job)
         db_session.commit()
 
-        service = SupervisorService(db_session)
-        context, jobs_to_ack = service._build_recent_worker_context(test_user.id)
+        service = ConciergeService(db_session)
+        context, jobs_to_ack = service._build_recent_commis_context(test_user.id)
 
         assert context is not None
         # Count how many "Job X" entries
         job_count = context.count("Job ")
-        assert job_count == RECENT_WORKER_HISTORY_LIMIT
-        # Should have RECENT_WORKER_HISTORY_LIMIT jobs to acknowledge
-        assert len(jobs_to_ack) == RECENT_WORKER_HISTORY_LIMIT
+        assert job_count == RECENT_COMMIS_HISTORY_LIMIT
+        # Should have RECENT_COMMIS_HISTORY_LIMIT jobs to acknowledge
+        assert len(jobs_to_ack) == RECENT_COMMIS_HISTORY_LIMIT
 
-    def test_build_recent_worker_context_includes_running(self, db_session, test_user, temp_artifact_path):
-        """Should include running workers in context."""
+    def test_build_recent_commis_context_includes_running(self, db_session, test_user, temp_artifact_path):
+        """Should include running commis in context."""
         from datetime import datetime
         from datetime import timezone
 
-        from zerg.models.models import WorkerJob
+        from zerg.models.models import CommisJob
 
-        job = WorkerJob(
+        job = CommisJob(
             owner_id=test_user.id,
             task="Long running investigation",
-            model=TEST_WORKER_MODEL,
+            model=TEST_COMMIS_MODEL,
             status="running",
             created_at=datetime.now(timezone.utc),
         )
         db_session.add(job)
         db_session.commit()
 
-        service = SupervisorService(db_session)
-        context, jobs_to_ack = service._build_recent_worker_context(test_user.id)
+        service = ConciergeService(db_session)
+        context, jobs_to_ack = service._build_recent_commis_context(test_user.id)
 
         assert context is not None
         assert "RUNNING" in context
@@ -411,49 +411,49 @@ class TestRecentWorkerHistoryInjection:
         # Running jobs are not acknowledged (only completed jobs)
         assert jobs_to_ack == []
 
-    def test_build_recent_worker_context_includes_marker(self, db_session, test_user, temp_artifact_path):
+    def test_build_recent_commis_context_includes_marker(self, db_session, test_user, temp_artifact_path):
         """Context should include marker for cleanup identification."""
         from datetime import datetime
         from datetime import timezone
 
-        from zerg.models.models import WorkerJob
-        from zerg.services.supervisor_service import RECENT_WORKER_CONTEXT_MARKER
+        from zerg.models.models import CommisJob
+        from zerg.services.concierge_service import RECENT_COMMIS_CONTEXT_MARKER
 
-        job = WorkerJob(
+        job = CommisJob(
             owner_id=test_user.id,
             task="Test task",
-            model=TEST_WORKER_MODEL,
+            model=TEST_COMMIS_MODEL,
             status="success",
             created_at=datetime.now(timezone.utc),
         )
         db_session.add(job)
         db_session.commit()
 
-        service = SupervisorService(db_session)
-        context, jobs_to_ack = service._build_recent_worker_context(test_user.id)
+        service = ConciergeService(db_session)
+        context, jobs_to_ack = service._build_recent_commis_context(test_user.id)
 
         assert context is not None
-        assert RECENT_WORKER_CONTEXT_MARKER in context
+        assert RECENT_COMMIS_CONTEXT_MARKER in context
         # Completed job should be in acknowledgement list
         assert job.id in jobs_to_ack
 
-    def test_cleanup_stale_worker_context(self, db_session, test_user, temp_artifact_path):
+    def test_cleanup_stale_commis_context(self, db_session, test_user, temp_artifact_path):
         """Should delete messages containing the marker (older than min_age)."""
         from zerg.crud import crud
         from zerg.models.models import ThreadMessage
-        from zerg.services.supervisor_service import RECENT_WORKER_CONTEXT_MARKER
+        from zerg.services.concierge_service import RECENT_COMMIS_CONTEXT_MARKER
 
-        # Create supervisor agent and thread
-        service = SupervisorService(db_session)
-        agent = service.get_or_create_supervisor_agent(test_user.id)
-        thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+        # Create concierge fiche and thread
+        service = ConciergeService(db_session)
+        fiche = service.get_or_create_concierge_fiche(test_user.id)
+        thread = service.get_or_create_concierge_thread(test_user.id, fiche)
 
         # Add a stale context message
         crud.create_thread_message(
             db=db_session,
             thread_id=thread.id,
             role="system",
-            content=f"{RECENT_WORKER_CONTEXT_MARKER}\n## Stale context",
+            content=f"{RECENT_COMMIS_CONTEXT_MARKER}\n## Stale context",
             processed=True,
         )
         db_session.commit()
@@ -463,14 +463,14 @@ class TestRecentWorkerHistoryInjection:
             db_session.query(ThreadMessage)
             .filter(
                 ThreadMessage.thread_id == thread.id,
-                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+                ThreadMessage.content.contains(RECENT_COMMIS_CONTEXT_MARKER),
             )
             .all()
         )
         assert len(messages_before) == 1
 
         # Cleanup with min_age_seconds=0 to delete immediately (for testing)
-        deleted_count = service._cleanup_stale_worker_context(thread.id, min_age_seconds=0)
+        deleted_count = service._cleanup_stale_commis_context(thread.id, min_age_seconds=0)
         db_session.commit()
 
         assert deleted_count == 1
@@ -480,7 +480,7 @@ class TestRecentWorkerHistoryInjection:
             db_session.query(ThreadMessage)
             .filter(
                 ThreadMessage.thread_id == thread.id,
-                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+                ThreadMessage.content.contains(RECENT_COMMIS_CONTEXT_MARKER),
             )
             .all()
         )
@@ -490,12 +490,12 @@ class TestRecentWorkerHistoryInjection:
         """Cleanup should only delete messages with the marker."""
         from zerg.crud import crud
         from zerg.models.models import ThreadMessage
-        from zerg.services.supervisor_service import RECENT_WORKER_CONTEXT_MARKER
+        from zerg.services.concierge_service import RECENT_COMMIS_CONTEXT_MARKER
 
-        # Create supervisor agent and thread
-        service = SupervisorService(db_session)
-        agent = service.get_or_create_supervisor_agent(test_user.id)
-        thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+        # Create concierge fiche and thread
+        service = ConciergeService(db_session)
+        fiche = service.get_or_create_concierge_fiche(test_user.id)
+        thread = service.get_or_create_concierge_thread(test_user.id, fiche)
 
         # Count existing messages (thread may have a system prompt)
         initial_count = (
@@ -519,7 +519,7 @@ class TestRecentWorkerHistoryInjection:
             db=db_session,
             thread_id=thread.id,
             role="system",
-            content=f"{RECENT_WORKER_CONTEXT_MARKER}\n## Stale context",
+            content=f"{RECENT_COMMIS_CONTEXT_MARKER}\n## Stale context",
             processed=True,
         )
         db_session.commit()
@@ -529,14 +529,14 @@ class TestRecentWorkerHistoryInjection:
             db_session.query(ThreadMessage)
             .filter(
                 ThreadMessage.thread_id == thread.id,
-                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+                ThreadMessage.content.contains(RECENT_COMMIS_CONTEXT_MARKER),
             )
             .all()
         )
         assert len(marker_messages) == 1
 
         # Cleanup with min_age_seconds=0 to delete immediately (for testing)
-        deleted_count = service._cleanup_stale_worker_context(thread.id, min_age_seconds=0)
+        deleted_count = service._cleanup_stale_commis_context(thread.id, min_age_seconds=0)
         db_session.commit()
 
         assert deleted_count == 1
@@ -546,7 +546,7 @@ class TestRecentWorkerHistoryInjection:
             db_session.query(ThreadMessage)
             .filter(
                 ThreadMessage.thread_id == thread.id,
-                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+                ThreadMessage.content.contains(RECENT_COMMIS_CONTEXT_MARKER),
             )
             .all()
         )
@@ -571,26 +571,26 @@ class TestRecentWorkerHistoryInjection:
         """
         from zerg.crud import crud
         from zerg.models.models import ThreadMessage
-        from zerg.services.supervisor_service import RECENT_WORKER_CONTEXT_MARKER
+        from zerg.services.concierge_service import RECENT_COMMIS_CONTEXT_MARKER
 
-        # Create supervisor agent and thread
-        service = SupervisorService(db_session)
-        agent = service.get_or_create_supervisor_agent(test_user.id)
-        thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+        # Create concierge fiche and thread
+        service = ConciergeService(db_session)
+        fiche = service.get_or_create_concierge_fiche(test_user.id)
+        thread = service.get_or_create_concierge_thread(test_user.id, fiche)
 
         # Add a context message (just created, so fresh)
         crud.create_thread_message(
             db=db_session,
             thread_id=thread.id,
             role="system",
-            content=f"{RECENT_WORKER_CONTEXT_MARKER}\n## Fresh context",
+            content=f"{RECENT_COMMIS_CONTEXT_MARKER}\n## Fresh context",
             processed=True,
         )
         db_session.commit()
 
         # Cleanup with default min_age_seconds=5.0
         # Message was just created, so it should NOT be deleted
-        deleted_count = service._cleanup_stale_worker_context(thread.id)
+        deleted_count = service._cleanup_stale_commis_context(thread.id)
         db_session.commit()
 
         # Should not delete fresh messages (race condition protection)
@@ -601,7 +601,7 @@ class TestRecentWorkerHistoryInjection:
             db_session.query(ThreadMessage)
             .filter(
                 ThreadMessage.thread_id == thread.id,
-                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+                ThreadMessage.content.contains(RECENT_COMMIS_CONTEXT_MARKER),
             )
             .all()
         )
@@ -615,12 +615,12 @@ class TestRecentWorkerHistoryInjection:
         """
         from zerg.crud import crud
         from zerg.models.models import ThreadMessage
-        from zerg.services.supervisor_service import RECENT_WORKER_CONTEXT_MARKER
+        from zerg.services.concierge_service import RECENT_COMMIS_CONTEXT_MARKER
 
-        # Create supervisor agent and thread
-        service = SupervisorService(db_session)
-        agent = service.get_or_create_supervisor_agent(test_user.id)
-        thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+        # Create concierge fiche and thread
+        service = ConciergeService(db_session)
+        fiche = service.get_or_create_concierge_fiche(test_user.id)
+        thread = service.get_or_create_concierge_thread(test_user.id, fiche)
 
         # Simulate back-to-back requests by adding multiple context messages
         # First message (older)
@@ -628,7 +628,7 @@ class TestRecentWorkerHistoryInjection:
             db=db_session,
             thread_id=thread.id,
             role="system",
-            content=f"{RECENT_WORKER_CONTEXT_MARKER}\n## Old context 1",
+            content=f"{RECENT_COMMIS_CONTEXT_MARKER}\n## Old context 1",
             processed=True,
         )
         # Second message (newer, fresh - should be kept)
@@ -636,7 +636,7 @@ class TestRecentWorkerHistoryInjection:
             db=db_session,
             thread_id=thread.id,
             role="system",
-            content=f"{RECENT_WORKER_CONTEXT_MARKER}\n## Fresh context 2",
+            content=f"{RECENT_COMMIS_CONTEXT_MARKER}\n## Fresh context 2",
             processed=True,
         )
         db_session.commit()
@@ -646,14 +646,14 @@ class TestRecentWorkerHistoryInjection:
             db_session.query(ThreadMessage)
             .filter(
                 ThreadMessage.thread_id == thread.id,
-                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+                ThreadMessage.content.contains(RECENT_COMMIS_CONTEXT_MARKER),
             )
             .all()
         )
         assert len(before) == 2
 
         # Cleanup with default min_age - newest is fresh so kept, older deleted
-        deleted_count = service._cleanup_stale_worker_context(thread.id)
+        deleted_count = service._cleanup_stale_commis_context(thread.id)
         db_session.commit()
 
         # Should have deleted the older one
@@ -664,7 +664,7 @@ class TestRecentWorkerHistoryInjection:
             db_session.query(ThreadMessage)
             .filter(
                 ThreadMessage.thread_id == thread.id,
-                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+                ThreadMessage.content.contains(RECENT_COMMIS_CONTEXT_MARKER),
             )
             .all()
         )

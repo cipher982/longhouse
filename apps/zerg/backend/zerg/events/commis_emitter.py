@@ -1,0 +1,266 @@
+"""CommisEmitter - emits commis_tool_* events with identity baked in.
+
+This class replaces the contextvar-based event emission pattern. The emitter's
+identity (commis) is fixed at construction time, so it always emits the correct
+event type regardless of contextvar state.
+
+Key design principle: The emitter does NOT hold a DB session. Event emission
+uses append_course_event() which opens its own short-lived session. This prevents
+DB sessions from crossing async/thread boundaries via contextvars.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from dataclasses import field
+from datetime import datetime
+from datetime import timezone
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ToolCall:
+    """Record of a tool call for activity tracking."""
+
+    name: str
+    tool_call_id: str | None = None
+    args_preview: str = ""
+    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    completed_at: datetime | None = None
+    status: str = "running"  # running, completed, failed
+    duration_ms: int | None = None
+    error: str | None = None
+
+
+@dataclass
+class CommisEmitter:
+    """Emitter for commis tool events - identity baked at construction.
+
+    Always emits commis_tool_* events, regardless of contextvar state.
+    This eliminates the contextvar leakage bug where concierge events
+    could be misclassified as commis events.
+
+    Key principle: No DB session stored. Event emission uses append_course_event()
+    which opens its own short-lived session per event.
+
+    Attributes
+    ----------
+    commis_id
+        Unique identifier for the commis (e.g., "2024-12-05T16-30-00_disk-check")
+    owner_id
+        User ID that owns this commis's fiche
+    course_id
+        Course ID for correlating events (concierge course ID)
+    job_id
+        CommisJob ID for roundabout event correlation (critical!)
+    tool_calls
+        List of tool calls made during this commis run (for activity log)
+    has_critical_error
+        Flag indicating a critical tool error occurred (fail-fast)
+    critical_error_message
+        Human-readable error message for the critical error
+    """
+
+    commis_id: str
+    owner_id: int | None
+    course_id: int | None
+    job_id: int | None
+    trace_id: str | None = None
+
+    # Tool tracking (existing CommisContext functionality)
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    has_critical_error: bool = False
+    critical_error_message: str | None = None
+
+    @property
+    def is_commis(self) -> bool:
+        """Always True - this is a commis emitter."""
+        return True
+
+    @property
+    def is_concierge(self) -> bool:
+        """Always False - this is a commis emitter."""
+        return False
+
+    def record_tool_start(
+        self,
+        tool_name: str,
+        tool_call_id: str | None = None,
+        args: dict[str, Any] | None = None,
+    ) -> ToolCall:
+        """Record a tool call starting. Returns the ToolCall for later update."""
+        args_preview = str(args)[:100] if args else ""
+        tool_call = ToolCall(
+            name=tool_name,
+            tool_call_id=tool_call_id,
+            args_preview=args_preview,
+        )
+        self.tool_calls.append(tool_call)
+        return tool_call
+
+    def record_tool_complete(
+        self,
+        tool_call: ToolCall,
+        *,
+        success: bool = True,
+        error: str | None = None,
+    ) -> None:
+        """Record a tool call completing."""
+        tool_call.completed_at = datetime.now(timezone.utc)
+        tool_call.status = "completed" if success else "failed"
+        tool_call.error = error
+        if tool_call.started_at:
+            delta = tool_call.completed_at - tool_call.started_at
+            tool_call.duration_ms = int(delta.total_seconds() * 1000)
+
+    def mark_critical_error(self, error_message: str) -> None:
+        """Mark that a critical error occurred, triggering fail-fast behavior."""
+        self.has_critical_error = True
+        self.critical_error_message = error_message
+
+    async def emit_tool_started(
+        self,
+        tool_name: str,
+        tool_call_id: str,
+        tool_args_preview: str,
+        tool_args: dict | None = None,  # Accept but don't use (concierge uses this)
+    ) -> None:
+        """Emit commis_tool_started event.
+
+        Always emits commis_tool_started - identity is fixed at construction.
+        """
+        if not self.course_id:
+            logger.debug("Skipping emit_tool_started: no course_id")
+            return
+
+        from zerg.services.event_store import append_course_event
+
+        try:
+            await append_course_event(
+                course_id=self.course_id,
+                event_type="commis_tool_started",
+                payload={
+                    "commis_id": self.commis_id,
+                    "owner_id": self.owner_id,
+                    "job_id": self.job_id,  # Critical for roundabout correlation
+                    "tool_name": tool_name,
+                    "tool_call_id": tool_call_id,
+                    "tool_args_preview": tool_args_preview,
+                    "trace_id": self.trace_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+        except Exception:
+            logger.warning("Failed to emit commis_tool_started event", exc_info=True)
+
+    async def emit_tool_completed(
+        self,
+        tool_name: str,
+        tool_call_id: str,
+        duration_ms: int,
+        result_preview: str,
+        result: str | None = None,  # Accept but don't use (concierge uses this)
+    ) -> None:
+        """Emit commis_tool_completed event.
+
+        Always emits commis_tool_completed - identity is fixed at construction.
+        """
+        if not self.course_id:
+            logger.debug("Skipping emit_tool_completed: no course_id")
+            return
+
+        from zerg.services.event_store import append_course_event
+
+        try:
+            await append_course_event(
+                course_id=self.course_id,
+                event_type="commis_tool_completed",
+                payload={
+                    "commis_id": self.commis_id,
+                    "owner_id": self.owner_id,
+                    "job_id": self.job_id,  # Critical for roundabout correlation
+                    "tool_name": tool_name,
+                    "tool_call_id": tool_call_id,
+                    "duration_ms": duration_ms,
+                    "result_preview": result_preview,
+                    "trace_id": self.trace_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+        except Exception:
+            logger.warning("Failed to emit commis_tool_completed event", exc_info=True)
+
+    async def emit_tool_failed(
+        self,
+        tool_name: str,
+        tool_call_id: str,
+        duration_ms: int,
+        error: str,
+    ) -> None:
+        """Emit commis_tool_failed event.
+
+        Always emits commis_tool_failed - identity is fixed at construction.
+        """
+        if not self.course_id:
+            logger.debug("Skipping emit_tool_failed: no course_id")
+            return
+
+        from zerg.services.event_store import append_course_event
+
+        try:
+            await append_course_event(
+                course_id=self.course_id,
+                event_type="commis_tool_failed",
+                payload={
+                    "commis_id": self.commis_id,
+                    "owner_id": self.owner_id,
+                    "job_id": self.job_id,  # Critical for roundabout correlation
+                    "tool_name": tool_name,
+                    "tool_call_id": tool_call_id,
+                    "duration_ms": duration_ms,
+                    "error": error[:500] if error else None,  # Truncate for safety
+                    "trace_id": self.trace_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+        except Exception:
+            logger.warning("Failed to emit commis_tool_failed event", exc_info=True)
+
+    async def emit_heartbeat(
+        self,
+        activity: str,
+        phase: str,
+    ) -> None:
+        """Emit commis_heartbeat event during long-running LLM calls.
+
+        Always emits commis_heartbeat - identity is fixed at construction.
+        """
+        from zerg.events.event_bus import EventType
+        from zerg.events.event_bus import event_bus
+
+        try:
+            await event_bus.publish(
+                EventType.COMMIS_HEARTBEAT,
+                {
+                    "event_type": EventType.COMMIS_HEARTBEAT,
+                    "commis_id": self.commis_id,
+                    "owner_id": self.owner_id,
+                    "course_id": self.course_id,
+                    "job_id": self.job_id,
+                    "activity": activity,
+                    "phase": phase,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            logger.debug(f"Emitted heartbeat for commis {self.commis_id} during {phase}")
+        except Exception:
+            logger.warning("Failed to emit commis_heartbeat event", exc_info=True)
+
+
+# Keep CommisEmitter as alias for backward compatibility during migration
+CommisEmitter = CommisEmitter
+
+__all__ = ["CommisEmitter", "CommisEmitter", "ToolCall"]

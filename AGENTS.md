@@ -164,3 +164,6 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-25) [gotcha] Tests patch `zerg.services.openai_realtime.httpx.AsyncClient`; keep `httpx` imported in the compatibility wrapper after moving realtime helpers.
 - (2026-01-25) [pattern] SupervisorService enforces a single ThreadType.SUPER thread per user (“one brain”); each Jarvis message creates an AgentRun tied to that thread.
 - (2026-01-25) [gotcha] Skills loader/registry must use `skill.name` (SkillEntry has no `.name`); `e.name` raises AttributeError during load/sort.
+- (2026-01-25) [gotcha] Phase 4 renames: `models/models.py` also has `Agent` relationships (e.g., ConnectorCredential); not just agent/run/worker files.
+- (2026-01-26) [gotcha] Rebrand work happens in worktree `~/git/zerg-rebrand` on branch `rebrand/french-terminology`; avoid touching main repo for this effort.
+- (2026-01-26) [gotcha] Bulk renames can create duplicate table prefixes (e.g., `commis_commis_barrier_jobs`); normalize to `commis_barrier_jobs` to match migrations.

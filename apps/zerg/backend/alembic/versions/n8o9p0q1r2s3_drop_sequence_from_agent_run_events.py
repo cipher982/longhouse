@@ -1,13 +1,13 @@
-"""drop_sequence_from_agent_run_events
+"""drop_sequence_from_course_events
 
 Revision ID: n8o9p0q1r2s3
 Revises: m7n8o9p0q1r2
 Create Date: 2025-12-26 14:00:00.000000
 
-Drop the sequence column from agent_run_events table. We now use the
+Drop the sequence column from course_events table. We now use the
 auto-incrementing id (BigSerial) for ordering, which is atomic and doesn't
 require explicit sequence number calculation. This fixes race conditions
-where concurrent emit_run_event() calls could cause IntegrityError.
+where concurrent emit_course_event() calls could cause IntegrityError.
 """
 from typing import Sequence, Union
 
@@ -27,19 +27,19 @@ def upgrade() -> None:
     inspector = sa.inspect(conn)
     tables = inspector.get_table_names()
 
-    if 'agent_run_events' not in tables:
-        print("agent_run_events table doesn't exist - skipping")
+    if 'course_events' not in tables:
+        print("course_events table doesn't exist - skipping")
         return
 
     # Drop the unique constraint first
     try:
-        op.drop_constraint('agent_run_events_unique_seq', 'agent_run_events', type_='unique')
+        op.drop_constraint('course_events_unique_seq', 'course_events', type_='unique')
     except Exception as e:
         print(f"Could not drop constraint (may not exist): {e}")
 
     # Drop the sequence column
     try:
-        op.drop_column('agent_run_events', 'sequence')
+        op.drop_column('course_events', 'sequence')
     except Exception as e:
         print(f"Could not drop column (may not exist): {e}")
 
@@ -50,26 +50,26 @@ def downgrade() -> None:
     inspector = sa.inspect(conn)
     tables = inspector.get_table_names()
 
-    if 'agent_run_events' not in tables:
-        print("agent_run_events table doesn't exist - skipping")
+    if 'course_events' not in tables:
+        print("course_events table doesn't exist - skipping")
         return
 
     # Add sequence column back
-    op.add_column('agent_run_events', sa.Column('sequence', sa.Integer(), nullable=True))
+    op.add_column('course_events', sa.Column('sequence', sa.Integer(), nullable=True))
 
     # Backfill sequence numbers based on id order
     conn.execute(sa.text("""
-        UPDATE agent_run_events
+        UPDATE course_events
         SET sequence = subq.row_num
         FROM (
-            SELECT id, ROW_NUMBER() OVER (PARTITION BY run_id ORDER BY id) as row_num
-            FROM agent_run_events
+            SELECT id, ROW_NUMBER() OVER (PARTITION BY course_id ORDER BY id) as row_num
+            FROM course_events
         ) subq
-        WHERE agent_run_events.id = subq.id
+        WHERE course_events.id = subq.id
     """))
 
     # Make sequence NOT NULL
-    op.alter_column('agent_run_events', 'sequence', nullable=False)
+    op.alter_column('course_events', 'sequence', nullable=False)
 
     # Recreate the unique constraint
-    op.create_unique_constraint('agent_run_events_unique_seq', 'agent_run_events', ['run_id', 'sequence'])
+    op.create_unique_constraint('course_events_unique_seq', 'course_events', ['course_id', 'sequence'])

@@ -1,14 +1,14 @@
-import type { AgentSummary, AgentRun } from "../../services/api";
+import type { FicheSummary, Course } from "../../services/api";
 import { formatDateTimeShort } from "./formatters";
 
-export type SortKey = "name" | "status" | "created_at" | "last_run" | "next_run" | "success";
+export type SortKey = "name" | "status" | "created_at" | "last_course" | "next_course" | "success";
 
 export type SortConfig = {
   key: SortKey;
   ascending: boolean;
 };
 
-export type AgentRunsState = Record<number, AgentRun[]>;
+export type FicheCoursesState = Record<number, Course[]>;
 
 const STATUS_ORDER: Record<string, number> = {
   running: 0,
@@ -32,8 +32,8 @@ export function loadSortConfig(): SortConfig {
     name: "name",
     status: "status",
     created_at: "created_at",
-    last_run: "last_run",
-    next_run: "next_run",
+    last_course: "last_course",
+    next_course: "next_course",
     success: "success",
   };
 
@@ -50,10 +50,10 @@ export function persistSortConfig(config: SortConfig) {
   window.localStorage.setItem(STORAGE_KEY_ASC, config.ascending ? "1" : "0");
 }
 
-export function sortAgents(agents: AgentSummary[], runsByAgent: AgentRunsState, sortConfig: SortConfig): AgentSummary[] {
-  const sorted = [...agents];
+export function sortFiches(fiches: FicheSummary[], coursesByFiche: FicheCoursesState, sortConfig: SortConfig): FicheSummary[] {
+  const sorted = [...fiches];
   sorted.sort((left, right) => {
-    const comparison = compareAgents(left, right, runsByAgent, sortConfig.key);
+    const comparison = compareFiches(left, right, coursesByFiche, sortConfig.key);
     if (comparison !== 0) {
       return sortConfig.ascending ? comparison : -comparison;
     }
@@ -63,10 +63,10 @@ export function sortAgents(agents: AgentSummary[], runsByAgent: AgentRunsState, 
   return sorted;
 }
 
-function compareAgents(
-  left: AgentSummary,
-  right: AgentSummary,
-  runsByAgent: AgentRunsState,
+function compareFiches(
+  left: FicheSummary,
+  right: FicheSummary,
+  coursesByFiche: FicheCoursesState,
   sortKey: SortKey
 ): number {
   switch (sortKey) {
@@ -78,17 +78,17 @@ function compareAgents(
       return formatDateTimeShort(left.created_at ?? null).localeCompare(
         formatDateTimeShort(right.created_at ?? null)
       );
-    case "last_run":
-      return formatDateTimeShort(left.last_run_at ?? null).localeCompare(
-        formatDateTimeShort(right.last_run_at ?? null)
+    case "last_course":
+      return formatDateTimeShort(left.last_course_at ?? null).localeCompare(
+        formatDateTimeShort(right.last_course_at ?? null)
       );
-    case "next_run":
-      return formatDateTimeShort(left.next_run_at ?? null).localeCompare(
-        formatDateTimeShort(right.next_run_at ?? null)
+    case "next_course":
+      return formatDateTimeShort(left.next_course_at ?? null).localeCompare(
+        formatDateTimeShort(right.next_course_at ?? null)
       );
     case "success": {
-      const leftStats = computeSuccessStats(runsByAgent[left.id]);
-      const rightStats = computeSuccessStats(runsByAgent[right.id]);
+      const leftStats = computeCourseSuccessStats(coursesByFiche[left.id]);
+      const rightStats = computeCourseSuccessStats(coursesByFiche[right.id]);
       if (leftStats.rate === rightStats.rate) {
         return leftStats.count - rightStats.count;
       }
@@ -99,25 +99,25 @@ function compareAgents(
   }
 }
 
-export function computeSuccessStats(runs?: AgentRun[]): { display: string; rate: number; count: number } {
-  if (!runs || runs.length === 0) {
+export function computeCourseSuccessStats(courses?: Course[]): { display: string; rate: number; count: number } {
+  if (!courses || courses.length === 0) {
     return { display: "0.0% (0)", rate: 0, count: 0 };
   }
 
-  const successCount = runs.filter((run) => run.status === "success").length;
-  const successRate = runs.length === 0 ? 0 : (successCount / runs.length) * 100;
+  const successCount = courses.filter((course) => course.status === "success").length;
+  const successRate = courses.length === 0 ? 0 : (successCount / courses.length) * 100;
   return {
-    display: `${successRate.toFixed(1)}% (${runs.length})`,
+    display: `${successRate.toFixed(1)}% (${courses.length})`,
     rate: successRate,
-    count: runs.length,
+    count: courses.length,
   };
 }
 
-export function determineLastRunIndicator(runs?: AgentRun[]): boolean | null {
-  if (!runs || runs.length === 0) {
+export function determineLastCourseIndicator(courses?: Course[]): boolean | null {
+  if (!courses || courses.length === 0) {
     return null;
   }
-  const status = runs[0]?.status;
+  const status = courses[0]?.status;
   if (status === "success") {
     return true;
   }

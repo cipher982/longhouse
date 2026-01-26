@@ -17,7 +17,7 @@
 ### ❌ DO NOT Mock - Internal Stack
 
 - **Database operations** - use test database, this catches schema issues
-- **Internal service calls** - AgentRunner, ThreadService, WorkflowEngine
+- **Internal service calls** - FicheRunner, ThreadService, WorkflowEngine
 - **Message serialization/deserialization** - core business logic
 - **WebSocket connections** (in integration tests)
 - **ORM model operations** - catches field name mismatches
@@ -28,9 +28,9 @@
 ### ✅ PROPER Integration Test
 
 ```python
-# tests/test_basic_agent_workflow_e2e.py - Tests exact "add agent, press run" scenario
-with patch('zerg.services.supervisor_react_engine.run_supervisor_loop') as mock_loop:
-    mock_loop.return_value = SupervisorResult(messages=[...], usage={}, interrupted=False)
+# tests/test_basic_fiche_workflow_e2e.py - Tests exact "add fiche, press run" scenario
+with patch('zerg.services.concierge_react_engine.run_concierge_loop') as mock_loop:
+    mock_loop.return_value = ConciergeResult(messages=[...], usage={}, interrupted=False)
 
     # Everything else runs REAL:
     execution_id = await workflow_engine.execute_workflow(workflow.id)
@@ -43,8 +43,8 @@ with patch('zerg.services.supervisor_react_engine.run_supervisor_loop') as mock_
 
 ```python
 # tests/test_conditional_workflows.py - Over-mocked version
-with patch("zerg.services.node_executors.AgentRunner") as mock_agent:
-    mock_agent.return_value.run_thread = lambda: [{"role": "assistant"}]  # Fake!
+with patch("zerg.services.node_executors.FicheRunner") as mock_fiche_runner:
+    mock_fiche_runner.return_value.run_thread = lambda: [{"role": "assistant"}]  # Fake!
 
     # Skips real ThreadMessage creation, real serialization, real datetime handling
     # Tests passed but production failed because they tested fake scenarios
@@ -54,7 +54,7 @@ with patch("zerg.services.node_executors.AgentRunner") as mock_agent:
 
 ### ✅ NEW Integration Tests (100% Passing)
 
-1. **`test_basic_agent_workflow_e2e.py`** - Basic "add agent, press run" workflow
+1. **`test_basic_fiche_workflow_e2e.py`** - Basic "add fiche, press run" workflow
 2. **`test_conditional_workflows_integration.py`** - Real conditional logic with minimal mocking
 3. **Both test real ThreadMessage serialization** - catches field name bugs
 4. **Both test real datetime operations** - catches timezone subtraction bugs
@@ -80,5 +80,5 @@ The two critical bugs you encountered would be **impossible** with proper integr
 make test
 
 # Backend-only unit tests (supports passing extra pytest args)
-cd apps/zerg/backend && ./run_backend_tests.sh -k supervisor_tools
+cd apps/zerg/backend && ./run_backend_tests.sh -k concierge_tools
 ```

@@ -51,7 +51,7 @@ export default function PrivacyPage() {
 
           <h3>Your Content</h3>
           <p>
-            Your agents, workflows, and conversation history are stored to provide the service.
+            Your fiches, workflows, and conversation history are stored to provide the service.
             This data is associated with your account.
           </p>
 

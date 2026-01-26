@@ -20,10 +20,10 @@ export interface WaitOptions {
 }
 
 /**
- * Get worker ID from test context (standardized approach)
+ * Get commis ID from test context (standardized approach)
  */
-export function getWorkerIdFromTest(testInfo: TestInfo): string {
-  return String(testInfo.workerIndex);
+export function getCommisIdFromTest(testInfo: TestInfo): string {
+  return String(testInfo.commisIndex);
 }
 
 /**

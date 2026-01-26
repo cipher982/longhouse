@@ -4,22 +4,22 @@ from sqlalchemy.orm import Session
 
 from tests.conftest import TEST_MODEL
 from zerg.crud import crud as _crud
-from zerg.models.models import Agent
-from zerg.models.models import AgentMessage
-from zerg.schemas.schemas import AgentCreate
-from zerg.schemas.schemas import AgentUpdate
+from zerg.models.models import Fiche
+from zerg.models.models import FicheMessage
+from zerg.schemas.schemas import FicheCreate
+from zerg.schemas.schemas import FicheUpdate
 from zerg.schemas.schemas import MessageCreate
 
 
-def test_agent_model(db_session: Session):
-    """Test creating an Agent model instance"""
+def test_fiche_model(db_session: Session):
+    """Test creating an Fiche model instance"""
     owner = _crud.get_user_by_email(db_session, "dev@local") or _crud.create_user(
         db_session, email="dev@local", provider=None, role="ADMIN"
     )
 
-    agent = Agent(
+    fiche = Fiche(
         owner_id=owner.id,
-        name="Test Agent",
+        name="Test Fiche",
         system_instructions="This is a test system instruction",
         task_instructions="This is a test task instruction",
         model=TEST_MODEL,
@@ -28,78 +28,78 @@ def test_agent_model(db_session: Session):
         config={"key": "value"},
     )
 
-    db_session.add(agent)
+    db_session.add(fiche)
     db_session.commit()
-    db_session.refresh(agent)
+    db_session.refresh(fiche)
 
-    assert agent.id is not None
-    assert agent.name == "Test Agent"
-    assert agent.system_instructions == "This is a test system instruction"
-    assert agent.task_instructions == "This is a test task instruction"
-    assert agent.model == TEST_MODEL
-    assert agent.status == "idle"
-    assert agent.schedule is None
-    assert agent.config == {"key": "value"}
-    assert agent.created_at is not None
-    assert agent.updated_at is not None
-    assert isinstance(agent.created_at, datetime)
-    assert isinstance(agent.updated_at, datetime)
-    assert len(agent.messages) == 0
+    assert fiche.id is not None
+    assert fiche.name == "Test Fiche"
+    assert fiche.system_instructions == "This is a test system instruction"
+    assert fiche.task_instructions == "This is a test task instruction"
+    assert fiche.model == TEST_MODEL
+    assert fiche.status == "idle"
+    assert fiche.schedule is None
+    assert fiche.config == {"key": "value"}
+    assert fiche.created_at is not None
+    assert fiche.updated_at is not None
+    assert isinstance(fiche.created_at, datetime)
+    assert isinstance(fiche.updated_at, datetime)
+    assert len(fiche.messages) == 0
 
 
-def test_agent_message_model(db_session: Session, sample_agent: Agent):
-    """Test creating an AgentMessage model instance"""
-    message = AgentMessage(agent_id=sample_agent.id, role="user", content="Test message content")
+def test_fiche_message_model(db_session: Session, sample_fiche: Fiche):
+    """Test creating an FicheMessage model instance"""
+    message = FicheMessage(fiche_id=sample_fiche.id, role="user", content="Test message content")
 
     db_session.add(message)
     db_session.commit()
     db_session.refresh(message)
 
     assert message.id is not None
-    assert message.agent_id == sample_agent.id
+    assert message.fiche_id == sample_fiche.id
     assert message.role == "user"
     assert message.content == "Test message content"
     assert message.timestamp is not None
     assert isinstance(message.timestamp, datetime)
 
-    # Test the relationship back to the agent
-    assert message.agent.id == sample_agent.id
-    assert message.agent.name == sample_agent.name
+    # Test the relationship back to the fiche
+    assert message.fiche.id == sample_fiche.id
+    assert message.fiche.name == sample_fiche.name
 
 
-def test_agent_message_relationship(db_session: Session, sample_agent: Agent):
-    """Test the relationship between Agent and AgentMessage"""
-    # Create a few messages for the agent
+def test_fiche_message_relationship(db_session: Session, sample_fiche: Fiche):
+    """Test the relationship between Fiche and FicheMessage"""
+    # Create a few messages for the fiche
     messages = [
-        AgentMessage(agent_id=sample_agent.id, role="system", content="System instructions"),
-        AgentMessage(agent_id=sample_agent.id, role="user", content="User message 1"),
-        AgentMessage(agent_id=sample_agent.id, role="assistant", content="Assistant reply 1"),
-        AgentMessage(agent_id=sample_agent.id, role="user", content="User message 2"),
+        FicheMessage(fiche_id=sample_fiche.id, role="system", content="System instructions"),
+        FicheMessage(fiche_id=sample_fiche.id, role="user", content="User message 1"),
+        FicheMessage(fiche_id=sample_fiche.id, role="assistant", content="Assistant reply 1"),
+        FicheMessage(fiche_id=sample_fiche.id, role="user", content="User message 2"),
     ]
 
     for message in messages:
         db_session.add(message)
 
     db_session.commit()
-    db_session.refresh(sample_agent)
+    db_session.refresh(sample_fiche)
 
-    # Test that the agent has the right number of messages
-    assert len(sample_agent.messages) == 4
+    # Test that the fiche has the right number of messages
+    assert len(sample_fiche.messages) == 4
 
     # Test cascade delete
-    db_session.delete(sample_agent)
+    db_session.delete(sample_fiche)
     db_session.commit()
 
     # Check that all messages were deleted
-    remaining_messages = db_session.query(AgentMessage).filter(AgentMessage.agent_id == sample_agent.id).count()
+    remaining_messages = db_session.query(FicheMessage).filter(FicheMessage.fiche_id == sample_fiche.id).count()
     assert remaining_messages == 0
 
 
-def test_agent_schema_validation():
+def test_fiche_schema_validation():
     """Test the Pydantic schemas for request validation"""
-    # Test AgentCreate
-    agent_data = {
-        "name": "Schema Test Agent",
+    # Test FicheCreate
+    fiche_data = {
+        "name": "Schema Test Fiche",
         "system_instructions": "Test system instructions",
         "task_instructions": "Test task instructions",
         "model": TEST_MODEL,
@@ -107,24 +107,24 @@ def test_agent_schema_validation():
         "config": {"test_key": "test_value"},
     }
 
-    agent_create = AgentCreate(**agent_data)
-    # AgentCreate does not have a 'name' field (it's auto-generated)
-    # assert agent_create.name == agent_data["name"]
-    assert agent_create.system_instructions == agent_data["system_instructions"]
-    assert agent_create.task_instructions == agent_data["task_instructions"]
-    assert agent_create.model == agent_data["model"]
-    assert agent_create.schedule == agent_data["schedule"]
-    assert agent_create.config == agent_data["config"]
+    fiche_create = FicheCreate(**fiche_data)
+    # FicheCreate does not have a 'name' field (it's auto-generated)
+    # assert fiche_create.name == fiche_data["name"]
+    assert fiche_create.system_instructions == fiche_data["system_instructions"]
+    assert fiche_create.task_instructions == fiche_data["task_instructions"]
+    assert fiche_create.model == fiche_data["model"]
+    assert fiche_create.schedule == fiche_data["schedule"]
+    assert fiche_create.config == fiche_data["config"]
 
-    # Test AgentUpdate with partial data
+    # Test FicheUpdate with partial data
     update_data = {"name": "Updated Name", "status": "processing"}
 
-    agent_update = AgentUpdate(**update_data)
-    assert agent_update.name == update_data["name"]
-    assert agent_update.status == update_data["status"]
-    assert agent_update.system_instructions is None  # Not provided
-    assert agent_update.task_instructions is None  # Not provided
-    assert agent_update.model is None  # Not provided
+    fiche_update = FicheUpdate(**update_data)
+    assert fiche_update.name == update_data["name"]
+    assert fiche_update.status == update_data["status"]
+    assert fiche_update.system_instructions is None  # Not provided
+    assert fiche_update.task_instructions is None  # Not provided
+    assert fiche_update.model is None  # Not provided
 
     # Test MessageCreate
     message_data = {"role": "user", "content": "Test message"}

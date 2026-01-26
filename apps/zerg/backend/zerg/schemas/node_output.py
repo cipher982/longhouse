@@ -21,7 +21,7 @@ class NodeMetadata(BaseModel):
     """Standard metadata for all node executions."""
 
     # Required fields for all nodes
-    node_type: Literal["tool", "agent", "trigger", "conditional"] = Field(description="Type of node that was executed")
+    node_type: Literal["tool", "fiche", "trigger", "conditional"] = Field(description="Type of node that was executed")
     phase: Literal["waiting", "running", "finished"] = Field(description="Current execution phase")
     result: Optional[Literal["success", "failure", "cancelled"]] = Field(None, description="Execution outcome (when phase=finished)")
     execution_time_ms: Optional[int] = Field(None, description="Execution time in milliseconds")
@@ -48,18 +48,18 @@ class ToolNodeMetadata(NodeMetadata):
     tool_execution_time_ms: Optional[int] = Field(None, description="Time spent in tool execution (excluding overhead)")
 
 
-class AgentNodeMetadata(NodeMetadata):
-    """Metadata specific to agent node executions."""
+class FicheNodeMetadata(NodeMetadata):
+    """Metadata specific to fiche node executions."""
 
-    node_type: Literal["agent"] = "agent"
+    node_type: Literal["fiche"] = "fiche"
 
-    # Agent-specific metadata
-    agent_id: Optional[int] = Field(None, description="ID of the agent that was executed")
-    agent_name: Optional[str] = Field(None, description="Name of the agent")
+    # Fiche-specific metadata
+    fiche_id: Optional[int] = Field(None, description="ID of the fiche that was executed")
+    fiche_name: Optional[str] = Field(None, description="Name of the fiche")
     model_used: Optional[str] = Field(None, description="LLM model used (e.g., gpt-4, claude-3)")
     total_tokens: Optional[int] = Field(None, description="Total tokens used in LLM calls")
     total_cost_usd: Optional[float] = Field(None, description="Total cost in USD")
-    thread_id: Optional[int] = Field(None, description="Thread ID for agent conversation")
+    thread_id: Optional[int] = Field(None, description="Thread ID for fiche conversation")
 
 
 class ConditionalNodeMetadata(NodeMetadata):
@@ -94,7 +94,7 @@ class NodeOutputEnvelope(BaseModel):
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat() if v else None})
 
     value: Any = Field(description="Primary result value from node execution")
-    meta: Union[ToolNodeMetadata, AgentNodeMetadata, ConditionalNodeMetadata, TriggerNodeMetadata, NodeMetadata] = Field(
+    meta: Union[ToolNodeMetadata, FicheNodeMetadata, ConditionalNodeMetadata, TriggerNodeMetadata, NodeMetadata] = Field(
         description="Execution metadata and context"
     )
 
@@ -142,40 +142,40 @@ def create_tool_envelope(
     return NodeOutputEnvelope(value=value, meta=metadata)
 
 
-def create_agent_envelope(
+def create_fiche_envelope(
     value: Any,
     *,
     phase: Literal["waiting", "running", "finished"] = "finished",
     result: Optional[Literal["success", "failure", "cancelled"]] = "success",
-    agent_id: Optional[int] = None,
-    agent_name: Optional[str] = None,
+    fiche_id: Optional[int] = None,
+    fiche_name: Optional[str] = None,
     thread_id: Optional[int] = None,
     execution_time_ms: Optional[int] = None,
     error_message: Optional[str] = None,
     **kwargs,
 ) -> NodeOutputEnvelope:
     """
-    Create a standardized agent node output envelope.
+    Create a standardized fiche node output envelope.
 
     Args:
-        value: Primary result from agent execution
+        value: Primary result from fiche execution
         phase: Current execution phase
         result: Execution outcome (when phase=finished)
-        agent_id: ID of the agent
-        agent_name: Name of the agent
+        fiche_id: ID of the fiche
+        fiche_name: Name of the fiche
         thread_id: Thread ID for conversation
         execution_time_ms: Execution time in milliseconds
         error_message: Error message if result=failure
         **kwargs: Additional metadata fields
 
     Returns:
-        NodeOutputEnvelope with agent metadata
+        NodeOutputEnvelope with fiche metadata
     """
-    metadata = AgentNodeMetadata(
+    metadata = FicheNodeMetadata(
         phase=phase,
         result=result,
-        agent_id=agent_id,
-        agent_name=agent_name,
+        fiche_id=fiche_id,
+        fiche_name=fiche_name,
         thread_id=thread_id,
         execution_time_ms=execution_time_ms,
         error_message=error_message,

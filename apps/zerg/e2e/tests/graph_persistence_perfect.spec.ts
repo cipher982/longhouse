@@ -20,22 +20,22 @@ test.describe('Perfect Graph Persistence', () => {
   });
 
   test('complete graph persists as single entity across tab switches', async ({ page, request }, testInfo) => {
-    const workerId = String(testInfo.parallelIndex);
+    const commisId = String(testInfo.parallelIndex);
 
-    // Step 1: Create test agent
-    console.log('🏗️  Step 1: Creating test agent...');
-    const agentResponse = await request.post('/api/agents', {
+    // Step 1: Create test fiche
+    console.log('🏗️  Step 1: Creating test fiche...');
+    const ficheResponse = await request.post('/api/fiches', {
       data: {
-        name: `Perfect Test Agent ${workerId}`,
-        system_instructions: 'Perfect test agent',
+        name: `Perfect Test Fiche ${commisId}`,
+        system_instructions: 'Perfect test fiche',
         task_instructions: 'Execute perfectly',
         model: 'gpt-mock',
       }
     });
 
-    expect(agentResponse.status()).toBe(201);
-    const agent = await agentResponse.json();
-    console.log(`✅ Agent created: ${agent.id}`);
+    expect(ficheResponse.status()).toBe(201);
+    const fiche = await ficheResponse.json();
+    console.log(`✅ Fiche created: ${fiche.id}`);
 
     // Step 2: Navigate to canvas
     console.log('🎨 Step 2: Navigating to canvas...');
@@ -45,15 +45,15 @@ test.describe('Perfect Graph Persistence', () => {
     // Step 3: Create complete graph (nodes + edges)
     console.log('📊 Step 3: Building complete graph...');
 
-    // Add agent node
-    const agentShelf = page.locator('#agent-shelf');
-    const agentPill = agentShelf.locator(`text=${agent.name}`);
-    await expect(agentPill).toBeVisible();
+    // Add fiche node
+    const ficheShelf = page.locator('#fiche-shelf');
+    const fichePill = ficheShelf.locator(`text=${fiche.name}`);
+    await expect(fichePill).toBeVisible();
 
     const canvas = page.locator('#node-canvas');
-    await agentPill.dragTo(canvas, { targetPosition: { x: 300, y: 200 } });
+    await fichePill.dragTo(canvas, { targetPosition: { x: 300, y: 200 } });
     await page.waitForTimeout(1000);
-    console.log('✅ Agent node added');
+    console.log('✅ Fiche node added');
 
     // TODO: Add trigger and create edge (requires UI investigation)
     // For now, validate that the single node persists perfectly
@@ -94,8 +94,8 @@ test.describe('Perfect Graph Persistence', () => {
     console.log(`📊 Initial state: ${initialState.pixelCount} pixels drawn`);
     expect(initialState.hasContent).toBe(true);
 
-    // Step 5: Verify agent shelf state
-    const initialShelfState = await agentPill.getAttribute('class');
+    // Step 5: Verify fiche shelf state
+    const initialShelfState = await fichePill.getAttribute('class');
     console.log(`📊 Initial shelf state: ${initialShelfState}`);
     expect(initialShelfState).toContain('disabled');
 
@@ -147,7 +147,7 @@ test.describe('Perfect Graph Persistence', () => {
       };
     });
 
-    const finalShelfState = await agentPill.getAttribute('class');
+    const finalShelfState = await fichePill.getAttribute('class');
 
     console.log(`📊 Final state: ${finalState.pixelCount} pixels drawn`);
     console.log(`📊 Final shelf state: ${finalShelfState}`);

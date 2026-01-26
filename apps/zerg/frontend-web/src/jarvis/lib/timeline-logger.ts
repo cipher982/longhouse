@@ -7,14 +7,14 @@
  * Timeline format:
  * [Timeline] correlationId=abc123
  *   T+0ms      send              Message dispatched
- *   T+45ms     backend_received  run_id=1
- *   T+120ms    supervisor_started
- *   T+850ms    worker_spawned    job_id=1
- *   T+1200ms   worker_started    worker_id=xyz
+ *   T+45ms     backend_received  course_id=1
+ *   T+120ms    concierge_started
+ *   T+850ms    commis_spawned    job_id=1
+ *   T+1200ms   commis_started    commis_id=xyz
  *   T+1500ms   tool_started      ssh_exec
  *   T+2100ms   tool_completed    ssh_exec (600ms)
- *   T+2800ms   worker_complete   (1600ms total)
- *   T+3200ms   supervisor_complete (3155ms total)
+ *   T+2800ms   commis_complete   (1600ms total)
+ *   T+3200ms   concierge_complete (3155ms total)
  */
 
 import { eventBus } from './event-bus';
@@ -56,23 +56,23 @@ export class TimelineLogger {
       })
     );
 
-    // Supervisor lifecycle events
+    // Concierge lifecycle events
     this.unsubscribers.push(
-      eventBus.on('supervisor:started', (data) => {
-        this.recordEvent('supervisor_started', data.timestamp, { runId: data.runId, task: data.task });
+      eventBus.on('concierge:started', (data) => {
+        this.recordEvent('concierge_started', data.timestamp, { courseId: data.courseId, task: data.task });
       })
     );
 
     this.unsubscribers.push(
-      eventBus.on('supervisor:thinking', (data) => {
-        this.recordEvent('supervisor_thinking', data.timestamp, { message: data.message });
+      eventBus.on('concierge:thinking', (data) => {
+        this.recordEvent('concierge_thinking', data.timestamp, { message: data.message });
       })
     );
 
     this.unsubscribers.push(
-      eventBus.on('supervisor:complete', (data) => {
-        this.recordEvent('supervisor_complete', data.timestamp, {
-          runId: data.runId,
+      eventBus.on('concierge:complete', (data) => {
+        this.recordEvent('concierge_complete', data.timestamp, {
+          courseId: data.courseId,
           status: data.status,
           durationMs: data.durationMs,
         });
@@ -82,41 +82,41 @@ export class TimelineLogger {
     );
 
     this.unsubscribers.push(
-      eventBus.on('supervisor:error', (data) => {
-        this.recordEvent('supervisor_error', data.timestamp, { message: data.message });
+      eventBus.on('concierge:error', (data) => {
+        this.recordEvent('concierge_error', data.timestamp, { message: data.message });
         this.outputTimeline();
       })
     );
 
-    // Worker lifecycle events
+    // Commis lifecycle events
     this.unsubscribers.push(
-      eventBus.on('supervisor:worker_spawned', (data) => {
-        this.recordEvent('worker_spawned', data.timestamp, { jobId: data.jobId, task: data.task });
+      eventBus.on('concierge:commis_spawned', (data) => {
+        this.recordEvent('commis_spawned', data.timestamp, { jobId: data.jobId, task: data.task });
       })
     );
 
     this.unsubscribers.push(
-      eventBus.on('supervisor:worker_started', (data) => {
-        this.recordEvent('worker_started', data.timestamp, { jobId: data.jobId, workerId: data.workerId });
+      eventBus.on('concierge:commis_started', (data) => {
+        this.recordEvent('commis_started', data.timestamp, { jobId: data.jobId, commisId: data.commisId });
       })
     );
 
     this.unsubscribers.push(
-      eventBus.on('supervisor:worker_complete', (data) => {
-        this.recordEvent('worker_complete', data.timestamp, {
+      eventBus.on('concierge:commis_complete', (data) => {
+        this.recordEvent('commis_complete', data.timestamp, {
           jobId: data.jobId,
-          workerId: data.workerId,
+          commisId: data.commisId,
           status: data.status,
           durationMs: data.durationMs,
         });
       })
     );
 
-    // Worker tool events
+    // Commis tool events
     this.unsubscribers.push(
-      eventBus.on('worker:tool_started', (data) => {
+      eventBus.on('commis:tool_started', (data) => {
         this.recordEvent('tool_started', data.timestamp, {
-          workerId: data.workerId,
+          commisId: data.commisId,
           toolName: data.toolName,
           toolCallId: data.toolCallId,
         });
@@ -124,9 +124,9 @@ export class TimelineLogger {
     );
 
     this.unsubscribers.push(
-      eventBus.on('worker:tool_completed', (data) => {
+      eventBus.on('commis:tool_completed', (data) => {
         this.recordEvent('tool_completed', data.timestamp, {
-          workerId: data.workerId,
+          commisId: data.commisId,
           toolName: data.toolName,
           toolCallId: data.toolCallId,
           durationMs: data.durationMs,
@@ -135,9 +135,9 @@ export class TimelineLogger {
     );
 
     this.unsubscribers.push(
-      eventBus.on('worker:tool_failed', (data) => {
+      eventBus.on('commis:tool_failed', (data) => {
         this.recordEvent('tool_failed', data.timestamp, {
-          workerId: data.workerId,
+          commisId: data.commisId,
           toolName: data.toolName,
           toolCallId: data.toolCallId,
           durationMs: data.durationMs,
@@ -148,8 +148,8 @@ export class TimelineLogger {
 
     // Deferred event
     this.unsubscribers.push(
-      eventBus.on('supervisor:deferred', (data) => {
-        this.recordEvent('supervisor_deferred', data.timestamp, { runId: data.runId, message: data.message });
+      eventBus.on('concierge:deferred', (data) => {
+        this.recordEvent('concierge_deferred', data.timestamp, { courseId: data.courseId, message: data.message });
         this.outputTimeline();
       })
     );
@@ -191,9 +191,9 @@ export class TimelineLogger {
       let metadataStr = '';
       if (event.metadata) {
         const parts: string[] = [];
-        if (event.metadata.runId) parts.push(`run_id=${event.metadata.runId}`);
+        if (event.metadata.courseId) parts.push(`course_id=${event.metadata.courseId}`);
         if (event.metadata.jobId) parts.push(`job_id=${event.metadata.jobId}`);
-        if (event.metadata.workerId) parts.push(`worker_id=${event.metadata.workerId}`);
+        if (event.metadata.commisId) parts.push(`commis_id=${event.metadata.commisId}`);
         if (event.metadata.toolName) parts.push(`${event.metadata.toolName}`);
         if (event.metadata.durationMs) parts.push(`(${event.metadata.durationMs}ms)`);
         if (event.metadata.status) parts.push(`status=${event.metadata.status}`);

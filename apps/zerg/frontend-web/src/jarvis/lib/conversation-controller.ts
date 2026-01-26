@@ -19,7 +19,7 @@ export interface ConversationState {
   streamingMessageId: string | null;
   streamingText: string;
   currentMessageId: string | null; // Message ID for streaming updates
-  currentRunId: number | undefined; // Run ID for continuation messages
+  currentCourseId: number | undefined; // Run ID for continuation messages
 }
 
 export type ConversationEvent =
@@ -35,7 +35,7 @@ export class ConversationController {
     streamingMessageId: null,
     streamingText: '',
     currentMessageId: null,
-    currentRunId: undefined,
+    currentCourseId: undefined,
   };
 
   private listeners: Set<ConversationListener> = new Set();
@@ -89,20 +89,20 @@ export class ConversationController {
   /**
    * Start a streaming response with messageId
    */
-  startStreamingWithMessageId(messageId: string, runId?: number): void {
-    logger.debug(`Starting streaming response with messageId: ${messageId}, runId: ${runId}`);
+  startStreamingWithMessageId(messageId: string, courseId?: number): void {
+    logger.debug(`Starting streaming response with messageId: ${messageId}, courseId: ${courseId}`);
 
     // Create streaming message ID
     this.state.streamingMessageId = `streaming-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     this.state.streamingText = '';
     this.state.currentMessageId = messageId;
-    this.state.currentRunId = runId;
+    this.state.currentCourseId = courseId;
 
     this.emit({ type: 'streamingStart' });
   }
 
   /**
-   * Append text to streaming response using messageId (for continuation runs)
+   * Append text to streaming response using messageId (for continuation courses)
    */
   appendStreamingByMessageId(messageId: string, delta: string): void {
     if (!this.state.streamingMessageId) {
@@ -116,7 +116,7 @@ export class ConversationController {
     stateManager.setStreamingText(this.state.streamingText);
 
     // Update the message by messageId
-    stateManager.updateAssistantStatusByMessageId(messageId, 'streaming', this.state.streamingText, undefined, this.state.currentRunId);
+    stateManager.updateAssistantStatusByMessageId(messageId, 'streaming', this.state.streamingText, undefined, this.state.currentCourseId);
   }
 
   /**
@@ -133,7 +133,7 @@ export class ConversationController {
     this.state.streamingMessageId = null;
     this.state.streamingText = '';
     this.state.currentMessageId = null;
-    this.state.currentRunId = undefined;
+    this.state.currentCourseId = undefined;
 
     // Clear streaming text and notify React of finalized message
     stateManager.setStreamingText('');
@@ -163,7 +163,7 @@ export class ConversationController {
     this.state.streamingMessageId = null;
     this.state.streamingText = '';
     this.state.currentMessageId = null;
-    this.state.currentRunId = undefined;
+    this.state.currentCourseId = undefined;
     stateManager.setStreamingText('');
   }
 

@@ -19,18 +19,18 @@ def test_create_email_trigger_with_connector(client, db_session, _dev_user):
         config={"refresh_token": "enc:dummy"},
     )
 
-    # 2) Create an agent
-    agent_payload = {
-        "name": "Email Trigger Agent",
+    # 2) Create an fiche
+    fiche_payload = {
+        "name": "Email Trigger Fiche",
         "system_instructions": "sys",
         "task_instructions": "task",
         "model": "gpt-mock",
     }
-    agent_id = client.post("/api/agents/", json=agent_payload).json()["id"]
+    fiche_id = client.post("/api/fiches/", json=fiche_payload).json()["id"]
 
     # 3) Create an email trigger referencing the connector
     trigger_payload = {
-        "agent_id": agent_id,
+        "fiche_id": fiche_id,
         "type": "email",
         "config": {"connector_id": conn.id},
     }

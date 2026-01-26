@@ -51,8 +51,8 @@ test.describe('Authentication flows', () => {
     const url = page.url();
     expect(url).toMatch(/\/dashboard|\/$/);
 
-    // Dashboard should have create agent button
-    await expect(page.locator('[data-testid="create-agent-btn"]')).toBeVisible({ timeout: 10000 });
+    // Dashboard should have create fiche button
+    await expect(page.locator('[data-testid="create-fiche-btn"]')).toBeVisible({ timeout: 10000 });
 
     console.log('✅ Dashboard loaded successfully');
   });

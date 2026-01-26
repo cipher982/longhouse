@@ -1,4 +1,4 @@
-"""Tests for WorkerJobProcessor session continuity integration.
+"""Tests for CommisJobProcessor session continuity integration.
 
 These tests verify that the workspace job processing correctly integrates
 with session continuity (prepare_session_for_resume and ship_session_to_life_hub).
@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
-from zerg.services.worker_job_processor import WorkerJobProcessor
+from zerg.services.commis_job_processor import CommisJobProcessor
 
 
 class TestWorkspaceJobSessionContinuity:
@@ -24,8 +24,8 @@ class TestWorkspaceJobSessionContinuity:
 
     @pytest.fixture
     def processor(self):
-        """Create a WorkerJobProcessor instance."""
-        return WorkerJobProcessor()
+        """Create a CommisJobProcessor instance."""
+        return CommisJobProcessor()
 
     @pytest.fixture
     def mock_workspace(self, tmp_path):
@@ -66,7 +66,7 @@ class TestWorkspaceJobSessionContinuity:
         from zerg.crud import crud
 
         # Create a job with resume_session_id
-        job = crud.WorkerJob(
+        job = crud.CommisJob(
             task="Test task",
             model="claude-sonnet",
             status="running",
@@ -101,9 +101,9 @@ class TestWorkspaceJobSessionContinuity:
                 "zerg.services.session_continuity.ship_session_to_life_hub",
                 mock_ship,
             ),
-            patch("zerg.services.worker_artifact_store.WorkerArtifactStore"),
+            patch("zerg.services.commis_artifact_store.CommisArtifactStore"),
         ):
-            await processor._process_workspace_job(job_id, supervisor_run_id=None)
+            await processor._process_workspace_job(job_id, concierge_course_id=None)
 
         # Verify prepare_session_for_resume was called with correct args
         mock_prepare.assert_called_once()
@@ -124,7 +124,7 @@ class TestWorkspaceJobSessionContinuity:
         from zerg.crud import crud
 
         # Create a job WITHOUT resume_session_id
-        job = crud.WorkerJob(
+        job = crud.CommisJob(
             task="Test task",
             model="claude-sonnet",
             status="running",
@@ -159,9 +159,9 @@ class TestWorkspaceJobSessionContinuity:
                 "zerg.services.session_continuity.ship_session_to_life_hub",
                 mock_ship,
             ),
-            patch("zerg.services.worker_artifact_store.WorkerArtifactStore"),
+            patch("zerg.services.commis_artifact_store.CommisArtifactStore"),
         ):
-            await processor._process_workspace_job(job_id, supervisor_run_id=None)
+            await processor._process_workspace_job(job_id, concierge_course_id=None)
 
         # Verify prepare_session_for_resume was NOT called
         mock_prepare.assert_not_called()
@@ -179,7 +179,7 @@ class TestWorkspaceJobSessionContinuity:
         """Test that ship_session_to_life_hub is called after successful execution."""
         from zerg.crud import crud
 
-        job = crud.WorkerJob(
+        job = crud.CommisJob(
             task="Test task",
             model="claude-sonnet",
             status="running",
@@ -208,22 +208,22 @@ class TestWorkspaceJobSessionContinuity:
                 "zerg.services.session_continuity.ship_session_to_life_hub",
                 mock_ship,
             ),
-            patch("zerg.services.worker_artifact_store.WorkerArtifactStore"),
+            patch("zerg.services.commis_artifact_store.CommisArtifactStore"),
         ):
-            await processor._process_workspace_job(job_id, supervisor_run_id=None)
+            await processor._process_workspace_job(job_id, concierge_course_id=None)
 
         # Verify ship_session_to_life_hub was called
         mock_ship.assert_called_once()
         call_args = mock_ship.call_args
-        # Worker ID should be generated and passed
-        assert "worker_id" in call_args.kwargs
+        # Commis ID should be generated and passed
+        assert "commis_id" in call_args.kwargs
 
     @pytest.mark.asyncio
     async def test_workspace_job_no_ship_on_failure(self, processor, mock_workspace_manager_class, db_session):
         """Test that ship_session_to_life_hub is NOT called when execution fails."""
         from zerg.crud import crud
 
-        job = crud.WorkerJob(
+        job = crud.CommisJob(
             task="Test task",
             model="claude-sonnet",
             status="running",
@@ -262,9 +262,9 @@ class TestWorkspaceJobSessionContinuity:
                 "zerg.services.session_continuity.ship_session_to_life_hub",
                 mock_ship,
             ),
-            patch("zerg.services.worker_artifact_store.WorkerArtifactStore"),
+            patch("zerg.services.commis_artifact_store.CommisArtifactStore"),
         ):
-            await processor._process_workspace_job(job_id, supervisor_run_id=None)
+            await processor._process_workspace_job(job_id, concierge_course_id=None)
 
         # Verify ship_session_to_life_hub was NOT called (only ships on success)
         mock_ship.assert_not_called()
@@ -276,7 +276,7 @@ class TestWorkspaceJobSessionContinuity:
         """Test that job continues even if prepare_session_for_resume fails."""
         from zerg.crud import crud
 
-        job = crud.WorkerJob(
+        job = crud.CommisJob(
             task="Test task",
             model="claude-sonnet",
             status="running",
@@ -312,10 +312,10 @@ class TestWorkspaceJobSessionContinuity:
                 "zerg.services.session_continuity.ship_session_to_life_hub",
                 mock_ship,
             ),
-            patch("zerg.services.worker_artifact_store.WorkerArtifactStore"),
+            patch("zerg.services.commis_artifact_store.CommisArtifactStore"),
         ):
             # Should not raise - graceful degradation
-            await processor._process_workspace_job(job_id, supervisor_run_id=None)
+            await processor._process_workspace_job(job_id, concierge_course_id=None)
 
         # Verify the job still ran (without resume)
         executor_instance = mock_cloud_executor_class.return_value
@@ -330,7 +330,7 @@ class TestWorkspaceJobSessionContinuity:
         """Test that job completes even if ship_session_to_life_hub fails."""
         from zerg.crud import crud
 
-        job = crud.WorkerJob(
+        job = crud.CommisJob(
             task="Test task",
             model="claude-sonnet",
             status="running",
@@ -360,10 +360,10 @@ class TestWorkspaceJobSessionContinuity:
                 "zerg.services.session_continuity.ship_session_to_life_hub",
                 mock_ship,
             ),
-            patch("zerg.services.worker_artifact_store.WorkerArtifactStore"),
+            patch("zerg.services.commis_artifact_store.CommisArtifactStore"),
         ):
             # Should not raise - shipping is best-effort
-            await processor._process_workspace_job(job_id, supervisor_run_id=None)
+            await processor._process_workspace_job(job_id, concierge_course_id=None)
 
         # Verify job was marked as success (execution succeeded, ship failure doesn't affect status)
         db_session.refresh(job)

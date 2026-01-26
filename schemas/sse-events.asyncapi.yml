@@ -20,9 +20,9 @@ defaultContentType: application/json
 # ---------------------------------------------------------------------------
 
 channels:
-  RunEventsChannel:
+  CourseEventsChannel:
     address: /api/jarvis/chat/stream
-    description: Real-time concierge and commis events for a specific run
+    description: Real-time concierge and commis events for a specific course
     messages:
       ConnectedEvent:
         $ref: '#/components/messages/ConnectedEvent'
@@ -73,11 +73,11 @@ channels:
 # ---------------------------------------------------------------------------
 
 operations:
-  StreamRunEvents:
+  StreamCourseEvents:
     action: send
     channel:
-      $ref: '#/channels/RunEventsChannel'
-    summary: Stream concierge and commis events for a run
+      $ref: '#/channels/CourseEventsChannel'
+    summary: Stream concierge and commis events for a course
 
 # ---------------------------------------------------------------------------
 # Components - Messages and schemas
@@ -309,15 +309,15 @@ components:
     # ---------------------------------------------------------------------------
     ConnectedPayload:
       type: object
-      required: [message, run_id]
+      required: [message, course_id]
       properties:
         message:
           type: string
           description: Connection confirmation message
-        run_id:
+        course_id:
           type: integer
           minimum: 1
-          description: Run ID for this SSE stream
+          description: Course ID for this SSE stream
         client_correlation_id:
           type: string
           description: Optional client-provided correlation ID
@@ -340,10 +340,10 @@ components:
       type: object
       required: [task, thread_id, message_id]
       properties:
-        run_id:
+        course_id:
           type: integer
           minimum: 1
-          description: Run ID (may be omitted in legacy events)
+          description: Course ID (may be omitted in legacy events)
         thread_id:
           type: integer
           minimum: 1
@@ -359,11 +359,11 @@ components:
         continuation_of_message_id:
           type: string
           format: uuid
-          description: For continuation runs, the message_id of the original run's message
+          description: For continuation courses, the message_id of the original course's message
         trace_id:
           type: string
           format: uuid
-          description: End-to-end trace ID for debugging (copy from UI for agent debugging)
+          description: End-to-end trace ID for debugging (copy from UI for fiche debugging)
 
     ConciergeThinkingPayload:
       type: object
@@ -373,7 +373,7 @@ components:
           type: string
           minLength: 1
           description: Thinking status message
-        run_id:
+        course_id:
           type: integer
           minimum: 1
         trace_id:
@@ -388,7 +388,7 @@ components:
         token:
           type: string
           description: LLM token (may be empty string)
-        run_id:
+        course_id:
           type: integer
           minimum: 1
         thread_id:
@@ -420,10 +420,10 @@ components:
           description: Execution duration in milliseconds
         usage:
           $ref: '#/components/schemas/UsageData'
-        run_id:
+        course_id:
           type: integer
           minimum: 1
-        agent_id:
+        fiche_id:
           type: integer
           minimum: 1
         thread_id:
@@ -451,15 +451,15 @@ components:
           description: Deferred status message
         attach_url:
           type: string
-          description: URL to re-attach to the running execution
+          description: URL to re-attach to the running course execution
         timeout_seconds:
           type: number
           minimum: 0
           description: Timeout that triggered deferral
-        run_id:
+        course_id:
           type: integer
           minimum: 1
-        agent_id:
+        fiche_id:
           type: integer
           minimum: 1
         thread_id:
@@ -489,10 +489,10 @@ components:
         close_stream:
           type: boolean
           description: If false, keep SSE stream open while waiting
-        run_id:
+        course_id:
           type: integer
           minimum: 1
-        agent_id:
+        fiche_id:
           type: integer
           minimum: 1
         thread_id:
@@ -511,10 +511,10 @@ components:
       type: object
       required: [thread_id, message_id]
       properties:
-        run_id:
+        course_id:
           type: integer
           minimum: 1
-        agent_id:
+        fiche_id:
           type: integer
           minimum: 1
         thread_id:
@@ -541,7 +541,7 @@ components:
         message:
           type: string
           description: Alternative error message field
-        run_id:
+        course_id:
           type: integer
           minimum: 1
         trace_id:
@@ -570,7 +570,7 @@ components:
         model:
           type: string
           description: LLM model for commis
-        run_id:
+        course_id:
           type: integer
           minimum: 1
         trace_id:
@@ -589,7 +589,7 @@ components:
           type: string
           minLength: 1
           description: Commis execution ID
-        run_id:
+        course_id:
           type: integer
           minimum: 1
         task:
@@ -618,7 +618,7 @@ components:
         error:
           type: string
           description: Error message (only present if status=failed)
-        run_id:
+        course_id:
           type: integer
           minimum: 1
         trace_id:
@@ -640,7 +640,7 @@ components:
           type: string
           minLength: 1
           description: Extracted commis summary
-        run_id:
+        course_id:
           type: integer
           minimum: 1
         trace_id:
@@ -668,10 +668,10 @@ components:
         tool_args_preview:
           type: string
           description: Preview of tool arguments (may be truncated)
-        run_id:
+        course_id:
           type: integer
           minimum: 1
-          description: Required for security (prevents cross-run leakage)
+          description: Required for security (prevents cross-course leakage)
         trace_id:
           type: string
           format: uuid
@@ -696,7 +696,7 @@ components:
         result_preview:
           type: string
           description: Preview of tool result (may be truncated)
-        run_id:
+        course_id:
           type: integer
           minimum: 1
         trace_id:
@@ -724,7 +724,7 @@ components:
           type: string
           minLength: 1
           description: Error message
-        run_id:
+        course_id:
           type: integer
           minimum: 1
         trace_id:
@@ -752,10 +752,10 @@ components:
         tool_args:
           type: object
           description: Full tool arguments (for persistence/raw view)
-        run_id:
+        course_id:
           type: integer
           minimum: 1
-          description: Concierge run ID for correlation
+          description: Concierge course ID for correlation
         trace_id:
           type: string
           format: uuid
@@ -783,7 +783,7 @@ components:
         data:
           type: object
           description: Optional structured data (metrics, artifacts preview)
-        run_id:
+        course_id:
           type: integer
           minimum: 1
         trace_id:
@@ -810,7 +810,7 @@ components:
         result:
           type: object
           description: Full result (for persistence/raw view)
-        run_id:
+        course_id:
           type: integer
           minimum: 1
         trace_id:
@@ -838,7 +838,7 @@ components:
         error_details:
           type: object
           description: Full error details (stack trace, context)
-        run_id:
+        course_id:
           type: integer
           minimum: 1
         trace_id:
@@ -860,8 +860,8 @@ x-sse-protocol:
 
 x-security-notes:
   - All events include owner_id in backend but it's filtered before SSE emission
-  - Tool events MUST include run_id to prevent cross-run leakage
-  - SSE stream filters events by run_id and owner_id
+  - Tool events MUST include course_id to prevent cross-course leakage
+  - SSE stream filters events by course_id and owner_id
 
 x-performance-notes:
   - concierge_token events are high-frequency (per-token streaming)

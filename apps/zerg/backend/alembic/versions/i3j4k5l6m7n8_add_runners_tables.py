@@ -66,8 +66,8 @@ def upgrade() -> None:
         'runner_jobs',
         sa.Column('id', sa.String(), primary_key=True),  # UUID as string
         sa.Column('owner_id', sa.Integer(), sa.ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True),
-        sa.Column('worker_id', sa.String(), nullable=True, index=True),
-        sa.Column('run_id', sa.String(), nullable=True),
+        sa.Column('commis_id', sa.String(), nullable=True, index=True),
+        sa.Column('course_id', sa.String(), nullable=True),
         sa.Column('runner_id', sa.Integer(), sa.ForeignKey('runners.id', ondelete='CASCADE'), nullable=False, index=True),
         sa.Column('command', sa.Text(), nullable=False),
         sa.Column('timeout_secs', sa.Integer(), nullable=False),

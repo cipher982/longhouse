@@ -176,7 +176,7 @@ DATABASE_URL="postgresql://zerg:secure-password@localhost:5432/zerg_prod" \
 
 # 3. Verify
 psql -U zerg -d zerg_prod -c "\dt"
-# Should show: users, agents, agent_runs, agent_threads, etc.
+# Should show: users, fiches, courses, threads, etc.
 ```
 
 ### SQLite (Development/Small Deployments)
@@ -190,7 +190,7 @@ cd apps/zerg/backend
 uv run alembic upgrade head
 
 # 3. Verify
-sqlite3 swarm.db ".schema agent_runs"
+sqlite3 swarm.db ".schema courses"
 ```
 
 ## Systemd Services
@@ -332,9 +332,12 @@ If you want `/metrics` publicly reachable, add an explicit nginx route (and prot
 
 Key metrics:
 
-- `agent_runs_total` - Total agent executions
-- `agent_runs_duration_seconds` - Execution time
-- `agent_runs_cost_usd` - Cost per run
+- `dashboard_snapshot_requests_total` - Dashboard snapshot requests
+- `dashboard_snapshot_latency_seconds` - Snapshot latency
+- `dashboard_snapshot_fiches_returned` - Fiches returned per snapshot
+- `dashboard_snapshot_courses_returned` - Courses returned per snapshot
+- `websocket_course_updates_total` - Course update broadcasts
+- `websocket_course_update_latency_seconds` - Course update latency
 - `websocket_connections` - Active connections
 
 ### Alerts
@@ -553,9 +556,9 @@ psql -U zerg -d zerg_prod -c "VACUUM ANALYZE;"
 # Check database size
 psql -U zerg -d zerg_prod -c "\l+"
 
-# Archive old runs (older than 90 days)
+# Archive old courses (older than 90 days)
 psql -U zerg -d zerg_prod << EOF
-DELETE FROM agent_runs
+DELETE FROM courses
 WHERE created_at < NOW() - INTERVAL '90 days';
 EOF
 ```
@@ -593,13 +596,13 @@ Before going live:
 - [ ] Run smoke tests: `./scripts/smoke-prod.sh`
 - [ ] Test Jarvis authentication
 - [ ] Verify SSE streaming works
-- [ ] Test agent dispatch
-- [ ] Confirm scheduled agents run
+- [ ] Test fiche dispatch
+- [ ] Confirm scheduled fiches run
 
 ### Deployment
 
 - [ ] Database migrations applied
-- [ ] Baseline agents seeded
+- [ ] Baseline fiches seeded
 - [ ] Systemd services enabled
 - [ ] Nginx configuration tested
 - [ ] DNS records configured
@@ -641,9 +644,9 @@ Ensure critical queries are fast:
 
 ```sql
 -- Already created by migrations, verify:
-CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id ON agent_runs(agent_id);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_created_at ON agent_runs(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
+CREATE INDEX IF NOT EXISTS idx_courses_fiche_id ON courses(fiche_id);
+CREATE INDEX IF NOT EXISTS idx_courses_created_at ON courses(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_courses_status ON courses(status);
 ```
 
 ### Connection Pooling
@@ -667,7 +670,7 @@ Avoid adding Redis by default. Add caching only after measuring real hotspots.
 After deployment:
 
 1. Validate endpoints with `./scripts/smoke-prod.sh`
-2. Seed agents with `make seed-agents` (idempotent)
+2. Seed fiches with `make seed-fiches` (idempotent)
 3. Review logs and error rates
 4. Ensure backups are configured
 5. Document any custom configuration

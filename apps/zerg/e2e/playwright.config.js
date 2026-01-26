@@ -68,18 +68,18 @@ FRONTEND_PORT = process.env.FRONTEND_PORT ? parseInt(process.env.FRONTEND_PORT) 
 const frontendBaseUrl = `http://localhost:${FRONTEND_PORT}`;
 process.env.PLAYWRIGHT_FRONTEND_BASE = frontendBaseUrl;
 
-// Define workers count first so we can use it later
+// Define commis count first so we can use it later
 // Pinned defaults for reproducible test runs:
-// - Local: 8 Playwright workers (reduced from 16 - more stable with 8 uvicorn workers)
-// - CI: 4 Playwright workers (conservative for shared runners)
-// Higher worker counts cause lock contention during parallel DB resets.
+// - Local: 8 Playwright commis (reduced from 16 - more stable with 8 uvicorn commis)
+// - CI: 4 Playwright commis (conservative for shared runners)
+// Higher commis counts cause lock contention during parallel DB resets.
 // Override with PLAYWRIGHT_WORKERS env var if needed.
-const envWorkers = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? "", 10);
-const defaultLocalWorkers = 8;  // Tested: 0 hard failures at 8 workers
-const defaultCIWorkers = 4;
-const workers = Number.isFinite(envWorkers) && envWorkers > 0
-  ? envWorkers
-  : (process.env.CI ? defaultCIWorkers : defaultLocalWorkers);
+const envCommis = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? "", 10);
+const defaultLocalCommis = 8;  // Tested: 0 hard failures at 8 commis
+const defaultCICommis = 4;
+const commis = Number.isFinite(envCommis) && envCommis > 0
+  ? envCommis
+  : (process.env.CI ? defaultCICommis : defaultLocalCommis);
 
 const frontendServer = {
   // React dev server for Playwright runs
@@ -118,7 +118,7 @@ const config = {
   globalTeardown: './test-teardown.js',
 
   fullyParallel: true,
-  workers: workers,
+  commis: commis,
   retries: process.env.CI ? 2 : 1,
 
   // Reporter configuration: minimal by default, verbose with VERBOSE=1
@@ -166,7 +166,7 @@ const config = {
   webServer: [
     frontendServer,
     {
-      // Start a single backend server; DB isolation happens via X-Test-Worker header
+      // Start a single backend server; DB isolation happens via X-Test-Commis header
       command: `node spawn-test-backend.js`,
       port: BACKEND_PORT,
       cwd: __dirname,

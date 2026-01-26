@@ -296,18 +296,18 @@ def service_login(request: Request, response: Response, db: Session = Depends(ge
 
     secret = request.headers.get("X-Service-Secret") or ""
     expected = _settings.smoke_test_secret or ""
-    run_id = (request.headers.get("X-Smoke-Run-Id") or "").strip()
+    course_id = (request.headers.get("X-Smoke-Run-Id") or "").strip()
 
     # Fail closed + constant-time comparison to prevent timing attacks
     if not expected or not hmac.compare_digest(secret, expected):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
-    def _smoke_user_for_run(run_id_value: str) -> tuple[str, str, str]:
+    def _smoke_user_for_run(course_id_value: str) -> tuple[str, str, str]:
         """Return (email, provider_user_id, display_name) for a smoke run."""
-        if not run_id_value:
+        if not course_id_value:
             return ("smoke@service.local", "smoke-test-1", "Smoke Test")
 
-        safe = re.sub(r"[^A-Za-z0-9._-]+", "-", run_id_value).strip("-_.")
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "-", course_id_value).strip("-_.")
         if not safe:
             return ("smoke@service.local", "smoke-test-1", "Smoke Test")
 
@@ -317,7 +317,7 @@ def service_login(request: Request, response: Response, db: Session = Depends(ge
         display_name = f"Smoke Test ({safe})"
         return (email, provider_user_id, display_name)
 
-    email, provider_user_id, display_name = _smoke_user_for_run(run_id)
+    email, provider_user_id, display_name = _smoke_user_for_run(course_id)
 
     # Get or create service user (handles race condition)
     user = crud.get_user_by_email(db, email)

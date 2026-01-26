@@ -27,7 +27,7 @@
         },
         "topic": {
           "type": "string",
-          "description": "Topic routing string (e.g., 'agent:123', 'thread:456')"
+          "description": "Topic routing string (e.g., 'fiche:123', 'thread:456')"
         },
         "req_id": {
           "type": "string",
@@ -43,7 +43,7 @@
         }
       }
     },
-    "AgentRef": {
+    "FicheRef": {
       "type": "object",
       "required": [
         "id"
@@ -288,7 +288,7 @@
           "type": "integer",
           "minimum": 1
         },
-        "agent_id": {
+        "fiche_id": {
           "type": "integer",
           "minimum": 1
         },
@@ -380,7 +380,7 @@
         }
       }
     },
-    "AgentEventData": {
+    "FicheEventData": {
       "type": "object",
       "required": [
         "id"
@@ -393,11 +393,11 @@
         "status": {
           "type": "string"
         },
-        "last_run_at": {
+        "last_course_at": {
           "type": "string",
           "format": "date-time"
         },
-        "next_run_at": {
+        "next_course_at": {
           "type": "string",
           "format": "date-time"
         },
@@ -412,11 +412,11 @@
         }
       }
     },
-    "RunUpdateData": {
+    "CourseUpdateData": {
       "type": "object",
       "required": [
         "id",
-        "agent_id",
+        "fiche_id",
         "status"
       ],
       "properties": {
@@ -424,7 +424,7 @@
           "type": "integer",
           "minimum": 1
         },
-        "agent_id": {
+        "fiche_id": {
           "type": "integer",
           "minimum": 1
         },
@@ -437,8 +437,11 @@
           "enum": [
             "queued",
             "running",
+            "waiting",
+            "deferred",
             "success",
-            "failed"
+            "failed",
+            "cancelled"
           ]
         },
         "trigger": {
@@ -448,7 +451,8 @@
             "schedule",
             "chat",
             "webhook",
-            "api"
+            "api",
+            "continuation"
           ]
         },
         "started_at": {
@@ -461,6 +465,14 @@
         },
         "duration_ms": {
           "type": "integer",
+          "minimum": 0
+        },
+        "total_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_cost_usd": {
+          "type": "number",
           "minimum": 0
         },
         "error": {
@@ -635,20 +647,20 @@
         "type": {
           "type": "string",
           "enum": [
-            "run_started",
-            "run_success",
-            "run_failed",
-            "agent_created",
-            "agent_updated",
+            "course_started",
+            "course_success",
+            "course_failed",
+            "fiche_created",
+            "fiche_updated",
             "thread_message_created",
             "budget_denied"
           ]
         },
-        "agent_id": {
+        "fiche_id": {
           "type": "integer",
           "minimum": 1
         },
-        "run_id": {
+        "course_id": {
           "type": "integer",
           "minimum": 1
         },
@@ -663,7 +675,7 @@
         "error": {
           "type": "string"
         },
-        "agent_name": {
+        "fiche_name": {
           "type": "string"
         },
         "status": {

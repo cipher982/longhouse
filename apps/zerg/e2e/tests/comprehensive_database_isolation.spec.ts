@@ -4,9 +4,9 @@ import { test, expect } from './fixtures';
  * COMPREHENSIVE DATABASE ISOLATION TEST
  *
  * This test validates that:
- * 1. Worker databases are properly isolated
+ * 1. Commis databases are properly isolated
  * 2. All database tables are created correctly
- * 3. API endpoints work with worker-specific databases
+ * 3. API endpoints work with commis-specific databases
  * 4. Headers are properly transmitted and processed
  */
 
@@ -14,9 +14,9 @@ test.describe('Comprehensive Database Isolation', () => {
   test('Complete database isolation validation', async ({ page, request }) => {
     console.log('🔍 Starting comprehensive database isolation test...');
 
-    // Get the worker ID from environment
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
-    console.log('📊 Worker ID:', workerId);
+    // Get the commis ID from environment
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
+    console.log('📊 Commis ID:', commisId);
 
     // Navigate to the app - this should trigger database initialization
     console.log('🚀 Navigating to app...');
@@ -56,7 +56,7 @@ test.describe('Comprehensive Database Isolation', () => {
     try {
       const healthResponse = await request.get('/', {
         headers: {
-          'X-Test-Worker': workerId,
+          'X-Test-Commis': commisId,
         }
       });
       console.log('📊 Health check status:', healthResponse.status());
@@ -70,32 +70,32 @@ test.describe('Comprehensive Database Isolation', () => {
       console.log('❌ Health check error:', error);
     }
 
-    // Test agent endpoint
+    // Test fiche endpoint
     try {
-      const agentResponse = await request.get('/api/agents', {
+      const ficheResponse = await request.get('/api/fiches', {
         headers: {
-          'X-Test-Worker': workerId,
+          'X-Test-Commis': commisId,
         }
       });
-      console.log('📊 Agent API status:', agentResponse.status());
+      console.log('📊 Fiche API status:', ficheResponse.status());
 
-      if (agentResponse.ok()) {
-        const agents = await agentResponse.json();
-        console.log('📊 Agent count:', Array.isArray(agents) ? agents.length : 'not array');
-        console.log('✅ Agent API working');
+      if (ficheResponse.ok()) {
+        const fiches = await ficheResponse.json();
+        console.log('📊 Fiche count:', Array.isArray(fiches) ? fiches.length : 'not array');
+        console.log('✅ Fiche API working');
       } else {
-        const errorText = await agentResponse.text();
-        console.log('❌ Agent API failed:', errorText.substring(0, 200));
+        const errorText = await ficheResponse.text();
+        console.log('❌ Fiche API failed:', errorText.substring(0, 200));
       }
     } catch (error) {
-      console.log('❌ Agent API error:', error);
+      console.log('❌ Fiche API error:', error);
     }
 
     // Test workflow endpoint
     try {
       const workflowResponse = await request.get('/api/workflows', {
         headers: {
-          'X-Test-Worker': workerId,
+          'X-Test-Commis': commisId,
         }
       });
       console.log('📊 Workflow API status:', workflowResponse.status());
@@ -112,31 +112,31 @@ test.describe('Comprehensive Database Isolation', () => {
       console.log('❌ Workflow API error:', error);
     }
 
-    // Test agent creation
-    console.log('🔍 Testing agent creation...');
+    // Test fiche creation
+    console.log('🔍 Testing fiche creation...');
     try {
-      const createResponse = await request.post('/api/agents', {
+      const createResponse = await request.post('/api/fiches', {
         headers: {
-          'X-Test-Worker': workerId,
+          'X-Test-Commis': commisId,
           'Content-Type': 'application/json',
         },
         data: {
-          name: `Test Agent ${workerId}`,
-          system_instructions: 'You are a test agent for database isolation testing',
+          name: `Test Fiche ${commisId}`,
+          system_instructions: 'You are a test fiche for database isolation testing',
         }
       });
-      console.log('📊 Agent creation status:', createResponse.status());
+      console.log('📊 Fiche creation status:', createResponse.status());
 
       if (createResponse.ok()) {
-        const agent = await createResponse.json();
-        console.log('📊 Created agent ID:', agent.id);
-        console.log('✅ Agent creation successful');
+        const fiche = await createResponse.json();
+        console.log('📊 Created fiche ID:', fiche.id);
+        console.log('✅ Fiche creation successful');
       } else {
         const errorText = await createResponse.text();
-        console.log('❌ Agent creation failed:', errorText.substring(0, 200));
+        console.log('❌ Fiche creation failed:', errorText.substring(0, 200));
       }
     } catch (error) {
-      console.log('❌ Agent creation error:', error);
+      console.log('❌ Fiche creation error:', error);
     }
 
     console.log('✅ Comprehensive database isolation test complete');

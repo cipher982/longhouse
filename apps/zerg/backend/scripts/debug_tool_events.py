@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Debug script to verify tool event flow.
 
-This script simulates the complete event flow from worker tool execution
+This script simulates the complete event flow from commis tool execution
 to SSE output, helping verify Phase 2 implementation is working correctly.
 
 Usage:
@@ -20,15 +20,15 @@ from zerg.events.event_bus import EventType, event_bus
 
 
 async def simulate_tool_events():
-    """Simulate tool events as they would be emitted during worker execution."""
+    """Simulate tool events as they would be emitted during commis execution."""
     print("=" * 60)
     print("Tool Event Flow Debug Script")
     print("=" * 60)
 
     # Simulate event data
-    worker_id = "2024-12-06T15-30-00_debug-test"
+    commis_id = "2024-12-06T15-30-00_debug-test"
     owner_id = 1
-    run_id = 999
+    course_id = 999
 
     received_events = []
 
@@ -39,22 +39,22 @@ async def simulate_tool_events():
 
     # Subscribe to tool events (like SSE endpoint does)
     print("\n1. Subscribing to tool events...")
-    event_bus.subscribe(EventType.WORKER_TOOL_STARTED, event_collector)
-    event_bus.subscribe(EventType.WORKER_TOOL_COMPLETED, event_collector)
-    event_bus.subscribe(EventType.WORKER_TOOL_FAILED, event_collector)
-    print("   ✓ Subscribed to WORKER_TOOL_STARTED")
-    print("   ✓ Subscribed to WORKER_TOOL_COMPLETED")
-    print("   ✓ Subscribed to WORKER_TOOL_FAILED")
+    event_bus.subscribe(EventType.COMMIS_TOOL_STARTED, event_collector)
+    event_bus.subscribe(EventType.COMMIS_TOOL_COMPLETED, event_collector)
+    event_bus.subscribe(EventType.COMMIS_TOOL_FAILED, event_collector)
+    print("   ✓ Subscribed to COMMIS_TOOL_STARTED")
+    print("   ✓ Subscribed to COMMIS_TOOL_COMPLETED")
+    print("   ✓ Subscribed to COMMIS_TOOL_FAILED")
 
-    # Emit WORKER_TOOL_STARTED
-    print("\n2. Emitting WORKER_TOOL_STARTED event...")
+    # Emit COMMIS_TOOL_STARTED
+    print("\n2. Emitting COMMIS_TOOL_STARTED event...")
     await event_bus.publish(
-        EventType.WORKER_TOOL_STARTED,
+        EventType.COMMIS_TOOL_STARTED,
         {
-            "event_type": "worker_tool_started",
-            "worker_id": worker_id,
+            "event_type": "commis_tool_started",
+            "commis_id": commis_id,
             "owner_id": owner_id,
-            "run_id": run_id,
+            "course_id": course_id,
             "tool_name": "ssh_exec",
             "tool_call_id": "call_001",
             "tool_args_preview": "{'host': 'cube', 'command': 'df -h'}",
@@ -65,15 +65,15 @@ async def simulate_tool_events():
     # Give event loop a chance to process
     await asyncio.sleep(0.1)
 
-    # Emit WORKER_TOOL_COMPLETED
-    print("\n3. Emitting WORKER_TOOL_COMPLETED event...")
+    # Emit COMMIS_TOOL_COMPLETED
+    print("\n3. Emitting COMMIS_TOOL_COMPLETED event...")
     await event_bus.publish(
-        EventType.WORKER_TOOL_COMPLETED,
+        EventType.COMMIS_TOOL_COMPLETED,
         {
-            "event_type": "worker_tool_completed",
-            "worker_id": worker_id,
+            "event_type": "commis_tool_completed",
+            "commis_id": commis_id,
             "owner_id": owner_id,
-            "run_id": run_id,
+            "course_id": course_id,
             "tool_name": "ssh_exec",
             "tool_call_id": "call_001",
             "duration_ms": 823,
@@ -84,15 +84,15 @@ async def simulate_tool_events():
 
     await asyncio.sleep(0.1)
 
-    # Emit another WORKER_TOOL_STARTED
-    print("\n4. Emitting second WORKER_TOOL_STARTED event...")
+    # Emit another COMMIS_TOOL_STARTED
+    print("\n4. Emitting second COMMIS_TOOL_STARTED event...")
     await event_bus.publish(
-        EventType.WORKER_TOOL_STARTED,
+        EventType.COMMIS_TOOL_STARTED,
         {
-            "event_type": "worker_tool_started",
-            "worker_id": worker_id,
+            "event_type": "commis_tool_started",
+            "commis_id": commis_id,
             "owner_id": owner_id,
-            "run_id": run_id,
+            "course_id": course_id,
             "tool_name": "http_request",
             "tool_call_id": "call_002",
             "tool_args_preview": "{'url': 'https://api.example.com/status'}",
@@ -102,15 +102,15 @@ async def simulate_tool_events():
 
     await asyncio.sleep(0.1)
 
-    # Emit WORKER_TOOL_FAILED
-    print("\n5. Emitting WORKER_TOOL_FAILED event...")
+    # Emit COMMIS_TOOL_FAILED
+    print("\n5. Emitting COMMIS_TOOL_FAILED event...")
     await event_bus.publish(
-        EventType.WORKER_TOOL_FAILED,
+        EventType.COMMIS_TOOL_FAILED,
         {
-            "event_type": "worker_tool_failed",
-            "worker_id": worker_id,
+            "event_type": "commis_tool_failed",
+            "commis_id": commis_id,
             "owner_id": owner_id,
-            "run_id": run_id,
+            "course_id": course_id,
             "tool_name": "http_request",
             "tool_call_id": "call_002",
             "duration_ms": 125,
@@ -122,9 +122,9 @@ async def simulate_tool_events():
     await asyncio.sleep(0.1)
 
     # Cleanup
-    event_bus.unsubscribe(EventType.WORKER_TOOL_STARTED, event_collector)
-    event_bus.unsubscribe(EventType.WORKER_TOOL_COMPLETED, event_collector)
-    event_bus.unsubscribe(EventType.WORKER_TOOL_FAILED, event_collector)
+    event_bus.unsubscribe(EventType.COMMIS_TOOL_STARTED, event_collector)
+    event_bus.unsubscribe(EventType.COMMIS_TOOL_COMPLETED, event_collector)
+    event_bus.unsubscribe(EventType.COMMIS_TOOL_FAILED, event_collector)
 
     # Summary
     print("\n" + "=" * 60)
@@ -161,9 +161,9 @@ async def verify_event_types_exist():
     print("=" * 60)
 
     required_types = [
-        "WORKER_TOOL_STARTED",
-        "WORKER_TOOL_COMPLETED",
-        "WORKER_TOOL_FAILED",
+        "COMMIS_TOOL_STARTED",
+        "COMMIS_TOOL_COMPLETED",
+        "COMMIS_TOOL_FAILED",
     ]
 
     all_present = True
@@ -185,7 +185,7 @@ async def verify_event_types_exist():
 
 async def main():
     """Run all verification steps."""
-    print("\n🔧 Debug Script: Worker Tool Events (Phase 2)\n")
+    print("\n🔧 Debug Script: Commis Tool Events (Phase 2)\n")
 
     # Verify event types exist
     types_ok = await verify_event_types_exist()
@@ -200,7 +200,7 @@ async def main():
     if types_ok and flow_ok:
         print("✅ All checks passed! Tool event flow is working correctly.")
         print("\nThe events will flow as follows:")
-        print("  1. Worker executes tool → supervisor_react_engine emits event")
+        print("  1. Commis executes tool → concierge_react_engine emits event")
         print("  2. Event bus delivers to subscribers")
         print("  3. SSE endpoint receives and forwards to frontend")
         print("  4. Frontend event bus receives and updates UI")

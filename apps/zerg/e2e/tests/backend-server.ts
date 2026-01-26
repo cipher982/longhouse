@@ -2,7 +2,7 @@
  * Backend server management for E2E tests
  *
  * This module provides utilities to start and stop isolated backend servers
- * for each test worker, ensuring complete test isolation.
+ * for each test commis, ensuring complete test isolation.
  */
 
 import { spawn, ChildProcess } from 'child_process';
@@ -41,7 +41,7 @@ interface BackendServer {
 
 const runningServers = new Map<string, BackendServer>();
 
-export async function startBackendServer(workerId: string): Promise<BackendServer> {
+export async function startBackendServer(commisId: string): Promise<BackendServer> {
   // Single shared backend is started by Playwright webServer; just return baseUrl
   const basePort = getBackendPort();
   const baseUrl = `http://localhost:${basePort}`;
@@ -54,11 +54,11 @@ export async function startBackendServer(workerId: string): Promise<BackendServe
 
   // Ensure it's reachable before proceeding
   await waitForServer(baseUrl);
-  console.log(`[backend-server] Backend ready (shared) for worker ${workerId} at ${baseUrl}`);
+  console.log(`[backend-server] Backend ready (shared) for commis ${commisId} at ${baseUrl}`);
   return server;
 }
 
-export async function stopBackendServer(_workerId: string): Promise<void> {
+export async function stopBackendServer(_commisId: string): Promise<void> {
   // No-op in shared backend mode
 }
 
@@ -90,9 +90,9 @@ async function waitForServer(baseUrl: string, maxAttempts = 30): Promise<void> {
 
 // Clean up on process exit
 process.on('exit', () => {
-  for (const [workerId, server] of runningServers.entries()) {
+  for (const [commisId, server] of runningServers.entries()) {
     if (server.process) {
-      console.log(`[backend-server] Cleaning up backend for worker ${workerId}`);
+      console.log(`[backend-server] Cleaning up backend for commis ${commisId}`);
       server.process.kill('SIGKILL');
     }
   }

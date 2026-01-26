@@ -1,6 +1,6 @@
-"""Connector status meta-tools for agent self-awareness.
+"""Connector status meta-tools for fiche self-awareness.
 
-This module provides tools that let agents query their own connector status,
+This module provides tools that let fiches query their own connector status,
 enabling explicit verification of which integrations are available.
 """
 
@@ -59,7 +59,7 @@ def refresh_connector_status() -> dict[str, Any]:
             status = build_connector_status(
                 db=db,
                 owner_id=resolver.owner_id,
-                agent_id=resolver.agent_id,
+                fiche_id=resolver.fiche_id,
             )
         return tool_success(status)
     except Exception as e:

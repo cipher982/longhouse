@@ -1,0 +1,421 @@
+/**
+ * Commis Progress UI Styles
+ *
+ * Shows live progress when the Concierge delegates tasks to commis.
+ * Only displays when commis are actively running.
+ */
+
+/* Main container */
+.jarvis-container .commis-progress {
+  display: none;
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-2);
+  background: var(--color-surface-card);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border-muted);
+  box-shadow: var(--shadow-sm);
+}
+
+.jarvis-container .commis-progress-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* Status header with spinner */
+.jarvis-container .concierge-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.jarvis-container .concierge-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--color-surface-elevated);
+  border-top-color: var(--color-brand-primary);
+  border-radius: 50%;
+  animation: concierge-spin 0.8s linear infinite;
+}
+
+@keyframes concierge-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.jarvis-container .concierge-label {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+/* Commis list */
+.jarvis-container .concierge-commis {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  padding-left: 30px; /* Align with text start */
+}
+
+.jarvis-container .concierge-commis {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  transition: opacity 0.2s ease;
+}
+
+.jarvis-container .concierge-commis .commis-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.jarvis-container .concierge-commis .commis-task {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jarvis-container .concierge-commis .commis-summary {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+/* Commis header (contains icon and task) */
+.jarvis-container .concierge-commis .commis-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Tool calls list within commis */
+.jarvis-container .concierge-commis .commis-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--space-1);
+  margin-left: 22px;
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--color-border-muted);
+}
+
+/* Individual tool call */
+.jarvis-container .commis-tool {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+}
+
+.jarvis-container .commis-tool .tool-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+}
+
+.jarvis-container .commis-tool .tool-name {
+  font-weight: 500;
+  color: var(--color-text-primary);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jarvis-container .commis-tool .tool-name--command {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border-muted);
+  color: var(--color-text-primary);
+}
+
+.jarvis-container .commis-tool .tool-meta {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.jarvis-container .commis-tool .tool-preview {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.jarvis-container .commis-tool .tool-duration {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+/* Tool status states */
+.jarvis-container .commis-tool.tool-status-running {
+  color: var(--color-brand-primary);
+}
+
+.jarvis-container .commis-tool.tool-status-running .tool-icon {
+  animation: tool-pulse 1s ease-in-out infinite;
+}
+
+.jarvis-container .commis-tool.tool-status-completed .tool-icon {
+  color: var(--color-intent-success);
+}
+
+.jarvis-container .commis-tool.tool-status-failed .tool-icon {
+  color: var(--color-intent-error);
+}
+
+.jarvis-container .commis-tool.tool-status-failed .tool-preview {
+  color: var(--color-intent-error);
+}
+
+@keyframes tool-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Commis status states */
+.jarvis-container .concierge-commis.commis-status-spawned {
+  opacity: 0.7;
+}
+
+.jarvis-container .concierge-commis.commis-status-running {
+  opacity: 1;
+}
+
+.jarvis-container .concierge-commis.commis-status-running .commis-task {
+  color: var(--color-brand-primary);
+}
+
+.jarvis-container .concierge-commis.commis-status-complete {
+  opacity: 0.8;
+}
+
+.jarvis-container .concierge-commis.commis-status-complete .commis-task {
+  color: var(--color-intent-success);
+}
+
+.jarvis-container .concierge-commis.commis-status-failed {
+  opacity: 0.8;
+}
+
+.jarvis-container .concierge-commis.commis-status-failed .commis-task {
+  color: var(--color-intent-error);
+}
+
+/* Active commis count */
+.jarvis-container .concierge-active-count {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  padding-left: 30px;
+}
+
+/* Responsive adjustments */
+@media (width <= 768px) {
+  .jarvis-container .commis-progress {
+    padding: var(--space-3);
+    margin: 0 var(--space-2) var(--space-2);
+  }
+
+  .jarvis-container .concierge-commis {
+    padding-left: 24px;
+  }
+}
+
+/* Animation for fade in */
+.jarvis-container .commis-progress[style*="display: block"] {
+  animation: concierge-fade-in 0.2s ease-out;
+}
+
+@keyframes concierge-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Sticky Mode - Sticks to top of chat area (default)                 */
+/* ------------------------------------------------------------------ */
+
+.jarvis-container .commis-progress--sticky {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  margin: 0 auto var(--space-3) auto;
+  width: 100%;
+  max-width: 960px; /* Match transcript width */
+
+  /* Enhanced visual presence */
+  background: var(--color-void-light);
+  border: 1px solid var(--color-neon-primary);
+  box-shadow: var(--shadow-card), var(--glow-primary);
+  backdrop-filter: blur(12px);
+}
+
+/* Sticky mode entrance animation */
+.jarvis-container .commis-progress--sticky[style*="display: block"] {
+  animation: concierge-sticky-in 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes concierge-sticky-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Mobile adjustments for sticky */
+@media (width <= 768px) {
+  .jarvis-container .commis-progress--sticky {
+    margin: 0 var(--space-3) var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Floating Mode - Fixed position toast, always visible               */
+/* ------------------------------------------------------------------ */
+
+.jarvis-container .commis-progress--floating {
+  position: fixed;
+  bottom: 140px; /* Above voice button controls */
+  right: var(--space-5);
+  width: 340px;
+  max-width: calc(100vw - var(--space-6) * 2);
+  z-index: 1000;
+  margin-bottom: 0; /* Override inline margin */
+
+  /* Enhanced visual presence for floating */
+  background: var(--color-void-light);
+  border: 1px solid var(--color-neon-primary);
+  box-shadow: var(--shadow-card), var(--glow-primary);
+}
+
+/* Floating mode entrance animation */
+.jarvis-container .commis-progress--floating[style*="display: block"] {
+  animation: concierge-float-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes concierge-float-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.95);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Mobile: full width at bottom */
+@media (width <= 768px) {
+  .jarvis-container .commis-progress--floating {
+    left: var(--space-3);
+    right: var(--space-3);
+    bottom: 120px;
+    width: auto;
+    max-width: none;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Attention Animation - Draws user focus when concierge starts      */
+/* ------------------------------------------------------------------ */
+
+.jarvis-container .commis-progress--attention {
+  animation: concierge-attention 0.4s ease-out;
+}
+
+@keyframes concierge-attention {
+  0% {
+    box-shadow:
+      var(--shadow-card),
+      0 0 0 0 rgb(99 102 241 / 60%);
+  }
+
+  50% {
+    box-shadow:
+      var(--shadow-card),
+      0 0 0 8px rgb(99 102 241 / 0%);
+  }
+
+  100% {
+    box-shadow: var(--shadow-card), var(--glow-primary);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Active State - Full modal with commis                              */
+/* ------------------------------------------------------------------ */
+
+.jarvis-container .commis-progress--active {
+  display: block;
+  flex: none; /* Don't grow/shrink in flex container */
+  height: auto; /* Size to content */
+}
+
+/* ------------------------------------------------------------------ */
+/* Status Icons (SVG icons via React component)                        */
+/* ------------------------------------------------------------------ */
+
+/* Spinning animation for running states */
+@keyframes icon-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.jarvis-container .icon-running,
+.jarvis-container .icon-commis-running {
+  display: inline-flex;
+  animation: icon-spin 1s linear infinite;
+}
+
+.jarvis-container .icon-completed,
+.jarvis-container .icon-complete {
+  display: inline-flex;
+  color: var(--color-intent-success);
+}
+
+.jarvis-container .icon-failed,
+.jarvis-container .icon-commis-failed {
+  display: inline-flex;
+  color: var(--color-intent-error);
+}
+
+.jarvis-container .icon-spawned,
+.jarvis-container .icon-default,
+.jarvis-container .icon-queued {
+  display: inline-flex;
+}

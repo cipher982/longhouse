@@ -4,7 +4,7 @@ info:
   title: Zerg WebSocket Protocol
   version: 1.0.0
   description: |
-    Comprehensive WebSocket protocol for the Zerg Agent Platform.
+    Comprehensive WebSocket protocol for the Zerg Fiche Platform.
     Consolidates message types, payload schemas, and routing patterns into
     a single source of truth for contract-first development.
 
@@ -64,18 +64,18 @@ channels:
       AssistantId:
         $ref: '#/components/messages/AssistantId'
 
-  AgentChannel:
-    address: agent:{agent_id}
-    description: Agent lifecycle events and run updates
+  FicheChannel:
+    address: fiche:{fiche_id}
+    description: Fiche lifecycle events and course updates
     parameters:
-      agent_id:
-        description: Numeric identifier of the agent
+      fiche_id:
+        description: Numeric identifier of the fiche
         examples: ["17", "42"]
     messages:
-      AgentEvent:
-        $ref: '#/components/messages/AgentEvent'
-      RunUpdate:
-        $ref: '#/components/messages/RunUpdate'
+      FicheEvent:
+        $ref: '#/components/messages/FicheEvent'
+      CourseUpdate:
+        $ref: '#/components/messages/CourseUpdate'
 
   UserChannel:
     address: user:{user_id}
@@ -93,7 +93,7 @@ channels:
     description: Workflow execution state, node updates, and logs
     parameters:
       execution_id:
-        description: Numeric identifier of the execution run
+        description: Numeric identifier of the execution course
         examples: ["123", "456"]
     messages:
       NodeState:
@@ -129,12 +129,12 @@ operations:
       $ref: '#/channels/ThreadChannel'
     summary: Handle thread-level WebSocket operations
 
-  # Agent operations
-  AgentOperations:
+  # Fiche operations
+  FicheOperations:
     action: send
     channel:
-      $ref: '#/channels/AgentChannel'
-    summary: Handle agent-level WebSocket operations
+      $ref: '#/channels/FicheChannel'
+    summary: Handle fiche-level WebSocket operations
 
   # User operations
   UserOperations:
@@ -276,21 +276,21 @@ components:
       x-handler-method: handle_assistant_id
       x-aliases: []
 
-    # Agent messages
-    AgentEvent:
-      name: agent_event
-      summary: Agent lifecycle or status event
+    # Fiche messages
+    FicheEvent:
+      name: fiche_event
+      summary: Fiche lifecycle or status event
       payload:
-        $ref: '#/components/schemas/AgentEventData'
-      x-handler-method: handle_agent_event
-      x-aliases: ["agent_created", "agent_updated", "agent_deleted", "agent_state"]
+        $ref: '#/components/schemas/FicheEventData'
+      x-handler-method: handle_fiche_event
+      x-aliases: ["fiche_created", "fiche_updated", "fiche_deleted", "fiche_state"]
 
-    RunUpdate:
-      name: run_update
-      summary: Agent run status update
+    CourseUpdate:
+      name: course_update
+      summary: Fiche course status update
       payload:
-        $ref: '#/components/schemas/RunUpdateData'
-      x-handler-method: handle_run_update
+        $ref: '#/components/schemas/CourseUpdateData'
+      x-handler-method: handle_course_update
       x-aliases: []
 
     # User messages
@@ -351,7 +351,7 @@ components:
           description: Message type identifier
         topic:
           type: string
-          description: Topic routing string (e.g., 'agent:123', 'thread:456')
+          description: Topic routing string (e.g., 'fiche:123', 'thread:456')
         req_id:
           type: string
           description: Optional request correlation ID
@@ -363,7 +363,7 @@ components:
           description: Message payload - structure depends on type
 
     # Base reference types
-    AgentRef:
+    FicheRef:
       type: object
       required: [id]
       properties:
@@ -526,7 +526,7 @@ components:
         thread_id:
           type: integer
           minimum: 1
-        agent_id:
+        fiche_id:
           type: integer
           minimum: 1
         title:
@@ -585,8 +585,8 @@ components:
           type: integer
           minimum: 1
 
-    # Agent message payloads
-    AgentEventData:
+    # Fiche message payloads
+    FicheEventData:
       type: object
       required: [id]
       properties:
@@ -595,10 +595,10 @@ components:
           minimum: 1
         status:
           type: string
-        last_run_at:
+        last_course_at:
           type: string
           format: date-time
-        next_run_at:
+        next_course_at:
           type: string
           format: date-time
         last_error:
@@ -608,14 +608,14 @@ components:
         description:
           type: string
 
-    RunUpdateData:
+    CourseUpdateData:
       type: object
-      required: [id, agent_id, status]
+      required: [id, fiche_id, status]
       properties:
         id:
           type: integer
           minimum: 1
-        agent_id:
+        fiche_id:
           type: integer
           minimum: 1
         thread_id:
@@ -623,10 +623,10 @@ components:
           minimum: 1
         status:
           type: string
-          enum: [queued, running, success, failed]
+          enum: [queued, running, waiting, deferred, success, failed, cancelled]
         trigger:
           type: string
-          enum: [manual, schedule, chat, webhook, api]
+          enum: [manual, schedule, chat, webhook, api, continuation]
         started_at:
           type: string
           format: date-time
@@ -635,6 +635,12 @@ components:
           format: date-time
         duration_ms:
           type: integer
+          minimum: 0
+        total_tokens:
+          type: integer
+          minimum: 0
+        total_cost_usd:
+          type: number
           minimum: 0
         error:
           type: string
@@ -743,18 +749,18 @@ components:
         type:
           type: string
           enum:
-            - run_started
-            - run_success
-            - run_failed
-            - agent_created
-            - agent_updated
+            - course_started
+            - course_success
+            - course_failed
+            - fiche_created
+            - fiche_updated
             - thread_message_created
             - budget_denied
         # Common optional fields used by various event kinds
-        agent_id:
+        fiche_id:
           type: integer
           minimum: 1
-        run_id:
+        course_id:
           type: integer
           minimum: 1
         thread_id:
@@ -765,7 +771,7 @@ components:
           minimum: 0
         error:
           type: string
-        agent_name:
+        fiche_name:
           type: string
         status:
           type: string
@@ -790,16 +796,16 @@ components:
 
 x-handler-groups:
   dashboard:
-    description: Handles agent management, runs, workflow execution, and ops ticker
+    description: Handles fiche management, courses, workflow execution, and ops ticker
     handles:
-      - run_update
-      - agent_event
+      - course_update
+      - fiche_event
       - execution_finished
       - node_state
       - node_log
       - ops_event
     topics:
-      - "agent:*"
+      - "fiche:*"
       - "workflow_execution:*"
       - "ops:*"
 
@@ -822,7 +828,7 @@ x-validation-rules:
 
 x-performance-contracts:
   message_size_limits:
-    run_update: "max_1kb"
+    course_update: "max_1kb"
     stream_chunk: "max_64kb"
   throughput_requirements:
     dashboard_messages: "100/sec"
@@ -830,7 +836,7 @@ x-performance-contracts:
 
 x-security-contracts:
   authentication_required: ["send_message", "subscribe"]
-  authorization_checks: ["agent_event", "run_update"]
+  authorization_checks: ["fiche_event", "course_update"]
   data_validation: "strict"
   sanitization_rules:
     user_content: "html_escape"

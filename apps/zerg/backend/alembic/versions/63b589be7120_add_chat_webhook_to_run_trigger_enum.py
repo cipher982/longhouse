@@ -1,4 +1,4 @@
-"""add_chat_webhook_to_run_trigger_enum
+"""add_chat_webhook_to_course_trigger_enum
 
 Revision ID: 63b589be7120
 Revises: d4e5f6g7h8i9
@@ -19,7 +19,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Add 'chat' and 'webhook' values to run_trigger_enum.
+    """Add 'chat' and 'webhook' values to course_trigger_enum.
 
     Note: The model uses native_enum=False, so this is stored as VARCHAR in PostgreSQL,
     not as a native ENUM type. No ALTER TYPE needed - the values are just strings.
@@ -31,7 +31,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Remove 'chat' and 'webhook' from run_trigger_enum.
+    """Remove 'chat' and 'webhook' from course_trigger_enum.
 
     Note: PostgreSQL doesn't support removing enum values directly.
     This would require recreating the enum type, which is complex and risky.

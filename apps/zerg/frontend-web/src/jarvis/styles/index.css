@@ -29,8 +29,8 @@
 /* Animations and transitions (200 lines) */
 @import url("./animations.css");
 
-/* Worker progress indicator (shows when supervisor delegates to workers) */
-@import url("./worker-progress.css");
+/* Commis progress indicator (shows when concierge delegates to commis) */
+@import url("./commis-progress.css");
 
 /* Additional component styles can be added here as needed */
 

@@ -14,10 +14,10 @@ logger = logging.getLogger(__name__)
 class EventType(str, Enum):
     """Standardized event types for the system."""
 
-    # Agent events
-    AGENT_CREATED = "agent_created"
-    AGENT_UPDATED = "agent_updated"
-    AGENT_DELETED = "agent_deleted"
+    # Fiche events
+    FICHE_CREATED = "fiche_created"
+    FICHE_UPDATED = "fiche_updated"
+    FICHE_DELETED = "fiche_deleted"
 
     # Thread events
     THREAD_CREATED = "thread_created"
@@ -25,9 +25,9 @@ class EventType(str, Enum):
     THREAD_DELETED = "thread_deleted"
     THREAD_MESSAGE_CREATED = "thread_message_created"
 
-    # Run events (new run history feature)
-    RUN_CREATED = "run_created"
-    RUN_UPDATED = "run_updated"
+    # Course events (run history feature)
+    COURSE_CREATED = "course_created"
+    COURSE_UPDATED = "course_updated"
 
     # Trigger events (external webhook or other sources)
     TRIGGER_FIRED = "trigger_fired"

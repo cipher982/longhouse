@@ -11,7 +11,7 @@ export interface Envelope<T = unknown> {
   v: number;
   /** Message type identifier */
   type: string;
-  /** Topic routing string (e.g., 'agent:123', 'thread:456') */
+  /** Topic routing string (e.g., 'fiche:123', 'thread:456') */
   topic: string;
   /** Optional request correlation ID */
   req_id?: string;
@@ -23,7 +23,7 @@ export interface Envelope<T = unknown> {
 
 // Message payload types
 
-export interface AgentRef {
+export interface FicheRef {
   id: number;
 }
 
@@ -93,7 +93,7 @@ export interface ThreadMessageData {
 
 export interface ThreadEventData {
   thread_id: number;
-  agent_id?: number;
+  fiche_id?: number;
   title?: string;
   created_at?: string;
   updated_at?: string;
@@ -121,25 +121,27 @@ export interface AssistantIdData {
   message_id: number;
 }
 
-export interface AgentEventData {
+export interface FicheEventData {
   id: number;
   status?: string;
-  last_run_at?: string;
-  next_run_at?: string;
+  last_course_at?: string;
+  next_course_at?: string;
   last_error?: string;
   name?: string;
   description?: string;
 }
 
-export interface RunUpdateData {
+export interface CourseUpdateData {
   id: number;
-  agent_id: number;
+  fiche_id: number;
   thread_id?: number;
-  status: "queued" | "running" | "success" | "failed";
-  trigger?: "manual" | "schedule" | "chat" | "webhook" | "api";
+  status: "queued" | "running" | "waiting" | "deferred" | "success" | "failed" | "cancelled";
+  trigger?: "manual" | "schedule" | "chat" | "webhook" | "api" | "continuation";
   started_at?: string;
   finished_at?: string;
   duration_ms?: number;
+  total_tokens?: number;
+  total_cost_usd?: number;
   error?: string;
 }
 
@@ -188,13 +190,13 @@ export interface NodeLogData {
 }
 
 export interface OpsEventData {
-  type: "run_started" | "run_success" | "run_failed" | "agent_created" | "agent_updated" | "thread_message_created" | "budget_denied";
-  agent_id?: number;
-  run_id?: number;
+  type: "course_started" | "course_success" | "course_failed" | "fiche_created" | "fiche_updated" | "thread_message_created" | "budget_denied";
+  fiche_id?: number;
+  course_id?: number;
   thread_id?: number;
   duration_ms?: number;
   error?: string;
-  agent_name?: string;
+  fiche_name?: string;
   status?: string;
   scope?: "user" | "global";
   percent?: number;
@@ -275,14 +277,14 @@ export interface AssistantId extends Envelope<AssistantIdData> {
   type: 'assistant_id';
 }
 
-/** Agent lifecycle or status event */
-export interface AgentEvent extends Envelope<AgentEventData> {
-  type: 'agent_event';
+/** Fiche lifecycle or status event */
+export interface FicheEvent extends Envelope<FicheEventData> {
+  type: 'fiche_event';
 }
 
-/** Agent run status update */
-export interface RunUpdate extends Envelope<RunUpdateData> {
-  type: 'run_update';
+/** Fiche course status update */
+export interface CourseUpdate extends Envelope<CourseUpdateData> {
+  type: 'course_update';
 }
 
 /** User profile update */
@@ -326,8 +328,8 @@ export type WebSocketMessage =
   | StreamChunk
   | StreamEnd
   | AssistantId
-  | AgentEvent
-  | RunUpdate
+  | FicheEvent
+  | CourseUpdate
   | UserUpdate
   | NodeState
   | ExecutionFinished

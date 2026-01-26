@@ -1,7 +1,7 @@
 """WebSocket message handlers for topic-based subscriptions.
 
 This module provides handlers for the new topic-based WebSocket system,
-supporting subscription to agent and thread events.
+supporting subscription to fiche and thread events.
 """
 
 import logging
@@ -15,13 +15,13 @@ from sqlalchemy.orm import Session
 
 from zerg.crud import crud
 from zerg.dependencies.auth import DEV_EMAIL  # noqa: F401  # may be used in future gating
-from zerg.generated.ws_messages import AgentEventData
 
 # ---------------------------------------------------------------------------
 # Generated message types - single source of truth
 # ---------------------------------------------------------------------------
 from zerg.generated.ws_messages import Envelope
 from zerg.generated.ws_messages import ErrorData
+from zerg.generated.ws_messages import FicheEventData
 from zerg.generated.ws_messages import MessageType
 from zerg.generated.ws_messages import PingData
 from zerg.generated.ws_messages import PongData
@@ -48,29 +48,29 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-async def handle_agent_subscription(client_id: str, agent_id: int, message_id: str, db: Session) -> None:
-    """Subscribe to agent events."""
-    agent = crud.get_agent(db, agent_id)
-    if not agent:
+async def handle_fiche_subscription(client_id: str, fiche_id: int, message_id: str, db: Session) -> None:
+    """Subscribe to fiche events."""
+    fiche = crud.get_fiche(db, fiche_id)
+    if not fiche:
         return await send_subscribe_error(
-            client_id, message_id, f"Agent {agent_id} not found", [f"agent:{agent_id}"], send_to_client, "NOT_FOUND"
+            client_id, message_id, f"Fiche {fiche_id} not found", [f"fiche:{fiche_id}"], send_to_client, "NOT_FOUND"
         )
 
-    topic = f"agent:{agent_id}"
-    last_run_at = getattr(agent, "last_run_at", None)
-    next_run_at = getattr(agent, "next_run_at", None)
+    topic = f"fiche:{fiche_id}"
+    last_course_at = getattr(fiche, "last_course_at", None)
+    next_course_at = getattr(fiche, "next_course_at", None)
 
-    agent_data = AgentEventData(
-        id=agent.id,
-        status=getattr(agent, "status", None),
-        name=getattr(agent, "name", None),
-        description=getattr(agent, "system_instructions", None),
-        last_run_at=last_run_at.isoformat() if last_run_at else None,
-        next_run_at=next_run_at.isoformat() if next_run_at else None,
-        last_error=getattr(agent, "last_error", None),
+    fiche_data = FicheEventData(
+        id=fiche.id,
+        status=getattr(fiche, "status", None),
+        name=getattr(fiche, "name", None),
+        description=getattr(fiche, "system_instructions", None),
+        last_course_at=last_course_at.isoformat() if last_course_at else None,
+        next_course_at=next_course_at.isoformat() if next_course_at else None,
+        last_error=getattr(fiche, "last_error", None),
     )
 
-    await subscribe_and_send_state(client_id, topic, message_id, agent_data, "agent_state", send_to_client)
+    await subscribe_and_send_state(client_id, topic, message_id, fiche_data, "fiche_state", send_to_client)
 
 
 async def handle_user_subscription(client_id: str, user_id: int, message_id: str, db: Session) -> None:
@@ -199,7 +199,7 @@ async def send_to_client(
             the mandatory envelope keys (``v``, ``topic``, ``ts``) it will be
             embedded into a new envelope automatically.
         topic:    Optional topic string.  Required when *message* itself does
-            not include a topic.  Helpers such as ``_subscribe_agent``
+            not include a topic.  Helpers such as ``handle_fiche_subscription``
             therefore forward their known topic so the wrapper logic can
             construct a valid envelope.
 
@@ -358,8 +358,8 @@ async def handle_subscribe(client_id: str, envelope: Envelope, db: Session) -> N
                 prefix, topic_id = topic.split(":", 1)
 
                 # Simple routing - no fancy abstraction needed
-                if prefix == "agent":
-                    await handle_agent_subscription(client_id, int(topic_id), message_id, db)
+                if prefix == "fiche":
+                    await handle_fiche_subscription(client_id, int(topic_id), message_id, db)
                 elif prefix == "user":
                     await handle_user_subscription(client_id, int(topic_id), message_id, db)
                 elif prefix == "workflow_execution":
@@ -480,16 +480,16 @@ async def handle_send_message(client_id: str, message: Dict[str, Any], db: Sessi
             await send_error(client_id, "Missing thread_id or content in send_message", message_id)
             return
 
-        # Validate thread exists and get agent owner
+        # Validate thread exists and get fiche owner
         thread = crud.get_thread(db, thread_id)
         if not thread:
             await send_error(client_id, f"Thread {thread_id} not found", message_id)
             return
 
-        # Get agent to find owner_id
-        agent = crud.get_agent(db, agent_id=thread.agent_id)
-        if not agent:
-            await send_error(client_id, f"Agent for thread {thread_id} not found", message_id)
+        # Get fiche to find owner_id
+        fiche = crud.get_fiche(db, fiche_id=thread.fiche_id)
+        if not fiche:
+            await send_error(client_id, f"Fiche for thread {thread_id} not found", message_id)
             return
 
         # Persist the message
@@ -517,7 +517,7 @@ async def handle_send_message(client_id: str, message: Dict[str, Any], db: Sessi
         )
 
         # Broadcast to user-scoped topic (all streaming goes to user:{user_id})
-        topic = f"user:{agent.owner_id}"
+        topic = f"user:{fiche.owner_id}"
         envelope = Envelope.create(
             message_type="thread_message",
             topic=topic,

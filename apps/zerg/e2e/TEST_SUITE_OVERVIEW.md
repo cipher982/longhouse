@@ -29,5 +29,5 @@ make test-e2e-ui
 ## Architecture notes
 
 - Playwright starts an isolated backend + frontend (see `apps/zerg/e2e/playwright.config.js`).
-- The backend uses per-worker SQLite DB routing for test isolation (header-based).
+- The backend uses per-commis SQLite DB routing for test isolation (header-based).
 - Use `cd apps/zerg/e2e && bunx playwright show-report` for failures and traces.

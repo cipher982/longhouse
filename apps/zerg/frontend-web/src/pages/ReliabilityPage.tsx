@@ -15,29 +15,29 @@ import {
 
 // Types for reliability data
 interface SystemHealthResponse {
-  workers: Record<string, number>;
-  recent_run_errors: number;
-  recent_worker_errors: number;
+  commis: Record<string, number>;
+  recent_course_errors: number;
+  recent_commis_errors: number;
   status: "healthy" | "degraded" | "unhealthy";
   checked_at: string;
 }
 
 interface ErrorsResponse {
-  run_errors: Array<{
+  course_errors: Array<{
     id: number;
     error: string | null;
     created_at: string | null;
     trace_id: string | null;
   }>;
-  worker_errors: Array<{
+  commis_errors: Array<{
     id: number;
     error: string | null;
     created_at: string | null;
     task_preview: string | null;
     trace_id: string | null;
   }>;
-  total_run_errors: number;
-  total_worker_errors: number;
+  total_course_errors: number;
+  total_commis_errors: number;
   hours: number;
 }
 
@@ -51,14 +51,14 @@ interface PerformanceResponse {
   hours: number;
 }
 
-interface StuckWorkersResponse {
+interface StuckCommisResponse {
   stuck_count: number;
   threshold_mins: number;
-  workers: Array<{
+  commis: Array<{
     id: number;
     task: string | null;
     started_at: string | null;
-    worker_id: string | null;
+    commis_id: string | null;
     trace_id: string | null;
   }>;
 }
@@ -101,11 +101,11 @@ async function fetchPerformance(hours: number = 24): Promise<PerformanceResponse
   return response.json();
 }
 
-async function fetchStuckWorkers(): Promise<StuckWorkersResponse> {
-  const response = await fetch(`${config.apiBaseUrl}/reliability/workers/stuck`, {
+async function fetchStuckCommis(): Promise<StuckCommisResponse> {
+  const response = await fetch(`${config.apiBaseUrl}/reliability/commis/stuck`, {
     credentials: "include",
   });
-  if (!response.ok) throw new Error("Failed to fetch stuck workers");
+  if (!response.ok) throw new Error("Failed to fetch stuck commis");
   return response.json();
 }
 
@@ -192,9 +192,9 @@ export default function ReliabilityPage() {
     enabled: !!user,
   });
 
-  const { data: stuckWorkers } = useQuery({
+  const { data: stuckCommis } = useQuery({
     queryKey: ["reliability-stuck"],
-    queryFn: fetchStuckWorkers,
+    queryFn: fetchStuckCommis,
     refetchInterval: 30000,
     enabled: !!user,
   });
@@ -262,14 +262,14 @@ export default function ReliabilityPage() {
         {/* Key Metrics */}
         <div className="metrics-grid reliability-metrics-grid">
           <MetricCard
-            title="Run Errors (1h)"
-            value={health?.recent_run_errors ?? 0}
-            color={health && health.recent_run_errors > 5 ? metricColors.error : metricColors.success}
+            title="Course Errors (1h)"
+            value={health?.recent_course_errors ?? 0}
+            color={health && health.recent_course_errors > 5 ? metricColors.error : metricColors.success}
           />
           <MetricCard
-            title="Worker Errors (1h)"
-            value={health?.recent_worker_errors ?? 0}
-            color={health && health.recent_worker_errors > 5 ? metricColors.error : metricColors.success}
+            title="Commis Errors (1h)"
+            value={health?.recent_commis_errors ?? 0}
+            color={health && health.recent_commis_errors > 5 ? metricColors.error : metricColors.success}
           />
           <MetricCard
             title="P50 Latency"
@@ -284,15 +284,15 @@ export default function ReliabilityPage() {
           />
           <MetricCard
             title="Runners Online"
-            value={health?.workers?.online ?? 0}
-            subtitle={`${health?.workers?.offline ?? 0} offline`}
+            value={health?.commis?.online ?? 0}
+            subtitle={`${health?.commis?.offline ?? 0} offline`}
             color={metricColors.success}
           />
           <MetricCard
-            title="Stuck Workers"
-            value={stuckWorkers?.stuck_count ?? 0}
-            subtitle={`>${stuckWorkers?.threshold_mins ?? 10}min threshold`}
-            color={stuckWorkers && stuckWorkers.stuck_count > 0 ? metricColors.warning : metricColors.success}
+            title="Stuck Commis"
+            value={stuckCommis?.stuck_count ?? 0}
+            subtitle={`>${stuckCommis?.threshold_mins ?? 10}min threshold`}
+            color={stuckCommis && stuckCommis.stuck_count > 0 ? metricColors.warning : metricColors.success}
           />
         </div>
 
@@ -302,12 +302,12 @@ export default function ReliabilityPage() {
             <h3 className="reliability-section-title ui-section-title">Recent Errors (24h)</h3>
           </Card.Header>
           <Card.Body>
-            {errors && (errors.total_run_errors > 0 || errors.total_worker_errors > 0) ? (
+            {errors && (errors.total_course_errors > 0 || errors.total_commis_errors > 0) ? (
               <div className="reliability-section-stack">
-                {errors.run_errors.length > 0 && (
+                {errors.course_errors.length > 0 && (
                   <div>
                     <h4 className="reliability-subsection-title ui-subsection-title">
-                      Run Errors ({errors.total_run_errors})
+                      Course Errors ({errors.total_course_errors})
                     </h4>
                     <Table>
                       <Table.Header>
@@ -317,7 +317,7 @@ export default function ReliabilityPage() {
                         <Table.Cell isHeader>Trace</Table.Cell>
                       </Table.Header>
                       <Table.Body>
-                        {errors.run_errors.slice(0, 5).map((err) => (
+                        {errors.course_errors.slice(0, 5).map((err) => (
                           <Table.Row key={err.id}>
                             <Table.Cell>{err.id}</Table.Cell>
                             <Table.Cell>
@@ -340,10 +340,10 @@ export default function ReliabilityPage() {
                   </div>
                 )}
 
-                {errors.worker_errors.length > 0 && (
+                {errors.commis_errors.length > 0 && (
                   <div>
                     <h4 className="reliability-subsection-title reliability-subsection-title--spaced ui-subsection-title">
-                      Worker Errors ({errors.total_worker_errors})
+                      Commis Errors ({errors.total_commis_errors})
                     </h4>
                     <Table>
                       <Table.Header>
@@ -353,7 +353,7 @@ export default function ReliabilityPage() {
                         <Table.Cell isHeader>Time</Table.Cell>
                       </Table.Header>
                       <Table.Body>
-                        {errors.worker_errors.slice(0, 5).map((err) => (
+                        {errors.commis_errors.slice(0, 5).map((err) => (
                           <Table.Row key={err.id}>
                             <Table.Cell>{err.id}</Table.Cell>
                             <Table.Cell>
@@ -378,11 +378,11 @@ export default function ReliabilityPage() {
           </Card.Body>
         </Card>
 
-        {/* Stuck Workers */}
-        {stuckWorkers && stuckWorkers.stuck_count > 0 && (
+        {/* Stuck Commis */}
+        {stuckCommis && stuckCommis.stuck_count > 0 && (
           <Card>
             <Card.Header>
-              <h3 className="reliability-warning-title">Stuck Workers ({stuckWorkers.stuck_count})</h3>
+              <h3 className="reliability-warning-title">Stuck Commis ({stuckCommis.stuck_count})</h3>
             </Card.Header>
             <Card.Body>
               <Table>
@@ -390,20 +390,20 @@ export default function ReliabilityPage() {
                   <Table.Cell isHeader>ID</Table.Cell>
                   <Table.Cell isHeader>Task</Table.Cell>
                   <Table.Cell isHeader>Started</Table.Cell>
-                  <Table.Cell isHeader>Worker ID</Table.Cell>
+                  <Table.Cell isHeader>Commis ID</Table.Cell>
                 </Table.Header>
                 <Table.Body>
-                  {stuckWorkers.workers.map((worker) => (
-                    <Table.Row key={worker.id}>
-                      <Table.Cell>{worker.id}</Table.Cell>
+                  {stuckCommis.commis.map((commis) => (
+                    <Table.Row key={commis.id}>
+                      <Table.Cell>{commis.id}</Table.Cell>
                       <Table.Cell>
-                        <span className="reliability-small-text">{worker.task || "-"}</span>
+                        <span className="reliability-small-text">{commis.task || "-"}</span>
                       </Table.Cell>
                       <Table.Cell>
-                        {worker.started_at ? new Date(worker.started_at).toLocaleString() : "-"}
+                        {commis.started_at ? new Date(commis.started_at).toLocaleString() : "-"}
                       </Table.Cell>
                       <Table.Cell>
-                        <code className="reliability-code">{worker.worker_id || "-"}</code>
+                        <code className="reliability-code">{commis.commis_id || "-"}</code>
                       </Table.Cell>
                     </Table.Row>
                   ))}

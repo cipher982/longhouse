@@ -1,16 +1,20 @@
-"""Built-in tools for Zerg agents.
+"""Built-in tools for Zerg fiches.
 
 This module contains the standard tools that come with the platform.
 All tools in this module are aggregated into a single list for registry construction.
 """
 
-from zerg.tools.builtin.agent_memory_tools import TOOLS as AGENT_MEMORY_TOOLS
+from zerg.tools.builtin.concierge_tools import CONCIERGE_TOOL_NAMES
+from zerg.tools.builtin.concierge_tools import CONCIERGE_UTILITY_TOOLS
+from zerg.tools.builtin.concierge_tools import TOOLS as CONCIERGE_TOOLS
+from zerg.tools.builtin.concierge_tools import get_concierge_allowed_tools
 from zerg.tools.builtin.connector_tools import TOOLS as CONNECTOR_TOOLS
 from zerg.tools.builtin.contact_user import TOOLS as CONTACT_USER_TOOLS
 from zerg.tools.builtin.container_tools import TOOLS as CONTAINER_TOOLS
 from zerg.tools.builtin.datetime_tools import TOOLS as DATETIME_TOOLS
 from zerg.tools.builtin.discord_tools import TOOLS as DISCORD_TOOLS
 from zerg.tools.builtin.email_tools import TOOLS as EMAIL_TOOLS
+from zerg.tools.builtin.fiche_memory_tools import TOOLS as FICHE_MEMORY_TOOLS
 from zerg.tools.builtin.github_tools import TOOLS as GITHUB_TOOLS
 from zerg.tools.builtin.http_tools import TOOLS as HTTP_TOOLS
 from zerg.tools.builtin.imessage_tools import TOOLS as IMESSAGE_TOOLS
@@ -26,10 +30,6 @@ from zerg.tools.builtin.runner_tools import TOOLS as RUNNER_TOOLS
 from zerg.tools.builtin.slack_tools import TOOLS as SLACK_TOOLS
 from zerg.tools.builtin.sms_tools import TOOLS as SMS_TOOLS
 from zerg.tools.builtin.ssh_tools import TOOLS as SSH_TOOLS
-from zerg.tools.builtin.supervisor_tools import SUPERVISOR_TOOL_NAMES
-from zerg.tools.builtin.supervisor_tools import SUPERVISOR_UTILITY_TOOLS
-from zerg.tools.builtin.supervisor_tools import TOOLS as SUPERVISOR_TOOLS
-from zerg.tools.builtin.supervisor_tools import get_supervisor_allowed_tools
 from zerg.tools.builtin.task_tools import TOOLS as TASK_TOOLS
 from zerg.tools.builtin.tool_discovery import TOOLS as TOOL_DISCOVERY_TOOLS
 from zerg.tools.builtin.uuid_tools import TOOLS as UUID_TOOLS
@@ -38,7 +38,7 @@ from zerg.tools.builtin.web_search import TOOLS as WEB_SEARCH_TOOLS
 from zerg.tools.registry import ToolRegistry
 
 BUILTIN_TOOLS = (
-    AGENT_MEMORY_TOOLS
+    FICHE_MEMORY_TOOLS
     + CONNECTOR_TOOLS
     + CONTACT_USER_TOOLS
     + CONTAINER_TOOLS
@@ -60,7 +60,7 @@ BUILTIN_TOOLS = (
     + SLACK_TOOLS
     + SMS_TOOLS
     + SSH_TOOLS
-    + SUPERVISOR_TOOLS
+    + CONCIERGE_TOOLS
     + TASK_TOOLS
     + TOOL_DISCOVERY_TOOLS
     + UUID_TOOLS
@@ -70,9 +70,9 @@ BUILTIN_TOOLS = (
 
 __all__ = [
     "BUILTIN_TOOLS",
-    "SUPERVISOR_TOOL_NAMES",
-    "SUPERVISOR_UTILITY_TOOLS",
-    "get_supervisor_allowed_tools",
+    "CONCIERGE_TOOL_NAMES",
+    "CONCIERGE_UTILITY_TOOLS",
+    "get_concierge_allowed_tools",
 ]
 
 # ---------------------------------------------------------------------------

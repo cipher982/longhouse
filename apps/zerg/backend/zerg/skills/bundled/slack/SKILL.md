@@ -23,7 +23,7 @@ Requires a Slack Bot Token with the following scopes:
 - `chat:write` - Send messages
 - `channels:read` - List channels (optional)
 
-Set `SLACK_BOT_TOKEN` in environment or configure in Agent Settings.
+Set `SLACK_BOT_TOKEN` in environment or configure in Fiche Settings.
 
 ## Example
 

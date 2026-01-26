@@ -45,13 +45,13 @@ router = APIRouter(
 logger = logging.getLogger(__name__)
 
 try:
-    # When E2E_USE_POSTGRES_SCHEMAS=1, WorkerDBMiddleware populates this
+    # When E2E_USE_POSTGRES_SCHEMAS=1, CommisDBMiddleware populates this
     # contextvar so zerg.database.get_session_factory can route to the correct
-    # worker schema. We explicitly set it inside threadpool work to avoid
+    # commis schema. We explicitly set it inside threadpool work to avoid
     # relying on contextvar propagation implementation details.
-    from zerg.middleware.worker_db import current_worker_id as _current_worker_id
+    from zerg.middleware.commis_db import current_commis_id as _current_commis_id
 except Exception:  # pragma: no cover - middleware not present in some contexts
-    _current_worker_id = None  # type: ignore[assignment]
+    _current_commis_id = None  # type: ignore[assignment]
 
 
 class ResetType(str, Enum):
@@ -235,7 +235,7 @@ def full_schema_rebuild(engine, settings, is_production, diagnostics) -> dict[st
 @router.post("/reset-database")
 async def reset_database(
     request: DatabaseResetRequest,
-    x_test_worker: str | None = Header(default=None, alias="X-Test-Worker"),
+    x_test_commis: str | None = Header(default=None, alias="X-Test-Commis"),
     current_user=Depends(require_super_admin),
 ):
     """Reset the database by dropping all tables and recreating them.
@@ -244,7 +244,7 @@ async def reset_database(
     In production environments, requires additional password confirmation.
     """
     # Run synchronously so the HTTP response reflects a completed commit.
-    return _reset_database_sync(request, current_user, x_test_worker)
+    return _reset_database_sync(request, current_user, x_test_commis)
 
 
 @router.post("/seed-scenario")
@@ -264,7 +264,7 @@ async def seed_scenario_data(
     return JSONResponse(content=result)
 
 
-def _reset_database_sync(request: DatabaseResetRequest, current_user, worker_id: str | None):
+def _reset_database_sync(request: DatabaseResetRequest, current_user, commis_id: str | None):
     settings = get_settings()
 
     # Log the reset attempt for audit purposes
@@ -294,11 +294,11 @@ def _reset_database_sync(request: DatabaseResetRequest, current_user, worker_id:
         raise HTTPException(status_code=403, detail="Database reset is only available in development and production environments")
 
     token = None
-    if _current_worker_id is not None and worker_id is not None:
-        token = _current_worker_id.set(worker_id)
+    if _current_commis_id is not None and commis_id is not None:
+        token = _current_commis_id.set(commis_id)
 
     try:
-        # Obtain the *current* engine – respects Playwright worker isolation
+        # Obtain the *current* engine – respects Playwright commis isolation
         session_factory = get_session_factory()
 
         # SQLAlchemy 2.0 removed the ``bind`` attribute from ``sessionmaker``.
@@ -380,18 +380,18 @@ def _reset_database_sync(request: DatabaseResetRequest, current_user, worker_id:
         # ------------------------------------------------------------------
         # SQLAlchemy's *global* ``close_all_sessions()`` helper invalidates
         # **every** Session that exists in the current process – even the
-        # ones that belong to a *different* Playwright worker using another
-        # database file.  When multiple E2E workers run in parallel this
+        # ones that belong to a *different* Playwright commis using another
+        # database file.  When multiple E2E commis run in parallel this
         # leads to race-conditions where an ongoing request suddenly loses
         # its Session mid-flight and subsequent ORM access explodes with
         # ``InvalidRequestError: Instance … is not persistent within this
         # Session``.
         #
-        # Because each Playwright worker is already fully isolated via its
-        # *own* SQLite engine (handled by WorkerDBMiddleware &
+        # Because each Playwright commis is already fully isolated via its
+        # *own* SQLite engine (handled by CommisDBMiddleware &
         # zerg.database) it is safe – and *necessary* – to avoid closing
         # foreign Sessions.  Instead we:
-        #   1. Dispose the *current* worker's engine after we are done.  This
+        #   1. Dispose the *current* commis's engine after we are done.  This
         #      releases connections that *belong to this engine only*.
         #   2. Rely on the fact that every incoming HTTP request obtains a
         #      **fresh** Session, so no stale identity maps can leak across
@@ -592,8 +592,8 @@ def _reset_database_sync(request: DatabaseResetRequest, current_user, worker_id:
             return {"message": "Database reset successfully (existing user)"}
         return JSONResponse(status_code=500, content={"detail": f"Failed to reset database: {str(e)}"})
     finally:
-        if token is not None and _current_worker_id is not None:
-            _current_worker_id.reset(token)
+        if token is not None and _current_commis_id is not None:
+            _current_commis_id.reset(token)
 
 
 # ---------------------------------------------------------------------------
@@ -715,11 +715,11 @@ class ConfigureTestModelRequest(BaseModel):
 @router.get("/debug/db-schema")
 async def debug_db_schema(
     db: Session = Depends(get_db),
-    x_test_worker: str | None = Header(default=None, alias="X-Test-Worker"),
+    x_test_commis: str | None = Header(default=None, alias="X-Test-Commis"),
 ):
     """Debug endpoint: returns current_schema + search_path for this request.
 
-    TESTING-only. Useful to validate Postgres schema routing (X-Test-Worker).
+    TESTING-only. Useful to validate Postgres schema routing (X-Test-Commis).
     """
     settings = get_settings()
     if not settings.testing:
@@ -729,18 +729,18 @@ async def debug_db_schema(
 
     current_schema = db.execute(text("SELECT current_schema()")).scalar()
     search_path = db.execute(text("SHOW search_path")).scalar()
-    agents_unqualified = db.execute(text("SELECT to_regclass('agents')")).scalar()
-    agents_public = db.execute(text("SELECT to_regclass('public.agents')")).scalar()
-    agents_count = db.execute(text("SELECT COUNT(*) FROM agents")).scalar()
-    agents_public_count = db.execute(text("SELECT COUNT(*) FROM public.agents")).scalar()
+    fiches_unqualified = db.execute(text("SELECT to_regclass('fiches')")).scalar()
+    fiches_public = db.execute(text("SELECT to_regclass('public.fiches')")).scalar()
+    fiches_count = db.execute(text("SELECT COUNT(*) FROM fiches")).scalar()
+    fiches_public_count = db.execute(text("SELECT COUNT(*) FROM public.fiches")).scalar()
     return {
         "current_schema": current_schema,
         "search_path": search_path,
-        "agents_unqualified": agents_unqualified,
-        "agents_public": agents_public,
-        "agents_count": agents_count,
-        "agents_public_count": agents_public_count,
-        "x_test_worker": x_test_worker,
+        "fiches_unqualified": fiches_unqualified,
+        "fiches_public": fiches_public,
+        "fiches_count": fiches_count,
+        "fiches_public_count": fiches_public_count,
+        "x_test_commis": x_test_commis,
     }
 
 
@@ -750,7 +750,7 @@ async def configure_test_model(
     db: Session = Depends(get_db),
     current_user=Depends(require_admin),
 ):
-    """Configure the supervisor agent to use a test model.
+    """Configure the concierge fiche to use a test model.
 
     This is a TEST-ONLY endpoint for E2E tests that need deterministic LLM behavior.
     Only available when TESTING=1 is set.
@@ -759,7 +759,7 @@ async def configure_test_model(
         request: Contains the model to use (default: gpt-scripted)
 
     Returns:
-        Success message with agent ID
+        Success message with fiche ID
     """
     settings = get_settings()
 
@@ -782,20 +782,20 @@ async def configure_test_model(
         )
 
     try:
-        from zerg.services.supervisor_service import SupervisorService
+        from zerg.services.concierge_service import ConciergeService
 
-        supervisor_service = SupervisorService(db)
-        agent = supervisor_service.get_or_create_supervisor_agent(current_user.id)
+        concierge_service = ConciergeService(db)
+        fiche = concierge_service.get_or_create_concierge_fiche(current_user.id)
 
-        # Update agent model
-        agent.model = request.model
+        # Update fiche model
+        fiche.model = request.model
         db.commit()
 
-        logger.info(f"Configured supervisor agent {agent.id} to use model: {request.model}")
+        logger.info(f"Configured concierge fiche {fiche.id} to use model: {request.model}")
 
         return {
-            "message": f"Supervisor agent configured to use {request.model}",
-            "agent_id": agent.id,
+            "message": f"Concierge fiche configured to use {request.model}",
+            "fiche_id": fiche.id,
             "model": request.model,
         }
     except Exception as e:
@@ -841,7 +841,7 @@ async def get_user_usage_details(
     Returns:
     - User info with usage summary for all periods
     - Daily breakdown for the specified period
-    - Top agents by cost for the specified period
+    - Top fiches by cost for the specified period
 
     Admin-only endpoint.
     """
@@ -854,10 +854,10 @@ async def get_user_usage_details(
 @_legacy_router.post("/reset-database")
 async def _legacy_reset_database(
     request: DatabaseResetRequest,
-    x_test_worker: str | None = Header(default=None, alias="X-Test-Worker"),
+    x_test_commis: str | None = Header(default=None, alias="X-Test-Commis"),
     current_user=Depends(require_super_admin),
 ):  # noqa: D401 – thin wrapper
-    return _reset_database_sync(request, current_user, x_test_worker)  # noqa: WPS110 – re-use logic
+    return _reset_database_sync(request, current_user, x_test_commis)  # noqa: WPS110 – re-use logic
 
 
 # mount the legacy router without the global /api prefix

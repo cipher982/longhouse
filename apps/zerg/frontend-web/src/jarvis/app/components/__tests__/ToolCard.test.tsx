@@ -2,14 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { render } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ToolCard } from '../ToolCard';
-import type { SupervisorToolCall } from '../../../lib/supervisor-tool-store';
+import type { ConciergeToolCall } from '../../../lib/concierge-tool-store';
 
 describe('ToolCard', () => {
-  const baseToolCall: SupervisorToolCall = {
+  const baseToolCall: ConciergeToolCall = {
     toolCallId: 'call-123',
     toolName: 'get_current_location',
     status: 'running',
-    runId: 1,
+    courseId: 1,
     startedAt: Date.now() - 5000, // Started 5 seconds ago
     logs: [],
   };
@@ -47,7 +47,7 @@ describe('ToolCard', () => {
       const now = Date.now();
       vi.spyOn(Date, 'now').mockReturnValue(now);
 
-      const tool: SupervisorToolCall = {
+      const tool: ConciergeToolCall = {
         ...baseToolCall,
         startedAt: now - 5000, // Exactly 5 seconds ago
       };
@@ -60,7 +60,7 @@ describe('ToolCard', () => {
     });
 
     it('displays duration in milliseconds for sub-second durations', () => {
-      const tool: SupervisorToolCall = {
+      const tool: ConciergeToolCall = {
         ...baseToolCall,
         status: 'completed',
         startedAt: Date.now() - 500,
@@ -73,7 +73,7 @@ describe('ToolCard', () => {
     });
 
     it('displays args preview when available', () => {
-      const tool: SupervisorToolCall = {
+      const tool: ConciergeToolCall = {
         ...baseToolCall,
         argsPreview: 'device_id: "1"',
       };
@@ -84,7 +84,7 @@ describe('ToolCard', () => {
 
     it('displays result preview on completion', async () => {
       const user = userEvent.setup();
-      const tool: SupervisorToolCall = {
+      const tool: ConciergeToolCall = {
         ...baseToolCall,
         status: 'completed',
         completedAt: Date.now(),
@@ -103,7 +103,7 @@ describe('ToolCard', () => {
 
     it('displays error message on failure', async () => {
       const user = userEvent.setup();
-      const tool: SupervisorToolCall = {
+      const tool: ConciergeToolCall = {
         ...baseToolCall,
         status: 'failed',
         completedAt: Date.now(),
@@ -124,7 +124,7 @@ describe('ToolCard', () => {
   describe('expansion behavior', () => {
     it('expands on click', async () => {
       const user = userEvent.setup();
-      const tool: SupervisorToolCall = {
+      const tool: ConciergeToolCall = {
         ...baseToolCall,
         argsPreview: 'test args',
       };
@@ -161,7 +161,7 @@ describe('ToolCard', () => {
   describe('progress logs', () => {
     it('displays tool logs when expanded', async () => {
       const user = userEvent.setup();
-      const tool: SupervisorToolCall = {
+      const tool: ConciergeToolCall = {
         ...baseToolCall,
         logs: [
           {
@@ -190,7 +190,7 @@ describe('ToolCard', () => {
 
     it('displays log level icons', async () => {
       const user = userEvent.setup();
-      const tool: SupervisorToolCall = {
+      const tool: ConciergeToolCall = {
         ...baseToolCall,
         logs: [
           {
@@ -227,7 +227,7 @@ describe('ToolCard', () => {
   describe('raw JSON view', () => {
     it('shows raw JSON when toggled', async () => {
       const user = userEvent.setup();
-      const tool: SupervisorToolCall = {
+      const tool: ConciergeToolCall = {
         ...baseToolCall,
         status: 'completed',
         completedAt: Date.now(),
@@ -257,7 +257,7 @@ describe('ToolCard', () => {
 
     it('hides raw JSON when toggled off', async () => {
       const user = userEvent.setup();
-      const tool: SupervisorToolCall = {
+      const tool: ConciergeToolCall = {
         ...baseToolCall,
         status: 'completed',
         completedAt: Date.now(),
@@ -285,7 +285,7 @@ describe('ToolCard', () => {
 
     it('displays error details in raw view for failed tools', async () => {
       const user = userEvent.setup();
-      const tool: SupervisorToolCall = {
+      const tool: ConciergeToolCall = {
         ...baseToolCall,
         status: 'failed',
         completedAt: Date.now(),
@@ -356,7 +356,7 @@ describe('ToolCard', () => {
   describe('event propagation', () => {
     it('stops propagation when clicking body elements', async () => {
       const user = userEvent.setup();
-      const tool: SupervisorToolCall = {
+      const tool: ConciergeToolCall = {
         ...baseToolCall,
         status: 'completed',
         completedAt: Date.now(),

@@ -11,7 +11,7 @@ Usage:
     uv run scripts/analyze_llm_requests.py                # Analyze most recent session
     uv run scripts/analyze_llm_requests.py --last 3       # Last 3 sessions
     uv run scripts/analyze_llm_requests.py --all          # All sessions
-    uv run scripts/analyze_llm_requests.py --worker W123  # Specific worker
+    uv run scripts/analyze_llm_requests.py --commis W123  # Specific commis
     uv run scripts/analyze_llm_requests.py --verbose      # Show full messages
 """
 
@@ -27,23 +27,23 @@ from typing import Any
 def parse_filename(filename: str) -> dict[str, Any]:
     """Parse LLM request log filename to extract metadata.
 
-    Format: YYYY-MM-DDTHH-MM-SS_<phase>[_<worker_id>][_response].json
+    Format: YYYY-MM-DDTHH-MM-SS_<phase>[_<commis_id>][_response].json
     """
     stem = Path(filename).stem
     parts = stem.split("_")
 
     timestamp_str = parts[0]
     phase = parts[1] if len(parts) > 1 else "unknown"
-    worker_id = None
+    commis_id = None
     is_response = False
 
-    # Check for worker_id and response indicator
+    # Check for commis_id and response indicator
     for part in parts[2:]:
         if part == "response":
             is_response = True
         elif part.startswith("2025-"):
-            # This is a worker_id with timestamp format
-            worker_id = "_".join(parts[2:-1]) if is_response else "_".join(parts[2:])
+            # This is a commis_id with timestamp format
+            commis_id = "_".join(parts[2:-1]) if is_response else "_".join(parts[2:])
             break
 
     # Convert timestamp format: YYYY-MM-DDTHH-MM-SS -> YYYY-MM-DDTHH:MM:SS
@@ -56,7 +56,7 @@ def parse_filename(filename: str) -> dict[str, Any]:
     return {
         "timestamp": datetime.fromisoformat(timestamp_str),
         "phase": phase,
-        "worker_id": worker_id,
+        "commis_id": commis_id,
         "is_response": is_response,
         "filename": filename,
     }
@@ -82,27 +82,27 @@ def load_request_logs(log_dir: Path) -> list[dict]:
 
 
 def group_by_session(logs: list[dict]) -> dict[str, list[dict]]:
-    """Group logs by session based on supervisor 'initial' phase timestamps.
+    """Group logs by session based on concierge 'initial' phase timestamps.
 
-    A session starts when a supervisor (worker_id=null) makes an 'initial' phase call.
-    All subsequent logs until the next supervisor initial are part of that session.
+    A session starts when a concierge (commis_id=null) makes an 'initial' phase call.
+    All subsequent logs until the next concierge initial are part of that session.
     """
     # Sort logs by timestamp first
     sorted_logs = sorted(logs, key=lambda x: x["_meta"]["timestamp"])
 
-    # Find all supervisor initial timestamps as session boundaries
+    # Find all concierge initial timestamps as session boundaries
     session_starts = []
     for log in sorted_logs:
         # Use JSON fields directly (more reliable than filename parsing)
         phase = log.get("phase") or log["_meta"]["phase"]
-        worker_id = log.get("worker_id") or log["_meta"]["worker_id"]
+        commis_id = log.get("commis_id") or log["_meta"]["commis_id"]
         is_response = log.get("type") == "response" or log["_meta"]["is_response"]
 
-        # Supervisor initial request marks a new session
-        if phase == "initial" and worker_id is None and not is_response:
+        # Concierge initial request marks a new session
+        if phase == "initial" and commis_id is None and not is_response:
             session_starts.append(log["_meta"]["timestamp"])
 
-    # If no supervisor initials found, fall back to first timestamp
+    # If no concierge initials found, fall back to first timestamp
     if not session_starts:
         session_starts = [sorted_logs[0]["_meta"]["timestamp"]] if sorted_logs else []
 
@@ -149,22 +149,22 @@ def analyze_session(logs: list[dict], verbose: bool = False) -> None:
     print(f"Total LLM calls: {len(logs)}")
     print("=" * 80)
 
-    # Group by phase and worker
+    # Group by phase and commis
     phase_counts = defaultdict(int)
-    worker_calls = defaultdict(list)
+    commis_calls = defaultdict(list)
     total_tokens = 0
 
     for log in logs:
         meta = log["_meta"]
         # Prefer JSON body fields over filename-parsed metadata
         phase = log.get("phase") or meta["phase"]
-        worker_id = log.get("worker_id") or meta["worker_id"] or "supervisor"
+        commis_id = log.get("commis_id") or meta["commis_id"] or "concierge"
         is_response = log.get("type") == "response" or meta["is_response"]
 
         phase_counts[phase] += 1
 
-        # Track worker activity
-        worker_calls[worker_id].append(log)
+        # Track commis activity
+        commis_calls[commis_id].append(log)
 
         # Token counting (only from responses)
         # Token data is in response.usage_metadata (not root-level usage)
@@ -181,13 +181,13 @@ def analyze_session(logs: list[dict], verbose: bool = False) -> None:
     for phase, count in sorted(phase_counts.items()):
         print(f"{phase:<20} {count:<10}")
 
-    # Worker analysis
-    print("\n## Worker Activity")
-    for worker_id, calls in sorted(worker_calls.items()):
+    # Commis analysis
+    print("\n## Commis Activity")
+    for commis_id, calls in sorted(commis_calls.items()):
         requests = [c for c in calls if not c["_meta"]["is_response"]]
         responses = [c for c in calls if c["_meta"]["is_response"]]
 
-        print(f"\n### {worker_id}")
+        print(f"\n### {commis_id}")
         print(f"  Requests: {len(requests)}")
         print(f"  Responses: {len(responses)}")
 
@@ -199,20 +199,20 @@ def analyze_session(logs: list[dict], verbose: bool = False) -> None:
         if tool_iterations > 0:
             print(f"  Tool iterations: {tool_iterations}")
             if tool_iterations > 2:
-                print(f"    ⚠️  HIGH: Worker made {tool_iterations} tool calls")
+                print(f"    ⚠️  HIGH: Commis made {tool_iterations} tool calls")
 
         # Token usage (from response.usage_metadata)
-        worker_tokens = sum(
+        commis_tokens = sum(
             r.get("response", {}).get("usage_metadata", {}).get("total_tokens", 0)
             for r in responses
             if r.get("response", {}).get("usage_metadata")
         )
-        if worker_tokens > 0:
-            print(f"  Tokens: {worker_tokens:,}")
+        if commis_tokens > 0:
+            print(f"  Tokens: {commis_tokens:,}")
 
     # Timeline view
     print("\n## Timeline")
-    print(f"{'Time':<12} {'Phase':<20} {'Worker':<15} {'Type':<10} {'Tokens':<10}")
+    print(f"{'Time':<12} {'Phase':<20} {'Commis':<15} {'Type':<10} {'Tokens':<10}")
     print("-" * 80)
 
     for log in logs:
@@ -220,7 +220,7 @@ def analyze_session(logs: list[dict], verbose: bool = False) -> None:
         ts = meta["timestamp"]
         # Prefer JSON body fields over filename-parsed metadata
         phase = (log.get("phase") or meta["phase"])[:18]
-        worker_id = (log.get("worker_id") or meta["worker_id"] or "supervisor")[:13]
+        commis_id = (log.get("commis_id") or meta["commis_id"] or "concierge")[:13]
         is_response = log.get("type") == "response" or meta["is_response"]
         req_type = "response" if is_response else "request"
 
@@ -231,7 +231,7 @@ def analyze_session(logs: list[dict], verbose: bool = False) -> None:
                 tokens = f"{usage.get('total_tokens', 0):,}"
 
         time_str = ts.strftime("%H:%M:%S")
-        print(f"{time_str:<12} {phase:<20} {worker_id:<15} {req_type:<10} {tokens:<10}")
+        print(f"{time_str:<12} {phase:<20} {commis_id:<15} {req_type:<10} {tokens:<10}")
 
     # Verbose mode: show message details
     if verbose:
@@ -255,14 +255,14 @@ def analyze_session(logs: list[dict], verbose: bool = False) -> None:
     if total_tokens > 100000:
         warnings.append(f"⚠️  Very high token usage: {total_tokens:,} tokens")
 
-    for worker_id, calls in worker_calls.items():
+    for commis_id, calls in commis_calls.items():
         # Prefer JSON body phase field
         tool_iters = sum(
             1 for c in calls
             if "tool_iteration" in (c.get("phase") or c["_meta"]["phase"])
         )
         if tool_iters > 3:
-            warnings.append(f"⚠️  {worker_id}: {tool_iters} tool iterations (expected ≤2 for simple tasks)")
+            warnings.append(f"⚠️  {commis_id}: {tool_iters} tool iterations (expected ≤2 for simple tasks)")
 
     if warnings:
         print("\n### Warnings")
@@ -303,9 +303,9 @@ Examples:
         help="Analyze all sessions",
     )
     parser.add_argument(
-        "--worker",
+        "--commis",
         type=str,
-        help="Filter to specific worker ID",
+        help="Filter to specific commis ID",
     )
     parser.add_argument(
         "--verbose",
@@ -328,11 +328,11 @@ Examples:
         print("No logs found.", file=sys.stderr)
         sys.exit(1)
 
-    # Filter by worker if specified
-    if args.worker:
-        logs = [log for log in logs if log.get("worker_id") == args.worker or log["_meta"]["worker_id"] == args.worker]
+    # Filter by commis if specified
+    if args.commis:
+        logs = [log for log in logs if log.get("commis_id") == args.commis or log["_meta"]["commis_id"] == args.commis]
         if not logs:
-            print(f"No logs found for worker: {args.worker}", file=sys.stderr)
+            print(f"No logs found for commis: {args.commis}", file=sys.stderr)
             sys.exit(1)
 
     # Group by session

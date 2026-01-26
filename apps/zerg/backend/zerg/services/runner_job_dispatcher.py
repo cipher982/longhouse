@@ -5,7 +5,7 @@ Manages concurrency control to ensure runners don't get overloaded.
 
 IMPORTANT: The dispatcher uses thread-safe primitives (threading.Event)
 instead of asyncio.Future because dispatch_job may be called from a
-worker thread (via _run_coro_sync) while complete_job is called from
+commis thread (via _run_coro_sync) while complete_job is called from
 the main event loop's WebSocket handler. Using asyncio.Future would
 cause the completion signal to be lost across event loop boundaries.
 """
@@ -94,8 +94,8 @@ class RunnerJobDispatcher:
         runner_id: int,
         command: str,
         timeout_secs: int,
-        worker_id: str | None = None,
-        run_id: str | None = None,
+        commis_id: str | None = None,
+        course_id: str | None = None,
     ) -> Dict[str, Any]:
         """Dispatch a job to a runner and wait for completion.
 
@@ -105,8 +105,8 @@ class RunnerJobDispatcher:
             runner_id: ID of the runner to execute on
             command: Shell command to execute
             timeout_secs: Maximum execution time in seconds
-            worker_id: Optional worker ID for correlation
-            run_id: Optional run ID for correlation
+            commis_id: Optional commis ID for correlation
+            course_id: Optional run ID for correlation
 
         Returns:
             Result dictionary with success/error envelope
@@ -139,8 +139,8 @@ class RunnerJobDispatcher:
             runner_id=runner_id,
             command=command,
             timeout_secs=timeout_secs,
-            worker_id=worker_id,
-            run_id=run_id,
+            commis_id=commis_id,
+            course_id=course_id,
         )
 
         # Mark job as running
@@ -150,7 +150,7 @@ class RunnerJobDispatcher:
         self.mark_job_active(runner_id, job.id)
 
         # Create thread-safe pending job for tracking completion
-        # This allows cross-event-loop signaling between worker thread and main loop
+        # This allows cross-event-loop signaling between commis thread and main loop
         pending = PendingJob(event=threading.Event())
         with self._pending_lock:
             self._pending_jobs[job.id] = pending

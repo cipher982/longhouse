@@ -44,7 +44,7 @@ This guide provides the end-to-end context, workflows, and task roadmap for repl
 
 - `frontend/www/config.js` sets `window.API_BASE_URL` and `window.WS_BASE_URL` so the React bundle hits the FastAPI backend even though it’s served from the static server port.
 - Playwright still seeds `zerg_use_react_*` localStorage keys when needed, but manual toggling is no longer required.
-- WebSockets include the `worker` query parameter for Playwright isolation; React components read `__TEST_WORKER_ID__` to mirror the legacy behaviour.
+- WebSockets include the `commis` query parameter for Playwright isolation; React components read `__TEST_COMMIS_ID__` to mirror the legacy behaviour.
 
 ### Codebase Quirks
 

@@ -2,11 +2,11 @@
  * Session Continuity E2E Tests
  *
  * Tests session fetch/ship with REAL Life Hub API to eliminate drift risk.
- * Uses mock hatch CLI (can't run real Claude Code agents in tests).
+ * Uses mock hatch CLI (can't run real Claude Code fiches in tests).
  *
  * Requires:
  * - LIFE_HUB_API_KEY environment variable
- * - WorkerJobProcessor running (included in E2E backend)
+ * - CommisJobProcessor running (included in E2E backend)
  * - mock-hatch in PATH (added by spawn-test-backend.js)
  */
 
@@ -21,14 +21,14 @@ test.describe('Session Continuity E2E', () => {
     await resetDatabase(request);
   });
 
-  test('workspace worker executes with mock hatch', async ({ request }) => {
+  test('workspace commis executes with mock hatch', async ({ request }) => {
     // Skip if Life Hub credentials not available (local dev without key)
     test.skip(!LIFE_HUB_API_KEY, 'LIFE_HUB_API_KEY not set - skipping session continuity test');
     test.setTimeout(90000);
 
     const startTime = Date.now();
 
-    // Send a message that triggers workspace worker scenario
+    // Send a message that triggers workspace commis scenario
     // The scripted LLM detects "workspace" or "repository" keywords
     const chatRes = await request.post('/api/jarvis/chat', {
       data: {
@@ -39,26 +39,26 @@ test.describe('Session Continuity E2E', () => {
     });
     expect(chatRes.ok()).toBeTruthy();
 
-    // Wait for supervisor run to appear
-    let runId: number | null = null;
+    // Wait for concierge course to appear
+    let courseId: number | null = null;
     await expect
       .poll(
         async () => {
-          const runsRes = await request.get('/api/jarvis/runs?limit=25');
-          if (!runsRes.ok()) return false;
-          const runs = (await runsRes.json()) as Array<{
+          const coursesRes = await request.get('/api/jarvis/courses?limit=25');
+          if (!coursesRes.ok()) return false;
+          const courses = (await coursesRes.json()) as Array<{
             id: number;
             created_at: string;
             trigger: string;
           }>;
 
-          const candidate = runs.find((run) => {
-            const createdAt = Date.parse(run.created_at);
-            return Number.isFinite(createdAt) && createdAt >= startTime - 2000 && run.trigger !== 'worker';
+          const candidate = courses.find((course) => {
+            const createdAt = Date.parse(course.created_at);
+            return Number.isFinite(createdAt) && createdAt >= startTime - 2000 && course.trigger !== 'commis';
           });
 
           if (candidate) {
-            runId = candidate.id;
+            courseId = candidate.id;
             return true;
           }
           return false;
@@ -67,25 +67,25 @@ test.describe('Session Continuity E2E', () => {
       )
       .toBeTruthy();
 
-    if (!runId) {
-      throw new Error('Failed to locate supervisor run');
+    if (!courseId) {
+      throw new Error('Failed to locate concierge course');
     }
 
-    // Wait for workspace worker flow: worker_spawned -> worker_complete
+    // Wait for workspace commis flow: commis_spawned -> commis_complete
     let events: Array<{ event_type: string; data?: any }> = [];
     await expect
       .poll(
         async () => {
-          const eventsRes = await request.get(`/api/jarvis/runs/${runId}/events`);
+          const eventsRes = await request.get(`/api/jarvis/courses/${courseId}/events`);
           if (!eventsRes.ok()) return false;
           const payload = await eventsRes.json();
           events = payload.events ?? [];
 
-          const spawnedCount = events.filter((e) => e.event_type === 'worker_spawned').length;
-          const completeCount = events.filter((e) => e.event_type === 'worker_complete').length;
+          const spawnedCount = events.filter((e) => e.event_type === 'commis_spawned').length;
+          const completeCount = events.filter((e) => e.event_type === 'commis_complete').length;
 
-          // Workspace workers don't emit supervisor_resumed like standard workers
-          // They complete directly via worker_complete event
+          // Workspace commis don't emit concierge_resumed like standard commis
+          // They complete directly via commis_complete event
           return spawnedCount >= 1 && completeCount >= 1;
         },
         { timeout: 60000, intervals: [1000, 2000, 5000] }
@@ -93,24 +93,24 @@ test.describe('Session Continuity E2E', () => {
       .toBeTruthy();
 
     // Verify we got the expected events
-    const spawnedEvents = events.filter((e) => e.event_type === 'worker_spawned');
-    const completeEvents = events.filter((e) => e.event_type === 'worker_complete');
+    const spawnedEvents = events.filter((e) => e.event_type === 'commis_spawned');
+    const completeEvents = events.filter((e) => e.event_type === 'commis_complete');
 
     expect(spawnedEvents.length).toBeGreaterThanOrEqual(1);
     expect(completeEvents.length).toBeGreaterThanOrEqual(1);
 
-    // Check worker completed successfully
-    const workerComplete = completeEvents[0];
-    expect(workerComplete.payload?.status).toBe('success');
+    // Check commis completed successfully
+    const commisComplete = completeEvents[0];
+    expect(commisComplete.payload?.status).toBe('success');
   });
 
-  test('workspace worker with resume_session_id fetches from Life Hub', async ({ request }) => {
+  test('workspace commis with resume_session_id fetches from Life Hub', async ({ request }) => {
     // Skip if Life Hub credentials not available
     test.skip(!LIFE_HUB_API_KEY, 'LIFE_HUB_API_KEY not set - skipping session continuity test');
     test.setTimeout(90000);
 
     // First, get a real session ID from Life Hub
-    const sessionsRes = await request.fetch(`${LIFE_HUB_URL}/query/agents/sessions`, {
+    const sessionsRes = await request.fetch(`${LIFE_HUB_URL}/query/fiches/sessions`, {
       headers: { 'X-API-Key': LIFE_HUB_API_KEY! },
       params: {
         limit: '10',
@@ -136,7 +136,7 @@ test.describe('Session Continuity E2E', () => {
     const testSessionId = testSession.id;
     const startTime = Date.now();
 
-    // Send a message that triggers workspace worker with resume
+    // Send a message that triggers workspace commis with resume
     // Include the session ID in the message - scripted LLM extracts it
     const chatRes = await request.post('/api/jarvis/chat', {
       data: {
@@ -147,26 +147,26 @@ test.describe('Session Continuity E2E', () => {
     });
     expect(chatRes.ok()).toBeTruthy();
 
-    // Wait for supervisor run
-    let runId: number | null = null;
+    // Wait for concierge course
+    let courseId: number | null = null;
     await expect
       .poll(
         async () => {
-          const runsRes = await request.get('/api/jarvis/runs?limit=25');
-          if (!runsRes.ok()) return false;
-          const runs = (await runsRes.json()) as Array<{
+          const coursesRes = await request.get('/api/jarvis/courses?limit=25');
+          if (!coursesRes.ok()) return false;
+          const courses = (await coursesRes.json()) as Array<{
             id: number;
             created_at: string;
             trigger: string;
           }>;
 
-          const candidate = runs.find((run) => {
-            const createdAt = Date.parse(run.created_at);
-            return Number.isFinite(createdAt) && createdAt >= startTime - 2000 && run.trigger !== 'worker';
+          const candidate = courses.find((course) => {
+            const createdAt = Date.parse(course.created_at);
+            return Number.isFinite(createdAt) && createdAt >= startTime - 2000 && course.trigger !== 'commis';
           });
 
           if (candidate) {
-            runId = candidate.id;
+            courseId = candidate.id;
             return true;
           }
           return false;
@@ -175,32 +175,32 @@ test.describe('Session Continuity E2E', () => {
       )
       .toBeTruthy();
 
-    if (!runId) {
-      throw new Error('Failed to locate supervisor run');
+    if (!courseId) {
+      throw new Error('Failed to locate concierge course');
     }
 
-    // Wait for worker_complete event
+    // Wait for commis_complete event
     await expect
       .poll(
         async () => {
-          const eventsRes = await request.get(`/api/jarvis/runs/${runId}/events`);
+          const eventsRes = await request.get(`/api/jarvis/courses/${courseId}/events`);
           if (!eventsRes.ok()) return false;
           const payload = await eventsRes.json();
           const events = payload.events ?? [];
-          return events.some((e: any) => e.event_type === 'worker_complete');
+          return events.some((e: any) => e.event_type === 'commis_complete');
         },
         { timeout: 60000, intervals: [1000, 2000, 5000] }
       )
       .toBeTruthy();
 
-    // Verify worker completed (session fetch happened even if no errors)
-    const eventsRes = await request.get(`/api/jarvis/runs/${runId}/events`);
+    // Verify commis completed (session fetch happened even if no errors)
+    const eventsRes = await request.get(`/api/jarvis/courses/${courseId}/events`);
     const { events } = await eventsRes.json();
-    const workerComplete = events.find((e: any) => e.event_type === 'worker_complete');
+    const commisComplete = events.find((e: any) => e.event_type === 'commis_complete');
 
-    // Worker should complete (mock hatch always succeeds)
-    expect(workerComplete).toBeTruthy();
-    expect(workerComplete.payload?.status).toBe('success');
+    // Commis should complete (mock hatch always succeeds)
+    expect(commisComplete).toBeTruthy();
+    expect(commisComplete.payload?.status).toBe('success');
   });
 
   test('graceful fallback when session not found in Life Hub', async ({ request }) => {
@@ -222,26 +222,26 @@ test.describe('Session Continuity E2E', () => {
     });
     expect(chatRes.ok()).toBeTruthy();
 
-    // Wait for supervisor run
-    let runId: number | null = null;
+    // Wait for concierge course
+    let courseId: number | null = null;
     await expect
       .poll(
         async () => {
-          const runsRes = await request.get('/api/jarvis/runs?limit=25');
-          if (!runsRes.ok()) return false;
-          const runs = (await runsRes.json()) as Array<{
+          const coursesRes = await request.get('/api/jarvis/courses?limit=25');
+          if (!coursesRes.ok()) return false;
+          const courses = (await coursesRes.json()) as Array<{
             id: number;
             created_at: string;
             trigger: string;
           }>;
 
-          const candidate = runs.find((run) => {
-            const createdAt = Date.parse(run.created_at);
-            return Number.isFinite(createdAt) && createdAt >= startTime - 2000 && run.trigger !== 'worker';
+          const candidate = courses.find((course) => {
+            const createdAt = Date.parse(course.created_at);
+            return Number.isFinite(createdAt) && createdAt >= startTime - 2000 && course.trigger !== 'commis';
           });
 
           if (candidate) {
-            runId = candidate.id;
+            courseId = candidate.id;
             return true;
           }
           return false;
@@ -250,37 +250,37 @@ test.describe('Session Continuity E2E', () => {
       )
       .toBeTruthy();
 
-    if (!runId) {
-      throw new Error('Failed to locate supervisor run');
+    if (!courseId) {
+      throw new Error('Failed to locate concierge course');
     }
 
-    // Wait for terminal state (worker_complete or supervisor_complete)
-    // The worker should either:
+    // Wait for terminal state (commis_complete or concierge_complete)
+    // The commis should either:
     // 1. Fail gracefully with an error about session not found
     // 2. Continue as a new session (no resume) and complete
     await expect
       .poll(
         async () => {
-          const eventsRes = await request.get(`/api/jarvis/runs/${runId}/events`);
+          const eventsRes = await request.get(`/api/jarvis/courses/${courseId}/events`);
           if (!eventsRes.ok()) return false;
           const payload = await eventsRes.json();
           const events = payload.events ?? [];
 
-          // Either worker completed or supervisor completed
+          // Either commis completed or concierge completed
           return events.some(
-            (e: any) => e.event_type === 'worker_complete' || e.event_type === 'supervisor_complete'
+            (e: any) => e.event_type === 'commis_complete' || e.event_type === 'concierge_complete'
           );
         },
         { timeout: 60000, intervals: [1000, 2000, 5000] }
       )
       .toBeTruthy();
 
-    // Check run didn't crash the system
-    const statusRes = await request.get(`/api/jarvis/runs/${runId}`);
+    // Check course didn't crash the system
+    const statusRes = await request.get(`/api/jarvis/courses/${courseId}`);
     expect(statusRes.ok()).toBeTruthy();
-    const runStatus = await statusRes.json();
+    const courseStatus = await statusRes.json();
 
-    // The run should complete (success or failed, but not stuck)
-    expect(['success', 'failed']).toContain(runStatus.status);
+    // The course should complete (success or failed, but not stuck)
+    expect(['success', 'failed']).toContain(courseStatus.status);
   });
 });

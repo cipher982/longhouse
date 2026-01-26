@@ -16,7 +16,7 @@ from typing import List
 
 from langchain_core.tools import StructuredTool
 
-from zerg.context import get_worker_context
+from zerg.context import get_commis_context
 from zerg.crud import runner_crud
 from zerg.database import get_db
 from zerg.services.command_validator import CommandValidator
@@ -41,7 +41,7 @@ def _run_coro_sync(coro: Any) -> Dict[str, Any]:
     except RuntimeError:
         return asyncio.run(coro)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_commis=1) as pool:
         return pool.submit(lambda: asyncio.run(coro)).result()
 
 
@@ -88,7 +88,7 @@ def runner_exec(
 ) -> Dict[str, Any]:
     """Execute a command on a user-owned runner.
 
-    This tool enables worker agents to execute commands on user-managed compute
+    This tool enables commis fiches to execute commands on user-managed compute
     infrastructure (laptops, servers, containers) without the backend needing
     SSH keys or direct access.
 
@@ -141,17 +141,17 @@ def runner_exec(
     Note: Non-zero exit codes are NOT errors - they indicate the command ran
     but returned a failure code. Only connection/timeout failures are errors.
     """
-    # Get worker context for owner_id
-    ctx = get_worker_context()
+    # Get commis context for owner_id
+    ctx = get_commis_context()
     if not ctx or ctx.owner_id is None:
         return tool_error(
             ErrorType.VALIDATION_ERROR,
-            "runner_exec requires worker context with owner_id",
+            "runner_exec requires commis context with owner_id",
         )
 
     owner_id = ctx.owner_id
-    worker_id = ctx.worker_id
-    run_id = ctx.run_id
+    commis_id = ctx.commis_id
+    course_id = ctx.course_id
 
     # Validate parameters
     if not target:
@@ -223,8 +223,8 @@ def runner_exec(
                 runner_id=runner_id,
                 command=command,
                 timeout_secs=timeout_secs,
-                worker_id=worker_id,
-                run_id=run_id,
+                commis_id=commis_id,
+                course_id=course_id,
             )
         )
 

@@ -40,14 +40,14 @@ const envPath = findDotEnv(__dirname);
 const BACKEND_PORT = Number.parseInt(process.env.BACKEND_PORT ?? readEnvVarFromFile(envPath, "BACKEND_PORT", "8001"), 10);
 
 const cpuCount = Math.max(1, os.cpus()?.length ?? 0);
-const envWorkers = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? "", 10);
-const workers = Number.isFinite(envWorkers) && envWorkers > 0 ? envWorkers : (process.env.CI ? 4 : cpuCount);
+const envCommis = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? "", 10);
+const commis = Number.isFinite(envCommis) && envCommis > 0 ? envCommis : (process.env.CI ? 4 : cpuCount);
 
 export default {
   testDir: "./probes",
   testMatch: ["**/*backend_parallelism.probe.spec.ts"],
   fullyParallel: true,
-  workers,
+  commis,
   retries: 0,
   timeout: 30_000,
   reporter: [

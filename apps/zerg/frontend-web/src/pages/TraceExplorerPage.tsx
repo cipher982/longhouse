@@ -16,7 +16,7 @@ import {
 // Types for trace data
 interface TraceListItem {
   trace_id: string;
-  run_id: number;
+  course_id: number;
   status: string | null;
   model: string | null;
   started_at: string | null;
@@ -33,7 +33,7 @@ interface TracesResponse {
 interface TimelineEvent {
   timestamp: string;
   event_type: string;
-  source: "run" | "worker" | "llm";
+  source: "course" | "commis" | "llm";
   details: Record<string, unknown>;
   is_error: boolean;
   duration_ms: number | null;
@@ -45,8 +45,8 @@ interface TraceDetail {
   started_at: string | null;
   duration_seconds: number;
   counts: {
-    runs: number;
-    workers: number;
+    courses: number;
+    commis: number;
     llm_calls: number;
   };
   anomalies: string[];
@@ -99,15 +99,15 @@ async function fetchTraceDetail(traceId: string, level: string = "summary"): Pro
 
 // Source color scheme
 const sourceStyles: Record<string, { color: string; bg: string; label: string }> = {
-  run: {
+  course: {
     color: "var(--color-brand-primary)",
     bg: "color-mix(in srgb, var(--color-brand-primary) 15%, transparent)",
-    label: "RUN",
+    label: "COURSE",
   },
-  worker: {
+  commis: {
     color: "var(--color-intent-success)",
     bg: "var(--color-intent-success-muted)",
-    label: "WORKER",
+    label: "COMMIS",
   },
   llm: {
     color: "var(--color-neon-secondary)",
@@ -283,8 +283,8 @@ function TraceDetailView({
         {/* Stats cards */}
         <div className="trace-detail-stats">
           {[
-            { label: "Runs", value: detail.counts.runs, color: sourceStyles.run.color },
-            { label: "Workers", value: detail.counts.workers, color: sourceStyles.worker.color },
+            { label: "Courses", value: detail.counts.courses, color: sourceStyles.course.color },
+            { label: "Commis", value: detail.counts.commis, color: sourceStyles.commis.color },
             { label: "LLM Calls", value: detail.counts.llm_calls, color: sourceStyles.llm.color },
           ].map((stat) => (
             <div
@@ -401,7 +401,7 @@ export default function TraceExplorerPage() {
     <PageShell size="wide" className="trace-explorer-container">
       <SectionHeader
         title="Trace Explorer"
-        description="Debug supervisor runs, workers, and LLM calls with unified trace timelines."
+        description="Debug concierge courses, commis jobs, and LLM calls with unified trace timelines."
       />
 
       {selectedTraceId ? (
@@ -417,7 +417,7 @@ export default function TraceExplorerPage() {
             ) : error ? (
               <EmptyState variant="error" title="Error" description={String(error)} />
             ) : !data || data.traces.length === 0 ? (
-              <EmptyState title="No traces found" description="Traces will appear here once agents start running." />
+              <EmptyState title="No traces found" description="Traces will appear here once fiches start running." />
             ) : (
               <>
                 <Table>

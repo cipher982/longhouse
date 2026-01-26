@@ -12,11 +12,11 @@ interface StreamingState {
 }
 
 interface UseThreadStreamingParams {
-  agentId: number | null;
+  ficheId: number | null;
   effectiveThreadId: number | null;
 }
 
-export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStreamingParams) {
+export function useThreadStreaming({ ficheId, effectiveThreadId }: UseThreadStreamingParams) {
   const queryClient = useQueryClient();
 
   // Map of streaming state by thread ID - stores ALL concurrent streams
@@ -28,15 +28,15 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
 
   const wsQueries = useMemo(() => {
     const queries = [];
-    if (agentId != null) {
-      queries.push(["threads", agentId, "chat"]);
-      queries.push(["threads", agentId, "automation"]);
+    if (ficheId != null) {
+      queries.push(["threads", ficheId, "chat"]);
+      queries.push(["threads", ficheId, "automation"]);
     }
     if (effectiveThreadId != null) {
       queries.push(["thread-messages", effectiveThreadId]);
     }
     return queries;
-  }, [agentId, effectiveThreadId]);
+  }, [ficheId, effectiveThreadId]);
 
   const handleStreamingMessage = useCallback((envelope: any) => {
     const { type, data } = envelope;
@@ -120,9 +120,9 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
       });
 
       // Also refresh thread list to update previews
-      if (agentId != null) {
+      if (ficheId != null) {
         queryClient.invalidateQueries({
-          queryKey: ["threads", agentId, "chat"]
+          queryKey: ["threads", ficheId, "chat"]
         });
       }
 
@@ -132,9 +132,9 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
       // Force re-render to update UI (clear active stream + remove badge)
       forceUpdate();
     }
-  }, [agentId, queryClient, forceUpdate]);
+  }, [ficheId, queryClient, forceUpdate]);
 
-  useWebSocket(agentId != null, {
+  useWebSocket(ficheId != null, {
     includeAuth: true,
     invalidateQueries: wsQueries,
     onStreamingMessage: handleStreamingMessage,

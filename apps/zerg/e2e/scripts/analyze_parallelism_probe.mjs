@@ -20,7 +20,7 @@ const files = fs
 
 const events = files.flatMap(readJsonl).sort((a, b) => a.t - b.t || (a.type === "end" ? 1 : -1));
 
-const workerSet = new Set(events.map((e) => e.workerIndex));
+const commisSet = new Set(events.map((e) => e.commisIndex));
 
 let active = 0;
 let maxActive = 0;
@@ -39,13 +39,13 @@ const durationMs = firstT !== null && lastT !== null ? lastT - firstT : 0;
 
 console.log("Parallelism probe results");
 console.log("-------------------------");
-console.log(`Workers observed: ${workerSet.size} (${[...workerSet].sort((a, b) => a - b).join(", ")})`);
+console.log(`Commis observed: ${commisSet.size} (${[...commisSet].sort((a, b) => a - b).join(", ")})`);
 console.log(`Events: ${events.length}`);
 console.log(`Max concurrent tests (from events): ${maxActive}`);
 console.log(`Wall time (events span): ${(durationMs / 1000).toFixed(2)}s`);
 
 // Basic heuristic output for quick interpretation
-if (workerSet.size <= 1 || maxActive <= 1) {
+if (commisSet.size <= 1 || maxActive <= 1) {
   console.log("Interpretation: serial (or nearly serial) scheduling detected.");
 } else {
   console.log("Interpretation: parallel scheduling detected.");

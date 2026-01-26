@@ -15,15 +15,15 @@ from typing import Optional
 import yaml
 from sqlalchemy.orm import Session
 
-from zerg.models.agent_run_event import AgentRunEvent
-from zerg.models.enums import RunStatus
-from zerg.models.enums import RunTrigger
+from zerg.models.course_event import CourseEvent
+from zerg.models.enums import CourseStatus
+from zerg.models.enums import CourseTrigger
 from zerg.models.enums import ThreadType
-from zerg.models.models import AgentRun
+from zerg.models.models import CommisJob
+from zerg.models.models import Course
 from zerg.models.models import Thread
 from zerg.models.models import ThreadMessage
-from zerg.models.models import WorkerJob
-from zerg.services.supervisor_service import SupervisorService
+from zerg.services.concierge_service import ConciergeService
 from zerg.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -64,14 +64,14 @@ def seed_scenario(
     clean: bool = True,
 ) -> dict[str, Any]:
     scenario = load_scenario(scenario_name)
-    runs = scenario.get("runs") or []
-    if not isinstance(runs, list):
-        raise ScenarioError("Scenario 'runs' must be a list")
+    courses = scenario.get("courses") or []
+    if not isinstance(courses, list):
+        raise ScenarioError("Scenario 'courses' must be a list")
 
     if clean:
         cleanup_scenario(db, scenario_name)
 
-    supervisor_agent = SupervisorService(db).get_or_create_supervisor_agent(owner_id)
+    concierge_fiche = ConciergeService(db).get_or_create_concierge_fiche(owner_id)
 
     base_time = utc_now()
     timebase_value = scenario.get("timebase")
@@ -80,65 +80,65 @@ def seed_scenario(
         if parsed_base is not None:
             base_time = parsed_base
 
-    counts = {"runs": 0, "messages": 0, "events": 0, "worker_jobs": 0}
+    counts = {"courses": 0, "messages": 0, "events": 0, "commis_jobs": 0}
 
-    for index, run_data in enumerate(runs, start=1):
-        if not isinstance(run_data, dict):
-            raise ScenarioError("Each run entry must be a mapping")
+    for index, course_data in enumerate(courses, start=1):
+        if not isinstance(course_data, dict):
+            raise ScenarioError("Each course entry must be a mapping")
 
-        run_ref = run_data.get("id") or f"run-{index}"
-        title = run_data.get("title") or run_data.get("thread_title") or run_ref
-        thread_type = _coerce_enum(ThreadType, run_data.get("thread_type", ThreadType.CHAT.value)).value
+        course_ref = course_data.get("id") or f"course-{index}"
+        title = course_data.get("title") or course_data.get("thread_title") or course_ref
+        thread_type = _coerce_enum(ThreadType, course_data.get("thread_type", ThreadType.CHAT.value)).value
         thread = Thread(
-            agent_id=supervisor_agent.id,
+            fiche_id=concierge_fiche.id,
             title=_scenario_title(scenario_name, title),
             active=False,
             thread_type=thread_type,
-            agent_state={"scenario": scenario_name, "scenario_run": run_ref},
+            fiche_state={"scenario": scenario_name, "scenario_course": course_ref},
         )
         db.add(thread)
         db.flush()
 
-        started_at = _parse_time(run_data.get("started_at"), base_time)
-        finished_at = _parse_time(run_data.get("finished_at"), base_time)
-        created_at = _parse_time(run_data.get("created_at"), base_time) or started_at or base_time
-        updated_at = _parse_time(run_data.get("updated_at"), base_time) or finished_at or created_at
+        started_at = _parse_time(course_data.get("started_at"), base_time)
+        finished_at = _parse_time(course_data.get("finished_at"), base_time)
+        created_at = _parse_time(course_data.get("created_at"), base_time) or started_at or base_time
+        updated_at = _parse_time(course_data.get("updated_at"), base_time) or finished_at or created_at
 
-        status = _coerce_enum(RunStatus, run_data.get("status", RunStatus.RUNNING.value))
-        trigger = _coerce_enum(RunTrigger, run_data.get("trigger", RunTrigger.MANUAL.value))
+        status = _coerce_enum(CourseStatus, course_data.get("status", CourseStatus.RUNNING.value))
+        trigger = _coerce_enum(CourseTrigger, course_data.get("trigger", CourseTrigger.MANUAL.value))
 
-        run = AgentRun(
-            agent_id=supervisor_agent.id,
+        course = Course(
+            fiche_id=concierge_fiche.id,
             thread_id=thread.id,
             status=status,
             trigger=trigger,
-            summary=run_data.get("summary"),
-            error=run_data.get("error"),
+            summary=course_data.get("summary"),
+            error=course_data.get("error"),
             started_at=_to_naive(started_at),
             finished_at=_to_naive(finished_at),
             created_at=_to_naive(created_at),
             updated_at=_to_naive(updated_at),
-            correlation_id=f"scenario:{scenario_name}:{run_ref}",
+            correlation_id=f"scenario:{scenario_name}:{course_ref}",
         )
         if started_at and finished_at:
-            run.duration_ms = int((finished_at - started_at).total_seconds() * 1000)
-        db.add(run)
+            course.duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+        db.add(course)
         db.flush()
 
-        for event in _as_list(run_data.get("events")):
+        for event in _as_list(course_data.get("events")):
             if not isinstance(event, dict):
-                raise ScenarioError("Run events must be mappings")
+                raise ScenarioError("Course events must be mappings")
             event_type = event.get("type")
             if not event_type:
-                raise ScenarioError("Run event missing 'type'")
+                raise ScenarioError("Course event missing 'type'")
             event_time = _parse_time(event.get("at") or event.get("created_at"), base_time) or base_time
             payload = dict(event.get("payload") or {})
             message = event.get("message")
             if message:
                 payload.setdefault("message", message)
             db.add(
-                AgentRunEvent(
-                    run_id=run.id,
+                CourseEvent(
+                    course_id=course.id,
                     event_type=str(event_type),
                     payload=payload,
                     created_at=_to_aware(event_time),
@@ -146,13 +146,13 @@ def seed_scenario(
             )
             counts["events"] += 1
 
-        for message in _as_list(run_data.get("messages")):
+        for message in _as_list(course_data.get("messages")):
             if not isinstance(message, dict):
-                raise ScenarioError("Run messages must be mappings")
+                raise ScenarioError("Course messages must be mappings")
             role = message.get("role")
             content = message.get("content")
             if not role or content is None:
-                raise ScenarioError("Run message requires 'role' and 'content'")
+                raise ScenarioError("Course message requires 'role' and 'content'")
             sent_at = _parse_time(message.get("at") or message.get("sent_at"), base_time) or base_time
             db.add(
                 ThreadMessage(
@@ -166,27 +166,27 @@ def seed_scenario(
             )
             counts["messages"] += 1
 
-        for job_data in _as_list(run_data.get("worker_jobs")):
+        for job_data in _as_list(course_data.get("commis_jobs")):
             if not isinstance(job_data, dict):
-                raise ScenarioError("Worker job must be a mapping")
+                raise ScenarioError("Commis job must be a mapping")
             task = job_data.get("task")
             if not task:
-                raise ScenarioError("Worker job requires 'task'")
+                raise ScenarioError("Commis job requires 'task'")
             job_status = job_data.get("status", "queued")
             job_started_at = _parse_time(job_data.get("started_at"), base_time)
             job_finished_at = _parse_time(job_data.get("finished_at"), base_time)
             job_created_at = _parse_time(job_data.get("created_at"), base_time) or job_started_at or base_time
             job_updated_at = _parse_time(job_data.get("updated_at"), base_time) or job_finished_at or job_created_at
             db.add(
-                WorkerJob(
+                CommisJob(
                     owner_id=owner_id,
-                    supervisor_run_id=run.id,
+                    concierge_course_id=course.id,
                     task=str(task),
                     status=str(job_status),
                     model=str(job_data.get("model") or "gpt-5-mini"),
                     reasoning_effort=job_data.get("reasoning_effort"),
                     config=dict(job_data.get("config") or {}),
-                    worker_id=job_data.get("worker_id"),
+                    commis_id=job_data.get("commis_id"),
                     error=job_data.get("error"),
                     acknowledged=bool(job_data.get("acknowledged", False)),
                     created_at=_to_naive(job_created_at),
@@ -195,9 +195,9 @@ def seed_scenario(
                     finished_at=_to_naive(job_finished_at),
                 )
             )
-            counts["worker_jobs"] += 1
+            counts["commis_jobs"] += 1
 
-        counts["runs"] += 1
+        counts["courses"] += 1
 
     db.commit()
     return {"scenario": scenario_name, **counts}
@@ -210,32 +210,32 @@ def cleanup_scenario(db: Session, scenario_name: Optional[str]) -> dict[str, int
     thread_ids = [row[0] for row in thread_rows]
 
     if not thread_ids:
-        return {"runs": 0, "threads": 0, "messages": 0, "worker_jobs": 0}
+        return {"courses": 0, "threads": 0, "messages": 0, "commis_jobs": 0}
 
-    run_ids = [row[0] for row in db.query(AgentRun.id).filter(AgentRun.thread_id.in_(thread_ids)).all()]
+    course_ids = [row[0] for row in db.query(Course.id).filter(Course.thread_id.in_(thread_ids)).all()]
 
-    worker_jobs_deleted = 0
-    if run_ids:
-        worker_jobs_deleted = db.query(WorkerJob).filter(WorkerJob.supervisor_run_id.in_(run_ids)).delete(synchronize_session=False)
+    commis_jobs_deleted = 0
+    if course_ids:
+        commis_jobs_deleted = db.query(CommisJob).filter(CommisJob.concierge_course_id.in_(course_ids)).delete(synchronize_session=False)
 
-    runs_deleted = db.query(AgentRun).filter(AgentRun.thread_id.in_(thread_ids)).delete(synchronize_session=False)
+    courses_deleted = db.query(Course).filter(Course.thread_id.in_(thread_ids)).delete(synchronize_session=False)
     messages_deleted = db.query(ThreadMessage).filter(ThreadMessage.thread_id.in_(thread_ids)).delete(synchronize_session=False)
     threads_deleted = db.query(Thread).filter(Thread.id.in_(thread_ids)).delete(synchronize_session=False)
 
     logger.info(
-        "Scenario cleanup %s: %s runs, %s messages, %s threads, %s worker jobs",
+        "Scenario cleanup %s: %s courses, %s messages, %s threads, %s commis jobs",
         prefix,
-        runs_deleted,
+        courses_deleted,
         messages_deleted,
         threads_deleted,
-        worker_jobs_deleted,
+        commis_jobs_deleted,
     )
 
     return {
-        "runs": runs_deleted,
+        "courses": courses_deleted,
         "threads": threads_deleted,
         "messages": messages_deleted,
-        "worker_jobs": worker_jobs_deleted,
+        "commis_jobs": commis_jobs_deleted,
     }
 
 

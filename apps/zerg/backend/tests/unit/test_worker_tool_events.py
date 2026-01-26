@@ -1,7 +1,7 @@
-"""Tests for worker tool event emission.
+"""Tests for commis tool event emission.
 
 These tests verify that tool events (COMMIS_TOOL_STARTED, COMMIS_TOOL_COMPLETED,
-COMMIS_TOOL_FAILED) are emitted correctly when tools are executed in a worker context.
+COMMIS_TOOL_FAILED) are emitted correctly when tools are executed in a commis context.
 """
 
 from datetime import datetime
@@ -9,57 +9,57 @@ from datetime import timezone
 
 import pytest
 
-from zerg.context import WorkerContext
-from zerg.context import get_worker_context
-from zerg.context import reset_worker_context
-from zerg.context import set_worker_context
+from zerg.context import CommisContext
+from zerg.context import get_commis_context
+from zerg.context import reset_commis_context
+from zerg.context import set_commis_context
 from zerg.events import EventType
 from zerg.tools.result_utils import redact_sensitive_args
 
 
-class TestWorkerToolEventEmission:
-    """Tests for tool event emission from supervisor_react_engine._execute_tool."""
+class TestCommisToolEventEmission:
+    """Tests for tool event emission from concierge_react_engine._execute_tool."""
 
     @pytest.fixture
-    def worker_context(self):
-        """Set up and tear down worker context for tests."""
-        ctx = WorkerContext(
-            worker_id="test-worker-123",
+    def commis_context(self):
+        """Set up and tear down commis context for tests."""
+        ctx = CommisContext(
+            commis_id="test-commis-123",
             owner_id=42,
-            run_id="run-abc",
+            course_id="run-abc",
             task="Test task",
         )
-        token = set_worker_context(ctx)
+        token = set_commis_context(ctx)
         yield ctx
-        reset_worker_context(token)
+        reset_commis_context(token)
 
-    def test_worker_context_is_accessible(self, worker_context):
-        """Test that worker context can be retrieved after being set."""
-        ctx = get_worker_context()
+    def test_commis_context_is_accessible(self, commis_context):
+        """Test that commis context can be retrieved after being set."""
+        ctx = get_commis_context()
         assert ctx is not None
-        assert ctx.worker_id == "test-worker-123"
+        assert ctx.commis_id == "test-commis-123"
         assert ctx.owner_id == 42
-        assert ctx.run_id == "run-abc"
+        assert ctx.course_id == "run-abc"
 
     def test_no_context_when_not_set(self):
-        """Test that get_worker_context returns None when no context is set."""
+        """Test that get_commis_context returns None when no context is set."""
         # Reset any existing context by setting and immediately resetting
-        temp_ctx = WorkerContext(worker_id="temp")
-        token = set_worker_context(temp_ctx)
-        reset_worker_context(token)
+        temp_ctx = CommisContext(commis_id="temp")
+        token = set_commis_context(temp_ctx)
+        reset_commis_context(token)
 
         # Now context should be None
-        ctx = get_worker_context()
+        ctx = get_commis_context()
         assert ctx is None
 
-    def test_tool_events_include_correct_fields(self, worker_context):
+    def test_tool_events_include_correct_fields(self, commis_context):
         """Test that tool events include all required fields."""
         # Create a test event payload matching what _call_tool_async creates
         event_data = {
             "event_type": EventType.COMMIS_TOOL_STARTED,
-            "worker_id": worker_context.worker_id,
-            "owner_id": worker_context.owner_id,
-            "run_id": worker_context.run_id,
+            "commis_id": commis_context.commis_id,
+            "owner_id": commis_context.owner_id,
+            "course_id": commis_context.course_id,
             "tool_name": "test_tool",
             "tool_call_id": "call_123",
             "tool_args_preview": "{'param': 'value'}",
@@ -68,16 +68,16 @@ class TestWorkerToolEventEmission:
 
         # Verify all required fields are present
         assert "event_type" in event_data
-        assert "worker_id" in event_data
+        assert "commis_id" in event_data
         assert "owner_id" in event_data
         assert "tool_name" in event_data
         assert "timestamp" in event_data
 
-    def test_completed_event_includes_duration(self, worker_context):
+    def test_completed_event_includes_duration(self, commis_context):
         """Test that COMMIS_TOOL_COMPLETED includes duration_ms."""
         event_data = {
             "event_type": EventType.COMMIS_TOOL_COMPLETED,
-            "worker_id": worker_context.worker_id,
+            "commis_id": commis_context.commis_id,
             "tool_name": "test_tool",
             "duration_ms": 150,
             "result_preview": "Tool executed successfully",
@@ -86,11 +86,11 @@ class TestWorkerToolEventEmission:
         assert "duration_ms" in event_data
         assert event_data["duration_ms"] >= 0
 
-    def test_failed_event_includes_error(self, worker_context):
+    def test_failed_event_includes_error(self, commis_context):
         """Test that COMMIS_TOOL_FAILED includes error details."""
         event_data = {
             "event_type": EventType.COMMIS_TOOL_FAILED,
-            "worker_id": worker_context.worker_id,
+            "commis_id": commis_context.commis_id,
             "tool_name": "test_tool",
             "duration_ms": 50,
             "error": "<tool-error> SSH connection refused",
@@ -100,12 +100,12 @@ class TestWorkerToolEventEmission:
         assert "<tool-error>" in event_data["error"]
 
 
-class TestWorkerContextToolTracking:
-    """Tests for tool call tracking in WorkerContext."""
+class TestCommisContextToolTracking:
+    """Tests for tool call tracking in CommisContext."""
 
     def test_record_tool_start_adds_to_list(self):
         """Test that record_tool_start adds a ToolCall to the list."""
-        ctx = WorkerContext(worker_id="test")
+        ctx = CommisContext(commis_id="test")
 
         tool_call = ctx.record_tool_start(
             tool_name="ssh_exec",
@@ -120,7 +120,7 @@ class TestWorkerContextToolTracking:
 
     def test_record_multiple_tools(self):
         """Test tracking multiple concurrent tool calls."""
-        ctx = WorkerContext(worker_id="test")
+        ctx = CommisContext(commis_id="test")
 
         ctx.record_tool_start("tool_a")
         ctx.record_tool_start("tool_b")
@@ -131,7 +131,7 @@ class TestWorkerContextToolTracking:
 
     def test_record_tool_complete_updates_status(self):
         """Test that record_tool_complete updates the ToolCall."""
-        ctx = WorkerContext(worker_id="test")
+        ctx = CommisContext(commis_id="test")
 
         tool_call = ctx.record_tool_start("test_tool")
         ctx.record_tool_complete(tool_call, success=True)
@@ -142,7 +142,7 @@ class TestWorkerContextToolTracking:
 
     def test_record_tool_failure(self):
         """Test recording a failed tool call."""
-        ctx = WorkerContext(worker_id="test")
+        ctx = CommisContext(commis_id="test")
 
         tool_call = ctx.record_tool_start("failing_tool")
         ctx.record_tool_complete(
@@ -158,8 +158,8 @@ class TestWorkerContextToolTracking:
 class TestEventTypeConstants:
     """Tests for event type constants."""
 
-    def test_worker_tool_event_types_exist(self):
-        """Test that all worker tool event types are defined."""
+    def test_commis_tool_event_types_exist(self):
+        """Test that all commis tool event types are defined."""
         assert hasattr(EventType, "COMMIS_TOOL_STARTED")
         assert hasattr(EventType, "COMMIS_TOOL_COMPLETED")
         assert hasattr(EventType, "COMMIS_TOOL_FAILED")
@@ -172,11 +172,11 @@ class TestEventTypeConstants:
 
 
 class TestSecretRedactionIntegration:
-    """Tests for secret redaction integration with WorkerContext."""
+    """Tests for secret redaction integration with CommisContext."""
 
-    def test_worker_context_with_real_redaction_function(self):
+    def test_commis_context_with_real_redaction_function(self):
         """Test that redact_sensitive_args properly redacts before storing."""
-        ctx = WorkerContext(worker_id="test")
+        ctx = CommisContext(commis_id="test")
 
         # Raw args with secrets (what tool receives)
         raw_args = {
@@ -206,7 +206,7 @@ class TestSecretRedactionIntegration:
 
     def test_list_of_dicts_redaction_integration(self):
         """Test that list-of-dict secrets are redacted (Slack/Discord case)."""
-        ctx = WorkerContext(worker_id="test")
+        ctx = CommisContext(commis_id="test")
 
         # Slack-style attachments with a secret in the list
         raw_args = {

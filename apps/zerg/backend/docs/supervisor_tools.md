@@ -1,123 +1,123 @@
-# Supervisor Tools
+# Concierge Tools
 
 ## Overview
 
-The supervisor tools layer enables Zerg's supervisor/worker architecture by providing tools that allow supervisor agents to spawn, manage, and query worker agents. This implements Milestone 2 of the worker system architecture.
+The concierge tools layer enables Zerg's concierge/commis architecture by providing tools that allow concierge fiches to spawn, manage, and query commis fiches. This implements Milestone 2 of the commis system architecture.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     Supervisor Agent                         │
+│                     Concierge Fiche                         │
 │  (can delegate tasks, query results, drill into artifacts)  │
 └──────────────────────┬──────────────────────────────────────┘
-                       │ uses supervisor tools
+                       │ uses concierge tools
                        ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                   Supervisor Tools                           │
-│  - spawn_worker()        - list_workers()                    │
-│  - read_worker_result()  - read_worker_file()                │
-│  - grep_workers()        - get_worker_metadata()             │
+│                   Concierge Tools                           │
+│  - spawn_commis()        - list_commis()                    │
+│  - read_commis_result()  - read_commis_file()                │
+│  - grep_commis()        - get_commis_metadata()             │
 └──────────────────────┬──────────────────────────────────────┘
                        │ wraps
                        ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                Worker Services (Milestone 1)                 │
-│  - WorkerRunner       - WorkerArtifactStore                  │
+│                Commis Services (Milestone 1)                 │
+│  - CommisRunner       - CommisArtifactStore                  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## Tools
 
-### spawn_worker(task: str, model: str | None = None) -> str
+### spawn_commis(task: str, model: str | None = None) -> str
 
-Spawns a disposable worker agent to execute a task independently.
+Spawns a disposable commis fiche to execute a task independently.
 
 **Use cases:**
 
-- Delegating sub-tasks from a supervisor
+- Delegating sub-tasks from a concierge
 - Parallel execution of multiple tasks
 - Isolating verbose or risky operations
 
 **Example:**
 
 ```python
-result = spawn_worker(
+result = spawn_commis(
     task="Check disk usage on cube server via SSH",
 )
-# Returns: "Worker job <id> queued successfully..."
+# Returns: "Commis job <id> queued successfully..."
 ```
 
 **Returns:**
 
 - A queued summary containing the `job_id`
 
-**Note:** The supervisor-facing `spawn_worker` tool is intentionally fire-and-forget (durable-runs model).
+**Note:** The concierge-facing `spawn_commis` tool is intentionally fire-and-forget (durable-runs model).
 Roundabout-style waiting exists in the underlying implementation but is not exposed to the LLM tool schema.
 
 ---
 
-### list_workers(limit: int = 20, status: str = None, since_hours: int = None) -> str
+### list_commis(limit: int = 20, status: str = None, since_hours: int = None) -> str
 
-Lists recent worker executions with optional filters.
+Lists recent commis executions with optional filters.
 
 **Parameters:**
 
-- `limit`: Maximum workers to return (default: 20)
+- `limit`: Maximum commis to return (default: 20)
 - `status`: Filter by "queued", "running", "success", "failed", or None for all
-- `since_hours`: Only show workers from last N hours
+- `since_hours`: Only show commis from last N hours
 
 **Example:**
 
 ```python
-# List all recent workers
-list_workers(limit=10)
+# List all recent commis
+list_commis(limit=10)
 
-# List only failed workers from last 24 hours
-list_workers(status="failed", since_hours=24)
+# List only failed commis from last 24 hours
+list_commis(status="failed", since_hours=24)
 ```
 
-**Returns:** Formatted list with worker IDs, tasks, status, timestamps
+**Returns:** Formatted list with commis IDs, tasks, status, timestamps
 
 ---
 
-### read_worker_result(job_id: str) -> str
+### read_commis_result(job_id: str) -> str
 
-Reads the final result from a completed worker.
+Reads the final result from a completed commis.
 
 **Example:**
 
 ```python
-result = read_worker_result("123")
-# Returns the worker's natural language result (includes duration if available)
+result = read_commis_result("123")
+# Returns the commis's natural language result (includes duration if available)
 ```
 
 ---
 
-### read_worker_file(job_id: str, file_path: str) -> str
+### read_commis_file(job_id: str, file_path: str) -> str
 
-Reads a specific file from a worker's artifact directory.
+Reads a specific file from a commis's artifact directory.
 
 **Common file paths:**
 
 - `result.txt` - Final result
-- `metadata.json` - Worker metadata
+- `metadata.json` - Commis metadata
 - `thread.jsonl` - Full conversation history
 - `tool_calls/001_ssh_exec.txt` - Individual tool outputs
 
-**Security:** Path traversal is blocked. Only files within the worker directory are accessible.
+**Security:** Path traversal is blocked. Only files within the commis directory are accessible.
 
 **Example:**
 
 ```python
 # Read metadata
-metadata = read_worker_file(
+metadata = read_commis_file(
     "123",
     "metadata.json"
 )
 
 # Read a specific tool output
-output = read_worker_file(
+output = read_commis_file(
     "123",
     "tool_calls/001_ssh_exec.txt"
 )
@@ -125,31 +125,31 @@ output = read_worker_file(
 
 ---
 
-### grep_workers(pattern: str, since_hours: int = 24) -> str
+### grep_commis(pattern: str, since_hours: int = 24) -> str
 
-Searches across worker artifacts for a text pattern.
+Searches across commis artifacts for a text pattern.
 
 **Features:**
 
 - Case-insensitive search
-- Searches all .txt files in worker directories
+- Searches all .txt files in commis directories
 - Returns matches with context
 
 **Example:**
 
 ```python
-# Find all workers that encountered "timeout" errors
-matches = grep_workers("timeout", since_hours=48)
+# Find all commis that encountered "timeout" errors
+matches = grep_commis("timeout", since_hours=48)
 
 # Search for specific output patterns
-matches = grep_workers("disk usage", since_hours=24)
+matches = grep_commis("disk usage", since_hours=24)
 ```
 
 ---
 
-### get_worker_metadata(job_id: str) -> str
+### get_commis_metadata(job_id: str) -> str
 
-Gets detailed metadata about a worker execution.
+Gets detailed metadata about a commis execution.
 
 **Returns:**
 
@@ -163,7 +163,7 @@ Gets detailed metadata about a worker execution.
 **Example:**
 
 ```python
-metadata = get_worker_metadata("123")
+metadata = get_commis_metadata("123")
 ```
 
 ## Implementation Details
@@ -185,12 +185,12 @@ This follows the same pattern as other Zerg tools (slack_tools, github_tools, et
 
 ### Async Handling
 
-`spawn_worker` is internally async. The tool wraps the async call synchronously:
+`spawn_commis` is internally async. The tool wraps the async call synchronously:
 
 ```python
 from zerg.utils.async_utils import run_async_safely
 
-result = run_async_safely(spawn_worker_async(...))
+result = run_async_safely(spawn_commis_async(...))
 ```
 
 This is necessary because LangChain tools must be synchronous functions.
@@ -199,17 +199,17 @@ This is necessary because LangChain tools must be synchronous functions.
 
 To avoid circular imports between:
 
-- `supervisor_tools.py` → `WorkerRunner`
-- `WorkerRunner` → `AgentRunner`
+- `concierge_tools.py` → `CommisRunner`
+- `CommisRunner` → `AgentRunner`
 - `AgentRunner` → `tools.builtin`
 
-We use **lazy imports** - `WorkerRunner` is imported inside the `spawn_worker` function rather than at module level.
+We use **lazy imports** - `CommisRunner` is imported inside the `spawn_commis` function rather than at module level.
 
 ## Testing
 
 ### Unit Tests
 
-**Location:** `tests/test_supervisor_tools.py`
+**Location:** `tests/test_concierge_tools.py`
 
 **Coverage:**
 
@@ -218,39 +218,39 @@ We use **lazy imports** - `WorkerRunner` is imported inside the `spawn_worker` f
 - Time filters
 - Status filters
 - Case-insensitive search
-- Multiple worker workflows
+- Multiple commis workflows
 
 **Results:** 20/20 tests passing
 
 ### Integration Tests
 
-**Location:** `tests/test_supervisor_tools_integration.py`
+**Location:** `tests/test_concierge_tools_integration.py`
 
 **Tests:**
 
 - Tool registration in BUILTIN_TOOLS
-- End-to-end agent usage (requires tool allowlist configuration)
+- End-to-end fiche usage (requires tool allowlist configuration)
 
 ## Usage Example
 
 ```python
-from zerg.tools.builtin.supervisor_tools import (
-    spawn_worker,
-    list_workers,
-    read_worker_result,
+from zerg.tools.builtin.concierge_tools import (
+    spawn_commis,
+    list_commis,
+    read_commis_result,
 )
 
-# Spawn a worker
-result = spawn_worker(
+# Spawn a commis
+result = spawn_commis(
     task="Analyze the logs from the last deployment",
     model="gpt-4o"
 )
 
-# List recent workers
-workers = list_workers(limit=5, status="success")
+# List recent commis
+commis = list_commis(limit=5, status="success")
 
 # Read a specific result
-worker_result = read_worker_result("2024-12-03T14-32-00_analyze-logs")
+commis_result = read_commis_result("2024-12-03T14-32-00_analyze-logs")
 ```
 
 ## Demo
@@ -259,38 +259,38 @@ Run the interactive demo:
 
 ```bash
 cd apps/zerg/backend
-uv run python examples/supervisor_tools_demo.py
+uv run python examples/concierge_tools_demo.py
 ```
 
 ## Files Created/Modified
 
 ### Created:
 
-- `zerg/tools/builtin/supervisor_tools.py` - Tool implementations
-- `tests/test_supervisor_tools.py` - Unit tests
-- `tests/test_supervisor_tools_integration.py` - Integration tests
-- `examples/supervisor_tools_demo.py` - Demo script
-- `apps/zerg/backend/docs/supervisor_tools.md` - This document
+- `zerg/tools/builtin/concierge_tools.py` - Tool implementations
+- `tests/test_concierge_tools.py` - Unit tests
+- `tests/test_concierge_tools_integration.py` - Integration tests
+- `examples/concierge_tools_demo.py` - Demo script
+- `apps/zerg/backend/docs/concierge_tools.md` - This document
 
 ### Modified:
 
-- `zerg/tools/builtin/__init__.py` - Registered supervisor tools
+- `zerg/tools/builtin/__init__.py` - Registered concierge tools
 
 ## Next Steps
 
-### Milestone 3: Agent API Integration
+### Milestone 3: Fiche API Integration
 
-To expose supervisor tools to agents via the API:
+To expose concierge tools to fiches via the API:
 
-1. **Update agent configuration** to include supervisor tools in allowlist
-2. **Frontend integration** - UI to enable supervisor mode for agents
-3. **Tool group creation** - Add "supervisor" tool group to `constants/toolGroups.ts`
-4. **Documentation** - User-facing docs on supervisor/worker patterns
+1. **Update fiche configuration** to include concierge tools in allowlist
+2. **Frontend integration** - UI to enable concierge mode for fiches
+3. **Tool group creation** - Add "concierge" tool group to `constants/toolGroups.ts`
+4. **Documentation** - User-facing docs on concierge/commis patterns
 
 ### Potential Enhancements
 
-1. **Worker cancellation** - Add `cancel_worker(job_id)` tool
-2. **Worker streaming** - Stream worker output in real-time
-3. **Worker pools** - Spawn multiple workers in parallel with `spawn_worker_pool()`
-4. **Result aggregation** - Tool to aggregate results from multiple workers
-5. **Worker retry** - Automatically retry failed workers
+1. **Commis cancellation** - Add `cancel_commis(job_id)` tool
+2. **Commis streaming** - Stream commis output in real-time
+3. **Commis pools** - Spawn multiple commis in parallel with `spawn_commis_pool()`
+4. **Result aggregation** - Tool to aggregate results from multiple commis
+5. **Commis retry** - Automatically retry failed commis

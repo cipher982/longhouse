@@ -2,7 +2,7 @@
  * useJarvisClient hook - Zerg backend communication
  *
  * This hook manages the connection to the Zerg backend via JarvisClient.
- * Handles authentication, session management, and agent communication.
+ * Handles authentication, session management, and fiche communication.
  */
 
 import { useCallback, useEffect, useRef } from 'react'
@@ -41,7 +41,7 @@ export function useJarvisClient(options: UseJarvisClientOptions = {}) {
   const dispatch = useAppDispatch()
   const clientRef = useRef<ReturnType<typeof getJarvisClient> | null>(null)
 
-  const { jarvisClient, isConnected, cachedAgents } = state
+  const { jarvisClient, isConnected, cachedFiches } = state
 
   // Initialize client
   const initialize = useCallback(async () => {
@@ -98,19 +98,19 @@ export function useJarvisClient(options: UseJarvisClientOptions = {}) {
     options.onDisconnected?.()
   }, [dispatch, options])
 
-  // Fetch available agents
-  const fetchAgents = useCallback(async () => {
+  // Fetch available fiches
+  const fetchFiches = useCallback(async () => {
     if (!clientRef.current) {
       console.warn('[useJarvisClient] Client not initialized')
       return []
     }
 
     try {
-      const agents = await clientRef.current.listAgents()
-      dispatch({ type: 'SET_CACHED_AGENTS', agents })
-      return agents
+      const fiches = await clientRef.current.listFiches()
+      dispatch({ type: 'SET_CACHED_FICHES', fiches })
+      return fiches
     } catch (error) {
-      console.error('[useJarvisClient] Failed to fetch agents:', error)
+      console.error('[useJarvisClient] Failed to fetch fiches:', error)
       options.onError?.(error as Error)
       return []
     }
@@ -127,12 +127,12 @@ export function useJarvisClient(options: UseJarvisClientOptions = {}) {
     // State
     client: jarvisClient,
     isConnected,
-    agents: cachedAgents,
+    fiches: cachedFiches,
 
     // Actions
     initialize,
     connect,
     disconnect,
-    fetchAgents,
+    fetchFiches,
   }
 }

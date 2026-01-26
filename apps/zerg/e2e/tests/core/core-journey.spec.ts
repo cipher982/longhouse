@@ -1,18 +1,18 @@
 /**
  * Core User Journey E2E Test
  *
- * Tests the supervisor -> response flow using the gpt-scripted model
+ * Tests the concierge -> response flow using the gpt-scripted model
  * for deterministic behavior without real LLM calls.
  *
  * The gpt-scripted model has predefined scenarios that emit specific responses
  * based on message patterns. This enables fully deterministic E2E testing.
  *
- * Primary test: generic_supervisor scenario
+ * Primary test: generic_concierge scenario
  * - User sends any message (e.g., "hello jarvis")
- * - Supervisor returns direct scripted response
- * - No worker spawning (avoids continuation complexity)
+ * - Concierge returns direct scripted response
+ * - No commis spawning (avoids continuation complexity)
  *
- * For worker flow testing with spawn_commis, see TODO: worker_flow.spec.ts
+ * For commis flow testing with spawn_commis, see TODO: commis_flow.spec.ts
  */
 
 import { randomUUID } from 'node:crypto';
@@ -69,16 +69,16 @@ function parseSSEEvents(sseText: string): Array<{ event: string; data: unknown }
 }
 
 /**
- * Query run events from the API
+ * Query course events from the API
  */
-async function getRunEvents(
+async function getCourseEvents(
   request: import('@playwright/test').APIRequestContext,
-  runId: number,
+  courseId: number,
   eventType?: string
 ): Promise<{ events: Array<{ event_type: string; payload: Record<string, unknown> }>; total: number }> {
   const url = eventType
-    ? `/api/jarvis/runs/${runId}/events?event_type=${eventType}`
-    : `/api/jarvis/runs/${runId}/events`;
+    ? `/api/jarvis/courses/${courseId}/events?event_type=${eventType}`
+    : `/api/jarvis/courses/${courseId}/events`;
 
   const response = await request.get(url);
   expect(response.status()).toBe(200);
@@ -86,17 +86,17 @@ async function getRunEvents(
 }
 
 test.describe('Core User Journey - Scripted LLM', () => {
-  // Set longer timeout for this test as it involves full supervisor flow
+  // Set longer timeout for this test as it involves full concierge flow
   test.setTimeout(120000);
 
-  test('supervisor direct response flow with gpt-scripted model', async ({ page, request }) => {
+  test('concierge direct response flow with gpt-scripted model', async ({ page, request }) => {
     console.log('[Core Journey] Starting test');
 
-    // Send a simple message that uses the "generic_supervisor" scenario
-    // This scenario returns a direct response without spawning workers,
+    // Send a simple message that uses the "generic_concierge" scenario
+    // This scenario returns a direct response without spawning commis,
     // which avoids the continuation flow complexity for this core test.
     //
-    // For worker flow testing, see worker_flow.spec.ts (TODO)
+    // For commis flow testing, see commis_flow.spec.ts (TODO)
     const chatResponse = await request.post('/api/jarvis/chat', {
       data: {
         message: 'hello jarvis',
@@ -120,18 +120,18 @@ test.describe('Core User Journey - Scripted LLM', () => {
       events.map((e) => e.event)
     );
 
-    // Step 3: Extract run_id from connected event
+    // Step 3: Extract course_id from connected event
     const connectedEvent = events.find((e) => e.event === 'connected');
     expect(connectedEvent).toBeTruthy();
-    const runId = (connectedEvent?.data as { run_id?: number })?.run_id;
-    expect(runId).toBeTruthy();
-    console.log('[Core Journey] Run ID:', runId);
+    const courseId = (connectedEvent?.data as { course_id?: number })?.course_id;
+    expect(courseId).toBeTruthy();
+    console.log('[Core Journey] Course ID:', courseId);
 
-    // Step 4: Verify we got supervisor_complete event
-    // The generic_supervisor scenario doesn't spawn workers, so we get complete directly
-    const completeEvent = events.find((e) => e.event === 'supervisor_complete');
+    // Step 4: Verify we got concierge_complete event
+    // The generic_concierge scenario doesn't spawn commis, so we get complete directly
+    const completeEvent = events.find((e) => e.event === 'concierge_complete');
     expect(completeEvent).toBeTruthy();
-    console.log('[Core Journey] Found supervisor_complete event');
+    console.log('[Core Journey] Found concierge_complete event');
 
     // Step 5: Extract and verify response contains expected scripted text
     const completePayload = (completeEvent?.data as { payload?: { result?: string } })?.payload;
@@ -142,100 +142,100 @@ test.describe('Core User Journey - Scripted LLM', () => {
     expect(result.toLowerCase()).toBe('ok');
     console.log('[Core Journey] Expected scripted response text found');
 
-    // Step 6: Query events API to verify run execution was recorded
+    // Step 6: Query events API to verify course execution was recorded
     // Use polling instead of sleep to wait for event persistence (per banana handoff)
-    let allEvents = await getRunEvents(request, runId!);
+    let allEvents = await getCourseEvents(request, courseId!);
 
-    // Poll until trace includes supervisor lifecycle evidence (events are persisted async)
+    // Poll until trace includes concierge lifecycle evidence (events are persisted async)
     await expect.poll(
       async () => {
-        allEvents = await getRunEvents(request, runId!);
+        allEvents = await getCourseEvents(request, courseId!);
         const types = allEvents.events.map((e) => e.event_type);
         return {
           total: allEvents.total,
-          hasSupervisorStarted: types.includes('supervisor_started'),
+          hasConciergeStarted: types.includes('concierge_started'),
         };
       },
       { timeout: 20000, intervals: [200, 500, 1000, 2000] }
-    ).toEqual(expect.objectContaining({ hasSupervisorStarted: true }));
+    ).toEqual(expect.objectContaining({ hasConciergeStarted: true }));
 
-    console.log('[Core Journey] Total events for run:', allEvents.total);
+    console.log('[Core Journey] Total events for course:', allEvents.total);
     console.log(
       '[Core Journey] Event types:',
       allEvents.events.map((e) => e.event_type)
     );
 
-    // Verify we have evidence of supervisor execution
-    const hasSupervisorStart = allEvents.events.some((e) => e.event_type === 'supervisor_started');
-    expect(hasSupervisorStart).toBeTruthy();
-    console.log('[Core Journey] supervisor_started event found in trace');
+    // Verify we have evidence of concierge execution
+    const hasConciergeStart = allEvents.events.some((e) => e.event_type === 'concierge_started');
+    expect(hasConciergeStart).toBeTruthy();
+    console.log('[Core Journey] concierge_started event found in trace');
 
     console.log('[Core Journey] Test completed successfully');
   });
 
-  test('run status indicator is present in DOM', async ({ page }) => {
+  test('course status indicator is present in DOM', async ({ page }) => {
     console.log('[Status Indicator] Starting test');
 
     await navigateToChatPage(page);
 
-    // Verify the run status indicator exists in the DOM
-    const statusIndicator = page.locator('[data-testid="run-status"]');
+    // Verify the course status indicator exists in the DOM
+    const statusIndicator = page.locator('[data-testid="course-status"]');
     await expect(statusIndicator).toBeAttached({ timeout: 5000 });
 
     // Verify initial state is idle
-    await expect(statusIndicator).toHaveAttribute('data-run-status', 'idle', { timeout: 5000 });
+    await expect(statusIndicator).toHaveAttribute('data-course-status', 'idle', { timeout: 5000 });
     console.log('[Status Indicator] Initial state is idle');
 
     console.log('[Status Indicator] Test completed successfully');
   });
 
-  test('worker tool rows display command preview', async ({ page }) => {
-    console.log('[Worker Tool UI] Starting test');
+  test('commis tool rows display command preview', async ({ page }) => {
+    console.log('[Commis Tool UI] Starting test');
 
     await navigateToChatPage(page);
 
     // Ensure dev-only event bus is available (Playwright uses Vite dev server).
     await page.waitForFunction(() => (window as any).__jarvis?.eventBus != null, null, { timeout: 15000 });
 
-    const runId = 101;
+    const courseId = 101;
     const toolCallId = 'call-spawn-1';
-    const workerId = 'e2e-worker-1';
+    const commisId = 'e2e-commis-1';
     const jobId = 9001;
 
     await page.evaluate(
-      ({ runId, toolCallId, workerId, jobId }) => {
+      ({ courseId, toolCallId, commisId, jobId }) => {
         const bus = (window as any).__jarvis.eventBus;
         const now = Date.now();
 
-        bus.emit('supervisor:started', { runId, task: 'Test task', timestamp: now });
-        bus.emit('supervisor:tool_started', {
-          runId,
+        bus.emit('concierge:started', { courseId, task: 'Test task', timestamp: now });
+        bus.emit('concierge:tool_started', {
+          courseId,
           toolName: 'spawn_commis',
           toolCallId,
           argsPreview: 'spawn_commis args',
           args: { task: 'Check disk space on cube' },
           timestamp: now + 1,
         });
-        bus.emit('supervisor:worker_spawned', {
+        bus.emit('concierge:commis_spawned', {
           jobId,
           task: 'Check disk space on cube',
           toolCallId,
           timestamp: now + 2,
         });
-        bus.emit('supervisor:worker_started', {
+        bus.emit('concierge:commis_started', {
           jobId,
-          workerId,
+          commisId,
           timestamp: now + 3,
         });
-        bus.emit('worker:tool_started', {
-          workerId,
+        bus.emit('commis:tool_started', {
+          commisId,
           toolName: 'runner_exec',
           toolCallId: 'call-tool-1',
           argsPreview: "{'target':'cube','command':'df -h'}",
           timestamp: now + 4,
         });
-        bus.emit('worker:tool_completed', {
-          workerId,
+        bus.emit('commis:tool_completed', {
+          commisId,
           toolName: 'runner_exec',
           toolCallId: 'call-tool-1',
           durationMs: 12,
@@ -243,21 +243,21 @@ test.describe('Core User Journey - Scripted LLM', () => {
           timestamp: now + 5,
         });
       },
-      { runId, toolCallId, workerId, jobId }
+      { courseId, toolCallId, commisId, jobId }
     );
 
-    const workerCard = page.locator('.worker-tool-card').first();
-    await expect(workerCard).toBeVisible({ timeout: 2000 });
+    const commisCard = page.locator('.commis-tool-card').first();
+    await expect(commisCard).toBeVisible({ timeout: 2000 });
 
-    const commandLabel = workerCard.locator('.nested-tool-name--command');
+    const commandLabel = commisCard.locator('.nested-tool-name--command');
     await expect(commandLabel).toContainText('df -h', { timeout: 2000 });
 
-    const toolMeta = workerCard.locator('.nested-tool-meta');
+    const toolMeta = commisCard.locator('.nested-tool-meta');
     await expect(toolMeta).toContainText('runner_exec', { timeout: 2000 });
     await expect(toolMeta).toContainText('target: cube', { timeout: 2000 });
     await expect(toolMeta).toContainText('exit 0', { timeout: 2000 });
 
-    console.log('[Worker Tool UI] Command preview verified');
+    console.log('[Commis Tool UI] Command preview verified');
   });
 
   test('nested tool details drawer expands on click', async ({ page }) => {
@@ -266,45 +266,45 @@ test.describe('Core User Journey - Scripted LLM', () => {
     await navigateToChatPage(page);
     await page.waitForFunction(() => (window as any).__jarvis?.eventBus != null, null, { timeout: 15000 });
 
-    const runId = 201;
+    const courseId = 201;
     const toolCallId = 'call-spawn-details';
-    const workerId = 'e2e-worker-details';
+    const commisId = 'e2e-commis-details';
     const jobId = 9002;
 
     await page.evaluate(
-      ({ runId, toolCallId, workerId, jobId }) => {
+      ({ courseId, toolCallId, commisId, jobId }) => {
         const bus = (window as any).__jarvis.eventBus;
         const now = Date.now();
 
-        bus.emit('supervisor:started', { runId, task: 'Details test', timestamp: now });
-        bus.emit('supervisor:tool_started', {
-          runId,
+        bus.emit('concierge:started', { courseId, task: 'Details test', timestamp: now });
+        bus.emit('concierge:tool_started', {
+          courseId,
           toolName: 'spawn_commis',
           toolCallId,
           argsPreview: 'spawn_commis args',
           args: { task: 'Test details drawer' },
           timestamp: now + 1,
         });
-        bus.emit('supervisor:worker_spawned', {
+        bus.emit('concierge:commis_spawned', {
           jobId,
           task: 'Test details drawer',
           toolCallId,
           timestamp: now + 2,
         });
-        bus.emit('supervisor:worker_started', {
+        bus.emit('concierge:commis_started', {
           jobId,
-          workerId,
+          commisId,
           timestamp: now + 3,
         });
-        bus.emit('worker:tool_started', {
-          workerId,
+        bus.emit('commis:tool_started', {
+          commisId,
           toolName: 'ssh_exec',
           toolCallId: 'call-tool-details',
           argsPreview: '{"target":"cube","command":"ls -la /tmp"}',
           timestamp: now + 4,
         });
-        bus.emit('worker:tool_completed', {
-          workerId,
+        bus.emit('commis:tool_completed', {
+          commisId,
           toolName: 'ssh_exec',
           toolCallId: 'call-tool-details',
           durationMs: 25,
@@ -313,18 +313,18 @@ test.describe('Core User Journey - Scripted LLM', () => {
           timestamp: now + 5,
         });
       },
-      { runId, toolCallId, workerId, jobId }
+      { courseId, toolCallId, commisId, jobId }
     );
 
-    const workerCard = page.locator('.worker-tool-card').first();
-    await expect(workerCard).toBeVisible({ timeout: 2000 });
+    const commisCard = page.locator('.commis-tool-card').first();
+    await expect(commisCard).toBeVisible({ timeout: 2000 });
 
     // Click on the nested tool row to expand details
-    const nestedToolRow = workerCard.locator('.nested-tool-row').first();
+    const nestedToolRow = commisCard.locator('.nested-tool-row').first();
     await nestedToolRow.click();
 
     // Verify details drawer is visible
-    const detailsDrawer = workerCard.locator('[data-testid="nested-tool-details"]');
+    const detailsDrawer = commisCard.locator('[data-testid="nested-tool-details"]');
     await expect(detailsDrawer).toBeVisible({ timeout: 2000 });
 
     // Verify content sections are present
@@ -340,52 +340,52 @@ test.describe('Core User Journey - Scripted LLM', () => {
     await navigateToChatPage(page);
     await page.waitForFunction(() => (window as any).__jarvis?.eventBus != null, null, { timeout: 15000 });
 
-    const runId = 202;
+    const courseId = 202;
     const toolCallId = 'call-spawn-source';
-    const workerId = 'e2e-worker-source';
+    const commisId = 'e2e-commis-source';
     const jobId = 9003;
 
     await page.evaluate(
-      ({ runId, toolCallId, workerId, jobId }) => {
+      ({ courseId, toolCallId, commisId, jobId }) => {
         const bus = (window as any).__jarvis.eventBus;
         const now = Date.now();
 
-        bus.emit('supervisor:started', { runId, task: 'Source badge test', timestamp: now });
-        bus.emit('supervisor:tool_started', {
-          runId,
+        bus.emit('concierge:started', { courseId, task: 'Source badge test', timestamp: now });
+        bus.emit('concierge:tool_started', {
+          courseId,
           toolName: 'spawn_commis',
           toolCallId,
           argsPreview: 'spawn_commis args',
           args: { task: 'Test source badge' },
           timestamp: now + 1,
         });
-        bus.emit('supervisor:worker_spawned', {
+        bus.emit('concierge:commis_spawned', {
           jobId,
           task: 'Test source badge',
           toolCallId,
           timestamp: now + 2,
         });
-        bus.emit('supervisor:worker_started', {
+        bus.emit('concierge:commis_started', {
           jobId,
-          workerId,
+          commisId,
           timestamp: now + 3,
         });
-        bus.emit('worker:tool_started', {
-          workerId,
+        bus.emit('commis:tool_started', {
+          commisId,
           toolName: 'runner_exec',
           toolCallId: 'call-tool-source',
           argsPreview: '{"target":"laptop","command":"uname -a"}',
           timestamp: now + 4,
         });
       },
-      { runId, toolCallId, workerId, jobId }
+      { courseId, toolCallId, commisId, jobId }
     );
 
-    const workerCard = page.locator('.worker-tool-card').first();
-    await expect(workerCard).toBeVisible({ timeout: 2000 });
+    const commisCard = page.locator('.commis-tool-card').first();
+    await expect(commisCard).toBeVisible({ timeout: 2000 });
 
     // Verify source badge is visible
-    const sourceBadge = workerCard.locator('.nested-tool-meta-item--source');
+    const sourceBadge = commisCard.locator('.nested-tool-meta-item--source');
     await expect(sourceBadge).toContainText('Runner', { timeout: 2000 });
 
     console.log('[Source Badge] Source badge displays correctly');
@@ -397,45 +397,45 @@ test.describe('Core User Journey - Scripted LLM', () => {
     await navigateToChatPage(page);
     await page.waitForFunction(() => (window as any).__jarvis?.eventBus != null, null, { timeout: 15000 });
 
-    const runId = 203;
+    const courseId = 203;
     const toolCallId = 'call-spawn-offline';
-    const workerId = 'e2e-worker-offline';
+    const commisId = 'e2e-commis-offline';
     const jobId = 9004;
 
     await page.evaluate(
-      ({ runId, toolCallId, workerId, jobId }) => {
+      ({ courseId, toolCallId, commisId, jobId }) => {
         const bus = (window as any).__jarvis.eventBus;
         const now = Date.now();
 
-        bus.emit('supervisor:started', { runId, task: 'Offline badge test', timestamp: now });
-        bus.emit('supervisor:tool_started', {
-          runId,
+        bus.emit('concierge:started', { courseId, task: 'Offline badge test', timestamp: now });
+        bus.emit('concierge:tool_started', {
+          courseId,
           toolName: 'spawn_commis',
           toolCallId,
           argsPreview: 'spawn_commis args',
           args: { task: 'Test offline badge' },
           timestamp: now + 1,
         });
-        bus.emit('supervisor:worker_spawned', {
+        bus.emit('concierge:commis_spawned', {
           jobId,
           task: 'Test offline badge',
           toolCallId,
           timestamp: now + 2,
         });
-        bus.emit('supervisor:worker_started', {
+        bus.emit('concierge:commis_started', {
           jobId,
-          workerId,
+          commisId,
           timestamp: now + 3,
         });
-        bus.emit('worker:tool_started', {
-          workerId,
+        bus.emit('commis:tool_started', {
+          commisId,
           toolName: 'runner_exec',
           toolCallId: 'call-tool-offline',
           argsPreview: '{"target":"cube","command":"whoami"}',
           timestamp: now + 4,
         });
-        bus.emit('worker:tool_failed', {
-          workerId,
+        bus.emit('commis:tool_failed', {
+          commisId,
           toolName: 'runner_exec',
           toolCallId: 'call-tool-offline',
           durationMs: 5000,
@@ -443,14 +443,14 @@ test.describe('Core User Journey - Scripted LLM', () => {
           timestamp: now + 5,
         });
       },
-      { runId, toolCallId, workerId, jobId }
+      { courseId, toolCallId, commisId, jobId }
     );
 
-    const workerCard = page.locator('.worker-tool-card').first();
-    await expect(workerCard).toBeVisible({ timeout: 2000 });
+    const commisCard = page.locator('.commis-tool-card').first();
+    await expect(commisCard).toBeVisible({ timeout: 2000 });
 
     // Verify offline badge is visible
-    const offlineBadge = workerCard.locator('.nested-tool-meta-item--offline');
+    const offlineBadge = commisCard.locator('.nested-tool-meta-item--offline');
     await expect(offlineBadge).toContainText('Runner offline', { timeout: 2000 });
 
     console.log('[Offline Badge] Offline badge displays correctly');
@@ -462,45 +462,45 @@ test.describe('Core User Journey - Scripted LLM', () => {
     await navigateToChatPage(page);
     await page.waitForFunction(() => (window as any).__jarvis?.eventBus != null, null, { timeout: 15000 });
 
-    const runId = 204;
+    const courseId = 204;
     const toolCallId = 'call-spawn-compact';
-    const workerId = 'e2e-worker-compact';
+    const commisId = 'e2e-commis-compact';
     const jobId = 9005;
 
     await page.evaluate(
-      ({ runId, toolCallId, workerId, jobId }) => {
+      ({ courseId, toolCallId, commisId, jobId }) => {
         const bus = (window as any).__jarvis.eventBus;
         const now = Date.now();
 
-        bus.emit('supervisor:started', { runId, task: 'Compact mode test', timestamp: now });
-        bus.emit('supervisor:tool_started', {
-          runId,
+        bus.emit('concierge:started', { courseId, task: 'Compact mode test', timestamp: now });
+        bus.emit('concierge:tool_started', {
+          courseId,
           toolName: 'spawn_commis',
           toolCallId,
           argsPreview: 'spawn_commis args',
           args: { task: 'Test compact mode' },
           timestamp: now + 1,
         });
-        bus.emit('supervisor:worker_spawned', {
+        bus.emit('concierge:commis_spawned', {
           jobId,
           task: 'Test compact mode',
           toolCallId,
           timestamp: now + 2,
         });
-        bus.emit('supervisor:worker_started', {
+        bus.emit('concierge:commis_started', {
           jobId,
-          workerId,
+          commisId,
           timestamp: now + 3,
         });
-        bus.emit('worker:tool_started', {
-          workerId,
+        bus.emit('commis:tool_started', {
+          commisId,
           toolName: 'ssh_exec',
           toolCallId: 'call-tool-compact',
           argsPreview: '{"target":"cube","command":"echo hello"}',
           timestamp: now + 4,
         });
-        bus.emit('worker:tool_completed', {
-          workerId,
+        bus.emit('commis:tool_completed', {
+          commisId,
           toolName: 'ssh_exec',
           toolCallId: 'call-tool-compact',
           durationMs: 10,
@@ -508,22 +508,22 @@ test.describe('Core User Journey - Scripted LLM', () => {
           timestamp: now + 5,
         });
       },
-      { runId, toolCallId, workerId, jobId }
+      { courseId, toolCallId, commisId, jobId }
     );
 
-    const workerCard = page.locator('.worker-tool-card').first();
-    await expect(workerCard).toBeVisible({ timeout: 2000 });
+    const commisCard = page.locator('.commis-tool-card').first();
+    await expect(commisCard).toBeVisible({ timeout: 2000 });
 
     // Verify preview is visible initially
-    const previewText = workerCard.locator('.nested-tool-preview');
+    const previewText = commisCard.locator('.nested-tool-preview');
     await expect(previewText).toBeVisible({ timeout: 2000 });
 
     // Click compact toggle
-    const compactToggle = workerCard.locator('.worker-tool-card__compact-toggle');
+    const compactToggle = commisCard.locator('.commis-tool-card__compact-toggle');
     await compactToggle.click();
 
     // Verify compact class is applied
-    await expect(workerCard).toHaveClass(/worker-tool-card--compact/, { timeout: 2000 });
+    await expect(commisCard).toHaveClass(/commis-tool-card--compact/, { timeout: 2000 });
 
     // Preview should be hidden in compact mode (CSS display: none)
     await expect(previewText).not.toBeVisible({ timeout: 2000 });
@@ -537,56 +537,56 @@ test.describe('Core User Journey - Scripted LLM', () => {
     await navigateToChatPage(page);
     await page.waitForFunction(() => (window as any).__jarvis?.eventBus != null, null, { timeout: 15000 });
 
-    const runId = 205;
+    const courseId = 205;
     const toolCallId = 'call-spawn-copy';
-    const workerId = 'e2e-worker-copy';
+    const commisId = 'e2e-commis-copy';
     const jobId = 9006;
 
     await page.evaluate(
-      ({ runId, toolCallId, workerId, jobId }) => {
+      ({ courseId, toolCallId, commisId, jobId }) => {
         const bus = (window as any).__jarvis.eventBus;
         const now = Date.now();
 
-        bus.emit('supervisor:started', { runId, task: 'Copy button test', timestamp: now });
-        bus.emit('supervisor:tool_started', {
-          runId,
+        bus.emit('concierge:started', { courseId, task: 'Copy button test', timestamp: now });
+        bus.emit('concierge:tool_started', {
+          courseId,
           toolName: 'spawn_commis',
           toolCallId,
           argsPreview: 'spawn_commis args',
           args: { task: 'Test copy button' },
           timestamp: now + 1,
         });
-        bus.emit('supervisor:worker_spawned', {
+        bus.emit('concierge:commis_spawned', {
           jobId,
           task: 'Test copy button',
           toolCallId,
           timestamp: now + 2,
         });
-        bus.emit('supervisor:worker_started', {
+        bus.emit('concierge:commis_started', {
           jobId,
-          workerId,
+          commisId,
           timestamp: now + 3,
         });
-        bus.emit('worker:tool_started', {
-          workerId,
+        bus.emit('commis:tool_started', {
+          commisId,
           toolName: 'runner_exec',
           toolCallId: 'call-tool-copy',
           argsPreview: '{"target":"laptop","command":"pwd"}',
           timestamp: now + 4,
         });
       },
-      { runId, toolCallId, workerId, jobId }
+      { courseId, toolCallId, commisId, jobId }
     );
 
-    const workerCard = page.locator('.worker-tool-card').first();
-    await expect(workerCard).toBeVisible({ timeout: 2000 });
+    const commisCard = page.locator('.commis-tool-card').first();
+    await expect(commisCard).toBeVisible({ timeout: 2000 });
 
     // Hover over the nested tool row to make copy button visible
-    const nestedToolRow = workerCard.locator('.nested-tool-row').first();
+    const nestedToolRow = commisCard.locator('.nested-tool-row').first();
     await nestedToolRow.hover();
 
     // Verify copy button exists (it's there but hidden until hover in CSS)
-    const copyButton = workerCard.locator('.nested-tool-copy');
+    const copyButton = commisCard.locator('.nested-tool-copy');
     await expect(copyButton).toBeAttached({ timeout: 2000 });
 
     // Clicking copy button should not throw an error
@@ -599,7 +599,7 @@ test.describe('Core User Journey - Scripted LLM', () => {
 test.describe('Core Journey - API Flow', () => {
   test.setTimeout(60000);
 
-  test('supervisor_complete event contains result text', async ({ request }) => {
+  test('concierge_complete event contains result text', async ({ request }) => {
     // Send a simple message via API
     const chatResponse = await request.post('/api/jarvis/chat', {
       data: {
@@ -618,19 +618,19 @@ test.describe('Core Journey - API Flow', () => {
     const connectedEvent = events.find((e) => e.event === 'connected');
     expect(connectedEvent).toBeTruthy();
 
-    // Verify supervisor_complete event exists
-    const completeEvent = events.find((e) => e.event === 'supervisor_complete');
+    // Verify concierge_complete event exists
+    const completeEvent = events.find((e) => e.event === 'concierge_complete');
     expect(completeEvent).toBeTruthy();
 
     // Verify the payload structure
     const completePayload = (completeEvent?.data as { payload?: { result?: string; status?: string } })?.payload;
     expect(completePayload).toBeTruthy();
     expect(completePayload?.status).toBe('success');
-    console.log('[API Flow] supervisor_complete event validated');
+    console.log('[API Flow] concierge_complete event validated');
   });
 
-  test('run events endpoint returns events for a run', async ({ request }) => {
-    // First, create a run
+  test('course events endpoint returns events for a course', async ({ request }) => {
+    // First, create a course
     const chatResponse = await request.post('/api/jarvis/chat', {
       data: {
         message: 'test message',
@@ -644,17 +644,17 @@ test.describe('Core Journey - API Flow', () => {
     const sseText = await chatResponse.text();
     const events = parseSSEEvents(sseText);
 
-    // Extract run_id
+    // Extract course_id
     const connectedEvent = events.find((e) => e.event === 'connected');
-    const runId = (connectedEvent?.data as { run_id?: number })?.run_id;
-    expect(runId).toBeTruthy();
+    const courseId = (connectedEvent?.data as { course_id?: number })?.course_id;
+    expect(courseId).toBeTruthy();
 
     // Query the events endpoint
-    const eventsResponse = await request.get(`/api/jarvis/runs/${runId}/events`);
+    const eventsResponse = await request.get(`/api/jarvis/courses/${courseId}/events`);
     expect(eventsResponse.status()).toBe(200);
 
     const eventsData = await eventsResponse.json();
-    expect(eventsData.run_id).toBe(runId);
+    expect(eventsData.course_id).toBe(courseId);
     expect(eventsData.events).toBeInstanceOf(Array);
     expect(eventsData.total).toBeGreaterThanOrEqual(0);
 

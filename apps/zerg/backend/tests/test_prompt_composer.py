@@ -7,8 +7,8 @@ from base templates and user context.
 from unittest.mock import patch
 
 from zerg.prompts.composer import build_jarvis_prompt
-from zerg.prompts.composer import build_supervisor_prompt
-from zerg.prompts.composer import build_worker_prompt
+from zerg.prompts.composer import build_concierge_prompt
+from zerg.prompts.composer import build_commis_prompt
 from zerg.prompts.composer import format_integrations
 from zerg.prompts.composer import format_server_names
 from zerg.prompts.composer import format_servers
@@ -208,7 +208,7 @@ class TestFormatServers:
     def test_format_servers_with_both_ssh_alias_and_concrete(self):
         """Test that both SSH alias and concrete details appear together.
 
-        Workers in Docker containers can't use SSH aliases (no ~/.ssh/config),
+        Commis in Docker containers can't use SSH aliases (no ~/.ssh/config),
         so they need the concrete user@host:port format even when an alias exists.
         This was a bug where 'elif' was used instead of 'if', causing the concrete
         details to be suppressed when an alias was present.
@@ -225,7 +225,7 @@ class TestFormatServers:
 
         result = format_servers(servers)
 
-        # Both should appear - alias for humans, concrete for Docker workers
+        # Both should appear - alias for humans, concrete for Docker commis
         assert "SSH alias: cube" in result
         assert "SSH: drose@100.104.187.47:2222" in result
 
@@ -315,14 +315,14 @@ class TestFormatIntegrations:
 
 
 # ---------------------------------------------------------------------------
-# Test build_supervisor_prompt
+# Test build_concierge_prompt
 # ---------------------------------------------------------------------------
 
 
-class TestBuildSupervisorPrompt:
-    """Test complete supervisor prompt building."""
+class TestBuildConciergePrompt:
+    """Test complete concierge prompt building."""
 
-    def test_build_supervisor_prompt_with_full_context(self):
+    def test_build_concierge_prompt_with_full_context(self):
         """Test building prompt with all sections populated."""
         user = MockUser(
             context={
@@ -340,7 +340,7 @@ class TestBuildSupervisorPrompt:
             }
         )
 
-        prompt = build_supervisor_prompt(user)
+        prompt = build_concierge_prompt(user)
 
         # Check user context is injected
         assert "Alice" in prompt
@@ -361,11 +361,11 @@ class TestBuildSupervisorPrompt:
         assert "spawn_commis" in prompt
         assert "Your Role" in prompt
 
-    def test_build_supervisor_prompt_empty_context(self):
+    def test_build_concierge_prompt_empty_context(self):
         """Test building prompt with empty context uses defaults."""
         user = MockUser(context={})
 
-        prompt = build_supervisor_prompt(user)
+        prompt = build_concierge_prompt(user)
 
         # Should include default messages
         assert "(No user context configured)" in prompt
@@ -376,23 +376,23 @@ class TestBuildSupervisorPrompt:
         assert "Concierge" in prompt
         assert "spawn_commis" in prompt
 
-    def test_build_supervisor_prompt_contains_required_sections(self):
+    def test_build_concierge_prompt_contains_required_sections(self):
         """Test that prompt contains all required sections."""
         user = MockUser(context={"display_name": "Bob"})
 
-        prompt = build_supervisor_prompt(user)
+        prompt = build_concierge_prompt(user)
 
         # Check for key sections from base template (now using Concierge/Commis terminology)
         assert "Your Role" in prompt
-        assert "commis" in prompt.lower()  # Should mention commis (worker replacement)
+        assert "commis" in prompt.lower()  # Should mention commis (commis replacement)
         assert "Response Style" in prompt
         assert "Error Handling" in prompt
 
-    def test_build_supervisor_prompt_none_context(self):
+    def test_build_concierge_prompt_none_context(self):
         """Test that None context is handled gracefully."""
         user = MockUser(context=None)
 
-        prompt = build_supervisor_prompt(user)
+        prompt = build_concierge_prompt(user)
 
         # Should use defaults for all sections
         assert "(No user context configured)" in prompt
@@ -400,15 +400,15 @@ class TestBuildSupervisorPrompt:
 
 
 # ---------------------------------------------------------------------------
-# Test build_worker_prompt
+# Test build_commis_prompt
 # ---------------------------------------------------------------------------
 
 
-class TestBuildWorkerPrompt:
-    """Test complete worker prompt building."""
+class TestBuildCommisPrompt:
+    """Test complete commis prompt building."""
 
     @patch("zerg.prompts.composer.format_online_runners")
-    def test_build_worker_prompt_with_servers(self, mock_runners):
+    def test_build_commis_prompt_with_servers(self, mock_runners):
         """Test building prompt with servers configured."""
         mock_runners.return_value = '**Use runner_exec** for targets: "clifford"\n**ssh_exec as fallback**'
 
@@ -422,7 +422,7 @@ class TestBuildWorkerPrompt:
             }
         )
 
-        prompt = build_worker_prompt(user)
+        prompt = build_commis_prompt(user)
 
         # Check servers appear in prompt
         assert "clifford" in prompt
@@ -437,13 +437,13 @@ class TestBuildWorkerPrompt:
         assert "ssh_exec" in prompt
 
     @patch("zerg.prompts.composer.format_online_runners")
-    def test_build_worker_prompt_empty_context(self, mock_runners):
+    def test_build_commis_prompt_empty_context(self, mock_runners):
         """Test building prompt with empty context uses defaults."""
         mock_runners.return_value = "**No runners online.** Use ssh_exec."
 
         user = MockUser(context={})
 
-        prompt = build_worker_prompt(user)
+        prompt = build_commis_prompt(user)
 
         # Should include default messages
         assert "(No servers configured)" in prompt
@@ -453,13 +453,13 @@ class TestBuildWorkerPrompt:
         assert "Commis" in prompt or "commis" in prompt
 
     @patch("zerg.prompts.composer.format_online_runners")
-    def test_build_worker_prompt_contains_commands_section(self, mock_runners):
-        """Test that worker prompt includes useful commands section."""
+    def test_build_commis_prompt_contains_commands_section(self, mock_runners):
+        """Test that commis prompt includes useful commands section."""
         mock_runners.return_value = '`runner_exec(target="cube", command="df -h")`'
 
         user = MockUser(context={})
 
-        prompt = build_worker_prompt(user)
+        prompt = build_commis_prompt(user)
 
         # Check for command guidance
         assert "df -h" in prompt or "disk" in prompt.lower()
@@ -483,7 +483,7 @@ class TestBuildJarvisPrompt:
             }
         )
 
-        # v2.1: route_to_supervisor removed - use other tools
+        # v2.1: route_to_concierge removed - use other tools
         enabled_tools = [
             {"name": "get_current_location", "description": "Get current GPS location"},
             {"name": "get_current_time", "description": "Get the current time"},
@@ -494,7 +494,7 @@ class TestBuildJarvisPrompt:
         # Check user context
         assert "Dana" in prompt
 
-        # Check tools appear in prompt (v2.1: route_to_supervisor removed)
+        # Check tools appear in prompt (v2.1: route_to_concierge removed)
         assert "get_current_location" in prompt
         assert "get_current_time" in prompt
 

@@ -5,7 +5,7 @@ individual **assistant tokens** over the existing topic-based WebSocket layer.
 
 The handler is *stateless* apart from a reference to the global
 ``topic_manager`` instance.  The thread context is passed via a
-``contextvars.ContextVar`` so callers (namely ``AgentRunner``) can set/reset
+``contextvars.ContextVar`` so callers (namely ``FicheRunner``) can set/reset
 the value immediately before invoking the LLM without having to
 re-instantiate the LLM for each thread.
 """
@@ -67,7 +67,7 @@ class WsTokenCallback(AsyncCallbackHandler):
     # ------------------------------------------------------------------
 
     # We *only* care about individual LLM tokens.  All other event categories
-    # (chains, agents, chat-model lifecycle, etc.) can be safely ignored to
+    # (chains, fiches, chat-model lifecycle, etc.) can be safely ignored to
     # avoid unnecessary method dispatch and the corresponding "method not
     # implemented" errors that were cluttering the logs.  The
     # ``BaseCallbackHandler`` contract allows us to opt-out on a per-category
@@ -108,33 +108,33 @@ class WsTokenCallback(AsyncCallbackHandler):
 
         if thread_id is None or user_id is None:
             # If no context is set we skip – this can happen if the LLM is
-            # called outside an ``AgentRunner`` (unit-tests, workers, etc.).
+            # called outside an ``FicheRunner`` (unit-tests, commis, etc.).
             # Only warn once per callback instance to prevent log spam.
             if not self._warned_no_context:
                 logger.debug("WsTokenCallback: thread_id or user_id context not set – skipping token dispatch")
                 self._warned_no_context = True
             return
 
-        # Get supervisor context for SSE correlation (may be None for non-supervisor calls)
-        from zerg.services.supervisor_context import get_supervisor_context
+        # Get concierge context for SSE correlation (may be None for non-concierge calls)
+        from zerg.services.concierge_context import get_concierge_context
 
-        ctx = get_supervisor_context()
-        run_id = ctx.run_id if ctx else None
+        ctx = get_concierge_context()
+        course_id = ctx.course_id if ctx else None
         message_id = ctx.message_id if ctx else None
 
         # Publish to event bus for SSE consumers (Jarvis chat)
         # NOTE: Tokens are NOT persisted to DB - only published to live subscribers.
         # Persisting every token caused 3x slowdown (blocking commit per token).
-        # Lifecycle events (supervisor_started, supervisor_complete) are still persisted
+        # Lifecycle events (concierge_started, concierge_complete) are still persisted
         # for resumability - clients can replay from last lifecycle event.
-        if run_id is not None:
+        if course_id is not None:
             try:
                 from zerg.events import EventType
                 from zerg.events import event_bus
 
                 payload = {
                     "event_type": EventType.CONCIERGE_TOKEN,
-                    "run_id": run_id,
+                    "course_id": course_id,
                     "thread_id": thread_id,
                     "token": token,
                     "owner_id": user_id,
@@ -144,13 +144,13 @@ class WsTokenCallback(AsyncCallbackHandler):
 
                 await event_bus.publish(EventType.CONCIERGE_TOKEN, payload)
             except Exception:  # noqa: BLE001 – token streaming is best-effort
-                logger.exception("Error publishing token to event bus for run %s", run_id)
-            # For supervisor runs, SSE is the primary delivery path - skip WS broadcast
+                logger.exception("Error publishing token to event bus for run %s", course_id)
+            # For concierge runs, SSE is the primary delivery path - skip WS broadcast
             # to avoid redundant Pydantic serialization + lock contention overhead.
             return
 
-        # WebSocket broadcast for non-supervisor contexts (dashboard thread view)
-        # Only runs when there's no supervisor run_id - keeps this path for legacy compat.
+        # WebSocket broadcast for non-concierge contexts (dashboard thread view)
+        # Only runs when there's no concierge course_id - keeps this path for legacy compat.
         topic = f"user:{user_id}"
 
         try:
@@ -172,7 +172,7 @@ class WsTokenCallback(AsyncCallbackHandler):
 
 
 # ---------------------------------------------------------------------------
-# Convenience helpers used by AgentRunner
+# Convenience helpers used by FicheRunner
 # ---------------------------------------------------------------------------
 
 

@@ -25,7 +25,7 @@ class ServerConfig(BaseModel):
     purpose: Optional[str] = Field(None, description="Server purpose or role")
     platform: Optional[str] = Field(None, description="OS/platform (e.g., 'Ubuntu', 'macOS')")
     notes: Optional[str] = Field(None, description="Additional notes or details")
-    # SSH configuration for worker fallback
+    # SSH configuration for commis fallback
     ssh_alias: Optional[str] = Field(None, description="SSH config alias (e.g., 'cube')")
     ssh_user: Optional[str] = Field(None, description="SSH username (e.g., 'drose')")
     ssh_host: Optional[str] = Field(None, description="SSH hostname/IP (defaults to ip if not set)")
@@ -38,21 +38,21 @@ class ServerConfig(BaseModel):
 class ToolsConfig(BaseModel):
     """Configuration for enabled/disabled tools and integrations.
 
-    Controls which tools are available to agents when operating on behalf
+    Controls which tools are available to fiches when operating on behalf
     of this user.
     """
 
     location: bool = Field(True, description="Enable location-based features")
     whoop: bool = Field(True, description="Enable Whoop fitness integration")
     obsidian: bool = Field(True, description="Enable Obsidian vault access")
-    supervisor: bool = Field(True, description="Enable supervisor agent delegation")
+    concierge: bool = Field(True, description="Enable concierge fiche delegation")
 
     class Config:
         extra = "allow"  # Allow additional tools to be added
 
 
 class UserContext(BaseModel):
-    """User context schema for prompt composition and agent behavior.
+    """User context schema for prompt composition and fiche behavior.
 
     This schema validates the structure of user.context JSONB field while
     maintaining flexibility through extra="allow". Additional fields beyond
@@ -86,7 +86,7 @@ class UserContext(BaseModel):
     servers: list[ServerConfig] = Field(default_factory=list, description="List of servers user has access to")
     integrations: Dict[str, str] = Field(default_factory=dict, description="Integration credentials or handles")
     tools: ToolsConfig = Field(default_factory=ToolsConfig, description="Tool enablement configuration")
-    custom_instructions: Optional[str] = Field(None, description="Custom instructions for agent behavior")
+    custom_instructions: Optional[str] = Field(None, description="Custom instructions for fiche behavior")
 
     class Config:
         extra = "allow"  # Allow additional fields for flexibility
@@ -104,7 +104,7 @@ class UserContext(BaseModel):
                     }
                 ],
                 "integrations": {"github": "janedoe", "email": "jane@example.com"},
-                "tools": {"location": True, "whoop": True, "obsidian": True, "supervisor": True},
+                "tools": {"location": True, "whoop": True, "obsidian": True, "concierge": True},
                 "custom_instructions": "Prefer TypeScript over JavaScript",
             }
         }

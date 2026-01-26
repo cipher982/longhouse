@@ -377,7 +377,7 @@ class TestCatalogPromptIntegration:
         # The loaded_tool_names should only have the allowed core tools
         loaded_names = sorted(binder.loaded_tool_names)
 
-        # Build the catalog header string (simulating what supervisor does)
+        # Build the catalog header string (simulating what concierge does)
         catalog_header = f"### Core Tools (always loaded): {', '.join(loaded_names)}"
 
         # Should NOT contain tools that aren't allowed

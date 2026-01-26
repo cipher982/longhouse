@@ -10,13 +10,13 @@ import { ConfirmContext } from './ConfirmProvider';
  *
  * const handleDelete = async () => {
  *   const ok = await confirm({
- *     title: 'Delete agent?',
+ *     title: 'Delete fiche?',
  *     message: 'This cannot be undone.',
  *     confirmLabel: 'Delete',
  *     cancelLabel: 'Keep',
  *     variant: 'danger',
  *   });
- *   if (ok) await deleteAgent();
+ *   if (ok) await deleteFiche();
  * };
  * ```
  */

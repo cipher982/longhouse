@@ -1,25 +1,25 @@
 # Performance Visibility System - E2E Verification
 
-This document describes the three-tier performance visibility system for worker execution and provides examples of each tier in action.
+This document describes the three-tier performance visibility system for commis execution and provides examples of each tier in action.
 
 ## Overview
 
-The system provides three levels of visibility into worker performance:
+The system provides three levels of visibility into commis performance:
 
-1. **Tier 1 (Always Visible)**: User-facing summary in supervisor results
+1. **Tier 1 (Always Visible)**: User-facing summary in concierge results
 2. **Tier 2 (Progressive Disclosure)**: Detailed metrics in `metrics.jsonl` for offline analysis
 3. **Tier 3 (Dev Telemetry)**: Real-time structured logs for developer monitoring
 
 ## Tier 1: Always Visible (User-Facing)
 
-**Purpose**: Give supervisors immediate visibility into worker execution time.
+**Purpose**: Give concierges immediate visibility into commis execution time.
 
-**Implementation**: When a supervisor reads a worker result via `read_worker_result`, the response includes execution time at the end.
+**Implementation**: When a concierge reads a commis result via `read_commis_result`, the response includes execution time at the end.
 
 ### Example Output
 
 ```
-Result from worker job 123 (worker 2025-12-15T04-08-08_calculate-7-6):
+Result from commis job 123 (commis 2025-12-15T04-08-08_calculate-7-6):
 
 Execution time: 98ms
 
@@ -28,17 +28,17 @@ The result is 42.
 
 ### How It Works
 
-- `WorkerRunner` tracks `start_time` and calculates `duration_ms` at completion
-- Duration is stored in `metadata.json` in worker directory
-- `read_worker_result` tool appends duration to result text
-- Supervisor LLM sees duration inline with the result
+- `CommisRunner` tracks `start_time` and calculates `duration_ms` at completion
+- Duration is stored in `metadata.json` in commis directory
+- `read_commis_result` tool appends duration to result text
+- Concierge LLM sees duration inline with the result
 
 ### Verification
 
 ```bash
 # Run test
 cd apps/zerg/backend
-uv run pytest tests/test_supervisor_tools_integration.py::test_read_worker_result_includes_duration -xvs
+uv run pytest tests/test_concierge_tools_integration.py::test_read_commis_result_includes_duration -xvs
 ```
 
 **Expected**: Test passes, result contains "Execution time: Xms" where X > 0.
@@ -49,15 +49,15 @@ uv run pytest tests/test_supervisor_tools_integration.py::test_read_worker_resul
 
 **Purpose**: Provide detailed performance metrics for post-hoc analysis and debugging.
 
-**Implementation**: Worker execution records all LLM calls and tool calls to `metrics.jsonl` in JSONL format.
+**Implementation**: Commis execution records all LLM calls and tool calls to `metrics.jsonl` in JSONL format.
 
 ### File Location
 
 ```
-/data/swarmlet/workers/{worker_id}/metrics.jsonl
+/data/swarmlet/commis/{commis_id}/metrics.jsonl
 ```
 
-Example: `/data/swarmlet/workers/2025-12-15T04-08-08_calculate-7-6/metrics.jsonl`
+Example: `/data/swarmlet/commis/2025-12-15T04-08-08_calculate-7-6/metrics.jsonl`
 
 ### File Format (JSONL)
 
@@ -101,16 +101,16 @@ Each line is a JSON object representing a single event:
 }
 ```
 
-### How Supervisors Access Metrics
+### How Concierges Access Metrics
 
-Supervisors can read metrics using the `read_worker_file` tool:
+Concierges can read metrics using the `read_commis_file` tool:
 
 ```python
-# Supervisor prompt template includes this hint:
-# "For detailed performance metrics, read 'metrics.jsonl' from the worker directory"
+# Concierge prompt template includes this hint:
+# "For detailed performance metrics, read 'metrics.jsonl' from the commis directory"
 
-result = read_worker_file(job_id="123", file_path="metrics.jsonl")
-# Returns full JSONL content for supervisor to analyze
+result = read_commis_file(job_id="123", file_path="metrics.jsonl")
+# Returns full JSONL content for concierge to analyze
 ```
 
 ### Analysis Examples
@@ -150,7 +150,7 @@ uv run pytest tests/test_metrics_jsonl_tier2.py -xvs
 **Expected**: All 3 tests pass:
 
 - `test_metrics_jsonl_creation` - File exists with valid JSONL
-- `test_read_worker_file_can_access_metrics` - Supervisor can access via tool
+- `test_read_commis_file_can_access_metrics` - Concierge can access via tool
 - `test_metrics_collector_context_isolation` - Context vars work correctly
 
 ---
@@ -166,8 +166,8 @@ uv run pytest tests/test_metrics_jsonl_tier2.py -xvs
 Logs are written to standard backend logs with structured fields:
 
 ```
-2025-12-15 03:19:33 INFO llm_call_complete phase=tool_decision duration_ms=19500 worker_id=2025-12-15T03-19-12_backup model=gpt-5-mini prompt_tokens=1234 completion_tokens=89 total_tokens=1323
-2025-12-15 03:19:34 INFO tool_call_complete tool=ssh_exec duration_ms=1234 success=True worker_id=2025-12-15T03-19-12_backup
+2025-12-15 03:19:33 INFO llm_call_complete phase=tool_decision duration_ms=19500 commis_id=2025-12-15T03-19-12_backup model=gpt-5-mini prompt_tokens=1234 completion_tokens=89 total_tokens=1323
+2025-12-15 03:19:34 INFO tool_call_complete tool=ssh_exec duration_ms=1234 success=True commis_id=2025-12-15T03-19-12_backup
 ```
 
 ### Grep Patterns for Monitoring
@@ -190,10 +190,10 @@ tail -f logs/backend/backend.log | grep tool_call_complete
 grep "duration_ms=" logs/backend/backend.log | awk -F'duration_ms=' '{print $2}' | awk '{print $1}' | sort -n | tail -20
 ```
 
-**Track specific worker**:
+**Track specific commis**:
 
 ```bash
-grep "worker_id=2025-12-15T03-19-12_backup" logs/backend/backend.log
+grep "commis_id=2025-12-15T03-19-12_backup" logs/backend/backend.log
 ```
 
 **Find failed tool calls**:
@@ -222,7 +222,7 @@ grep "duration_ms=" logs/backend/backend.log | awk -F'duration_ms=' '{print $2}'
 - `phase`: "initial" | "summary" | "synthesis"
 - `model`: Model identifier (e.g., "gpt-5-mini")
 - `duration_ms`: Execution time in milliseconds
-- `worker_id`: Worker identifier
+- `commis_id`: Commis identifier
 - `prompt_tokens`: Number of prompt tokens (optional)
 - `completion_tokens`: Number of completion tokens (optional)
 - `total_tokens`: Total tokens (optional)
@@ -233,15 +233,15 @@ grep "duration_ms=" logs/backend/backend.log | awk -F'duration_ms=' '{print $2}'
 - `tool`: Tool name (e.g., "ssh_exec")
 - `duration_ms`: Execution time in milliseconds
 - `success`: Boolean success status
-- `worker_id`: Worker identifier
+- `commis_id`: Commis identifier
 - `error`: Error message (optional, only if success=false)
 
 ### How It Works
 
 Structured logs are emitted in two places:
 
-1. **worker_runner.py** - After summary extraction (LLM call)
-2. **supervisor_react_engine.py** - After tool execution (tool call)
+1. **commis_runner.py** - After summary extraction (LLM call)
+2. **concierge_react_engine.py** - After tool execution (tool call)
 
 Both use the same pattern:
 
@@ -251,7 +251,7 @@ logger.info("llm_call_complete", extra={
     "phase": "summary",
     "model": "gpt-5-mini",
     "duration_ms": 123,
-    "worker_id": ctx.worker_id,
+    "commis_id": ctx.commis_id,
     # ... additional fields
 })
 ```
@@ -262,7 +262,7 @@ The `extra` dict fields are added as attributes to the log record, making them a
 
 Structured logging is best-effort and wrapped in try/except:
 
-- Logging failures never crash worker execution
+- Logging failures never crash commis execution
 - Invalid data in `extra` is handled gracefully
 - None values are acceptable
 
@@ -290,8 +290,8 @@ uv run pytest tests/test_structured_logs_tier3.py -xvs
 ```bash
 cd apps/zerg/backend
 
-# Tier 1: Duration in supervisor results
-uv run pytest tests/test_supervisor_tools_integration.py::test_read_worker_result_includes_duration -xvs
+# Tier 1: Duration in concierge results
+uv run pytest tests/test_concierge_tools_integration.py::test_read_commis_result_includes_duration -xvs
 
 # Tier 2: metrics.jsonl structure
 uv run pytest tests/test_metrics_jsonl_tier2.py -xvs
@@ -300,7 +300,7 @@ uv run pytest tests/test_metrics_jsonl_tier2.py -xvs
 uv run pytest tests/test_structured_logs_tier3.py -xvs
 
 # Full integration suite
-uv run pytest tests/test_worker_runner.py tests/test_supervisor_tools.py tests/test_supervisor_tools_integration.py -x
+uv run pytest tests/test_commis_runner.py tests/test_concierge_tools.py tests/test_concierge_tools_integration.py -x
 ```
 
 ### Expected Results
@@ -318,7 +318,7 @@ Based on test runs:
 - **Tier 2**: Minimal (1-2ms per event for JSONL append)
 - **Tier 3**: Minimal (<1ms per log statement)
 
-**Total overhead**: <5% of typical worker execution time.
+**Total overhead**: <5% of typical commis execution time.
 
 ---
 
@@ -326,22 +326,22 @@ Based on test runs:
 
 ### Metrics Not Appearing
 
-**Problem**: `metrics.jsonl` file not created after worker execution.
+**Problem**: `metrics.jsonl` file not created after commis execution.
 
 **Diagnosis**:
 
-1. Check if `MetricsCollector` was set up in `WorkerRunner.run_worker`
+1. Check if `MetricsCollector` was set up in `CommisRunner.run_commis`
 2. Verify `collector.flush(artifact_store)` was called in finally block
-3. Check worker directory exists and is writable
+3. Check commis directory exists and is writable
 
 **Solution**:
 
 ```bash
-# Check worker directory
-ls -la /data/swarmlet/workers/{worker_id}/
+# Check commis directory
+ls -la /data/swarmlet/commis/{commis_id}/
 
 # Verify metrics.jsonl exists
-cat /data/swarmlet/workers/{worker_id}/metrics.jsonl
+cat /data/swarmlet/commis/{commis_id}/metrics.jsonl
 ```
 
 ### Structured Logs Not Visible
@@ -369,17 +369,17 @@ grep "event=" logs/backend/backend.log | head -5
 
 ### Duration Shows 0ms
 
-**Problem**: Worker execution time shows 0ms in Tier 1 results.
+**Problem**: Commis execution time shows 0ms in Tier 1 results.
 
 **Diagnosis**:
 
-1. Worker execution is extremely fast (<1ms, gets rounded to 0)
+1. Commis execution is extremely fast (<1ms, gets rounded to 0)
 2. `start_time` or `end_time` not captured correctly
 
 **Solution**:
 
 - This is expected for very fast operations (mock LLM calls in tests)
-- In production, workers should take >1ms and show realistic durations
+- In production, commis should take >1ms and show realistic durations
 - For sub-millisecond precision, modify code to use microseconds
 
 ---
@@ -389,13 +389,13 @@ grep "event=" logs/backend/backend.log | head -5
 ### Tiered Visibility
 
 1. **Tier 1 (Always)**: Simple, always-on, user-facing summary
-2. **Tier 2 (Progressive)**: Detailed data available when supervisor needs it
+2. **Tier 2 (Progressive)**: Detailed data available when concierge needs it
 3. **Tier 3 (Dev)**: Real-time monitoring for developers, opaque to LLMs
 
 ### Non-Intrusive
 
 - Metrics collection uses context vars (thread-safe, async-safe)
-- Fail-safe design: metrics failures never crash workers
+- Fail-safe design: metrics failures never crash commis
 - Minimal performance overhead (<5%)
 
 ### Structured & Grep-able
@@ -407,7 +407,7 @@ grep "event=" logs/backend/backend.log | head -5
 ### Progressive Disclosure
 
 - User sees summary by default (Tier 1)
-- Supervisor can drill into details via tools (Tier 2)
+- Concierge can drill into details via tools (Tier 2)
 - Developers monitor real-time via logs (Tier 3)
 
 ---
@@ -418,9 +418,9 @@ grep "event=" logs/backend/backend.log | head -5
 
 1. **Graphical Dashboard**: Visualize metrics from `metrics.jsonl` in web UI
 2. **Alerting**: Trigger alerts on slow operations (duration > threshold)
-3. **Aggregation**: Roll up metrics across workers for system-wide visibility
+3. **Aggregation**: Roll up metrics across commis for system-wide visibility
 4. **Cost Tracking**: Add token cost calculations to LLM events
-5. **Tracing**: Link events across supervisor -> worker -> tool call chains
+5. **Tracing**: Link events across concierge -> commis -> tool call chains
 6. **Export**: Push metrics to external observability platforms (Prometheus, Datadog)
 
 ### Backwards Compatibility
@@ -437,11 +437,11 @@ All three tiers are backwards compatible:
 
 The three-tier performance visibility system provides:
 
-✅ **Tier 1**: Immediate feedback for supervisors ("Execution time: 98ms")
+✅ **Tier 1**: Immediate feedback for concierges ("Execution time: 98ms")
 ✅ **Tier 2**: Detailed metrics for analysis (`metrics.jsonl`)
 ✅ **Tier 3**: Real-time monitoring for developers (structured logs)
 
-All three tiers are verified by comprehensive tests and work together to provide complete visibility into worker performance without introducing significant overhead or complexity.
+All three tiers are verified by comprehensive tests and work together to provide complete visibility into commis performance without introducing significant overhead or complexity.
 
 **Verification Date**: 2025-12-14
 **Test Status**: All tests passing (43/43)

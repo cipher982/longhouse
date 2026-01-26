@@ -21,14 +21,14 @@ We modified `useWebSocket.tsx` to expose `sendMessage` in test mode:
 useEffect(() => {
   if (
     typeof window !== "undefined" &&
-    (window as any).__TEST_WORKER_ID__ !== undefined
+    (window as any).__TEST_COMMIS_ID__ !== undefined
   ) {
     (window as any).__testSendMessage = sendMessage;
   }
 }, [sendMessage]);
 ```
 
-This is **only active during E2E tests** (when `__TEST_WORKER_ID__` is set by fixtures.ts).
+This is **only active during E2E tests** (when `__TEST_COMMIS_ID__` is set by fixtures.ts).
 
 ## Test Strategy
 

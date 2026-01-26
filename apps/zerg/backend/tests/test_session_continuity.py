@@ -305,7 +305,7 @@ class TestShipSessionToLifeHub:
 
         monkeypatch.setattr("zerg.services.session_continuity.LIFE_HUB_API_KEY", None)
 
-        result = await ship_session_to_life_hub(tmp_path, "worker-1")
+        result = await ship_session_to_life_hub(tmp_path, "commis-1")
         assert result is None
 
     @pytest.mark.asyncio
@@ -320,7 +320,7 @@ class TestShipSessionToLifeHub:
         config_dir = tmp_path / "claude_config"
         config_dir.mkdir()
 
-        result = await ship_session_to_life_hub(workspace, "worker-1", claude_config_dir=config_dir)
+        result = await ship_session_to_life_hub(workspace, "commis-1", claude_config_dir=config_dir)
         assert result is None
 
     @pytest.mark.asyncio
@@ -363,7 +363,7 @@ class TestShipSessionToLifeHub:
         mock_client.__aexit__.return_value = None
 
         with patch("httpx.AsyncClient", return_value=mock_client):
-            result = await ship_session_to_life_hub(workspace, "worker-1", claude_config_dir=config_dir)
+            result = await ship_session_to_life_hub(workspace, "commis-1", claude_config_dir=config_dir)
 
         assert result == "life-hub-session-123"
 
@@ -397,7 +397,7 @@ class TestShipSessionToLifeHub:
         mock_client.__aexit__.return_value = None
 
         with patch("httpx.AsyncClient", return_value=mock_client):
-            result = await ship_session_to_life_hub(workspace, "worker-1", claude_config_dir=config_dir)
+            result = await ship_session_to_life_hub(workspace, "commis-1", claude_config_dir=config_dir)
 
         # Should return None, not raise
         assert result is None
@@ -457,7 +457,7 @@ class TestSessionContinuityIntegration:
         mock_client.__aexit__.return_value = None
 
         with patch("httpx.AsyncClient", return_value=mock_client):
-            shipped_id = await ship_session_to_life_hub(workspace, "worker-1", claude_config_dir=config_dir)
+            shipped_id = await ship_session_to_life_hub(workspace, "commis-1", claude_config_dir=config_dir)
 
         assert shipped_id == "shipped-session-456"
 

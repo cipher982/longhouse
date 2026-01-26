@@ -29,8 +29,8 @@ def mock_compiler():
     with patch("zerg.services.evidence_mounting_llm.EvidenceCompiler") as MockCompiler:
         compiler = MagicMock()
         compiler.compile.return_value = {
-            123: "--- Evidence for Worker 123 ---\nFull tool outputs here\n--- End Evidence ---",
-            456: "--- Evidence for Worker 456 ---\nOther worker evidence\n--- End Evidence ---",
+            123: "--- Evidence for Commis 123 ---\nFull tool outputs here\n--- End Evidence ---",
+            456: "--- Evidence for Commis 456 ---\nOther commis evidence\n--- End Evidence ---",
         }
         MockCompiler.return_value = compiler
         yield compiler
@@ -41,17 +41,17 @@ class TestEvidenceMarkerPattern:
 
     def test_matches_valid_marker(self):
         """Test pattern matches valid evidence markers."""
-        marker = "[EVIDENCE:run_id=48,job_id=123,worker_id=abc-123]"
+        marker = "[EVIDENCE:course_id=48,job_id=123,commis_id=abc-123]"
         match = EVIDENCE_MARKER_PATTERN.search(marker)
 
         assert match is not None
-        assert match.group(1) == "48"  # run_id
+        assert match.group(1) == "48"  # course_id
         assert match.group(2) == "123"  # job_id
-        assert match.group(3) == "abc-123"  # worker_id
+        assert match.group(3) == "abc-123"  # commis_id
 
     def test_matches_in_larger_text(self):
         """Test pattern finds marker within larger text."""
-        text = "Worker completed.\n[EVIDENCE:run_id=10,job_id=99,worker_id=xyz-456]\nSummary: Done."
+        text = "Commis completed.\n[EVIDENCE:course_id=10,job_id=99,commis_id=xyz-456]\nSummary: Done."
         match = EVIDENCE_MARKER_PATTERN.search(text)
 
         assert match is not None
@@ -63,9 +63,9 @@ class TestEvidenceMarkerPattern:
         """Test pattern doesn't match invalid formats."""
         invalid_markers = [
             "[EVIDENCE:invalid]",
-            "[EVIDENCE:run_id=48]",  # Missing fields
-            "[EVIDENCE:job_id=123,worker_id=abc]",  # Missing run_id
-            "EVIDENCE:run_id=48,job_id=123,worker_id=abc",  # Missing brackets
+            "[EVIDENCE:course_id=48]",  # Missing fields
+            "[EVIDENCE:job_id=123,commis_id=abc]",  # Missing course_id
+            "EVIDENCE:course_id=48,job_id=123,commis_id=abc",  # Missing brackets
         ]
 
         for marker in invalid_markers:
@@ -83,7 +83,7 @@ class TestEvidenceMountingLLM:
 
         messages = [
             HumanMessage(content="Test message"),
-            ToolMessage(content="[EVIDENCE:run_id=1,job_id=2,worker_id=abc]", tool_call_id="123", name="spawn_commis"),
+            ToolMessage(content="[EVIDENCE:course_id=1,job_id=2,commis_id=abc]", tool_call_id="123", name="spawn_commis"),
         ]
 
         result = await wrapper.ainvoke(messages)
@@ -93,17 +93,17 @@ class TestEvidenceMountingLLM:
         mock_base_llm.ainvoke.assert_called_once()
         call_args = mock_base_llm.ainvoke.call_args[0][0]
         assert len(call_args) == 2
-        assert call_args[1].content == "[EVIDENCE:run_id=1,job_id=2,worker_id=abc]"  # Unchanged
+        assert call_args[1].content == "[EVIDENCE:course_id=1,job_id=2,commis_id=abc]"  # Unchanged
 
     @pytest.mark.asyncio
     async def test_passthrough_without_markers(self, mock_base_llm, mock_compiler):
         """Test LLM passes through when no evidence markers present."""
         mock_db = MagicMock()
-        wrapper = EvidenceMountingLLM(base_llm=mock_base_llm, run_id=1, owner_id=100, db=mock_db)
+        wrapper = EvidenceMountingLLM(base_llm=mock_base_llm, course_id=1, owner_id=100, db=mock_db)
 
         messages = [
             HumanMessage(content="Test message"),
-            ToolMessage(content="Worker completed successfully", tool_call_id="123", name="spawn_commis"),
+            ToolMessage(content="Commis completed successfully", tool_call_id="123", name="spawn_commis"),
         ]
 
         result = await wrapper.ainvoke(messages)
@@ -113,7 +113,7 @@ class TestEvidenceMountingLLM:
         mock_base_llm.ainvoke.assert_called_once()
         call_args = mock_base_llm.ainvoke.call_args[0][0]
         assert len(call_args) == 2
-        assert call_args[1].content == "Worker completed successfully"  # Unchanged
+        assert call_args[1].content == "Commis completed successfully"  # Unchanged
 
         # Compiler should not be called (no markers)
         mock_compiler.compile.assert_not_called()
@@ -122,12 +122,12 @@ class TestEvidenceMountingLLM:
     async def test_expands_single_marker(self, mock_base_llm, mock_compiler):
         """Test expansion of a single evidence marker."""
         mock_db = MagicMock()
-        wrapper = EvidenceMountingLLM(base_llm=mock_base_llm, run_id=48, owner_id=100, db=mock_db)
+        wrapper = EvidenceMountingLLM(base_llm=mock_base_llm, course_id=48, owner_id=100, db=mock_db)
 
         messages = [
             HumanMessage(content="Check the server"),
             ToolMessage(
-                content="Worker completed.\n[EVIDENCE:run_id=48,job_id=123,worker_id=abc-123]",
+                content="Commis completed.\n[EVIDENCE:course_id=48,job_id=123,commis_id=abc-123]",
                 tool_call_id="tc1",
                 name="spawn_commis",
             ),
@@ -136,7 +136,7 @@ class TestEvidenceMountingLLM:
         result = await wrapper.ainvoke(messages)
 
         # Compiler should be called once
-        mock_compiler.compile.assert_called_once_with(run_id=48, owner_id=100, db=mock_db)
+        mock_compiler.compile.assert_called_once_with(course_id=48, owner_id=100, db=mock_db)
 
         # Should call base LLM with expanded messages
         assert result.content == "Test response"
@@ -146,25 +146,25 @@ class TestEvidenceMountingLLM:
         # Second message should have evidence expanded
         expanded_msg = call_args[1]
         assert isinstance(expanded_msg, ToolMessage)
-        assert "[EVIDENCE:run_id=48,job_id=123,worker_id=abc-123]" in expanded_msg.content
-        assert "--- Evidence for Worker 123 ---" in expanded_msg.content
+        assert "[EVIDENCE:course_id=48,job_id=123,commis_id=abc-123]" in expanded_msg.content
+        assert "--- Evidence for Commis 123 ---" in expanded_msg.content
         assert "Full tool outputs here" in expanded_msg.content
 
     @pytest.mark.asyncio
     async def test_expands_multiple_markers(self, mock_base_llm, mock_compiler):
         """Test expansion of multiple evidence markers in different messages."""
         mock_db = MagicMock()
-        wrapper = EvidenceMountingLLM(base_llm=mock_base_llm, run_id=48, owner_id=100, db=mock_db)
+        wrapper = EvidenceMountingLLM(base_llm=mock_base_llm, course_id=48, owner_id=100, db=mock_db)
 
         messages = [
             HumanMessage(content="Check servers"),
             ToolMessage(
-                content="Worker 1 done.\n[EVIDENCE:run_id=48,job_id=123,worker_id=abc-123]",
+                content="Commis 1 done.\n[EVIDENCE:course_id=48,job_id=123,commis_id=abc-123]",
                 tool_call_id="tc1",
                 name="spawn_commis",
             ),
             ToolMessage(
-                content="Worker 2 done.\n[EVIDENCE:run_id=48,job_id=456,worker_id=xyz-456]",
+                content="Commis 2 done.\n[EVIDENCE:course_id=48,job_id=456,commis_id=xyz-456]",
                 tool_call_id="tc2",
                 name="spawn_commis",
             ),
@@ -173,30 +173,30 @@ class TestEvidenceMountingLLM:
         result = await wrapper.ainvoke(messages)
 
         # Compiler should be called once (for entire run)
-        mock_compiler.compile.assert_called_once_with(run_id=48, owner_id=100, db=mock_db)
+        mock_compiler.compile.assert_called_once_with(course_id=48, owner_id=100, db=mock_db)
 
         # Both messages should have evidence expanded
         call_args = mock_base_llm.ainvoke.call_args[0][0]
         msg1 = call_args[1]
         msg2 = call_args[2]
 
-        assert "--- Evidence for Worker 123 ---" in msg1.content
-        assert "--- Evidence for Worker 456 ---" in msg2.content
+        assert "--- Evidence for Commis 123 ---" in msg1.content
+        assert "--- Evidence for Commis 456 ---" in msg2.content
 
     @pytest.mark.asyncio
     async def test_handles_missing_evidence_gracefully(self, mock_base_llm, mock_compiler):
-        """Test handling when evidence is not found for a worker."""
+        """Test handling when evidence is not found for a commis."""
         # Mock compiler returns evidence for job 123 but not 999
         mock_compiler.compile.return_value = {
-            123: "--- Evidence for Worker 123 ---\nData here\n--- End Evidence ---"
+            123: "--- Evidence for Commis 123 ---\nData here\n--- End Evidence ---"
         }
 
         mock_db = MagicMock()
-        wrapper = EvidenceMountingLLM(base_llm=mock_base_llm, run_id=48, owner_id=100, db=mock_db)
+        wrapper = EvidenceMountingLLM(base_llm=mock_base_llm, course_id=48, owner_id=100, db=mock_db)
 
         messages = [
             ToolMessage(
-                content="Worker unknown.\n[EVIDENCE:run_id=48,job_id=999,worker_id=missing]",
+                content="Commis unknown.\n[EVIDENCE:course_id=48,job_id=999,commis_id=missing]",
                 tool_call_id="tc1",
                 name="spawn_commis",
             ),
@@ -207,18 +207,18 @@ class TestEvidenceMountingLLM:
         # Should add "unavailable" note instead of crashing
         call_args = mock_base_llm.ainvoke.call_args[0][0]
         expanded_msg = call_args[0]
-        assert "[EVIDENCE:run_id=48,job_id=999,worker_id=missing]" in expanded_msg.content
-        assert "[Evidence unavailable for this worker]" in expanded_msg.content
+        assert "[EVIDENCE:course_id=48,job_id=999,commis_id=missing]" in expanded_msg.content
+        assert "[Evidence unavailable for this commis]" in expanded_msg.content
 
     @pytest.mark.asyncio
-    async def test_validates_run_id_mismatch(self, mock_base_llm, mock_compiler):
-        """Test validation when marker run_id doesn't match context."""
+    async def test_validates_course_id_mismatch(self, mock_base_llm, mock_compiler):
+        """Test validation when marker course_id doesn't match context."""
         mock_db = MagicMock()
-        wrapper = EvidenceMountingLLM(base_llm=mock_base_llm, run_id=48, owner_id=100, db=mock_db)
+        wrapper = EvidenceMountingLLM(base_llm=mock_base_llm, course_id=48, owner_id=100, db=mock_db)
 
         messages = [
             ToolMessage(
-                content="Worker done.\n[EVIDENCE:run_id=99,job_id=123,worker_id=abc]",  # Wrong run_id
+                content="Commis done.\n[EVIDENCE:course_id=99,job_id=123,commis_id=abc]",  # Wrong course_id
                 tool_call_id="tc1",
                 name="spawn_commis",
             ),
@@ -229,7 +229,7 @@ class TestEvidenceMountingLLM:
         # Should skip expansion and pass through original (with warning logged)
         call_args = mock_base_llm.ainvoke.call_args[0][0]
         msg = call_args[0]
-        assert msg.content == "Worker done.\n[EVIDENCE:run_id=99,job_id=123,worker_id=abc]"  # Unchanged
+        assert msg.content == "Commis done.\n[EVIDENCE:course_id=99,job_id=123,commis_id=abc]"  # Unchanged
 
     @pytest.mark.asyncio
     async def test_handles_compiler_error_gracefully(self, mock_base_llm):
@@ -240,11 +240,11 @@ class TestEvidenceMountingLLM:
             MockCompiler.return_value = compiler
 
             mock_db = MagicMock()
-            wrapper = EvidenceMountingLLM(base_llm=mock_base_llm, run_id=48, owner_id=100, db=mock_db)
+            wrapper = EvidenceMountingLLM(base_llm=mock_base_llm, course_id=48, owner_id=100, db=mock_db)
 
             messages = [
                 ToolMessage(
-                    content="Worker done.\n[EVIDENCE:run_id=48,job_id=123,worker_id=abc]",
+                    content="Commis done.\n[EVIDENCE:course_id=48,job_id=123,commis_id=abc]",
                     tool_call_id="tc1",
                     name="spawn_commis",
                 ),
@@ -256,15 +256,15 @@ class TestEvidenceMountingLLM:
             assert result.content == "Test response"
             call_args = mock_base_llm.ainvoke.call_args[0][0]
             msg = call_args[0]
-            assert msg.content == "Worker done.\n[EVIDENCE:run_id=48,job_id=123,worker_id=abc]"  # Unchanged
+            assert msg.content == "Commis done.\n[EVIDENCE:course_id=48,job_id=123,commis_id=abc]"  # Unchanged
 
     @pytest.mark.asyncio
     async def test_messages_not_mutated(self, mock_base_llm, mock_compiler):
         """Test that original messages are never mutated (copies are made)."""
         mock_db = MagicMock()
-        wrapper = EvidenceMountingLLM(base_llm=mock_base_llm, run_id=48, owner_id=100, db=mock_db)
+        wrapper = EvidenceMountingLLM(base_llm=mock_base_llm, course_id=48, owner_id=100, db=mock_db)
 
-        original_content = "Worker done.\n[EVIDENCE:run_id=48,job_id=123,worker_id=abc]"
+        original_content = "Commis done.\n[EVIDENCE:course_id=48,job_id=123,commis_id=abc]"
         messages = [
             ToolMessage(
                 content=original_content,
@@ -281,7 +281,7 @@ class TestEvidenceMountingLLM:
     def test_bind_tools_creates_new_wrapper(self, mock_base_llm):
         """Test that bind_tools returns a new wrapper with bound tools."""
         mock_db = MagicMock()
-        wrapper = EvidenceMountingLLM(base_llm=mock_base_llm, run_id=48, owner_id=100, db=mock_db)
+        wrapper = EvidenceMountingLLM(base_llm=mock_base_llm, course_id=48, owner_id=100, db=mock_db)
 
         # Mock bind_tools to return a new mock LLM (not async)
         bound_mock_llm = MagicMock()
@@ -293,7 +293,7 @@ class TestEvidenceMountingLLM:
         # Should return new wrapper
         assert isinstance(bound_wrapper, EvidenceMountingLLM)
         assert bound_wrapper.base_llm is bound_mock_llm
-        assert bound_wrapper.run_id == 48
+        assert bound_wrapper.course_id == 48
         assert bound_wrapper.owner_id == 100
 
         # Original wrapper unchanged

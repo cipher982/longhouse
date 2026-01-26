@@ -6,7 +6,7 @@
  *
  * Includes extensive debugging to trace data flow through:
  * - Frontend request (reasoning_effort parameter)
- * - Backend SSE response (supervisor_complete event with usage)
+ * - Backend SSE response (concierge_complete event with usage)
  * - UI rendering (reasoning tokens badge)
  */
 
@@ -16,7 +16,7 @@ import { resetDatabase } from './test-utils';
 // Skip: Reasoning effort tests need chat selector updates
 test.skip();
 
-// Reset DB before each test to keep agent/thread ids predictable
+// Reset DB before each test to keep fiche/thread ids predictable
 // Uses strict reset that throws on failure to fail fast
 test.beforeEach(async ({ request }) => {
   await resetDatabase(request);
@@ -70,11 +70,11 @@ async function setupDebugging(page: Page): Promise<TestDebugData> {
     debugData.consoleMessages.push(`[${msg.type()}] ${text}`);
 
     // Log SSE events from frontend code
-    if (text.includes('SSE event:') || text.includes('supervisor_complete') || text.includes('supervisor:complete')) {
+    if (text.includes('SSE event:') || text.includes('concierge_complete') || text.includes('concierge:complete')) {
       console.log(`📋 Console: ${text}`);
 
       // Try to extract usage object from console
-      if (text.includes('supervisor:complete') && text.includes('usage:')) {
+      if (text.includes('concierge:complete') && text.includes('usage:')) {
         try {
           const args = msg.args();
           if (args.length > 1) {
@@ -255,7 +255,7 @@ function printDebugReport(debugData: TestDebugData, sseEvents: CapturedSSEEvent[
   console.log('\n📋 RELEVANT CONSOLE MESSAGES:');
   const relevantMessages = debugData.consoleMessages.filter(msg =>
     msg.includes('SSE') ||
-    msg.includes('supervisor') ||
+    msg.includes('concierge') ||
     msg.includes('reasoning') ||
     msg.includes('usage') ||
     msg.includes('token')
@@ -410,7 +410,7 @@ test.describe('Reasoning Effort Feature E2E Tests', () => {
           foundCompleteEvent = true;
           try {
             const parsed = typeof evt.data === 'string' ? JSON.parse(evt.data) : evt.data;
-            console.log(`📡 supervisor_complete event ${i + 1}:`, JSON.stringify(parsed, null, 2));
+            console.log(`📡 concierge_complete event ${i + 1}:`, JSON.stringify(parsed, null, 2));
 
             if (parsed.payload?.usage) {
               console.log(`   ✅ Has usage field:`, parsed.payload.usage);
@@ -429,7 +429,7 @@ test.describe('Reasoning Effort Feature E2E Tests', () => {
       });
 
       if (!foundCompleteEvent) {
-        console.log('❌ No supervisor_complete event found in SSE stream');
+        console.log('❌ No concierge_complete event found in SSE stream');
       }
 
       // Check console for state manager updates
@@ -442,7 +442,7 @@ test.describe('Reasoning Effort Feature E2E Tests', () => {
       // Fail the test with detailed diagnostic info
       throw new Error(
         'Reasoning tokens badge not found in UI. Check debug report above for:\n' +
-        '  1. Did the backend send usage.reasoning_tokens in supervisor_complete SSE event?\n' +
+        '  1. Did the backend send usage.reasoning_tokens in concierge_complete SSE event?\n' +
         '  2. Did the frontend receive and parse the event correctly?\n' +
         '  3. Did the state manager update the message with usage data?\n' +
         '  4. Did the ChatContainer component render the badge?'

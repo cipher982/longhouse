@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Golden Run Replay Harness for testing supervisor prompt changes.
+"""Golden Run Replay Harness for testing concierge prompt changes.
 
-This script replays a supervisor run using a live LLM while mocking tool results.
+This script replays a concierge run using a live LLM while mocking tool results.
 Mode: "Tier 2" - Live LLM + mocked tools (not deterministic replay).
 
 Key properties:
 - **Isolated by default**: runs in a new replay thread so it doesn't pollute the user's
-  long-lived supervisor thread (important for repeated prompt iteration).
+  long-lived concierge thread (important for repeated prompt iteration).
 - **Safe by default**: blocks side-effectful tools unless explicitly allowed.
 
 Usage (run from backend directory):
     cd apps/zerg/backend
-    uv run python scripts/replay_run.py <run_id>
-    uv run python scripts/replay_run.py <run_id> --dry-run
+    uv run python scripts/replay_run.py <course_id>
+    uv run python scripts/replay_run.py <course_id> --dry-run
 
 Example:
     uv run python scripts/replay_run.py 42 --dry-run
@@ -43,15 +43,15 @@ from sqlalchemy.exc import OperationalError
 
 from zerg.crud import crud
 from zerg.database import get_db
-from zerg.managers.agent_runner import AgentRunner
-from zerg.models.enums import RunStatus
-from zerg.models.enums import RunTrigger
+from zerg.managers.fiche_runner import FicheRunner
+from zerg.models.enums import CourseStatus
+from zerg.models.enums import CourseTrigger
 from zerg.models.enums import ThreadType
-from zerg.models.models import AgentRun
+from zerg.models.models import Course
 from zerg.models.models import ThreadMessage
-from zerg.models.models import WorkerJob
-from zerg.services.supervisor_service import SupervisorService
-from zerg.services.worker_artifact_store import WorkerArtifactStore
+from zerg.models.models import CommisJob
+from zerg.services.concierge_service import ConciergeService
+from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.tools.unified_access import get_tool_resolver
 
 # Configure logging
@@ -78,7 +78,7 @@ def normalize_datetime(dt: datetime | None) -> datetime | None:
     """Normalize a datetime to UTC timezone-aware.
 
     Handles the timezone mismatch between:
-    - AgentRun.started_at (naive datetime)
+    - Course.started_at (naive datetime)
     - ThreadMessage.sent_at (timezone-aware datetime)
 
     Args:
@@ -95,21 +95,21 @@ def normalize_datetime(dt: datetime | None) -> datetime | None:
     return dt
 
 
-class MockedSpawnWorker:
+class MockedSpawnCommis:
     """Mock spawn_commis that returns cached results from original run."""
 
-    def __init__(self, db: Session, original_run_id: int, stats: ReplayStats, *, match_threshold: float = 0.7):
+    def __init__(self, db: Session, original_course_id: int, stats: ReplayStats, *, match_threshold: float = 0.7):
         self.db = db
-        self.original_run_id = original_run_id
+        self.original_course_id = original_course_id
         self.stats = stats
         self.match_threshold = match_threshold
-        self.artifact_store = WorkerArtifactStore()
-        self.cached_jobs = self._load_original_workers()
+        self.artifact_store = CommisArtifactStore()
+        self.cached_jobs = self._load_original_commis()
         self.used_job_ids: set[int] = set()
 
-    def _load_original_workers(self) -> dict:
-        """Load worker jobs from the original run."""
-        jobs = self.db.query(WorkerJob).filter(WorkerJob.supervisor_run_id == self.original_run_id).all()
+    def _load_original_commis(self) -> dict:
+        """Load commis jobs from the original run."""
+        jobs = self.db.query(CommisJob).filter(CommisJob.concierge_course_id == self.original_course_id).all()
 
         cached = {}
         for job in jobs:
@@ -118,11 +118,11 @@ class MockedSpawnWorker:
                 "task": job.task,
                 "model": job.model,
                 "status": job.status,
-                "worker_id": job.worker_id,
+                "commis_id": job.commis_id,
                 "error": job.error,
             }
 
-        logger.info(f"Loaded {len(cached)} cached worker results from run {self.original_run_id}")
+        logger.info(f"Loaded {len(cached)} cached commis results from run {self.original_course_id}")
         return cached
 
     def _find_matching_job(self, task: str) -> dict | None:
@@ -163,7 +163,7 @@ class MockedSpawnWorker:
         timeout_seconds: float = 300.0,
         decision_mode: str = "heuristic",
     ) -> str:
-        """Mock spawn_commis - returns cached results instead of spawning real workers."""
+        """Mock spawn_commis - returns cached results instead of spawning real commis."""
         self.stats.spawn_commis_calls += 1
         self.stats.tool_call_names.append("spawn_commis")
 
@@ -174,7 +174,7 @@ class MockedSpawnWorker:
             return (
                 f"[REPLAY MOCK] No cached result for task.\n"
                 f"Task: {task[:200]}\n\n"
-                f"In production, a worker would be spawned. Returning synthetic response."
+                f"In production, a commis would be spawned. Returning synthetic response."
             )
 
         # Mark the matched cached job as used to avoid reusing a single cached job
@@ -182,31 +182,31 @@ class MockedSpawnWorker:
         self.used_job_ids.add(int(matching_job["job_id"]))
         self.stats.cache_hits += 1
         job_id = matching_job["job_id"]
-        worker_id = matching_job["worker_id"]
+        commis_id = matching_job["commis_id"]
         status = matching_job["status"]
 
         if not wait:
             # Fire-and-forget mode: return queued message
             return (
-                f"[REPLAY MOCK] Worker job {job_id} (cached) queued.\n"
+                f"[REPLAY MOCK] Commis job {job_id} (cached) queued.\n"
                 f"Task: {task[:100]}\n"
                 f"Original status: {status}\n\n"
                 f"Use read_commis_result('{job_id}') to get results."
             )
 
         # Wait mode: return actual cached result
-        if status == "success" and worker_id:
+        if status == "success" and commis_id:
             try:
-                result = self.artifact_store.get_worker_result(worker_id)
+                result = self.artifact_store.get_commis_result(commis_id)
                 return f"[REPLAY MOCK - cached from job {job_id}]\n\n{result}"
             except Exception as e:
-                logger.error(f"Failed to read cached result for {worker_id}: {e}")
+                logger.error(f"Failed to read cached result for {commis_id}: {e}")
                 return f"[REPLAY MOCK] Error reading cached result: {e}"
         elif status == "failed":
             error = matching_job.get("error", "Unknown error")
-            return f"[REPLAY MOCK] Worker job {job_id} failed: {error}"
+            return f"[REPLAY MOCK] Commis job {job_id} failed: {error}"
         else:
-            return f"[REPLAY MOCK] Worker job {job_id} status: {status}"
+            return f"[REPLAY MOCK] Commis job {job_id} status: {status}"
 
     def sync_wrapper(
         self,
@@ -291,7 +291,7 @@ class ToolMocker:
 
 
 SAFE_DEFAULT_TOOLS = {
-    # Supervisor/worker inspection (read-only)
+    # Concierge/commis inspection (read-only)
     "list_commis",
     "read_commis_result",
     "read_commis_file",
@@ -308,30 +308,30 @@ SAFE_DEFAULT_TOOLS = {
 
 
 def utc_now_naive() -> datetime:
-    """UTC 'naive' timestamp (matches existing DB convention for AgentRun timestamps)."""
+    """UTC 'naive' timestamp (matches existing DB convention for Course timestamps)."""
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def list_recent_runs(db: Session, limit: int = 20) -> None:
-    """Print recent AgentRun rows to help find replay targets."""
-    runs = db.query(AgentRun).order_by(AgentRun.id.desc()).limit(limit).all()
+    """Print recent Course rows to help find replay targets."""
+    runs = db.query(Course).order_by(Course.id.desc()).limit(limit).all()
 
     print("\n" + "=" * 80)
     print(f"RECENT RUNS (showing {len(runs)})")
     print("=" * 80)
-    print(f"\n{'Run ID':<10} {'Status':<12} {'Thread':<10} {'Agent':<10} {'Duration':<10} {'Created At'}")
+    print(f"\n{'Run ID':<10} {'Status':<12} {'Thread':<10} {'Fiche':<10} {'Duration':<10} {'Created At'}")
     print("-" * 80)
 
     for run in runs:
         status = run.status.value if hasattr(run.status, "value") else str(run.status)
         duration = f"{run.duration_ms}ms" if run.duration_ms else "-"
         created_at = run.created_at.isoformat() if run.created_at else "-"
-        print(f"{run.id:<10} {status:<12} {run.thread_id:<10} {run.agent_id:<10} {duration:<10} {created_at}")
+        print(f"{run.id:<10} {status:<12} {run.thread_id:<10} {run.fiche_id:<10} {duration:<10} {created_at}")
 
-    print("\nTip: pick a run_id and re-run with: uv run python scripts/replay_run.py <run_id> --dry-run")
+    print("\nTip: pick a course_id and re-run with: uv run python scripts/replay_run.py <course_id> --dry-run")
 
 
-def get_run_time_window(run: AgentRun) -> tuple[datetime | None, datetime | None, bool]:
+def get_run_time_window(run: Course) -> tuple[datetime | None, datetime | None, bool]:
     """Return (start, end, valid) for message-window filtering."""
     run_start = normalize_datetime(run.started_at) or normalize_datetime(run.created_at)
     run_end = normalize_datetime(run.finished_at)
@@ -339,7 +339,7 @@ def get_run_time_window(run: AgentRun) -> tuple[datetime | None, datetime | None
     return run_start, run_end, time_window_valid
 
 
-def find_task_message(db: Session, run: AgentRun) -> tuple[ThreadMessage | None, bool]:
+def find_task_message(db: Session, run: Course) -> tuple[ThreadMessage | None, bool]:
     """Find the user message representing the task for this run."""
     run_start, run_end, time_window_valid = get_run_time_window(run)
 
@@ -360,7 +360,7 @@ def find_task_message(db: Session, run: AgentRun) -> tuple[ThreadMessage | None,
     return (user_msgs[0] if time_window_valid else user_msgs[-1]), time_window_valid
 
 
-def print_header(original_run: AgentRun):
+def print_header(original_run: Course):
     """Print header with original run info."""
     print("\n" + "=" * 80)
     print("GOLDEN RUN REPLAY HARNESS")
@@ -373,19 +373,19 @@ def print_header(original_run: AgentRun):
     print("=" * 80)
 
 
-def get_run_summary(db: Session, run: AgentRun) -> dict:
+def get_run_summary(db: Session, run: Course) -> dict:
     """Extract summary data from a run, scoped to run's time window.
 
     IMPORTANT: Messages are filtered to only those within the run's time window
     (started_at to finished_at) to avoid counting messages from other runs
-    on the same long-lived supervisor thread.
+    on the same long-lived concierge thread.
 
     Args:
         db: Database session
-        run: The AgentRun to summarize
+        run: The Course to summarize
 
     Returns:
-        Dictionary with task, tool_calls, workers, result, duration_ms, time_window_valid
+        Dictionary with task, tool_calls, commis, result, duration_ms, time_window_valid
     """
     run_start, run_end, time_window_valid = get_run_time_window(run)
     if not time_window_valid:
@@ -413,8 +413,8 @@ def get_run_summary(db: Session, run: AgentRun) -> dict:
     # Count tool calls from assistant messages within the time window
     tool_call_count = sum(len(m.tool_calls) for m in messages if m.tool_calls)
 
-    # Get workers spawned by this specific run (uses run.id, not time window)
-    workers = db.query(WorkerJob).filter(WorkerJob.supervisor_run_id == run.id).all()
+    # Get commis spawned by this specific run (uses run.id, not time window)
+    commis = db.query(CommisJob).filter(CommisJob.concierge_course_id == run.id).all()
 
     # Get final result (last assistant message with content in the time window)
     assistant_msgs = [m for m in messages if m.role == "assistant" and m.content]
@@ -423,8 +423,8 @@ def get_run_summary(db: Session, run: AgentRun) -> dict:
     return {
         "task": task,
         "tool_calls": tool_call_count,
-        "workers": len(workers),
-        "worker_tasks": [w.task[:60] for w in workers],
+        "commis": len(commis),
+        "commis_tasks": [w.task[:60] for w in commis],
         "result": final_result,
         "duration_ms": run.duration_ms,
         "time_window_valid": time_window_valid,
@@ -452,12 +452,12 @@ def print_comparison(original: dict, replay: dict, stats: ReplayStats):
 
     # Tool calls
     print(f"{'Tool Calls (all)':<25} {original['tool_calls']:<20} {replay['tool_calls']:<20}")
-    print(f"{'  spawn_commis (mocked)':<25} {original['workers']:<20} {stats.spawn_commis_calls:<20}")
+    print(f"{'  spawn_commis (mocked)':<25} {original['commis']:<20} {stats.spawn_commis_calls:<20}")
     if stats.blocked_tool_calls:
         print(f"{'  blocked tools':<25} {'-':<20} {stats.blocked_tool_calls:<20}")
 
-    # Workers
-    print(f"{'Workers Spawned':<25} {original['workers']:<20} {stats.spawn_commis_calls:<20}")
+    # Commis
+    print(f"{'Commis Spawned':<25} {original['commis']:<20} {stats.spawn_commis_calls:<20}")
     print(f"{'  Cache Hits':<25} {'-':<20} {stats.cache_hits:<20}")
     print(f"{'  Cache Misses':<25} {'-':<20} {stats.cache_misses:<20}")
 
@@ -476,20 +476,20 @@ def print_comparison(original: dict, replay: dict, stats: ReplayStats):
 def build_replay_thread(
     db: Session,
     *,
-    original_run: AgentRun,
-    replay_agent,
+    original_run: Course,
+    replay_fiche,
     task_message: ThreadMessage,
     max_context_messages: int | None,
 ) -> tuple[Thread, int]:
     """Create an isolated replay thread with a snapshot of the original thread context."""
     replay_thread = crud.create_thread(
         db=db,
-        agent_id=replay_agent.id,
+        fiche_id=replay_fiche.id,
         title=f"[REPLAY] original_run={original_run.id}",
         active=False,
-        agent_state={
+        fiche_state={
             "replay": {
-                "original_run_id": original_run.id,
+                "original_course_id": original_run.id,
                 "original_thread_id": original_run.thread_id,
                 "created_at": utc_now_naive().isoformat(),
             }
@@ -499,7 +499,7 @@ def build_replay_thread(
     )
 
     # Copy non-system messages from the original thread up to (but excluding) the task message.
-    # System messages in DB are intentionally excluded from LLM input (AgentRunner injects fresh system prompt).
+    # System messages in DB are intentionally excluded from LLM input (FicheRunner injects fresh system prompt).
     query = (
         db.query(ThreadMessage)
         .filter(
@@ -563,7 +563,7 @@ def make_blocked_tool(tool_name: str, stats: ReplayStats) -> tuple[Callable, Cal
 
 async def replay_run(
     db: Session,
-    run_id: int,
+    course_id: int,
     *,
     dry_run: bool = False,
     match_threshold: float = 0.7,
@@ -572,11 +572,11 @@ async def replay_run(
     allow_tools: list[str] | None = None,
     cleanup: bool = False,
 ):
-    """Replay a supervisor run with mocked tools."""
+    """Replay a concierge run with mocked tools."""
     # Load original run
-    original_run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
+    original_run = db.query(Course).filter(Course.id == course_id).first()
     if not original_run:
-        print(f"❌ Run {run_id} not found")
+        print(f"❌ Run {course_id} not found")
         return
 
     print_header(original_run)
@@ -585,7 +585,7 @@ async def replay_run(
     original_summary = get_run_summary(db, original_run)
     print(f"\nTask: {original_summary['task'][:100]}...")
     print(f"Original tool calls: {original_summary['tool_calls']}")
-    print(f"Original workers: {original_summary['workers']}")
+    print(f"Original commis: {original_summary['commis']}")
 
     task_message, time_window_valid = find_task_message(db, original_run)
     if task_message is None:
@@ -595,11 +595,11 @@ async def replay_run(
     if not time_window_valid:
         print("\n⚠️  WARNING: Run has no started_at/created_at; time window may include other runs on this thread")
 
-    # Always refresh supervisor agent (pulls latest prompt + tool allowlist from templates/user context)
-    supervisor_service = SupervisorService(db)
-    replay_agent = supervisor_service.get_or_create_supervisor_agent(original_run.agent.owner_id)
+    # Always refresh concierge fiche (pulls latest prompt + tool allowlist from templates/user context)
+    concierge_service = ConciergeService(db)
+    replay_fiche = concierge_service.get_or_create_concierge_fiche(original_run.fiche.owner_id)
 
-    allowed_tool_names = list(getattr(replay_agent, "allowed_tools", None) or [])
+    allowed_tool_names = list(getattr(replay_fiche, "allowed_tools", None) or [])
     allow_tools_set = set(allow_tools or [])
 
     blocked_tools: list[str] = []
@@ -641,8 +641,8 @@ async def replay_run(
         else:
             print("Blocked tools: (none)")
 
-        print("Cached worker tasks:")
-        for task in original_summary["worker_tasks"]:
+        print("Cached commis tasks:")
+        for task in original_summary["commis_tasks"]:
             print(f"  - {task}...")
         return
 
@@ -650,16 +650,16 @@ async def replay_run(
     replay_thread, copied_count = build_replay_thread(
         db,
         original_run=original_run,
-        replay_agent=replay_agent,
+        replay_fiche=replay_fiche,
         task_message=task_message,
         max_context_messages=max_context_messages,
     )
 
-    replay_run_row = AgentRun(
-        agent_id=replay_agent.id,
+    replay_run_row = Course(
+        fiche_id=replay_fiche.id,
         thread_id=replay_thread.id,
-        status=RunStatus.RUNNING,
-        trigger=RunTrigger.API,
+        status=CourseStatus.RUNNING,
+        trigger=CourseTrigger.API,
         correlation_id=f"replay:{original_run.id}:{utc_now_naive().isoformat()}",
         started_at=utc_now_naive(),
     )
@@ -667,7 +667,7 @@ async def replay_run(
     db.commit()
     db.refresh(replay_run_row)
 
-    # Add task as an unprocessed user message (AgentRunner will pick it up)
+    # Add task as an unprocessed user message (FicheRunner will pick it up)
     crud.create_thread_message(
         db=db,
         thread_id=replay_thread.id,
@@ -685,7 +685,7 @@ async def replay_run(
         print(f"Tool policy:  {'ALLOW ALL' if allow_all_tools else 'SAFE DEFAULT'}")
 
     stats = ReplayStats()
-    mock_spawn = MockedSpawnWorker(db, run_id, stats, match_threshold=match_threshold)
+    mock_spawn = MockedSpawnCommis(db, course_id, stats, match_threshold=match_threshold)
 
     start_time = datetime.now(timezone.utc)
 
@@ -699,7 +699,7 @@ async def replay_run(
             stack.enter_context(ToolMocker(tool_name, blocked_async, blocked_sync))
 
         try:
-            runner = AgentRunner(replay_agent)
+            runner = FicheRunner(replay_fiche)
             created_messages = await runner.run_thread(db, replay_thread)
 
             # Extract final result (last assistant message)
@@ -712,7 +712,7 @@ async def replay_run(
             end_time = datetime.now(timezone.utc)
             duration_ms = int((end_time - start_time).total_seconds() * 1000)
 
-            replay_run_row.status = RunStatus.SUCCESS
+            replay_run_row.status = CourseStatus.SUCCESS
             replay_run_row.finished_at = end_time.replace(tzinfo=None)
             replay_run_row.duration_ms = duration_ms
             if runner.usage_total_tokens:
@@ -721,7 +721,7 @@ async def replay_run(
             db.commit()
 
             print("\n✅ Replay complete: success")
-            print(f"   Replay run_id: {replay_run_row.id}")
+            print(f"   Replay course_id: {replay_run_row.id}")
 
             replay_summary = get_run_summary(db, replay_run_row)
             replay_summary["result"] = result_text or "(no result)"
@@ -733,7 +733,7 @@ async def replay_run(
             end_time = datetime.now(timezone.utc)
             duration_ms = int((end_time - start_time).total_seconds() * 1000)
 
-            replay_run_row.status = RunStatus.FAILED
+            replay_run_row.status = CourseStatus.FAILED
             replay_run_row.finished_at = end_time.replace(tzinfo=None)
             replay_run_row.duration_ms = duration_ms
             replay_run_row.error = str(e)
@@ -759,8 +759,8 @@ async def replay_run(
 
 def main():
     """CLI entry point."""
-    parser = argparse.ArgumentParser(description="Replay a supervisor run with mocked tools to test prompt changes")
-    parser.add_argument("run_id", type=int, nargs="?", help="Run ID to replay")
+    parser = argparse.ArgumentParser(description="Replay a concierge run with mocked tools to test prompt changes")
+    parser.add_argument("course_id", type=int, nargs="?", help="Run ID to replay")
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -781,7 +781,7 @@ def main():
         "--match-threshold",
         type=float,
         default=0.7,
-        help="Fuzzy match threshold for cached worker task selection (default: 0.7)",
+        help="Fuzzy match threshold for cached commis task selection (default: 0.7)",
     )
     parser.add_argument(
         "--max-context-messages",
@@ -798,7 +798,7 @@ def main():
     parser.add_argument(
         "--allow-all-tools",
         action="store_true",
-        help="Allow all supervisor tools (dangerous: can send email / make network calls)",
+        help="Allow all concierge tools (dangerous: can send email / make network calls)",
     )
     parser.add_argument(
         "--list-recent",
@@ -830,13 +830,13 @@ def main():
             list_recent_runs(db, limit=args.list_recent)
             return
 
-        if args.run_id is None:
-            parser.error("run_id is required unless --list-recent is used")
+        if args.course_id is None:
+            parser.error("course_id is required unless --list-recent is used")
 
         asyncio.run(
             replay_run(
                 db,
-                args.run_id,
+                args.course_id,
                 dry_run=args.dry_run,
                 match_threshold=args.match_threshold,
                 max_context_messages=args.max_context_messages,

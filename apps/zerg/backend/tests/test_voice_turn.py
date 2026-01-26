@@ -1,4 +1,4 @@
-"""Tests for turn-based voice (STT + supervisor)."""
+"""Tests for turn-based voice (STT + concierge)."""
 
 from __future__ import annotations
 
@@ -69,7 +69,7 @@ async def test_stt_service_calls_openai(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_run_voice_turn_happy_path(monkeypatch):
-    """Turn-based voice should combine STT + supervisor response."""
+    """Turn-based voice should combine STT + concierge response."""
     import zerg.voice.turn_based as turn_module
 
     class FakeSTT:
@@ -83,25 +83,25 @@ async def test_run_voice_turn_happy_path(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    class FakeSupervisor:
+    class FakeConcierge:
         def __init__(self, _db):
             pass
 
-        async def run_supervisor(self, **kwargs):
-            from zerg.services.supervisor_service import SupervisorRunResult
+        async def run_concierge(self, **kwargs):
+            from zerg.services.concierge_service import ConciergeCourseResult
 
-            return SupervisorRunResult(run_id=123, thread_id=456, status="success", result="ok")
+            return ConciergeCourseResult(course_id=123, thread_id=456, status="success", result="ok")
 
     monkeypatch.setattr(turn_module, "get_stt_service", lambda: FakeSTT())
     monkeypatch.setattr(turn_module, "db_session", lambda: DummySession())
-    monkeypatch.setattr(turn_module, "SupervisorService", FakeSupervisor)
+    monkeypatch.setattr(turn_module, "ConciergeService", FakeConcierge)
 
     result = await turn_module.run_voice_turn(owner_id=1, audio_bytes=b"audio")
 
     assert result.transcript == "hello"
     assert result.response_text == "ok"
     assert result.status == "success"
-    assert result.run_id == 123
+    assert result.course_id == 123
     assert result.thread_id == 456
 
 
@@ -121,7 +121,7 @@ def test_voice_turn_endpoint_success(monkeypatch):
                 transcript="hello",
                 response_text="ok",
                 status="success",
-                run_id=1,
+                course_id=1,
                 thread_id=2,
                 stt_model="gpt-4o-mini-transcribe",
             )

@@ -73,7 +73,7 @@ python scripts/seed_personal_credentials.py --email your@email.com
 ## Seeding Commands
 
 ```bash
-make seed-agents       # Seed Jarvis agents
+make seed-fiches       # Seed Jarvis fiches
 make seed-credentials  # Seed personal tool credentials
 make seed-credentials ARGS="--force"  # Overwrite existing
 ```

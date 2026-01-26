@@ -94,27 +94,27 @@ try:
         buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
     )
 
-    dashboard_snapshot_agents_returned = Histogram(
-        "dashboard_snapshot_agents_returned",
-        "Number of agents included in dashboard snapshot responses",
+    dashboard_snapshot_fiches_returned = Histogram(
+        "dashboard_snapshot_fiches_returned",
+        "Number of fiches included in dashboard snapshot responses",
         buckets=(0, 1, 5, 10, 25, 50, 100, 200, 500, 1000),
     )
 
-    dashboard_snapshot_runs_returned = Histogram(
-        "dashboard_snapshot_runs_returned",
-        "Number of runs included across all agents in dashboard snapshots",
+    dashboard_snapshot_courses_returned = Histogram(
+        "dashboard_snapshot_courses_returned",
+        "Number of courses included across all fiches in dashboard snapshots",
         buckets=(0, 5, 10, 25, 50, 100, 200, 500, 1000, 2000),
     )
 
-    websocket_run_updates_total = Counter(
-        "websocket_run_updates_total",
-        "Total run_update events broadcast to WebSocket clients",
+    websocket_course_updates_total = Counter(
+        "websocket_course_updates_total",
+        "Total course_update events broadcast to WebSocket clients",
         labelnames=("status", "source_event"),
     )
 
-    websocket_run_update_latency_seconds = Histogram(
-        "websocket_run_update_latency_seconds",
-        "Elapsed time between run start and run_update broadcast (seconds)",
+    websocket_course_update_latency_seconds = Histogram(
+        "websocket_course_update_latency_seconds",
+        "Elapsed time between course start and course_update broadcast (seconds)",
         buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 120),
     )
 
@@ -133,7 +133,7 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     gmail_webhook_error_total = _NoopCounter()  # type: ignore[assignment]
     external_api_retry_total = _NoopCounter()  # type: ignore[assignment]
     dashboard_snapshot_requests_total = _NoopCounter()  # type: ignore[assignment]
-    websocket_run_updates_total = _NoopCounter()  # type: ignore[assignment]
+    websocket_course_updates_total = _NoopCounter()  # type: ignore[assignment]
 
     # Provide *noop* Gauge so code can call ``set`` without importing
     # the optional dependency in minimal CI images.
@@ -165,6 +165,6 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     gmail_http_latency_seconds = _NoopHistogram()  # type: ignore[assignment]
     trigger_processing_seconds = _NoopHistogram()  # type: ignore[assignment]
     dashboard_snapshot_latency_seconds = _NoopHistogram()  # type: ignore[assignment]
-    dashboard_snapshot_agents_returned = _NoopHistogram()  # type: ignore[assignment]
-    dashboard_snapshot_runs_returned = _NoopHistogram()  # type: ignore[assignment]
-    websocket_run_update_latency_seconds = _NoopHistogram()  # type: ignore[assignment]
+    dashboard_snapshot_fiches_returned = _NoopHistogram()  # type: ignore[assignment]
+    dashboard_snapshot_courses_returned = _NoopHistogram()  # type: ignore[assignment]
+    websocket_course_update_latency_seconds = _NoopHistogram()  # type: ignore[assignment]

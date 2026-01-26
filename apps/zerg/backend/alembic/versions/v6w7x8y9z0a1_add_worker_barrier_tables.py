@@ -1,15 +1,15 @@
-"""Add worker_barriers and barrier_jobs tables for parallel worker coordination.
+"""Add commis_barriers and commis_barrier_jobs tables for parallel commis coordination.
 
 Revision ID: v6w7x8y9z0a1
 Revises: u5v6w7x8y9z0
 Create Date: 2026-01-15
 
-Implements barrier synchronization pattern for multi-worker execution:
-- worker_barriers: tracks batch of parallel workers for a supervisor run
-- barrier_jobs: individual worker job in a barrier with result caching
+Implements barrier synchronization pattern for multi-commis execution:
+- commis_barriers: tracks batch of parallel commis for a concierge run
+- commis_barrier_jobs: individual commis job in a barrier with result caching
 
-Two-Phase Commit Pattern prevents "fast worker" race condition where a
-worker completes before the barrier exists.
+Two-Phase Commit Pattern prevents "fast commis" race condition where a
+commis completes before the barrier exists.
 """
 
 from alembic import op
@@ -22,11 +22,11 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Create worker_barriers table
+    # Create commis_barriers table
     op.create_table(
-        "worker_barriers",
+        "commis_barriers",
         sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("run_id", sa.Integer(), nullable=False),
+        sa.Column("course_id", sa.Integer(), nullable=False),
         sa.Column("expected_count", sa.Integer(), nullable=False),
         sa.Column("completed_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("status", sa.String(20), nullable=False, server_default="waiting"),
@@ -34,15 +34,15 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), server_default=sa.func.now(), onupdate=sa.func.now(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
-        sa.ForeignKeyConstraint(["run_id"], ["agent_runs.id"], ondelete="CASCADE"),
-        sa.UniqueConstraint("run_id", name="uq_worker_barriers_run_id"),
+        sa.ForeignKeyConstraint(["course_id"], ["courses.id"], ondelete="CASCADE"),
+        sa.UniqueConstraint("course_id", name="uq_commis_barriers_course_id"),
     )
-    op.create_index("ix_worker_barriers_run_id", "worker_barriers", ["run_id"])
-    op.create_index("ix_worker_barriers_status", "worker_barriers", ["status"])
+    op.create_index("ix_commis_barriers_course_id", "commis_barriers", ["course_id"])
+    op.create_index("ix_commis_barriers_status", "commis_barriers", ["status"])
 
-    # Create barrier_jobs table
+    # Create commis_barrier_jobs table
     op.create_table(
-        "barrier_jobs",
+        "commis_barrier_jobs",
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("barrier_id", sa.Integer(), nullable=False),
         sa.Column("job_id", sa.Integer(), nullable=False),
@@ -54,23 +54,23 @@ def upgrade() -> None:
         sa.Column("completed_at", sa.DateTime(), nullable=True),
         sa.Column("created_at", sa.DateTime(), server_default=sa.func.now(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
-        sa.ForeignKeyConstraint(["barrier_id"], ["worker_barriers.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["job_id"], ["worker_jobs.id"], ondelete="CASCADE"),
-        sa.UniqueConstraint("barrier_id", "job_id", name="uq_barrier_jobs_barrier_job"),
+        sa.ForeignKeyConstraint(["barrier_id"], ["commis_barriers.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["job_id"], ["commis_jobs.id"], ondelete="CASCADE"),
+        sa.UniqueConstraint("barrier_id", "job_id", name="uq_commis_barrier_jobs_barrier_job"),
     )
-    op.create_index("ix_barrier_jobs_barrier_id", "barrier_jobs", ["barrier_id"])
-    op.create_index("ix_barrier_jobs_job_id", "barrier_jobs", ["job_id"])
-    op.create_index("ix_barrier_jobs_barrier_job", "barrier_jobs", ["barrier_id", "job_id"])
+    op.create_index("ix_commis_barrier_jobs_barrier_id", "commis_barrier_jobs", ["barrier_id"])
+    op.create_index("ix_commis_barrier_jobs_job_id", "commis_barrier_jobs", ["job_id"])
+    op.create_index("ix_commis_barrier_jobs_barrier_job", "commis_barrier_jobs", ["barrier_id", "job_id"])
 
 
 def downgrade() -> None:
-    # Drop barrier_jobs table
-    op.drop_index("ix_barrier_jobs_barrier_job", table_name="barrier_jobs")
-    op.drop_index("ix_barrier_jobs_job_id", table_name="barrier_jobs")
-    op.drop_index("ix_barrier_jobs_barrier_id", table_name="barrier_jobs")
-    op.drop_table("barrier_jobs")
+    # Drop commis_barrier_jobs table
+    op.drop_index("ix_commis_barrier_jobs_barrier_job", table_name="commis_barrier_jobs")
+    op.drop_index("ix_commis_barrier_jobs_job_id", table_name="commis_barrier_jobs")
+    op.drop_index("ix_commis_barrier_jobs_barrier_id", table_name="commis_barrier_jobs")
+    op.drop_table("commis_barrier_jobs")
 
-    # Drop worker_barriers table
-    op.drop_index("ix_worker_barriers_status", table_name="worker_barriers")
-    op.drop_index("ix_worker_barriers_run_id", table_name="worker_barriers")
-    op.drop_table("worker_barriers")
+    # Drop commis_barriers table
+    op.drop_index("ix_commis_barriers_status", table_name="commis_barriers")
+    op.drop_index("ix_commis_barriers_course_id", table_name="commis_barriers")
+    op.drop_table("commis_barriers")

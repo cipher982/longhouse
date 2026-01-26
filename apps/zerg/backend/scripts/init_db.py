@@ -16,7 +16,7 @@ def init_db():
         print("🏗️ Creating initial database schema...")
         try:
             # Import models to ensure they are registered
-            from zerg.models.models import User, Agent, AgentRun, Thread, ThreadMessage, Workflow # noqa: F401
+            from zerg.models.models import User, Fiche, Course, Thread, ThreadMessage, Workflow # noqa: F401
             Base.metadata.create_all(bind=default_engine)
             print("✅ Database schema created successfully.")
         except Exception as e:

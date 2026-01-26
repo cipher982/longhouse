@@ -1,6 +1,6 @@
 """
 Postgres schema management for E2E test isolation.
-Each Playwright worker gets its own schema with full table isolation.
+Each Playwright commis gets its own schema with full table isolation.
 """
 
 import logging
@@ -11,34 +11,34 @@ from sqlalchemy.engine import Engine
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_PREFIX = "e2e_worker_"
+SCHEMA_PREFIX = "e2e_commis_"
 
 
-def get_schema_name(worker_id: str) -> str:
-    """Generate schema name for a worker.
+def get_schema_name(commis_id: str) -> str:
+    """Generate schema name for a commis.
 
-    Worker IDs are mapped 1:1 to schemas. This is the safest mental model:
-    each Playwright worker (or test-only identifier like ``guardrail_a``) gets
+    Commis IDs are mapped 1:1 to schemas. This is the safest mental model:
+    each Playwright commis (or test-only identifier like ``guardrail_a``) gets
     its own schema and should never collide with others.
     """
-    # Sanitize worker_id to prevent SQL injection
-    safe_id = "".join(c for c in str(worker_id) if c.isalnum() or c == "_")
+    # Sanitize commis_id to prevent SQL injection
+    safe_id = "".join(c for c in str(commis_id) if c.isalnum() or c == "_")
     return f"{SCHEMA_PREFIX}{safe_id}"
 
 
-def recreate_worker_schema(engine: Engine, worker_id: str) -> str:
+def recreate_commis_schema(engine: Engine, commis_id: str) -> str:
     """
-    Force-recreate schema for a worker with fresh state.
+    Force-recreate schema for a commis with fresh state.
 
     Uses Postgres advisory locks to prevent race conditions when multiple
-    Uvicorn workers initialize schemas concurrently.
+    Uvicorn commis initialize schemas concurrently.
 
     CRITICAL: Always DROP then CREATE to ensure clean state.
 
-    NOTE: This function is DEPRECATED for runtime use. Use ensure_worker_schema()
+    NOTE: This function is DEPRECATED for runtime use. Use ensure_commis_schema()
     instead to avoid DROP+CREATE races. This is only used for globalSetup cleanup.
     """
-    schema_name = get_schema_name(worker_id)
+    schema_name = get_schema_name(commis_id)
 
     # Generate deterministic lock ID from schema name
     lock_id = zlib.crc32(f"init_schema_{schema_name}".encode())
@@ -49,14 +49,14 @@ def recreate_worker_schema(engine: Engine, worker_id: str) -> str:
     from zerg.database import Base
 
     with engine.begin() as conn:
-        # Advisory lock prevents race between Uvicorn workers
+        # Advisory lock prevents race between Uvicorn commis
         conn.execute(text(f"SELECT pg_advisory_xact_lock({lock_id})"))
 
         # Force fresh state - always DROP then CREATE
         conn.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE"))
         conn.execute(text(f"CREATE SCHEMA {schema_name}"))
 
-        # Create all tables in the worker schema.
+        # Create all tables in the commis schema.
         #
         # IMPORTANT: We use schema_translate_map so SQLAlchemy performs both the
         # "does this table exist?" checks and the CREATE TABLE statements in the
@@ -68,20 +68,20 @@ def recreate_worker_schema(engine: Engine, worker_id: str) -> str:
     return schema_name
 
 
-def ensure_worker_schema(engine: Engine, worker_id: str) -> str:
+def ensure_commis_schema(engine: Engine, commis_id: str) -> str:
     """
     Idempotent schema creation. Never DROP during test execution.
 
-    Safe for concurrent uvicorn workers and forward-compatible with migrations.
+    Safe for concurrent uvicorn commis and forward-compatible with migrations.
     Uses CREATE SCHEMA IF NOT EXISTS + create_all(checkfirst=True) to be
     idempotent across multiple processes.
 
-    This is the preferred function for runtime use. Unlike recreate_worker_schema(),
+    This is the preferred function for runtime use. Unlike recreate_commis_schema(),
     it won't DROP a schema that another process might be using.
 
     See: docs/work/e2e-test-infrastructure-redesign.md
     """
-    schema_name = get_schema_name(worker_id)
+    schema_name = get_schema_name(commis_id)
 
     # Generate deterministic lock ID from schema name
     lock_id = zlib.crc32(f"ensure_schema_{schema_name}".encode())
@@ -108,9 +108,9 @@ def ensure_worker_schema(engine: Engine, worker_id: str) -> str:
     return schema_name
 
 
-def drop_schema(engine: Engine, worker_id: str) -> None:
-    """Drop a worker's schema and all its contents."""
-    schema_name = get_schema_name(worker_id)
+def drop_schema(engine: Engine, commis_id: str) -> None:
+    """Drop a commis's schema and all its contents."""
+    schema_name = get_schema_name(commis_id)
 
     with engine.connect() as conn:
         conn.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE"))
@@ -130,7 +130,7 @@ def drop_all_e2e_schemas(engine: Engine) -> int:
             text("""
             SELECT schema_name
             FROM information_schema.schemata
-            WHERE schema_name LIKE 'e2e_worker_%'
+            WHERE schema_name LIKE 'e2e_commis_%'
         """)
         )
         schemas = [row[0] for row in result]
@@ -147,7 +147,7 @@ def drop_all_e2e_schemas(engine: Engine) -> int:
     return len(schemas)
 
 
-def set_search_path(conn, worker_id: str) -> None:
-    """Set search_path for a connection to use worker's schema."""
-    schema_name = get_schema_name(worker_id)
+def set_search_path(conn, commis_id: str) -> None:
+    """Set search_path for a connection to use commis's schema."""
+    schema_name = get_schema_name(commis_id)
     conn.execute(text(f"SET search_path TO {schema_name}, public"))

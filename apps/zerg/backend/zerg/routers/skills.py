@@ -300,7 +300,7 @@ async def get_skills_prompt(
     """Generate skills prompt for system prompt injection.
 
     Returns a formatted markdown prompt containing eligible skills,
-    suitable for including in an agent's system prompt.
+    suitable for including in an fiche's system prompt.
     """
     # Per-request registry (thread-safe)
     registry = SkillRegistry()

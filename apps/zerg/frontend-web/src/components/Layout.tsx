@@ -49,7 +49,7 @@ function WelcomeHeader() {
   const toggleMobileNav = useCallback(() => setMobileNavOpen(prev => !prev), []);
 
   // Only show shelf toggle on routes that have drawer UI
-  const SHELF_ENABLED_ROUTES = ["/canvas", "/agent"];
+  const SHELF_ENABLED_ROUTES = ["/canvas", "/fiche"];
   const shouldShowShelfToggle = SHELF_ENABLED_ROUTES.some(route =>
     location.pathname.startsWith(route)
   );
@@ -153,8 +153,8 @@ function WelcomeHeader() {
           <button
             id="shelf-toggle-btn"
             className="header-button shelf-toggle"
-            aria-label="Toggle agent panel"
-            aria-controls="agent-shelf"
+            aria-label="Toggle fiche panel"
+            aria-controls="fiche-shelf"
             aria-expanded={isShelfOpen}
             onClick={toggleShelf}
           >

@@ -1,10 +1,10 @@
 """Base prompt templates with {placeholder} injection points.
 
-These templates define WHAT the agents are and HOW they work, with placeholders
+These templates define WHAT the fiches are and HOW they work, with placeholders
 for user-specific context that gets injected at runtime via the composer module.
 """
 
-BASE_SUPERVISOR_PROMPT = """You are the Concierge - an AI that coordinates complex tasks for your user.
+BASE_CONCIERGE_PROMPT = """You are the Concierge - an AI that coordinates complex tasks for your user.
 
 ## Your Role
 
@@ -59,7 +59,7 @@ spawn_workspace_commis("List dependencies from pyproject.toml", "https://github.
 spawn_workspace_commis("Fix the typo in README.md", "git@github.com:user/repo.git")
 ```
 
-Use `spawn_workspace_commis` when the task involves a git repository - it clones the repo and runs the agent in an isolated workspace.
+Use `spawn_workspace_commis` when the task involves a git repository - it clones the repo and runs the fiche in an isolated workspace.
 
 ## Commis Guidelines
 
@@ -94,7 +94,7 @@ Never claim you used a tool unless you actually called it this turn.
 - Tool returned nothing? Say "No results" with the query used.
 - Unsure if tool ran? Assume it didn't, call again.
 
-Use `knowledge_search` before spawning workers for unfamiliar server names.
+Use `knowledge_search` before spawning commis for unfamiliar server names.
 Never guess hostnames, IPs, or credentials.
 
 ## Response Style
@@ -102,13 +102,13 @@ Never guess hostnames, IPs, or credentials.
 Be concise. No bureaucratic fluff.
 
 **Good:** "Server at 78% disk - mostly Docker. Worth cleaning up."
-**Bad:** "I will now analyze the worker results..."
+**Bad:** "I will now analyze the commis results..."
 
-Brief status when spawning: "Checking that now..." / "Worker found..."
+Brief status when spawning: "Checking that now..." / "Commis found..."
 
 ## Error Handling
 
-If a worker fails: read the error, explain in plain English, suggest next steps.
+If a commis fails: read the error, explain in plain English, suggest next steps.
 Don't just say "failed" - interpret it.
 
 ---
@@ -213,6 +213,6 @@ If asked about something you can't do, say so clearly.
 
 # Backward compatibility aliases for Phase 1 migration
 # These can be removed once all imports are updated
-BASE_WORKER_PROMPT = BASE_COMMIS_PROMPT
+BASE_COMMIS_PROMPT = BASE_COMMIS_PROMPT
 BASE_JARVIS_PROMPT = BASE_CONCIERGE_PROMPT
 # Cache bust: 1769229365

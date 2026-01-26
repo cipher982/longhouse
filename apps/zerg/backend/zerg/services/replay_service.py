@@ -79,7 +79,7 @@ class ReplayService:
             conversation_id: ID of the conversation from scenario
 
         Returns:
-            Conversation dict with messages, worker_result, final_message,
+            Conversation dict with messages, commis_result, final_message,
             or None if not found
         """
         return self.conversations.get(conversation_id)
@@ -108,7 +108,7 @@ class ReplayService:
     async def emit_conversation_events(
         self,
         conversation_id: str,
-        run_id: int,
+        course_id: int,
         thread_id: int,
         owner_id: int,
         message_id: str,
@@ -116,12 +116,12 @@ class ReplayService:
     ) -> None:
         """Emit SSE events for a golden conversation.
 
-        This simulates the real supervisor flow by emitting events
+        This simulates the real concierge flow by emitting events
         with the correct timing and data.
 
         Args:
             conversation_id: ID of the golden conversation
-            run_id: The agent run ID
+            course_id: The concierge course ID
             thread_id: The thread ID
             owner_id: User ID
             message_id: Client message ID
@@ -135,12 +135,12 @@ class ReplayService:
             logger.error(f"Conversation not found: {conversation_id}")
             return
 
-        # Emit supervisor_started
+        # Emit concierge_started
         await event_bus.publish(
             EventType.CONCIERGE_STARTED,
             {
                 "event_type": "concierge_started",
-                "run_id": run_id,
+                "course_id": course_id,
                 "thread_id": thread_id,
                 "owner_id": owner_id,
                 "message_id": message_id,
@@ -154,7 +154,7 @@ class ReplayService:
             EventType.CONCIERGE_THINKING,
             {
                 "event_type": "concierge_thinking",
-                "run_id": run_id,
+                "course_id": course_id,
                 "owner_id": owner_id,
                 "message": "Analyzing your request...",
                 "trace_id": trace_id,
@@ -171,7 +171,7 @@ class ReplayService:
                 content = msg.get("content", "")
                 await self._stream_tokens(
                     content=content,
-                    run_id=run_id,
+                    course_id=course_id,
                     owner_id=owner_id,
                     message_id=message_id,
                     trace_id=trace_id,
@@ -183,36 +183,36 @@ class ReplayService:
                 tool_input = msg.get("input", {})
 
                 if tool_name == "spawn_commis":
-                    # Emit worker spawned event
+                    # Emit commis spawned event
                     await event_bus.publish(
                         EventType.COMMIS_SPAWNED,
                         {
                             "event_type": "commis_spawned",
-                            "run_id": run_id,
+                            "course_id": course_id,
                             "owner_id": owner_id,
                             "job_id": 999,  # Fake job ID
-                            "tool_call_id": f"call_{run_id}_spawn",
+                            "tool_call_id": f"call_{course_id}_spawn",
                             "task": tool_input.get("task", ""),
                             "trace_id": trace_id,
                         },
                     )
 
-        # Simulate worker completion if present
-        if worker_result := conv.get("worker_result"):
-            delay_ms = worker_result.get("delay_ms", 2000)
+        # Simulate commis completion if present
+        if commis_result := conv.get("commis_result"):
+            delay_ms = commis_result.get("delay_ms", 2000)
             await asyncio.sleep(delay_ms / 1000)
 
-            # Emit worker complete
+            # Emit commis complete
             await event_bus.publish(
                 EventType.COMMIS_COMPLETE,
                 {
                     "event_type": "commis_complete",
-                    "run_id": run_id,
+                    "course_id": course_id,
                     "owner_id": owner_id,
                     "job_id": 999,
-                    "tool_call_id": f"call_{run_id}_spawn",
+                    "tool_call_id": f"call_{course_id}_spawn",
                     "status": "success",
-                    "result": worker_result.get("result", ""),
+                    "result": commis_result.get("result", ""),
                     "trace_id": trace_id,
                 },
             )
@@ -225,7 +225,7 @@ class ReplayService:
             content = final_msg.get("content", "")
             await self._stream_tokens(
                 content=content,
-                run_id=run_id,
+                course_id=course_id,
                 owner_id=owner_id,
                 message_id=message_id,
                 trace_id=trace_id,
@@ -236,7 +236,7 @@ class ReplayService:
             EventType.CONCIERGE_COMPLETE,
             {
                 "event_type": "concierge_complete",
-                "run_id": run_id,
+                "course_id": course_id,
                 "thread_id": thread_id,
                 "owner_id": owner_id,
                 "message_id": message_id,
@@ -251,7 +251,7 @@ class ReplayService:
     async def _stream_tokens(
         self,
         content: str,
-        run_id: int,
+        course_id: int,
         owner_id: int,
         message_id: str,
         trace_id: str,
@@ -262,7 +262,7 @@ class ReplayService:
 
         Args:
             content: Text to stream
-            run_id: Run ID
+            course_id: Run ID
             owner_id: User ID
             message_id: Message ID
             trace_id: Trace ID
@@ -280,7 +280,7 @@ class ReplayService:
                 EventType.CONCIERGE_TOKEN,
                 {
                     "event_type": "concierge_token",
-                    "run_id": run_id,
+                    "course_id": course_id,
                     "owner_id": owner_id,
                     "message_id": message_id,
                     "token": chunk,
@@ -293,7 +293,7 @@ class ReplayService:
 async def run_replay_conversation(
     scenario_name: str,
     user_message: str,
-    run_id: int,
+    course_id: int,
     thread_id: int,
     owner_id: int,
     message_id: str,
@@ -309,7 +309,7 @@ async def run_replay_conversation(
     Args:
         scenario_name: Name of the scenario
         user_message: User's message
-        run_id: Agent run ID
+        course_id: Fiche run ID
         thread_id: Thread ID
         owner_id: User ID
         message_id: Client message ID
@@ -331,7 +331,7 @@ async def run_replay_conversation(
 
         await service.emit_conversation_events(
             conversation_id=conv_id,
-            run_id=run_id,
+            course_id=course_id,
             thread_id=thread_id,
             owner_id=owner_id,
             message_id=message_id,

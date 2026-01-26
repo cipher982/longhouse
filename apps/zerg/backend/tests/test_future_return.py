@@ -5,13 +5,13 @@
 from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
 
-from tests.conftest import TEST_WORKER_MODEL
+from tests.conftest import TEST_COMMIS_MODEL
 
 
 def test_globally_mocked_chatOpenAI_behavior():
     """Verify the globally mocked ChatOpenAI from conftest works as expected."""
     # Instantiate ChatOpenAI - this will use the _StubChatOpenAI from conftest
-    llm = ChatOpenAI(model=TEST_WORKER_MODEL, temperature=0)  # Parameters are ignored by the stub
+    llm = ChatOpenAI(model=TEST_COMMIS_MODEL, temperature=0)  # Parameters are ignored by the stub
 
     # The _StubChatOpenAI.bind_tools returns _StubLlm (also from conftest)
     bound_llm = llm.bind_tools([])

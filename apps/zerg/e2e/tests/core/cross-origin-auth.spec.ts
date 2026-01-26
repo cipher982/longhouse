@@ -133,7 +133,7 @@ test.describe('Cross-Origin Authentication - Core', () => {
       // This could be a user menu, dashboard content, etc.
       return (
         document.querySelector('[data-testid="user-menu"]') !== null ||
-        document.querySelector('[data-testid="create-agent-btn"]') !== null ||
+        document.querySelector('[data-testid="create-fiche-btn"]') !== null ||
         window.location.pathname.includes('/dashboard') ||
         window.location.pathname.includes('/chat')
       );

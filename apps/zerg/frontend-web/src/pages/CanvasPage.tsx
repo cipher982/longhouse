@@ -38,7 +38,7 @@ import {
 } from "../services/api";
 import { useWebSocket } from "../lib/useWebSocket";
 import type { WebSocketMessage } from "../lib/useWebSocket";
-import { AgentShelf } from "./canvas/AgentShelf";
+import { FicheShelf } from "./canvas/FicheShelf";
 import { ExecutionControls } from "./canvas/ExecutionControls";
 import { ExecutionLogsPanel } from "./canvas/ExecutionLogsPanel";
 import { nodeTypes, MiniMapNode } from "./canvas/NodeComponents";
@@ -136,14 +136,14 @@ function CanvasPageContent() {
       });
 
       const newNode: FlowNode =
-        payload.type === "agent"
+        payload.type === "fiche"
           ? {
-              id: `agent-${Date.now()}`,
-              type: "agent",
+              id: `fiche-${Date.now()}`,
+              type: "fiche",
               position,
               data: {
                 label: payload.label,
-                agentId: payload.agentId,
+                ficheId: payload.ficheId,
               },
             }
           : {
@@ -163,11 +163,11 @@ function CanvasPageContent() {
     [dragPreviewData, reactFlowInstance, resetDragPreview, setNodes, zoom]
   );
 
-  const beginAgentDrag = useCallback(
-    (event: React.DragEvent, agent: { id: number; name: string }) => {
+  const beginFicheDrag = useCallback(
+    (event: React.DragEvent, fiche: { id: number; name: string }) => {
       event.stopPropagation();
-      event.dataTransfer.setData("agent-id", String(agent.id));
-      event.dataTransfer.setData("agent-name", agent.name);
+      event.dataTransfer.setData("fiche-id", String(fiche.id));
+      event.dataTransfer.setData("fiche-name", fiche.name);
       event.dataTransfer.effectAllowed = "move";
       if (event.dataTransfer.setDragImage) {
         event.dataTransfer.setDragImage(transparentDragImage, 0, 0);
@@ -181,25 +181,25 @@ function CanvasPageContent() {
         const pointerOffsetY = clientY - rect.top;
         const pointerRatioX = rect.width ? clamp(pointerOffsetX / rect.width, 0, 1) : 0;
         const pointerRatioY = rect.height ? clamp(pointerOffsetY / rect.height, 0, 1) : 0;
-      const preview: DragPreviewData = {
-        kind: "agent",
-        label: agent.name,
-        icon: "",
-        baseSize: { width: rect.width || 160, height: rect.height || 48 },
-        pointerRatio: { x: pointerRatioX, y: pointerRatioY },
-        agentId: agent.id,
-      };
-      setDragPreviewData(preview);
-      updatePreviewPositionFromClientPoint({ x: clientX, y: clientY }, preview);
-    } else {
-      const preview: DragPreviewData = {
-        kind: "agent",
-        label: agent.name,
-        icon: "",
-        baseSize: { width: 160, height: 48 },
-        pointerRatio: { x: 0, y: 0 },
-        agentId: agent.id,
-      };
+        const preview: DragPreviewData = {
+          kind: "fiche",
+          label: fiche.name,
+          icon: "",
+          baseSize: { width: rect.width || 160, height: rect.height || 48 },
+          pointerRatio: { x: pointerRatioX, y: pointerRatioY },
+          ficheId: fiche.id,
+        };
+        setDragPreviewData(preview);
+        updatePreviewPositionFromClientPoint({ x: clientX, y: clientY }, preview);
+      } else {
+        const preview: DragPreviewData = {
+          kind: "fiche",
+          label: fiche.name,
+          icon: "",
+          baseSize: { width: 160, height: 48 },
+          pointerRatio: { x: 0, y: 0 },
+          ficheId: fiche.id,
+        };
         setDragPreviewData(preview);
         updatePreviewPositionFromClientPoint({ x: event.clientX ?? 0, y: event.clientY ?? 0 }, preview);
       }
@@ -253,29 +253,29 @@ function CanvasPageContent() {
     [setIsDragActive, transparentDragImage, updatePreviewPositionFromClientPoint]
   );
 
-  const handleAgentPointerDown = useCallback(
-    (event: React.PointerEvent, agent: { id: number; name: string }) => {
+  const handleFichePointerDown = useCallback(
+    (event: React.PointerEvent, fiche: { id: number; name: string }) => {
       // Only use Pointer API for touch/pen; let HTML5 drag handle mouse
       if (event.isPrimary && event.pointerType !== 'mouse') {
         startDrag(event, {
-          type: 'agent',
-          id: agent.id.toString(),
-          name: agent.name
+          type: 'fiche',
+          id: fiche.id.toString(),
+          name: fiche.name
         });
 
-        const rect = event.currentTarget.getBoundingClientRect();
-        const pointerOffsetX = event.clientX - rect.left;
-        const pointerOffsetY = event.clientY - rect.top;
+      const rect = event.currentTarget.getBoundingClientRect();
+      const pointerOffsetX = event.clientX - rect.left;
+      const pointerOffsetY = event.clientY - rect.top;
       const preview: DragPreviewData = {
-        kind: 'agent',
-        label: agent.name,
+        kind: 'fiche',
+        label: fiche.name,
         icon: '',
         baseSize: { width: rect.width || 160, height: rect.height || 48 },
         pointerRatio: {
           x: rect.width ? pointerOffsetX / rect.width : 0,
           y: rect.height ? pointerOffsetY / rect.height : 0
         },
-        agentId: agent.id,
+        ficheId: fiche.id,
       };
       setDragPreviewData(preview);
       updatePreviewPositionFromClientPoint({ x: event.clientX, y: event.clientY }, preview);
@@ -745,20 +745,20 @@ const handleToolPointerDown = useCallback(
     return () => clearInterval(timer);
   }, [nodes, edges]);
 
-  // Handle drag and drop from agent shelf
+  // Handle drag and drop from fiche shelf
   const onDrop = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault();
 
-      const agentId = event.dataTransfer.getData("agent-id");
-      const agentName = event.dataTransfer.getData("agent-name");
+      const ficheId = event.dataTransfer.getData("fiche-id");
+      const ficheName = event.dataTransfer.getData("fiche-name");
       const toolType = event.dataTransfer.getData("tool-type");
       const toolName = event.dataTransfer.getData("tool-name");
 
       let payload: DropPayload | null = null;
 
-      if (agentId && agentName) {
-        payload = toDropPayload({ type: "agent", id: agentId, name: agentName });
+      if (ficheId && ficheName) {
+        payload = toDropPayload({ type: "fiche", id: ficheId, name: ficheName });
       } else if (toolType && toolName) {
         payload = toDropPayload({ type: "tool", name: toolName, tool_type: toolType });
       }
@@ -899,10 +899,10 @@ const handleToolPointerDown = useCallback(
 
   return (
     <>
-      <AgentShelf
-        onAgentDragStart={beginAgentDrag}
+      <FicheShelf
+        onFicheDragStart={beginFicheDrag}
         onToolDragStart={beginToolDrag}
-        onAgentPointerDown={handleAgentPointerDown}
+        onFichePointerDown={handleFichePointerDown}
         onToolPointerDown={handleToolPointerDown}
       />
 
@@ -986,12 +986,12 @@ const handleToolPointerDown = useCallback(
                         height: `${dragPreviewData.baseSize.height || 48}px`,
                       }}
                     >
-                      {dragPreviewData.kind === "agent" ? (
-                        <div className="agent-node drag-preview-node">
-                          <div className="agent-icon">
-                            {getNodeIcon("agent")}
+                      {dragPreviewData.kind === "fiche" ? (
+                        <div className="fiche-node drag-preview-node">
+                          <div className="fiche-icon">
+                            {getNodeIcon("fiche")}
                           </div>
-                          <div className="agent-name">{dragPreviewData.label}</div>
+                          <div className="fiche-name">{dragPreviewData.label}</div>
                         </div>
                       ) : (
                         <div className="tool-node drag-preview-node">

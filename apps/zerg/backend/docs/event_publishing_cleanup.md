@@ -49,7 +49,7 @@ except RuntimeError:
 
 ```python
 # Found in task_runner.py, decorators.py
-await event_bus.publish(EventType.AGENT_UPDATED, {"id": agent.id, "status": "running"})
+await event_bus.publish(EventType.FICHE_UPDATED, {"id": fiche.id, "status": "running"})
 ```
 
 **Good but inconsistent:** Only worked in some contexts.
@@ -57,9 +57,9 @@ await event_bus.publish(EventType.AGENT_UPDATED, {"id": agent.id, "status": "run
 ### Pattern 4: Decorator-Based (GOOD)
 
 ```python
-# Found in decorators.py, agents.py
-@publish_event(EventType.AGENT_CREATED)
-async def create_agent(...):
+# Found in decorators.py, fiches.py
+@publish_event(EventType.FICHE_CREATED)
+async def create_fiche(...):
     # Automatic event publishing
 ```
 

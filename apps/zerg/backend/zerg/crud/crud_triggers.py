@@ -14,12 +14,12 @@ from zerg.models import Trigger
 def create_trigger(
     db: Session,
     *,
-    agent_id: int,
+    fiche_id: int,
     trigger_type: str = "webhook",
     secret: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
 ):
-    """Create a new trigger for an agent.
+    """Create a new trigger for an fiche.
 
     The **secret** is only relevant for webhook triggers.  For future trigger
     types we still persist a secret so external systems can authenticate when
@@ -30,7 +30,7 @@ def create_trigger(
         secret = uuid4().hex
 
     db_trigger = Trigger(
-        agent_id=agent_id,
+        fiche_id=fiche_id,
         type=trigger_type,
         secret=secret,
         config=config,
@@ -54,11 +54,11 @@ def delete_trigger(db: Session, trigger_id: int):
     return True
 
 
-def get_triggers(db: Session, agent_id: Optional[int] = None) -> List[Trigger]:
+def get_triggers(db: Session, fiche_id: Optional[int] = None) -> List[Trigger]:
     """
-    Retrieve triggers, optionally filtered by agent_id.
+    Retrieve triggers, optionally filtered by fiche_id.
     """
     query = db.query(Trigger)
-    if agent_id is not None:
-        query = query.filter(Trigger.agent_id == agent_id)
+    if fiche_id is not None:
+        query = query.filter(Trigger.fiche_id == fiche_id)
     return query.order_by(Trigger.id).all()

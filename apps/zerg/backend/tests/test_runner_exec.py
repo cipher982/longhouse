@@ -16,9 +16,9 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy.orm import Session
 
-from zerg.context import WorkerContext
-from zerg.context import reset_worker_context
-from zerg.context import set_worker_context
+from zerg.context import CommisContext
+from zerg.context import reset_commis_context
+from zerg.context import set_commis_context
 from zerg.crud import runner_crud
 from zerg.models.models import Runner
 from zerg.models.models import User
@@ -50,17 +50,17 @@ def test_runner(db: Session, test_user: User) -> tuple[Runner, str]:
 
 
 @pytest.fixture
-def worker_context(test_user: User):
-    """Create and set a test worker context."""
-    ctx = WorkerContext(
-        worker_id="test-worker",
+def commis_context(test_user: User):
+    """Create and set a test commis context."""
+    ctx = CommisContext(
+        commis_id="test-commis",
         owner_id=test_user.id,
-        run_id="test-run",
+        course_id="test-run",
         task="test task",
     )
-    token = set_worker_context(ctx)
+    token = set_commis_context(ctx)
     yield ctx
-    reset_worker_context(token)
+    reset_commis_context(token)
 
 
 class TestJobCRUD:
@@ -76,8 +76,8 @@ class TestJobCRUD:
             runner_id=runner.id,
             command="echo 'test'",
             timeout_secs=30,
-            worker_id="test-worker",
-            run_id="test-run",
+            commis_id="test-commis",
+            course_id="test-run",
         )
 
         assert job.id is not None
@@ -86,8 +86,8 @@ class TestJobCRUD:
         assert job.command == "echo 'test'"
         assert job.timeout_secs == 30
         assert job.status == "queued"
-        assert job.worker_id == "test-worker"
-        assert job.run_id == "test-run"
+        assert job.commis_id == "test-commis"
+        assert job.course_id == "test-run"
 
     def test_update_job_started(self, db: Session, test_user: User, test_runner: tuple[Runner, str]):
         """Test marking job as running."""
@@ -237,14 +237,14 @@ class TestJobCRUD:
 class TestRunnerExecTool:
     """Tests for runner_exec tool."""
 
-    def test_runner_exec_requires_worker_context(self):
-        """Test that runner_exec requires worker context."""
+    def test_runner_exec_requires_commis_context(self):
+        """Test that runner_exec requires commis context."""
         result = runner_exec("test-laptop", "echo 'hello'")
 
         assert result.get("ok") is False
-        assert "worker context" in result["user_message"].lower()
+        assert "commis context" in result["user_message"].lower()
 
-    def test_runner_exec_validates_parameters(self, worker_context):
+    def test_runner_exec_validates_parameters(self, commis_context):
         """Test parameter validation."""
         # Missing target
         result = runner_exec("", "echo 'hello'")
@@ -261,7 +261,7 @@ class TestRunnerExecTool:
         assert result["ok"] is False
         assert "timeout_secs must be positive" in result["user_message"]
 
-    def test_runner_exec_resolves_target_by_name(self, worker_context, test_runner: tuple[Runner, str]):
+    def test_runner_exec_resolves_target_by_name(self, commis_context, test_runner: tuple[Runner, str]):
         """Test target resolution by name."""
         runner, _ = test_runner
 
@@ -285,7 +285,7 @@ class TestRunnerExecTool:
             assert result["data"]["target"] == "test-laptop"
             assert result["data"]["command"] == "echo 'hello'"
 
-    def test_runner_exec_resolves_target_by_id(self, worker_context, test_runner: tuple[Runner, str]):
+    def test_runner_exec_resolves_target_by_id(self, commis_context, test_runner: tuple[Runner, str]):
         """Test target resolution by explicit ID."""
         runner, _ = test_runner
 
@@ -307,14 +307,14 @@ class TestRunnerExecTool:
             assert result["ok"] is True
             assert result["data"]["target"] == "test-laptop"
 
-    def test_runner_exec_unknown_runner(self, worker_context):
+    def test_runner_exec_unknown_runner(self, commis_context):
         """Test execution on unknown runner."""
         result = runner_exec("unknown-runner", "echo 'hello'")
 
         assert result["ok"] is False
         assert "not found" in result["user_message"].lower()
 
-    def test_runner_exec_revoked_runner(self, worker_context, test_runner: tuple[Runner, str], db: Session):
+    def test_runner_exec_revoked_runner(self, commis_context, test_runner: tuple[Runner, str], db: Session):
         """Test execution on revoked runner."""
         runner, _ = test_runner
         runner.status = "revoked"
@@ -325,7 +325,7 @@ class TestRunnerExecTool:
         assert result["ok"] is False
         assert "revoked" in result["user_message"].lower()
 
-    def test_runner_exec_offline_runner(self, worker_context, test_runner: tuple[Runner, str], db: Session):
+    def test_runner_exec_offline_runner(self, commis_context, test_runner: tuple[Runner, str], db: Session):
         """Test execution on offline runner."""
         runner, _ = test_runner
         runner.status = "offline"
@@ -336,7 +336,7 @@ class TestRunnerExecTool:
         assert result["ok"] is False
         assert "offline" in result["user_message"].lower()
 
-    def test_runner_exec_success(self, worker_context, test_runner: tuple[Runner, str]):
+    def test_runner_exec_success(self, commis_context, test_runner: tuple[Runner, str]):
         """Test successful command execution."""
         runner, _ = test_runner
 
@@ -361,7 +361,7 @@ class TestRunnerExecTool:
             assert result["data"]["stderr"] == ""
             assert result["data"]["duration_ms"] == 234
 
-    def test_runner_exec_nonzero_exit_code(self, worker_context, test_runner: tuple[Runner, str]):
+    def test_runner_exec_nonzero_exit_code(self, commis_context, test_runner: tuple[Runner, str]):
         """Test command with non-zero exit code (not an error)."""
         runner, _ = test_runner
 
@@ -385,7 +385,7 @@ class TestRunnerExecTool:
             assert result["data"]["exit_code"] == 1
             assert result["data"]["stderr"] == "error message\n"
 
-    def test_runner_exec_execution_error(self, worker_context, test_runner: tuple[Runner, str]):
+    def test_runner_exec_execution_error(self, commis_context, test_runner: tuple[Runner, str]):
         """Test handling of execution errors."""
         runner, _ = test_runner
 
@@ -513,7 +513,7 @@ class TestJobDispatcher:
 class TestCapabilityEnforcement:
     """Tests for capability-based command validation."""
 
-    def test_runner_exec_readonly_allows_safe_commands(self, worker_context, test_runner: tuple[Runner, str]):
+    def test_runner_exec_readonly_allows_safe_commands(self, commis_context, test_runner: tuple[Runner, str]):
         """Test that readonly runner allows safe commands."""
         runner, _ = test_runner
 
@@ -534,7 +534,7 @@ class TestCapabilityEnforcement:
             result = runner_exec("test-laptop", "df -h")
             assert result["ok"] is True
 
-    def test_runner_exec_readonly_blocks_dangerous_commands(self, worker_context, test_runner: tuple[Runner, str]):
+    def test_runner_exec_readonly_blocks_dangerous_commands(self, commis_context, test_runner: tuple[Runner, str]):
         """Test that readonly runner blocks dangerous commands."""
         runner, _ = test_runner
 
@@ -543,7 +543,7 @@ class TestCapabilityEnforcement:
         assert result["ok"] is False
         assert "not allowed" in result["user_message"].lower()
 
-    def test_runner_exec_readonly_blocks_shell_metacharacters(self, worker_context, test_runner: tuple[Runner, str]):
+    def test_runner_exec_readonly_blocks_shell_metacharacters(self, commis_context, test_runner: tuple[Runner, str]):
         """Test that readonly runner blocks shell metacharacters."""
         runner, _ = test_runner
 
@@ -553,7 +553,7 @@ class TestCapabilityEnforcement:
         assert "not allowed" in result["user_message"].lower()
         assert "metacharacters" in result["user_message"].lower()
 
-    def test_runner_exec_readonly_blocks_redirects(self, worker_context, test_runner: tuple[Runner, str]):
+    def test_runner_exec_readonly_blocks_redirects(self, commis_context, test_runner: tuple[Runner, str]):
         """Test that readonly runner blocks redirects."""
         runner, _ = test_runner
 
@@ -563,7 +563,7 @@ class TestCapabilityEnforcement:
         assert "not allowed" in result["user_message"].lower()
 
     def test_runner_exec_readonly_blocks_docker_without_capability(
-        self, worker_context, test_runner: tuple[Runner, str]
+        self, commis_context, test_runner: tuple[Runner, str]
     ):
         """Test that docker requires explicit capability."""
         runner, _ = test_runner
@@ -575,7 +575,7 @@ class TestCapabilityEnforcement:
         assert "capability" in result["user_message"].lower()
 
     def test_runner_exec_full_allows_dangerous_commands(
-        self, worker_context, test_runner: tuple[Runner, str], db: Session
+        self, commis_context, test_runner: tuple[Runner, str], db: Session
     ):
         """Test that exec.full runner allows dangerous commands."""
         runner, _ = test_runner
@@ -601,7 +601,7 @@ class TestCapabilityEnforcement:
             result = runner_exec("test-laptop", "rm -rf /tmp/test")
             assert result["ok"] is True
 
-    def test_runner_exec_full_allows_pipes(self, worker_context, test_runner: tuple[Runner, str], db: Session):
+    def test_runner_exec_full_allows_pipes(self, commis_context, test_runner: tuple[Runner, str], db: Session):
         """Test that exec.full runner allows pipes."""
         runner, _ = test_runner
 
@@ -626,7 +626,7 @@ class TestCapabilityEnforcement:
             result = runner_exec("test-laptop", "ps aux | grep python")
             assert result["ok"] is True
 
-    def test_runner_exec_docker_capability(self, worker_context, test_runner: tuple[Runner, str], db: Session):
+    def test_runner_exec_docker_capability(self, commis_context, test_runner: tuple[Runner, str], db: Session):
         """Test that docker capability enables docker commands."""
         runner, _ = test_runner
 
@@ -652,7 +652,7 @@ class TestCapabilityEnforcement:
             assert result["ok"] is True
 
     def test_runner_exec_docker_readonly_blocks_destructive(
-        self, worker_context, test_runner: tuple[Runner, str], db: Session
+        self, commis_context, test_runner: tuple[Runner, str], db: Session
     ):
         """Test that docker capability only allows readonly docker commands."""
         runner, _ = test_runner

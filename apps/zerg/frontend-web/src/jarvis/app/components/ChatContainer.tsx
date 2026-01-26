@@ -8,9 +8,9 @@
 
 import { useEffect, useRef, useMemo, useSyncExternalStore } from 'react'
 import { renderMarkdown } from '../../lib/markdown-renderer'
-import { supervisorToolStore, type SupervisorToolCall } from '../../lib/supervisor-tool-store'
+import { conciergeToolStore, type ConciergeToolCall } from '../../lib/concierge-tool-store'
 import { ToolCard } from './ToolCard'
-import { WorkerToolCard } from './WorkerToolCard'
+import { CommisToolCard } from './CommisToolCard'
 import type { ChatMessage } from '../context/types'
 
 // Timeline event types - messages and tools are both events in the conversation
@@ -18,10 +18,10 @@ import type { ChatMessage } from '../context/types'
 //   0 = user message (first)
 //   1 = tool (middle)
 //   2 = assistant message (last)
-// This ensures: user msg → tools → assistant response within the same run
+// This ensures: user msg → tools → assistant response within the same course
 type TimelineEvent =
-  | { type: 'message'; id: string; timestamp: number; sortOrder: number; runId: number; data: ChatMessage }
-  | { type: 'tool'; id: string; timestamp: number; sortOrder: number; runId: number; data: SupervisorToolCall }
+  | { type: 'message'; id: string; timestamp: number; sortOrder: number; courseId: number; data: ChatMessage }
+  | { type: 'tool'; id: string; timestamp: number; sortOrder: number; courseId: number; data: ConciergeToolCall }
 
 interface ChatContainerProps {
   messages: ChatMessage[]
@@ -32,10 +32,10 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
   // Ref on wrapper (scroll container) - scrolling now happens on outer element
   const wrapperRef = useRef<HTMLDivElement>(null)
 
-  // Subscribe to supervisor tool store
+  // Subscribe to concierge tool store
   const toolState = useSyncExternalStore(
-    supervisorToolStore.subscribe.bind(supervisorToolStore),
-    () => supervisorToolStore.getState()
+    conciergeToolStore.subscribe.bind(conciergeToolStore),
+    () => conciergeToolStore.getState()
   )
 
   const formatTokens = (n?: number | null) => {
@@ -55,7 +55,7 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
     const reasoning = usage.reasoning_tokens
 
     const lines: string[] = []
-    if (total !== null && total !== undefined) lines.push(`Run tokens (input+output): ${total.toLocaleString()}`)
+    if (total !== null && total !== undefined) lines.push(`Course tokens (input+output): ${total.toLocaleString()}`)
     if (prompt !== null && prompt !== undefined) lines.push(`Input tokens: ${prompt.toLocaleString()}`)
     if (completion !== null && completion !== undefined) lines.push(`Output tokens: ${completion.toLocaleString()}`)
     if (reasoning !== null && reasoning !== undefined && reasoning > 0) lines.push(`Reasoning tokens: ${reasoning.toLocaleString()} (subset of output)`)
@@ -71,7 +71,7 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
 
     const reasoning = usage.reasoning_tokens
     const reasoningPart = reasoning && reasoning > 0 ? ` · Reasoning ${formatTokens(reasoning)}` : ''
-    return `Run ${total}${reasoningPart}`
+    return `Course ${total}${reasoningPart}`
   }
 
   // Auto-scroll to bottom when new messages arrive or during streaming
@@ -92,12 +92,12 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
   }, [toolCount])
 
   // Build unified timeline of messages and tools
-  // Sort by runId first (to keep related items together), then by logical order
-  // This ensures: user message → tools → assistant response within each run
+  // Sort by courseId first (to keep related items together), then by logical order
+  // This ensures: user message → tools → assistant response within each course
   const timeline = useMemo((): TimelineEvent[] => {
     const events: TimelineEvent[] = []
 
-    // Add messages with sortOrder for logical ordering within a run
+    // Add messages with sortOrder for logical ordering within a course
     // User messages sort first (0), assistant messages sort last (2)
     for (const msg of messages) {
       const timestamp = msg.timestamp?.getTime()
@@ -108,8 +108,8 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
         timestamp: timestamp && Number.isFinite(timestamp) ? timestamp : Infinity,
         // User=0 (first), Assistant=2 (last)
         sortOrder: msg.role === 'user' ? 0 : 2,
-        // runId for grouping (0 if not set)
-        runId: msg.runId ?? 0,
+        // courseId for grouping (0 if not set)
+        courseId: msg.courseId ?? 0,
         data: msg,
       })
     }
@@ -121,20 +121,20 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
         id: tool.toolCallId,
         timestamp: Number.isFinite(tool.startedAt) ? tool.startedAt : Infinity,
         sortOrder: 1,
-        runId: tool.runId ?? 0,
+        courseId: tool.courseId ?? 0,
         data: tool,
       })
     }
 
     // Sort strategy:
-    // 1. Different runIds: sort by timestamp (chronological order of runs)
-    // 2. Same runId: sort by sortOrder (user → tools → assistant)
+    // 1. Different courseIds: sort by timestamp (chronological order of courses)
+    // 2. Same courseId: sort by sortOrder (user → tools → assistant)
     // This fixes the visual "jumping" issue where tools appeared after assistant
     return events.sort((a, b) => {
       const stableIdDiff = a.id.localeCompare(b.id)
 
-      // If same run, use logical ordering
-      if (a.runId !== 0 && b.runId !== 0 && a.runId === b.runId) {
+      // If same course, use logical ordering
+      if (a.courseId !== 0 && b.courseId !== 0 && a.courseId === b.courseId) {
         const orderDiff = a.sortOrder - b.sortOrder
         if (orderDiff !== 0) return orderDiff
 
@@ -144,23 +144,23 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
         return stableIdDiff
       }
 
-      // Different runs (or runId=0): sort by timestamp
+      // Different courses (or courseId=0): sort by timestamp
       const timeDiff = a.timestamp - b.timestamp
       if (timeDiff !== 0) return timeDiff
 
-      // Same timestamp across runs: preserve logical order, then stably by id
+      // Same timestamp across courses: preserve logical order, then stably by id
       const orderDiff = a.sortOrder - b.sortOrder
       if (orderDiff !== 0) return orderDiff
       return stableIdDiff
     })
   }, [messages, toolState.tools])
 
-  // Check if any workers are actively running (for hiding typing dots)
-  const hasActiveWorkers = useMemo(() => {
+  // Check if any commis are actively running (for hiding typing dots)
+  const hasActiveCommis = useMemo(() => {
     return Array.from(toolState.tools.values()).some(tool => {
       if (tool.toolName === 'spawn_commis') {
-        const workerStatus = (tool.result as Record<string, unknown>)?.workerStatus
-        return workerStatus === 'running' || workerStatus === 'spawned'
+        const commisStatus = (tool.result as Record<string, unknown>)?.commisStatus
+        return commisStatus === 'running' || commisStatus === 'spawned'
       }
       return tool.status === 'running'
     })
@@ -169,12 +169,12 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
   const hasContent = messages.length > 0 || toolState.tools.size > 0 || userTranscriptPreview
 
   // Render a tool event
-  const renderTool = (tool: SupervisorToolCall) => {
+  const renderTool = (tool: ConciergeToolCall) => {
     if (tool.toolName === 'spawn_commis') {
-      const isDeferred = supervisorToolStore.isDeferred(tool.runId)
-      const workerStatus = (tool.result as Record<string, unknown>)?.workerStatus
-      const isDetached = isDeferred && (workerStatus === 'running' || workerStatus === 'spawned')
-      return <WorkerToolCard key={tool.toolCallId} tool={tool} isDetached={isDetached} detachedIndex={0} />
+      const isDeferred = conciergeToolStore.isDeferred(tool.courseId)
+      const commisStatus = (tool.result as Record<string, unknown>)?.commisStatus
+      const isDetached = isDeferred && (commisStatus === 'running' || commisStatus === 'spawned')
+      return <CommisToolCard key={tool.toolCallId} tool={tool} isDetached={isDetached} detachedIndex={0} />
     }
     return <ToolCard key={tool.toolCallId} tool={tool} />
   }
@@ -185,8 +185,8 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
     const hasMessageContent = message.content && message.content.length > 0
     const isPending = isAssistant && message.status !== 'final' && message.status !== 'error' && message.status !== 'canceled'
 
-    // Hide thinking dots if workers are showing progress
-    const showTypingDots = isPending && !hasMessageContent && !hasActiveWorkers
+    // Hide thinking dots if commis are showing progress
+    const showTypingDots = isPending && !hasMessageContent && !hasActiveCommis
     const usageTitle = isAssistant ? buildUsageTitle(message.usage) : null
     const usageLine = isAssistant ? buildUsageLine(message.usage) : null
 

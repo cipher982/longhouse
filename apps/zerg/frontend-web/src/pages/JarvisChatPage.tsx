@@ -18,7 +18,7 @@ import { AppProvider, type ChatMessage, type StoredToolCall } from '../jarvis/ap
 import App from '../jarvis/app/App';
 
 // Import tool store for hydration
-import { supervisorToolStore, type SupervisorToolCall } from '../jarvis/lib/supervisor-tool-store';
+import { conciergeToolStore, type ConciergeToolCall } from '../jarvis/lib/concierge-tool-store';
 
 // API functions
 import { fetchThreadByTitle, fetchThreadMessages } from '../services/api';
@@ -44,10 +44,10 @@ export default function JarvisChatPage() {
         const messages = await fetchThreadMessages(thread.id);
 
         // Clear any existing tools from previous loads
-        supervisorToolStore.clearTools();
+        conciergeToolStore.clearTools();
 
         // Collect tools to hydrate into the store
-        const toolsToLoad: SupervisorToolCall[] = [];
+        const toolsToLoad: ConciergeToolCall[] = [];
 
         // Convert backend ThreadMessages to Jarvis ChatMessages
         // Filter to only user/assistant roles (skip system and tool messages)
@@ -65,18 +65,18 @@ export default function JarvisChatPage() {
                 }))
               : undefined;
 
-            // Generate synthetic runId for messages with tool calls
-            // Use negative message ID to avoid collision with real run IDs
-            const syntheticRunId = toolCalls ? -m.id : undefined;
+            // Generate synthetic courseId for messages with tool calls
+            // Use negative message ID to avoid collision with real course IDs
+            const syntheticCourseId = toolCalls ? -m.id : undefined;
 
-            // Convert tool_calls to SupervisorToolCall format for the store
-            if (toolCalls && syntheticRunId !== undefined) {
+            // Convert tool_calls to ConciergeToolCall format for the store
+            if (toolCalls && syntheticCourseId !== undefined) {
               for (const tc of toolCalls) {
                 toolsToLoad.push({
                   toolCallId: tc.id,
                   toolName: tc.name,
                   status: 'completed', // Historical tools are always completed
-                  runId: syntheticRunId,
+                  courseId: syntheticCourseId,
                   startedAt: m.sent_at ? new Date(m.sent_at).getTime() : Date.now(),
                   completedAt: m.sent_at ? new Date(m.sent_at).getTime() : Date.now(),
                   argsPreview: JSON.stringify(tc.args).slice(0, 100),
@@ -92,14 +92,14 @@ export default function JarvisChatPage() {
               content: m.content || '',
               timestamp: m.sent_at ? new Date(m.sent_at) : new Date(),
               skipAnimation: true, // Don't animate pre-loaded messages
-              runId: syntheticRunId,
+              courseId: syntheticCourseId,
               toolCalls,
             };
           });
 
         // Hydrate the tool store with historical tools
         if (toolsToLoad.length > 0) {
-          supervisorToolStore.loadTools(toolsToLoad);
+          conciergeToolStore.loadTools(toolsToLoad);
         }
 
         setInitialMessages(chatMessages);

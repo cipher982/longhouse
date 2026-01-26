@@ -99,8 +99,8 @@ class LLMAuditLogger:
     async def log_request(
         self,
         *,
-        run_id: int | None,
-        worker_id: str | None,
+        course_id: int | None,
+        commis_id: str | None,
         thread_id: int | None = None,
         owner_id: int | None = None,
         trace_id: str | None = None,
@@ -121,8 +121,8 @@ class LLMAuditLogger:
             payload = {
                 "type": "request",
                 "correlation_id": correlation_id,
-                "run_id": run_id,
-                "worker_id": worker_id,
+                "course_id": course_id,
+                "commis_id": commis_id,
                 "thread_id": thread_id,
                 "owner_id": owner_id,
                 "trace_id": trace_id,
@@ -270,8 +270,8 @@ class LLMAuditLogger:
 
                             session.add(
                                 LLMAuditLog(
-                                    run_id=record.get("run_id"),
-                                    worker_id=record.get("worker_id"),
+                                    course_id=record.get("course_id"),
+                                    commis_id=record.get("commis_id"),
                                     thread_id=record.get("thread_id"),
                                     owner_id=record.get("owner_id"),
                                     trace_id=trace_id_uuid,
@@ -325,27 +325,27 @@ class LLMAuditLogger:
 def query_audit_log(
     db: Session,
     *,
-    run_id: int | None = None,
-    worker_id: str | None = None,
+    course_id: int | None = None,
+    commis_id: str | None = None,
     since: datetime | None = None,
     limit: int = 100,
 ) -> List[LLMAuditLog]:
     """Query audit logs with filters."""
     query = db.query(LLMAuditLog)
 
-    if run_id:
-        query = query.filter(LLMAuditLog.run_id == run_id)
-    if worker_id:
-        query = query.filter(LLMAuditLog.worker_id == worker_id)
+    if course_id:
+        query = query.filter(LLMAuditLog.course_id == course_id)
+    if commis_id:
+        query = query.filter(LLMAuditLog.commis_id == commis_id)
     if since:
         query = query.filter(LLMAuditLog.created_at >= since)
 
     return query.order_by(LLMAuditLog.created_at.desc()).limit(limit).all()
 
 
-def get_run_llm_history(db: Session, run_id: int) -> List[Dict]:
+def get_run_llm_history(db: Session, course_id: int) -> List[Dict]:
     """Get full LLM interaction history for a run (for debugging)."""
-    logs = query_audit_log(db, run_id=run_id, limit=1000)
+    logs = query_audit_log(db, course_id=course_id, limit=1000)
     return [
         {
             "phase": log.phase,

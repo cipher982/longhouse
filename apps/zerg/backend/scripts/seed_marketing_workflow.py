@@ -4,9 +4,9 @@ Seed marketing-ready data for landing page screenshots.
 
 Creates:
 1. Three distinct workflows (Health, Inbox, Home Automation)
-2. Agents with varied statuses and recent activity
-3. AgentRun records showing execution history
-4. A Supervisor thread with a realistic chat conversation
+2. Fiches with varied statuses and recent activity
+3. Course records showing execution history
+4. A Concierge thread with a realistic chat conversation
 
 This script is idempotent - it cleans up existing marketing data before seeding.
 
@@ -29,16 +29,16 @@ from langchain_core.messages import ToolMessage
 
 from zerg.crud import crud
 from zerg.database import db_session
-from zerg.models.enums import AgentStatus
-from zerg.models.enums import RunStatus
-from zerg.models.enums import RunTrigger
+from zerg.models.enums import FicheStatus
+from zerg.models.enums import CourseStatus
+from zerg.models.enums import CourseTrigger
 from zerg.models.enums import ThreadType
-from zerg.models.models import Agent
+from zerg.models.models import Fiche
 from zerg.models.models import Workflow
-from zerg.models.run import AgentRun
+from zerg.models.course import Course
 from zerg.models.thread import Thread
 from zerg.models_config import DEFAULT_MODEL_ID
-from zerg.models_config import DEFAULT_WORKER_MODEL_ID
+from zerg.models_config import DEFAULT_COMMIS_MODEL_ID
 from zerg.services.thread_service import ThreadService
 
 # Marketing tag to identify seeded data for cleanup
@@ -51,7 +51,7 @@ MARKETING_TAG = "marketing_demo"
 HEALTH_WORKFLOW = {
     "name": "health",  # Short name for URL addressability: /canvas?workflow=health
     "description": "Automated health monitoring and daily wellness summary",
-    "agents": [
+    "fiches": [
         {"name": "WHOOP Monitor", "instructions": "Pull recovery and sleep metrics from WHOOP API."},
         {"name": "Health Analyzer", "instructions": "Analyze health trends and flag anomalies."},
         {"name": "Wellness Notifier", "instructions": "Send daily wellness summary via Slack or email."},
@@ -74,7 +74,7 @@ HEALTH_WORKFLOW = {
 INBOX_WORKFLOW = {
     "name": "inbox",  # Short name for URL addressability: /canvas?workflow=inbox
     "description": "Intelligent email triage and task management",
-    "agents": [
+    "fiches": [
         {"name": "Email Watcher", "instructions": "Monitor incoming emails and classify by priority."},
         {"name": "Content Analyzer", "instructions": "Analyze message content for sentiment and urgency."},
         {"name": "Priority Router", "instructions": "Route messages based on priority and sender."},
@@ -105,7 +105,7 @@ INBOX_WORKFLOW = {
 HOME_WORKFLOW = {
     "name": "home",  # Short name for URL addressability: /canvas?workflow=home
     "description": "Location-aware home automation and presence detection",
-    "agents": [
+    "fiches": [
         {"name": "Location Tracker", "instructions": "Monitor GPS location from Traccar."},
         {"name": "Presence Detector", "instructions": "Determine home/away status from location."},
         {"name": "Light Controller", "instructions": "Control smart lights based on presence."},
@@ -136,7 +136,7 @@ ALL_WORKFLOWS = [HEALTH_WORKFLOW, INBOX_WORKFLOW, HOME_WORKFLOW]
 def build_chat_conversation() -> list:
     """Build the marketing chat conversation using LangChain message types.
 
-    This ensures the tool_calls format matches exactly what the real agent runner produces,
+    This ensures the tool_calls format matches exactly what the real fiche runner produces,
     avoiding format mismatches between seeded data and live data.
     """
     return [
@@ -201,68 +201,68 @@ def cleanup_marketing_data(db, dev_user):
         Workflow.owner_id == dev_user.id,
     ).all()
 
-    # Find marketing agents - SCOPED TO DEV USER
-    agent_names = []
+    # Find marketing fiches - SCOPED TO DEV USER
+    fiche_names = []
     for wf in ALL_WORKFLOWS:
-        agent_names.extend([a["name"] for a in wf["agents"]])
-    agent_names.append("Jarvis")  # Supervisor for chat
+        fiche_names.extend([a["name"] for a in wf["fiches"]])
+    fiche_names.append("Jarvis")  # Concierge for chat
 
-    agents = db.query(Agent).filter(
-        Agent.name.in_(agent_names),
-        Agent.owner_id == dev_user.id,
+    fiches = db.query(Fiche).filter(
+        Fiche.name.in_(fiche_names),
+        Fiche.owner_id == dev_user.id,
     ).all()
-    agent_ids = [a.id for a in agents]
+    fiche_ids = [a.id for a in fiches]
 
     # Delete workflows first (no FK deps)
     for wf in workflows:
         db.delete(wf)
         print(f"  - Deleted workflow: {wf.name}")
 
-    if agent_ids:
+    if fiche_ids:
         # Use raw SQL with proper order to handle FK constraints
-        # 1. Delete run events (references agent_runs)
+        # 1. Delete run events (references courses)
         db.execute(text("""
-            DELETE FROM agent_run_events
-            WHERE run_id IN (SELECT id FROM agent_runs WHERE agent_id = ANY(:ids))
-        """), {"ids": agent_ids})
+            DELETE FROM course_events
+            WHERE course_id IN (SELECT id FROM courses WHERE fiche_id = ANY(:ids))
+        """), {"ids": fiche_ids})
 
-        # 2. Delete runs (references agent_threads)
+        # 2. Delete runs (references threads)
         db.execute(text("""
-            DELETE FROM agent_runs WHERE agent_id = ANY(:ids)
-        """), {"ids": agent_ids})
+            DELETE FROM courses WHERE fiche_id = ANY(:ids)
+        """), {"ids": fiche_ids})
 
         # 3. Delete messages (self-referential parent_id + references threads)
         db.execute(text("""
             DELETE FROM thread_messages
-            WHERE thread_id IN (SELECT id FROM agent_threads WHERE agent_id = ANY(:ids))
-        """), {"ids": agent_ids})
+            WHERE thread_id IN (SELECT id FROM threads WHERE fiche_id = ANY(:ids))
+        """), {"ids": fiche_ids})
 
         # 4. Delete threads
         db.execute(text("""
-            DELETE FROM agent_threads WHERE agent_id = ANY(:ids)
-        """), {"ids": agent_ids})
+            DELETE FROM threads WHERE fiche_id = ANY(:ids)
+        """), {"ids": fiche_ids})
 
-        # 5. Delete agents
+        # 5. Delete fiches
         db.execute(text("""
-            DELETE FROM agents WHERE id = ANY(:ids)
-        """), {"ids": agent_ids})
+            DELETE FROM fiches WHERE id = ANY(:ids)
+        """), {"ids": fiche_ids})
 
-        for agent in agents:
-            print(f"  - Deleted agent: {agent.name}")
+        for fiche in fiches:
+            print(f"  - Deleted fiche: {fiche.name}")
 
-    # Also clean up orphaned marketing thread - SCOPED TO DEV USER via agent ownership
-    # IMPORTANT: Only clean up MANUAL threads to avoid deleting the real SUPER supervisor thread
+    # Also clean up orphaned marketing thread - SCOPED TO DEV USER via fiche ownership
+    # IMPORTANT: Only clean up MANUAL threads to avoid deleting the real SUPER concierge thread
     db.execute(text("""
         DELETE FROM thread_messages WHERE thread_id IN (
-            SELECT t.id FROM agent_threads t
-            JOIN agents a ON t.agent_id = a.id
+            SELECT t.id FROM threads t
+            JOIN fiches a ON t.fiche_id = a.id
             WHERE t.title = 'marketing' AND t.thread_type = 'manual' AND a.owner_id = :owner_id
         )
     """), {"owner_id": dev_user.id})
     db.execute(text("""
-        DELETE FROM agent_threads WHERE id IN (
-            SELECT t.id FROM agent_threads t
-            JOIN agents a ON t.agent_id = a.id
+        DELETE FROM threads WHERE id IN (
+            SELECT t.id FROM threads t
+            JOIN fiches a ON t.fiche_id = a.id
             WHERE t.title = 'marketing' AND t.thread_type = 'manual' AND a.owner_id = :owner_id
         )
     """), {"owner_id": dev_user.id})
@@ -271,9 +271,9 @@ def cleanup_marketing_data(db, dev_user):
     print("  ✓ Cleanup complete\n")
 
 
-def create_workflow_canvas(agents: list[Agent], workflow_def: dict) -> dict:
+def create_workflow_canvas(fiches: list[Fiche], workflow_def: dict) -> dict:
     """Create workflow canvas JSON with nodes and edges."""
-    agent_map = {a.name: a.id for a in agents}
+    fiche_map = {a.name: a.id for a in fiches}
     nodes = []
     edges = []
     node_ids = {}
@@ -297,12 +297,12 @@ def create_workflow_canvas(agents: list[Agent], workflow_def: dict) -> dict:
                     },
                 },
             })
-        elif name in agent_map:
+        elif name in fiche_map:
             nodes.append({
                 "id": node_id,
-                "type": "agent",
+                "type": "fiche",
                 "position": {"x": float(x), "y": float(y)},
-                "config": {"text": name, "agent_id": agent_map[name]},
+                "config": {"text": name, "fiche_id": fiche_map[name]},
             })
 
     # Create edges
@@ -319,34 +319,34 @@ def create_workflow_canvas(agents: list[Agent], workflow_def: dict) -> dict:
     return {"nodes": nodes, "edges": edges}
 
 
-def seed_agents_for_workflow(db, user, workflow_def: dict) -> list[Agent]:
-    """Create agents for a workflow."""
-    agents = []
-    for agent_def in workflow_def["agents"]:
-        agent = Agent(
+def seed_fiches_for_workflow(db, user, workflow_def: dict) -> list[Fiche]:
+    """Create fiches for a workflow."""
+    fiches = []
+    for fiche_def in workflow_def["fiches"]:
+        fiche = Fiche(
             owner_id=user.id,
-            name=agent_def["name"],
-            system_instructions=agent_def["instructions"],
+            name=fiche_def["name"],
+            system_instructions=fiche_def["instructions"],
             task_instructions="",
-            model=DEFAULT_WORKER_MODEL_ID,
-            status=AgentStatus.IDLE,
+            model=DEFAULT_COMMIS_MODEL_ID,
+            status=FicheStatus.IDLE,
         )
-        db.add(agent)
+        db.add(fiche)
         db.flush()
-        agents.append(agent)
-        print(f"    ✨ Created agent: {agent_def['name']}")
-    return agents
+        fiches.append(fiche)
+        print(f"    ✨ Created fiche: {fiche_def['name']}")
+    return fiches
 
 
-def seed_agent_runs(db, agents: list[Agent], user):
-    """Create AgentRun records with varied statuses for visual appeal."""
+def seed_courses(db, fiches: list[Fiche], user):
+    """Create Course records with varied statuses for visual appeal."""
     now = datetime.now(timezone.utc)
 
-    for i, agent in enumerate(agents):
+    for i, fiche in enumerate(fiches):
         # Create a thread for the run
         thread = Thread(
-            agent_id=agent.id,
-            title=f"Run for {agent.name}",
+            fiche_id=fiche.id,
+            title=f"Run for {fiche.name}",
             thread_type=ThreadType.MANUAL,
         )
         db.add(thread)
@@ -354,75 +354,75 @@ def seed_agent_runs(db, agents: list[Agent], user):
 
         # Vary statuses for visual interest
         if i % 4 == 0:
-            status = RunStatus.SUCCESS
+            status = CourseStatus.SUCCESS
             started = now - timedelta(minutes=30)
             finished = now - timedelta(minutes=25)
             duration = 5 * 60 * 1000  # 5 min
-            agent.status = AgentStatus.IDLE
-            agent.last_run_at = finished
+            fiche.status = FicheStatus.IDLE
+            fiche.last_course_at = finished
         elif i % 4 == 1:
-            status = RunStatus.RUNNING
+            status = CourseStatus.RUNNING
             started = now - timedelta(minutes=2)
             finished = None
             duration = None
-            agent.status = AgentStatus.RUNNING
+            fiche.status = FicheStatus.RUNNING
         elif i % 4 == 2:
-            status = RunStatus.SUCCESS
+            status = CourseStatus.SUCCESS
             started = now - timedelta(hours=2)
             finished = now - timedelta(hours=1, minutes=55)
             duration = 5 * 60 * 1000
-            agent.status = AgentStatus.IDLE
-            agent.last_run_at = finished
+            fiche.status = FicheStatus.IDLE
+            fiche.last_course_at = finished
         else:
-            status = RunStatus.SUCCESS
+            status = CourseStatus.SUCCESS
             started = now - timedelta(hours=6)
             finished = now - timedelta(hours=5, minutes=58)
             duration = 2 * 60 * 1000
-            agent.status = AgentStatus.IDLE
-            agent.last_run_at = finished
+            fiche.status = FicheStatus.IDLE
+            fiche.last_course_at = finished
 
-        run = AgentRun(
-            agent_id=agent.id,
+        run = Course(
+            fiche_id=fiche.id,
             thread_id=thread.id,
             status=status,
-            trigger=RunTrigger.SCHEDULE,
+            trigger=CourseTrigger.SCHEDULE,
             started_at=started,
             finished_at=finished,
             duration_ms=duration,
             total_tokens=1500 + (i * 200),
             total_cost_usd=0.002 + (i * 0.0005),
-            summary=f"Executed {agent.name} task successfully.",
+            summary=f"Executed {fiche.name} task successfully.",
         )
         db.add(run)
 
     db.commit()
 
 
-def seed_chat_thread(db, supervisor: Agent):
-    """Create a Supervisor thread with realistic chat messages.
+def seed_chat_thread(db, concierge: Fiche):
+    """Create a Concierge thread with realistic chat messages.
 
     Uses ThreadService.save_new_messages() to ensure messages are stored
-    in the exact same format as the real agent runner produces.
+    in the exact same format as the real fiche runner produces.
 
     IMPORTANT: Uses MANUAL thread type to avoid collision with the real
-    supervisor thread (which uses SUPER type and has "one per user" constraint).
+    concierge thread (which uses SUPER type and has "one per user" constraint).
     """
     print("  💬 Creating chat conversation...")
 
     thread = Thread(
-        agent_id=supervisor.id,
+        fiche_id=concierge.id,
         title="marketing",  # Short name for URL addressability: /chat?thread=marketing
-        thread_type=ThreadType.MANUAL,  # MANUAL to avoid collision with real supervisor
+        thread_type=ThreadType.MANUAL,  # MANUAL to avoid collision with real concierge
         active=True,
     )
     db.add(thread)
     db.flush()
 
-    # Build conversation using LangChain message types (same as real agent)
+    # Build conversation using LangChain message types (same as real fiche)
     langchain_messages = build_chat_conversation()
 
     # Use ThreadService to save messages - this ensures format consistency
-    # with the real agent runner code path
+    # with the real fiche runner code path
     ThreadService.save_new_messages(db, thread_id=thread.id, messages=langchain_messages)
 
     db.commit()
@@ -455,16 +455,16 @@ def seed_marketing_data():
         cleanup_marketing_data(db, dev_user)
 
         # Seed each workflow
-        all_agents = []
+        all_fiches = []
         for workflow_def in ALL_WORKFLOWS:
             print(f"\n📊 Seeding workflow: {workflow_def['name']}")
 
-            # Create agents
-            agents = seed_agents_for_workflow(db, dev_user, workflow_def)
-            all_agents.extend(agents)
+            # Create fiches
+            fiches = seed_fiches_for_workflow(db, dev_user, workflow_def)
+            all_fiches.extend(fiches)
 
             # Create workflow
-            canvas = create_workflow_canvas(agents, workflow_def)
+            canvas = create_workflow_canvas(fiches, workflow_def)
             workflow = Workflow(
                 owner_id=dev_user.id,
                 name=workflow_def["name"],
@@ -477,28 +477,28 @@ def seed_marketing_data():
 
             print(f"    ✓ Created workflow with {len(canvas['nodes'])} nodes, {len(canvas['edges'])} edges")
 
-        # Seed agent runs for varied statuses
-        print("\n📈 Seeding agent runs...")
-        seed_agent_runs(db, all_agents, dev_user)
-        print(f"    ✓ Created runs for {len(all_agents)} agents")
+        # Seed courses for varied statuses
+        print("\n📈 Seeding courses...")
+        seed_courses(db, all_fiches, dev_user)
+        print(f"    ✓ Created runs for {len(all_fiches)} fiches")
 
-        # Create Supervisor for chat
-        print("\n🤖 Creating Supervisor for chat...")
-        supervisor = Agent(
+        # Create Concierge for chat
+        print("\n🤖 Creating Concierge for chat...")
+        concierge = Fiche(
             owner_id=dev_user.id,
             name="Jarvis",
             system_instructions="You are Jarvis, a helpful AI assistant.",
             task_instructions="Help the user with their requests.",
             model=DEFAULT_MODEL_ID,
-            status=AgentStatus.IDLE,
-            config={"is_supervisor": True},
+            status=FicheStatus.IDLE,
+            config={"is_concierge": True},
         )
-        db.add(supervisor)
+        db.add(concierge)
         db.flush()
-        print(f"    ✓ Created Supervisor: Jarvis (ID: {supervisor.id})")
+        print(f"    ✓ Created Concierge: Jarvis (ID: {concierge.id})")
 
         # Create chat thread
-        thread = seed_chat_thread(db, supervisor)
+        thread = seed_chat_thread(db, concierge)
 
         db.commit()
 
@@ -506,7 +506,7 @@ def seed_marketing_data():
         print("\n" + "=" * 60)
         print("✅ Marketing data seeded successfully!")
         print(f"   Workflows: {len(ALL_WORKFLOWS)}")
-        print(f"   Agents: {len(all_agents) + 1}")  # +1 for Supervisor
+        print(f"   Fiches: {len(all_fiches) + 1}")  # +1 for Concierge
         print(f"   Chat thread ID: {thread.id}")
         print("\n📸 Ready for screenshots!")
         print("   - Canvas: /canvas?workflow=health&marketing=true")

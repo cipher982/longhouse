@@ -3,7 +3,7 @@
 /**
  * Spawn isolated test backend for E2E tests
  *
- * This script spawns a dedicated backend server for each Playwright worker,
+ * This script spawns a dedicated backend server for each Playwright commis,
  * ensuring complete test isolation without shared state.
  */
 
@@ -83,31 +83,31 @@ function getPortsFromEnv() {
     return { BACKEND_PORT, FRONTEND_PORT };
 }
 
-// Optional worker ID from command line argument (legacy mode)
-const workerId = process.argv[2];
+// Optional commis ID from command line argument (legacy mode)
+const commisId = process.argv[2];
 const { BACKEND_PORT } = getPortsFromEnv();
 
-const port = workerId ? BACKEND_PORT + parseInt(workerId) : BACKEND_PORT;
+const port = commisId ? BACKEND_PORT + parseInt(commisId) : BACKEND_PORT;
 
-// E2E tests use per-Playwright-worker Postgres schemas routed via X-Test-Worker header.
-// Schemas are pre-created in test-setup.js, so we can safely use multiple uvicorn workers.
+// E2E tests use per-Playwright-commis Postgres schemas routed via X-Test-Commis header.
+// Schemas are pre-created in test-setup.js, so we can safely use multiple uvicorn commis.
 // Pinned defaults for reproducible test runs:
-// - Local: 8 uvicorn workers (bumped from 6 to reduce race conditions with 16 Playwright workers)
-// - CI: 2 uvicorn workers (conservative for shared runners)
+// - Local: 8 uvicorn commis (bumped from 6 to reduce race conditions with 16 Playwright commis)
+// - CI: 2 uvicorn commis (conservative for shared runners)
 // Override with UVICORN_WORKERS env var if needed.
-const defaultLocalUvicornWorkers = 8;   // Bumped: better concurrency for 16 Playwright workers
-const defaultCIUvicornWorkers = 2;
-const envUvicornWorkers = Number.parseInt(process.env.UVICORN_WORKERS ?? "", 10);
-const uvicornWorkers = workerId
-  ? 1  // Legacy per-worker backend mode (deprecated)
-  : (Number.isFinite(envUvicornWorkers) && envUvicornWorkers > 0
-      ? envUvicornWorkers
-      : (process.env.CI ? defaultCIUvicornWorkers : defaultLocalUvicornWorkers));
+const defaultLocalUvicornCommis = 8;   // Bumped: better concurrency for 16 Playwright commis
+const defaultCIUvicornCommis = 2;
+const envUvicornCommis = Number.parseInt(process.env.UVICORN_WORKERS ?? "", 10);
+const uvicornCommis = commisId
+  ? 1  // Legacy per-commis backend mode (deprecated)
+  : (Number.isFinite(envUvicornCommis) && envUvicornCommis > 0
+      ? envUvicornCommis
+      : (process.env.CI ? defaultCIUvicornCommis : defaultLocalUvicornCommis));
 
-if (workerId) {
-    console.log(`[spawn-backend] Starting isolated backend for worker ${workerId} on port ${port}`);
+if (commisId) {
+    console.log(`[spawn-backend] Starting isolated backend for commis ${commisId} on port ${port}`);
 } else {
-    console.log(`[spawn-backend] Starting single backend on port ${port} with ${uvicornWorkers} workers (per-worker DB isolation via header)`);
+    console.log(`[spawn-backend] Starting single backend on port ${port} with ${uvicornCommis} commis (per-commis DB isolation via header)`);
 }
 
 // Spawn the test backend with E2E configuration
@@ -115,15 +115,15 @@ const backend = spawn('uv', [
     'run', 'python', '-m', 'uvicorn', 'zerg.main:app',
     `--host=127.0.0.1`,
     `--port=${port}`,
-    `--workers=${uvicornWorkers}`,
+    `--commis=${uvicornCommis}`,
     '--log-level=error'  // Only show errors, not INFO logs (reduces output from 26K to ~100 lines)
 ], {
     env: {
         ...process.env,
-        // Add e2e/bin to PATH for mock-hatch CLI (used by workspace workers in E2E)
+        // Add e2e/bin to PATH for mock-hatch CLI (used by workspace commis in E2E)
         PATH: `${join(__dirname, 'bin')}:${process.env.PATH || ''}`,
         ENVIRONMENT: 'test:e2e',  // Use E2E test config for real models
-        TEST_WORKER_ID: workerId || '0',
+        TEST_WORKER_ID: commisId || '0',
         NODE_ENV: 'test',
         TESTING: '1',  // Enable testing mode for database reset
         AUTH_DISABLED: '1',  // Disable auth for E2E tests
@@ -133,11 +133,11 @@ const backend = spawn('uv', [
         // DATABASE_URL inherited from environment (Postgres)
         LLM_TOKEN_STREAM: process.env.LLM_TOKEN_STREAM || 'true',  // Enable token streaming for E2E tests
         // LIFE_HUB_URL and LIFE_HUB_API_KEY inherited from environment (for session continuity tests)
-        // Workspace path for workspace workers (use temp dir in E2E, not /var/jarvis)
+        // Workspace path for workspace commis (use temp dir in E2E, not /var/jarvis)
         JARVIS_WORKSPACE_PATH: process.env.JARVIS_WORKSPACE_PATH || os.tmpdir() + '/zerg-e2e-workspaces',
         // Claude config dir for session files (use temp dir in E2E)
         CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR || os.tmpdir() + '/zerg-e2e-claude',
-        // Mock hatch CLI for workspace workers in E2E (can't run real Claude Code agents)
+        // Mock hatch CLI for workspace commis in E2E (can't run real Claude Code fiches)
         E2E_HATCH_PATH: join(__dirname, 'bin', 'hatch'),
         // Suppress Python logging noise for E2E tests
         LOG_LEVEL: 'ERROR',
@@ -149,23 +149,23 @@ const backend = spawn('uv', [
 
 // Handle backend process events
 backend.on('error', (error) => {
-    console.error(`[spawn-backend] Worker ${workerId} backend error:`, error);
+    console.error(`[spawn-backend] Commis ${commisId} backend error:`, error);
     process.exit(1);
 });
 
 backend.on('close', (code) => {
-    console.log(`[spawn-backend] Worker ${workerId} backend exited with code ${code}`);
+    console.log(`[spawn-backend] Commis ${commisId} backend exited with code ${code}`);
     process.exit(code);
 });
 
 // Forward signals to backend process
 process.on('SIGTERM', () => {
-    console.log(`[spawn-backend] Worker ${workerId} received SIGTERM, shutting down backend`);
+    console.log(`[spawn-backend] Commis ${commisId} received SIGTERM, shutting down backend`);
     backend.kill('SIGTERM');
 });
 
 process.on('SIGINT', () => {
-    console.log(`[spawn-backend] Worker ${workerId} received SIGINT, shutting down backend`);
+    console.log(`[spawn-backend] Commis ${commisId} received SIGINT, shutting down backend`);
     backend.kill('SIGINT');
 });
 

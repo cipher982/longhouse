@@ -405,7 +405,7 @@ def _test_notion(creds: dict[str, Any]) -> dict[str, Any]:
 def _test_imessage(creds: dict[str, Any]) -> dict[str, Any]:
     """Validate iMessage configuration.
 
-    iMessage requires the agent to run on a macOS host with Messages.app
+    iMessage requires the fiche to run on a macOS host with Messages.app
     configured. We can only verify the configuration is set - actual
     sending capability depends on the runtime environment.
     """

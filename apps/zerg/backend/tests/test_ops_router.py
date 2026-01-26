@@ -35,11 +35,11 @@ def test_ops_summary_ok_for_admin(client: TestClient, db_session):
                 "budget_user",
                 "budget_global",
                 "active_users_24h",
-                "agents_total",
-                "agents_scheduled",
+                "fiches_total",
+                "fiches_scheduled",
                 "latency_ms",
                 "errors_last_hour",
-                "top_agents_today",
+                "top_fiches_today",
             ]
         ).issubset(data.keys())
     finally:

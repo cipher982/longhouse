@@ -1,6 +1,6 @@
-"""Tests for Phase 6: Worker fail-fast behavior on critical tool errors.
+"""Tests for Phase 6: Commis fail-fast behavior on critical tool errors.
 
-This module tests that workers fail immediately when critical tool errors occur,
+This module tests that commis fail immediately when critical tool errors occur,
 rather than continuing execution with errors accumulated in the message history.
 """
 
@@ -8,52 +8,52 @@ from unittest.mock import patch
 
 import pytest
 
-from zerg.context import WorkerContext
-from zerg.services.worker_runner import WorkerRunner
+from zerg.context import CommisContext
+from zerg.services.commis_runner import CommisRunner
 
 
 @pytest.fixture
 def mock_agent(db_session):
-    """Create a mock agent for testing."""
+    """Create a mock fiche for testing."""
     from zerg.crud import crud
 
-    agent = crud.create_agent(
+    fiche = crud.create_fiche(
         db=db_session,
         owner_id=1,
-        name="Test Agent",
+        name="Test Fiche",
         model="gpt-mock",
-        system_instructions="Test agent",
+        system_instructions="Test fiche",
         task_instructions="Test task",
     )
-    agent.allowed_tools = ["ssh_exec", "http_request"]
+    fiche.allowed_tools = ["ssh_exec", "http_request"]
     db_session.commit()
-    db_session.refresh(agent)
-    return agent
+    db_session.refresh(fiche)
+    return fiche
 
 
 @pytest.mark.asyncio
-async def test_worker_fails_fast_on_critical_error(db_session, tmp_path, monkeypatch):
-    """Worker should fail immediately when a critical error is encountered."""
-    from zerg.services.worker_artifact_store import WorkerArtifactStore
+async def test_commis_fails_fast_on_critical_error(db_session, tmp_path, monkeypatch):
+    """Commis should fail immediately when a critical error is encountered."""
+    from zerg.services.commis_artifact_store import CommisArtifactStore
 
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
+    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
 
-    artifact_store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
+    artifact_store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
-    # Mock the agent runner to simulate critical error with context
+    # Mock the fiche runner to simulate critical error with context
     async def mock_run_thread_with_critical_error(db, thread):
-        from zerg.context import get_worker_context
+        from zerg.context import get_commis_context
         from zerg.crud import crud
 
-        # Get the worker context (set by WorkerRunner)
-        ctx = get_worker_context()
+        # Get the commis context (set by CommisRunner)
+        ctx = get_commis_context()
 
         # Create system message
         crud.create_thread_message(
             db=db,
             thread_id=thread.id,
             role="system",
-            content="You are a test agent",
+            content="You are a test fiche",
             processed=True,
         )
 
@@ -81,32 +81,32 @@ async def test_worker_fails_fast_on_critical_error(db_session, tmp_path, monkeyp
 
         return crud.get_thread_messages(db, thread_id=thread.id)
 
-    with patch("zerg.managers.agent_runner.AgentRunner.run_thread", side_effect=mock_run_thread_with_critical_error):
-        runner = WorkerRunner(artifact_store=artifact_store)
-        result = await runner.run_worker(
+    with patch("zerg.managers.fiche_runner.FicheRunner.run_thread", side_effect=mock_run_thread_with_critical_error):
+        runner = CommisRunner(artifact_store=artifact_store)
+        result = await runner.run_commis(
             db=db_session,
             task="Check disk on cube",
-            agent=None,
-            agent_config={"model": "gpt-mock", "owner_id": 1},
+            fiche=None,
+            fiche_config={"model": "gpt-mock", "owner_id": 1},
             timeout=30,
         )
 
-        # Worker should have failed
+        # Commis should have failed
         assert result.status == "failed"
         assert result.error is not None
         assert "ssh" in result.error.lower() or "critical" in result.error.lower()
 
 
 @pytest.mark.asyncio
-async def test_worker_succeeds_without_critical_error(db_session, tmp_path, monkeypatch):
-    """Worker should complete successfully when no critical errors occur."""
-    from zerg.services.worker_artifact_store import WorkerArtifactStore
+async def test_commis_succeeds_without_critical_error(db_session, tmp_path, monkeypatch):
+    """Commis should complete successfully when no critical errors occur."""
+    from zerg.services.commis_artifact_store import CommisArtifactStore
 
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
+    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
 
-    artifact_store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
+    artifact_store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
-    # Mock the agent runner for normal execution
+    # Mock the fiche runner for normal execution
     async def mock_run_thread_success(db, thread):
         from zerg.crud import crud
 
@@ -115,7 +115,7 @@ async def test_worker_succeeds_without_critical_error(db_session, tmp_path, monk
             db=db,
             thread_id=thread.id,
             role="system",
-            content="You are a test agent",
+            content="You are a test fiche",
             processed=True,
         )
 
@@ -139,25 +139,25 @@ async def test_worker_succeeds_without_critical_error(db_session, tmp_path, monk
 
         return crud.get_thread_messages(db, thread_id=thread.id)
 
-    with patch("zerg.managers.agent_runner.AgentRunner.run_thread", side_effect=mock_run_thread_success):
-        runner = WorkerRunner(artifact_store=artifact_store)
-        result = await runner.run_worker(
+    with patch("zerg.managers.fiche_runner.FicheRunner.run_thread", side_effect=mock_run_thread_success):
+        runner = CommisRunner(artifact_store=artifact_store)
+        result = await runner.run_commis(
             db=db_session,
             task="What is 2 + 2?",
-            agent=None,
-            agent_config={"model": "gpt-mock", "owner_id": 1},
+            fiche=None,
+            fiche_config={"model": "gpt-mock", "owner_id": 1},
             timeout=30,
         )
 
-        # Worker should have succeeded
+        # Commis should have succeeded
         assert result.status == "success"
         assert "4" in result.result
 
 
 @pytest.mark.asyncio
-async def test_worker_context_tracks_critical_error(db_session):
-    """WorkerContext should track critical errors."""
-    ctx = WorkerContext(worker_id="test-worker-123", owner_id=1, task="Test task")
+async def test_commis_context_tracks_critical_error(db_session):
+    """CommisContext should track critical errors."""
+    ctx = CommisContext(commis_id="test-commis-123", owner_id=1, task="Test task")
 
     # Initially no error
     assert ctx.has_critical_error is False
@@ -173,7 +173,7 @@ async def test_worker_context_tracks_critical_error(db_session):
 
 def test_critical_error_detection():
     """Test _is_critical_error function for various error types."""
-    # Import the function from the agent module
+    # Import the function from the fiche module
     # This is a bit hacky but necessary since the function is defined inside get_runnable()
     # For now, we'll test the logic patterns we expect
 
@@ -195,33 +195,33 @@ def test_critical_error_detection():
 
 
 @pytest.mark.asyncio
-async def test_roundabout_exits_immediately_on_worker_failure(db_session, tmp_path, monkeypatch):
-    """Roundabout should exit immediately when worker fails with critical error."""
+async def test_roundabout_exits_immediately_on_commis_failure(db_session, tmp_path, monkeypatch):
+    """Roundabout should exit immediately when commis fails with critical error."""
     import zerg.services.roundabout_monitor as rm
     from zerg.events import event_bus
-    from zerg.models.models import WorkerJob
+    from zerg.models.models import CommisJob
     from zerg.services.roundabout_monitor import RoundaboutMonitor
-    from zerg.services.worker_artifact_store import WorkerArtifactStore
+    from zerg.services.commis_artifact_store import CommisArtifactStore
 
     # Speed up polling
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
-    store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
+    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     # Reset event bus - use shallow copy to avoid pickling asyncio Futures
     original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
-        worker_id = store.create_worker("Check disk on cube", owner_id=1)
-        store.start_worker(worker_id)
+        commis_id = store.create_commis("Check disk on cube", owner_id=1)
+        store.start_commis(commis_id)
 
-        job = WorkerJob(
+        job = CommisJob(
             owner_id=1,
             task="Check disk on cube",
             model="gpt-mock",
             status="running",
-            worker_id=worker_id,
+            commis_id=commis_id,
         )
         db_session.add(job)
         db_session.commit()
@@ -240,9 +240,9 @@ async def test_roundabout_exits_immediately_on_worker_failure(db_session, tmp_pa
         job.error = "Tool 'ssh_exec' failed: SSH client not found. Ensure OpenSSH is installed."
         db_session.commit()
 
-        # Save error to worker result
-        store.save_result(worker_id, "Critical error: SSH client not found")
-        store.complete_worker(worker_id, status="failed", error=job.error)
+        # Save error to commis result
+        store.save_result(commis_id, "Critical error: SSH client not found")
+        store.complete_commis(commis_id, status="failed", error=job.error)
 
         result = await monitor_task
 
@@ -258,7 +258,7 @@ async def test_roundabout_exits_immediately_on_worker_failure(db_session, tmp_pa
 
 @pytest.mark.asyncio
 async def test_error_message_formatting():
-    """Test that error messages are formatted clearly for supervisor."""
+    """Test that error messages are formatted clearly for concierge."""
     # Critical SSH error
     error_content = (
         "{'ok': False, 'error_type': 'execution_error', 'user_message': 'SSH key not found at ~/.ssh/id_ed25519'}"

@@ -1,8 +1,8 @@
-"""NullEmitter - no-op emitter for testing and direct agent calls.
+"""NullEmitter - no-op emitter for testing and direct fiche calls.
 
 This emitter does nothing when emit methods are called. Use it for:
 - Unit tests where event emission is not needed
-- Direct agent calls outside supervisor/worker context
+- Direct fiche calls outside concierge/commis context
 - Performance testing without event overhead
 """
 
@@ -18,19 +18,19 @@ class NullEmitter:
 
     Use this for contexts where event emission is not needed:
     - Unit tests
-    - Direct agent calls
+    - Direct fiche calls
     - Performance benchmarks
 
     All emit_* methods are no-ops (do nothing, return immediately).
     """
 
     @property
-    def is_worker(self) -> bool:
+    def is_commis(self) -> bool:
         """Always False - this is a null emitter."""
         return False
 
     @property
-    def is_supervisor(self) -> bool:
+    def is_concierge(self) -> bool:
         """Always False - this is a null emitter."""
         return False
 

@@ -11,10 +11,10 @@ The library layer provides stateful services that React hooks consume:
 | `config.ts` | Environment + base URLs | Most modules |
 | `event-bus.ts` | Internal event fanout (SSE → UI stores/components) | Chat + progress UI |
 | `state-manager.ts` | Chat/session state + assistant status updates | `useJarvisApp`, `useTextChannel` |
-| `supervisor-chat-controller.ts` | SSE streaming for `POST /api/jarvis/chat` | `useTextChannel` |
+| `concierge-chat-controller.ts` | SSE streaming for `POST /api/jarvis/chat` | `useTextChannel` |
 | `conversation-controller.ts` | Streaming text accumulation | Chat rendering |
-| `worker-progress-store.ts` | Worker lifecycle/tool progress state | `WorkerProgress` |
-| `supervisor-tool-store.ts` | Supervisor tool card state | `ActivityStream` |
+| `commis-progress-store.ts` | Commis lifecycle/tool progress state | `CommisProgress` |
+| `concierge-tool-store.ts` | Concierge tool card state | `ActivityStream` |
 | `timeline-logger.ts` | Timeline logging (`?log=timeline`) | Performance/debug |
 | `session-handler.ts` | OpenAI Realtime session management (voice I/O) | `useJarvisApp` |
 

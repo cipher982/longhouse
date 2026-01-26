@@ -14,7 +14,7 @@ from zerg.tools.builtin.memory_tools import memory_write
 @pytest.fixture
 def credential_context(db_session, test_user):
     """Set up credential resolver context for memory tools."""
-    resolver = CredentialResolver(agent_id=1, db=db_session, owner_id=test_user.id)
+    resolver = CredentialResolver(fiche_id=1, db=db_session, owner_id=test_user.id)
     token = set_credential_resolver(resolver)
     yield resolver
     set_credential_resolver(None)
@@ -26,7 +26,7 @@ def test_memory_write_and_read(credential_context):
         path="episodes/2026-01-17/test.md",
         content="Hello memory",
         tags=["test"],
-        metadata={"run_id": 42},
+        metadata={"course_id": 42},
     )
 
     assert write_result["ok"] is True
@@ -36,7 +36,7 @@ def test_memory_write_and_read(credential_context):
     assert read_result["ok"] is True
     assert read_result["data"]["content"] == "Hello memory"
     assert read_result["data"]["tags"] == ["test"]
-    assert read_result["data"]["metadata"]["run_id"] == 42
+    assert read_result["data"]["metadata"]["course_id"] == 42
 
 
 def test_memory_write_overwrites_existing(credential_context):

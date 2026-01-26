@@ -22,27 +22,27 @@ def auth_headers(request):
     return headers
 
 
-class SupervisorClient:
+class ConciergeClient:
     def __init__(self, base_url: str, headers: Dict[str, str]):
         self.base_url = base_url
         self.headers = headers
 
     def dispatch(self, task: str) -> int:
-        """Dispatches a task and returns the run_id."""
+        """Dispatches a task and returns the course_id."""
         resp = requests.post(
-            f"{self.base_url}/api/jarvis/supervisor", json={"task": task}, headers=self.headers, timeout=10
+            f"{self.base_url}/api/jarvis/concierge", json={"task": task}, headers=self.headers, timeout=10
         )
         try:
             resp.raise_for_status()
         except requests.exceptions.HTTPError:
             raise RuntimeError(f"Failed to dispatch task: {resp.status_code} {resp.text}")
-        return resp.json()["run_id"]
+        return resp.json()["course_id"]
 
-    def wait_for_completion(self, run_id: int, timeout: int = 60) -> str:
+    def wait_for_completion(self, course_id: int, timeout: int = 60) -> str:
         """Waits for completion and returns the final message."""
-        return self._stream_and_parse(run_id, timeout)
+        return self._stream_and_parse(course_id, timeout)
 
-    def collect_events(self, run_id: int, timeout: int = 60) -> list:
+    def collect_events(self, course_id: int, timeout: int = 60) -> list:
         """Collects all SSE events for a run and returns them as a list.
 
         Each event has the structure:
@@ -55,7 +55,7 @@ class SupervisorClient:
         grace_period = 0.5  # Drain trailing events for 0.5s after completion
 
         with requests.get(
-            f"{self.base_url}/api/stream/runs/{run_id}",
+            f"{self.base_url}/api/stream/runs/{course_id}",
             headers=self.headers,
             stream=True,
             timeout=timeout,
@@ -96,17 +96,17 @@ class SupervisorClient:
                         if isinstance(data, dict):
                             payload = data.get("payload", {})
                             error_msg = payload.get("error") or payload.get("message") or data.get("error", str(data))
-                        raise RuntimeError(f"Supervisor Error: {error_msg}")
+                        raise RuntimeError(f"Concierge Error: {error_msg}")
 
         return events
 
-    def _stream_and_parse(self, run_id: int, timeout: int) -> str:
+    def _stream_and_parse(self, course_id: int, timeout: int) -> str:
         """Streams SSE events and returns the final result message."""
         start_time = time.time()
         event_type = None
 
         with requests.get(
-            f"{self.base_url}/api/stream/runs/{run_id}",
+            f"{self.base_url}/api/stream/runs/{course_id}",
             headers=self.headers,
             stream=True,
             timeout=timeout,
@@ -143,11 +143,11 @@ class SupervisorClient:
                         if isinstance(data, dict):
                             payload = data.get("payload", {})
                             error_msg = payload.get("error") or payload.get("message") or data.get("error", str(data))
-                        raise RuntimeError(f"Supervisor Error: {error_msg}")
+                        raise RuntimeError(f"Concierge Error: {error_msg}")
 
         return ""
 
 
 @pytest.fixture(scope="session")
-def supervisor_client(base_url, auth_headers):
-    return SupervisorClient(base_url, auth_headers)
+def concierge_client(base_url, auth_headers):
+    return ConciergeClient(base_url, auth_headers)

@@ -1,11 +1,11 @@
-"""add_assistant_message_id_to_agent_runs
+"""add_assistant_message_id_to_courses
 
 Revision ID: r2s3t4u5v6w7
 Revises: q1r2s3t4u5v6
 Create Date: 2025-01-10 00:00:00.000000
 
-Add assistant_message_id column to agent_runs for durable runs message tracking.
-This stores the UUID assigned to the assistant message in supervisor_started,
+Add assistant_message_id column to courses for durable runs message tracking.
+This stores the UUID assigned to the assistant message in concierge_started,
 allowing continuation runs to look up the original message's ID for
 continuation_of_message_id (instead of using a sentinel string).
 """
@@ -23,21 +23,21 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Add assistant_message_id column to agent_runs."""
+    """Add assistant_message_id column to courses."""
     conn = op.get_bind()
     inspector = sa.inspect(conn)
-    columns = [col['name'] for col in inspector.get_columns('agent_runs')]
+    columns = [col['name'] for col in inspector.get_columns('courses')]
 
     if 'assistant_message_id' in columns:
         print("assistant_message_id column already exists - skipping")
         return
 
     op.add_column(
-        'agent_runs',
+        'courses',
         sa.Column('assistant_message_id', sa.String(36), nullable=True)
     )
 
 
 def downgrade() -> None:
-    """Remove assistant_message_id column from agent_runs."""
-    op.drop_column('agent_runs', 'assistant_message_id')
+    """Remove assistant_message_id column from courses."""
+    op.drop_column('courses', 'assistant_message_id')

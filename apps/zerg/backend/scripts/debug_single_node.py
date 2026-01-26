@@ -12,7 +12,7 @@ sys.path.append(str(Path(__file__).parent))
 
 
 def debug_single_node():
-    """Debug a single AgentIdentity node with no edges."""
+    """Debug a single ficheidentity node with no edges."""
 
     print("🐛 Debugging Single Node Execution")
     print("=" * 50)
@@ -22,15 +22,15 @@ def debug_single_node():
         "edges": [],
         "nodes": [
             {
-                "agent_id": 3,
+                "fiche_id": 3,
                 "color": "#2ecc71",
                 "height": 80.0,
                 "is_dragging": False,
                 "is_selected": False,
                 "node_id": "node_0",
-                "node_type": "AgentIdentity",
+                "node_type": "ficheidentity",
                 "parent_id": None,
-                "text": "New Agent 81",
+                "text": "New Fiche 81",
                 "width": 200.0,
                 "x": 280.0,
                 "y": 178.0,
@@ -89,10 +89,10 @@ def debug_single_node():
 
         print(f"\n🔍 Node {node_id}:")
         print(f"   Type: {node_type}")
-        print(f"   Agent ID: {node.get('agent_id')}")
+        print(f"   Fiche ID: {node.get('fiche_id')}")
 
-        if node_type == "agentidentity" or node_type == "agent":
-            print("   ✅ Would create agent node")
+        if node_type == "ficheidentity" or node_type == "fiche":
+            print("   ✅ Would create fiche node")
         elif node_type == "tool":
             print("   ✅ Would create tool node")
         elif node_type == "trigger":

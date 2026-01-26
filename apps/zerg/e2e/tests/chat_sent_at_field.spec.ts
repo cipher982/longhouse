@@ -18,7 +18,7 @@ test.skip();
  * 4. Multiple messages maintain chronological order by server ID
  */
 
-// Reset DB before each test to keep agent/thread ids predictable
+// Reset DB before each test to keep fiche/thread ids predictable
 test.beforeEach(async ({ page, request }) => {
   await request.post('/api/admin/reset-database', {
     data: { clear_data: true },
@@ -26,7 +26,7 @@ test.beforeEach(async ({ page, request }) => {
   await page.goto('/');
 });
 
-async function createAgentAndNavigateToChat(page: Page) {
+async function createFicheAndNavigateToChat(page: Page) {
   // Intercept auth
   const authResponse = await page.request.post('/api/auth/google', {
     data: { token: 'fake_token' },
@@ -41,19 +41,19 @@ async function createAgentAndNavigateToChat(page: Page) {
     },
   ]);
 
-  // Create agent via API
-  const agentRes = await page.request.post('/api/agents', {
+  // Create fiche via API
+  const ficheRes = await page.request.post('/api/fiches', {
     headers: { Authorization: `Bearer ${access_token}` },
     data: {
-      name: 'Test Agent',
-      description: 'E2E test agent',
+      name: 'Test Fiche',
+      description: 'E2E test fiche',
       model: 'gpt-5-nano',
     },
   });
-  const agent = await agentRes.json();
+  const fiche = await ficheRes.json();
 
-  // Navigate to chat for this agent
-  await page.goto(`/agent/${agent.id}`);
+  // Navigate to chat for this fiche
+  await page.goto(`/fiche/${fiche.id}`);
   await expect(page.getByTestId('chat-container')).toBeVisible({ timeout: 5000 });
 }
 
@@ -69,7 +69,7 @@ async function getMessagesInDomOrder(page: Page): Promise<string[]> {
 
 test.describe('Chat sent_at Field - Timezone Awareness', () => {
   test('sent_at field is timezone-aware (contains timezone info)', async ({ page }) => {
-    await createAgentAndNavigateToChat(page);
+    await createFicheAndNavigateToChat(page);
 
     // Intercept and inspect the API response
     let capturedMessage: any = null;
@@ -97,7 +97,7 @@ test.describe('Chat sent_at Field - Timezone Awareness', () => {
   });
 
   test('Optimistic message shows no timestamp, then server timestamp appears', async ({ page }) => {
-    await createAgentAndNavigateToChat(page);
+    await createFicheAndNavigateToChat(page);
 
     const testMessage = 'Timestamp lifecycle test';
 
@@ -119,7 +119,7 @@ test.describe('Chat sent_at Field - Timezone Awareness', () => {
   });
 
   test('Multiple messages maintain order by server ID, not timestamp', async ({ page }) => {
-    await createAgentAndNavigateToChat(page);
+    await createFicheAndNavigateToChat(page);
 
     const messages = ['First', 'Second', 'Third'];
 
@@ -141,7 +141,7 @@ test.describe('Chat sent_at Field - Timezone Awareness', () => {
   });
 
   test('Timestamp does not change between optimistic and server states', async ({ page }) => {
-    await createAgentAndNavigateToChat(page);
+    await createFicheAndNavigateToChat(page);
 
     // This test captures the key bug: timestamp shouldn't change from noon to 5pm
     let capturedOptimistic: string | null = null;
@@ -184,7 +184,7 @@ test.describe('Chat sent_at Field - Timezone Awareness', () => {
 
 test.describe('Chat sent_at Field - Server Validation', () => {
   test('Server rejects client-provided sent_at beyond ±5 minutes', async ({ page }) => {
-    await createAgentAndNavigateToChat(page);
+    await createFicheAndNavigateToChat(page);
 
     // Get access token
     const authResponse = await page.request.post('/api/auth/google', {
@@ -193,7 +193,7 @@ test.describe('Chat sent_at Field - Server Validation', () => {
     const { access_token } = await authResponse.json();
 
     // Create thread
-    const threadRes = await page.request.post('/api/agents/1/threads', {
+    const threadRes = await page.request.post('/api/fiches/1/threads', {
       headers: { Authorization: `Bearer ${access_token}` },
       data: { title: 'Validation test' },
     });

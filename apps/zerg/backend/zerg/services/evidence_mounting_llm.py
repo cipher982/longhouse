@@ -5,7 +5,7 @@ It wraps the base LLM to detect and expand evidence markers in ToolMessages
 before each API call within the ReAct loop.
 
 Key Insights:
-- The ReAct loop makes MULTIPLE LLM calls per agent invocation
+- The ReAct loop makes MULTIPLE LLM calls per fiche invocation
 - Evidence must be mounted before EACH call, not just once at run start
 - Expansion happens OUTSIDE LangGraph's state machine (no persistence)
 - Only the compact payload (with marker) is persisted to thread_messages
@@ -36,9 +36,9 @@ from zerg.services.evidence_compiler import EvidenceCompiler
 logger = logging.getLogger(__name__)
 
 # Regex to detect evidence markers in ToolMessage content
-# Format: [EVIDENCE:run_id=48,job_id=123,worker_id=abc-123]
+# Format: [EVIDENCE:course_id=48,job_id=123,commis_id=abc-123]
 EVIDENCE_MARKER_PATTERN = re.compile(
-    r"\[EVIDENCE:run_id=(\d+),job_id=(\d+),worker_id=([^\]]+)\]",
+    r"\[EVIDENCE:course_id=(\d+),job_id=(\d+),commis_id=([^\]]+)\]",
     re.IGNORECASE,
 )
 
@@ -51,21 +51,21 @@ class EvidenceMountingLLM:
     persistent message state.
 
     Usage:
-        # Create wrapper (typically in supervisor_react_engine.py)
+        # Create wrapper (typically in concierge_react_engine.py)
         base_llm = ChatOpenAI(model="gpt-4")
         wrapped_llm = EvidenceMountingLLM(
             base_llm=base_llm,
-            run_id=supervisor_run.id,
-            owner_id=supervisor_run.owner_id,
+            course_id=concierge_run.id,
+            owner_id=concierge_run.owner_id,
         )
 
         # Use normally - evidence mounting is transparent
         response = await wrapped_llm.ainvoke(messages)
 
     The wrapper only mounts evidence if:
-    1. run_id and owner_id are provided (supervisor context)
+    1. course_id and owner_id are provided (concierge context)
     2. Messages contain [EVIDENCE:...] markers
-    3. EvidenceCompiler can access the worker artifacts
+    3. EvidenceCompiler can access the commis artifacts
 
     Otherwise, it passes through to the base LLM unchanged.
     """
@@ -73,7 +73,7 @@ class EvidenceMountingLLM:
     def __init__(
         self,
         base_llm: Any,
-        run_id: int | None = None,
+        course_id: int | None = None,
         owner_id: int | None = None,
         db: Any = None,
     ):
@@ -83,15 +83,15 @@ class EvidenceMountingLLM:
         ----------
         base_llm
             The base LLM to wrap (e.g., ChatOpenAI)
-        run_id
-            Supervisor run ID for evidence correlation (None = no mounting)
+        course_id
+            Concierge run ID for evidence correlation (None = no mounting)
         owner_id
             User ID for security scoping (None = no mounting)
         db
             Database session for evidence compiler (None = no mounting)
         """
         self.base_llm = base_llm
-        self.run_id = run_id
+        self.course_id = course_id
         self.owner_id = owner_id
         self.db = db
         self.compiler = EvidenceCompiler(db=db)
@@ -100,7 +100,7 @@ class EvidenceMountingLLM:
         """Invoke the LLM with evidence mounting.
 
         This method:
-        1. Checks if we have supervisor context (run_id + owner_id + db)
+        1. Checks if we have concierge context (course_id + owner_id + db)
         2. Scans messages for evidence markers
         3. Expands markers using EvidenceCompiler
         4. Calls base LLM with augmented messages
@@ -118,13 +118,13 @@ class EvidenceMountingLLM:
         Any
             Result from base LLM (typically AIMessage)
         """
-        # Only mount if we have supervisor context
-        if self.run_id is not None and self.owner_id is not None and self.db is not None:
+        # Only mount if we have concierge context
+        if self.course_id is not None and self.owner_id is not None and self.db is not None:
             try:
                 messages = self._mount_evidence(messages)
             except Exception as e:
                 # Evidence mounting is best-effort - don't fail the LLM call
-                logger.warning(f"Evidence mounting failed for run_id={self.run_id}: {e}", exc_info=True)
+                logger.warning(f"Evidence mounting failed for course_id={self.course_id}: {e}", exc_info=True)
 
         # Delegate to base LLM
         return await self.base_llm.ainvoke(messages, **kwargs)
@@ -134,7 +134,7 @@ class EvidenceMountingLLM:
 
         This method:
         1. Scans all ToolMessages for [EVIDENCE:...] markers
-        2. Extracts marker parameters (run_id, job_id, worker_id)
+        2. Extracts marker parameters (course_id, job_id, commis_id)
         3. Calls EvidenceCompiler once to get all evidence for this run
         4. Replaces/appends evidence to matching ToolMessages
         5. Returns copied messages (never mutates originals)
@@ -155,19 +155,19 @@ class EvidenceMountingLLM:
         if not has_markers:
             return messages  # No markers, pass through
 
-        # Compile evidence once for all workers in this run
+        # Compile evidence once for all commis in this run
         try:
             evidence_map = self.compiler.compile(
-                run_id=self.run_id,
+                course_id=self.course_id,
                 owner_id=self.owner_id,
                 db=self.db,
             )
         except Exception as e:
-            logger.error(f"EvidenceCompiler.compile() failed for run_id={self.run_id}: {e}", exc_info=True)
+            logger.error(f"EvidenceCompiler.compile() failed for course_id={self.course_id}: {e}", exc_info=True)
             return messages  # Fail gracefully, return original messages
 
         if not evidence_map:
-            logger.debug(f"No evidence available for run_id={self.run_id}")
+            logger.debug(f"No evidence available for course_id={self.course_id}")
             return messages
 
         # Process messages and expand markers
@@ -180,7 +180,7 @@ class EvidenceMountingLLM:
                 # Non-ToolMessage: pass through as-is
                 augmented_messages.append(msg)
 
-        logger.info(f"Mounted evidence for run_id={self.run_id}: {len(evidence_map)} workers")
+        logger.info(f"Mounted evidence for course_id={self.course_id}: {len(evidence_map)} commis")
         return augmented_messages
 
     def _expand_tool_message(self, msg: ToolMessage, evidence_map: dict[int, str]) -> ToolMessage:
@@ -205,21 +205,21 @@ class EvidenceMountingLLM:
             return msg  # No marker, return as-is
 
         # Extract marker parameters
-        marker_run_id = int(match.group(1))
+        marker_course_id = int(match.group(1))
         marker_job_id = int(match.group(2))
-        marker_worker_id = match.group(3)
+        marker_commis_id = match.group(3)
 
         # Validate marker matches our context
-        if marker_run_id != self.run_id:
-            logger.warning(f"Evidence marker run_id mismatch: marker={marker_run_id}, context={self.run_id}. Skipping expansion.")
+        if marker_course_id != self.course_id:
+            logger.warning(f"Evidence marker course_id mismatch: marker={marker_course_id}, context={self.course_id}. Skipping expansion.")
             return msg
 
-        # Get evidence for this worker
+        # Get evidence for this commis
         evidence = evidence_map.get(marker_job_id)
         if not evidence:
-            logger.warning(f"No evidence found for job_id={marker_job_id} (worker_id={marker_worker_id})")
+            logger.warning(f"No evidence found for job_id={marker_job_id} (commis_id={marker_commis_id})")
             # Return original message with a note
-            expanded_content = content.replace(match.group(0), f"{match.group(0)}\n\n[Evidence unavailable for this worker]")
+            expanded_content = content.replace(match.group(0), f"{match.group(0)}\n\n[Evidence unavailable for this commis]")
             return ToolMessage(
                 content=expanded_content,
                 tool_call_id=msg.tool_call_id,
@@ -243,7 +243,7 @@ class EvidenceMountingLLM:
         bound_llm = self.base_llm.bind_tools(tools, **kwargs)
         return EvidenceMountingLLM(
             base_llm=bound_llm,
-            run_id=self.run_id,
+            course_id=self.course_id,
             owner_id=self.owner_id,
             db=self.db,
         )

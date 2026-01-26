@@ -41,9 +41,9 @@ class TestCloudExecutor:
         return CloudExecutor()
 
     @pytest.mark.asyncio
-    async def test_run_agent_missing_workspace(self, executor, tmp_path):
+    async def test_run_commis_missing_workspace(self, executor, tmp_path):
         """Returns error when workspace doesn't exist."""
-        result = await executor.run_agent(
+        result = await executor.run_commis(
             task="test task",
             workspace_path=tmp_path / "nonexistent",
         )
@@ -53,7 +53,7 @@ class TestCloudExecutor:
         assert result.exit_code == -1
 
     @pytest.mark.asyncio
-    async def test_run_agent_hatch_not_found(self, executor, tmp_path):
+    async def test_run_commis_hatch_not_found(self, executor, tmp_path):
         """Returns error when hatch executable not found."""
         workspace = tmp_path / "workspace"
         workspace.mkdir()
@@ -61,7 +61,7 @@ class TestCloudExecutor:
         # Use a non-existent path for hatch
         executor.hatch_path = "/nonexistent/hatch"
 
-        result = await executor.run_agent(
+        result = await executor.run_commis(
             task="test task",
             workspace_path=workspace,
         )
@@ -71,7 +71,7 @@ class TestCloudExecutor:
         assert result.exit_code == -1
 
     @pytest.mark.asyncio
-    async def test_run_agent_success(self, executor, tmp_path):
+    async def test_run_commis_success(self, executor, tmp_path):
         """Successful execution returns result."""
         workspace = tmp_path / "workspace"
         workspace.mkdir()
@@ -83,7 +83,7 @@ class TestCloudExecutor:
         mock_process.pid = 12345
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
-            result = await executor.run_agent(
+            result = await executor.run_commis(
                 task="test task",
                 workspace_path=workspace,
             )
@@ -93,7 +93,7 @@ class TestCloudExecutor:
         assert result.exit_code == 0
 
     @pytest.mark.asyncio
-    async def test_run_agent_failure(self, executor, tmp_path):
+    async def test_run_commis_failure(self, executor, tmp_path):
         """Failed execution returns error status."""
         workspace = tmp_path / "workspace"
         workspace.mkdir()
@@ -105,7 +105,7 @@ class TestCloudExecutor:
         mock_process.pid = 12345
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
-            result = await executor.run_agent(
+            result = await executor.run_commis(
                 task="test task",
                 workspace_path=workspace,
             )
@@ -115,7 +115,7 @@ class TestCloudExecutor:
         assert result.exit_code == 1
 
     @pytest.mark.asyncio
-    async def test_run_agent_timeout(self, executor, tmp_path):
+    async def test_run_commis_timeout(self, executor, tmp_path):
         """Timeout kills process group and returns timeout status."""
         workspace = tmp_path / "workspace"
         workspace.mkdir()
@@ -135,7 +135,7 @@ class TestCloudExecutor:
             patch("asyncio.create_subprocess_exec", return_value=mock_process),
             patch("os.killpg") as mock_killpg,
         ):
-            result = await executor.run_agent(
+            result = await executor.run_commis(
                 task="test task",
                 workspace_path=workspace,
                 timeout=0.1,  # Very short timeout
@@ -179,7 +179,7 @@ class TestCloudExecutor:
         assert executor.default_model == "zai/glm-4.7"
 
     @pytest.mark.asyncio
-    async def test_run_agent_includes_resume_flag(self, executor, tmp_path):
+    async def test_run_commis_includes_resume_flag(self, executor, tmp_path):
         """Verify --resume flag is included when resume_session_id is provided."""
         workspace = tmp_path / "workspace"
         workspace.mkdir()
@@ -197,7 +197,7 @@ class TestCloudExecutor:
             return mock_process
 
         with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
-            await executor.run_agent(
+            await executor.run_commis(
                 task="test task",
                 workspace_path=workspace,
                 resume_session_id="abc123-session-id",
@@ -211,7 +211,7 @@ class TestCloudExecutor:
         assert cmd_list[resume_idx + 1] == "abc123-session-id"
 
     @pytest.mark.asyncio
-    async def test_run_agent_no_resume_flag_without_session_id(self, executor, tmp_path):
+    async def test_run_commis_no_resume_flag_without_session_id(self, executor, tmp_path):
         """Verify --resume flag is NOT included when resume_session_id is None."""
         workspace = tmp_path / "workspace"
         workspace.mkdir()
@@ -229,7 +229,7 @@ class TestCloudExecutor:
             return mock_process
 
         with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
-            await executor.run_agent(
+            await executor.run_commis(
                 task="test task",
                 workspace_path=workspace,
                 # No resume_session_id

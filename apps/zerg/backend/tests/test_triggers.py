@@ -9,20 +9,20 @@ from zerg.events import EventType
 def test_webhook_trigger_flow(client):
     """Creating a trigger and firing it should publish TRIGGER_FIRED event."""
 
-    # 1. Create an agent first
-    agent_payload = {
-        "name": "Trigger Agent",
+    # 1. Create an fiche first
+    fiche_payload = {
+        "name": "Trigger Fiche",
         "system_instructions": "sys",
         "task_instructions": "task",
         "model": "gpt-mock",
     }
 
-    resp = client.post("/api/agents/", json=agent_payload)
+    resp = client.post("/api/fiches/", json=fiche_payload)
     assert resp.status_code == 201, resp.text
-    agent_id = resp.json()["id"]
+    fiche_id = resp.json()["id"]
 
-    # 2. Create a webhook trigger for that agent
-    trg_payload = {"agent_id": agent_id, "type": "webhook"}
+    # 2. Create a webhook trigger for that fiche
+    trg_payload = {"fiche_id": fiche_id, "type": "webhook"}
     trg_resp = client.post("/api/triggers/", json=trg_payload)
     assert trg_resp.status_code == 201, trg_resp.text
     trigger_data = trg_resp.json()
@@ -52,7 +52,7 @@ def test_webhook_trigger_flow(client):
 
     event_data = trigger_fired_events[0]["data"]
     assert event_data["trigger_id"] == trigger_id
-    assert event_data["agent_id"] == agent_id
+    assert event_data["fiche_id"] == fiche_id
     assert event_data["payload"] == event_body
     assert event_data["trigger_type"] == "webhook"
 
@@ -60,18 +60,18 @@ def test_webhook_trigger_flow(client):
 def test_webhook_trigger_invalid_token(client):
     """Firing a trigger with an invalid token should return 404."""
 
-    # 1. Create an agent and trigger
-    agent_payload = {
-        "name": "Test Agent",
+    # 1. Create an fiche and trigger
+    fiche_payload = {
+        "name": "Test Fiche",
         "system_instructions": "sys",
         "task_instructions": "task",
         "model": "gpt-mock",
     }
-    resp = client.post("/api/agents/", json=agent_payload)
+    resp = client.post("/api/fiches/", json=fiche_payload)
     assert resp.status_code == 201, resp.text
-    agent_id = resp.json()["id"]
+    fiche_id = resp.json()["id"]
 
-    trg_payload = {"agent_id": agent_id, "type": "webhook"}
+    trg_payload = {"fiche_id": fiche_id, "type": "webhook"}
     trg_resp = client.post("/api/triggers/", json=trg_payload)
     assert trg_resp.status_code == 201, trg_resp.text
     trigger_id = trg_resp.json()["id"]
@@ -96,18 +96,18 @@ def test_webhook_trigger_unknown_trigger(client):
 def test_webhook_trigger_missing_auth_header(client):
     """Firing a trigger without Authorization header should return 404."""
 
-    # 1. Create an agent and trigger
-    agent_payload = {
-        "name": "Test Agent",
+    # 1. Create an fiche and trigger
+    fiche_payload = {
+        "name": "Test Fiche",
         "system_instructions": "sys",
         "task_instructions": "task",
         "model": "gpt-mock",
     }
-    resp = client.post("/api/agents/", json=agent_payload)
+    resp = client.post("/api/fiches/", json=fiche_payload)
     assert resp.status_code == 201, resp.text
-    agent_id = resp.json()["id"]
+    fiche_id = resp.json()["id"]
 
-    trg_payload = {"agent_id": agent_id, "type": "webhook"}
+    trg_payload = {"fiche_id": fiche_id, "type": "webhook"}
     trg_resp = client.post("/api/triggers/", json=trg_payload)
     assert trg_resp.status_code == 201, trg_resp.text
     trigger_id = trg_resp.json()["id"]
@@ -121,18 +121,18 @@ def test_webhook_trigger_missing_auth_header(client):
 def test_webhook_trigger_body_too_large(client):
     """Firing a trigger with oversized payload should return 413."""
 
-    # 1. Create an agent and trigger
-    agent_payload = {
-        "name": "Test Agent",
+    # 1. Create an fiche and trigger
+    fiche_payload = {
+        "name": "Test Fiche",
         "system_instructions": "sys",
         "task_instructions": "task",
         "model": "gpt-mock",
     }
-    resp = client.post("/api/agents/", json=agent_payload)
+    resp = client.post("/api/fiches/", json=fiche_payload)
     assert resp.status_code == 201, resp.text
-    agent_id = resp.json()["id"]
+    fiche_id = resp.json()["id"]
 
-    trg_payload = {"agent_id": agent_id, "type": "webhook"}
+    trg_payload = {"fiche_id": fiche_id, "type": "webhook"}
     trg_resp = client.post("/api/triggers/", json=trg_payload)
     assert trg_resp.status_code == 201, trg_resp.text
     trigger_data = trg_resp.json()

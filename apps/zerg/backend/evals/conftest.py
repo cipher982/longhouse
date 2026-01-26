@@ -40,9 +40,9 @@ class EvalAssertion(BaseModel):
     case_insensitive: bool = False
     rubric: str | None = None
     min_score: float | None = None
-    worker_id: int | None = None  # For worker-specific assertions
+    commis_id: int | None = None  # For commis-specific assertions
     path: str | None = None  # For artifact assertions
-    tool: str | None = None  # For worker_tool_called
+    tool: str | None = None  # For commis_tool_called
 
 
 class Message(BaseModel):
@@ -107,7 +107,7 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "tool_usage: Tool usage test category")
     config.addinivalue_line("markers", "edge_case: Edge case test category")
     config.addinivalue_line("markers", "performance: Performance test category")
-    config.addinivalue_line("markers", "worker: Worker delegation test")
+    config.addinivalue_line("markers", "commis: Commis delegation test")
     config.addinivalue_line("markers", "multi_turn: Multi-turn conversation test")
     config.addinivalue_line("markers", "llm_graded: Test uses LLM-as-judge for evaluation")
     config.addinivalue_line("markers", "live_only: Test requires live mode (real OpenAI API)")
@@ -210,7 +210,7 @@ def eval_runner(db_session, test_user, request, eval_case):
     If a variant is specified via --variant flag, it will be applied.
     """
     from evals.runner import EvalRunner
-    from zerg.services.supervisor_service import SupervisorService
+    from zerg.services.concierge_service import ConciergeService
     from zerg.services.auto_seed import _seed_server_knowledge, _seed_user_context
 
     # Evals should reflect a real "dev@local" environment. In tests we create the
@@ -223,8 +223,8 @@ def eval_runner(db_session, test_user, request, eval_case):
     _seed_server_knowledge()
     db_session.expire_all()
 
-    supervisor_service = SupervisorService(db_session)
-    runner = EvalRunner(supervisor_service, test_user.id)
+    concierge_service = ConciergeService(db_session)
+    runner = EvalRunner(concierge_service, test_user.id)
 
     # Apply variant overrides (if the dataset defines variants)
     dataset_name, _case = eval_case
@@ -254,7 +254,7 @@ def hermetic_mode():
         os.environ["EVAL_MODE"] = eval_mode
 
     # In live mode, restore real OpenAI for llm_graded assertions
-    # Note: Supervisor still uses stub LLM (that's OK - we're testing the grader, not supervisor quality)
+    # Note: Concierge still uses stub LLM (that's OK - we're testing the grader, not concierge quality)
     if eval_mode == "live":
         import sys
 
@@ -286,15 +286,15 @@ def hermetic_mode():
 
 
 def pytest_sessionfinish(session, exitstatus):
-    """Merge per-worker temp files after all tests complete.
+    """Merge per-commis temp files after all tests complete.
 
-    This runs in both master and worker processes, so we need to check
+    This runs in both master and commis processes, so we need to check
     if we're the master before merging.
     """
     import os
 
-    # Only merge on master node (not on xdist workers)
-    if os.environ.get("PYTEST_XDIST_WORKER"):
+    # Only merge on master node (not on xdist commis)
+    if os.environ.get("PYTEST_XDIST_COMMIS"):
         return
 
     # Only merge if we have temp files (tests actually ran)
@@ -328,5 +328,5 @@ def pytest_sessionfinish(session, exitstatus):
 # - Database (per-test session via db_session fixture)
 # - Auth (AUTH_DISABLED=1 via TESTING=1)
 #
-# No additional stubs needed for Phase 1 - we're calling SupervisorService
+# No additional stubs needed for Phase 1 - we're calling ConciergeService
 # directly which uses the existing test infrastructure.

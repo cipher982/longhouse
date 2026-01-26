@@ -42,7 +42,7 @@ class Workflow(BaseModel):
     updated_at: Optional[datetime] = None
 
 
-class Agent(BaseModel):
+class Fiche(BaseModel):
     id: int
     name: str
     system_instructions: str
@@ -55,7 +55,7 @@ class Agent(BaseModel):
 class Thread(BaseModel):
     id: int
     title: str
-    agent_id: int
+    fiche_id: int
     created_at: Optional[datetime] = None
 
 

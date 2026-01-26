@@ -3,8 +3,8 @@
 This module provides assertion functions that validate eval results:
 - contains: Text contains substring
 - regex: Text matches regex pattern
-- tool_called: Supervisor called specific tool
-- worker_spawned: Number of workers spawned
+- tool_called: Concierge called specific tool
+- commis_spawned: Number of commis spawned
 - latency_ms: Execution time bounds
 - total_tokens: Token usage bounds
 - status: Run status check
@@ -111,7 +111,7 @@ def assert_not_tool_called(
 ) -> tuple[bool, str]:
     """Assert that a specific tool was NOT called during the run.
 
-    Useful for testing that agents pick the right specialized tool
+    Useful for testing that fiches pick the right specialized tool
     instead of a generic fallback (e.g., get_whoop_data instead of web_search).
 
     Args:
@@ -128,13 +128,13 @@ def assert_not_tool_called(
     return False, f"Tool '{tool_name}' was unexpectedly called (all tools: {observed})"
 
 
-def assert_worker_spawned(
+def assert_commis_spawned(
     metrics: EvalMetrics,
     count: int | None = None,
     min_count: int | None = None,
     max_count: int | None = None,
 ) -> tuple[bool, str]:
-    """Assert number of workers spawned.
+    """Assert number of commis spawned.
 
     Args:
         metrics: EvalMetrics from run
@@ -145,21 +145,21 @@ def assert_worker_spawned(
     Returns:
         (passed, message) tuple
     """
-    actual = metrics.workers_spawned
+    actual = metrics.commis_spawned
 
     if count is not None:
         if actual == count:
-            return True, f"Spawned {actual} worker(s) (expected {count})"
+            return True, f"Spawned {actual} commis(s) (expected {count})"
         else:
-            return False, f"Spawned {actual} worker(s), expected {count}"
+            return False, f"Spawned {actual} commis(s), expected {count}"
 
     if min_count is not None and actual < min_count:
-        return False, f"Spawned {actual} worker(s), expected at least {min_count}"
+        return False, f"Spawned {actual} commis(s), expected at least {min_count}"
 
     if max_count is not None and actual > max_count:
-        return False, f"Spawned {actual} worker(s), expected at most {max_count}"
+        return False, f"Spawned {actual} commis(s), expected at most {max_count}"
 
-    return True, f"Spawned {actual} worker(s)"
+    return True, f"Spawned {actual} commis(s)"
 
 
 def assert_latency_ms(
@@ -228,54 +228,54 @@ def assert_status(
         return False, f"Status is {metrics.status}, expected {expected}"
 
 
-def assert_worker_result_contains(
+def assert_commis_result_contains(
     metrics: EvalMetrics,
-    worker_id: int,
+    commis_id: int,
     value: str,
     case_insensitive: bool = False,
 ) -> tuple[bool, str]:
-    """Assert that a worker's result contains specific text.
+    """Assert that a commis's result contains specific text.
 
     Args:
         metrics: EvalMetrics from run
-        worker_id: Ordinal index of worker (0-based, ordered by created_at)
+        commis_id: Ordinal index of commis (0-based, ordered by created_at)
         value: Substring to search for
         case_insensitive: Whether to ignore case
 
     Returns:
         (passed, message) tuple
     """
-    from zerg.models.models import WorkerJob
-    from zerg.services.worker_artifact_store import WorkerArtifactStore
+    from zerg.models.models import CommisJob
+    from zerg.services.commis_artifact_store import CommisArtifactStore
 
     # Import db_session from runner (injected into metrics)
-    # We need to query WorkerJob to get worker_id (UUID), then read artifact
+    # We need to query CommisJob to get commis_id (UUID), then read artifact
     if not hasattr(metrics, "_db_session"):
         return False, "DB session not available in metrics"
 
     db_session = metrics._db_session
 
-    # Get workers ordered by created_at (ordinal indexing)
-    workers = (
-        db_session.query(WorkerJob)
-        .filter(WorkerJob.supervisor_run_id == metrics.run_id)
-        .order_by(WorkerJob.created_at)
+    # Get commis ordered by created_at (ordinal indexing)
+    commis = (
+        db_session.query(CommisJob)
+        .filter(CommisJob.concierge_course_id == metrics.course_id)
+        .order_by(CommisJob.created_at)
         .all()
     )
 
-    if worker_id >= len(workers):
-        return False, f"Worker index {worker_id} out of range (only {len(workers)} workers spawned)"
+    if commis_id >= len(commis):
+        return False, f"Commis index {commis_id} out of range (only {len(commis)} commis spawned)"
 
-    job = workers[worker_id]
-    if not job.worker_id:
-        return False, f"Worker {worker_id} has no worker_id (not started yet)"
+    job = commis[commis_id]
+    if not job.commis_id:
+        return False, f"Commis {commis_id} has no commis_id (not started yet)"
 
     # Read result from artifact store
-    artifact_store = WorkerArtifactStore()
-    result_path = artifact_store.base_path / job.worker_id / "result.txt"
+    artifact_store = CommisArtifactStore()
+    result_path = artifact_store.base_path / job.commis_id / "result.txt"
 
     if not result_path.exists():
-        return False, f"Worker {worker_id} result file not found: {result_path}"
+        return False, f"Commis {commis_id} result file not found: {result_path}"
 
     result_text = result_path.read_text()
     search_text = result_text
@@ -286,171 +286,171 @@ def assert_worker_result_contains(
         search_value = search_value.lower()
 
     if search_value in search_text:
-        return True, f"Worker {worker_id} result contains '{value}'"
+        return True, f"Commis {commis_id} result contains '{value}'"
     else:
-        return False, f"Worker {worker_id} result does not contain '{value}'"
+        return False, f"Commis {commis_id} result does not contain '{value}'"
 
 
-def assert_worker_tool_called(
+def assert_commis_tool_called(
     metrics: EvalMetrics,
-    worker_id: int,
+    commis_id: int,
     tool: str,
     min_calls: int = 1,
 ) -> tuple[bool, str]:
-    """Assert that a worker called a specific tool.
+    """Assert that a commis called a specific tool.
 
     Args:
         metrics: EvalMetrics from run
-        worker_id: Ordinal index of worker (0-based, ordered by created_at)
+        commis_id: Ordinal index of commis (0-based, ordered by created_at)
         tool: Tool name to check for
         min_calls: Minimum number of times tool should be called
 
     Returns:
         (passed, message) tuple
     """
-    from zerg.models.models import WorkerJob
-    from zerg.models.agent_run_event import AgentRunEvent
+    from zerg.models.models import CommisJob
+    from zerg.models.course_event import CourseEvent
 
     if not hasattr(metrics, "_db_session"):
         return False, "DB session not available in metrics"
 
     db_session = metrics._db_session
 
-    # Get workers ordered by created_at (ordinal indexing)
-    workers = (
-        db_session.query(WorkerJob)
-        .filter(WorkerJob.supervisor_run_id == metrics.run_id)
-        .order_by(WorkerJob.created_at)
+    # Get commis ordered by created_at (ordinal indexing)
+    commis = (
+        db_session.query(CommisJob)
+        .filter(CommisJob.concierge_course_id == metrics.course_id)
+        .order_by(CommisJob.created_at)
         .all()
     )
 
-    if worker_id >= len(workers):
-        return False, f"Worker index {worker_id} out of range (only {len(workers)} workers spawned)"
+    if commis_id >= len(commis):
+        return False, f"Commis index {commis_id} out of range (only {len(commis)} commis spawned)"
 
-    job = workers[worker_id]
-    if not job.worker_id:
-        return False, f"Worker {worker_id} has no worker_id (not started yet)"
+    job = commis[commis_id]
+    if not job.commis_id:
+        return False, f"Commis {commis_id} has no commis_id (not started yet)"
 
-    # Worker tool calls are emitted as AgentRunEvents on the *supervisor run*.
-    # See supervisor_react_engine._call_tool_async: it uses ctx.run_id (supervisor run_id)
-    # and includes worker_id + tool_name in the payload.
-    events = db_session.query(AgentRunEvent).filter(AgentRunEvent.run_id == metrics.run_id).all()
+    # Commis tool calls are emitted as AgentRunEvents on the *concierge run*.
+    # See concierge_react_engine._call_tool_async: it uses ctx.course_id (concierge course_id)
+    # and includes commis_id + tool_name in the payload.
+    events = db_session.query(CourseEvent).filter(CourseEvent.course_id == metrics.course_id).all()
 
-    def _matches(event: AgentRunEvent) -> bool:
+    def _matches(event: CourseEvent) -> bool:
         payload = event.payload or {}
-        return payload.get("worker_id") == job.worker_id and payload.get("tool_name") == tool
+        return payload.get("commis_id") == job.commis_id and payload.get("tool_name") == tool
 
     # Prefer counting "started" events (one per tool call), but fall back to any
-    # worker tool lifecycle event if started wasn't persisted for some reason.
-    started_calls = sum(1 for e in events if e.event_type == "worker_tool_started" and _matches(e))
+    # commis tool lifecycle event if started wasn't persisted for some reason.
+    started_calls = sum(1 for e in events if e.event_type == "commis_tool_started" and _matches(e))
     tool_calls = started_calls or sum(
         1
         for e in events
-        if e.event_type in ("worker_tool_started", "worker_tool_completed", "worker_tool_failed") and _matches(e)
+        if e.event_type in ("commis_tool_started", "commis_tool_completed", "commis_tool_failed") and _matches(e)
     )
 
     if tool_calls >= min_calls:
-        return True, f"Worker {worker_id} called '{tool}' {tool_calls} time(s) (min: {min_calls})"
+        return True, f"Commis {commis_id} called '{tool}' {tool_calls} time(s) (min: {min_calls})"
     else:
-        return False, f"Worker {worker_id} called '{tool}' {tool_calls} time(s), expected at least {min_calls}"
+        return False, f"Commis {commis_id} called '{tool}' {tool_calls} time(s), expected at least {min_calls}"
 
 
 def assert_artifact_exists(
     metrics: EvalMetrics,
-    worker_id: int,
+    commis_id: int,
     path: str,
 ) -> tuple[bool, str]:
-    """Assert that a worker artifact file exists.
+    """Assert that a commis artifact file exists.
 
     Args:
         metrics: EvalMetrics from run
-        worker_id: Ordinal index of worker (0-based, ordered by created_at)
-        path: Relative path within worker's artifact directory (e.g., "metrics.jsonl")
+        commis_id: Ordinal index of commis (0-based, ordered by created_at)
+        path: Relative path within commis's artifact directory (e.g., "metrics.jsonl")
 
     Returns:
         (passed, message) tuple
     """
-    from zerg.models.models import WorkerJob
-    from zerg.services.worker_artifact_store import WorkerArtifactStore
+    from zerg.models.models import CommisJob
+    from zerg.services.commis_artifact_store import CommisArtifactStore
 
     if not hasattr(metrics, "_db_session"):
         return False, "DB session not available in metrics"
 
     db_session = metrics._db_session
 
-    # Get workers ordered by created_at (ordinal indexing)
-    workers = (
-        db_session.query(WorkerJob)
-        .filter(WorkerJob.supervisor_run_id == metrics.run_id)
-        .order_by(WorkerJob.created_at)
+    # Get commis ordered by created_at (ordinal indexing)
+    commis = (
+        db_session.query(CommisJob)
+        .filter(CommisJob.concierge_course_id == metrics.course_id)
+        .order_by(CommisJob.created_at)
         .all()
     )
 
-    if worker_id >= len(workers):
-        return False, f"Worker index {worker_id} out of range (only {len(workers)} workers spawned)"
+    if commis_id >= len(commis):
+        return False, f"Commis index {commis_id} out of range (only {len(commis)} commis spawned)"
 
-    job = workers[worker_id]
-    if not job.worker_id:
-        return False, f"Worker {worker_id} has no worker_id (not started yet)"
+    job = commis[commis_id]
+    if not job.commis_id:
+        return False, f"Commis {commis_id} has no commis_id (not started yet)"
 
     # Check if artifact exists
-    artifact_store = WorkerArtifactStore()
-    artifact_path = artifact_store.base_path / job.worker_id / path
+    artifact_store = CommisArtifactStore()
+    artifact_path = artifact_store.base_path / job.commis_id / path
 
     if artifact_path.exists():
-        return True, f"Worker {worker_id} artifact exists: {path}"
+        return True, f"Commis {commis_id} artifact exists: {path}"
     else:
-        return False, f"Worker {worker_id} artifact not found: {path}"
+        return False, f"Commis {commis_id} artifact not found: {path}"
 
 
 def assert_artifact_contains(
     metrics: EvalMetrics,
-    worker_id: int,
+    commis_id: int,
     path: str,
     value: str,
     case_insensitive: bool = False,
 ) -> tuple[bool, str]:
-    """Assert that a worker artifact file contains specific text.
+    """Assert that a commis artifact file contains specific text.
 
     Args:
         metrics: EvalMetrics from run
-        worker_id: Ordinal index of worker (0-based, ordered by created_at)
-        path: Relative path within worker's artifact directory
+        commis_id: Ordinal index of commis (0-based, ordered by created_at)
+        path: Relative path within commis's artifact directory
         value: Substring to search for
         case_insensitive: Whether to ignore case
 
     Returns:
         (passed, message) tuple
     """
-    from zerg.models.models import WorkerJob
-    from zerg.services.worker_artifact_store import WorkerArtifactStore
+    from zerg.models.models import CommisJob
+    from zerg.services.commis_artifact_store import CommisArtifactStore
 
     if not hasattr(metrics, "_db_session"):
         return False, "DB session not available in metrics"
 
     db_session = metrics._db_session
 
-    # Get workers ordered by created_at (ordinal indexing)
-    workers = (
-        db_session.query(WorkerJob)
-        .filter(WorkerJob.supervisor_run_id == metrics.run_id)
-        .order_by(WorkerJob.created_at)
+    # Get commis ordered by created_at (ordinal indexing)
+    commis = (
+        db_session.query(CommisJob)
+        .filter(CommisJob.concierge_course_id == metrics.course_id)
+        .order_by(CommisJob.created_at)
         .all()
     )
 
-    if worker_id >= len(workers):
-        return False, f"Worker index {worker_id} out of range (only {len(workers)} workers spawned)"
+    if commis_id >= len(commis):
+        return False, f"Commis index {commis_id} out of range (only {len(commis)} commis spawned)"
 
-    job = workers[worker_id]
-    if not job.worker_id:
-        return False, f"Worker {worker_id} has no worker_id (not started yet)"
+    job = commis[commis_id]
+    if not job.commis_id:
+        return False, f"Commis {commis_id} has no commis_id (not started yet)"
 
     # Read artifact
-    artifact_store = WorkerArtifactStore()
-    artifact_path = artifact_store.base_path / job.worker_id / path
+    artifact_store = CommisArtifactStore()
+    artifact_path = artifact_store.base_path / job.commis_id / path
 
     if not artifact_path.exists():
-        return False, f"Worker {worker_id} artifact not found: {path}"
+        return False, f"Commis {commis_id} artifact not found: {path}"
 
     content = artifact_path.read_text()
     search_content = content
@@ -461,9 +461,9 @@ def assert_artifact_contains(
         search_value = search_value.lower()
 
     if search_value in search_content:
-        return True, f"Worker {worker_id} artifact '{path}' contains '{value}'"
+        return True, f"Commis {commis_id} artifact '{path}' contains '{value}'"
     else:
-        return False, f"Worker {worker_id} artifact '{path}' does not contain '{value}'"
+        return False, f"Commis {commis_id} artifact '{path}' does not contain '{value}'"
 
 
 class SkipAssertion(Exception):
@@ -552,13 +552,13 @@ ASSERTERS = {
     "regex": assert_regex,
     "tool_called": assert_tool_called,
     "not_tool_called": assert_not_tool_called,
-    "worker_spawned": assert_worker_spawned,
+    "commis_spawned": assert_commis_spawned,
     "latency_ms": assert_latency_ms,
     "total_tokens": assert_total_tokens,
     "status": assert_status,
     "llm_graded": assert_llm_graded,
-    "worker_result_contains": assert_worker_result_contains,
-    "worker_tool_called": assert_worker_tool_called,
+    "commis_result_contains": assert_commis_result_contains,
+    "commis_tool_called": assert_commis_tool_called,
     "artifact_exists": assert_artifact_exists,
     "artifact_contains": assert_artifact_contains,
 }

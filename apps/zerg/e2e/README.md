@@ -17,7 +17,7 @@ make test-e2e-grep GREP="Jarvis"
 
 - Playwright starts an isolated backend (`apps/zerg/e2e/spawn-test-backend.js`) and a frontend dev server.
 - Default ports are `BACKEND_PORT=8001` and `FRONTEND_PORT=8002` (override via env).
-- Database isolation is per-Playwright-worker (Postgres schema per worker, routed by the `X-Test-Worker` header).
+- Database isolation is per-Playwright-commis (Postgres schema per commis, routed by the `X-Test-Commis` header).
 
 ## Setup
 
@@ -45,10 +45,10 @@ cd apps/zerg/e2e && bunx playwright install
 cd apps/zerg/e2e
 bunx playwright show-report
 ```
-    const workerId = getWorkerIdFromTest(testInfo);
+    const commisId = getCommisIdFromTest(testInfo);
 
     // Test implementation
-    const agent = await createAgentViaAPI(workerId);
+    const fiche = await createFicheViaAPI(commisId);
     // ... rest of test
   });
 });
@@ -68,14 +68,14 @@ basic)
 ### 3. Use Helper Libraries
 
 - Import from `./helpers/` directory
-- Use consistent patterns for worker ID handling
+- Use consistent patterns for commis ID handling
 - Leverage existing utilities for common operations
 
 ## 🐛 Debugging
 
 ### Common Issues
 
-1. **Database isolation**: Ensure using `testInfo.workerIndex` for worker ID
+1. **Database isolation**: Ensure using `testInfo.commisIndex` for commis ID
 2. **Server startup**: Check ports 8001/8002 are available
 3. **Element timing**: Use `waitForStableElement()` for dynamic content
 4. **Test cleanup**: Verify database reset between tests
@@ -84,7 +84,7 @@ basic)
 
 ```bash
 # Run single test with debugging
-npx playwright test tests/agent_creation_full.spec.ts --debug
+npx playwright test tests/fiche_creation_full.spec.ts --debug
 
 # Run with browser visible
 npx playwright test --headed
@@ -125,11 +125,11 @@ npx playwright test --trace on
 ## 🤝 Contributing
 
 1. **Follow existing patterns** in helper libraries
-2. **Use consistent worker ID handling** via `testInfo.workerIndex`
+2. **Use consistent commis ID handling** via `testInfo.commisIndex`
 3. **Add comprehensive logging** for debugging
 4. **Include error handling** for flaky operations
 5. **Document new patterns** in helper libraries
 
 ---
 
-**Architecture Status**: ✅ Database isolation working, ✅ Worker management stable, ✅ Helper libraries consolidated
+**Architecture Status**: ✅ Database isolation working, ✅ Commis management stable, ✅ Helper libraries consolidated

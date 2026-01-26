@@ -2,8 +2,8 @@
 
 This module provides a lease-based job queue for reliable job execution:
 - Jobs are enqueued with dedupe keys to prevent duplicates
-- Workers claim jobs with FOR UPDATE SKIP LOCKED for concurrency
-- Leases prevent jobs from being stuck if a worker crashes
+- Commis claim jobs with FOR UPDATE SKIP LOCKED for concurrency
+- Leases prevent jobs from being stuck if a commis crashes
 - Automatic retry with exponential backoff on failure
 """
 
@@ -49,7 +49,7 @@ class QueueJob:
 
 @dataclass(frozen=True, slots=True)
 class QueueOwner:
-    """Identity of a queue worker."""
+    """Identity of a queue commis."""
 
     name: str
 

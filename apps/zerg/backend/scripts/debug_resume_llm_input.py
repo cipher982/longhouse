@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Debug script: Capture and display EXACT LLM input during supervisor resume.
+"""Debug script: Capture and display EXACT LLM input during concierge resume.
 
-This script helps postmortem why the LLM might spawn a second worker after resume.
+This script helps postmortem why the LLM might spawn a second commis after resume.
 It shows the raw messages that would be sent to OpenAI so we can diagnose:
 - Is the tool result missing or malformed?
 - Is the message history corrupted?
@@ -86,21 +86,21 @@ async def simulate_bug_scenario():
     print("SIMULATING: The exact bug scenario from 2026-01-13 01:58")
     print("="*80)
 
-    # This is what the LLM SHOULD see after worker completes:
-    print("\n--- EXPECTED message history (after worker completes) ---")
+    # This is what the LLM SHOULD see after commis completes:
+    print("\n--- EXPECTED message history (after commis completes) ---")
 
     system_prompt = """You are Jarvis, a helpful AI assistant with access to various tools.
 
 When a user asks for something, you can:
 1. Answer directly if you know the answer
 2. Use tools to help accomplish tasks
-3. Spawn workers for complex tasks that need tool access
+3. Spawn commis for complex tasks that need tool access
 
-When you call spawn_commis, it will create a background worker to handle the task.
-Once the worker completes, you'll receive the result and should synthesize it for the user.
+When you call spawn_commis, it will create a background commis to handle the task.
+Once the commis completes, you'll receive the result and should synthesize it for the user.
 
-IMPORTANT: When you see a tool result that says "Worker job N completed:", that means
-the task is DONE. You should summarize the result for the user, NOT spawn another worker."""
+IMPORTANT: When you see a tool result that says "Commis job N completed:", that means
+the task is DONE. You should summarize the result for the user, NOT spawn another commis."""
 
     user_message = "check disk space on cube real quick"
 
@@ -114,10 +114,10 @@ the task is DONE. You should summarize the result for the user, NOT spawn anothe
         }]
     )
 
-    # The tool result from spawn_commis AFTER worker completed
-    # This is what interrupt() returns after Command(resume=worker_result)
+    # The tool result from spawn_commis AFTER commis completed
+    # This is what interrupt() returns after Command(resume=commis_result)
     tool_result = ToolMessage(
-        content="""Worker job 41 completed:
+        content="""Commis job 41 completed:
 
 Cube is at 45% disk usage. Docker images and volumes are the largest consumers.
 
@@ -172,13 +172,13 @@ TO DIAGNOSE:
 """)
 
 
-async def analyze_run(run_id: int):
+async def analyze_run(course_id: int):
     """Analyze a specific run from the database."""
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
     from zerg.config import settings
-    from zerg.models.models import AgentRun, WorkerJob
+    from zerg.models.models import Course, CommisJob
     from zerg.services.thread_service import ThreadService
 
     engine = create_engine(settings.database_url)
@@ -186,26 +186,26 @@ async def analyze_run(run_id: int):
     db = SessionLocal()
 
     try:
-        run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
+        run = db.query(Course).filter(Course.id == course_id).first()
         if not run:
-            print(f"Run {run_id} not found")
+            print(f"Run {course_id} not found")
             return
 
         print(f"\n{'='*80}")
-        print(f"ANALYZING: Run {run_id}")
+        print(f"ANALYZING: Run {course_id}")
         print(f"{'='*80}")
         print(f"Status: {run.status}")
         print(f"Thread ID: {run.thread_id}")
         print(f"Started: {run.started_at}")
         print(f"Finished: {run.finished_at}")
 
-        # Get workers for this run
-        workers = db.query(WorkerJob).filter(
-            WorkerJob.supervisor_run_id == run_id
-        ).order_by(WorkerJob.created_at).all()
+        # Get commis for this run
+        commis = db.query(CommisJob).filter(
+            CommisJob.concierge_course_id == course_id
+        ).order_by(CommisJob.created_at).all()
 
-        print(f"\nWorkers spawned: {len(workers)}")
-        for w in workers:
+        print(f"\nCommis spawned: {len(commis)}")
+        for w in commis:
             print(f"  - Job {w.id}: '{w.task}' ({w.status})")
 
         # Get thread messages
@@ -249,15 +249,15 @@ async def check_llm_logs():
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="Debug LLM input during supervisor resume")
+    parser = argparse.ArgumentParser(description="Debug LLM input during concierge resume")
     parser.add_argument("--run-id", type=int, help="Analyze a specific run from database")
     parser.add_argument("--simulate", action="store_true", help="Simulate the bug scenario")
     parser.add_argument("--check-logs", action="store_true", help="Check LLM request logs")
 
     args = parser.parse_args()
 
-    if args.run_id:
-        await analyze_run(args.run_id)
+    if args.course_id:
+        await analyze_run(args.course_id)
     elif args.check_logs:
         await check_llm_logs()
     else:

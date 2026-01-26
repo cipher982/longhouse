@@ -23,4 +23,4 @@ cd "$SCRIPT_DIR"
 # Run tests (excluding live connector tests which require real API credentials)
 # To run live connector tests: uv run pytest tests/integration/test_connectors_live.py -v
 # -n auto: parallel execution using all CPU cores (requires pytest-xdist)
-uv run pytest tests/ --ignore=tests/integration/test_connectors_live.py -n "${PYTEST_XDIST_WORKERS:-auto}" -p no:warnings --tb=short "$@"
+uv run pytest tests/ --ignore=tests/integration/test_connectors_live.py -n "${PYTEST_XDIST_COMMIS:-auto}" -p no:warnings --tb=short "$@"

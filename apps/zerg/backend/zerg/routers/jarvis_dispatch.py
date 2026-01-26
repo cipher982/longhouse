@@ -1,4 +1,4 @@
-"""Jarvis manual agent dispatch endpoint."""
+"""Jarvis manual fiche dispatch endpoint."""
 
 import logging
 from typing import Optional
@@ -13,9 +13,9 @@ from sqlalchemy.orm import Session
 
 from zerg.crud import crud
 from zerg.database import get_db
-from zerg.models.models import AgentRun
+from zerg.models.models import Course
 from zerg.routers.jarvis_auth import get_current_jarvis_user
-from zerg.services.task_runner import execute_agent_task
+from zerg.services.task_runner import execute_fiche_task
 
 logger = logging.getLogger(__name__)
 
@@ -23,19 +23,19 @@ router = APIRouter(prefix="", tags=["jarvis"])
 
 
 class JarvisDispatchRequest(BaseModel):
-    """Jarvis dispatch request to trigger agent execution."""
+    """Jarvis dispatch request to trigger fiche execution."""
 
-    agent_id: int = Field(..., description="ID of agent to execute")
+    fiche_id: int = Field(..., description="ID of fiche to execute")
     task_override: Optional[str] = Field(None, description="Optional task instruction override")
 
 
 class JarvisDispatchResponse(BaseModel):
-    """Jarvis dispatch response with run/thread IDs."""
+    """Jarvis dispatch response with course/thread IDs."""
 
-    run_id: int = Field(..., description="AgentRun ID for tracking execution")
+    course_id: int = Field(..., description="Course ID for tracking execution")
     thread_id: int = Field(..., description="Thread ID containing conversation")
-    status: str = Field(..., description="Initial run status")
-    agent_name: str = Field(..., description="Name of agent being executed")
+    status: str = Field(..., description="Initial course status")
+    fiche_name: str = Field(..., description="Name of fiche being executed")
 
 
 @router.post("/dispatch", response_model=JarvisDispatchResponse)
@@ -44,78 +44,78 @@ async def jarvis_dispatch(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_jarvis_user),
 ) -> JarvisDispatchResponse:
-    """Dispatch agent task from Jarvis.
+    """Dispatch fiche task from Jarvis.
 
-    Triggers immediate execution of an agent task and returns run/thread IDs
+    Triggers immediate execution of a fiche task and returns course/thread IDs
     for tracking. Jarvis can then listen to the SSE stream for updates.
 
     Args:
-        request: Dispatch request with agent_id and optional task override
+        request: Dispatch request with fiche_id and optional task override
         db: Database session
         current_user: Authenticated user (Jarvis service account)
 
     Returns:
-        JarvisDispatchResponse with run and thread IDs
+        JarvisDispatchResponse with course and thread IDs
 
     Raises:
-        404: Agent not found
-        409: Agent already running
+        404: Fiche not found
+        409: Fiche already running
         500: Execution error
     """
-    # Get agent
-    agent = crud.get_agent(db, request.agent_id)
-    if not agent:
+    # Get fiche
+    fiche = crud.get_fiche(db, request.fiche_id)
+    if not fiche:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Agent {request.agent_id} not found",
+            detail=f"Fiche {request.fiche_id} not found",
         )
-    # Authorization: only owner or admin may dispatch an agent's task
+    # Authorization: only owner or admin may dispatch a fiche's task
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
-    if not is_admin and agent.owner_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not agent owner")
+    if not is_admin and fiche.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not fiche owner")
 
     # Optionally override task instructions
-    original_task = agent.task_instructions
+    original_task = fiche.task_instructions
     if request.task_override:
-        agent.task_instructions = request.task_override
+        fiche.task_instructions = request.task_override
 
     try:
-        # Execute agent task (creates thread and run)
-        thread = await execute_agent_task(db, agent, thread_type="manual")
+        # Execute fiche task (creates thread and course)
+        thread = await execute_fiche_task(db, fiche, thread_type="manual")
 
-        # Get the created run
-        run = db.query(AgentRun).filter(AgentRun.thread_id == thread.id).order_by(AgentRun.created_at.desc()).first()
+        # Get the created course
+        course = db.query(Course).filter(Course.thread_id == thread.id).order_by(Course.created_at.desc()).first()
 
-        if not run:
+        if not course:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to create agent run",
+                detail="Failed to create fiche course",
             )
 
-        logger.info(f"Jarvis dispatched agent {agent.id} (run {run.id}, thread {thread.id})")
+        logger.info(f"Jarvis dispatched fiche {fiche.id} (course {course.id}, thread {thread.id})")
 
         return JarvisDispatchResponse(
-            run_id=run.id,
+            course_id=course.id,
             thread_id=thread.id,
-            status=run.status.value if hasattr(run.status, "value") else str(run.status),
-            agent_name=agent.name,
+            status=course.status.value if hasattr(course.status, "value") else str(course.status),
+            fiche_name=fiche.name,
         )
 
     except ValueError as e:
-        # Agent already running or validation error
+        # Fiche already running or validation error
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(e),
         )
     except Exception as e:
-        logger.error(f"Jarvis dispatch failed for agent {agent.id}: {e}")
+        logger.error(f"Jarvis dispatch failed for fiche {fiche.id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to dispatch agent: {str(e)}",
+            detail=f"Failed to dispatch fiche: {str(e)}",
         )
     finally:
         # Restore original task instructions if overridden
         if request.task_override:
-            agent.task_instructions = original_task
-            db.add(agent)
+            fiche.task_instructions = original_task
+            db.add(fiche)
             db.commit()

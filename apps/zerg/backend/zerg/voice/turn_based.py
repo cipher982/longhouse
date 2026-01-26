@@ -1,4 +1,4 @@
-"""Turn-based voice orchestration: STT -> supervisor -> text response."""
+"""Turn-based voice orchestration: STT -> concierge -> text response."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from zerg.config import get_settings
 from zerg.database import db_session
-from zerg.services.supervisor_service import SupervisorService
+from zerg.services.concierge_service import ConciergeService
 from zerg.voice.stt_service import STTResult
 from zerg.voice.stt_service import get_stt_service
 
@@ -21,7 +21,7 @@ class VoiceTurnResult:
     transcript: str
     response_text: str | None
     status: str
-    run_id: int | None = None
+    course_id: int | None = None
     thread_id: int | None = None
     error: str | None = None
     stt_model: str | None = None
@@ -42,7 +42,7 @@ async def run_voice_turn(
 
     Steps:
       1) Transcribe audio to text
-      2) Run supervisor on the transcript
+      2) Run concierge on the transcript
       3) Return transcript + response text
     """
     stt_service = get_stt_service()
@@ -71,8 +71,8 @@ async def run_voice_turn(
 
     try:
         with db_session() as db:
-            supervisor = SupervisorService(db)
-            result = await supervisor.run_supervisor(
+            concierge = ConciergeService(db)
+            result = await concierge.run_concierge(
                 owner_id=owner_id,
                 task=stt_result.text,
                 model_override=effective_model,
@@ -82,7 +82,7 @@ async def run_voice_turn(
             transcript=stt_result.text,
             response_text=result.result,
             status=result.status,
-            run_id=result.run_id,
+            course_id=result.course_id,
             thread_id=result.thread_id,
             stt_model=stt_result.model,
         )

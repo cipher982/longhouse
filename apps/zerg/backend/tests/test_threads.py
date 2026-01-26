@@ -9,19 +9,19 @@ import pytest
 from fastapi.testclient import TestClient
 
 from zerg.crud import crud
-from zerg.models.models import Agent
+from zerg.models.models import Fiche
 from zerg.models.models import Thread
 from zerg.models.models import ThreadMessage
 
 
 @pytest.fixture
-def sample_thread(db_session, sample_agent: Agent):
+def sample_thread(db_session, sample_fiche: Fiche):
     """Create a sample thread in the database"""
     thread = Thread(
-        agent_id=sample_agent.id,
+        fiche_id=sample_fiche.id,
         title="Test Thread",
         active=True,
-        agent_state={"test_key": "test_value"},
+        fiche_state={"test_key": "test_value"},
         memory_strategy="buffer",
     )
     db_session.add(thread)
@@ -73,9 +73,9 @@ def test_read_threads(client: TestClient, sample_thread: Thread):
     assert len(threads) == 1
     assert threads[0]["id"] == sample_thread.id
     assert threads[0]["title"] == sample_thread.title
-    assert threads[0]["agent_id"] == sample_thread.agent_id
+    assert threads[0]["fiche_id"] == sample_thread.fiche_id
     assert threads[0]["active"] == sample_thread.active
-    assert threads[0]["agent_state"] == sample_thread.agent_state
+    assert threads[0]["fiche_state"] == sample_thread.fiche_state
     assert threads[0]["memory_strategy"] == sample_thread.memory_strategy
 
 
@@ -94,39 +94,39 @@ def test_read_threads_excludes_messages(client: TestClient, db_session, sample_t
     assert "messages" not in threads[0]
 
 
-def test_read_threads_filter_by_agent(client: TestClient, sample_agent: Agent, sample_thread: Thread):
-    """Test filtering threads by agent_id"""
-    response = client.get(f"/api/threads?agent_id={sample_agent.id}")
+def test_read_threads_filter_by_agent(client: TestClient, sample_fiche: Fiche, sample_thread: Thread):
+    """Test filtering threads by fiche_id"""
+    response = client.get(f"/api/threads?fiche_id={sample_fiche.id}")
     assert response.status_code == 200
     threads = response.json()
     assert len(threads) == 1
     assert threads[0]["id"] == sample_thread.id
 
-    # Test with non-existent agent_id
-    response = client.get("/api/threads?agent_id=999")  # Assuming this ID doesn't exist
+    # Test with non-existent fiche_id
+    response = client.get("/api/threads?fiche_id=999")  # Assuming this ID doesn't exist
     assert response.status_code == 200
     assert response.json() == []
 
 
-def test_create_thread(client: TestClient, sample_agent: Agent):
+def test_create_thread(client: TestClient, sample_fiche: Fiche):
     """Test the POST /api/threads endpoint"""
     thread_data = {
         "title": "New Test Thread",
-        "agent_id": sample_agent.id,
+        "fiche_id": sample_fiche.id,
         "active": True,
         "memory_strategy": "buffer",
-        "agent_state": {"test": "value"},
+        "fiche_state": {"test": "value"},
     }
 
-    # No need to patch AgentRunner for thread creation
+    # No need to patch FicheRunner for thread creation
     response = client.post("/api/threads", json=thread_data)
     assert response.status_code == 201
     created_thread = response.json()
     assert created_thread["title"] == thread_data["title"]
-    assert created_thread["agent_id"] == thread_data["agent_id"]
+    assert created_thread["fiche_id"] == thread_data["fiche_id"]
     assert created_thread["active"] == thread_data["active"]
     assert created_thread["memory_strategy"] == thread_data["memory_strategy"]
-    assert created_thread["agent_state"] == thread_data["agent_state"]
+    assert created_thread["fiche_state"] == thread_data["fiche_state"]
     assert "id" in created_thread
     assert "created_at" in created_thread
     assert "updated_at" in created_thread
@@ -140,17 +140,17 @@ def test_create_thread(client: TestClient, sample_agent: Agent):
 
 
 def test_create_thread_with_nonexistent_agent(client: TestClient):
-    """Test creating a thread with a non-existent agent ID"""
+    """Test creating a thread with a non-existent fiche ID"""
     thread_data = {
         "title": "New Test Thread",
-        "agent_id": 999,  # Assuming this ID doesn't exist
+        "fiche_id": 999,  # Assuming this ID doesn't exist
         "active": True,
     }
 
     response = client.post("/api/threads", json=thread_data)
     assert response.status_code == 404
     assert "detail" in response.json()
-    assert response.json()["detail"] == "Agent not found"
+    assert response.json()["detail"] == "Fiche not found"
 
 
 def test_read_thread(client: TestClient, sample_thread: Thread):
@@ -160,9 +160,9 @@ def test_read_thread(client: TestClient, sample_thread: Thread):
     fetched_thread = response.json()
     assert fetched_thread["id"] == sample_thread.id
     assert fetched_thread["title"] == sample_thread.title
-    assert fetched_thread["agent_id"] == sample_thread.agent_id
+    assert fetched_thread["fiche_id"] == sample_thread.fiche_id
     assert fetched_thread["active"] == sample_thread.active
-    assert fetched_thread["agent_state"] == sample_thread.agent_state
+    assert fetched_thread["fiche_state"] == sample_thread.fiche_state
     assert fetched_thread["memory_strategy"] == sample_thread.memory_strategy
 
 
@@ -179,7 +179,7 @@ def test_update_thread(client: TestClient, sample_thread: Thread):
     update_data = {
         "title": "Updated Test Thread",
         "active": False,
-        "agent_state": {"updated": "state"},
+        "fiche_state": {"updated": "state"},
         "memory_strategy": "summary",
         "thread_type": "manual",
     }
@@ -190,7 +190,7 @@ def test_update_thread(client: TestClient, sample_thread: Thread):
     assert updated_thread["id"] == sample_thread.id
     assert updated_thread["title"] == update_data["title"]
     assert updated_thread["active"] == update_data["active"]
-    assert updated_thread["agent_state"] == update_data["agent_state"]
+    assert updated_thread["fiche_state"] == update_data["fiche_state"]
     assert updated_thread["memory_strategy"] == update_data["memory_strategy"]
     assert updated_thread["thread_type"] == update_data["thread_type"]
 
@@ -404,11 +404,11 @@ def test_run_thread_not_found(client: TestClient):
 # ============================================================================
 
 
-def test_create_thread_with_scheduled_type(client: TestClient, sample_agent: Agent):
+def test_create_thread_with_scheduled_type(client: TestClient, sample_fiche: Fiche):
     """Test creating a scheduled automation thread"""
     thread_data = {
         "title": "Scheduled Automation",
-        "agent_id": sample_agent.id,
+        "fiche_id": sample_fiche.id,
         "thread_type": "scheduled",
         "active": True,
     }
@@ -421,11 +421,11 @@ def test_create_thread_with_scheduled_type(client: TestClient, sample_agent: Age
     assert "id" in created_thread
 
 
-def test_create_thread_with_manual_type(client: TestClient, sample_agent: Agent):
+def test_create_thread_with_manual_type(client: TestClient, sample_fiche: Fiche):
     """Test creating a manual automation thread"""
     thread_data = {
         "title": "Manual Run",
-        "agent_id": sample_agent.id,
+        "fiche_id": sample_fiche.id,
         "thread_type": "manual",
         "active": True,
     }
@@ -437,11 +437,11 @@ def test_create_thread_with_manual_type(client: TestClient, sample_agent: Agent)
     assert created_thread["title"] == thread_data["title"]
 
 
-def test_create_thread_with_chat_type(client: TestClient, sample_agent: Agent):
+def test_create_thread_with_chat_type(client: TestClient, sample_fiche: Fiche):
     """Test creating a regular chat thread (default type)"""
     thread_data = {
         "title": "Chat Thread",
-        "agent_id": sample_agent.id,
+        "fiche_id": sample_fiche.id,
         "thread_type": "chat",
         "active": True,
     }
@@ -452,22 +452,22 @@ def test_create_thread_with_chat_type(client: TestClient, sample_agent: Agent):
     assert created_thread["thread_type"] == "chat"
 
 
-def test_filter_threads_by_type_scheduled(client: TestClient, sample_agent: Agent):
+def test_filter_threads_by_type_scheduled(client: TestClient, sample_fiche: Fiche):
     """Test filtering threads by thread_type='scheduled'"""
     # Create threads of different types
     chat_thread = {
         "title": "Chat Thread",
-        "agent_id": sample_agent.id,
+        "fiche_id": sample_fiche.id,
         "thread_type": "chat",
     }
     scheduled_thread = {
         "title": "Scheduled Run",
-        "agent_id": sample_agent.id,
+        "fiche_id": sample_fiche.id,
         "thread_type": "scheduled",
     }
     manual_thread = {
         "title": "Manual Run",
-        "agent_id": sample_agent.id,
+        "fiche_id": sample_fiche.id,
         "thread_type": "manual",
     }
 
@@ -476,7 +476,7 @@ def test_filter_threads_by_type_scheduled(client: TestClient, sample_agent: Agen
     client.post("/api/threads", json=manual_thread)
 
     # Filter by scheduled
-    response = client.get(f"/api/threads?agent_id={sample_agent.id}&thread_type=scheduled")
+    response = client.get(f"/api/threads?fiche_id={sample_fiche.id}&thread_type=scheduled")
     assert response.status_code == 200
     threads = response.json()
     assert len(threads) == 1
@@ -484,17 +484,17 @@ def test_filter_threads_by_type_scheduled(client: TestClient, sample_agent: Agen
     assert threads[0]["title"] == "Scheduled Run"
 
 
-def test_filter_threads_by_type_manual(client: TestClient, sample_agent: Agent):
+def test_filter_threads_by_type_manual(client: TestClient, sample_fiche: Fiche):
     """Test filtering threads by thread_type='manual'"""
     # Create threads
     chat_thread = {
         "title": "Chat Thread",
-        "agent_id": sample_agent.id,
+        "fiche_id": sample_fiche.id,
         "thread_type": "chat",
     }
     manual_thread = {
         "title": "Manual Run",
-        "agent_id": sample_agent.id,
+        "fiche_id": sample_fiche.id,
         "thread_type": "manual",
     }
 
@@ -502,7 +502,7 @@ def test_filter_threads_by_type_manual(client: TestClient, sample_agent: Agent):
     client.post("/api/threads", json=manual_thread)
 
     # Filter by manual
-    response = client.get(f"/api/threads?agent_id={sample_agent.id}&thread_type=manual")
+    response = client.get(f"/api/threads?fiche_id={sample_fiche.id}&thread_type=manual")
     assert response.status_code == 200
     threads = response.json()
     assert len(threads) == 1
@@ -510,17 +510,17 @@ def test_filter_threads_by_type_manual(client: TestClient, sample_agent: Agent):
     assert threads[0]["title"] == "Manual Run"
 
 
-def test_filter_threads_by_type_chat(client: TestClient, sample_agent: Agent):
+def test_filter_threads_by_type_chat(client: TestClient, sample_fiche: Fiche):
     """Test filtering threads by thread_type='chat'"""
     # Create threads
     chat_thread = {
         "title": "Chat Thread",
-        "agent_id": sample_agent.id,
+        "fiche_id": sample_fiche.id,
         "thread_type": "chat",
     }
     scheduled_thread = {
         "title": "Scheduled Run",
-        "agent_id": sample_agent.id,
+        "fiche_id": sample_fiche.id,
         "thread_type": "scheduled",
     }
 
@@ -528,7 +528,7 @@ def test_filter_threads_by_type_chat(client: TestClient, sample_agent: Agent):
     client.post("/api/threads", json=scheduled_thread)
 
     # Filter by chat
-    response = client.get(f"/api/threads?agent_id={sample_agent.id}&thread_type=chat")
+    response = client.get(f"/api/threads?fiche_id={sample_fiche.id}&thread_type=chat")
     assert response.status_code == 200
     threads = response.json()
     assert len(threads) == 1
@@ -536,7 +536,7 @@ def test_filter_threads_by_type_chat(client: TestClient, sample_agent: Agent):
     assert threads[0]["title"] == "Chat Thread"
 
 
-def test_automation_threads_api_contract(client: TestClient, sample_agent: Agent):
+def test_automation_threads_api_contract(client: TestClient, sample_fiche: Fiche):
     """
     Contract test: Verify automation threads API returns structure expected by UI.
 
@@ -550,12 +550,12 @@ def test_automation_threads_api_contract(client: TestClient, sample_agent: Agent
     # Create automation threads
     scheduled_data = {
         "title": "Scheduled Automation",
-        "agent_id": sample_agent.id,
+        "fiche_id": sample_fiche.id,
         "thread_type": "scheduled",
     }
     manual_data = {
         "title": "Manual Automation",
-        "agent_id": sample_agent.id,
+        "fiche_id": sample_fiche.id,
         "thread_type": "manual",
     }
 
@@ -566,7 +566,7 @@ def test_automation_threads_api_contract(client: TestClient, sample_agent: Agent
     assert manual_response.status_code == 201
 
     # Fetch scheduled threads
-    response = client.get(f"/api/threads?agent_id={sample_agent.id}&thread_type=scheduled")
+    response = client.get(f"/api/threads?fiche_id={sample_fiche.id}&thread_type=scheduled")
     assert response.status_code == 200
     scheduled_threads = response.json()
     assert len(scheduled_threads) == 1
@@ -581,7 +581,7 @@ def test_automation_threads_api_contract(client: TestClient, sample_agent: Agent
     assert thread["thread_type"] == "scheduled"
 
     # Fetch manual threads
-    response = client.get(f"/api/threads?agent_id={sample_agent.id}&thread_type=manual")
+    response = client.get(f"/api/threads?fiche_id={sample_fiche.id}&thread_type=manual")
     assert response.status_code == 200
     manual_threads = response.json()
     assert len(manual_threads) == 1
@@ -595,7 +595,7 @@ def test_automation_threads_api_contract(client: TestClient, sample_agent: Agent
     assert thread["thread_type"] == "manual"
 
 
-def test_automation_threads_separated_from_chat(client: TestClient, sample_agent: Agent):
+def test_automation_threads_separated_from_chat(client: TestClient, sample_fiche: Fiche):
     """
     Test that automation threads (scheduled/manual) are properly separated
     from chat threads when filtering by type.
@@ -608,7 +608,7 @@ def test_automation_threads_separated_from_chat(client: TestClient, sample_agent
         "/api/threads",
         json={
             "title": "Chat 1",
-            "agent_id": sample_agent.id,
+            "fiche_id": sample_fiche.id,
             "thread_type": "chat",
         },
     )
@@ -616,7 +616,7 @@ def test_automation_threads_separated_from_chat(client: TestClient, sample_agent
         "/api/threads",
         json={
             "title": "Chat 2",
-            "agent_id": sample_agent.id,
+            "fiche_id": sample_fiche.id,
             "thread_type": "chat",
         },
     )
@@ -626,7 +626,7 @@ def test_automation_threads_separated_from_chat(client: TestClient, sample_agent
         "/api/threads",
         json={
             "title": "Scheduled",
-            "agent_id": sample_agent.id,
+            "fiche_id": sample_fiche.id,
             "thread_type": "scheduled",
         },
     )
@@ -636,27 +636,27 @@ def test_automation_threads_separated_from_chat(client: TestClient, sample_agent
         "/api/threads",
         json={
             "title": "Manual",
-            "agent_id": sample_agent.id,
+            "fiche_id": sample_fiche.id,
             "thread_type": "manual",
         },
     )
 
     # Fetch chat threads only
-    chat_response = client.get(f"/api/threads?agent_id={sample_agent.id}&thread_type=chat")
+    chat_response = client.get(f"/api/threads?fiche_id={sample_fiche.id}&thread_type=chat")
     assert chat_response.status_code == 200
     chat_threads = chat_response.json()
     assert len(chat_threads) == 2
     assert all(t["thread_type"] == "chat" for t in chat_threads)
 
     # Fetch automation threads (scheduled)
-    scheduled_response = client.get(f"/api/threads?agent_id={sample_agent.id}&thread_type=scheduled")
+    scheduled_response = client.get(f"/api/threads?fiche_id={sample_fiche.id}&thread_type=scheduled")
     assert scheduled_response.status_code == 200
     scheduled_threads = scheduled_response.json()
     assert len(scheduled_threads) == 1
     assert scheduled_threads[0]["thread_type"] == "scheduled"
 
     # Fetch automation threads (manual)
-    manual_response = client.get(f"/api/threads?agent_id={sample_agent.id}&thread_type=manual")
+    manual_response = client.get(f"/api/threads?fiche_id={sample_fiche.id}&thread_type=manual")
     assert manual_response.status_code == 200
     manual_threads = manual_response.json()
     assert len(manual_threads) == 1

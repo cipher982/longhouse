@@ -24,14 +24,15 @@ from sqlalchemy.sql import func
 # Local helpers / enums
 from zerg.database import Base
 from zerg.models.enums import Phase
-from zerg.models_config import DEFAULT_WORKER_MODEL_ID
+from zerg.models_config import DEFAULT_COMMIS_MODEL_ID
 
-# Re-export models that have been split into separate files for backwards compatibility
-from .agent import Agent  # noqa: F401
-from .agent import AgentMessage  # noqa: F401
 from .connector import Connector  # noqa: F401
+from .course import Course  # noqa: F401
+
+# Re-export models that have been split into separate files
+from .fiche import Fiche  # noqa: F401
+from .fiche import FicheMessage  # noqa: F401
 from .llm_audit import LLMAuditLog  # noqa: F401
-from .run import AgentRun  # noqa: F401
 from .thread import Thread  # noqa: F401
 from .thread import ThreadMessage  # noqa: F401
 from .trigger import Trigger  # noqa: F401
@@ -112,7 +113,7 @@ class CanvasLayout(Base):
 # ------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# AgentRun – lightweight execution telemetry row
+# Course – lightweight execution telemetry row
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
@@ -230,7 +231,7 @@ class NodeExecutionState(Base):
 class ConnectorCredential(Base):
     """Encrypted credential for a built-in connector tool.
 
-    Scoped to a single agent. Each agent can have at most one credential
+    Scoped to a single fiche. Each fiche can have at most one credential
     per connector type (e.g., one Slack webhook, one GitHub token).
 
     Credentials are stored encrypted using Fernet (AES-GCM) via the
@@ -240,17 +241,17 @@ class ConnectorCredential(Base):
 
     __tablename__ = "connector_credentials"
     __table_args__ = (
-        # One credential per connector type per agent
-        UniqueConstraint("agent_id", "connector_type", name="uix_agent_connector"),
+        # One credential per connector type per fiche
+        UniqueConstraint("fiche_id", "connector_type", name="uix_fiche_connector"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
 
-    # Foreign key to agent with CASCADE delete – when an agent is deleted,
+    # Foreign key to fiche with CASCADE delete – when a fiche is deleted,
     # all its credentials are automatically removed.
-    agent_id = Column(
+    fiche_id = Column(
         Integer,
-        ForeignKey("agents.id", ondelete="CASCADE"),
+        ForeignKey("fiches.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -283,7 +284,7 @@ class ConnectorCredential(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     # Relationships
-    agent = relationship("Agent", backref="connector_credentials")
+    fiche = relationship("Fiche", backref="connector_credentials")
 
 
 # ---------------------------------------------------------------------------
@@ -294,18 +295,18 @@ class ConnectorCredential(Base):
 class AccountConnectorCredential(Base):
     """Account-level encrypted credential for built-in connector tools.
 
-    These credentials are shared across all agents owned by the user.
-    Agents can optionally override with per-agent credentials in
-    ConnectorCredential (agent-level overrides).
+    These credentials are shared across all fiches owned by the user.
+    Fiches can optionally override with per-fiche credentials in
+    ConnectorCredential (fiche-level overrides).
 
     Resolution order in CredentialResolver:
-    1. Agent-level override (ConnectorCredential)
+    1. Fiche-level override (ConnectorCredential)
     2. Account-level credential (this table)
     3. None if neither exists
 
     The organization_id column is nullable and reserved for future
     multi-tenant support. When populated, credentials can be shared
-    across an organization and agents reference organization_id for
+    across an organization and fiches reference organization_id for
     credential resolution.
     """
 
@@ -357,49 +358,49 @@ class AccountConnectorCredential(Base):
 
 
 # ---------------------------------------------------------------------------
-# Worker Jobs – Background task execution for supervisor agents
+# Commis Jobs – Background task execution for concierge fiches
 # ---------------------------------------------------------------------------
 
 
-class WorkerJob(Base):
-    """Background job for executing worker agent tasks.
+class CommisJob(Base):
+    """Background job for executing commis tasks.
 
-    Worker jobs allow supervisor agents to delegate long-running tasks
-    to background workers without blocking the supervisor's execution flow.
+    Commis jobs allow concierge fiches to delegate long-running tasks
+    to background commis without blocking the concierge's execution flow.
     """
 
-    __tablename__ = "worker_jobs"
+    __tablename__ = "commis_jobs"
 
     id = Column(Integer, primary_key=True, index=True)
 
     # Job ownership and security
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
 
-    # Supervisor correlation - links worker to supervisor run for SSE event streaming
-    # ON DELETE SET NULL: if supervisor run is deleted, worker job remains but loses correlation
-    supervisor_run_id = Column(Integer, ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True, index=True)
+    # Concierge correlation - links commis to concierge course for SSE event streaming
+    # ON DELETE SET NULL: if concierge course is deleted, commis job remains but loses correlation
+    concierge_course_id = Column(Integer, ForeignKey("courses.id", ondelete="SET NULL"), nullable=True, index=True)
 
-    # Tool call idempotency - prevents duplicate workers from supervisor resume replay
+    # Tool call idempotency - prevents duplicate commis from concierge resume replay
     # The tool_call_id comes from LangChain's ToolCall structure and is unique per LLM response
     tool_call_id = Column(String(64), nullable=True, index=True)
 
-    # Trace ID for end-to-end debugging (inherited from supervisor run)
+    # Trace ID for end-to-end debugging (inherited from concierge course)
     trace_id = Column(UUID(as_uuid=True), nullable=True, index=True)
 
     # Job specification
     task = Column(Text, nullable=False)
-    model = Column(String(100), nullable=False, default=DEFAULT_WORKER_MODEL_ID)
+    model = Column(String(100), nullable=False, default=DEFAULT_COMMIS_MODEL_ID)
     reasoning_effort = Column(String(20), nullable=True, default="none")  # none, low, medium, high
 
-    # Flexible execution configuration (cloud execution, git repo, etc.)
-    # Keys: execution_mode ("local" | "cloud"), git_repo (url), base_branch, etc.
+    # Flexible execution configuration (workspace execution, git repo, etc.)
+    # Keys: execution_mode ("standard" | "workspace"), git_repo (url), base_branch, etc.
     config = Column(JSON, nullable=True)
 
     # Execution state
     status = Column(String(20), nullable=False, default="queued")  # queued, running, success, failed, cancelled
-    worker_id = Column(String(255), nullable=True, index=True)  # Set when execution starts
+    commis_id = Column(String(255), nullable=True, index=True)  # Set when execution starts
 
-    # Async inbox model - tracks whether supervisor has acknowledged this result
+    # Async inbox model - tracks whether concierge has acknowledged this result
     acknowledged = Column(Boolean, nullable=False, default=False, server_default="false")
 
     # Error handling
@@ -412,17 +413,17 @@ class WorkerJob(Base):
     finished_at = Column(DateTime, nullable=True)
 
     # Relationships
-    owner = relationship("User", backref="worker_jobs")
+    owner = relationship("User", backref="commis_jobs")
 
-    # Unique constraint for idempotency - prevents duplicate workers from replay
+    # Unique constraint for idempotency - prevents duplicate commis from replay
     # Uses partial index: only enforce when both fields are non-null
     __table_args__ = (
         Index(
-            "ix_worker_jobs_idempotency",
-            "supervisor_run_id",
+            "ix_commis_jobs_idempotency",
+            "concierge_course_id",
             "tool_call_id",
             unique=True,
-            postgresql_where=text("supervisor_run_id IS NOT NULL AND tool_call_id IS NOT NULL"),
+            postgresql_where=text("concierge_course_id IS NOT NULL AND tool_call_id IS NOT NULL"),
         ),
     )
 
@@ -436,7 +437,7 @@ class Runner(Base):
     """User-owned runner daemon for executing commands.
 
     Runners connect outbound to the Swarmlet platform and execute jobs
-    on behalf of workers. This enables secure execution without backend
+    on behalf of commis. This enables secure execution without backend
     access to user SSH keys.
     """
 
@@ -516,8 +517,8 @@ class RunnerJob(Base):
     owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     owner = relationship("User", backref="runner_jobs")
 
-    worker_id = Column(String, nullable=True, index=True)  # Link to WorkerArtifactStore
-    run_id = Column(String, nullable=True)  # Link to run context
+    commis_id = Column(String, nullable=True, index=True)  # Link to CommisArtifactStore
+    course_id = Column(String, nullable=True)  # Link to course context
 
     # Runner assignment
     runner_id = Column(Integer, ForeignKey("runners.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -639,14 +640,14 @@ class KnowledgeDocument(Base):
 
 
 # ---------------------------------------------------------------------------
-# User Tasks – Agent-created tasks for users
+# User Tasks – Fiche-created tasks for users
 # ---------------------------------------------------------------------------
 
 
 class UserTask(Base):
-    """A task created by an agent for a user.
+    """A task created by a fiche for a user.
 
-    Agents can use task management tools to create, update, and track
+    Fiches can use task management tools to create, update, and track
     tasks for their users. This provides a lightweight task management
     system without external dependencies.
     """
@@ -677,19 +678,19 @@ class UserTask(Base):
 
 
 # ---------------------------------------------------------------------------
-# Agent Memory – Persistent key-value storage for agents
+# Fiche Memory – Persistent key-value storage for fiches
 # ---------------------------------------------------------------------------
 
 
-class AgentMemoryKV(Base):
-    """Persistent key-value memory storage for agents.
+class FicheMemoryKV(Base):
+    """Persistent key-value memory storage for fiches.
 
-    Allows agents to store and retrieve arbitrary data across conversations.
+    Allows fiches to store and retrieve arbitrary data across conversations.
     Each entry is scoped to a user and can be tagged for easy retrieval.
     Optional expiration allows for automatic cleanup of temporary data.
     """
 
-    __tablename__ = "agent_memory_kv"
+    __tablename__ = "fiche_memory_kv"
 
     # Composite primary key (user_id, key)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, primary_key=True)
@@ -710,11 +711,11 @@ class AgentMemoryKV(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     # Relationships
-    user = relationship("User", backref="agent_memory")
+    user = relationship("User", backref="fiche_memory")
 
 
 # ---------------------------------------------------------------------------
-# Memory Files – Virtual filesystem for long-term agent memory
+# Memory Files – Virtual filesystem for long-term fiche memory
 # ---------------------------------------------------------------------------
 
 
@@ -784,7 +785,7 @@ class MemoryEmbedding(Base):
 class UserEmailContact(Base):
     """Approved email contact for a user.
 
-    Users maintain a list of approved contacts that agents can send emails to.
+    Users maintain a list of approved contacts that fiches can send emails to.
     This prevents abuse (spam, phishing) while keeping the platform usable.
     """
 
@@ -822,7 +823,7 @@ class UserEmailContact(Base):
 class UserPhoneContact(Base):
     """Approved phone contact for a user.
 
-    Users maintain a list of approved contacts that agents can send SMS to.
+    Users maintain a list of approved contacts that fiches can send SMS to.
     Phone numbers are stored in E.164 format (+1234567890) for matching.
     """
 

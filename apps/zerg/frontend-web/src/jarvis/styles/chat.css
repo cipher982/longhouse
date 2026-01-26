@@ -220,7 +220,7 @@
   animation: pulse 1s ease-in-out infinite;
 }
 
-/* Assistant typing bubble (pre-stream / supervisor thinking) */
+/* Assistant typing bubble (pre-stream / concierge thinking) */
 .jarvis-container .message.assistant.typing .message-content {
   display: flex;
   align-items: center;

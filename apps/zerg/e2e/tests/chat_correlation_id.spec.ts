@@ -3,7 +3,7 @@
  *
  * Verifies that:
  * - Frontend generates a unique UUID correlation ID for each message
- * - Backend receives and stores the correlation ID on AgentRun
+ * - Backend receives and stores the correlation ID on Course
  * - All SSE events include the correlation ID for tracing
  */
 
@@ -65,7 +65,7 @@ test.describe('Chat Correlation ID Flow', () => {
     // Phase 1 acceptance criteria met:
     // 1. Frontend generates unique UUID correlation ID ✓
     // 2. Correlation ID is sent in POST /api/jarvis/chat request body ✓
-    // 3. Backend stores it on AgentRun (verified by model changes) ✓
+    // 3. Backend stores it on Course (verified by model changes) ✓
     // 4. Backend includes it in SSE events (verified by jarvis_sse.py code) ✓
   });
 

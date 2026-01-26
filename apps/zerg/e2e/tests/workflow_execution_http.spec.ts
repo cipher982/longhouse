@@ -15,26 +15,26 @@ test.describe('Workflow Execution with HTTP Tools', () => {
   test('Execute workflow with HTTP tool and verify requests', async ({ page, request }, testInfo) => {
     console.log('🚀 Starting workflow execution test...');
 
-    const workerId = String(testInfo.parallelIndex);
-    console.log('📊 Worker ID:', workerId);
+    const commisId = String(testInfo.parallelIndex);
+    console.log('📊 Commis ID:', commisId);
 
-    // Step 1: Create agent for workflow
-    console.log('📊 Step 1: Creating test agent...');
-    const agentResponse = await request.post('/api/agents', {
+    // Step 1: Create fiche for workflow
+    console.log('📊 Step 1: Creating test fiche...');
+    const ficheResponse = await request.post('/api/fiches', {
       headers: {
         'Content-Type': 'application/json',
       },
       data: {
-        name: `HTTP Test Agent ${workerId}`,
-        system_instructions: 'You are an agent that makes HTTP requests for testing',
+        name: `HTTP Test Fiche ${commisId}`,
+        system_instructions: 'You are an fiche that makes HTTP requests for testing',
         task_instructions: 'Make HTTP requests to test endpoints as instructed',
         model: 'gpt-mock',
       }
     });
 
-    expect(agentResponse.status()).toBe(201);
-    const createdAgent = await agentResponse.json();
-    console.log('✅ Test agent created with ID:', createdAgent.id);
+    expect(ficheResponse.status()).toBe(201);
+    const createdFiche = await ficheResponse.json();
+    console.log('✅ Test fiche created with ID:', createdFiche.id);
 
     // Step 2: Create a simple workflow (if workflow creation is supported)
     console.log('📊 Step 2: Attempting workflow creation...');
@@ -44,14 +44,14 @@ test.describe('Workflow Execution with HTTP Tools', () => {
           'Content-Type': 'application/json',
         },
         data: {
-          name: `HTTP Test Workflow ${workerId}`,
+          name: `HTTP Test Workflow ${commisId}`,
           description: 'Workflow for testing HTTP request execution',
           canvas_data: {
             nodes: [
               {
-                id: 'agent-1',
-                type: 'agent',
-                agent_id: createdAgent.id,
+                id: 'fiche-1',
+                type: 'fiche',
+                fiche_id: createdFiche.id,
                 position: { x: 100, y: 100 }
               },
               {
@@ -68,7 +68,7 @@ test.describe('Workflow Execution with HTTP Tools', () => {
             edges: [
               {
                 id: 'edge-1',
-                source: 'agent-1',
+                source: 'fiche-1',
                 target: 'http-tool-1',
                 type: 'default'
               }

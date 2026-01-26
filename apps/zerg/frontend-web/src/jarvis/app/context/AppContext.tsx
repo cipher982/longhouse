@@ -33,7 +33,7 @@ const initialState: AppState = {
 
   // Jarvis-Zerg integration
   jarvisClient: null,
-  cachedAgents: [],
+  cachedFiches: [],
 
   // Media
   sharedMicStream: null,
@@ -69,14 +69,14 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, messages: updated }
     }
     case 'UPDATE_MESSAGE_BY_MESSAGE_ID': {
-      // Message IDs are stable across a single supervisor run.
-      // For normal runs: Client-generated upfront (placeholder already has messageId).
-      // For continuation runs: Backend-generated, create new message on first content update.
+      // Message IDs are stable across a single concierge course.
+      // For normal courses: Client-generated upfront (placeholder already has messageId).
+      // For continuation courses: Backend-generated, create new message on first content update.
       const idx = state.messages.findIndex(
         (m) => m.role === 'assistant' && m.messageId === action.messageId
       )
       if (idx === -1) {
-        // Message doesn't exist yet - this is a continuation run
+        // Message doesn't exist yet - this is a continuation course
         // Guard: Don't create empty bubble if content is empty/undefined
         // This prevents empty assistant bubbles from appearing before tokens arrive
         if (!action.updates.content) {
@@ -90,7 +90,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
           timestamp: action.updates.timestamp || new Date(),
           messageId: action.messageId,
           status: action.updates.status,
-          runId: action.updates.runId,
+          courseId: action.updates.courseId,
           usage: action.updates.usage,
         }
         return { ...state, messages: [...state.messages, newMessage] }
@@ -117,8 +117,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, isConnected: action.connected }
     case 'SET_JARVIS_CLIENT':
       return { ...state, jarvisClient: action.client }
-    case 'SET_CACHED_AGENTS':
-      return { ...state, cachedAgents: action.agents }
+    case 'SET_CACHED_FICHES':
+      return { ...state, cachedFiches: action.fiches }
     case 'SET_MIC_STREAM':
       return { ...state, sharedMicStream: action.stream }
     case 'SET_AVAILABLE_MODELS':

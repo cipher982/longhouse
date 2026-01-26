@@ -2,12 +2,12 @@
 
 This module isolates all database interactions related to *conversation
 threads* and their messages.  It is an extraction from the former
-AgentManager implementation so that higher-level orchestration code can rely
+manager implementation so that higher-level orchestration code can rely
 on a clean, well-typed interface rather than calling the low-level *crud*
 functions directly.
 
-The goal is **separation of concerns** – AgentDefinition (LLM logic) and
-AgentRunner (execution orchestration) should not be aware of SQLAlchemy or
+The goal is **separation of concerns** – FicheDefinition (LLM logic) and
+FicheRunner (execution orchestration) should not be aware of SQLAlchemy or
 our schema details.
 """
 
@@ -28,7 +28,7 @@ from langchain_core.messages import ToolMessage
 from sqlalchemy.orm import Session
 
 from zerg.crud import crud
-from zerg.models.models import Agent as AgentModel
+from zerg.models.models import Fiche as FicheModel
 from zerg.models.models import Thread as ThreadModel
 from zerg.models.models import ThreadMessage as ThreadMessageModel
 
@@ -47,7 +47,7 @@ def _db_to_langchain(msg_row: ThreadMessageModel) -> BaseMessage:  # pragma: no 
     instances that include the *tool_calls* attribute.
 
     Messages are timestamped using the sent_at field to enable temporal
-    awareness as specified in the connector-aware agents PRD (P1.2).
+    awareness as specified in the connector-aware fiches PRD (P1.2).
     """
 
     role = msg_row.role
@@ -181,19 +181,19 @@ class ThreadService:
     @staticmethod
     def create_thread_with_system_message(
         db: Session,
-        agent: AgentModel,
+        fiche: FicheModel,
         *,
         title: str,
         thread_type: str = "chat",
         active: Optional[bool] = None,
     ) -> ThreadModel:
-        """Create a thread for an agent.
+        """Create a thread for a fiche.
 
         NOTE: System messages are NO LONGER stored in thread_messages.
-        They are injected fresh at runtime from agent.system_instructions.
+        They are injected fresh at runtime from fiche.system_instructions.
         This prevents drift when prompts are updated.
 
-        The function name is kept for backward compatibility.
+        The function name remains stable for internal callers.
         """
 
         if active is None:
@@ -202,16 +202,16 @@ class ThreadService:
 
         thread = crud.create_thread(
             db=db,
-            agent_id=agent.id,
+            fiche_id=fiche.id,
             title=title,
             active=active,
-            agent_state={},
+            fiche_state={},
             memory_strategy="buffer",
             thread_type=thread_type,
         )
 
         # System prompt is now injected at runtime, not stored in DB
-        # See: agent_runner.py run_thread() for runtime injection
+        # See: fiche_runner.py run_thread() for runtime injection
 
         return thread
 
@@ -220,15 +220,15 @@ class ThreadService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def get_valid_thread_for_agent(db: Session, *, thread_id: int, agent_id: int) -> ThreadModel:
-        """Return thread if it belongs to *agent_id* else raise ValueError."""
+    def get_valid_thread_for_fiche(db: Session, *, thread_id: int, fiche_id: int) -> ThreadModel:
+        """Return thread if it belongs to *fiche_id* else raise ValueError."""
 
         thread = crud.get_thread(db, thread_id)
         if thread is None:
             raise ValueError("Thread not found")
 
-        if thread.agent_id != agent_id:
-            raise ValueError("Thread does not belong to agent")
+        if thread.fiche_id != fiche_id:
+            raise ValueError("Thread does not belong to fiche")
 
         return thread
 

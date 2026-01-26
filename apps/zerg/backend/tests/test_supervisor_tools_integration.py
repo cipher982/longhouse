@@ -1,17 +1,17 @@
-"""Integration tests for supervisor tools with real agent execution."""
+"""Integration tests for concierge tools with real fiche execution."""
 
 import tempfile
 
 import pytest
 
 from tests.conftest import TEST_MODEL
-from tests.conftest import TEST_WORKER_MODEL
+from tests.conftest import TEST_COMMIS_MODEL
 from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
 from zerg.crud import crud
-from zerg.managers.agent_runner import AgentRunner
+from zerg.managers.fiche_runner import FicheRunner
 from zerg.services.thread_service import ThreadService
-from zerg.services.worker_artifact_store import WorkerArtifactStore
+from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.tools.builtin import BUILTIN_TOOLS
 from zerg.tools.registry import ImmutableToolRegistry
 
@@ -25,15 +25,15 @@ def temp_artifact_path(monkeypatch):
 
 
 @pytest.fixture
-def supervisor_agent(db_session, test_user):
-    """Create a supervisor agent with supervisor tools enabled."""
-    agent = crud.create_agent(
+def concierge_fiche(db_session, test_user):
+    """Create a concierge fiche with concierge tools enabled."""
+    fiche = crud.create_fiche(
         db=db_session,
         owner_id=test_user.id,
-        name="Supervisor Agent",
+        name="Concierge Fiche",
         model=TEST_MODEL,  # Use smarter model - gpt-5-mini is unreliable for tool calling
         system_instructions=(
-            "You are a supervisor agent that MUST delegate ALL tasks to workers. "
+            "You are a concierge fiche that MUST delegate ALL tasks to commis. "
             "You have access to the spawn_commis tool. "
             "IMPORTANT: When asked to do anything, you MUST call spawn_commis immediately. "
             "Never respond with text - always use the spawn_commis tool."
@@ -41,7 +41,7 @@ def supervisor_agent(db_session, test_user):
         task_instructions="",
     )
     # Set allowed_tools - required for tools to be passed to the LLM
-    agent.allowed_tools = [
+    fiche.allowed_tools = [
         "spawn_commis",
         "list_commis",
         "read_commis_result",
@@ -50,109 +50,109 @@ def supervisor_agent(db_session, test_user):
         "get_commis_metadata",
     ]
     db_session.commit()
-    db_session.refresh(agent)
-    return agent
+    db_session.refresh(fiche)
+    return fiche
 
 
 @pytest.mark.asyncio
-async def test_supervisor_spawns_worker_via_tool(supervisor_agent, db_session, test_user, temp_artifact_path):
-    """Test that a supervisor agent can use spawn_commis tool (queues job).
+async def test_concierge_spawns_commis_via_tool(concierge_fiche, db_session, test_user, temp_artifact_path):
+    """Test that a concierge fiche can use spawn_commis tool (queues job).
 
-    In async model, spawn_commis returns immediately and the supervisor continues.
+    In async model, spawn_commis returns immediately and the concierge continues.
     We verify the job was created and queued.
     """
-    from zerg.models.models import WorkerJob
+    from zerg.models.models import CommisJob
 
-    # Create a thread for the supervisor
+    # Create a thread for the concierge
     thread = ThreadService.create_thread_with_system_message(
         db_session,
-        supervisor_agent,
-        title="Test Supervisor Thread",
+        concierge_fiche,
+        title="Test Concierge Thread",
         thread_type="manual",
         active=False,
     )
 
-    # Add user message asking supervisor to spawn a worker
+    # Add user message asking concierge to spawn a commis
     crud.create_thread_message(
         db=db_session,
         thread_id=thread.id,
         role="user",
-        content="Spawn a worker to calculate 10 + 15",
+        content="Spawn a commis to calculate 10 + 15",
         processed=False,
     )
 
     # Set up credential resolver context
-    resolver = CredentialResolver(agent_id=supervisor_agent.id, db=db_session, owner_id=test_user.id)
+    resolver = CredentialResolver(fiche_id=concierge_fiche.id, db=db_session, owner_id=test_user.id)
     set_credential_resolver(resolver)
 
     try:
-        # Run the supervisor agent - spawn_commis returns immediately in async model
-        runner = AgentRunner(supervisor_agent)
+        # Run the concierge fiche - spawn_commis returns immediately in async model
+        runner = FicheRunner(concierge_fiche)
         messages = await runner.run_thread(db_session, thread)
 
-        # Verify the supervisor completed (not interrupted)
-        assert messages is not None, "Supervisor should return messages"
+        # Verify the concierge completed (not interrupted)
+        assert messages is not None, "Concierge should return messages"
 
-        # Verify a worker JOB was created
-        jobs = db_session.query(WorkerJob).filter(WorkerJob.owner_id == test_user.id).all()
-        assert len(jobs) >= 1, "At least one worker job should have been created"
+        # Verify a commis JOB was created
+        jobs = db_session.query(CommisJob).filter(CommisJob.owner_id == test_user.id).all()
+        assert len(jobs) >= 1, "At least one commis job should have been created"
 
         # Verify job is in 'queued' status (async model flips to queued immediately)
         job = jobs[0]
-        assert job.status == "queued", "Worker job should be in 'queued' status"
-        assert len(job.task) > 0, "Worker job should have a task"
+        assert job.status == "queued", "Commis job should be in 'queued' status"
+        assert len(job.task) > 0, "Commis job should have a task"
 
     finally:
         set_credential_resolver(None)
 
 
 @pytest.mark.asyncio
-async def test_supervisor_can_list_commis(supervisor_agent, db_session, test_user, temp_artifact_path):
-    """Test that a supervisor can use list_commis tool."""
+async def test_concierge_can_list_commis(concierge_fiche, db_session, test_user, temp_artifact_path):
+    """Test that a concierge can use list_commis tool."""
     from datetime import datetime
     from datetime import timezone
 
-    from zerg.models.models import WorkerJob
+    from zerg.models.models import CommisJob
 
-    # Create a WorkerJob record (simulating a queued job)
-    worker_job = WorkerJob(
+    # Create a CommisJob record (simulating a queued job)
+    commis_job = CommisJob(
         owner_id=test_user.id,
         task="Test task for listing",
-        model=TEST_WORKER_MODEL,
+        model=TEST_COMMIS_MODEL,
         status="queued",
         created_at=datetime.now(timezone.utc),
     )
-    db_session.add(worker_job)
+    db_session.add(commis_job)
     db_session.commit()
 
-    # Create a thread for the supervisor
+    # Create a thread for the concierge
     thread = ThreadService.create_thread_with_system_message(
         db_session,
-        supervisor_agent,
-        title="Test List Workers",
+        concierge_fiche,
+        title="Test List Commis",
         thread_type="manual",
         active=False,
     )
 
-    # Add user message asking supervisor to list workers
+    # Add user message asking concierge to list commis
     crud.create_thread_message(
         db=db_session,
         thread_id=thread.id,
         role="user",
-        content="Use the list_commis tool to show me all recent workers",
+        content="Use the list_commis tool to show me all recent commis",
         processed=False,
     )
 
     # Set up credential resolver context
-    resolver = CredentialResolver(agent_id=supervisor_agent.id, db=db_session, owner_id=test_user.id)
+    resolver = CredentialResolver(fiche_id=concierge_fiche.id, db=db_session, owner_id=test_user.id)
     set_credential_resolver(resolver)
 
     try:
-        # Run the supervisor agent
-        agent_runner = AgentRunner(supervisor_agent)
-        messages = await agent_runner.run_thread(db_session, thread)
+        # Run the concierge fiche
+        fiche_runner = FicheRunner(concierge_fiche)
+        messages = await fiche_runner.run_thread(db_session, thread)
 
-        # Verify the supervisor called list_commis
+        # Verify the concierge called list_commis
         list_commis_called = False
 
         for msg in messages:
@@ -162,12 +162,12 @@ async def test_supervisor_can_list_commis(supervisor_agent, db_session, test_use
                         list_commis_called = True
                         break
 
-        assert list_commis_called, "Supervisor should have called list_commis"
+        assert list_commis_called, "Concierge should have called list_commis"
 
-        # Check that the response mentions the worker
+        # Check that the response mentions the commis
         final_message = messages[-1]
         assert final_message.role == "assistant"
-        # The response should contain information about workers
+        # The response should contain information about commis
         assert len(final_message.content) > 0
 
     finally:
@@ -175,72 +175,72 @@ async def test_supervisor_can_list_commis(supervisor_agent, db_session, test_use
 
 
 @pytest.mark.asyncio
-async def test_supervisor_reads_worker_result(supervisor_agent, db_session, test_user, temp_artifact_path):
-    """Test that a supervisor can read worker results."""
+async def test_concierge_reads_commis_result(concierge_fiche, db_session, test_user, temp_artifact_path):
+    """Test that a concierge can read commis results."""
     from datetime import datetime
     from datetime import timezone
 
-    from zerg.models.models import WorkerJob
-    from zerg.services.worker_runner import WorkerRunner
+    from zerg.models.models import CommisJob
+    from zerg.services.commis_runner import CommisRunner
 
-    # First spawn a worker directly via WorkerRunner (creates artifacts)
-    artifact_store = WorkerArtifactStore(base_path=temp_artifact_path)
-    runner = WorkerRunner(artifact_store=artifact_store)
+    # First spawn a commis directly via CommisRunner (creates artifacts)
+    artifact_store = CommisArtifactStore(base_path=temp_artifact_path)
+    runner = CommisRunner(artifact_store=artifact_store)
 
-    result = await runner.run_worker(
+    result = await runner.run_commis(
         db=db_session,
         task="Calculate 5 * 8",
-        agent=None,
-        agent_config={"model": TEST_WORKER_MODEL, "owner_id": test_user.id},
+        fiche=None,
+        fiche_config={"model": TEST_COMMIS_MODEL, "owner_id": test_user.id},
     )
 
-    worker_id = result.worker_id
+    commis_id = result.commis_id
 
-    # Create a WorkerJob record linking to this worker (so tools can find it)
-    worker_job = WorkerJob(
+    # Create a CommisJob record linking to this commis (so tools can find it)
+    commis_job = CommisJob(
         owner_id=test_user.id,
         task="Calculate 5 * 8",
-        model=TEST_WORKER_MODEL,
+        model=TEST_COMMIS_MODEL,
         status="success",
-        worker_id=worker_id,
+        commis_id=commis_id,
         created_at=datetime.now(timezone.utc),
         started_at=datetime.now(timezone.utc),
         finished_at=datetime.now(timezone.utc),
     )
-    db_session.add(worker_job)
+    db_session.add(commis_job)
     db_session.commit()
-    db_session.refresh(worker_job)
+    db_session.refresh(commis_job)
 
-    job_id = worker_job.id
+    job_id = commis_job.id
 
-    # Create a thread for the supervisor
+    # Create a thread for the concierge
     thread = ThreadService.create_thread_with_system_message(
         db_session,
-        supervisor_agent,
-        title="Test Read Worker Result",
+        concierge_fiche,
+        title="Test Read Commis Result",
         thread_type="manual",
         active=False,
     )
 
-    # Add user message asking supervisor to read the worker result (using job_id)
+    # Add user message asking concierge to read the commis result (using job_id)
     crud.create_thread_message(
         db=db_session,
         thread_id=thread.id,
         role="user",
-        content=f"Read the result from worker job {job_id}",
+        content=f"Read the result from commis job {job_id}",
         processed=False,
     )
 
     # Set up credential resolver context
-    resolver = CredentialResolver(agent_id=supervisor_agent.id, db=db_session, owner_id=test_user.id)
+    resolver = CredentialResolver(fiche_id=concierge_fiche.id, db=db_session, owner_id=test_user.id)
     set_credential_resolver(resolver)
 
     try:
-        # Run the supervisor agent
-        agent_runner = AgentRunner(supervisor_agent)
-        messages = await agent_runner.run_thread(db_session, thread)
+        # Run the concierge fiche
+        fiche_runner = FicheRunner(concierge_fiche)
+        messages = await fiche_runner.run_thread(db_session, thread)
 
-        # Verify the supervisor called read_commis_result
+        # Verify the concierge called read_commis_result
         read_commis_result_called = False
 
         for msg in messages:
@@ -250,7 +250,7 @@ async def test_supervisor_reads_worker_result(supervisor_agent, db_session, test
                         read_commis_result_called = True
                         break
 
-        assert read_commis_result_called, "Supervisor should have called read_commis_result"
+        assert read_commis_result_called, "Concierge should have called read_commis_result"
 
     finally:
         set_credential_resolver(None)
@@ -258,11 +258,11 @@ async def test_supervisor_reads_worker_result(supervisor_agent, db_session, test
 
 @pytest.mark.asyncio
 async def test_tools_registered_in_builtin(db_session):
-    """Test that supervisor tools are registered in BUILTIN_TOOLS."""
+    """Test that concierge tools are registered in BUILTIN_TOOLS."""
     # Build registry
     registry = ImmutableToolRegistry.build([BUILTIN_TOOLS])
 
-    # Verify all supervisor tools are registered
+    # Verify all concierge tools are registered
     assert registry.get("spawn_commis") is not None
     assert registry.get("list_commis") is not None
     assert registry.get("read_commis_result") is not None
@@ -276,53 +276,53 @@ async def test_tools_registered_in_builtin(db_session):
 
 
 @pytest.mark.asyncio
-async def test_read_commis_result_includes_duration(supervisor_agent, db_session, test_user, temp_artifact_path):
-    """Test that read_commis_result returns duration_ms from completed workers (Tier 1 visibility)."""
+async def test_read_commis_result_includes_duration(concierge_fiche, db_session, test_user, temp_artifact_path):
+    """Test that read_commis_result returns duration_ms from completed commis (Tier 1 visibility)."""
     from datetime import datetime
     from datetime import timezone
 
     from zerg.connectors.context import set_credential_resolver
     from zerg.connectors.resolver import CredentialResolver
-    from zerg.models.models import WorkerJob
-    from zerg.services.worker_runner import WorkerRunner
+    from zerg.models.models import CommisJob
+    from zerg.services.commis_runner import CommisRunner
 
-    # Create and run a worker directly via WorkerRunner
-    # Set up credential resolver context FIRST (needed for worker execution)
-    resolver = CredentialResolver(agent_id=supervisor_agent.id, db=db_session, owner_id=test_user.id)
+    # Create and run a commis directly via CommisRunner
+    # Set up credential resolver context FIRST (needed for commis execution)
+    resolver = CredentialResolver(fiche_id=concierge_fiche.id, db=db_session, owner_id=test_user.id)
     set_credential_resolver(resolver)
 
     try:
-        artifact_store = WorkerArtifactStore(base_path=temp_artifact_path)
-        runner = WorkerRunner(artifact_store=artifact_store)
+        artifact_store = CommisArtifactStore(base_path=temp_artifact_path)
+        runner = CommisRunner(artifact_store=artifact_store)
 
-        result = await runner.run_worker(
+        result = await runner.run_commis(
             db=db_session,
             task="Calculate 7 * 6",
-            agent=None,
-            agent_config={"model": TEST_WORKER_MODEL, "owner_id": test_user.id},
+            fiche=None,
+            fiche_config={"model": TEST_COMMIS_MODEL, "owner_id": test_user.id},
         )
 
-        worker_id = result.worker_id
+        commis_id = result.commis_id
 
-        # Create a WorkerJob record linking to this worker
-        worker_job = WorkerJob(
+        # Create a CommisJob record linking to this commis
+        commis_job = CommisJob(
             owner_id=test_user.id,
             task="Calculate 7 * 6",
-            model=TEST_WORKER_MODEL,
+            model=TEST_COMMIS_MODEL,
             status="success",
-            worker_id=worker_id,
+            commis_id=commis_id,
             created_at=datetime.now(timezone.utc),
             started_at=datetime.now(timezone.utc),
             finished_at=datetime.now(timezone.utc),
         )
-        db_session.add(worker_job)
+        db_session.add(commis_job)
         db_session.commit()
-        db_session.refresh(worker_job)
+        db_session.refresh(commis_job)
 
-        job_id = worker_job.id
+        job_id = commis_job.id
 
         # Call read_commis_result_async directly (to preserve context in same async loop)
-        from zerg.tools.builtin.supervisor_tools import read_commis_result_async
+        from zerg.tools.builtin.concierge_tools import read_commis_result_async
 
         result_text = await read_commis_result_async(str(job_id))
 
@@ -340,7 +340,7 @@ async def test_read_commis_result_includes_duration(supervisor_agent, db_session
         assert duration_value > 0, "Duration should be greater than 0ms"
 
         # Verify we still get the actual result text
-        assert "42" in result_text or "result" in result_text.lower(), "Result should include actual worker output"
+        assert "42" in result_text or "result" in result_text.lower(), "Result should include actual commis output"
 
     finally:
         set_credential_resolver(None)

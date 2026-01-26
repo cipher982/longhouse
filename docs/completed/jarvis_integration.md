@@ -599,14 +599,14 @@ curl -s -X POST http://localhost:47300/api/jarvis/auth \
   -d '{"device_secret":"your-secret"}' \
   -c "$COOKIE_JAR" -b "$COOKIE_JAR"
 
-# List agents
-curl http://localhost:47300/api/jarvis/agents \
+# List fiches
+curl http://localhost:47300/api/jarvis/fiches \
   -b "$COOKIE_JAR"
 
-# Dispatch agent
+# Dispatch fiche
 curl -X POST http://localhost:47300/api/jarvis/dispatch \
   -H "Content-Type: application/json" \
-  -d '{"agent_id":1}' \
+  -d '{"fiche_id":1}' \
   -b "$COOKIE_JAR"
 
 # Listen to SSE stream
@@ -619,7 +619,7 @@ curl -N http://localhost:47300/api/jarvis/events \
 - Legacy: `/api/session`, `/api/tool`, `/api/sync/*` → jarvis-server (Port 8787) (removed)
 - `/api/zerg/*` → backend (Port 8000)
 
-### Seeding Baseline Agents
+### Seeding Baseline Fiches
 
 #### Option A: Unified Docker Compose
 
@@ -629,21 +629,21 @@ make dev
 
 # Wait for backend to be healthy, then seed:
 BACKEND=$(docker ps --format "{{.Names}}" | rg "backend" | head -n 1)
-docker exec "$BACKEND" uv run python scripts/seed_jarvis_agents.py
+docker exec "$BACKEND" uv run python scripts/seed_jarvis_fiches.py
 ```
 
 #### Option B: Traditional Setup
 
 ```bash
 cd /Users/davidrose/git/zerg
-make seed-jarvis-agents
+make seed-fiches
 
 # Or directly:
 cd apps/zerg/backend
-uv run python scripts/seed_jarvis_agents.py
+uv run python scripts/seed_jarvis_fiches.py
 ```
 
-This creates 4 baseline agents:
+This creates 4 baseline fiches:
 
 1. **Morning Digest** - 7 AM daily (health + calendar + weather)
 2. **Health Watch** - 8 PM daily (WHOOP trends and insights)
@@ -658,20 +658,21 @@ import { getJarvisClient } from "@jarvis/core";
 // Initialize client
 const client = getJarvisClient(import.meta.env.VITE_ZERG_API_URL);
 
-// Authenticate on startup
-await client.authenticate(import.meta.env.JARVIS_DEVICE_SECRET);
+// Authenticate on startup (cookie-based auth via Swarmlet dashboard login)
+await client.isAuthenticated();
 
-// List agents
-const agents = await client.listAgents();
+// List fiches
+const fiches = await client.listFiches();
 
-// Dispatch agent
-const result = await client.dispatch({ agent_id: 1 });
+// Dispatch fiche
+const result = await client.dispatch({ fiche_id: 1 });
 
 // Connect to SSE stream
 client.connectEventStream({
   onConnected: () => console.log("Connected to Zerg"),
-  onRunCreated: (event) => updateTaskInbox(event),
-  onRunUpdated: (event) => {
+  onFicheUpdated: (event) => updateTaskInbox(event),
+  onCourseCreated: (event) => updateTaskInbox(event),
+  onCourseUpdated: (event) => {
     updateTaskInbox(event);
     if (event.payload.status === "success") {
       speakResult(event.payload.summary);
@@ -683,13 +684,13 @@ client.connectEventStream({
 
 ## Database Schema
 
-### AgentRun Extensions
+### Course Extensions
 
 ```sql
 -- New column added in migration a1b2c3d4e5f6
-ALTER TABLE agent_runs ADD COLUMN summary TEXT NULL;
+ALTER TABLE courses ADD COLUMN summary TEXT NULL;
 
--- Updated by crud.mark_finished() when run completes
+-- Updated by crud.mark_finished() when course completes
 -- Contains first assistant response or truncated output (max 500 chars)
 ```
 
@@ -709,9 +710,9 @@ All events published to the event bus follow this structure:
 
 ```python
 {
-    "event_type": "run_created" | "run_updated" | "agent_updated",
-    "run_id": int,
-    "agent_id": int,
+    "event_type": "course_created" | "course_updated" | "fiche_updated",
+    "course_id": int,
+    "fiche_id": int,
     "status": str,
     "summary": str | None,
     "timestamp": str,  # ISO format
@@ -722,9 +723,9 @@ All events published to the event bus follow this structure:
 
 The SSE endpoint subscribes to:
 
-- `EventType.RUN_CREATED` - New runs initiated
-- `EventType.RUN_UPDATED` - Status changes, summaries added
-- `EventType.AGENT_UPDATED` - Agent config/status changes
+- `EventType.COURSE_CREATED` - New courses initiated
+- `EventType.COURSE_UPDATED` - Status changes, summaries added
+- `EventType.FICHE_UPDATED` - Fiche config/status changes
 
 ## Error Handling
 
@@ -840,5 +841,5 @@ client.connectEventStream({
 - **Progress Report**: `/JARVIS_INTEGRATION_PROGRESS.md` _(archived/removed)_
 - **Backend Router**: `/apps/zerg/backend/zerg/routers/jarvis.py` _(still valid)_
 - **TypeScript Client**: `/apps/zerg/frontend-web/src/jarvis/core/jarvis-api-client.ts` _(now: `apps/zerg/frontend-web/src/jarvis/core/jarvis-api-client.ts`)_
-- **Seed Script**: `/apps/zerg/backend/scripts/seed_jarvis_agents.py` _(still valid)_
+- **Seed Script**: `/apps/zerg/backend/scripts/seed_jarvis_fiches.py` _(still valid)_
 - **Migration**: `/apps/zerg/backend/alembic/versions/a1b2c3d4e5f6_add_summary_to_agent_run.py` _(example path)_

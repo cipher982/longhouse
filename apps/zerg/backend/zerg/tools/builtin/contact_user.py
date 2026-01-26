@@ -1,4 +1,4 @@
-"""Contact user tool - allows agents to notify their owner."""
+"""Contact user tool - allows fiches to notify their owner."""
 
 import logging
 from typing import Any
@@ -6,7 +6,7 @@ from typing import Dict
 
 from langchain_core.tools import StructuredTool
 
-from zerg.context import get_worker_context
+from zerg.context import get_commis_context
 from zerg.crud import crud
 from zerg.database import db_session
 from zerg.tools.builtin.email_tools import send_email
@@ -62,13 +62,13 @@ def _convert_markdown_to_html(text: str) -> str:
     return "\n".join(html_lines)
 
 
-def _build_email_template(message: str, priority: str, worker_id: str | None = None) -> str:
+def _build_email_template(message: str, priority: str, commis_id: str | None = None) -> str:
     """Build HTML email template with Swarmlet branding.
 
     Args:
         message: The notification message
         priority: Priority level
-        worker_id: Optional worker ID for context
+        commis_id: Optional commis ID for context
 
     Returns:
         HTML email body
@@ -93,13 +93,13 @@ def _build_email_template(message: str, priority: str, worker_id: str | None = N
         </div>
         """
 
-    # Build worker context if available
-    worker_context = ""
-    if worker_id:
-        worker_context = f"""
+    # Build commis context if available
+    commis_context = ""
+    if commis_id:
+        commis_context = f"""
         <div style="background: #f8f9fa; padding: 12px; border-radius: 4px;
                     margin-top: 24px; font-size: 13px; color: #6c757d;">
-            <strong>Worker ID:</strong> {worker_id}
+            <strong>Commis ID:</strong> {commis_id}
         </div>
         """
 
@@ -116,7 +116,7 @@ def _build_email_template(message: str, priority: str, worker_id: str | None = N
         <!-- Header -->
         <div style="text-align: center; margin-bottom: 32px;">
             <h1 style="color: #2563eb; margin: 0; font-size: 24px;">Swarmlet</h1>
-            <p style="color: #6c757d; margin: 4px 0 0 0; font-size: 14px;">Agent Notification</p>
+            <p style="color: #6c757d; margin: 4px 0 0 0; font-size: 14px;">Fiche Notification</p>
         </div>
 
         <!-- Priority Badge -->
@@ -127,12 +127,12 @@ def _build_email_template(message: str, priority: str, worker_id: str | None = N
             {message_html}
         </div>
 
-        {worker_context}
+        {commis_context}
 
         <!-- Footer -->
         <div style="text-align: center; margin-top: 32px; padding-top: 24px;
                     border-top: 1px solid #e5e7eb; color: #6c757d; font-size: 13px;">
-            <p>This notification was sent by your Swarmlet agent.</p>
+            <p>This notification was sent by your Swarmlet fiche.</p>
             <p style="margin-top: 8px;">
                 <a href="https://swarmlet.com" style="color: #2563eb; text-decoration: none;">
                     Visit Dashboard
@@ -150,7 +150,7 @@ def contact_user(
     message: str,
     priority: str = "normal",
 ) -> Dict[str, Any]:
-    """Send a notification to the agent's owner.
+    """Send a notification to the fiche's owner.
 
     Use this when:
     - A long-running task completes
@@ -199,20 +199,20 @@ def contact_user(
                 user_message=f"priority must be one of: {', '.join(valid_priorities)}",
             )
 
-        # Get worker context
-        ctx = get_worker_context()
+        # Get commis context
+        ctx = get_commis_context()
         if ctx is None:
             return tool_error(
                 error_type=ErrorType.EXECUTION_ERROR,
-                user_message="contact_user can only be called from within a worker context. "
-                "This tool requires access to worker execution metadata.",
+                user_message="contact_user can only be called from within a commis context. "
+                "This tool requires access to commis execution metadata.",
             )
 
         owner_id = ctx.owner_id
         if owner_id is None:
             return tool_error(
                 error_type=ErrorType.EXECUTION_ERROR,
-                user_message="No owner information available in worker context. Cannot determine who to notify.",
+                user_message="No owner information available in commis context. Cannot determine who to notify.",
             )
 
         # Look up user
@@ -244,7 +244,7 @@ def contact_user(
         html_body = _build_email_template(
             message=message,
             priority=priority,
-            worker_id=ctx.worker_id,
+            commis_id=ctx.commis_id,
         )
 
         # Plain text fallback (strip HTML tags)
@@ -284,7 +284,7 @@ TOOLS = [
         func=contact_user,
         name="contact_user",
         description=(
-            "Send a notification to the agent's owner (user). "
+            "Send a notification to the fiche's owner (user). "
             "Use this to notify about task completion, errors, or when you need user input. "
             "Supports priority levels: low, normal, high, urgent. "
             "Message supports basic markdown formatting."

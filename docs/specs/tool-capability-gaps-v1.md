@@ -120,7 +120,7 @@ tools:
     - list_tasks: View task list
 
   database:
-    - run_agent_memory_sql: Execute SQL on persistent DB
+    - run_fiche_memory_sql: Execute SQL on persistent DB
     - get_agent_db_schema: View database schema
 
   connections:
@@ -392,7 +392,7 @@ Agents need to remember information across sessions. This enables learning, prog
 **Low-level SQL Access**:
 
 ```python
-def agent_memory_sql(
+def fiche_memory_sql(
     query: str,                    # SQL query (SELECT, INSERT, UPDATE, DELETE)
     params: list | None = None,    # Query parameters (prevents injection)
 ) -> AgentMemoryResult:
@@ -403,9 +403,9 @@ def agent_memory_sql(
     You can create tables, insert data, and query freely.
 
     Example:
-        agent_memory_sql("CREATE TABLE IF NOT EXISTS notes (id SERIAL, content TEXT)")
-        agent_memory_sql("INSERT INTO notes (content) VALUES ($1)", ["Remember this"])
-        agent_memory_sql("SELECT * FROM notes WHERE content LIKE $1", ["%remember%"])
+        fiche_memory_sql("CREATE TABLE IF NOT EXISTS notes (id SERIAL, content TEXT)")
+        fiche_memory_sql("INSERT INTO notes (content) VALUES ($1)", ["Remember this"])
+        fiche_memory_sql("SELECT * FROM notes WHERE content LIKE $1", ["%remember%"])
 
     Returns:
         rows: Query results (for SELECT)
@@ -417,7 +417,7 @@ def agent_memory_sql(
 **Schema Inspection**:
 
 ```python
-def agent_memory_schema() -> AgentMemorySchema:
+def fiche_memory_schema() -> AgentMemorySchema:
     """
     Get the schema of your memory database.
 
@@ -431,7 +431,7 @@ def agent_memory_schema() -> AgentMemorySchema:
 **Simplified Key-Value Interface** (Optional, friendlier):
 
 ```python
-def agent_memory_set(
+def fiche_memory_set(
     key: str,
     value: Any,                    # JSON-serializable
     tags: list[str] | None = None,
@@ -439,14 +439,14 @@ def agent_memory_set(
 ) -> None:
     """Store a value in memory with optional tags and expiration."""
 
-def agent_memory_get(
+def fiche_memory_get(
     key: str | None = None,
     tags: list[str] | None = None,
     limit: int = 100,
 ) -> list[MemoryEntry]:
     """Retrieve values by key or tags."""
 
-def agent_memory_delete(
+def fiche_memory_delete(
     key: str | None = None,
     tags: list[str] | None = None,
 ) -> int:
@@ -459,7 +459,7 @@ def agent_memory_delete(
 
 ```sql
 -- System table to track user memory schemas
-CREATE TABLE agent_memory_registry (
+CREATE TABLE fiche_memory_registry (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     schema_name TEXT NOT NULL UNIQUE,
@@ -535,10 +535,10 @@ MEMORY_LIMITS = {
 **Files to Create/Modify**:
 
 ```
-apps/zerg/backend/zerg/tools/builtin/agent_memory.py     # NEW
-apps/zerg/backend/zerg/services/agent_memory_service.py  # NEW
-apps/zerg/backend/zerg/models/agent_memory.py            # NEW (registry model)
-apps/zerg/backend/alembic/versions/xxx_agent_memory.py   # Migration
+apps/zerg/backend/zerg/tools/builtin/fiche_memory.py     # NEW
+apps/zerg/backend/zerg/services/fiche_memory_service.py  # NEW
+apps/zerg/backend/zerg/models/fiche_memory.py            # NEW (registry model)
+apps/zerg/backend/alembic/versions/xxx_fiche_memory.py   # Migration
 apps/zerg/backend/zerg/tools/builtin/__init__.py         # Export
 apps/zerg/backend/zerg/services/tool_registry.py         # Register
 ```
@@ -810,8 +810,8 @@ These unblock autonomous research immediately.
 
 ### Phase 2: Memory & State (Week 2-3)
 
-3. **agent_memory_sql** - Scoped Postgres schemas
-4. **agent_memory_schema** - Schema inspection
+3. **fiche_memory_sql** - Scoped Postgres schemas
+4. **fiche_memory_schema** - Schema inspection
 
 Enables learning and stateful workflows.
 

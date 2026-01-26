@@ -1,6 +1,6 @@
 """Trace Explorer API endpoints.
 
-Admin-only endpoints for debugging traces across supervisor runs, workers, and LLM calls.
+Admin-only endpoints for debugging traces across concierge runs, commis, and LLM calls.
 """
 
 from typing import Literal
@@ -44,7 +44,7 @@ async def get_trace(
 ):
     """Get unified trace timeline (admin only).
 
-    Returns a unified timeline of events across supervisor runs, workers, and LLM calls.
+    Returns a unified timeline of events across concierge runs, commis, and LLM calls.
 
     Levels:
     - summary: High-level timeline with key events (default)

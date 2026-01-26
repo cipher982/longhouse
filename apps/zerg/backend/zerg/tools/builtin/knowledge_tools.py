@@ -49,20 +49,20 @@ def knowledge_search(query: str, limit: int = 5) -> List[dict]:
         ]
     """
     from zerg.connectors.context import get_credential_resolver
-    from zerg.context import get_worker_context
+    from zerg.context import get_commis_context
     from zerg.crud import knowledge_crud
     from zerg.database import db_session
 
-    # Get current user from execution context (V1.1: supports both Worker and Supervisor)
-    # Priority: WorkerContext > CredentialResolver (set by AgentRunner for all runs)
+    # Get current user from execution context (V1.1: supports both Commis and Concierge)
+    # Priority: CommisContext > CredentialResolver (set by FicheRunner for all runs)
     owner_id = None
 
-    # Try WorkerContext first (set by WorkerRunner)
-    ctx = get_worker_context()
+    # Try CommisContext first (set by CommisRunner)
+    ctx = get_commis_context()
     if ctx is not None and ctx.owner_id is not None:
         owner_id = ctx.owner_id
     else:
-        # Fall back to CredentialResolver (set by AgentRunner for Supervisor runs)
+        # Fall back to CredentialResolver (set by FicheRunner for Concierge runs)
         resolver = get_credential_resolver()
         if resolver is not None and resolver.owner_id is not None:
             owner_id = resolver.owner_id

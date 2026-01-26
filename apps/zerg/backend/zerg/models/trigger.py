@@ -1,4 +1,4 @@
-"""Trigger model for event-driven agent execution."""
+"""Trigger model for event-driven fiche execution."""
 
 from sqlalchemy import JSON
 from sqlalchemy import Column
@@ -14,7 +14,7 @@ from zerg.database import Base
 
 
 class Trigger(Base):
-    """A trigger that can fire an agent (e.g. via webhook).
+    """A trigger that can fire a fiche (e.g. via webhook).
 
     Currently only the *webhook* type is implemented.  Each trigger owns a
     unique secret token that must be supplied when the webhook is invoked.
@@ -23,7 +23,7 @@ class Trigger(Base):
     __tablename__ = "triggers"
 
     id = Column(Integer, primary_key=True, index=True)
-    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False)
+    fiche_id = Column(Integer, ForeignKey("fiches.id"), nullable=False)
 
     # For now we only support webhook triggers but leave room for future
     # extension (e.g. kafka, email, slack, etc.).
@@ -67,4 +67,4 @@ class Trigger(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     # ORM relationships
-    agent = relationship("Agent", backref="triggers")
+    fiche = relationship("Fiche", backref="triggers")

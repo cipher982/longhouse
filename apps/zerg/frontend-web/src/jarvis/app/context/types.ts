@@ -53,13 +53,13 @@ export interface ChatMessage {
   status?: AssistantStatus
   /**
    * Unique identifier for the assistant message.
-   * For normal runs: Client-generated upfront (no binding step needed).
-   * For continuation runs: Backend-generated, received in supervisor_started event.
-   * Stable across supervisor_started -> supervisor_token -> supervisor_complete.
+   * For normal courses: Client-generated upfront (no binding step needed).
+   * For continuation courses: Backend-generated, received in concierge_started event.
+   * Stable across concierge_started -> concierge_token -> concierge_complete.
    */
   messageId?: string
-  /** Supervisor run ID for associating tool calls with this message */
-  runId?: number
+  /** Concierge course ID for associating tool calls with this message */
+  courseId?: number
   /** Tool calls made by this assistant message (hydrated from DB on page load) */
   toolCalls?: StoredToolCall[]
   /** Token usage for debug mode */
@@ -120,7 +120,7 @@ export interface AppState {
 
   // Jarvis-Zerg integration
   jarvisClient: unknown | null
-  cachedAgents: unknown[]
+  cachedFiches: unknown[]
 
   // Media state
   sharedMicStream: MediaStream | null
@@ -150,7 +150,7 @@ export type AppAction =
   | { type: 'SET_SIDEBAR_OPEN'; open: boolean }
   | { type: 'SET_CONNECTED'; connected: boolean }
   | { type: 'SET_JARVIS_CLIENT'; client: unknown }
-  | { type: 'SET_CACHED_AGENTS'; agents: unknown[] }
+  | { type: 'SET_CACHED_FICHES'; fiches: unknown[] }
   | { type: 'SET_MIC_STREAM'; stream: MediaStream | null }
   | { type: 'SET_AVAILABLE_MODELS'; models: ModelInfo[] }
   | { type: 'SET_PREFERENCES'; preferences: ChatPreferences }

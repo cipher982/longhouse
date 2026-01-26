@@ -34,8 +34,8 @@
  * For marketing screenshots:
  *   await waitForScreenshotReady(page);
  *
- * For async operations (supervisor completion, etc.):
- *   await waitForEvent(page, 'supervisor:complete', { timeout: 30000 });
+ * For async operations (concierge completion, etc.):
+ *   await waitForEvent(page, 'concierge:complete', { timeout: 30000 });
  *
  * Note: Prefer sticky flags/attributes over events for "ready" signals to avoid race
  * conditions where the event fires before the test listener is attached.
@@ -168,8 +168,8 @@ export async function waitForEventBusAvailable(
  * // Wait for chat to be ready
  * await waitForEvent(page, 'test:chat_ready');
  *
- * // Wait for supervisor to complete
- * await waitForEvent(page, 'supervisor:complete', { timeout: 30000 });
+ * // Wait for concierge to complete
+ * await waitForEvent(page, 'concierge:complete', { timeout: 30000 });
  */
 export async function waitForEvent<T = unknown>(
   page: Page,
@@ -232,9 +232,9 @@ export async function waitForEvent<T = unknown>(
  * to produce them. Only works in DEV mode where window.__jarvis.eventBus is exposed.
  *
  * @example
- * // Simulate supervisor completing
- * await emitTestEvent(page, 'supervisor:complete', {
- *   runId: 1,
+ * // Simulate concierge completing
+ * await emitTestEvent(page, 'concierge:complete', {
+ *   courseId: 1,
  *   result: 'Test complete',
  *   status: 'success',
  *   timestamp: Date.now()

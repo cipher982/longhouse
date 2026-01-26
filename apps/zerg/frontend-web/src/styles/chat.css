@@ -98,7 +98,7 @@
       color: var(--color-text-primary);
     }
 
-    .agent-info {
+    .fiche-info {
       display: flex;
       flex-direction: column;
       flex: 1;
@@ -148,7 +148,7 @@
       height: 14px;
     }
 
-    .agent-name {
+    .fiche-name {
       font-family: var(--font-family-display);
       font-size: var(--font-size-sm);
       font-weight: 500;
@@ -931,11 +931,11 @@
         row-gap: var(--space-2);
       }
 
-      .agent-info {
+      .fiche-info {
         min-width: 0;
       }
 
-      .agent-name,
+      .fiche-name,
       .thread-title-text {
         white-space: nowrap;
         overflow: hidden;

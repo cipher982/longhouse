@@ -29,7 +29,7 @@ Key moves:
 - **Doc drift:** `docs/specs/eval-dataset.md` describes earlier counts/behavior that no longer match `apps/zerg/backend/evals/datasets/*.yml`.
 
 ### Playwright E2E
-- Playwright E2E runs with **per-worker Postgres schema isolation** via `X-Test-Worker` header and pre-created schemas:
+- Playwright E2E runs with **per-worker Postgres schema isolation** via `X-Test-Commis` header and pre-created schemas:
   - `apps/zerg/e2e/test-setup.js`
   - `apps/zerg/e2e/spawn-test-backend.js`
   - `apps/zerg/e2e/tests/fixtures.ts`
@@ -109,7 +109,7 @@ Example: current `live.yml` delegation cases are judged purely by `llm_graded` (
 ## Spec: Tier 4 Live Journeys (Playwright + LLM Judge)
 
 ### What “live journey” means in this repo
-Playwright already runs an isolated backend/frontend by default (`apps/zerg/e2e/playwright.config.js`) using ports 8001/8002 and schema isolation via `X-Test-Worker`.
+Playwright already runs an isolated backend/frontend by default (`apps/zerg/e2e/playwright.config.js`) using ports 8001/8002 and schema isolation via `X-Test-Commis`.
 
 “Live journey” adds:
 - a real model for the agent involved in the journey (not `gpt-mock` / `gpt-scripted`)
@@ -145,7 +145,7 @@ Playwright already runs an isolated backend/frontend by default (`apps/zerg/e2e/
 ## Task List (Small, Shippable Chunks)
 
 ### 0) Fix doc drift (no behavior changes)
-- [ ] Update `apps/zerg/e2e/TEST_SUITE_OVERVIEW.md` to reflect schema isolation via `X-Test-Worker`.
+- [ ] Update `apps/zerg/e2e/TEST_SUITE_OVERVIEW.md` to reflect schema isolation via `X-Test-Commis`.
 - [ ] Update `docs/specs/eval-dataset.md` (counts, live.yml behavior, current make targets).
 - [ ] Normalize `apps/zerg/backend/evals/datasets/live.yml` comments/section counts (it currently disagrees with itself).
 

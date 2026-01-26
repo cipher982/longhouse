@@ -48,7 +48,7 @@ TEST_CASES = [
             "max_tool_calls": 1,
             "max_tokens": 10000,
             "should_spawn_commis": True,
-            "worker_should_use_df": True,
+            "commis_should_use_df": True,
             "keywords_in_result": ["disk", "%", "GB"],
         },
         category="simple",
@@ -61,7 +61,7 @@ TEST_CASES = [
             "max_tool_calls": 1,
             "max_tokens": 10000,
             "should_spawn_commis": True,
-            "worker_should_use_free": True,
+            "commis_should_use_free": True,
             "keywords_in_result": ["memory", "GB"],
         },
         category="simple",
@@ -95,33 +95,33 @@ TEST_CASES = [
         description="Check multiple servers in parallel",
         user_query="check disk space on cube, clifford, and zerg",
         expected_behavior={
-            "max_tool_calls": 3,  # Should spawn 3 workers in parallel
+            "max_tool_calls": 3,  # Should spawn 3 commis in parallel
             "max_tokens": 30000,
             "should_spawn_commis": True,
-            "parallel_workers": 3,
+            "parallel_commis": 3,
             "keywords_in_result": ["cube", "clifford", "zerg"],
         },
         category="multi_step",
     ),
     TestCase(
         id="conversation_followup",
-        description="Follow-up question - should NOT spawn new worker",
+        description="Follow-up question - should NOT spawn new commis",
         user_query="what did you find?",
         expected_behavior={
             "max_tool_calls": 1,  # Should use read_commis_result
             "max_tokens": 5000,
             "should_spawn_commis": False,
-            "should_query_past_workers": True,
+            "should_query_past_commis": True,
         },
         category="simple",
     ),
     TestCase(
         id="over_specification_trap",
-        description="Worker task should be concise, not over-specified",
+        description="Commis task should be concise, not over-specified",
         user_query="check disk space on cube",
         expected_behavior={
-            "max_task_length": 100,  # Supervisor's task to worker should be brief
-            "task_should_not_contain": ["run df", "execute", "sudo du"],  # Don't tell worker HOW
+            "max_task_length": 100,  # Concierge's task to commis should be brief
+            "task_should_not_contain": ["run df", "execute", "sudo du"],  # Don't tell commis HOW
             "task_should_contain": ["disk", "cube"],  # Just WHAT
         },
         category="anti_pattern",
@@ -213,23 +213,23 @@ def analyze_session_logs(logs: list[dict], test_case: TestCase) -> dict[str, Any
                 f"Tokens: {total_tokens:,} > {expected['max_tokens']:,} (inefficient)"
             )
 
-    # Check if worker was spawned
+    # Check if commis was spawned
     if "should_spawn_commis" in expected:
-        worker_spawned = any(log.get("worker_id") for log in logs)
-        if worker_spawned == expected["should_spawn_commis"]:
+        commis_spawned = any(log.get("commis_id") for log in logs)
+        if commis_spawned == expected["should_spawn_commis"]:
             results["passed"].append(
-                f"Worker spawned: {worker_spawned} (expected: {expected['should_spawn_commis']})"
+                f"Commis spawned: {commis_spawned} (expected: {expected['should_spawn_commis']})"
             )
         else:
             results["failed"].append(
-                f"Worker spawned: {worker_spawned} (expected: {expected['should_spawn_commis']})"
+                f"Commis spawned: {commis_spawned} (expected: {expected['should_spawn_commis']})"
             )
 
-    # Check for over-specification in supervisor's task delegation
+    # Check for over-specification in concierge's task delegation
     if "max_task_length" in expected:
         for log in logs:
-            if log.get("phase") == "initial" and log.get("worker_id"):
-                # This is supervisor delegating to worker
+            if log.get("phase") == "initial" and log.get("commis_id"):
+                # This is concierge delegating to commis
                 messages = log.get("messages", [])
                 for msg in messages:
                     if msg.get("role") == "human":
@@ -265,7 +265,7 @@ def detect_anti_patterns(logs: list[dict]) -> list[str]:
 
     # Pattern 1: Over-specification in task delegation
     for log in logs:
-        if log.get("phase") == "initial" and log.get("worker_id"):
+        if log.get("phase") == "initial" and log.get("commis_id"):
             messages = log.get("messages", [])
             for msg in messages:
                 if msg.get("role") == "human":
@@ -276,7 +276,7 @@ def detect_anti_patterns(logs: list[dict]) -> list[str]:
                         for cmd in ["df -h", "du -", "docker system", "sudo"]
                     ):
                         patterns.append(
-                            f"Over-specification: Supervisor told worker exact commands: {task[:100]}..."
+                            f"Over-specification: Concierge told commis exact commands: {task[:100]}..."
                         )
 
     # Pattern 2: Excessive tool iterations for simple tasks
@@ -288,21 +288,21 @@ def detect_anti_patterns(logs: list[dict]) -> list[str]:
             for msg in messages
         )
         if has_simple_request:
-            worker_id = log.get("worker_id")
-            if worker_id:
-                # Count tool iterations for this worker
-                worker_logs = [l for l in logs if l.get("worker_id") == worker_id]
+            commis_id = log.get("commis_id")
+            if commis_id:
+                # Count tool iterations for this commis
+                commis_logs = [l for l in logs if l.get("commis_id") == commis_id]
                 tool_iters = sum(
-                    1 for l in worker_logs if "tool_iteration" in l.get("phase", "")
+                    1 for l in commis_logs if "tool_iteration" in l.get("phase", "")
                 )
                 if tool_iters > 2:
                     patterns.append(
                         f"Excessive iterations: Simple task took {tool_iters} tool calls"
                     )
 
-    # Pattern 3: Supervisor doing worker tasks
+    # Pattern 3: Concierge doing commis tasks
     for log in logs:
-        if not log.get("worker_id"):  # Supervisor
+        if not log.get("commis_id"):  # Concierge
             messages = log.get("messages", [])
             for msg in messages:
                 if msg.get("role") == "ai":
@@ -311,7 +311,7 @@ def detect_anti_patterns(logs: list[dict]) -> list[str]:
                     for tc in tool_calls:
                         if tc.get("name") in ["ssh_exec", "runner_exec"]:
                             patterns.append(
-                                "Supervisor used execution tool directly (should spawn worker)"
+                                "Concierge used execution tool directly (should spawn commis)"
                             )
 
     # Pattern 4: Token bloat in system prompts
@@ -416,13 +416,13 @@ def generate_recommendations(report: dict[str, Any]) -> list[str]:
     if common_failures["excessive_tool_calls"] > 0:
         recommendations.append(
             f"[HIGH] Reduce tool iterations: {common_failures['excessive_tool_calls']} tests had excessive tool calls. "
-            "Strengthen worker prompt's 'ONE command, then stop' guidance."
+            "Strengthen commis prompt's 'ONE command, then stop' guidance."
         )
 
     if common_failures["over_specification"] > 0:
         recommendations.append(
             f"[HIGH] Prevent over-specification: {common_failures['over_specification']} tests had detailed task instructions. "
-            "Supervisor should pass user queries nearly verbatim to workers."
+            "Concierge should pass user queries nearly verbatim to commis."
         )
 
     if common_failures["token_inefficiency"] > 0:

@@ -2,7 +2,7 @@
  * Account-level Integrations Settings Page.
  *
  * Allows users to configure connector credentials at the account level.
- * These credentials are shared across all agents owned by the user.
+ * These credentials are shared across all fiches owned by the user.
  */
 
 import { useState, useEffect, type FormEvent } from "react";
@@ -14,7 +14,7 @@ import {
   useTestAccountConnectorBeforeSave,
 } from "../hooks/useAccountConnectors";
 import type { AccountConnectorStatus } from "../types/connectors";
-import { ConnectorConfigModal, type ConfigModalState } from "../components/agent-settings/ConnectorConfigModal";
+import { ConnectorConfigModal, type ConfigModalState } from "../components/fiche-settings/ConnectorConfigModal";
 import { ConnectorCard, isOAuthConnector } from "../components/connectors/ConnectorCard";
 import { useOAuthFlow } from "../hooks/useOAuthFlow";
 import { SectionHeader, EmptyState, Spinner, PageShell } from "../components/ui";
@@ -96,7 +96,7 @@ export default function IntegrationsPage() {
   const handleDelete = async (connector: AccountConnectorStatus) => {
     const confirmed = await confirm({
       title: `Remove ${connector.name}?`,
-      message: 'This will remove this integration from your account. Any agents using these credentials will lose access.',
+      message: 'This will remove this integration from your account. Any fiches using these credentials will lose access.',
       confirmLabel: 'Remove',
       cancelLabel: 'Keep',
       variant: 'danger',
@@ -141,7 +141,7 @@ export default function IntegrationsPage() {
     <PageShell size="narrow" className="integrations-page-container">
       <SectionHeader
         title="Integrations"
-        description="Configure credentials for external services. These integrations are shared across all your agents."
+        description="Configure credentials for external services. These integrations are shared across all your fiches."
       />
 
       <div className="integrations-content">

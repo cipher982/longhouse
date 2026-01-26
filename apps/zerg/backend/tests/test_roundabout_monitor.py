@@ -5,16 +5,16 @@ from datetime import timezone
 import pytest
 
 import zerg.services.roundabout_monitor as rm
-from tests.conftest import TEST_WORKER_MODEL
+from tests.conftest import TEST_COMMIS_MODEL
 from zerg.events import EventType
 from zerg.events import event_bus
-from zerg.models.models import WorkerJob
+from zerg.models.models import CommisJob
 from zerg.services.roundabout_monitor import DecisionContext
 from zerg.services.roundabout_monitor import RoundaboutDecision
 from zerg.services.roundabout_monitor import RoundaboutMonitor
 from zerg.services.roundabout_monitor import ToolActivity
 from zerg.services.roundabout_monitor import make_heuristic_decision
-from zerg.services.worker_artifact_store import WorkerArtifactStore
+from zerg.services.commis_artifact_store import CommisArtifactStore
 
 
 @pytest.mark.asyncio
@@ -23,24 +23,24 @@ async def test_roundabout_records_tool_events(monkeypatch, db_session, tmp_path)
     # Speed up polling
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
 
-    # Isolate worker artifacts
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
-    store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
+    # Isolate commis artifacts
+    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     # Reset event bus subscribers for isolation
     original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
-        worker_id = store.create_worker("Test task", owner_id=1)
-        store.start_worker(worker_id)
+        commis_id = store.create_commis("Test task", owner_id=1)
+        store.start_commis(commis_id)
 
-        job = WorkerJob(
+        job = CommisJob(
             owner_id=1,
             task="Test task",
-            model=TEST_WORKER_MODEL,
+            model=TEST_COMMIS_MODEL,
             status="running",
-            worker_id=worker_id,
+            commis_id=commis_id,
         )
         db_session.add(job)
         db_session.commit()
@@ -67,9 +67,9 @@ async def test_roundabout_records_tool_events(monkeypatch, db_session, tmp_path)
             },
         )
 
-        # Complete the worker/job
-        store.save_result(worker_id, "OK")
-        store.complete_worker(worker_id, status="success")
+        # Complete the commis/job
+        store.save_result(commis_id, "OK")
+        store.complete_commis(commis_id, status="success")
         job.status = "success"
         db_session.commit()
 
@@ -86,24 +86,24 @@ async def test_roundabout_records_tool_events(monkeypatch, db_session, tmp_path)
 
 @pytest.mark.asyncio
 async def test_roundabout_monitor_timeout_sets_flag(monkeypatch, db_session, tmp_path):
-    """Monitor timeout should report monitor_timeout and note worker still running."""
+    """Monitor timeout should report monitor_timeout and note commis still running."""
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
-    store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
+    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
-        worker_id = store.create_worker("Long task", owner_id=1)
-        store.start_worker(worker_id)
+        commis_id = store.create_commis("Long task", owner_id=1)
+        store.start_commis(commis_id)
 
-        job = WorkerJob(
+        job = CommisJob(
             owner_id=1,
             task="Long task",
-            model=TEST_WORKER_MODEL,
+            model=TEST_COMMIS_MODEL,
             status="running",
-            worker_id=worker_id,
+            commis_id=commis_id,
         )
         db_session.add(job)
         db_session.commit()
@@ -119,7 +119,7 @@ async def test_roundabout_monitor_timeout_sets_flag(monkeypatch, db_session, tmp
         result = await monitor.wait_for_completion()
 
         assert result.status == "monitor_timeout"
-        assert result.worker_still_running is True
+        assert result.commis_still_running is True
         assert result.activity_summary["monitoring_checks"] >= 1
         assert monitor._event_subscription is None
     finally:
@@ -138,7 +138,7 @@ class TestMakeHeuristicDecision:
         """Helper to create a DecisionContext with defaults."""
         defaults = {
             "job_id": 1,
-            "worker_id": "test-worker-123",
+            "commis_id": "test-commis-123",
             "task": "Test task",
             "status": "running",
             "elapsed_seconds": 10.0,
@@ -153,7 +153,7 @@ class TestMakeHeuristicDecision:
         return DecisionContext(**defaults)
 
     def test_wait_when_running_normally(self):
-        """Should return WAIT when worker is running normally."""
+        """Should return WAIT when commis is running normally."""
         ctx = self._make_context(status="running")
         decision, reason = make_heuristic_decision(ctx)
 
@@ -161,7 +161,7 @@ class TestMakeHeuristicDecision:
         assert "Continuing" in reason
 
     def test_exit_when_status_success(self):
-        """Should return EXIT when worker status is success."""
+        """Should return EXIT when commis status is success."""
         ctx = self._make_context(status="success")
         decision, reason = make_heuristic_decision(ctx)
 
@@ -169,7 +169,7 @@ class TestMakeHeuristicDecision:
         assert "success" in reason
 
     def test_exit_when_status_failed(self):
-        """Should return EXIT when worker status is failed."""
+        """Should return EXIT when commis status is failed."""
         ctx = self._make_context(status="failed")
         decision, reason = make_heuristic_decision(ctx)
 
@@ -248,7 +248,7 @@ class TestMakeHeuristicDecision:
         )
         decision, reason = make_heuristic_decision(ctx)
 
-        # Should wait, not cancel - worker may still be in initial model call
+        # Should wait, not cancel - commis may still be in initial model call
         assert decision == RoundaboutDecision.WAIT
 
     def test_wait_when_stuck_but_under_threshold(self):
@@ -272,22 +272,22 @@ async def test_roundabout_warns_but_continues_on_no_progress(monkeypatch, db_ses
     """
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
     monkeypatch.setattr(rm, "ROUNDABOUT_NO_PROGRESS_POLLS", 3)  # Lower for fast test
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
-    store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
+    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
-        worker_id = store.create_worker("Stuck task", owner_id=1)
-        store.start_worker(worker_id)
+        commis_id = store.create_commis("Stuck task", owner_id=1)
+        store.start_commis(commis_id)
 
-        job = WorkerJob(
+        job = CommisJob(
             owner_id=1,
             task="Stuck task",
-            model=TEST_WORKER_MODEL,
+            model=TEST_COMMIS_MODEL,
             status="running",
-            worker_id=worker_id,
+            commis_id=commis_id,
         )
         db_session.add(job)
         db_session.commit()
@@ -311,7 +311,7 @@ async def test_roundabout_warns_but_continues_on_no_progress(monkeypatch, db_ses
             {
                 "event_type": EventType.COMMIS_TOOL_STARTED,
                 "job_id": job.id,
-                "worker_id": worker_id,
+                "commis_id": commis_id,
                 "tool_name": "stuck_tool",
             },
         )
@@ -329,22 +329,22 @@ async def test_roundabout_warns_but_continues_on_no_progress(monkeypatch, db_ses
 async def test_roundabout_correlates_events_by_job_id(monkeypatch, db_session, tmp_path):
     """Monitor should correlate tool events by job_id (regression test for event filtering bug)."""
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
-    store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
+    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
-        worker_id = store.create_worker("Test task", owner_id=1)
-        store.start_worker(worker_id)
+        commis_id = store.create_commis("Test task", owner_id=1)
+        store.start_commis(commis_id)
 
-        job = WorkerJob(
+        job = CommisJob(
             owner_id=1,
             task="Test task",
-            model=TEST_WORKER_MODEL,
+            model=TEST_COMMIS_MODEL,
             status="running",
-            worker_id=worker_id,
+            commis_id=commis_id,
         )
         db_session.add(job)
         db_session.commit()
@@ -362,7 +362,7 @@ async def test_roundabout_correlates_events_by_job_id(monkeypatch, db_session, t
             {
                 "event_type": EventType.COMMIS_TOOL_STARTED,
                 "job_id": job.id,  # Critical: includes job_id
-                "worker_id": worker_id,
+                "commis_id": commis_id,
                 "owner_id": 1,
                 "tool_name": "http_request",
             },
@@ -374,7 +374,7 @@ async def test_roundabout_correlates_events_by_job_id(monkeypatch, db_session, t
             {
                 "event_type": EventType.COMMIS_TOOL_STARTED,
                 "job_id": 99999,  # Different job
-                "worker_id": "other-worker",
+                "commis_id": "other-commis",
                 "owner_id": 1,
                 "tool_name": "should_not_appear",
             },
@@ -385,26 +385,26 @@ async def test_roundabout_correlates_events_by_job_id(monkeypatch, db_session, t
             EventType.COMMIS_TOOL_STARTED,
             {
                 "event_type": EventType.COMMIS_TOOL_STARTED,
-                "worker_id": worker_id,  # Same worker but no job_id
+                "commis_id": commis_id,  # Same commis but no job_id
                 "owner_id": 1,
                 "tool_name": "also_should_not_appear",
             },
         )
 
-        # Complete the worker
+        # Complete the commis
         await event_bus.publish(
             EventType.COMMIS_TOOL_COMPLETED,
             {
                 "event_type": EventType.COMMIS_TOOL_COMPLETED,
                 "job_id": job.id,
-                "worker_id": worker_id,
+                "commis_id": commis_id,
                 "tool_name": "http_request",
                 "duration_ms": 100,
             },
         )
 
-        store.save_result(worker_id, "OK")
-        store.complete_worker(worker_id, status="success")
+        store.save_result(commis_id, "OK")
+        store.complete_commis(commis_id, status="success")
         job.status = "success"
         db_session.commit()
 
@@ -441,7 +441,7 @@ class TestRoundaboutDecisionModes:
         """Helper to create a DecisionContext with defaults."""
         defaults = {
             "job_id": 1,
-            "worker_id": "test-worker-123",
+            "commis_id": "test-commis-123",
             "task": "Test task",
             "status": "running",
             "elapsed_seconds": 10.0,
@@ -460,22 +460,22 @@ class TestRoundaboutDecisionModes:
 async def test_roundabout_with_llm_mode_exit(monkeypatch, db_session, tmp_path):
     """LLM mode should exit early when LLM says exit."""
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
-    store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
+    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
-        worker_id = store.create_worker("Test task", owner_id=1)
-        store.start_worker(worker_id)
+        commis_id = store.create_commis("Test task", owner_id=1)
+        store.start_commis(commis_id)
 
-        job = WorkerJob(
+        job = CommisJob(
             owner_id=1,
             task="Test task",
-            model=TEST_WORKER_MODEL,
+            model=TEST_COMMIS_MODEL,
             status="running",
-            worker_id=worker_id,
+            commis_id=commis_id,
         )
         db_session.add(job)
         db_session.commit()
@@ -515,22 +515,22 @@ async def test_roundabout_with_llm_mode_exit(monkeypatch, db_session, tmp_path):
 async def test_roundabout_with_llm_mode_cancel(monkeypatch, db_session, tmp_path):
     """LLM mode should cancel when LLM says cancel."""
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
-    store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
+    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
-        worker_id = store.create_worker("Stuck task", owner_id=1)
-        store.start_worker(worker_id)
+        commis_id = store.create_commis("Stuck task", owner_id=1)
+        store.start_commis(commis_id)
 
-        job = WorkerJob(
+        job = CommisJob(
             owner_id=1,
             task="Stuck task",
-            model=TEST_WORKER_MODEL,
+            model=TEST_COMMIS_MODEL,
             status="running",
-            worker_id=worker_id,
+            commis_id=commis_id,
         )
         db_session.add(job)
         db_session.commit()
@@ -569,22 +569,22 @@ async def test_roundabout_with_llm_mode_cancel(monkeypatch, db_session, tmp_path
 async def test_roundabout_llm_budget_enforcement(monkeypatch, db_session, tmp_path):
     """LLM mode should respect max calls budget."""
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
-    store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
+    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
-        worker_id = store.create_worker("Test task", owner_id=1)
-        store.start_worker(worker_id)
+        commis_id = store.create_commis("Test task", owner_id=1)
+        store.start_commis(commis_id)
 
-        job = WorkerJob(
+        job = CommisJob(
             owner_id=1,
             task="Test task",
-            model=TEST_WORKER_MODEL,
+            model=TEST_COMMIS_MODEL,
             status="running",
-            worker_id=worker_id,
+            commis_id=commis_id,
         )
         db_session.add(job)
         db_session.commit()
@@ -630,22 +630,22 @@ async def test_roundabout_llm_budget_enforcement(monkeypatch, db_session, tmp_pa
 async def test_roundabout_llm_interval_enforcement(monkeypatch, db_session, tmp_path):
     """LLM mode should respect poll interval."""
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
-    store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
+    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
-        worker_id = store.create_worker("Test task", owner_id=1)
-        store.start_worker(worker_id)
+        commis_id = store.create_commis("Test task", owner_id=1)
+        store.start_commis(commis_id)
 
-        job = WorkerJob(
+        job = CommisJob(
             owner_id=1,
             task="Test task",
-            model=TEST_WORKER_MODEL,
+            model=TEST_COMMIS_MODEL,
             status="running",
-            worker_id=worker_id,
+            commis_id=commis_id,
         )
         db_session.add(job)
         db_session.commit()
@@ -690,30 +690,30 @@ async def test_roundabout_llm_interval_enforcement(monkeypatch, db_session, tmp_
 async def test_roundabout_hybrid_mode_heuristic_takes_precedence(monkeypatch, db_session, tmp_path):
     """Hybrid mode should use heuristic decision when it's not WAIT."""
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
-    store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
+    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
-        worker_id = store.create_worker("Test task", owner_id=1)
-        store.start_worker(worker_id)
+        commis_id = store.create_commis("Test task", owner_id=1)
+        store.start_commis(commis_id)
 
-        job = WorkerJob(
+        job = CommisJob(
             owner_id=1,
             task="Test task",
-            model=TEST_WORKER_MODEL,
+            model=TEST_COMMIS_MODEL,
             status="success",  # Heuristic will say EXIT
-            worker_id=worker_id,
+            commis_id=commis_id,
         )
         db_session.add(job)
         db_session.commit()
         db_session.refresh(job)
 
-        # Complete worker artifacts
-        store.save_result(worker_id, "OK")
-        store.complete_worker(worker_id, status="success")
+        # Complete commis artifacts
+        store.save_result(commis_id, "OK")
+        store.complete_commis(commis_id, status="success")
 
         llm_called = False
 
@@ -745,22 +745,22 @@ async def test_roundabout_heuristic_mode_no_llm_calls(monkeypatch, db_session, t
     """Heuristic mode should never call LLM."""
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
     monkeypatch.setattr(rm, "ROUNDABOUT_NO_PROGRESS_POLLS", 2)  # Quick cancel
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
-    store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
+    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
-        worker_id = store.create_worker("Test task", owner_id=1)
-        store.start_worker(worker_id)
+        commis_id = store.create_commis("Test task", owner_id=1)
+        store.start_commis(commis_id)
 
-        job = WorkerJob(
+        job = CommisJob(
             owner_id=1,
             task="Test task",
-            model=TEST_WORKER_MODEL,
+            model=TEST_COMMIS_MODEL,
             status="running",
-            worker_id=worker_id,
+            commis_id=commis_id,
         )
         db_session.add(job)
         db_session.commit()
@@ -796,22 +796,22 @@ async def test_roundabout_heuristic_mode_no_llm_calls(monkeypatch, db_session, t
 async def test_roundabout_llm_timeout_fallback(monkeypatch, db_session, tmp_path):
     """LLM timeout should fall back to wait."""
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
-    store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
+    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
-        worker_id = store.create_worker("Test task", owner_id=1)
-        store.start_worker(worker_id)
+        commis_id = store.create_commis("Test task", owner_id=1)
+        store.start_commis(commis_id)
 
-        job = WorkerJob(
+        job = CommisJob(
             owner_id=1,
             task="Test task",
-            model=TEST_WORKER_MODEL,
+            model=TEST_COMMIS_MODEL,
             status="running",
-            worker_id=worker_id,
+            commis_id=commis_id,
         )
         db_session.add(job)
         db_session.commit()

@@ -21,8 +21,8 @@ from zerg.config import get_settings
 from zerg.events import EventType
 from zerg.events import event_bus
 from zerg.generated.ws_messages import Envelope
-from zerg.metrics import websocket_run_update_latency_seconds
-from zerg.metrics import websocket_run_updates_total
+from zerg.metrics import websocket_course_update_latency_seconds
+from zerg.metrics import websocket_course_updates_total
 from zerg.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -103,19 +103,19 @@ class TopicConnectionManager:
     def _setup_event_handlers(self) -> None:
         """Set up handlers for events we want to broadcast."""
         logger.info("Setting up WebSocket event handlers")
-        # Agent events
-        event_bus.subscribe(EventType.AGENT_CREATED, self._handle_agent_event)
-        event_bus.subscribe(EventType.AGENT_UPDATED, self._handle_agent_event)
-        event_bus.subscribe(EventType.AGENT_DELETED, self._handle_agent_event)
+        # Fiche events
+        event_bus.subscribe(EventType.FICHE_CREATED, self._handle_fiche_event)
+        event_bus.subscribe(EventType.FICHE_UPDATED, self._handle_fiche_event)
+        event_bus.subscribe(EventType.FICHE_DELETED, self._handle_fiche_event)
         # Thread events
         event_bus.subscribe(EventType.THREAD_CREATED, self._handle_thread_event)
         event_bus.subscribe(EventType.THREAD_UPDATED, self._handle_thread_event)
         event_bus.subscribe(EventType.THREAD_DELETED, self._handle_thread_event)
         event_bus.subscribe(EventType.THREAD_MESSAGE_CREATED, self._handle_thread_event)
 
-        # Run events
-        event_bus.subscribe(EventType.RUN_CREATED, self._handle_run_event)
-        event_bus.subscribe(EventType.RUN_UPDATED, self._handle_run_event)
+        # Course events
+        event_bus.subscribe(EventType.COURSE_CREATED, self._handle_course_event)
+        event_bus.subscribe(EventType.COURSE_UPDATED, self._handle_course_event)
 
         # Workflow execution events
         event_bus.subscribe(EventType.EXECUTION_STARTED, self._handle_execution_started)
@@ -273,7 +273,7 @@ class TopicConnectionManager:
 
         Args:
             client_id: The client ID to subscribe
-            topic: The topic to subscribe to (e.g., "agent:123", "thread:45")
+            topic: The topic to subscribe to (e.g., "fiche:123", "thread:45")
         """
         async with self._get_lock():
             if topic not in self.topic_subscriptions:
@@ -430,7 +430,7 @@ class TopicConnectionManager:
         """
         logger.debug(f"broadcast_to_topic called for topic: {topic}")
         # If there are no active subscribers we silently skip to avoid log
-        # spam – this situation is perfectly normal when scheduled agents or
+        # spam – this situation is perfectly normal when scheduled fiches or
         # background jobs emit updates while no browser is connected.
         async with self._get_lock():
             if topic not in self.topic_subscriptions:
@@ -493,13 +493,13 @@ class TopicConnectionManager:
                 return_exceptions=True,
             )
 
-    async def _handle_agent_event(self, data: Dict[str, Any]) -> None:
-        """Handle agent-related events from the event bus."""
+    async def _handle_fiche_event(self, data: Dict[str, Any]) -> None:
+        """Handle fiche-related events from the event bus."""
         if "id" not in data:
             return
 
-        agent_id = data["id"]
-        topic = f"agent:{agent_id}"
+        fiche_id = data["id"]
+        topic = f"fiche:{fiche_id}"
 
         # Extract event_type before serialization to avoid duplication in envelope
         event_type = data["event_type"]
@@ -531,24 +531,24 @@ class TopicConnectionManager:
         envelope = Envelope.create(message_type=event_type, topic=topic, data=serialized_data)
         await self.broadcast_to_topic(topic, envelope.model_dump())
 
-    async def _handle_run_event(self, data: Dict[str, Any]) -> None:
-        """Forward run events to the *agent:* topic so dashboards update."""
-        if "agent_id" not in data:
+    async def _handle_course_event(self, data: Dict[str, Any]) -> None:
+        """Forward course events to the *fiche:* topic so dashboards update."""
+        if "fiche_id" not in data:
             return
 
-        agent_id = data["agent_id"]
-        topic = f"agent:{agent_id}"
+        fiche_id = data["fiche_id"]
+        topic = f"fiche:{fiche_id}"
 
-        # Map run_id to id to match schema expectations
+        # Map course_id to id to match schema expectations
         clean_data = {k: v for k, v in data.items() if k != "event_type"}
-        if "run_id" in clean_data:
-            clean_data["id"] = clean_data.pop("run_id")
+        if "course_id" in clean_data:
+            clean_data["id"] = clean_data.pop("course_id")
 
-        run_id = clean_data.get("id")
+        course_id = clean_data.get("id")
         source_event = str(data.get("event_type") or "unknown")
         status_value = str(clean_data.get("status") or "unknown")
 
-        websocket_run_updates_total.labels(status=status_value, source_event=source_event).inc()
+        websocket_course_updates_total.labels(status=status_value, source_event=source_event).inc()
 
         elapsed_seconds: float | None = None
         started_at = clean_data.get("started_at")
@@ -560,21 +560,21 @@ class TopicConnectionManager:
             elapsed_seconds = max(0.0, float(clean_data["duration_ms"]) / 1000.0)
 
         if elapsed_seconds is not None:
-            websocket_run_update_latency_seconds.observe(elapsed_seconds)
+            websocket_course_update_latency_seconds.observe(elapsed_seconds)
 
         thread_id = clean_data.get("thread_id")
         if thread_id is None:
             logger.warning(
-                "run_update payload missing thread_id (agent=%s run=%s source=%s)",
-                agent_id,
-                run_id,
+                "course_update payload missing thread_id (fiche=%s course=%s source=%s)",
+                fiche_id,
+                course_id,
                 source_event,
             )
 
         logger.info(
-            "Broadcasting run_update (agent=%s run=%s status=%s thread=%s elapsed=%s)",
-            agent_id,
-            run_id,
+            "Broadcasting course_update (fiche=%s course=%s status=%s thread=%s elapsed=%s)",
+            fiche_id,
+            course_id,
             status_value,
             thread_id if thread_id is not None else "unknown",
             f"{elapsed_seconds:.3f}s" if elapsed_seconds is not None else "n/a",
@@ -583,7 +583,7 @@ class TopicConnectionManager:
         serialized_data = jsonable_encoder(clean_data)
 
         # Use envelope format
-        envelope = Envelope.create(message_type="run_update", topic=topic, data=serialized_data)
+        envelope = Envelope.create(message_type="course_update", topic=topic, data=serialized_data)
         await self.broadcast_to_topic(topic, envelope.model_dump())
 
     async def _handle_user_event(self, data: Dict[str, Any]) -> None:

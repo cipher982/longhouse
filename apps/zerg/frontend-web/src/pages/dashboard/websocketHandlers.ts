@@ -1,46 +1,46 @@
-import type { DashboardSnapshot, AgentSummary, AgentRun } from "../../services/api";
+import type { DashboardSnapshot, FicheSummary, Course } from "../../services/api";
 
-export function applyAgentStateUpdate(
+export function applyFicheStateUpdate(
   current: DashboardSnapshot,
-  agentId: number,
+  ficheId: number,
   dataPayload: Record<string, unknown>
 ): DashboardSnapshot {
   const validStatuses = ["idle", "running", "processing", "error"] as const;
   const statusValue =
     typeof dataPayload.status === "string" && validStatuses.includes(dataPayload.status as (typeof validStatuses)[number])
-      ? (dataPayload.status as AgentSummary["status"])
+      ? (dataPayload.status as FicheSummary["status"])
       : undefined;
-  const lastRunAtValue = typeof dataPayload.last_run_at === "string" ? dataPayload.last_run_at : undefined;
-  const nextRunAtValue = typeof dataPayload.next_run_at === "string" ? dataPayload.next_run_at : undefined;
+  const lastCourseAtValue = typeof dataPayload.last_course_at === "string" ? dataPayload.last_course_at : undefined;
+  const nextCourseAtValue = typeof dataPayload.next_course_at === "string" ? dataPayload.next_course_at : undefined;
   const lastErrorValue =
     dataPayload.last_error === null || typeof dataPayload.last_error === "string"
       ? (dataPayload.last_error as string | null)
       : undefined;
 
   let changed = false;
-  const nextAgents = current.agents.map((agent) => {
-    if (agent.id !== agentId) {
-      return agent;
+  const nextFiches = current.fiches.map((fiche) => {
+    if (fiche.id !== ficheId) {
+      return fiche;
     }
 
-    const nextAgent: AgentSummary = {
-      ...agent,
-      status: statusValue ?? agent.status,
-      last_run_at: lastRunAtValue ?? agent.last_run_at,
-      next_run_at: nextRunAtValue ?? agent.next_run_at,
-      last_error: lastErrorValue !== undefined ? lastErrorValue : agent.last_error,
+    const nextFiche: FicheSummary = {
+      ...fiche,
+      status: statusValue ?? fiche.status,
+      last_course_at: lastCourseAtValue ?? fiche.last_course_at,
+      next_course_at: nextCourseAtValue ?? fiche.next_course_at,
+      last_error: lastErrorValue !== undefined ? lastErrorValue : fiche.last_error,
     };
 
     if (
-      nextAgent.status !== agent.status ||
-      nextAgent.last_run_at !== agent.last_run_at ||
-      nextAgent.next_run_at !== agent.next_run_at ||
-      nextAgent.last_error !== agent.last_error
+      nextFiche.status !== fiche.status ||
+      nextFiche.last_course_at !== fiche.last_course_at ||
+      nextFiche.next_course_at !== fiche.next_course_at ||
+      nextFiche.last_error !== fiche.last_error
     ) {
       changed = true;
-      return nextAgent;
+      return nextFiche;
     }
-    return agent;
+    return fiche;
   });
 
   if (!changed) {
@@ -49,55 +49,55 @@ export function applyAgentStateUpdate(
 
   return {
     ...current,
-    agents: nextAgents,
+    fiches: nextFiches,
   };
 }
 
-export function applyRunUpdate(
+export function applyCourseUpdate(
   current: DashboardSnapshot,
-  agentId: number,
+  ficheId: number,
   dataPayload: Record<string, unknown>
 ): DashboardSnapshot {
-  const runIdCandidate = dataPayload.id ?? dataPayload.run_id;
-  const runId = typeof runIdCandidate === "number" ? runIdCandidate : null;
-  if (runId == null) {
+  const courseIdCandidate = dataPayload.id ?? dataPayload.course_id;
+  const courseId = typeof courseIdCandidate === "number" ? courseIdCandidate : null;
+  if (courseId == null) {
     return current;
   }
 
   const threadId =
     typeof dataPayload.thread_id === "number" ? (dataPayload.thread_id as number) : undefined;
 
-  const runsBundles = current.runs.slice();
-  let bundleIndex = runsBundles.findIndex((bundle) => bundle.agentId === agentId);
-  let runsChanged = false;
+  const courseBundles = current.courses.slice();
+  let bundleIndex = courseBundles.findIndex((bundle) => bundle.ficheId === ficheId);
+  let coursesChanged = false;
 
   if (bundleIndex === -1) {
-    runsBundles.push({ agentId, runs: [] });
-    bundleIndex = runsBundles.length - 1;
-    runsChanged = true;
+    courseBundles.push({ ficheId, courses: [] });
+    bundleIndex = courseBundles.length - 1;
+    coursesChanged = true;
   }
 
-  const targetBundle = runsBundles[bundleIndex];
-  const existingRuns = targetBundle.runs ?? [];
-  const existingIndex = existingRuns.findIndex((run) => run.id === runId);
-  let nextRuns = existingRuns;
+  const targetBundle = courseBundles[bundleIndex];
+  const existingCourses = targetBundle.courses ?? [];
+  const existingIndex = existingCourses.findIndex((course) => course.id === courseId);
+  let nextCourses = existingCourses;
 
   if (existingIndex === -1) {
     if (threadId === undefined) {
       return current;
     }
 
-    const newRun: AgentRun = {
-      id: runId,
-      agent_id: agentId,
+    const newCourse: Course = {
+      id: courseId,
+      fiche_id: ficheId,
       thread_id: threadId,
       status:
         typeof dataPayload.status === "string"
-          ? (dataPayload.status as AgentRun["status"])
+          ? (dataPayload.status as Course["status"])
           : "running",
       trigger:
         typeof dataPayload.trigger === "string"
-          ? (dataPayload.trigger as AgentRun["trigger"])
+          ? (dataPayload.trigger as Course["trigger"])
           : "manual",
       started_at: typeof dataPayload.started_at === "string" ? (dataPayload.started_at as string) : null,
       finished_at: typeof dataPayload.finished_at === "string" ? (dataPayload.finished_at as string) : null,
@@ -109,102 +109,105 @@ export function applyRunUpdate(
         dataPayload.error === undefined
           ? null
           : (dataPayload.error as string | null) ?? null,
+      display_type:
+        typeof dataPayload.display_type === "string" ? (dataPayload.display_type as string) : "course",
     };
 
-    nextRuns = [newRun, ...existingRuns];
-    if (nextRuns.length > current.runsLimit) {
-      nextRuns = nextRuns.slice(0, current.runsLimit);
+    nextCourses = [newCourse, ...existingCourses];
+    if (nextCourses.length > current.coursesLimit) {
+      nextCourses = nextCourses.slice(0, current.coursesLimit);
     }
-    runsChanged = true;
+    coursesChanged = true;
   } else {
-    const previousRun = existingRuns[existingIndex];
-    const updatedRun: AgentRun = {
-      ...previousRun,
+    const previousCourse = existingCourses[existingIndex];
+    const updatedCourse: Course = {
+      ...previousCourse,
       status:
         typeof dataPayload.status === "string"
-          ? (dataPayload.status as AgentRun["status"])
-          : previousRun.status,
+          ? (dataPayload.status as Course["status"])
+          : previousCourse.status,
       started_at:
         typeof dataPayload.started_at === "string"
-          ? (dataPayload.started_at as AgentRun["started_at"])
-          : previousRun.started_at,
+          ? (dataPayload.started_at as Course["started_at"])
+          : previousCourse.started_at,
       finished_at:
         typeof dataPayload.finished_at === "string"
-          ? (dataPayload.finished_at as AgentRun["finished_at"])
-          : previousRun.finished_at,
+          ? (dataPayload.finished_at as Course["finished_at"])
+          : previousCourse.finished_at,
       duration_ms:
         typeof dataPayload.duration_ms === "number"
-          ? (dataPayload.duration_ms as AgentRun["duration_ms"])
-          : previousRun.duration_ms,
+          ? (dataPayload.duration_ms as Course["duration_ms"])
+          : previousCourse.duration_ms,
       total_tokens:
         typeof dataPayload.total_tokens === "number"
-          ? (dataPayload.total_tokens as AgentRun["total_tokens"])
-          : previousRun.total_tokens,
+          ? (dataPayload.total_tokens as Course["total_tokens"])
+          : previousCourse.total_tokens,
       total_cost_usd:
         typeof dataPayload.total_cost_usd === "number"
-          ? (dataPayload.total_cost_usd as AgentRun["total_cost_usd"])
-          : previousRun.total_cost_usd,
+          ? (dataPayload.total_cost_usd as Course["total_cost_usd"])
+          : previousCourse.total_cost_usd,
       error:
         dataPayload.error === undefined
-          ? previousRun.error
+          ? previousCourse.error
           : ((dataPayload.error as string | null) ?? null),
     };
 
-    const hasRunDiff =
-      updatedRun.status !== previousRun.status ||
-      updatedRun.started_at !== previousRun.started_at ||
-      updatedRun.finished_at !== previousRun.finished_at ||
-      updatedRun.duration_ms !== previousRun.duration_ms ||
-      updatedRun.total_tokens !== previousRun.total_tokens ||
-      updatedRun.total_cost_usd !== previousRun.total_cost_usd ||
-      updatedRun.error !== previousRun.error;
+    const hasCourseDiff =
+      updatedCourse.status !== previousCourse.status ||
+      updatedCourse.started_at !== previousCourse.started_at ||
+      updatedCourse.finished_at !== previousCourse.finished_at ||
+      updatedCourse.duration_ms !== previousCourse.duration_ms ||
+      updatedCourse.total_tokens !== previousCourse.total_tokens ||
+      updatedCourse.total_cost_usd !== previousCourse.total_cost_usd ||
+      updatedCourse.error !== previousCourse.error;
 
-    if (hasRunDiff) {
-      nextRuns = [...existingRuns];
-      nextRuns[existingIndex] = updatedRun;
-      runsChanged = true;
+    if (hasCourseDiff) {
+      nextCourses = [...existingCourses];
+      nextCourses[existingIndex] = updatedCourse;
+      coursesChanged = true;
     }
   }
 
-  if (runsChanged) {
-    runsBundles[bundleIndex] = {
-      agentId,
-      runs: nextRuns,
+  if (coursesChanged) {
+    courseBundles[bundleIndex] = {
+      ficheId,
+      courses: nextCourses,
     };
   }
 
-  let agentsChanged = false;
-  const updatedAgents = current.agents.map((agent) => {
-    if (agent.id !== agentId) {
-      return agent;
+  let fichesChanged = false;
+  const validFicheStatuses = ["idle", "running", "processing", "error"] as const;
+  const updatedFiches = current.fiches.map((fiche) => {
+    if (fiche.id !== ficheId) {
+      return fiche;
     }
 
     const statusValue =
-      typeof dataPayload.status === "string"
-        ? (dataPayload.status as AgentSummary["status"])
-        : agent.status;
-    const lastRunValue =
-      typeof dataPayload.started_at === "string" ? (dataPayload.started_at as string) : agent.last_run_at;
+      typeof dataPayload.status === "string" && validFicheStatuses.includes(dataPayload.status as (typeof validFicheStatuses)[number])
+        ? (dataPayload.status as FicheSummary["status"])
+        : fiche.status;
+    const lastCourseValue =
+      typeof dataPayload.started_at === "string" ? (dataPayload.started_at as string) : fiche.last_course_at;
 
-    if (statusValue === agent.status && lastRunValue === agent.last_run_at) {
-      return agent;
+    if (statusValue === fiche.status && lastCourseValue === fiche.last_course_at) {
+      return fiche;
     }
 
-    agentsChanged = true;
+    fichesChanged = true;
     return {
-      ...agent,
+      ...fiche,
       status: statusValue,
-      last_run_at: lastRunValue,
+      last_course_at: lastCourseValue,
     };
   });
 
-  if (!runsChanged && !agentsChanged) {
+  if (!coursesChanged && !fichesChanged) {
     return current;
   }
 
   return {
     ...current,
-    agents: agentsChanged ? updatedAgents : current.agents,
-    runs: runsChanged ? runsBundles : current.runs,
+    fiches: fichesChanged ? updatedFiches : current.fiches,
+    courses: coursesChanged ? courseBundles : current.courses,
   };
 }

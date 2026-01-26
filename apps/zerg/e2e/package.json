@@ -1,7 +1,7 @@
 {
   "name": "zerg-e2e-tests",
   "version": "1.0.0",
-  "description": "End-to-end tests for Zerg Agent Platform",
+  "description": "End-to-end tests for Zerg Fiche Platform",
   "scripts": {
     "test": "NODE_ENV=test playwright test",
     "test:headed": "NODE_ENV=test playwright test --headed",

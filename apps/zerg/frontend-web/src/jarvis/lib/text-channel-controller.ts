@@ -3,10 +3,10 @@
  *
  * @deprecated v2.1 Architecture: This controller sends messages through Realtime's
  * session.sendMessage(), which is no longer the primary path. Text messages now go
- * through SupervisorChatController → POST /api/jarvis/chat → Supervisor backend.
+ * through ConciergeChatController → POST /api/jarvis/chat → Concierge backend.
  *
  * This class is kept for backward compatibility but should not be used for new code.
- * The Supervisor is the "one brain" - all text input should route there directly.
+ * The Concierge is the "one brain" - all text input should route there directly.
  *
  * Previous Responsibilities:
  * - Manage send queue with error handling and retries

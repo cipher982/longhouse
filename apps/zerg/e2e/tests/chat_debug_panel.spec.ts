@@ -134,7 +134,7 @@ test.describe('Reset Memory Tests', () => {
     // Get initial thread info (should have at least 2 messages: system + user)
     // Poll until message_count > 1 since the chat API might be async
     await expect.poll(async () => {
-      const response = await request.get('/api/jarvis/supervisor/thread');
+      const response = await request.get('/api/jarvis/concierge/thread');
       const thread = await response.json();
       console.log('Polling thread state:', thread.message_count);
       return thread.message_count;
@@ -157,7 +157,7 @@ test.describe('Reset Memory Tests', () => {
     // Verify backend thread is cleared (all messages including system deleted)
     // Use polling to wait for backend state to stabilize
     await expect.poll(async () => {
-      const finalThreadResponse = await request.get('/api/jarvis/supervisor/thread');
+      const finalThreadResponse = await request.get('/api/jarvis/concierge/thread');
       const finalThread = await finalThreadResponse.json();
       console.log('Polling final thread state:', finalThread.message_count);
       return finalThread.message_count;
@@ -178,7 +178,7 @@ test.describe('Reset Memory Tests', () => {
     await expect
       .poll(
         async () => {
-          const response = await request.get('/api/jarvis/supervisor/thread');
+          const response = await request.get('/api/jarvis/concierge/thread');
           const thread = await response.json();
           return thread.message_count;
         },

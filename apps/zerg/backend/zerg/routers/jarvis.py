@@ -5,10 +5,10 @@ focused sub-routers and providing remaining endpoints (events, history, config, 
 
 Sub-routers:
 - jarvis_auth: Authentication helpers
-- jarvis_agents: Agent listing
-- jarvis_runs: Run history
-- jarvis_dispatch: Manual agent dispatch
-- jarvis_supervisor: Supervisor dispatch, events, cancel
+- jarvis_fiches: Fiche listing
+- jarvis_courses: Course history
+- jarvis_dispatch: Manual fiche dispatch
+- jarvis_concierge: Concierge dispatch, events, cancel
 - jarvis_chat: Text chat with streaming
 - jarvis_tts: Text-to-speech for voice responses
 
@@ -46,13 +46,13 @@ from zerg.database import get_db
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
 from zerg.models.models import ThreadMessage
+from zerg.routers import jarvis_chat
+from zerg.routers import jarvis_concierge
+from zerg.routers import jarvis_courses
+from zerg.routers import jarvis_dispatch
 
 # Import sub-routers
-from zerg.routers import jarvis_agents
-from zerg.routers import jarvis_chat
-from zerg.routers import jarvis_dispatch
-from zerg.routers import jarvis_runs
-from zerg.routers import jarvis_supervisor
+from zerg.routers import jarvis_fiches
 from zerg.routers import jarvis_tts
 from zerg.routers.jarvis_auth import _is_tool_enabled
 from zerg.routers.jarvis_auth import get_current_jarvis_user
@@ -64,10 +64,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/jarvis", tags=["jarvis"])
 
 # Include sub-routers (they all have /api/jarvis prefix already, so we strip it here)
-router.include_router(jarvis_agents.router, prefix="", tags=["jarvis"])
-router.include_router(jarvis_runs.router, prefix="", tags=["jarvis"])
+router.include_router(jarvis_fiches.router, prefix="", tags=["jarvis"])
+router.include_router(jarvis_courses.router, prefix="", tags=["jarvis"])
 router.include_router(jarvis_dispatch.router, prefix="", tags=["jarvis"])
-router.include_router(jarvis_supervisor.router, prefix="", tags=["jarvis"])
+router.include_router(jarvis_concierge.router, prefix="", tags=["jarvis"])
 router.include_router(jarvis_chat.router, prefix="", tags=["jarvis"])
 router.include_router(jarvis_tts.router, prefix="", tags=["jarvis-tts"])
 router.include_router(jarvis_voice.router, prefix="", tags=["jarvis-voice"])
@@ -115,7 +115,7 @@ def jarvis_auth(
 async def _jarvis_event_generator(_current_user):
     """Generate SSE events for Jarvis.
 
-    Subscribes to the event bus and yields agent/run update events.
+    Subscribes to the event bus and yields fiche/course update events.
     Runs until the client disconnects.
     """
     # Create asyncio queue for this connection
@@ -126,10 +126,10 @@ async def _jarvis_event_generator(_current_user):
         """Handle event and put into queue."""
         await queue.put(event)
 
-    # Subscribe to agent and run events
-    event_bus.subscribe(EventType.AGENT_UPDATED, event_handler)
-    event_bus.subscribe(EventType.RUN_CREATED, event_handler)
-    event_bus.subscribe(EventType.RUN_UPDATED, event_handler)
+    # Subscribe to fiche and course events
+    event_bus.subscribe(EventType.FICHE_UPDATED, event_handler)
+    event_bus.subscribe(EventType.COURSE_CREATED, event_handler)
+    event_bus.subscribe(EventType.COURSE_UPDATED, event_handler)
 
     try:
         # Send initial connection event
@@ -171,9 +171,9 @@ async def _jarvis_event_generator(_current_user):
         logger.info("Jarvis SSE stream disconnected")
     finally:
         # Unsubscribe from events
-        event_bus.unsubscribe(EventType.AGENT_UPDATED, event_handler)
-        event_bus.unsubscribe(EventType.RUN_CREATED, event_handler)
-        event_bus.unsubscribe(EventType.RUN_UPDATED, event_handler)
+        event_bus.unsubscribe(EventType.FICHE_UPDATED, event_handler)
+        event_bus.unsubscribe(EventType.COURSE_CREATED, event_handler)
+        event_bus.unsubscribe(EventType.COURSE_UPDATED, event_handler)
 
 
 @router.get("/events")
@@ -182,7 +182,7 @@ async def jarvis_events(
 ) -> EventSourceResponse:
     """Server-Sent Events stream for Jarvis.
 
-    Provides real-time updates for agent and run events. Jarvis listens to this
+    Provides real-time updates for fiche and course events. Jarvis listens to this
     stream to update the Task Inbox UI without polling.
 
     Authentication:
@@ -193,9 +193,9 @@ async def jarvis_events(
     Event types:
     - connected: Initial connection confirmation
     - heartbeat: Keep-alive ping every 30 seconds
-    - agent_updated: Agent status or configuration changed
-    - run_created: New agent run started
-    - run_updated: Agent run status changed (running → success/failed)
+    - fiche_updated: Fiche status or configuration changed
+    - course_created: New fiche course started
+    - course_updated: Fiche course status changed (running → success/failed)
 
     Args:
         current_user: Authenticated user (Jarvis service account)
@@ -211,8 +211,8 @@ async def jarvis_events(
 # ---------------------------------------------------------------------------
 
 
-class WorkerToolInfo(BaseModel):
-    """Tool executed by a worker."""
+class CommisToolInfo(BaseModel):
+    """Tool executed by a commis."""
 
     tool_name: str
     status: str  # completed, failed
@@ -221,25 +221,25 @@ class WorkerToolInfo(BaseModel):
     error: Optional[str] = None
 
 
-class WorkerInfo(BaseModel):
-    """Worker spawned by spawn_commis tool."""
+class CommisInfo(BaseModel):
+    """Commis spawned by spawn_commis tool."""
 
     job_id: int
     task: str
     status: str  # spawned, running, complete, failed
     summary: Optional[str] = None
-    tools: List[WorkerToolInfo] = []
+    tools: List[CommisToolInfo] = []
 
 
 class ToolCallInfo(BaseModel):
-    """Tool call made by supervisor."""
+    """Tool call made by concierge."""
 
     tool_call_id: str
     tool_name: str
     args: Optional[dict] = None
     result: Optional[str] = None
-    # For spawn_commis tools, includes worker activity
-    worker: Optional[WorkerInfo] = None
+    # For spawn_commis tools, includes commis activity
+    commis: Optional[CommisInfo] = None
 
 
 class JarvisChatMessage(BaseModel):
@@ -259,42 +259,42 @@ class JarvisHistoryResponse(BaseModel):
     total: int = Field(..., description="Total message count")
 
 
-def _fetch_worker_activity(db: Session, agent_id: int, tool_call_ids: list[str]) -> dict[str, dict]:
-    """Fetch worker activity for spawn_commis tool calls.
+def _fetch_commis_activity(db: Session, fiche_id: int, tool_call_ids: list[str]) -> dict[str, dict]:
+    """Fetch commis activity for spawn_commis tool calls.
 
-    Queries AgentRunEvent to build a complete picture of worker execution:
+    Queries CourseEvent to build a complete picture of commis execution:
     - commis_spawned: task, job_id
-    - commis_started: confirms worker began
+    - commis_started: confirms commis began
     - commis_tool_started/completed/failed: nested tool calls
     - commis_complete: final status
     - commis_summary_ready: LLM-generated summary
 
     Args:
         db: Database session
-        agent_id: Supervisor agent ID (to filter runs)
+        fiche_id: Concierge fiche ID (to filter courses)
         tool_call_ids: List of spawn_commis tool_call_ids to look up
 
     Returns:
-        Dict mapping tool_call_id -> worker activity dict with:
+        Dict mapping tool_call_id -> commis activity dict with:
         - job_id, task, status, summary, tools[]
     """
-    from zerg.models import AgentRun
-    from zerg.models import AgentRunEvent
+    from zerg.models import Course
+    from zerg.models import CourseEvent
 
     if not tool_call_ids:
         return {}
 
-    # Get runs for this agent
-    run_ids = [r.id for r in db.query(AgentRun.id).filter(AgentRun.agent_id == agent_id).all()]
-    if not run_ids:
+    # Get courses for this fiche
+    course_ids = [row.id for row in db.query(Course.id).filter(Course.fiche_id == fiche_id).all()]
+    if not course_ids:
         return {}
 
     # Fetch all relevant events in one query
     events = (
-        db.query(AgentRunEvent)
+        db.query(CourseEvent)
         .filter(
-            AgentRunEvent.run_id.in_(run_ids),
-            AgentRunEvent.event_type.in_(
+            CourseEvent.course_id.in_(course_ids),
+            CourseEvent.event_type.in_(
                 [
                     "concierge_tool_started",
                     "commis_spawned",
@@ -307,13 +307,13 @@ def _fetch_worker_activity(db: Session, agent_id: int, tool_call_ids: list[str])
                 ]
             ),
         )
-        .order_by(AgentRunEvent.id.asc())
+        .order_by(CourseEvent.id.asc())
         .all()
     )
 
-    # Build job_id -> worker activity from worker events
+    # Build job_id -> commis activity from commis events
     job_activity: dict[int, dict] = {}
-    # Map tool_call_id -> worker activity (for spawn_commis history)
+    # Map tool_call_id -> commis activity (for spawn_commis history)
     result: dict[str, dict] = {}
     for e in events:
         payload = e.payload or {}
@@ -361,19 +361,19 @@ def _fetch_worker_activity(db: Session, agent_id: int, tool_call_ids: list[str])
         elif e.event_type == "commis_summary_ready" and job_id and job_id in job_activity:
             job_activity[job_id]["summary"] = payload.get("summary")
 
-    # Fallback mapping for legacy events without commis_spawned.tool_call_id
+    # Fallback mapping for events without commis_spawned.tool_call_id
     # Use concierge_tool_started -> commis_spawned correlation only when tool_call_id is missing.
     from collections import deque
 
-    events_by_run: dict[int, list] = {}
+    events_by_course: dict[int, list] = {}
     for e in events:
-        if e.run_id not in events_by_run:
-            events_by_run[e.run_id] = []
-        events_by_run[e.run_id].append(e)
+        if e.course_id not in events_by_course:
+            events_by_course[e.course_id] = []
+        events_by_course[e.course_id].append(e)
 
-    for run_events in events_by_run.values():
+    for course_events in events_by_course.values():
         pending_tool_call_ids: deque[str] = deque()
-        for e in run_events:
+        for e in course_events:
             payload = e.payload or {}
             if e.event_type == "concierge_tool_started" and payload.get("tool_name") == "spawn_commis":
                 tc_id = payload.get("tool_call_id")
@@ -398,9 +398,9 @@ def jarvis_history(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_jarvis_user),
 ) -> JarvisHistoryResponse:
-    """Get conversation history from Supervisor thread.
+    """Get conversation history from Concierge thread.
 
-    Returns paginated message history from the user's supervisor thread.
+    Returns paginated message history from the user's concierge thread.
     Only includes user and assistant messages (filters out system messages).
 
     Args:
@@ -412,13 +412,13 @@ def jarvis_history(
     Returns:
         JarvisHistoryResponse with messages and total count
     """
-    from zerg.services.supervisor_service import SupervisorService
+    from zerg.services.concierge_service import ConciergeService
 
-    supervisor_service = SupervisorService(db)
+    concierge_service = ConciergeService(db)
 
-    # Get supervisor thread (creates if doesn't exist)
-    agent = supervisor_service.get_or_create_supervisor_agent(current_user.id)
-    thread = supervisor_service.get_or_create_supervisor_thread(current_user.id, agent)
+    # Get concierge thread (creates if doesn't exist)
+    fiche = concierge_service.get_or_create_concierge_fiche(current_user.id)
+    thread = concierge_service.get_or_create_concierge_thread(current_user.id, fiche)
 
     # Query messages from thread (user and assistant only, excluding internal orchestration messages)
     # Internal messages (continuation prompts, system notifications) are stored for LLM context
@@ -439,7 +439,7 @@ def jarvis_history(
     # Get paginated messages
     messages = query.offset(offset).limit(limit).all()
 
-    # Collect all tool_call_ids that are spawn_commis to batch-fetch worker activity
+    # Collect all tool_call_ids that are spawn_commis to batch-fetch commis activity
     spawn_commis_tool_call_ids = []
     for msg in messages:
         if msg.role == "assistant" and msg.tool_calls:
@@ -447,10 +447,10 @@ def jarvis_history(
                 if tc.get("name") == "spawn_commis" and tc.get("id"):
                     spawn_commis_tool_call_ids.append(tc["id"])
 
-    # Batch fetch worker activity for all spawn_commis tool calls
-    worker_activity_map: dict[str, dict] = {}
+    # Batch fetch commis activity for all spawn_commis tool calls
+    commis_activity_map: dict[str, dict] = {}
     if spawn_commis_tool_call_ids:
-        worker_activity_map = _fetch_worker_activity(db, agent.id, spawn_commis_tool_call_ids)
+        commis_activity_map = _fetch_commis_activity(db, fiche.id, spawn_commis_tool_call_ids)
 
     # Also need to find tool results from ToolMessages
     # Get all ToolMessages for this thread to map tool_call_id -> result
@@ -480,17 +480,17 @@ def jarvis_history(
                 tc_args = tc.get("args")
                 tc_result = tool_results_map.get(tc_id)
 
-                # For spawn_commis, include worker activity
-                worker_info = None
-                if tc_name == "spawn_commis" and tc_id in worker_activity_map:
-                    wa = worker_activity_map[tc_id]
-                    worker_info = WorkerInfo(
+                # For spawn_commis, include commis activity
+                commis_info = None
+                if tc_name == "spawn_commis" and tc_id in commis_activity_map:
+                    wa = commis_activity_map[tc_id]
+                    commis_info = CommisInfo(
                         job_id=wa["job_id"],
                         task=wa["task"],
                         status=wa["status"],
                         summary=wa.get("summary"),
                         tools=[
-                            WorkerToolInfo(
+                            CommisToolInfo(
                                 tool_name=t["tool_name"],
                                 status=t["status"],
                                 duration_ms=t.get("duration_ms"),
@@ -507,7 +507,7 @@ def jarvis_history(
                         tool_name=tc_name,
                         args=tc_args,
                         result=tc_result,
-                        worker=worker_info,
+                        commis=commis_info,
                     )
                 )
 
@@ -538,13 +538,13 @@ def jarvis_clear_history(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_jarvis_user),
 ) -> None:
-    """Clear conversation history by deleting all messages from Supervisor thread.
+    """Clear conversation history by deleting all messages from Concierge thread.
 
-    This clears all conversation messages from the user's Supervisor thread.
-    The thread itself and the agent's system instructions are preserved.
+    This clears all conversation messages from the user's Concierge thread.
+    The thread itself and the fiche's system instructions are preserved.
 
-    System prompts are injected fresh on every run from agent.system_instructions,
-    so clearing history doesn't affect the agent's behavior.
+    System prompts are injected fresh on every course from fiche.system_instructions,
+    so clearing history doesn't affect the fiche's behavior.
 
     Args:
         db: Database session
@@ -553,16 +553,16 @@ def jarvis_clear_history(
     from zerg.crud import crud
     from zerg.models.enums import ThreadType
 
-    agents = crud.get_agents(db, owner_id=current_user.id)
-    agent = next((a for a in agents if (a.config or {}).get("is_supervisor")), None)
-    if agent is None:
-        logger.info(f"Jarvis history cleared: no supervisor agent found for user {current_user.id} (noop)")
+    fiches = crud.get_fiches(db, owner_id=current_user.id)
+    fiche = next((f for f in fiches if (f.config or {}).get("is_concierge")), None)
+    if fiche is None:
+        logger.info(f"Jarvis history cleared: no concierge fiche found for user {current_user.id} (noop)")
         return
 
-    threads = crud.get_threads(db, agent_id=agent.id)
+    threads = crud.get_threads(db, fiche_id=fiche.id)
     old_thread = next((t for t in threads if t.thread_type == ThreadType.SUPER), None)
     if old_thread is None:
-        logger.info(f"Jarvis history cleared: no supervisor thread found for user {current_user.id} (noop)")
+        logger.info(f"Jarvis history cleared: no concierge thread found for user {current_user.id} (noop)")
         return
 
     # Delete all messages from the thread (keeps thread, clears history)
@@ -625,14 +625,14 @@ def jarvis_bootstrap(
     This is the single source of truth for Jarvis configuration.
     """
     from zerg.models_config import get_all_models
-    from zerg.models_config import get_default_model_id_str
+    from zerg.models_config import get_default_model_id
     from zerg.prompts.composer import build_jarvis_prompt
 
     # Define all available personal tools (Phase 4 v2.1)
-    # These are now Supervisor-owned tools, NOT Realtime tools.
+    # These are now Concierge-owned tools, NOT Realtime tools.
     # Realtime has zero tools (I/O only: transcription + VAD).
-    # All user input goes to Supervisor via POST /api/jarvis/chat.
-    # Supervisor can call these tools directly using connector credentials.
+    # All user input goes to Concierge via POST /api/jarvis/chat.
+    # Concierge can call these tools directly using connector credentials.
     AVAILABLE_TOOLS = {
         "location": {"name": "get_current_location", "description": "Get GPS location via Traccar"},
         "whoop": {"name": "get_whoop_data", "description": "Get WHOOP health metrics"},
@@ -674,7 +674,7 @@ def jarvis_bootstrap(
     ]
 
     available_model_ids = {m.id for m in available_models}
-    default_model_id = get_default_model_id_str()
+    default_model_id = get_default_model_id()
 
     # Get user preferences (with defaults + validation)
     prefs = ctx.get("preferences", {}) or {}
@@ -701,28 +701,28 @@ def jarvis_bootstrap(
     )
 
 
-class SupervisorThreadInfo(BaseModel):
-    """Supervisor thread information."""
+class ConciergeThreadInfo(BaseModel):
+    """Concierge thread information."""
 
     thread_id: int = Field(..., description="Thread ID")
     title: str = Field(..., description="Thread title")
     message_count: int = Field(..., description="Number of messages in thread")
 
 
-@router.get("/supervisor/thread", response_model=SupervisorThreadInfo)
-def get_supervisor_thread(
+@router.get("/concierge/thread", response_model=ConciergeThreadInfo)
+def get_concierge_thread(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_jarvis_user),
-) -> SupervisorThreadInfo:
-    """Get the supervisor thread for the current user.
+) -> ConciergeThreadInfo:
+    """Get the concierge thread for the current user.
 
-    Returns basic information about the user's supervisor thread.
+    Returns basic information about the user's concierge thread.
     """
-    from zerg.services.supervisor_service import SupervisorService
+    from zerg.services.concierge_service import ConciergeService
 
-    service = SupervisorService(db)
-    agent = service.get_or_create_supervisor_agent(current_user.id)
-    thread = service.get_or_create_supervisor_thread(current_user.id, agent)
+    service = ConciergeService(db)
+    fiche = service.get_or_create_concierge_fiche(current_user.id)
+    thread = service.get_or_create_concierge_thread(current_user.id, fiche)
 
     # Count messages using proper count query (not limited to 100)
     # Exclude internal orchestration messages from the count shown to users
@@ -741,9 +741,9 @@ def get_supervisor_thread(
         or 0
     )
 
-    return SupervisorThreadInfo(
+    return ConciergeThreadInfo(
         thread_id=thread.id,
-        title=thread.title or "Supervisor",
+        title=thread.title or "Concierge",
         message_count=message_count,
     )
 
@@ -766,7 +766,7 @@ def jarvis_update_preferences(
     Saves preferences to the user's context in the database.
     Only provided fields are updated; others remain unchanged.
     """
-    from zerg.models_config import get_default_model_id_str
+    from zerg.models_config import get_default_model_id
     from zerg.models_config import get_model_by_id
 
     ctx = current_user.context or {}
@@ -800,7 +800,7 @@ def jarvis_update_preferences(
     db.commit()
 
     # Return preferences with sensible defaults
-    chat_model = prefs.get("chat_model") or get_default_model_id_str()
+    chat_model = prefs.get("chat_model") or get_default_model_id()
     reasoning = (prefs.get("reasoning_effort") or "none").lower()
     if reasoning not in {"none", "low", "medium", "high"}:
         reasoning = "none"

@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # Gmail delivers push notifications to Cloud Pub/Sub *or* direct HTTPS
-# endpoints.  For the Agent Platform we only support the **HTTPS** variant so
+# endpoints.  For the Fiche Platform we only support the **HTTPS** variant so
 # users do not need a GCP project with Pub/Sub enabled.  The relevant REST
 # endpoint is:
 #

@@ -84,7 +84,7 @@ class TestContractBreakageDetection:
         from zerg.tools.builtin.math_tools import TOOLS as MATH_TOOLS
         from zerg.tools.builtin.personal_tools import TOOLS as PERSONAL_TOOLS
         from zerg.tools.builtin.ssh_tools import TOOLS as SSH_TOOLS
-        from zerg.tools.builtin.supervisor_tools import TOOLS as SUPERVISOR_TOOLS
+        from zerg.tools.builtin.concierge_tools import TOOLS as CONCIERGE_TOOLS
         from zerg.tools.builtin.uuid_tools import TOOLS as UUID_TOOLS
 
         # Build actual tool-to-server mapping from module structure
@@ -99,8 +99,8 @@ class TestContractBreakageDetection:
             actual_mapping[tool.name] = "uuid"
         for tool in SSH_TOOLS:
             actual_mapping[tool.name] = "ssh"
-        for tool in SUPERVISOR_TOOLS:
-            actual_mapping[tool.name] = "supervisor"
+        for tool in CONCIERGE_TOOLS:
+            actual_mapping[tool.name] = "concierge"
         for tool in PERSONAL_TOOLS:
             actual_mapping[tool.name] = "personal"
 

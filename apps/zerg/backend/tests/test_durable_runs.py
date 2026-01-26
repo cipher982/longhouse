@@ -4,13 +4,13 @@ Tests verify:
 1. Timeout produces DEFERRED status (not FAILED)
 2. CONCIERGE_DEFERRED event is emitted on timeout
 3. Roundabout no longer cancels on no-progress (warn only)
-4. SSE stream closes on supervisor_deferred event
-5. Resume endpoint resumes WAITING runs when worker completes
+4. SSE stream closes on concierge_deferred event
+5. Resume endpoint resumes WAITING runs when commis completes
 6. Heartbeat events reset no-progress counter
 
-NOTE: The continuation pattern was replaced by the LangGraph-free supervisor
-resume path in Jan 2026 (AgentInterrupted + AgentRunner.run_continuation).
-See: docs/work/supervisor-continuation-refactor.md
+NOTE: The continuation pattern was replaced by the LangGraph-free concierge
+resume path in Jan 2026 (CourseInterrupted + FicheRunner.run_continuation).
+See: docs/work/concierge-continuation-refactor.md
 """
 
 import asyncio
@@ -23,10 +23,10 @@ import pytest
 from zerg.crud import crud
 from zerg.events import EventType
 from zerg.events import event_bus
-from zerg.models.enums import RunStatus
-from zerg.models.enums import RunTrigger
-from zerg.models.models import AgentRun
-from zerg.services.supervisor_service import SupervisorService
+from zerg.models.enums import CourseStatus
+from zerg.models.enums import CourseTrigger
+from zerg.models.models import Course
+from zerg.services.concierge_service import ConciergeService
 
 
 @pytest.mark.timeout(30)
@@ -42,16 +42,16 @@ class TestDurableRunsTimeout:
 
     @pytest.mark.asyncio
     async def test_timeout_produces_deferred_status(self, db_session, test_user, temp_artifact_path):
-        """Test that supervisor timeout sets DEFERRED status, not FAILED."""
-        service = SupervisorService(db_session)
+        """Test that concierge timeout sets DEFERRED status, not FAILED."""
+        service = ConciergeService(db_session)
 
-        # Mock AgentRunner.run_thread to be slower than timeout
+        # Mock FicheRunner.run_thread to be slower than timeout
         async def slow_run_thread(_self, *_args, **_kwargs):
             await asyncio.sleep(0.2)  # Longer than our test timeout, but finishes quickly
             return []
 
-        with patch("zerg.managers.agent_runner.AgentRunner.run_thread", new=slow_run_thread):
-            result = await service.run_supervisor(
+        with patch("zerg.managers.fiche_runner.FicheRunner.run_thread", new=slow_run_thread):
+            result = await service.run_concierge(
                 owner_id=test_user.id,
                 task="This will timeout",
                 timeout=0.05,  # Very short timeout
@@ -65,14 +65,14 @@ class TestDurableRunsTimeout:
             await asyncio.sleep(0.25)
 
             # Verify DB record
-            run = db_session.query(AgentRun).filter(AgentRun.id == result.run_id).first()
+            run = db_session.query(Course).filter(Course.id == result.course_id).first()
             assert run is not None
-            assert run.status == RunStatus.DEFERRED
+            assert run.status == CourseStatus.DEFERRED
 
     @pytest.mark.asyncio
     async def test_timeout_emits_deferred_event(self, db_session, test_user, temp_artifact_path):
         """Test that timeout emits CONCIERGE_DEFERRED event, not ERROR."""
-        service = SupervisorService(db_session)
+        service = ConciergeService(db_session)
         events_received = []
 
         async def capture_deferred(event_data):
@@ -89,8 +89,8 @@ class TestDurableRunsTimeout:
                 await asyncio.sleep(0.2)
                 return []
 
-            with patch("zerg.managers.agent_runner.AgentRunner.run_thread", new=slow_run_thread):
-                result = await service.run_supervisor(
+            with patch("zerg.managers.fiche_runner.FicheRunner.run_thread", new=slow_run_thread):
+                result = await service.run_concierge(
                     owner_id=test_user.id,
                     task="Timeout test",
                     timeout=0.05,
@@ -104,9 +104,9 @@ class TestDurableRunsTimeout:
 
                 # Verify event contains expected fields
                 deferred_payload = deferred_events[0][1]
-                assert "run_id" in deferred_payload
+                assert "course_id" in deferred_payload
                 assert "message" in deferred_payload
-                assert deferred_payload["run_id"] == result.run_id
+                assert deferred_payload["course_id"] == result.course_id
 
                 # Verify NO error event was emitted (for timeout)
                 error_events = [e for e in events_received if e[0] == "error"]
@@ -121,7 +121,7 @@ class TestDurableRunsTimeout:
     @pytest.mark.asyncio
     async def test_normal_completion_still_works(self, db_session, test_user, temp_artifact_path):
         """Test that normal (non-timeout) completion still returns SUCCESS."""
-        service = SupervisorService(db_session)
+        service = ConciergeService(db_session)
 
         # Mock a fast completion
         mock_message = AsyncMock()
@@ -131,8 +131,8 @@ class TestDurableRunsTimeout:
         async def fast_run_thread(_self, *_args, **_kwargs):
             return [mock_message]
 
-        with patch("zerg.managers.agent_runner.AgentRunner.run_thread", new=fast_run_thread):
-            result = await service.run_supervisor(
+        with patch("zerg.managers.fiche_runner.FicheRunner.run_thread", new=fast_run_thread):
+            result = await service.run_concierge(
                 owner_id=test_user.id,
                 task="Quick task",
                 timeout=30,  # Plenty of time
@@ -142,9 +142,9 @@ class TestDurableRunsTimeout:
             assert result.status == "success"
 
             # Verify DB record
-            run = db_session.query(AgentRun).filter(AgentRun.id == result.run_id).first()
+            run = db_session.query(Course).filter(Course.id == result.course_id).first()
             assert run is not None
-            assert run.status == RunStatus.SUCCESS
+            assert run.status == CourseStatus.SUCCESS
 
 
 @pytest.mark.timeout(10)
@@ -152,16 +152,16 @@ class TestDeferredEventTypes:
     """Test that DEFERRED status and event types exist."""
 
     def test_deferred_status_exists(self):
-        """Verify DEFERRED is a valid RunStatus."""
-        assert hasattr(RunStatus, "DEFERRED")
-        assert RunStatus.DEFERRED.value == "deferred"
+        """Verify DEFERRED is a valid CourseStatus."""
+        assert hasattr(CourseStatus, "DEFERRED")
+        assert CourseStatus.DEFERRED.value == "deferred"
 
     def test_waiting_status_exists(self):
-        """Verify WAITING is a valid RunStatus (for interrupt/resume pattern)."""
-        assert hasattr(RunStatus, "WAITING")
-        assert RunStatus.WAITING.value == "waiting"
+        """Verify WAITING is a valid CourseStatus (for interrupt/resume pattern)."""
+        assert hasattr(CourseStatus, "WAITING")
+        assert CourseStatus.WAITING.value == "waiting"
 
-    def test_supervisor_deferred_event_exists(self):
+    def test_concierge_deferred_event_exists(self):
         """Verify CONCIERGE_DEFERRED is a valid EventType."""
         assert hasattr(EventType, "CONCIERGE_DEFERRED")
         assert EventType.CONCIERGE_DEFERRED.value == "concierge_deferred"
@@ -169,9 +169,9 @@ class TestDeferredEventTypes:
 
 @pytest.mark.timeout(30)
 class TestResumeFlow:
-    """Test resume flow when worker completes while supervisor is WAITING.
+    """Test resume flow when commis completes while concierge is WAITING.
 
-    This tests the LangGraph-free supervisor resume pattern that replaced the
+    This tests the LangGraph-free concierge resume pattern that replaced the
     old continuation pattern in Jan 2026.
     """
 
@@ -183,87 +183,87 @@ class TestResumeFlow:
             yield tmpdir
 
     @pytest.mark.asyncio
-    async def test_resume_endpoint_resumes_waiting_run(self, db_session, test_user, sample_agent):
-        """Test that resume endpoint calls resume_supervisor_with_worker_result for WAITING run."""
-        from zerg.routers.jarvis_internal import WorkerCompletionPayload
+    async def test_resume_endpoint_resumes_waiting_run(self, db_session, test_user, sample_fiche):
+        """Test that resume endpoint calls resume_concierge_with_commis_result for WAITING run."""
+        from zerg.routers.jarvis_internal import CommisCompletionPayload
         from zerg.routers.jarvis_internal import resume_run
 
         # Create a WAITING run (interrupted by spawn_commis)
         thread = crud.create_thread(
             db=db_session,
-            agent_id=sample_agent.id,
+            fiche_id=sample_fiche.id,
             title="Test thread",
             active=True,
         )
-        waiting_run = AgentRun(
-            agent_id=sample_agent.id,
+        waiting_run = Course(
+            fiche_id=sample_fiche.id,
             thread_id=thread.id,
-            status=RunStatus.WAITING,
+            status=CourseStatus.WAITING,
         )
         db_session.add(waiting_run)
         db_session.commit()
         db_session.refresh(waiting_run)
 
-        # Mock resume_supervisor_with_worker_result
+        # Mock resume_concierge_with_commis_result
         # The import is inside the function, so we patch the service module
-        async def mock_resume(db, run_id, worker_result, job_id=None):  # noqa: ARG001 - test double
+        async def mock_resume(db, course_id, commis_result, job_id=None):  # noqa: ARG001 - test double
             # Update run status to success (simulating what real resume does)
-            run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
-            run.status = RunStatus.SUCCESS
+            run = db.query(Course).filter(Course.id == course_id).first()
+            run.status = CourseStatus.SUCCESS
             db.commit()
             return {"status": "success", "result": "Resumed successfully"}
 
-        with patch("zerg.services.worker_resume.resume_supervisor_with_worker_result", side_effect=mock_resume):
+        with patch("zerg.services.commis_resume.resume_concierge_with_commis_result", side_effect=mock_resume):
             # Call resume endpoint
-            payload = WorkerCompletionPayload(
+            payload = CommisCompletionPayload(
                 job_id=123,
-                worker_id="test-worker-123",
+                commis_id="test-commis-123",
                 status="success",
-                result_summary="Worker completed successfully",
+                result_summary="Commis completed successfully",
             )
 
             result = await resume_run(
-                run_id=waiting_run.id,
+                course_id=waiting_run.id,
                 payload=payload,
                 db=db_session,
             )
 
             # Verify response
             assert result["status"] == "resumed"
-            assert result["run_id"] == waiting_run.id
+            assert result["course_id"] == waiting_run.id
 
     @pytest.mark.asyncio
-    async def test_resume_endpoint_skips_non_waiting_run(self, db_session, test_user, sample_agent):
+    async def test_resume_endpoint_skips_non_waiting_run(self, db_session, test_user, sample_fiche):
         """Test that calling resume on non-WAITING run is a no-op (idempotent)."""
-        from zerg.routers.jarvis_internal import WorkerCompletionPayload
+        from zerg.routers.jarvis_internal import CommisCompletionPayload
         from zerg.routers.jarvis_internal import resume_run
 
         # Create a SUCCESS run (not WAITING)
         thread = crud.create_thread(
             db=db_session,
-            agent_id=sample_agent.id,
+            fiche_id=sample_fiche.id,
             title="Test thread",
             active=True,
         )
-        completed_run = AgentRun(
-            agent_id=sample_agent.id,
+        completed_run = Course(
+            fiche_id=sample_fiche.id,
             thread_id=thread.id,
-            status=RunStatus.SUCCESS,
+            status=CourseStatus.SUCCESS,
         )
         db_session.add(completed_run)
         db_session.commit()
         db_session.refresh(completed_run)
 
         # Call resume endpoint
-        payload = WorkerCompletionPayload(
+        payload = CommisCompletionPayload(
             job_id=123,
-            worker_id="test-worker-123",
+            commis_id="test-commis-123",
             status="success",
-            result_summary="Worker completed",
+            result_summary="Commis completed",
         )
 
         result = await resume_run(
-            run_id=completed_run.id,
+            course_id=completed_run.id,
             payload=payload,
             db=db_session,
         )
@@ -273,38 +273,38 @@ class TestResumeFlow:
         assert "not WAITING" in result["reason"]
 
     @pytest.mark.asyncio
-    async def test_worker_completion_triggers_resume(
-        self, db_session, test_user, sample_agent, temp_artifact_path
+    async def test_commis_completion_triggers_resume(
+        self, db_session, test_user, sample_fiche, temp_artifact_path
     ):
-        """Test that worker completion calls resume when run is WAITING."""
-        from zerg.services.worker_runner import WorkerRunner
+        """Test that commis completion calls resume when run is WAITING."""
+        from zerg.services.commis_runner import CommisRunner
 
-        # Create a WAITING supervisor run (interrupted by spawn_commis)
+        # Create a WAITING concierge run (interrupted by spawn_commis)
         thread = crud.create_thread(
             db=db_session,
-            agent_id=sample_agent.id,
+            fiche_id=sample_fiche.id,
             title="Test thread",
             active=True,
         )
-        waiting_run = AgentRun(
-            agent_id=sample_agent.id,
+        waiting_run = Course(
+            fiche_id=sample_fiche.id,
             thread_id=thread.id,
-            status=RunStatus.WAITING,
+            status=CourseStatus.WAITING,
         )
         db_session.add(waiting_run)
         db_session.commit()
         db_session.refresh(waiting_run)
 
-        # Mock AgentRunner to return immediately
-        with patch("zerg.services.worker_runner.AgentRunner") as mock_runner_class:
+        # Mock FicheRunner to return immediately
+        with patch("zerg.services.commis_runner.FicheRunner") as mock_runner_class:
             mock_runner_instance = AsyncMock()
             mock_runner_instance.run_thread = AsyncMock(
                 return_value=[AsyncMock(role="assistant", content="Done")]
             )
             mock_runner_class.return_value = mock_runner_instance
 
-            # Run worker with event context
-            runner = WorkerRunner()
+            # Run commis with event context
+            runner = CommisRunner()
             created_tasks = []
             real_create_task = asyncio.create_task
 
@@ -316,25 +316,25 @@ class TestResumeFlow:
             # Mock the resume function to track calls
             resume_calls = []
 
-            async def mock_resume(db, run_id, worker_result):
-                resume_calls.append({"run_id": run_id, "worker_result": worker_result})
+            async def mock_resume(db, course_id, commis_result):
+                resume_calls.append({"course_id": course_id, "commis_result": commis_result})
                 return {"status": "success"}
 
-            with patch("zerg.services.worker_runner.asyncio.create_task", side_effect=_capture_task):
+            with patch("zerg.services.commis_runner.asyncio.create_task", side_effect=_capture_task):
                 with patch(
-                    "zerg.services.worker_resume.resume_supervisor_with_worker_result",
+                    "zerg.services.commis_resume.resume_concierge_with_commis_result",
                     side_effect=mock_resume,
                 ):
-                    result = await runner.run_worker(
+                    result = await runner.run_commis(
                         db=db_session,
                         task="Test task",
-                        agent=sample_agent,
+                        fiche=sample_fiche,
                         timeout=10,
-                        event_context={"run_id": waiting_run.id},
+                        event_context={"course_id": waiting_run.id},
                         job_id=123,
                     )
 
-            # Verify worker completed
+            # Verify commis completed
             assert result.status == "success"
 
             # Ensure the background resume task finishes
@@ -363,24 +363,24 @@ class TestHeartbeatCounterReset:
         a full roundabout monitoring loop (which is tested in test_roundabout_monitor.py).
         """
         from zerg.services.roundabout_monitor import RoundaboutMonitor
-        from zerg.services.worker_artifact_store import WorkerArtifactStore
-        from zerg.models.models import WorkerJob
-        from tests.conftest import TEST_WORKER_MODEL
+        from zerg.services.commis_artifact_store import CommisArtifactStore
+        from zerg.models.models import CommisJob
+        from tests.conftest import TEST_COMMIS_MODEL
 
-        # Isolate worker artifacts
-        monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
-        store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
+        # Isolate commis artifacts
+        monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+        store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
-        # Create worker and job
-        worker_id = store.create_worker("Test task", owner_id=test_user.id)
-        store.start_worker(worker_id)
+        # Create commis and job
+        commis_id = store.create_commis("Test task", owner_id=test_user.id)
+        store.start_commis(commis_id)
 
-        job = WorkerJob(
+        job = CommisJob(
             owner_id=test_user.id,
             task="Test task",
-            model=TEST_WORKER_MODEL,
+            model=TEST_COMMIS_MODEL,
             status="running",
-            worker_id=worker_id,
+            commis_id=commis_id,
         )
         db_session.add(job)
         db_session.commit()

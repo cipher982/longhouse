@@ -86,7 +86,7 @@ class Settings:  # noqa: D401 – simple data container
     # Model policy ------------------------------------------------------
     allowed_models_non_admin: str  # csv list
     # Quotas ------------------------------------------------------------
-    daily_runs_per_user: int
+    daily_courses_per_user: int
     # Cost budgets (in cents) ------------------------------------------
     daily_cost_per_user_cents: int
     daily_cost_global_cents: int
@@ -136,13 +136,13 @@ class Settings:  # noqa: D401 – simple data container
     # Bootstrap API settings -------------------------------------------
     bootstrap_token: str | None  # Token for CLI-based bootstrap API auth
 
-    # Supervisor tool output storage -----------------------------------
-    supervisor_tool_output_max_chars: int  # Max tool output chars before storing (0 = disabled)
-    supervisor_tool_output_preview_chars: int  # Preview size for stored tool outputs
+    # Concierge tool output storage -----------------------------------
+    concierge_tool_output_max_chars: int  # Max tool output chars before storing (0 = disabled)
+    concierge_tool_output_preview_chars: int  # Preview size for stored tool outputs
 
     # E2E test database isolation --------------------------------------
     e2e_use_postgres_schemas: bool  # Use Postgres schemas for E2E test isolation (vs SQLite files)
-    e2e_worker_id: str | None  # Override worker ID for E2E testing
+    e2e_commis_id: str | None  # Override commis ID for E2E testing
 
     # Dynamic guards (evaluated at runtime) -----------------------------
     @property
@@ -273,7 +273,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         max_users=int(os.getenv("MAX_USERS", "20")),
         admin_emails=os.getenv("ADMIN_EMAILS", os.getenv("ADMIN_EMAIL", "")),
         allowed_models_non_admin=os.getenv("ALLOWED_MODELS_NON_ADMIN", ""),
-        daily_runs_per_user=int(os.getenv("DAILY_RUNS_PER_USER", "0")),
+        daily_courses_per_user=int(os.getenv("DAILY_COURSES_PER_USER", "0")),
         daily_cost_per_user_cents=int(os.getenv("DAILY_COST_PER_USER_CENTS", "0")),
         daily_cost_global_cents=int(os.getenv("DAILY_COST_GLOBAL_CENTS", "0")),
         discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL"),
@@ -305,12 +305,12 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         roundabout_llm_timeout=float(os.getenv("ROUNDABOUT_LLM_TIMEOUT", "1.5")),
         # Bootstrap API settings
         bootstrap_token=os.getenv("BOOTSTRAP_TOKEN"),
-        # Supervisor tool output storage
-        supervisor_tool_output_max_chars=int(os.getenv("SUPERVISOR_TOOL_OUTPUT_MAX_CHARS", "8000")),
-        supervisor_tool_output_preview_chars=int(os.getenv("SUPERVISOR_TOOL_OUTPUT_PREVIEW_CHARS", "1200")),
+        # Concierge tool output storage
+        concierge_tool_output_max_chars=int(os.getenv("CONCIERGE_TOOL_OUTPUT_MAX_CHARS", "8000")),
+        concierge_tool_output_preview_chars=int(os.getenv("CONCIERGE_TOOL_OUTPUT_PREVIEW_CHARS", "1200")),
         # E2E test database isolation
         e2e_use_postgres_schemas=_truthy(os.getenv("E2E_USE_POSTGRES_SCHEMAS")),
-        e2e_worker_id=os.getenv("E2E_WORKER_ID"),
+        e2e_commis_id=os.getenv("E2E_COMMIS_ID"),
     )
 
 
@@ -340,11 +340,11 @@ def _validate_required(settings: Settings) -> None:  # noqa: D401 – helper
         )
 
     # SAFETY GATE: E2E Postgres schema isolation relies on request-controlled routing
-    # (via the X-Test-Worker header). It must never be enabled outside tests.
+    # (via the X-Test-Commis header). It must never be enabled outside tests.
     if settings.e2e_use_postgres_schemas and not settings.testing:
         raise RuntimeError(
             "CRITICAL: E2E_USE_POSTGRES_SCHEMAS=1 but TESTING is not enabled. "
-            "Per-worker schema routing is TEST-ONLY infrastructure; unset E2E_USE_POSTGRES_SCHEMAS or set TESTING=1."
+            "Per-commis schema routing is TEST-ONLY infrastructure; unset E2E_USE_POSTGRES_SCHEMAS or set TESTING=1."
         )
 
     if settings.testing:  # Unit-/integration tests run with stubbed LLMs

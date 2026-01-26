@@ -2,7 +2,7 @@
 
 Currently only supports simple *webhook* triggers that, when invoked, publish
 an EventType.TRIGGER_FIRED event.  The SchedulerService listens for that event
-and executes the associated agent immediately.
+and executes the associated fiche immediately.
 """
 
 # typing and forward-ref convenience
@@ -78,7 +78,7 @@ async def delete_trigger(
 
 @router.post("/", response_model=TriggerSchema, status_code=status.HTTP_201_CREATED)
 async def create_trigger(trigger_in: TriggerCreate, db: Session = Depends(get_db)):
-    """Create a new trigger for an agent.
+    """Create a new trigger for a fiche.
 
     If the trigger is of type *email* and the provider is **gmail** we kick off
     an asynchronous helper that ensures a Gmail *watch* is registered.  The
@@ -86,10 +86,10 @@ async def create_trigger(trigger_in: TriggerCreate, db: Session = Depends(get_db
     the side-effects synchronously without sprinkling ``asyncio.sleep`` hacks.
     """
 
-    # Ensure agent exists -------------------------------------------------
-    agent = crud.get_agent(db, trigger_in.agent_id)
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    # Ensure fiche exists -------------------------------------------------
+    fiche = crud.get_fiche(db, trigger_in.fiche_id)
+    if not fiche:
+        raise HTTPException(status_code=404, detail="Fiche not found")
 
     # Validate trigger type against allowlist
     if trigger_in.type not in {"webhook", "email"}:
@@ -107,8 +107,8 @@ async def create_trigger(trigger_in: TriggerCreate, db: Session = Depends(get_db
         conn = _crud.get_connector(db, int(connector_id))
         if conn is None:
             raise HTTPException(status_code=404, detail="Connector not found")
-        # Security: ensure connector belongs to same user as agent
-        if conn.owner_id != agent.owner_id:
+        # Security: ensure connector belongs to same user as fiche
+        if conn.owner_id != fiche.owner_id:
             raise HTTPException(status_code=403, detail="Connector belongs to different user")
         # Normalise provider field to connector provider
         cfg["provider"] = conn.provider
@@ -117,7 +117,7 @@ async def create_trigger(trigger_in: TriggerCreate, db: Session = Depends(get_db
     # Persist trigger -----------------------------------------------------
     trg = crud.create_trigger(
         db,
-        agent_id=trigger_in.agent_id,
+        fiche_id=trigger_in.fiche_id,
         trigger_type=trigger_in.type,
         config=new_config,
     )
@@ -201,12 +201,12 @@ async def fire_trigger_event(
         raise HTTPException(status_code=404, detail="Not found")
 
     # 4) Publish event on internal bus (non-blocking)
-    # The SchedulerService subscribes to TRIGGER_FIRED and executes the agent.
-    # We use create_task to avoid blocking the HTTP response on agent execution.
+    # The SchedulerService subscribes to TRIGGER_FIRED and executes the fiche.
+    # We use create_task to avoid blocking the HTTP response on fiche execution.
     task = asyncio.create_task(
         event_bus.publish(
             EventType.TRIGGER_FIRED,
-            {"trigger_id": trg.id, "agent_id": trg.agent_id, "payload": payload, "trigger_type": "webhook"},
+            {"trigger_id": trg.id, "fiche_id": trg.fiche_id, "payload": payload, "trigger_type": "webhook"},
         )
     )
 
@@ -230,10 +230,10 @@ async def fire_trigger_event(
 @router.get("/", response_model=List[TriggerSchema])
 def list_triggers(
     db: Session = Depends(get_db),
-    agent_id: Optional[int] = Query(None, description="Filter triggers by agent ID"),
+    fiche_id: Optional[int] = Query(None, description="Filter triggers by fiche ID"),
 ):
     """
-    List all triggers, optionally filtered by agent_id.
+    List all triggers, optionally filtered by fiche_id.
     """
-    triggers = crud.get_triggers(db, agent_id=agent_id)
+    triggers = crud.get_triggers(db, fiche_id=fiche_id)
     return triggers

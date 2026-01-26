@@ -1,11 +1,11 @@
 """Credential resolver for built-in connector tools.
 
-The CredentialResolver is instantiated per-request with an agent's ID and
+The CredentialResolver is instantiated per-request with a fiche's ID and
 provides a clean interface for tools to retrieve their required credentials.
 It handles decryption and caches results for the lifetime of the request.
 
 Resolution order (v2 architecture):
-1. Agent-level override (connector_credentials table)
+1. Fiche-level override (connector_credentials table)
 2. Account-level credential (account_connector_credentials table)
 3. None if neither exists
 """
@@ -28,36 +28,36 @@ logger = logging.getLogger(__name__)
 
 
 # Cache entry with source tracking for observability
-CacheEntry = tuple[dict[str, Any] | None, Literal["agent", "account", "none"]]
+CacheEntry = tuple[dict[str, Any] | None, Literal["fiche", "account", "none"]]
 
 
 class CredentialResolver:
-    """Resolves and decrypts credentials for an agent's connector tools.
+    """Resolves and decrypts credentials for a fiche's connector tools.
 
-    Instantiated per-request with agent_id and owner_id. Resolves in order:
-    1. Agent-level override (connector_credentials)
+    Instantiated per-request with fiche_id and owner_id. Resolves in order:
+    1. Fiche-level override (connector_credentials)
     2. Account-level credential (account_connector_credentials)
 
     Caches decrypted values for the lifetime of the request to avoid
     repeated DB queries and decryption operations.
 
     Usage:
-        resolver = CredentialResolver(agent_id=42, owner_id=1, db=session)
+        resolver = CredentialResolver(fiche_id=42, owner_id=1, db=session)
         creds = resolver.get(ConnectorType.SLACK)
         if creds:
             webhook_url = creds.get("webhook_url")
     """
 
-    def __init__(self, agent_id: int, db: Session, *, owner_id: int | None = None, prefetch: bool = True):
-        """Initialize resolver for a specific agent.
+    def __init__(self, fiche_id: int, db: Session, *, owner_id: int | None = None, prefetch: bool = True):
+        """Initialize resolver for a specific fiche.
 
         Args:
-            agent_id: The ID of the agent whose credentials to resolve
+            fiche_id: The ID of the fiche whose credentials to resolve
             db: SQLAlchemy database session
-            owner_id: The ID of the agent's owner (for account-level fallback).
+            owner_id: The ID of the fiche's owner (for account-level fallback).
                       If None, account-level lookup is skipped.
         """
-        self.agent_id = agent_id
+        self.fiche_id = fiche_id
         self.owner_id = owner_id
         self.db = db
         self._cache: dict[str, CacheEntry] = {}
@@ -83,28 +83,28 @@ class CredentialResolver:
             self._prefetch_enabled = False
             return
 
-        # Agent-level overrides first.
+        # Fiche-level overrides first.
         try:
-            agent_creds = self.db.query(ConnectorCredential).filter(ConnectorCredential.agent_id == self.agent_id).all()
+            fiche_creds = self.db.query(ConnectorCredential).filter(ConnectorCredential.fiche_id == self.fiche_id).all()
         except Exception:
-            logger.warning("Failed to prefetch agent connector credentials", exc_info=True)
+            logger.warning("Failed to prefetch fiche connector credentials", exc_info=True)
             self._prefetch_enabled = False
             return
 
-        for cred in agent_creds:
+        for cred in fiche_creds:
             try:
                 decrypted = decrypt(cred.encrypted_value)
                 value = json.loads(decrypted)
-                self._cache[cred.connector_type] = (value, "agent")
+                self._cache[cred.connector_type] = (value, "fiche")
             except Exception:
                 logger.warning(
-                    "Failed to decrypt agent credential agent_id=%d connector=%s during prefetch",
-                    self.agent_id,
+                    "Failed to decrypt fiche credential fiche_id=%d connector=%s during prefetch",
+                    self.fiche_id,
                     cred.connector_type,
                     exc_info=True,
                 )
 
-        # Account-level fallbacks (only for types not overridden at agent level).
+        # Account-level fallbacks (only for types not overridden at fiche level).
         if self.owner_id is not None:
             try:
                 account_creds = self.db.query(AccountConnectorCredential).filter(AccountConnectorCredential.owner_id == self.owner_id).all()
@@ -132,7 +132,7 @@ class CredentialResolver:
         """Get decrypted credential for a connector type.
 
         Resolution order:
-        1. Agent-level override (connector_credentials table)
+        1. Fiche-level override (connector_credentials table)
         2. Account-level credential (account_connector_credentials table)
         3. None if neither exists
 
@@ -156,13 +156,13 @@ class CredentialResolver:
             self._cache[type_str] = (None, "none")
             return None
 
-        # Try agent-level override first
-        value, source = self._resolve_agent_credential(type_str)
+        # Try fiche-level override first
+        value, source = self._resolve_fiche_credential(type_str)
         if value is not None:
             self._cache[type_str] = (value, source)
             logger.debug(
-                "credential_resolver.resolve agent_id=%d owner_id=%s connector_type=%s source=%s cache_hit=False",
-                self.agent_id,
+                "credential_resolver.resolve fiche_id=%d owner_id=%s connector_type=%s source=%s cache_hit=False",
+                self.fiche_id,
                 self.owner_id,
                 type_str,
                 source,
@@ -175,8 +175,8 @@ class CredentialResolver:
             if value is not None:
                 self._cache[type_str] = (value, source)
                 logger.debug(
-                    "credential_resolver.resolve agent_id=%d owner_id=%s connector_type=%s source=%s cache_hit=False",
-                    self.agent_id,
+                    "credential_resolver.resolve fiche_id=%d owner_id=%s connector_type=%s source=%s cache_hit=False",
+                    self.fiche_id,
                     self.owner_id,
                     type_str,
                     source,
@@ -186,21 +186,21 @@ class CredentialResolver:
         # No credential found
         self._cache[type_str] = (None, "none")
         logger.debug(
-            "credential_resolver.resolve agent_id=%d owner_id=%s connector_type=%s source=none cache_hit=False",
-            self.agent_id,
+            "credential_resolver.resolve fiche_id=%d owner_id=%s connector_type=%s source=none cache_hit=False",
+            self.fiche_id,
             self.owner_id,
             type_str,
         )
         return None
 
-    def _resolve_agent_credential(self, type_str: str) -> CacheEntry:
-        """Resolve credential from agent-level overrides."""
+    def _resolve_fiche_credential(self, type_str: str) -> CacheEntry:
+        """Resolve credential from fiche-level overrides."""
         from zerg.models.models import ConnectorCredential
 
         cred = (
             self.db.query(ConnectorCredential)
             .filter(
-                ConnectorCredential.agent_id == self.agent_id,
+                ConnectorCredential.fiche_id == self.fiche_id,
                 ConnectorCredential.connector_type == type_str,
             )
             .first()
@@ -212,11 +212,11 @@ class CredentialResolver:
         try:
             decrypted = decrypt(cred.encrypted_value)
             value = json.loads(decrypted)
-            return (value, "agent")
+            return (value, "fiche")
         except Exception as e:
             logger.warning(
-                "Failed to decrypt agent credential agent_id=%d connector=%s: %s",
-                self.agent_id,
+                "Failed to decrypt fiche credential fiche_id=%d connector=%s: %s",
+                self.fiche_id,
                 type_str,
                 str(e),
             )
@@ -257,7 +257,7 @@ class CredentialResolver:
     def has(self, connector_type: ConnectorType | str) -> bool:
         """Check if a credential is configured (without decrypting).
 
-        Checks both agent-level and account-level credentials.
+        Checks both fiche-level and account-level credentials.
 
         Args:
             connector_type: ConnectorType enum or string value
@@ -280,16 +280,16 @@ class CredentialResolver:
             self._cache[type_str] = (None, "none")
             return False
 
-        # Check agent-level first (count query avoids decryption)
-        agent_count = (
+        # Check fiche-level first (count query avoids decryption)
+        fiche_count = (
             self.db.query(ConnectorCredential)
             .filter(
-                ConnectorCredential.agent_id == self.agent_id,
+                ConnectorCredential.fiche_id == self.fiche_id,
                 ConnectorCredential.connector_type == type_str,
             )
             .count()
         )
-        if agent_count > 0:
+        if fiche_count > 0:
             return True
 
         # Check account-level if owner_id is available
@@ -307,9 +307,9 @@ class CredentialResolver:
         return False
 
     def get_all_configured(self) -> list[str]:
-        """Get list of all connector types that are configured for this agent.
+        """Get list of all connector types that are configured for this fiche.
 
-        Returns both agent-level overrides and account-level credentials.
+        Returns both fiche-level overrides and account-level credentials.
 
         Returns:
             List of unique connector type strings that have credentials configured
@@ -320,9 +320,9 @@ class CredentialResolver:
         from zerg.models.models import AccountConnectorCredential
         from zerg.models.models import ConnectorCredential
 
-        # Get agent-level credentials
-        agent_creds = self.db.query(ConnectorCredential.connector_type).filter(ConnectorCredential.agent_id == self.agent_id).all()
-        types = {c.connector_type for c in agent_creds}
+        # Get fiche-level credentials
+        fiche_creds = self.db.query(ConnectorCredential.connector_type).filter(ConnectorCredential.fiche_id == self.fiche_id).all()
+        types = {c.connector_type for c in fiche_creds}
 
         # Get account-level credentials if owner_id is available
         if self.owner_id is not None:
@@ -333,14 +333,14 @@ class CredentialResolver:
 
         return list(types)
 
-    def get_resolution_source(self, connector_type: ConnectorType | str) -> Literal["agent", "account", "none"]:
+    def get_resolution_source(self, connector_type: ConnectorType | str) -> Literal["fiche", "account", "none"]:
         """Get the source of a credential (for debugging/observability).
 
         Args:
             connector_type: ConnectorType enum or string value
 
         Returns:
-            'agent' if resolved from agent override, 'account' if from account-level,
+            'fiche' if resolved from fiche override, 'account' if from account-level,
             'none' if not configured.
         """
         type_str = connector_type.value if isinstance(connector_type, ConnectorType) else connector_type
@@ -363,15 +363,15 @@ class CredentialResolver:
             self._prefetch_all()
 
 
-def create_resolver(agent_id: int, db: Session, *, owner_id: int | None = None) -> CredentialResolver:
+def create_resolver(fiche_id: int, db: Session, *, owner_id: int | None = None) -> CredentialResolver:
     """Factory function to create a CredentialResolver.
 
     Args:
-        agent_id: The ID of the agent whose credentials to resolve
+        fiche_id: The ID of the fiche whose credentials to resolve
         db: SQLAlchemy database session
         owner_id: Optional owner ID for account-level credential fallback
 
     Returns:
         CredentialResolver instance
     """
-    return CredentialResolver(agent_id=agent_id, db=db, owner_id=owner_id)
+    return CredentialResolver(fiche_id=fiche_id, db=db, owner_id=owner_id)

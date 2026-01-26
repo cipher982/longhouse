@@ -41,12 +41,12 @@ class Position(BaseModel):
 
 
 class WorkflowNode(BaseModel):
-    """A workflow node (agent, tool, trigger, or conditional)."""
+    """A workflow node (fiche, tool, trigger, or conditional)."""
 
     model_config = ConfigDict(extra="forbid")
 
     id: str
-    type: Literal["agent", "tool", "trigger", "conditional"]
+    type: Literal["fiche", "tool", "trigger", "conditional"]
     position: Position
     config: Dict[str, Any] = Field(default_factory=dict)
 

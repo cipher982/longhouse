@@ -1,7 +1,7 @@
 /**
  * Global test setup - runs once before all tests
  *
- * Pre-creates Postgres schemas for all Playwright workers.
+ * Pre-creates Postgres schemas for all Playwright commis.
  * This ensures schemas exist before tests run, eliminating race conditions
  * from lazy schema creation during test execution.
  *
@@ -53,22 +53,22 @@ async function globalSetup(config) {
   process.env.NODE_ENV = 'test';
   process.env.TESTING = '1';
 
-  // Calculate worker count (must match playwright.config.js logic)
+  // Calculate commis count (must match playwright.config.js logic)
   // Keep in sync with playwright.config.js.
-  const envWorkers = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? "", 10);
-  const defaultLocalWorkers = 16;
-  const defaultCIWorkers = 4;
-  const workers = Number.isFinite(envWorkers) && envWorkers > 0
-    ? envWorkers
-    : (process.env.CI ? defaultCIWorkers : defaultLocalWorkers);
+  const envCommis = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? "", 10);
+  const defaultLocalCommis = 16;
+  const defaultCICommis = 4;
+  const commis = Number.isFinite(envCommis) && envCommis > 0
+    ? envCommis
+    : (process.env.CI ? defaultCICommis : defaultLocalCommis);
 
-  // Pre-create one schema per Playwright worker id (0..workers-1).
-  // Other tests may use custom non-numeric worker IDs (e.g. guardrail_a) which are
+  // Pre-create one schema per Playwright commis id (0..commis-1).
+  // Other tests may use custom non-numeric commis IDs (e.g. guardrail_a) which are
   // created lazily by the backend when first requested.
-  const schemaCount = workers;
+  const schemaCount = commis;
 
   // Quiet setup - only show count
-  process.stdout.write(`Setting up ${schemaCount} schemas for ${workers} workers... `);
+  process.stdout.write(`Setting up ${schemaCount} schemas for ${commis} commis... `);
 
   try {
     // Use uv run python to ensure correct venv with all deps
@@ -85,18 +85,18 @@ os.environ['TESTING'] = '1'
 os.environ['E2E_USE_POSTGRES_SCHEMAS'] = '1'
 
 from zerg.database import default_engine
-from zerg.e2e_schema_manager import drop_all_e2e_schemas, ensure_worker_schema
+from zerg.e2e_schema_manager import drop_all_e2e_schemas, ensure_commis_schema
 
 # Clean slate - drop any stale schemas from previous runs
 dropped = drop_all_e2e_schemas(default_engine)
 if dropped > 0:
     print(f"  Dropped {dropped} stale schemas", file=sys.stderr)
 
-# Pre-create one schema per Playwright worker id (0..workers-1).
+# Pre-create one schema per Playwright commis id (0..commis-1).
 for i in range(${schemaCount}):
-    ensure_worker_schema(default_engine, str(i))
+    ensure_commis_schema(default_engine, str(i))
 
-print(f"  {${schemaCount}} worker schemas ready")
+print(f"  {${schemaCount}} commis schemas ready")
     `], {
       cwd: backendDir,
       stdio: 'inherit',

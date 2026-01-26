@@ -1,10 +1,10 @@
-"""Add pending_tool_call_id to agent_runs for async inbox model.
+"""Add pending_tool_call_id to courses for async inbox model.
 
 Revision ID: b5c6d7e8f9g0
 Revises: a4b5c6d7e8f9
 Create Date: 2026-01-25
 
-Stores the tool_call_id from wait_for_worker interrupts so resume can
+Stores the tool_call_id from wait_for_commis interrupts so resume can
 inject results into the correct tool call.
 """
 
@@ -23,14 +23,14 @@ SCHEMA = "zerg"
 
 
 def upgrade() -> None:
-    """Add pending_tool_call_id column to agent_runs table."""
+    """Add pending_tool_call_id column to courses table."""
     op.add_column(
-        "agent_runs",
+        "courses",
         sa.Column("pending_tool_call_id", sa.String(64), nullable=True),
         schema=SCHEMA,
     )
 
 
 def downgrade() -> None:
-    """Remove pending_tool_call_id column from agent_runs table."""
-    op.drop_column("agent_runs", "pending_tool_call_id", schema=SCHEMA)
+    """Remove pending_tool_call_id column from courses table."""
+    op.drop_column("courses", "pending_tool_call_id", schema=SCHEMA)

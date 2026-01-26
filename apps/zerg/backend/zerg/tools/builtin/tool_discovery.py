@@ -1,6 +1,6 @@
 """Tool discovery tools for semantic search over available tools.
 
-These meta-tools allow agents to discover and search for available tools
+These meta-tools allow fiches to discover and search for available tools
 using natural language queries. They complement the tool catalog by
 providing runtime search capabilities.
 """
@@ -85,10 +85,10 @@ async def search_tools(
         >>> search_tools("track my health")
         # Returns: get_whoop_data, get_current_location, etc.
     """
-    from zerg.tools.tool_search import search_tools_for_agent
+    from zerg.tools.tool_search import search_tools_for_fiche
 
     try:
-        result = await search_tools_for_agent(query, max_results=max_results)
+        result = await search_tools_for_fiche(query, max_results=max_results)
 
         # Add helpful hint
         result["hint"] = (
@@ -118,7 +118,7 @@ async def list_tools(
 
     Args:
         category: Optional category filter. Categories include:
-            - supervisor: spawn_worker, list_workers, contact_user
+            - concierge: spawn_commis, list_commis, contact_user
             - messaging: send_email, send_sms, send_slack_webhook, etc.
             - github: github_list_issues, github_create_issue, etc.
             - jira: jira_list_issues, jira_create_issue, etc.
@@ -127,7 +127,7 @@ async def list_tools(
             - personal: get_whoop_data, get_current_location, search_notes
             - infrastructure: ssh_exec, runner_exec, container_exec
             - tasks: task_create, task_list, task_update, task_delete
-            - memory: agent_memory_get, agent_memory_set, etc.
+            - memory: fiche_memory_get, fiche_memory_set, etc.
             - web: web_search, http_request, web_fetch
             - utility: get_current_time, generate_uuid, math_eval
         include_params: Whether to include parameter hints
@@ -210,7 +210,7 @@ list_tools_tool = StructuredTool.from_function(
     name="list_tools",
     description=(
         "List all available tools, optionally filtered by category. "
-        "Categories: supervisor, messaging, github, jira, linear, notion, "
+        "Categories: concierge, messaging, github, jira, linear, notion, "
         "personal, infrastructure, tasks, memory, web, utility. "
         "Use this to browse available capabilities."
     ),

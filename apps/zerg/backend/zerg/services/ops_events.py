@@ -1,6 +1,6 @@
 """Ops events bridge: normalize EventBus events to an `ops:events` ticker.
 
-Subscribes to core domain events (runs, agents, threads) and broadcasts
+Subscribes to core domain events (courses, fiches, threads) and broadcasts
 compact, color-codable frames to the `ops:events` WebSocket topic.
 """
 
@@ -31,46 +31,46 @@ class OpsEventsBridge:
 
     _started: bool = False
 
-    async def _handle_run_event(self, data: Dict[str, Any]) -> None:
-        # Normalize RUN_* events into run_started/run_success/run_failed
+    async def _handle_course_event(self, data: Dict[str, Any]) -> None:
+        # Normalize COURSE_* events into course_started/course_success/course_failed
         status = data.get("status")
-        agent_id = data.get("agent_id")
-        run_id = data.get("run_id") or data.get("id")
-        if not agent_id or not run_id:
+        fiche_id = data.get("fiche_id")
+        course_id = data.get("course_id") or data.get("id")
+        if not fiche_id or not course_id:
             return
 
         if status == "running":
-            msg_type = "run_started"
+            msg_type = "course_started"
         elif status == "success":
-            msg_type = "run_success"
+            msg_type = "course_success"
         elif status == "failed":
-            msg_type = "run_failed"
+            msg_type = "course_failed"
         else:
             # Ignore queued and unknown statuses for the ticker
             return
 
         payload = OpsEventData(
             type=msg_type,
-            agent_id=agent_id,
-            run_id=run_id,
+            fiche_id=fiche_id,
+            course_id=course_id,
             thread_id=data.get("thread_id"),
             duration_ms=data.get("duration_ms"),
             error=data.get("error"),
         )
         await typed_emitter.send_typed(OPS_TOPIC, MessageType.OPS_EVENT, payload)
 
-    async def _handle_agent_event(self, data: Dict[str, Any]) -> None:
-        agent_id = data.get("id")
-        if not agent_id:
+    async def _handle_fiche_event(self, data: Dict[str, Any]) -> None:
+        fiche_id = data.get("id")
+        if not fiche_id:
             return
-        event_type = "agent_updated"
+        event_type = "fiche_updated"
         # Try to infer created
-        if data.get("event_type") == "agent_created":
-            event_type = "agent_created"
+        if data.get("event_type") == "fiche_created":
+            event_type = "fiche_created"
         payload = OpsEventData(
             type=event_type,
-            agent_id=agent_id,
-            agent_name=data.get("name"),
+            fiche_id=fiche_id,
+            fiche_name=data.get("name"),
             status=data.get("status"),
         )
         await typed_emitter.send_typed(OPS_TOPIC, MessageType.OPS_EVENT, payload)
@@ -100,10 +100,10 @@ class OpsEventsBridge:
     def start(self) -> None:
         if self._started:
             return
-        event_bus.subscribe(EventType.RUN_CREATED, self._handle_run_event)
-        event_bus.subscribe(EventType.RUN_UPDATED, self._handle_run_event)
-        event_bus.subscribe(EventType.AGENT_CREATED, self._handle_agent_event)
-        event_bus.subscribe(EventType.AGENT_UPDATED, self._handle_agent_event)
+        event_bus.subscribe(EventType.COURSE_CREATED, self._handle_course_event)
+        event_bus.subscribe(EventType.COURSE_UPDATED, self._handle_course_event)
+        event_bus.subscribe(EventType.FICHE_CREATED, self._handle_fiche_event)
+        event_bus.subscribe(EventType.FICHE_UPDATED, self._handle_fiche_event)
         event_bus.subscribe(EventType.THREAD_MESSAGE_CREATED, self._handle_thread_message)
         event_bus.subscribe(EventType.BUDGET_DENIED, self._handle_budget_denied)
         self._started = True
@@ -113,10 +113,10 @@ class OpsEventsBridge:
         if not self._started:
             return
         try:
-            event_bus.unsubscribe(EventType.RUN_CREATED, self._handle_run_event)
-            event_bus.unsubscribe(EventType.RUN_UPDATED, self._handle_run_event)
-            event_bus.unsubscribe(EventType.AGENT_CREATED, self._handle_agent_event)
-            event_bus.unsubscribe(EventType.AGENT_UPDATED, self._handle_agent_event)
+            event_bus.unsubscribe(EventType.COURSE_CREATED, self._handle_course_event)
+            event_bus.unsubscribe(EventType.COURSE_UPDATED, self._handle_course_event)
+            event_bus.unsubscribe(EventType.FICHE_CREATED, self._handle_fiche_event)
+            event_bus.unsubscribe(EventType.FICHE_UPDATED, self._handle_fiche_event)
             event_bus.unsubscribe(EventType.THREAD_MESSAGE_CREATED, self._handle_thread_message)
             event_bus.unsubscribe(EventType.BUDGET_DENIED, self._handle_budget_denied)
         finally:

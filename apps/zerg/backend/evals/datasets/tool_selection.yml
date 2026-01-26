@@ -1,5 +1,5 @@
 version: "1.0"
-description: Tool selection quality evals - tests that agents pick the right specialized tool
+description: Tool selection quality evals - tests that fiches pick the right specialized tool
 
 # NOTE: These tests require LIVE MODE (real LLM) to be meaningful.
 # In hermetic mode, the stub LLM doesn't select tools based on context.
@@ -124,10 +124,10 @@ cases:
         max: 30000
     tags: [tool_selection, web, live]
 
-  # Worker spawning for infrastructure tasks
+  # Commis spawning for infrastructure tasks
   - id: infra_ssh_task
     category: tool_selection
-    description: Server task should spawn worker, not call http_request
+    description: Server task should spawn commis, not call http_request
     input: "Check disk space on the clifford server"
     timeout: 120
     assert:
@@ -137,6 +137,6 @@ cases:
         value: spawn_commis
       - type: not_tool_called
         value: http_request
-      - type: worker_spawned
+      - type: commis_spawned
         min_count: 1
-    tags: [tool_selection, infrastructure, worker, live]
+    tags: [tool_selection, infrastructure, commis, live]

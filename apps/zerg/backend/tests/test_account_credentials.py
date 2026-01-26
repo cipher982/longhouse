@@ -8,8 +8,8 @@ from zerg.models.models import ConnectorCredential
 from zerg.utils.crypto import encrypt
 
 
-def test_credential_resolver_fallback(db_session, test_user, sample_agent):
-    """Test that CredentialResolver correctly prioritizes agent overrides over account credentials."""
+def test_credential_resolver_fallback(db_session, test_user, sample_fiche):
+    """Test that CredentialResolver correctly prioritizes fiche overrides over account credentials."""
     connector_type = ConnectorType.SLACK.value
 
     # 1. Setup: Create account-level credential
@@ -24,7 +24,7 @@ def test_credential_resolver_fallback(db_session, test_user, sample_agent):
     db_session.commit()
 
     # Initialize resolver with owner_id
-    resolver = CredentialResolver(agent_id=sample_agent.id, db=db_session, owner_id=test_user.id)
+    resolver = CredentialResolver(fiche_id=sample_fiche.id, db=db_session, owner_id=test_user.id)
 
     # Case 1: Only account credential exists -> return account credential
     result = resolver.get(connector_type)
@@ -32,24 +32,24 @@ def test_credential_resolver_fallback(db_session, test_user, sample_agent):
     assert resolver.get_resolution_source(connector_type) == "account"
     assert resolver.has(connector_type) is True
 
-    # 2. Setup: Create agent-level override
-    agent_creds = {"webhook_url": "https://agent-override.com"}
-    agent_cred = ConnectorCredential(
-        agent_id=sample_agent.id,
+    # 2. Setup: Create fiche-level override
+    fiche_creds = {"webhook_url": "https://fiche-override.com"}
+    fiche_cred = ConnectorCredential(
+        fiche_id=sample_fiche.id,
         connector_type=connector_type,
-        encrypted_value=encrypt(json.dumps(agent_creds)),
-        display_name="Agent Slack",
+        encrypted_value=encrypt(json.dumps(fiche_creds)),
+        display_name="Fiche Slack",
     )
-    db_session.add(agent_cred)
+    db_session.add(fiche_cred)
     db_session.commit()
 
     # Clear cache to force re-resolution
     resolver.clear_cache()
 
-    # Case 2: Both exist -> return agent override
+    # Case 2: Both exist -> return fiche override
     result = resolver.get(connector_type)
-    assert result == agent_creds
-    assert resolver.get_resolution_source(connector_type) == "agent"
+    assert result == fiche_creds
+    assert resolver.get_resolution_source(connector_type) == "fiche"
     assert resolver.has(connector_type) is True
 
     # 3. Cleanup: Remove account credential
@@ -57,13 +57,13 @@ def test_credential_resolver_fallback(db_session, test_user, sample_agent):
     db_session.commit()
     resolver.clear_cache()
 
-    # Case 3: Only agent override exists -> return agent override
+    # Case 3: Only fiche override exists -> return fiche override
     result = resolver.get(connector_type)
-    assert result == agent_creds
-    assert resolver.get_resolution_source(connector_type) == "agent"
+    assert result == fiche_creds
+    assert resolver.get_resolution_source(connector_type) == "fiche"
 
-    # 4. Cleanup: Remove agent override
-    db_session.delete(agent_cred)
+    # 4. Cleanup: Remove fiche override
+    db_session.delete(fiche_cred)
     db_session.commit()
     resolver.clear_cache()
 
@@ -74,10 +74,10 @@ def test_credential_resolver_fallback(db_session, test_user, sample_agent):
     assert resolver.has(connector_type) is False
 
 
-def test_credential_resolver_no_owner(db_session, sample_agent):
+def test_credential_resolver_no_owner(db_session, sample_fiche):
     """Test resolver behavior when owner_id is not provided (legacy behavior)."""
     connector_type = ConnectorType.SLACK.value
-    resolver = CredentialResolver(agent_id=sample_agent.id, db=db_session, owner_id=None)
+    resolver = CredentialResolver(fiche_id=sample_fiche.id, db=db_session, owner_id=None)
 
     # Should return 'none' even if account creds exist (because we didn't pass owner_id)
     assert resolver.get(connector_type) is None

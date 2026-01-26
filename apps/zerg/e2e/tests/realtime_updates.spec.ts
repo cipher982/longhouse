@@ -18,10 +18,10 @@ test('Dashboard live update placeholder', async ({ browser }) => {
   await page2.goto('/');
 
   // Trigger create in page1
-  await page1.locator('[data-testid="create-agent-btn"]').click();
+  await page1.locator('[data-testid="create-fiche-btn"]').click();
 
   // Expect row appears in page2 after some time
-  await expect(page2.locator('tr[data-agent-id]')).toHaveCount(1, { timeout: 15_000 });
+  await expect(page2.locator('tr[data-fiche-id]')).toHaveCount(1, { timeout: 15_000 });
 });
 
 test('WebSocket connection establishes successfully', async ({ page }) => {
@@ -37,8 +37,8 @@ test('WebSocket connection establishes successfully', async ({ page }) => {
     wsConnected = true;
     console.log('✅ WebSocket connected:', url);
 
-    // Verify worker parameter is present (from fixtures)
-    expect(url).toContain('worker=');
+    // Verify commis parameter is present (from fixtures)
+    expect(url).toContain('commis=');
   });
 
   // Navigate to app
@@ -56,18 +56,18 @@ test('Message streaming via WebSocket', async ({ page, request }) => {
   test.skip(true, 'Streaming test requires LLM mocking');
   console.log('🎯 Testing: Message streaming through WebSocket');
 
-  // Create agent
-  const agentResponse = await request.post('/api/agents', {
+  // Create fiche
+  const ficheResponse = await request.post('/api/fiches', {
     data: {
-      name: 'WebSocket Streaming Agent',
-      system_instructions: 'Test agent',
+      name: 'WebSocket Streaming Fiche',
+      system_instructions: 'Test fiche',
       task_instructions: 'Respond briefly',
       model: 'gpt-5-nano',
     }
   });
-  expect(agentResponse.status()).toBe(201);
-  const agent = await agentResponse.json();
-  console.log(`✅ Created agent ID: ${agent.id}`);
+  expect(ficheResponse.status()).toBe(201);
+  const fiche = await ficheResponse.json();
+  console.log(`✅ Created fiche ID: ${fiche.id}`);
 
   // Track WebSocket messages
   const wsMessages: any[] = [];
@@ -90,7 +90,7 @@ test('Message streaming via WebSocket', async ({ page, request }) => {
   // Navigate to chat
   await page.goto('/');
   await page.waitForLoadState('networkidle');
-  await page.locator(`[data-testid="chat-agent-${agent.id}"]`).click();
+  await page.locator(`[data-testid="chat-fiche-${fiche.id}"]`).click();
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
 
   // Send message that will trigger streaming

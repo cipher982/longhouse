@@ -10,8 +10,8 @@ import { ExecutionMonitor, startExecutionMonitoring, analyzeExecutionResults } f
  */
 
 export interface WorkflowTestConfig {
-  agentName: string;
-  agentInstructions: string;
+  ficheName: string;
+  ficheInstructions: string;
   toolName: string;
   toolConfig: Record<string, string>;
   expectedHttpRequests?: string[];
@@ -26,28 +26,28 @@ export interface WorkflowExecutionResult {
 }
 
 /**
- * Create agents via the dashboard UI (no modal - direct creation)
+ * Create fiches via the dashboard UI (no modal - direct creation)
  */
-export async function createAgentsViaDashboard(
+export async function createFichesViaDashboard(
   page: Page,
   count: number = 1
 ): Promise<void> {
   await page.locator('.header-nav').click();
   await page.waitForTimeout(1000);
 
-  const createAgentBtn = page.locator('button:has-text("Create Agent")');
+  const createFicheBtn = page.locator('button:has-text("Create Fiche")');
 
-  // Click create agent button multiple times
+  // Click create fiche button multiple times
   for (let i = 0; i < count; i++) {
-    await createAgentBtn.click();
+    await createFicheBtn.click();
     await page.waitForTimeout(500);
   }
 
-  // Verify agents were created
-  const agentRows = page.locator('table tbody tr');
-  await expect(agentRows.first()).toBeVisible({ timeout: 5000 });
-  const agentCount = await agentRows.count();
-  expect(agentCount).toBeGreaterThanOrEqual(count);
+  // Verify fiches were created
+  const ficheRows = page.locator('table tbody tr');
+  await expect(ficheRows.first()).toBeVisible({ timeout: 5000 });
+  const ficheCount = await ficheRows.count();
+  expect(ficheCount).toBeGreaterThanOrEqual(count);
 }
 
 /**
@@ -58,16 +58,16 @@ export async function executeWorkflowTest(
   config: WorkflowTestConfig
 ): Promise<WorkflowExecutionResult> {
   const {
-    agentName,
-    agentInstructions,
+    ficheName,
+    ficheInstructions,
     toolName,
     toolConfig,
     expectedHttpRequests = [],
     executionTimeoutMs = 10000
   } = config;
 
-  // 1. Create agents
-  await createAgentsViaDashboard(page, 2); // Create a couple agents
+  // 1. Create fiches
+  await createFichesViaDashboard(page, 2); // Create a couple fiches
 
   // 2. Switch to canvas
   await page.getByTestId('global-canvas-tab').click();
@@ -75,11 +75,11 @@ export async function executeWorkflowTest(
 
   // 3. Verify canvas loaded
   await expect(page.locator('#canvas-container canvas')).toBeVisible({ timeout: 5000 });
-  await expect(page.locator('#agent-shelf .agent-pill')).toHaveCount.toBeGreaterThanOrEqual(1, { timeout: 10000 });
+  await expect(page.locator('#fiche-shelf .fiche-pill')).toHaveCount.toBeGreaterThanOrEqual(1, { timeout: 10000 });
 
-  // 4. Create workflow (agent + tool + connection)
-  const { createAgentToolWorkflow } = await import('./canvas-helpers');
-  await createAgentToolWorkflow(page, {
+  // 4. Create workflow (fiche + tool + connection)
+  const { createFicheToolWorkflow } = await import('./canvas-helpers');
+  await createFicheToolWorkflow(page, {
     toolName,
     toolConfig
   });
@@ -124,8 +124,8 @@ export async function executeWorkflowTest(
  */
 export const WORKFLOW_SCENARIOS = {
   HTTP_JSON_API: {
-    agentName: 'JSON API Processor',
-    agentInstructions: 'You process JSON API responses and extract key information.',
+    ficheName: 'JSON API Processor',
+    ficheInstructions: 'You process JSON API responses and extract key information.',
     toolName: 'HTTP Request',
     toolConfig: {
       url: 'https://jsonplaceholder.typicode.com/posts/1',
@@ -135,8 +135,8 @@ export const WORKFLOW_SCENARIOS = {
   },
 
   HTTP_POST_DATA: {
-    agentName: 'Data Submission Agent',
-    agentInstructions: 'You handle HTTP POST responses and validate submission results.',
+    ficheName: 'Data Submission Fiche',
+    ficheInstructions: 'You handle HTTP POST responses and validate submission results.',
     toolName: 'HTTP Request',
     toolConfig: {
       url: 'https://httpbin.org/post',
@@ -147,8 +147,8 @@ export const WORKFLOW_SCENARIOS = {
   },
 
   WEB_SEARCH: {
-    agentName: 'Search Results Analyst',
-    agentInstructions: 'You analyze web search results and provide summaries.',
+    ficheName: 'Search Results Analyst',
+    ficheInstructions: 'You analyze web search results and provide summaries.',
     toolName: 'Web Search',
     toolConfig: {
       query: 'artificial intelligence news'

@@ -40,7 +40,7 @@ class EmailProvider(Protocol):
         The provider is responsible for:
         1. Any watch renewal logic (if applicable)
         2. Detecting new messages / events
-        3. Publishing ``TRIGGER_FIRED`` and scheduling the agent run
+        3. Publishing ``TRIGGER_FIRED`` and scheduling the course
 
         The signature keeps call-sites uniform across providers so the
         trigger scheduler can delegate without branching.
@@ -311,13 +311,13 @@ class GmailProvider:  # noqa: D101 – obvious from context
                         EventType.TRIGGER_FIRED,
                         {
                             "trigger_id": trg.id,
-                            "agent_id": trg.agent_id,
+                            "fiche_id": trg.fiche_id,
                             "provider": "gmail",
                             "message_id": mid,
                             "trigger_type": "webhook",
                         },
                     )
-                    await scheduler_service.run_agent_task(trg.agent_id, trigger="webhook")  # type: ignore[arg-type]
+                    await scheduler_service.run_fiche_task(trg.fiche_id, trigger="webhook")  # type: ignore[arg-type]
                     fired_total += 1
 
             # Update connector history id

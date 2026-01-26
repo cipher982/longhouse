@@ -10,10 +10,10 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from zerg.models.agent_run_event import AgentRunEvent
+from zerg.models.course_event import CourseEvent
 from zerg.models.llm_audit import LLMAuditLog
-from zerg.models.models import AgentRun
-from zerg.models.models import WorkerJob
+from zerg.models.models import CommisJob
+from zerg.models.models import Course
 
 
 @dataclass
@@ -65,27 +65,27 @@ def build_trace_coverage_report(db: Session, since: datetime | None = None) -> d
     """Build a trace coverage report across core observability tables."""
     now = datetime.now(timezone.utc)
 
-    runs_query = _apply_since(db.query(AgentRun), AgentRun.created_at, since)
-    runs_total = runs_query.count()
-    runs_with_trace = runs_query.filter(AgentRun.trace_id.isnot(None)).count()
+    courses_query = _apply_since(db.query(Course), Course.created_at, since)
+    courses_total = courses_query.count()
+    courses_with_trace = courses_query.filter(Course.trace_id.isnot(None)).count()
 
-    jobs_query = _apply_since(db.query(WorkerJob), WorkerJob.created_at, since)
+    jobs_query = _apply_since(db.query(CommisJob), CommisJob.created_at, since)
     jobs_total = jobs_query.count()
-    jobs_with_trace = jobs_query.filter(WorkerJob.trace_id.isnot(None)).count()
+    jobs_with_trace = jobs_query.filter(CommisJob.trace_id.isnot(None)).count()
 
     audit_query = _apply_since(db.query(LLMAuditLog), LLMAuditLog.created_at, since)
     audit_total = audit_query.count()
     audit_with_trace = audit_query.filter(LLMAuditLog.trace_id.isnot(None)).count()
 
-    events_query = _apply_since(db.query(AgentRunEvent), AgentRunEvent.created_at, since)
-    event_rows = events_query.with_entities(AgentRunEvent.event_type, AgentRunEvent.payload).all()
+    events_query = _apply_since(db.query(CourseEvent), CourseEvent.created_at, since)
+    event_rows = events_query.with_entities(CourseEvent.event_type, CourseEvent.payload).all()
     events_total, events_with_trace, event_buckets = _event_breakdown(event_rows)
 
     buckets = [
-        _bucket("agent_runs", runs_total, runs_with_trace),
-        _bucket("worker_jobs", jobs_total, jobs_with_trace),
+        _bucket("courses", courses_total, courses_with_trace),
+        _bucket("commis_jobs", jobs_total, jobs_with_trace),
         _bucket("llm_audit_log", audit_total, audit_with_trace),
-        _bucket("agent_run_events", events_total, events_with_trace),
+        _bucket("course_events", events_total, events_with_trace),
     ]
 
     return {

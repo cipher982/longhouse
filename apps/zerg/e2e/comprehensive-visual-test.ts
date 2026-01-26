@@ -24,8 +24,8 @@ const PAGE_CONFIGS: PageTestConfig[] = [
     name: 'dashboard',
     rustUrl: '/',
     reactUrl: '/react/index.html',
-    description: 'Main dashboard with agent list and controls',
-    waitForSelector: '#agents-table, [data-testid="dashboard-container"]',
+    description: 'Main dashboard with fiche list and controls',
+    waitForSelector: '#fiches-table, [data-testid="dashboard-container"]',
     excludeElements: ['.timestamp', '.last-updated']  // Exclude dynamic timestamps
   },
   {

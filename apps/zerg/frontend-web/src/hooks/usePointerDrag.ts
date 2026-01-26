@@ -8,7 +8,7 @@ import { useCallback, useRef } from 'react';
  *   const { startDrag, getDragData, isDragging } = usePointerDrag();
  *
  *   // On item:
- *   onPointerDown={(e) => startDrag(e, { type: 'agent', id: '123', name: 'Bot' })}
+ *   onPointerDown={(e) => startDrag(e, { type: 'fiche', id: '123', name: 'Bot' })}
  *
  *   // On drop zone:
  *   onPointerUp={(e) => {
@@ -18,7 +18,7 @@ import { useCallback, useRef } from 'react';
  */
 
 export interface DragData {
-  type: 'agent' | 'tool';
+  type: 'fiche' | 'tool';
   id?: string;
   name: string;
   [key: string]: unknown;

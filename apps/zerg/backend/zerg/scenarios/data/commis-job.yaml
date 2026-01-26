@@ -1,0 +1,26 @@
+name: commis-job
+version: 1
+summary: Commis job demo for seeded courses.
+timebase: now
+courses:
+  - id: repo-audit
+    title: Repo audit commis
+    status: success
+    trigger: manual
+    started_at: -25m
+    finished_at: -18m
+    summary: "Repo audit complete: 3 TODOs found"
+    events:
+      - type: commis_spawned
+        message: "Commis spawned for repo audit"
+        at: -24m
+      - type: commis_complete
+        message: "Commis completed repo audit"
+        at: -18m
+    commis_jobs:
+      - task: "Audit repo for TODOs and risky dependencies"
+        status: success
+        started_at: -24m
+        finished_at: -18m
+        model: gpt-5-mini
+        commis_id: demo-commis-1

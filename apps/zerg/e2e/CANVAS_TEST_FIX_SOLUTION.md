@@ -34,7 +34,7 @@ async def system_info():
         "status": "healthy",
         "version": "test-1.0.0",
         "environment": "test",
-        "features": ["canvas", "agents", "workflows"]
+        "features": ["canvas", "fiches", "workflows"]
     }
 
 @app.get("/api/models")
@@ -194,7 +194,7 @@ async function createConnectedWorkflow(page) {
 
   // Wait for canvas to be fully initialized
   await page.waitForSelector("#canvas-container", { timeout: 10_000 });
-  await page.waitForSelector("#agent-shelf .agent-pill", { timeout: 10_000 });
+  await page.waitForSelector("#fiche-shelf .fiche-pill", { timeout: 10_000 });
 
   // Rest of the function remains the same...
 }
@@ -250,7 +250,7 @@ await page.addInitScript(() => {
 
 3. **Canvas Visibility**: Verify `#canvas-root` becomes visible and `#canvas-container` gets created
 
-4. **Agent Shelf**: Confirm agent shelf loads with test agents
+4. **Fiche Shelf**: Confirm fiche shelf loads with test fiches
 
 ## Files Modified
 

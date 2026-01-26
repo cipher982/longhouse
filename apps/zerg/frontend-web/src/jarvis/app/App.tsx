@@ -10,9 +10,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { useAppState, useAppDispatch } from './context'
 import { useTextChannel } from './hooks'
 import { useJarvisApp } from './hooks/useJarvisApp'
-import { DebugPanel, Header, ChatContainer, TextInput, OfflineBanner, ModelSelector, RunStatusIndicator, TraceIdDisplay } from './components'
+import { DebugPanel, Header, ChatContainer, TextInput, OfflineBanner, ModelSelector, CourseStatusIndicator, TraceIdDisplay } from './components'
 import './components/TraceIdDisplay.css'
-import { supervisorToolStore } from '../lib/supervisor-tool-store'
+import { conciergeToolStore } from '../lib/concierge-tool-store'
 import { eventBus } from '../lib/event-bus'
 import config from '../../lib/config'
 import { useAuth } from '../../lib/auth'
@@ -73,12 +73,12 @@ export default function App({ embedded = false }: AppProps) {
     dispatch({ type: 'SET_SIDEBAR_OPEN', open: !state.sidebarOpen })
   }, [dispatch, state.sidebarOpen])
 
-  // Reset memory - clears supervisor thread history
+  // Reset memory - clears concierge thread history
   const handleReset = useCallback(async () => {
     console.log('[App] Resetting memory (clearing history)')
     setIsResetting(true)
     try {
-      supervisorToolStore.clearTools()
+      conciergeToolStore.clearTools()
       await jarvisApp.clearHistory()
       console.log('[App] Memory reset complete')
     } catch (error) {
@@ -200,7 +200,7 @@ export default function App({ embedded = false }: AppProps) {
       <audio id="remoteAudio" autoPlay style={{ display: 'none' }}></audio>
 
       {/* Run status indicator for E2E testing - hidden but accessible via data-testid */}
-      <RunStatusIndicator />
+      <CourseStatusIndicator />
 
       {/* Trace ID display for debugging - shows in dev mode only */}
       <TraceIdDisplay devOnly={true} />

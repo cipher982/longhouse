@@ -16,46 +16,46 @@ test.beforeEach(async ({ request }) => {
 });
 
 /**
- * Create an agent via UI and return its ID.
+ * Create an fiche via UI and return its ID.
  * CRITICAL: Gets ID from API response, NOT from DOM query (.first() is racy in parallel tests)
  */
-async function createAgentViaUI(page: Page): Promise<string> {
+async function createFicheViaUI(page: Page): Promise<string> {
   await page.goto('/');
 
-  const createBtn = page.locator('[data-testid="create-agent-btn"]');
+  const createBtn = page.locator('[data-testid="create-fiche-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
   await expect(createBtn).toBeEnabled({ timeout: 5000 });
 
   const [response] = await Promise.all([
     page.waitForResponse(
-      (r) => r.url().includes('/api/agents') && r.request().method() === 'POST' && r.status() === 201,
+      (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
       { timeout: 10000 }
     ),
     createBtn.click(),
   ]);
 
   const body = await response.json();
-  const agentId = String(body.id);
+  const ficheId = String(body.id);
 
-  if (!agentId || agentId === 'undefined') {
-    throw new Error(`Failed to get agent ID from API response: ${JSON.stringify(body)}`);
+  if (!ficheId || ficheId === 'undefined') {
+    throw new Error(`Failed to get fiche ID from API response: ${JSON.stringify(body)}`);
   }
 
-  const row = page.locator(`tr[data-agent-id="${agentId}"]`);
+  const row = page.locator(`tr[data-fiche-id="${ficheId}"]`);
   await expect(row).toBeVisible({ timeout: 10000 });
 
-  return agentId;
+  return ficheId;
 }
 
 /**
- * Navigate to chat for an agent.
+ * Navigate to chat for an fiche.
  */
-async function navigateToChat(page: Page, agentId: string): Promise<void> {
-  const chatBtn = page.locator(`[data-testid="chat-agent-${agentId}"]`);
+async function navigateToChat(page: Page, ficheId: string): Promise<void> {
+  const chatBtn = page.locator(`[data-testid="chat-fiche-${ficheId}"]`);
   await expect(chatBtn).toBeVisible({ timeout: 5000 });
   await chatBtn.click();
 
-  await page.waitForURL((url) => url.pathname.includes(`/agent/${agentId}/thread`), { timeout: 10000 });
+  await page.waitForURL((url) => url.pathname.includes(`/fiche/${ficheId}/thread`), { timeout: 10000 });
   await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
   await expect(page.locator('[data-testid="chat-input"]')).toBeEnabled({ timeout: 5000 });
 }
@@ -128,8 +128,8 @@ async function createNewThread(page: Page): Promise<number> {
 
 test.describe('Thread Management - Core', () => {
   test('create new thread - URL changes and thread appears', async ({ page }) => {
-    const agentId = await createAgentViaUI(page);
-    await navigateToChat(page, agentId);
+    const ficheId = await createFicheViaUI(page);
+    await navigateToChat(page, ficheId);
 
     const urlBeforeNewThread = page.url();
     const threadIdBeforeNewThread = urlBeforeNewThread.match(/\/thread\/([^/?]+)/)?.[1];
@@ -145,8 +145,8 @@ test.describe('Thread Management - Core', () => {
   });
 
   test('new thread starts empty - no message bleed', async ({ page }) => {
-    const agentId = await createAgentViaUI(page);
-    await navigateToChat(page, agentId);
+    const ficheId = await createFicheViaUI(page);
+    await navigateToChat(page, ficheId);
 
     // Send message in first thread
     const thread1Message = 'UNIQUE_MESSAGE_THREAD_ONE_12345';

@@ -23,7 +23,7 @@ if (!isLocalhost && umamiWebsiteId) {
   document.head.appendChild(script);
 }
 
-// NOTE: PWA/Service Worker support removed - vite-plugin-pwa was never installed
+// NOTE: PWA/Service Commis support removed - vite-plugin-pwa was never installed
 // Add back when PWA is actually needed
 
 const container = document.getElementById('root')

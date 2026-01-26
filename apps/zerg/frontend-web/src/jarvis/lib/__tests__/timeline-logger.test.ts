@@ -62,7 +62,7 @@ describe('TimelineLogger', () => {
     expect(events[0].phase).toBe('send')
   })
 
-  it('should capture supervisor lifecycle events', () => {
+  it('should capture concierge lifecycle events', () => {
     const messageId = 'test-123'
     logger.setMessageId(messageId)
 
@@ -71,18 +71,18 @@ describe('TimelineLogger', () => {
     // Send
     eventBus.emit('text_channel:sent', { text: 'test', timestamp: now })
 
-    // Supervisor started
-    eventBus.emit('supervisor:started', { runId: 1, task: 'test task', timestamp: now + 100 })
+    // Concierge started
+    eventBus.emit('concierge:started', { courseId: 1, task: 'test task', timestamp: now + 100 })
 
     // Check events before complete (which triggers output and reset)
     let events = (logger as any).events as Array<any>
     expect(events.length).toBe(2)
     expect(events[0].phase).toBe('send')
-    expect(events[1].phase).toBe('supervisor_started')
+    expect(events[1].phase).toBe('concierge_started')
 
-    // Supervisor complete (triggers output and reset)
-    eventBus.emit('supervisor:complete', {
-      runId: 1,
+    // Concierge complete (triggers output and reset)
+    eventBus.emit('concierge:complete', {
+      courseId: 1,
       result: 'Done',
       status: 'success',
       timestamp: now + 500,
@@ -93,7 +93,7 @@ describe('TimelineLogger', () => {
     expect(events.length).toBe(0)
   })
 
-  it('should output timeline on supervisor:complete', () => {
+  it('should output timeline on concierge:complete', () => {
     const messageId = 'test-123'
     logger.setMessageId(messageId)
 
@@ -101,9 +101,9 @@ describe('TimelineLogger', () => {
 
     // Emit events
     eventBus.emit('text_channel:sent', { text: 'test', timestamp: now })
-    eventBus.emit('supervisor:started', { runId: 1, task: 'test', timestamp: now + 50 })
-    eventBus.emit('supervisor:complete', {
-      runId: 1,
+    eventBus.emit('concierge:started', { courseId: 1, task: 'test', timestamp: now + 50 })
+    eventBus.emit('concierge:complete', {
+      courseId: 1,
       result: 'Done',
       status: 'success',
       timestamp: now + 200,
@@ -129,9 +129,9 @@ describe('TimelineLogger', () => {
 
     // Emit events with specific timestamps
     eventBus.emit('text_channel:sent', { text: 'test', timestamp: now })
-    eventBus.emit('supervisor:started', { runId: 1, task: 'test', timestamp: now + 100 })
-    eventBus.emit('supervisor:complete', {
-      runId: 1,
+    eventBus.emit('concierge:started', { courseId: 1, task: 'test', timestamp: now + 100 })
+    eventBus.emit('concierge:complete', {
+      courseId: 1,
       result: 'Done',
       status: 'success',
       timestamp: now + 300,
@@ -149,7 +149,7 @@ describe('TimelineLogger', () => {
     expect(logOutput).toContain('T+300ms')
   })
 
-  it('should capture worker and tool events', () => {
+  it('should capture commis and tool events', () => {
     const messageId = 'test-123'
     logger.setMessageId(messageId)
 
@@ -157,24 +157,24 @@ describe('TimelineLogger', () => {
 
     // Emit events (but not complete yet)
     eventBus.emit('text_channel:sent', { text: 'test', timestamp: now })
-    eventBus.emit('supervisor:worker_spawned', { jobId: 1, task: 'worker task', timestamp: now + 50 })
-    eventBus.emit('supervisor:worker_started', { jobId: 1, workerId: 'worker-1', timestamp: now + 100 })
-    eventBus.emit('worker:tool_started', {
-      workerId: 'worker-1',
+    eventBus.emit('concierge:commis_spawned', { jobId: 1, task: 'commis task', timestamp: now + 50 })
+    eventBus.emit('concierge:commis_started', { jobId: 1, commisId: 'commis-1', timestamp: now + 100 })
+    eventBus.emit('commis:tool_started', {
+      commisId: 'commis-1',
       toolName: 'ssh_exec',
       toolCallId: 'tool-1',
       timestamp: now + 150,
     })
-    eventBus.emit('worker:tool_completed', {
-      workerId: 'worker-1',
+    eventBus.emit('commis:tool_completed', {
+      commisId: 'commis-1',
       toolName: 'ssh_exec',
       toolCallId: 'tool-1',
       durationMs: 200,
       timestamp: now + 350,
     })
-    eventBus.emit('supervisor:worker_complete', {
+    eventBus.emit('concierge:commis_complete', {
       jobId: 1,
-      workerId: 'worker-1',
+      commisId: 'commis-1',
       status: 'success',
       durationMs: 400,
       timestamp: now + 500,
@@ -185,16 +185,16 @@ describe('TimelineLogger', () => {
     expect(events.length).toBe(6)
     expect(events.map((e: any) => e.phase)).toEqual([
       'send',
-      'worker_spawned',
-      'worker_started',
+      'commis_spawned',
+      'commis_started',
       'tool_started',
       'tool_completed',
-      'worker_complete',
+      'commis_complete',
     ])
 
     // Emit complete (triggers output and reset)
-    eventBus.emit('supervisor:complete', {
-      runId: 1,
+    eventBus.emit('concierge:complete', {
+      courseId: 1,
       result: 'Done',
       status: 'success',
       timestamp: now + 600,

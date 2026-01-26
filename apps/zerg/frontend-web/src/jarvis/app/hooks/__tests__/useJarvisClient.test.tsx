@@ -18,8 +18,8 @@ const mockClient = vi.hoisted(() => ({
     handlersRef.current = handlers;
   }),
   disconnectEventStream: vi.fn(),
-  listAgents: vi.fn().mockResolvedValue([
-    { id: 1, name: 'Agent One', status: 'idle' },
+  listFiches: vi.fn().mockResolvedValue([
+    { id: 1, name: 'Fiche One', status: 'idle' },
   ]),
 }));
 
@@ -36,7 +36,7 @@ beforeEach(() => {
   mockClient.isAuthenticated.mockResolvedValue(false);
   mockClient.connectEventStream.mockClear();
   mockClient.disconnectEventStream.mockClear();
-  mockClient.listAgents.mockClear();
+  mockClient.listFiches.mockClear();
 });
 
 describe('useJarvisClient', () => {
@@ -57,20 +57,20 @@ describe('useJarvisClient', () => {
     expect(result.current.isConnected).toBe(true);
   });
 
-  it('fetchAgents requests fresh data and updates cache', async () => {
+  it('fetchFiches requests fresh data and updates cache', async () => {
     const { result } = renderHook(() => useJarvisClient({ autoConnect: false }), { wrapper });
 
     await act(async () => {
       await result.current.initialize();
     });
 
-    let agents: Array<{ id: number; name: string; status: string }> = [];
+    let fiches: Array<{ id: number; name: string; status: string }> = [];
     await act(async () => {
-      agents = await result.current.fetchAgents();
+      fiches = await result.current.fetchFiches();
     });
 
-    expect(mockClient.listAgents).toHaveBeenCalledTimes(1);
-    expect(agents).toEqual([{ id: 1, name: 'Agent One', status: 'idle' }]);
-    expect(result.current.agents).toEqual([{ id: 1, name: 'Agent One', status: 'idle' }]);
+    expect(mockClient.listFiches).toHaveBeenCalledTimes(1);
+    expect(fiches).toEqual([{ id: 1, name: 'Fiche One', status: 'idle' }]);
+    expect(result.current.fiches).toEqual([{ id: 1, name: 'Fiche One', status: 'idle' }]);
   });
 });

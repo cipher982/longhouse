@@ -47,22 +47,23 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from zerg.constants import AGENTS_PREFIX
 from zerg.constants import API_PREFIX
+from zerg.constants import FICHES_PREFIX
 from zerg.constants import MODELS_PREFIX
 from zerg.constants import THREADS_PREFIX
 from zerg.database import initialize_database
 from zerg.routers.account_connectors import router as account_connectors_router
 from zerg.routers.admin import router as admin_router
 from zerg.routers.admin_bootstrap import router as admin_bootstrap_router
-from zerg.routers.agent_config import router as agent_config_router
-from zerg.routers.agent_connectors import router as agent_connectors_router
-from zerg.routers.agents import router as agents_router
 from zerg.routers.auth import router as auth_router
 from zerg.routers.connectors import router as connectors_router
 from zerg.routers.contacts import router as contacts_router
+from zerg.routers.courses import router as courses_router
 from zerg.routers.email_webhooks import router as email_webhook_router
 from zerg.routers.email_webhooks_pubsub import router as pubsub_webhook_router
+from zerg.routers.fiche_config import router as fiche_config_router
+from zerg.routers.fiche_connectors import router as fiche_connectors_router
+from zerg.routers.fiches import router as fiches_router
 from zerg.routers.funnel import router as funnel_router
 from zerg.routers.graph_layout import router as graph_router
 from zerg.routers.jarvis import router as jarvis_router
@@ -77,7 +78,6 @@ from zerg.routers.ops import beacon_router as ops_beacon_router
 from zerg.routers.ops import router as ops_router
 from zerg.routers.reliability import router as reliability_router
 from zerg.routers.runners import router as runners_router
-from zerg.routers.runs import router as runs_router
 from zerg.routers.skills import router as skills_router
 from zerg.routers.stream import router as stream_router
 from zerg.routers.sync import router as sync_router
@@ -104,7 +104,7 @@ from zerg.routers.workflows import router as workflows_router
 from zerg.services.ops_events import ops_events_bridge  # noqa: E402
 from zerg.services.scheduler_service import scheduler_service  # noqa: E402
 
-# Import topic_manager at module level so event subscriptions register in worker process
+# Import topic_manager at module level so event subscriptions register in commis process
 from zerg.websocket.manager import topic_manager  # noqa: E402, F401
 
 _log_level_name = _settings.log_level.upper()
@@ -121,7 +121,7 @@ class StructuredFormatter(logging.Formatter):
     """Formatter that renders structured fields for grep-able telemetry logs.
 
     For logs with 'extra' dict, formats as:
-        2025-12-15 03:19:33 INFO [AGENT] Starting run_thread thread_id=1
+        2025-12-15 03:19:33 INFO [FICHE] Starting course thread thread_id=1
     """
 
     def format(self, record):
@@ -210,10 +210,10 @@ for _noisy_mod in (
     "zerg.websocket.manager",
     "zerg.events.event_bus",  # Silence event-by-event publishing in DEBUG
     "zerg.services.ops_events",  # Silence bridge event noise
-    "zerg.services.agent_state_recovery",  # Silence "No stuck agents found" on reload
+    "zerg.services.fiche_state_recovery",  # Silence "No stuck fiches found" on reload
     "zerg.services.auto_seed",  # Silence seeding boilerplate after first run
     "zerg.services.watch_renewal_service",  # Silence background watch renewals
-    "zerg.services.worker_job_processor",  # Silence polling loops
+    "zerg.services.commis_job_processor",  # Silence polling loops
     "zerg.services.scheduler_service",  # Silence scheduling noise
     # Third-party libraries that can dump huge payloads
     "openai",
@@ -292,11 +292,11 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"Auto-seed failed (non-fatal): {e}")
 
-        # Initialize agent state recovery system (recovers orphaned agents, runs, jobs)
+        # Initialize fiche state recovery system (recovers orphaned fiches, courses, jobs)
         if not _settings.testing:
-            from zerg.services.agent_state_recovery import initialize_agent_state_system
+            from zerg.services.fiche_state_recovery import initialize_fiche_state_system
 
-            await initialize_agent_state_system()
+            await initialize_fiche_state_system()
 
         # Start shared async runner
         from zerg.utils.async_runner import get_shared_runner
@@ -334,29 +334,29 @@ async def lifespan(app: FastAPI):
                 failed.append(f"watch_renewal ({e})")
                 logger.exception("Failed to start watch_renewal_service")
 
-            # Worker job processor (critical for supervisor workers)
+            # Commis job processor (critical for concierge commis)
             try:
-                from zerg.services.worker_job_processor import worker_job_processor
+                from zerg.services.commis_job_processor import commis_job_processor
 
-                await worker_job_processor.start()
-                started.append("worker_job_processor")
+                await commis_job_processor.start()
+                started.append("commis_job_processor")
             except Exception as e:  # noqa: BLE001
-                failed.append(f"worker_job_processor ({e})")
-                logger.exception("Failed to start worker_job_processor")
+                failed.append(f"commis_job_processor ({e})")
+                logger.exception("Failed to start commis_job_processor")
 
-            # Job queue worker (durable job execution)
+            # Job queue commis (durable job execution)
             if _settings.job_queue_enabled:
                 try:
                     from pathlib import Path
 
                     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+                    from zerg.jobs.commis import enqueue_missed_runs
+                    from zerg.jobs.commis import run_queue_commis
                     from zerg.jobs.git_sync import GitSyncService
                     from zerg.jobs.git_sync import run_git_sync_loop
                     from zerg.jobs.git_sync import set_git_sync_service
                     from zerg.jobs.registry import register_all_jobs
-                    from zerg.jobs.worker import enqueue_missed_runs
-                    from zerg.jobs.worker import run_queue_worker
 
                     # Initialize git sync service if configured
                     if _settings.jobs_git_repo_url:
@@ -389,12 +389,12 @@ async def lifespan(app: FastAPI):
 
                     await enqueue_missed_runs()  # Backfill missed runs
                     job_scheduler.start()  # Start cron triggers
-                    asyncio.create_task(run_queue_worker())  # Background worker loop
-                    started.append("job_queue_worker")
-                    logger.info("Job queue worker started (queue mode)")
+                    asyncio.create_task(run_queue_commis())  # Background commis loop
+                    started.append("job_queue_commis")
+                    logger.info("Job queue commis started (queue mode)")
                 except Exception as e:  # noqa: BLE001
-                    failed.append(f"job_queue_worker ({e})")
-                    logger.exception("Failed to start job_queue_worker")
+                    failed.append(f"job_queue_commis ({e})")
+                    logger.exception("Failed to start job_queue_commis")
 
             if failed:
                 logger.warning(
@@ -405,16 +405,16 @@ async def lifespan(app: FastAPI):
             else:
                 logger.info("Background services started: %s", started)
 
-        # E2E tests: start worker_job_processor even though testing=True
-        # Workers need to process jobs for continuation tests to pass
+        # E2E tests: start commis_job_processor even though testing=True
+        # Commis need to process jobs for continuation tests to pass
         if _settings.testing and _settings.environment == "test:e2e":
             try:
-                from zerg.services.worker_job_processor import worker_job_processor
+                from zerg.services.commis_job_processor import commis_job_processor
 
-                await worker_job_processor.start()
-                logger.info("Worker job processor started (E2E test mode)")
+                await commis_job_processor.start()
+                logger.info("Commis job processor started (E2E test mode)")
             except Exception as e:  # noqa: BLE001
-                logger.exception(f"Failed to start worker_job_processor in E2E mode: {e}")
+                logger.exception(f"Failed to start commis_job_processor in E2E mode: {e}")
 
         logger.info("Application startup complete")
     except Exception as e:
@@ -445,11 +445,11 @@ async def lifespan(app: FastAPI):
                 logger.exception("Failed to stop watch_renewal_service")
 
             try:
-                from zerg.services.worker_job_processor import worker_job_processor
+                from zerg.services.commis_job_processor import commis_job_processor
 
-                await worker_job_processor.stop()
+                await commis_job_processor.stop()
             except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop worker_job_processor")
+                logger.exception("Failed to stop commis_job_processor")
 
             # Close DB pool (job queue)
             if _settings.job_queue_enabled:
@@ -468,14 +468,14 @@ async def lifespan(app: FastAPI):
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to shutdown MCP stdio processes")
 
-        # E2E tests: stop worker_job_processor if it was started
+        # E2E tests: stop commis_job_processor if it was started
         if _settings.testing and _settings.environment == "test:e2e":
             try:
-                from zerg.services.worker_job_processor import worker_job_processor
+                from zerg.services.commis_job_processor import commis_job_processor
 
-                await worker_job_processor.stop()
+                await commis_job_processor.stop()
             except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop worker_job_processor in E2E mode")
+                logger.exception("Failed to stop commis_job_processor in E2E mode")
 
         # Stop shared async runner
         from zerg.utils.async_runner import get_shared_runner
@@ -517,9 +517,9 @@ def custom_openapi():
     from fastapi.openapi.utils import get_openapi
 
     openapi_schema = get_openapi(
-        title="Zerg Agent Platform API",
+        title="Zerg Fiche Platform API",
         version="1.0.0",
-        description="Complete REST API specification for the Zerg Agent Platform. "
+        description="Complete REST API specification for the Zerg Fiche Platform. "
         "This schema is the single source of truth for frontend-backend contracts.",
         routes=app.routes,
     )
@@ -598,12 +598,12 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # ---------------------------------------------------------------------------
-# Playwright worker database isolation – attach middleware early so every
+# Playwright commis database isolation – attach middleware early so every
 # request, including those made during router setup, carries the correct
 # context.
 #
 # SECURITY: Only enable when E2E_USE_POSTGRES_SCHEMAS=1. In prod/dev, a request
-# with X-Test-Worker header would otherwise try to access worker schemas that
+# with X-Test-Commis header would otherwise try to access commis schemas that
 # don't exist, causing 500 errors (potential DoS vector).
 # ---------------------------------------------------------------------------
 
@@ -613,10 +613,10 @@ if _settings.e2e_use_postgres_schemas:
     from importlib import import_module
 
     try:
-        WorkerDBMiddleware = getattr(import_module("zerg.middleware.worker_db"), "WorkerDBMiddleware")
-        app.add_middleware(WorkerDBMiddleware)
+        CommisDBMiddleware = getattr(import_module("zerg.middleware.commis_db"), "CommisDBMiddleware")
+        app.add_middleware(CommisDBMiddleware)
     except Exception:  # pragma: no cover – keep startup resilient
-        logger.exception("Failed to register WorkerDBMiddleware while E2E_USE_POSTGRES_SCHEMAS=1")
+        logger.exception("Failed to register CommisDBMiddleware while E2E_USE_POSTGRES_SCHEMAS=1")
 
 # ---------------------------------------------------------------------------
 # SafeErrorResponseMiddleware - MUST be added LAST to be the outermost wrapper.
@@ -629,8 +629,8 @@ from zerg.middleware.safe_error_response import SafeErrorResponseMiddleware
 app.add_middleware(SafeErrorResponseMiddleware, cors_origins=cors_origins)
 
 # Include our API routers with centralized prefixes
-app.include_router(agents_router, prefix=f"{API_PREFIX}{AGENTS_PREFIX}")
-app.include_router(mcp_servers_router, prefix=f"{API_PREFIX}")  # MCP servers nested under agents
+app.include_router(fiches_router, prefix=f"{API_PREFIX}{FICHES_PREFIX}")
+app.include_router(mcp_servers_router, prefix=f"{API_PREFIX}")  # MCP servers nested under fiches
 app.include_router(threads_router, prefix=f"{API_PREFIX}{THREADS_PREFIX}")
 app.include_router(models_router, prefix=f"{API_PREFIX}{MODELS_PREFIX}")
 app.include_router(websocket_router, prefix=API_PREFIX)
@@ -641,7 +641,7 @@ app.include_router(pubsub_webhook_router, prefix=f"{API_PREFIX}")
 app.include_router(connectors_router, prefix=f"{API_PREFIX}")
 app.include_router(triggers_router, prefix=f"{API_PREFIX}")
 app.include_router(knowledge_router, prefix=f"{API_PREFIX}")
-app.include_router(runs_router, prefix=f"{API_PREFIX}")
+app.include_router(courses_router, prefix=f"{API_PREFIX}")
 app.include_router(runners_router, prefix=f"{API_PREFIX}")  # Runners execution infrastructure
 app.include_router(workflows_router, prefix=f"{API_PREFIX}")
 app.include_router(workflow_executions_router, prefix=f"{API_PREFIX}")
@@ -652,15 +652,15 @@ app.include_router(contacts_router, prefix=f"{API_PREFIX}")  # User approved con
 app.include_router(templates_router, prefix=f"{API_PREFIX}")
 app.include_router(graph_router, prefix=f"{API_PREFIX}")
 app.include_router(jarvis_router)  # Jarvis integration - includes /api/jarvis prefix
-app.include_router(jarvis_internal_router, prefix=f"{API_PREFIX}")  # Internal endpoints for run continuation
+app.include_router(jarvis_internal_router, prefix=f"{API_PREFIX}")  # Internal endpoints for course continuation
 app.include_router(sync_router)  # Conversation sync - includes /api/jarvis/sync prefix
 app.include_router(stream_router)  # Resumable SSE v1 - includes /api/stream prefix
 app.include_router(system_router, prefix=API_PREFIX)
 app.include_router(metrics_router)  # no prefix – Prometheus expects /metrics
 app.include_router(ops_router, prefix=f"{API_PREFIX}")
 app.include_router(ops_beacon_router, prefix=f"{API_PREFIX}")  # Public beacon (no auth)
-app.include_router(agent_config_router, prefix=f"{API_PREFIX}")
-app.include_router(agent_connectors_router, prefix=f"{API_PREFIX}")  # Agent connector credentials
+app.include_router(fiche_config_router, prefix=f"{API_PREFIX}")
+app.include_router(fiche_connectors_router, prefix=f"{API_PREFIX}")  # Fiche connector credentials
 app.include_router(account_connectors_router, prefix=f"{API_PREFIX}")  # Account-level connector credentials
 app.include_router(funnel_router, prefix=f"{API_PREFIX}")  # Funnel tracking
 app.include_router(waitlist_router, prefix=f"{API_PREFIX}")  # Public waitlist signup
@@ -690,7 +690,7 @@ except ImportError:  # pragma: no cover – should not happen
 @app.get("/")
 async def read_root():
     """Return a simple message to indicate the API is working."""
-    return {"message": "Agent Platform API is running"}
+    return {"message": "Fiche Platform API is running"}
 
 
 @app.get("/health", operation_id="health_check_get")
@@ -701,7 +701,7 @@ async def health_check():
 
     from sqlalchemy import text
 
-    health_status = {"status": "healthy", "message": "Agent Platform API is running"}
+    health_status = {"status": "healthy", "message": "Fiche Platform API is running"}
     checks = {}
 
     # 1. Environment validation

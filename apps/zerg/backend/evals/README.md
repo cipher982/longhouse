@@ -1,6 +1,6 @@
 # Zerg Eval Dataset System
 
-A comprehensive evaluation framework for AI agent quality, regression testing, and prompt optimization.
+A comprehensive evaluation framework for AI fiche quality, regression testing, and prompt optimization.
 
 **Status:** Phase 4 Complete (53 test cases, tag filtering, deployment gates)
 
@@ -55,7 +55,7 @@ Tests are tagged for flexible filtering:
 | **optional** | Informational, no block | `pytest -m optional` |
 | **quick** | Quick sanity check | `pytest -m quick` |
 
-Plus category tags: `conversational`, `infrastructure`, `multi_step`, `tool_usage`, `edge_case`, `performance`, `worker`, `multi_turn`
+Plus category tags: `conversational`, `infrastructure`, `multi_step`, `tool_usage`, `edge_case`, `performance`, `commis`, `multi_turn`
 
 ### Filter Examples
 ```bash
@@ -98,7 +98,7 @@ cases:
         value: success
       - type: latency_ms
         max: 15000
-      - type: worker_spawned
+      - type: commis_spawned
         count: 1
     tags: [infrastructure, critical]    # Tags for filtering
 ```
@@ -134,12 +134,12 @@ For multi-turn tests, use `messages` instead of `input`:
 | **status** | `value` | success/failed/deferred |
 | **latency_ms** | `max`, `min` | Execution time bounds |
 | **total_tokens** | `max` | Token usage |
-| **worker_spawned** | `count`, `min`, `max` | Workers spawned |
+| **commis_spawned** | `count`, `min`, `max` | Commis spawned |
 | **tool_called** | `value` | Tool was called |
-| **worker_result_contains** | `worker_id`, `value` | Worker result text |
-| **worker_tool_called** | `worker_id`, `value`, `min` | Worker used tool |
-| **artifact_exists** | `worker_id`, `value` | Artifact file exists |
-| **artifact_contains** | `worker_id`, `path`, `value` | Artifact content |
+| **commis_result_contains** | `commis_id`, `value` | Commis result text |
+| **commis_tool_called** | `commis_id`, `value`, `min` | Commis used tool |
+| **artifact_exists** | `commis_id`, `value` | Artifact file exists |
+| **artifact_contains** | `commis_id`, `path`, `value` | Artifact content |
 | **llm_graded** | `rubric`, `min_score` | LLM-as-judge (live mode) |
 
 ### 5. Tag Your Test
@@ -156,7 +156,7 @@ Choose appropriate tags:
 - `conversational`, `infrastructure`, `multi_step`, `tool_usage`, `edge_case`, `performance`
 
 **Special:**
-- `worker` - Tests worker delegation
+- `commis` - Tests commis delegation
 - `multi_turn` - Multi-turn conversation
 - `quick` - Quick sanity check
 
@@ -181,7 +181,7 @@ make eval
 
 ### Live Mode (Opt-in)
 - **LLM:** Real OpenAI API calls
-- **Tools:** Full supervisor toolset
+- **Tools:** Full concierge toolset
 - **Speed:** Slower (~10-30s per test)
 - **Cost:** Real API costs
 - **Use:** Pre-deploy validation, prompt quality testing
@@ -190,12 +190,12 @@ make eval
 
 | Capability | Hermetic | Live |
 |------------|----------|------|
-| Supervisor doesn't crash | ✅ | ✅ |
-| Worker artifacts created correctly | ✅ | ✅ |
+| Concierge doesn't crash | ✅ | ✅ |
+| Commis artifacts created correctly | ✅ | ✅ |
 | Latency within bounds | ✅ | ✅ |
 | Multi-turn message injection works | ✅ | ✅ |
 | xdist parallelism works | ✅ | ✅ |
-| Agent reasoning quality | ❌ | ✅ |
+| Fiche reasoning quality | ❌ | ✅ |
 | Tool selection decisions | ❌ | ✅ |
 | Response correctness | ❌ | ✅ |
 | Prompt optimization testing | ❌ | ✅ |
@@ -267,7 +267,7 @@ Results are saved to `evals/results/`:
 results/
 ├── eval-2025-12-30-baseline-abc123.json
 ├── eval-2025-12-30-improved-def456.json
-└── .tmp/                                   # Per-worker temp files (auto-cleaned)
+└── .tmp/                                   # Per-commis temp files (auto-cleaned)
 ```
 
 Each result file includes:
@@ -283,11 +283,11 @@ YAML datasets (human-editable)
     ↓
 pytest plugin (load + generate tests)
     ↓
-EvalRunner (in-process SupervisorService calls)
+EvalRunner (in-process ConciergeService calls)
     ↓
 Assertions (deterministic + LLM-graded)
     ↓
-Results (JSON files + per-worker JSONL)
+Results (JSON files + per-commis JSONL)
 ```
 
 ## Tips
@@ -323,7 +323,7 @@ pytest evals/ --markers
 ```
 
 ### Results not merging
-- Check `evals/results/.tmp/` for per-worker files
+- Check `evals/results/.tmp/` for per-commis files
 - Ensure pytest-xdist is installed: `uv sync`
 - Try single-process mode: `pytest evals/` (without `-n auto`)
 
@@ -339,15 +339,15 @@ both use the same stub. Variant comparison is only meaningful when running live 
 
 ### Critical Tests
 The current "critical" tests (deployment gate) run in hermetic mode, which means they verify
-*infrastructure* (system runs without crashing) rather than *behavior* (agent does the right thing).
+*infrastructure* (system runs without crashing) rather than *behavior* (fiche does the right thing).
 
 **Recommendation:** For production deployment gates, run `make eval-live` with critical live tests,
 or use the hermetic critical tests as a fast pre-check before live validation.
 
 ### Tool Call Assertions in Hermetic Mode
-Tool call assertions (`tool_called`, `worker_tool_called`) verify that the stub's keyword-based
+Tool call assertions (`tool_called`, `commis_tool_called`) verify that the stub's keyword-based
 routing works, not that the real LLM would make the same tool selection. These are useful for
-testing the tool infrastructure but don't validate agent reasoning.
+testing the tool infrastructure but don't validate fiche reasoning.
 
 ## References
 

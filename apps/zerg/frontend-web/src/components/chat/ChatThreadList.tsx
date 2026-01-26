@@ -152,23 +152,23 @@ export function ChatThreadList({
               >
                 ▼
               </span>
-              Automation Runs
+              Automation Courses
             </h4>
             <span className="automation-history-count" data-testid="automation-count">
               {automationThreads.length}
             </span>
           </div>
           <div
-            className={clsx("automation-runs-list", { collapsed: isAutomationCollapsed })}
-            data-testid="automation-runs-list"
+            className={clsx("automation-courses-list", { collapsed: isAutomationCollapsed })}
+            data-testid="automation-courses-list"
           >
             {automationThreads.map((thread) => (
               <div
                 key={thread.id}
-                className={clsx("automation-run-item", {
+                className={clsx("automation-course-item", {
                   selected: thread.id === effectiveThreadId,
                 })}
-                data-testid={`automation-run-${thread.id}`}
+                data-testid={`automation-course-${thread.id}`}
                 data-id={thread.id}
                 data-thread-id={thread.id}
                 data-thread-type={thread.thread_type}
@@ -182,14 +182,14 @@ export function ChatThreadList({
                   }
                 }}
               >
-                <div className="automation-run-title">{thread.title}</div>
-                <div className="automation-run-time">
+                <div className="automation-course-title">{thread.title}</div>
+                <div className="automation-course-time">
                   {formatTimestamp(thread.created_at)}
                 </div>
-                <div className="automation-run-type">
+                <div className="automation-course-type">
                   <span
-                    className={`run-badge run-badge-${thread.thread_type}`}
-                    data-testid={`run-badge-${thread.thread_type}`}
+                    className={`course-badge course-badge-${thread.thread_type}`}
+                    data-testid={`course-badge-${thread.thread_type}`}
                   >
                     {thread.thread_type === "scheduled" ? "🔄 Scheduled" : "▶️ Manual"}
                   </span>

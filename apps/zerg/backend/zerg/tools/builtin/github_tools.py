@@ -9,7 +9,7 @@ Required PAT Permissions:
     - public_repo - for public repositories only
 
 Configuration:
-    Agents should be configured with a GitHub connector that provides:
+    Fiches should be configured with a GitHub connector that provides:
     - token: GitHub Personal Access Token (PAT)
 
 Rate Limits:
@@ -173,7 +173,7 @@ def github_list_repositories(
     """List repositories for the authenticated user.
 
     Args:
-        token: GitHub Personal Access Token (optional if configured in agent)
+        token: GitHub Personal Access Token (optional if configured in fiche)
         visibility: Filter by visibility - 'all', 'public', or 'private' (default: 'all')
         sort: Sort order - 'created', 'updated', 'pushed', or 'full_name' (default: 'updated')
         per_page: Number of results per page, max 100 (default: 30)
@@ -247,7 +247,7 @@ def github_create_issue(
         body: Issue description/body (optional)
         labels: List of label names to apply (optional)
         assignees: List of usernames to assign (optional)
-        token: GitHub Personal Access Token (optional, can be configured in Agent Settings)
+        token: GitHub Personal Access Token (optional, can be configured in Fiche Settings)
 
     Returns:
         Dictionary containing:
@@ -288,7 +288,7 @@ def github_create_issue(
 
     result = _make_github_request(resolved_token, "POST", endpoint, data=payload)
 
-    # Simplify response for agent consumption
+    # Simplify response for fiche consumption
     if result.get("ok") and "data" in result:
         issue_data = result["data"]
         return tool_success(
@@ -320,7 +320,7 @@ def github_list_issues(
         state: Issue state filter: "open", "closed", or "all" (default: "open")
         labels: Comma-separated list of label names to filter by (optional)
         per_page: Number of results per page, max 100 (default: 30)
-        token: GitHub Personal Access Token (optional, can be configured in Agent Settings)
+        token: GitHub Personal Access Token (optional, can be configured in Fiche Settings)
 
     Returns:
         Dictionary containing:
@@ -364,7 +364,7 @@ def github_list_issues(
 
     result = _make_github_request(resolved_token, "GET", endpoint, params=params)
 
-    # Simplify response for agent consumption
+    # Simplify response for fiche consumption
     if result.get("ok") and "data" in result:
         issues_data = result["data"]
         if isinstance(issues_data, list):
@@ -396,7 +396,7 @@ def github_get_issue(
         owner: Repository owner (username or organization)
         repo: Repository name
         issue_number: Issue number
-        token: GitHub Personal Access Token (optional, can be configured in Agent Settings)
+        token: GitHub Personal Access Token (optional, can be configured in Fiche Settings)
 
     Returns:
         Dictionary containing:
@@ -426,7 +426,7 @@ def github_get_issue(
     endpoint = f"/repos/{owner}/{repo}/issues/{issue_number}"
     result = _make_github_request(resolved_token, "GET", endpoint)
 
-    # Simplify response for agent consumption
+    # Simplify response for fiche consumption
     if result.get("ok") and "data" in result:
         issue_data = result["data"]
         return tool_success(
@@ -459,7 +459,7 @@ def github_add_comment(
         repo: Repository name
         issue_number: Issue or PR number to comment on
         body: Comment text (required)
-        token: GitHub Personal Access Token (optional, can be configured in Agent Settings)
+        token: GitHub Personal Access Token (optional, can be configured in Fiche Settings)
 
     Returns:
         Dictionary containing:
@@ -499,7 +499,7 @@ def github_add_comment(
 
     result = _make_github_request(resolved_token, "POST", endpoint, data=payload)
 
-    # Simplify response for agent consumption
+    # Simplify response for fiche consumption
     if result.get("ok") and "data" in result:
         comment_data = result["data"]
         return tool_success(
@@ -528,7 +528,7 @@ def github_list_pull_requests(
         repo: Repository name
         state: PR state filter: "open", "closed", or "all" (default: "open")
         per_page: Number of results per page, max 100 (default: 30)
-        token: GitHub Personal Access Token (optional, can be configured in Agent Settings)
+        token: GitHub Personal Access Token (optional, can be configured in Fiche Settings)
 
     Returns:
         Dictionary containing:
@@ -568,7 +568,7 @@ def github_list_pull_requests(
 
     result = _make_github_request(resolved_token, "GET", endpoint, params=params)
 
-    # Simplify response for agent consumption
+    # Simplify response for fiche consumption
     if result.get("ok") and "data" in result:
         prs_data = result["data"]
         if isinstance(prs_data, list):
@@ -601,7 +601,7 @@ def github_get_pull_request(
         owner: Repository owner (username or organization)
         repo: Repository name
         pr_number: Pull request number
-        token: GitHub Personal Access Token (optional, can be configured in Agent Settings)
+        token: GitHub Personal Access Token (optional, can be configured in Fiche Settings)
 
     Returns:
         Dictionary containing:
@@ -631,7 +631,7 @@ def github_get_pull_request(
     endpoint = f"/repos/{owner}/{repo}/pulls/{pr_number}"
     result = _make_github_request(resolved_token, "GET", endpoint)
 
-    # Simplify response for agent consumption
+    # Simplify response for fiche consumption
     if result.get("ok") and "data" in result:
         pr_data = result["data"]
         return tool_success(
@@ -658,36 +658,36 @@ TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
         func=github_list_repositories,
         name="github_list_repositories",
-        description="List all repositories for the authenticated user. Shows repo name, description, URL, language, and stars. Token can be provided or configured in Agent Settings -> Connectors.",
+        description="List all repositories for the authenticated user. Shows repo name, description, URL, language, and stars. Token can be provided or configured in Fiche Settings -> Connectors.",
     ),
     StructuredTool.from_function(
         func=github_create_issue,
         name="github_create_issue",
-        description="Create a new issue in a GitHub repository. Token can be provided or configured in Agent Settings -> Connectors. Returns the issue number and URL.",
+        description="Create a new issue in a GitHub repository. Token can be provided or configured in Fiche Settings -> Connectors. Returns the issue number and URL.",
     ),
     StructuredTool.from_function(
         func=github_list_issues,
         name="github_list_issues",
-        description="List issues in a GitHub repository with optional filtering by state and labels. Token can be provided or configured in Agent Settings -> Connectors.",
+        description="List issues in a GitHub repository with optional filtering by state and labels. Token can be provided or configured in Fiche Settings -> Connectors.",
     ),
     StructuredTool.from_function(
         func=github_get_issue,
         name="github_get_issue",
-        description="Get detailed information about a specific GitHub issue by number. Token can be provided or configured in Agent Settings -> Connectors.",
+        description="Get detailed information about a specific GitHub issue by number. Token can be provided or configured in Fiche Settings -> Connectors.",
     ),
     StructuredTool.from_function(
         func=github_add_comment,
         name="github_add_comment",
-        description="Add a comment to an existing GitHub issue or pull request. Token can be provided or configured in Agent Settings -> Connectors.",
+        description="Add a comment to an existing GitHub issue or pull request. Token can be provided or configured in Fiche Settings -> Connectors.",
     ),
     StructuredTool.from_function(
         func=github_list_pull_requests,
         name="github_list_pull_requests",
-        description="List pull requests in a GitHub repository with optional filtering by state. Token can be provided or configured in Agent Settings -> Connectors.",
+        description="List pull requests in a GitHub repository with optional filtering by state. Token can be provided or configured in Fiche Settings -> Connectors.",
     ),
     StructuredTool.from_function(
         func=github_get_pull_request,
         name="github_get_pull_request",
-        description="Get detailed information about a specific GitHub pull request by number. Token can be provided or configured in Agent Settings -> Connectors.",
+        description="Get detailed information about a specific GitHub pull request by number. Token can be provided or configured in Fiche Settings -> Connectors.",
     ),
 ]

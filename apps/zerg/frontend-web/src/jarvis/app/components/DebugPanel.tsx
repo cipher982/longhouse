@@ -28,7 +28,7 @@ export function DebugPanel({ isOpen, onToggle, onReset, isResetting = false }: D
   // Fetch thread info
   const fetchThreadInfo = useCallback(async () => {
     try {
-      const response = await fetch(`${config.apiBaseUrl}/jarvis/supervisor/thread`, {
+      const response = await fetch(`${config.apiBaseUrl}/jarvis/concierge/thread`, {
         credentials: 'include',
       })
       if (response.ok) {
@@ -159,7 +159,7 @@ export function DebugPanel({ isOpen, onToggle, onReset, isResetting = false }: D
           <div className="debug-section">
             <div className="debug-section-header">API</div>
             <a
-              href={`${config.apiBaseUrl}/jarvis/supervisor/thread`}
+              href={`${config.apiBaseUrl}/jarvis/concierge/thread`}
               target="_blank"
               rel="noopener noreferrer"
               className="debug-link"

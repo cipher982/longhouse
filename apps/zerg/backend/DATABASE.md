@@ -103,9 +103,9 @@ finally:
 
 Tables are automatically created during application startup via the `initialize_database()` function.
 
-## Agent Scheduling Model
+## Fiche Scheduling Model
 
-The `Agent` table includes a `schedule` column (nullable string) that stores a CRON expression. If `schedule` is set (not NULL), the agent is considered scheduled and will be picked up by the SchedulerService. If `schedule` is NULL, the agent is not scheduled.
+The `Fiche` table includes a `schedule` column (nullable string) that stores a CRON expression. If `schedule` is set (not NULL), the fiche is considered scheduled and will be picked up by the SchedulerService. If `schedule` is NULL, the fiche is not scheduled.
 
 **Note:** The previous `run_on_schedule` boolean flag has been removed. Scheduling is now determined solely by the presence of a non-null `schedule` string.
 
@@ -126,7 +126,7 @@ This endpoint:
 
 ## E2E DB Isolation
 
-Playwright E2E runs use per-worker SQLite DB routing (header-based) so parallel workers don’t share a single DB file. See `apps/zerg/backend/zerg/database.py` and `apps/zerg/backend/zerg/middleware/worker_db.py`.
+Playwright E2E runs use per-commis SQLite DB routing (header-based) so parallel commis don’t share a single DB file. See `apps/zerg/backend/zerg/database.py` and `apps/zerg/backend/zerg/middleware/commis_db.py`.
 
 ## Testing
 

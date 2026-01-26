@@ -1,6 +1,6 @@
 """EventEmitter Protocol - defines the interface for tool event emission.
 
-Emitters have their identity (worker vs supervisor) baked in at construction.
+Emitters have their identity (commis vs concierge) baked in at construction.
 This eliminates contextvar leakage bugs where events get misclassified.
 """
 
@@ -18,9 +18,9 @@ if TYPE_CHECKING:
 class EventEmitter(Protocol):
     """Protocol for tool event emission.
 
-    Identity is baked at construction time. A WorkerEmitter will always
-    emit worker_tool_* events, a SupervisorEmitter will always emit
-    supervisor_tool_* events, regardless of contextvar state.
+    Identity is baked at construction time. A CommisEmitter will always
+    emit commis_tool_* events, a ConciergeEmitter will always emit
+    concierge_tool_* events, regardless of contextvar state.
 
     Usage:
         emitter = get_emitter()
@@ -31,13 +31,13 @@ class EventEmitter(Protocol):
     """
 
     @property
-    def is_worker(self) -> bool:
-        """True if this emitter is for worker context."""
+    def is_commis(self) -> bool:
+        """True if this emitter is for commis context."""
         ...
 
     @property
-    def is_supervisor(self) -> bool:
-        """True if this emitter is for supervisor context."""
+    def is_concierge(self) -> bool:
+        """True if this emitter is for concierge context."""
         ...
 
     async def emit_tool_started(

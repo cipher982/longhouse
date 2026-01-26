@@ -1,4 +1,4 @@
-"""add reasoning_effort to agent_runs
+"""add reasoning_effort to courses
 
 Revision ID: t4u5v6w7x8y9
 Revises: 0a09e33fe6b0
@@ -18,8 +18,8 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Add reasoning_effort column to agent_runs for continuation inheritance
-    # When a supervisor run is resumed, it should use the same reasoning_effort
+    # Add reasoning_effort column to courses for continuation inheritance
+    # When a concierge run is resumed, it should use the same reasoning_effort
     # Values: none, low, medium, high
     conn = op.get_bind()
 
@@ -27,15 +27,15 @@ def upgrade() -> None:
     result = conn.execute(
         sa.text(
             "SELECT column_name FROM information_schema.columns "
-            "WHERE table_name = 'agent_runs' AND column_name = 'reasoning_effort'"
+            "WHERE table_name = 'courses' AND column_name = 'reasoning_effort'"
         )
     )
     if result.fetchone() is None:
         op.add_column(
-            "agent_runs",
+            "courses",
             sa.Column("reasoning_effort", sa.String(20), nullable=True),
         )
 
 
 def downgrade() -> None:
-    op.drop_column("agent_runs", "reasoning_effort")
+    op.drop_column("courses", "reasoning_effort")

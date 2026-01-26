@@ -45,15 +45,15 @@ export interface EventMap {
   'connection:disconnected': { timestamp: number };
   'connection:error': { error: Error; message: string };
 
-  // Supervisor Progress Events
-  'supervisor:started': { runId: number; task: string; timestamp: number; traceId?: string };
-  'supervisor:thinking': { message: string; timestamp: number };
-  'supervisor:worker_spawned': { jobId: number; task: string; timestamp: number; toolCallId?: string };
-  'supervisor:worker_started': { jobId: number; workerId?: string; timestamp: number };
-  'supervisor:worker_complete': { jobId: number; workerId?: string; status: string; durationMs?: number; timestamp: number };
-  'supervisor:worker_summary': { jobId: number; workerId?: string; summary: string; timestamp: number };
-  'supervisor:complete': {
-    runId: number;
+  // Concierge Progress Events
+  'concierge:started': { courseId: number; task: string; timestamp: number; traceId?: string };
+  'concierge:thinking': { message: string; timestamp: number };
+  'concierge:commis_spawned': { jobId: number; task: string; timestamp: number; toolCallId?: string; courseId?: number };
+  'concierge:commis_started': { jobId: number; commisId?: string; timestamp: number; courseId?: number };
+  'concierge:commis_complete': { jobId: number; commisId?: string; status: string; durationMs?: number; timestamp: number; courseId?: number };
+  'concierge:commis_summary': { jobId: number; commisId?: string; summary: string; timestamp: number; courseId?: number };
+  'concierge:complete': {
+    courseId: number;
     result: string;
     status: string;
     durationMs?: number;
@@ -66,48 +66,51 @@ export interface EventMap {
       reasoning_tokens?: number | null;
     };
   };
-  'supervisor:error': { message: string; details?: string; timestamp: number; traceId?: string };
-  'supervisor:deferred': { runId: number; message: string; attachUrl?: string; timestamp: number };
-  'supervisor:waiting': { runId: number; jobId?: number; message: string; timestamp: number };
-  'supervisor:resumed': { runId: number; timestamp: number };
-  'supervisor:cleared': { timestamp: number };
+  'concierge:error': { message: string; details?: string; timestamp: number; traceId?: string; courseId?: number };
+  'concierge:deferred': { courseId: number; message: string; attachUrl?: string; timestamp: number };
+  'concierge:waiting': { courseId: number; jobId?: number; message: string; timestamp: number };
+  'concierge:resumed': { courseId: number; timestamp: number };
+  'concierge:cleared': { timestamp: number };
 
-  // Worker Tool Events (Phase 2: Activity Ticker)
-  'worker:tool_started': {
-    workerId: string;
+  // Commis Tool Events (Phase 2: Activity Ticker)
+  'commis:tool_started': {
+    commisId: string;
     toolName: string;
     toolCallId: string;
     argsPreview?: string;
+    courseId?: number;
     timestamp: number;
   };
-  'worker:tool_completed': {
-    workerId: string;
+  'commis:tool_completed': {
+    commisId: string;
     toolName: string;
     toolCallId: string;
     durationMs: number;
     resultPreview?: string;
+    courseId?: number;
     timestamp: number;
   };
-  'worker:tool_failed': {
-    workerId: string;
+  'commis:tool_failed': {
+    commisId: string;
     toolName: string;
     toolCallId: string;
     durationMs: number;
     error: string;
+    courseId?: number;
     timestamp: number;
   };
 
-  // Supervisor Tool Events (uniform treatment with worker tools)
-  'supervisor:tool_started': {
-    runId: number;
+  // Concierge Tool Events (uniform treatment with commis tools)
+  'concierge:tool_started': {
+    courseId: number;
     toolName: string;
     toolCallId: string;
     argsPreview?: string;
     args?: Record<string, unknown>;  // Full args for raw view
     timestamp: number;
   };
-  'supervisor:tool_progress': {
-    runId: number;
+  'concierge:tool_progress': {
+    courseId: number;
     toolCallId: string;
     message: string;
     level?: 'debug' | 'info' | 'warn' | 'error';
@@ -115,8 +118,8 @@ export interface EventMap {
     data?: Record<string, unknown>;
     timestamp: number;
   };
-  'supervisor:tool_completed': {
-    runId: number;
+  'concierge:tool_completed': {
+    courseId: number;
     toolName: string;
     toolCallId: string;
     durationMs: number;
@@ -124,8 +127,8 @@ export interface EventMap {
     result?: Record<string, unknown>;  // Full result for raw view
     timestamp: number;
   };
-  'supervisor:tool_failed': {
-    runId: number;
+  'concierge:tool_failed': {
+    courseId: number;
     toolName: string;
     toolCallId: string;
     durationMs: number;

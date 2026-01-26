@@ -29,7 +29,7 @@ interface CapturedEvent {
 
 interface TimelineData {
   correlationId: string | null;
-  runId: number | null;
+  courseId: number | null;
   events: CapturedEvent[];
   startTime: number;
   endTime: number;
@@ -43,8 +43,8 @@ interface TimelineMetrics {
   timeline: TimelineData;
   summary: {
     totalDurationMs: number;
-    supervisorThinkingMs?: number;
-    workerExecutionMs?: number;
+    conciergeThinkingMs?: number;
+    commisExecutionMs?: number;
     toolExecutionMs?: number;
   };
 }
@@ -54,7 +54,7 @@ export class TimelineCapture {
   private events: CapturedEvent[] = [];
   private startTime: number | null = null;
   private correlationId: string | null = null;
-  private runId: number | null = null;
+  private courseId: number | null = null;
   private capturing: boolean = false;
 
   constructor(page: Page) {
@@ -73,7 +73,7 @@ export class TimelineCapture {
     this.events = [];
     this.startTime = Date.now();
     this.correlationId = null;
-    this.runId = null;
+    this.courseId = null;
 
     // Inject event capture script into page context
     await this.page.addInitScript(() => {
@@ -147,7 +147,7 @@ export class TimelineCapture {
     if (capturedEvents.length === 0) {
       return {
         correlationId: this.correlationId,
-        runId: this.runId,
+        courseId: this.courseId,
         events: [],
         startTime: this.startTime || Date.now(),
         endTime: Date.now(),
@@ -156,15 +156,15 @@ export class TimelineCapture {
       };
     }
 
-    // Extract correlation ID and run ID from first event
+    // Extract correlation ID and course ID from first event
     for (const evt of capturedEvents) {
       if (evt.data?.client_correlation_id && !this.correlationId) {
         this.correlationId = evt.data.client_correlation_id;
       }
-      if (evt.data?.payload?.run_id && !this.runId) {
-        this.runId = evt.data.payload.run_id;
+      if (evt.data?.payload?.course_id && !this.courseId) {
+        this.courseId = evt.data.payload.course_id;
       }
-      if (this.correlationId && this.runId) break;
+      if (this.correlationId && this.courseId) break;
     }
 
     // Build timeline events
@@ -196,7 +196,7 @@ export class TimelineCapture {
 
     return {
       correlationId: this.correlationId,
-      runId: this.runId,
+      courseId: this.courseId,
       events: this.events,
       startTime: firstTimestamp,
       endTime: lastTimestamp,
@@ -240,22 +240,22 @@ export class TimelineCapture {
    */
   private calculateSummary(timeline: TimelineData): {
     totalDurationMs: number;
-    supervisorThinkingMs?: number;
-    workerExecutionMs?: number;
+    conciergeThinkingMs?: number;
+    commisExecutionMs?: number;
     toolExecutionMs?: number;
   } {
     const { phases, totalDurationMs } = timeline;
 
-    // Calculate supervisor thinking time (supervisor_started → worker_spawned)
-    let supervisorThinkingMs: number | undefined = undefined;
-    if (phases.supervisor_started && phases.worker_spawned) {
-      supervisorThinkingMs = phases.worker_spawned.offsetMs - phases.supervisor_started.offsetMs;
+    // Calculate concierge thinking time (concierge_started → commis_spawned)
+    let conciergeThinkingMs: number | undefined = undefined;
+    if (phases.concierge_started && phases.commis_spawned) {
+      conciergeThinkingMs = phases.commis_spawned.offsetMs - phases.concierge_started.offsetMs;
     }
 
-    // Calculate worker execution time (worker_spawned → worker_complete)
-    let workerExecutionMs: number | undefined = undefined;
-    if (phases.worker_spawned && phases.worker_complete) {
-      workerExecutionMs = phases.worker_complete.offsetMs - phases.worker_spawned.offsetMs;
+    // Calculate commis execution time (commis_spawned → commis_complete)
+    let commisExecutionMs: number | undefined = undefined;
+    if (phases.commis_spawned && phases.commis_complete) {
+      commisExecutionMs = phases.commis_complete.offsetMs - phases.commis_spawned.offsetMs;
     }
 
     // Calculate tool execution time (first tool_started → last tool_completed/tool_failed)
@@ -269,8 +269,8 @@ export class TimelineCapture {
 
     return {
       totalDurationMs,
-      supervisorThinkingMs,
-      workerExecutionMs,
+      conciergeThinkingMs,
+      commisExecutionMs,
       toolExecutionMs,
     };
   }
@@ -290,9 +290,9 @@ export class TimelineCapture {
   }
 
   /**
-   * Get run ID
+   * Get course ID
    */
-  getRunId(): number | null {
-    return this.runId;
+  getCourseId(): number | null {
+    return this.courseId;
   }
 }

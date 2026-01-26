@@ -20,9 +20,9 @@ def main():
     SessionLocal = get_session_factory()
     db = SessionLocal()
     try:
-        history = get_run_llm_history(db, args.run_id)
+        history = get_run_llm_history(db, args.course_id)
 
-        print(f"LLM Audit Trail for Run {args.run_id}")
+        print(f"LLM Audit Trail for Run {args.course_id}")
         print("=" * 80)
 
         if not history:

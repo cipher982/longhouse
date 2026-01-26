@@ -88,7 +88,7 @@ export default function SecurityPage() {
           <h2>Your Controls</h2>
           <p>You have control over your data:</p>
           <ul>
-            <li><strong>View</strong> - See your agents and workflows in the dashboard</li>
+            <li><strong>View</strong> - See your fiches and workflows in the dashboard</li>
             <li><strong>Delete</strong> - Remove your account and data from settings</li>
             <li><strong>Revoke</strong> - Disconnect integrations and delete credentials</li>
           </ul>

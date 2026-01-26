@@ -64,7 +64,7 @@ test.describe('Core Jarvis Math - Scripted LLM', () => {
     const sseText = await chatResponse.text();
     const events = parseSSEEvents(sseText);
 
-    const completeEvent = events.find((event) => event.event === 'supervisor_complete');
+    const completeEvent = events.find((event) => event.event === 'concierge_complete');
     expect(completeEvent).toBeTruthy();
 
     const result = (completeEvent?.data as { payload?: { result?: string } })?.payload?.result ?? '';

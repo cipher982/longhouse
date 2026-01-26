@@ -120,7 +120,7 @@ class TestModelValidation:
 
     def test_unknown_model_raises_error(self):
         """Unknown model ID should raise ValueError."""
-        from zerg.services.supervisor_react_engine import _make_llm
+        from zerg.services.concierge_react_engine import _make_llm
 
         with pytest.raises(ValueError, match="Unknown model"):
             _make_llm("nonexistent-model-xyz", tools=[])
@@ -129,7 +129,7 @@ class TestModelValidation:
         """Groq model without GROQ_API_KEY should raise ValueError."""
         from unittest.mock import MagicMock, patch
 
-        from zerg.services.supervisor_react_engine import _make_llm
+        from zerg.services.concierge_react_engine import _make_llm
 
         # Mock get_settings to return settings with no groq_api_key
         mock_settings = MagicMock()

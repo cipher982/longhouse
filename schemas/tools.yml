@@ -19,10 +19,10 @@ components:
       type: string
       description: Built-in tool names available in the registry
       enum:
-        - agent_memory_delete
-        - agent_memory_export
-        - agent_memory_get
-        - agent_memory_set
+        - fiche_memory_delete
+        - fiche_memory_export
+        - fiche_memory_get
+        - fiche_memory_set
         - contact_user
         - container_exec
         - datetime_diff
@@ -100,7 +100,7 @@ components:
       type: string
       description: Server/module names for tools
       enum:
-        - agent_memory
+        - fiche_memory
         - connector
         - contact_user
         - container
@@ -170,14 +170,14 @@ components:
           type: object
           description: Tool name to server mapping
           properties:
-            agent_memory_delete:
-              const: agent_memory
-            agent_memory_export:
-              const: agent_memory
-            agent_memory_get:
-              const: agent_memory
-            agent_memory_set:
-              const: agent_memory
+            fiche_memory_delete:
+              const: fiche_memory
+            fiche_memory_export:
+              const: fiche_memory
+            fiche_memory_get:
+              const: fiche_memory
+            fiche_memory_set:
+              const: fiche_memory
             contact_user:
               const: contact_user
             container_exec:
@@ -323,10 +323,10 @@ components:
             web_search:
               const: web_search
           required:
-            - agent_memory_delete
-            - agent_memory_export
-            - agent_memory_get
-            - agent_memory_set
+            - fiche_memory_delete
+            - fiche_memory_export
+            - fiche_memory_get
+            - fiche_memory_set
             - contact_user
             - container_exec
             - datetime_diff

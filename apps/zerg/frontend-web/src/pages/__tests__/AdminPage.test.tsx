@@ -34,7 +34,7 @@ const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
 const mockOpsSummary = {
-  runs_today: 45,
+  courses_today: 45,
   cost_today_usd: 1.23,
   budget_user: {
     limit_cents: 5000,
@@ -47,27 +47,27 @@ const mockOpsSummary = {
     percent: 34.5,
   },
   active_users_24h: 5,
-  agents_total: 12,
-  agents_scheduled: 3,
+  fiches_total: 12,
+  fiches_scheduled: 3,
   latency_ms: {
     p50: 250,
     p95: 800,
   },
   errors_last_hour: 2,
-  top_agents_today: [
+  top_fiches_today: [
     {
-      agent_id: 1,
-      name: "Test Agent",
+      fiche_id: 1,
+      name: "Test Fiche",
       owner_email: "test@example.com",
-      runs: 50,
+      courses: 50,
       cost_usd: 0.125,
       p95_ms: 300,
     },
     {
-      agent_id: 2,
-      name: "Helper Agent",
+      fiche_id: 2,
+      name: "Helper Fiche",
       owner_email: "helper@example.com",
-      runs: 30,
+      courses: 30,
       cost_usd: 0.089,
       p95_ms: 250,
     },
@@ -130,7 +130,7 @@ describe("AdminPage", () => {
           json: () => Promise.resolve({ message: "Reset triggered" }),
         });
       }
-      // No separate /api/ops/top call - top agents included in summary
+      // No separate /api/ops/top call - top fiches included in summary
       return Promise.resolve({
         ok: false,
         text: () => Promise.resolve("Not found"),
@@ -150,7 +150,7 @@ describe("AdminPage", () => {
 
     // Wait for data to load
     await waitFor(() => {
-      expect(screen.getByText("45")).toBeInTheDocument(); // runs_today
+      expect(screen.getByText("45")).toBeInTheDocument(); // courses_today
     });
 
     const errorsHeading = screen.getAllByText("Errors (1h)")[0];
@@ -170,14 +170,14 @@ describe("AdminPage", () => {
       .toBeInTheDocument();
   });
 
-  it("displays top agents table", async () => {
+  it("displays top fiches table", async () => {
     renderAdminPage();
 
     await waitFor(() => {
-      expect(screen.getAllByText("Test Agent").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Test Fiche").length).toBeGreaterThan(0);
     });
 
-    expect(screen.getAllByText("Helper Agent").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Helper Fiche").length).toBeGreaterThan(0);
     expect(screen.getAllByText("test@example.com").length).toBeGreaterThan(0); // owner_email
     expect(screen.getAllByText("$0.1250").length).toBeGreaterThan(0); // cost_usd
     expect(screen.getAllByText("300ms").length).toBeGreaterThan(0); // p95_ms
@@ -189,7 +189,7 @@ describe("AdminPage", () => {
 
     // Wait for initial data load
     await waitFor(() => {
-      expect(screen.getAllByText("45").length).toBeGreaterThan(0); // today runs
+      expect(screen.getAllByText("45").length).toBeGreaterThan(0); // today courses
     });
 
     const select = screen.getAllByRole("combobox")[0] as HTMLSelectElement;

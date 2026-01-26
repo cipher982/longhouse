@@ -2,7 +2,7 @@
  * Contacts Settings Page.
  *
  * Allows users to manage approved contacts for email and SMS.
- * Agents can only send to contacts in this list (or the user's own email).
+ * Fiches can only send to contacts in this list (or the user's own email).
  */
 
 import { useState, useEffect, type FormEvent } from "react";
@@ -135,8 +135,8 @@ export default function ContactsPage() {
       title: `Remove "${contact.name}"?`,
       message:
         type === "email"
-          ? "Your agents will no longer be able to send emails to this contact."
-          : "Your agents will no longer be able to send SMS to this contact.",
+          ? "Your fiches will no longer be able to send emails to this contact."
+          : "Your fiches will no longer be able to send SMS to this contact.",
       confirmLabel: "Remove",
       cancelLabel: "Keep",
       variant: "danger",
@@ -171,7 +171,7 @@ export default function ContactsPage() {
     <PageShell size="narrow" className="contacts-page-container">
       <SectionHeader
         title="Approved Contacts"
-        description="Manage contacts that your agents can send emails or SMS to. Agents can only contact people on this list."
+        description="Manage contacts that your fiches can send emails or SMS to. Fiches can only contact people on this list."
       />
 
       <div className="contacts-tabs">
@@ -249,7 +249,7 @@ export default function ContactsPage() {
             ) : (
               <EmptyState
                 title="No email contacts yet"
-                description="Add contacts to let your agents send emails on your behalf."
+                description="Add contacts to let your fiches send emails on your behalf."
               />
             )}
           </div>
@@ -300,7 +300,7 @@ export default function ContactsPage() {
             ) : (
               <EmptyState
                 title="No phone contacts yet"
-                description="Add contacts to let your agents send SMS on your behalf."
+                description="Add contacts to let your fiches send SMS on your behalf."
               />
             )}
           </div>

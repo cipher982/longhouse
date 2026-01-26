@@ -5,7 +5,7 @@ import { toast } from "react-hot-toast";
 import clsx from "clsx";
 import { useShelf } from "../lib/useShelfState";
 import { SettingsIcon, SidebarIcon } from "../components/icons";
-import AgentSettingsDrawer from "../components/agent-settings/AgentSettingsDrawer";
+import FicheSettingsDrawer from "../components/fiche-settings/FicheSettingsDrawer";
 import { ChatThreadList } from "../components/chat/ChatThreadList";
 import { ChatMessageList } from "../components/chat/ChatMessageList";
 import { ChatComposer } from "../components/chat/ChatComposer";
@@ -27,7 +27,7 @@ export default function ChatPage() {
   const { isShelfOpen, closeShelf, toggleShelf } = useShelf();
   const creatingThreadRef = useRef(false);
 
-  const agentId = useRequiredNumber(params.agentId);
+  const ficheId = useRequiredNumber(params.ficheId);
   const threadIdParam = useRequiredNumber(params.threadId ?? undefined);
   const [selectedThreadId, setSelectedThreadId] = useState<number | null>(threadIdParam);
   const [editingThreadId, setEditingThreadId] = useState<number | null>(null);
@@ -47,8 +47,8 @@ export default function ChatPage() {
   }, [threadIdParam]);
 
   // Use chat data hook - strict URL state (no fallback)
-  const { agent, chatThreads, automationThreads, messages, isLoading, hasError, workflowsQuery, chatThreadsQuery } = useChatData({
-    agentId,
+  const { fiche, chatThreads, automationThreads, messages, isLoading, hasError, workflowsQuery, chatThreadsQuery } = useChatData({
+    ficheId,
     effectiveThreadId: selectedThreadId,
   });
 
@@ -79,18 +79,18 @@ export default function ChatPage() {
 
   // Handle URL navigation
   useEffect(() => {
-    if (agentId != null && effectiveThreadId != null) {
-      navigate(`/agent/${agentId}/thread/${effectiveThreadId}`, { replace: true });
-    } else if (agentId != null) {
-      navigate(`/agent/${agentId}/thread/`, { replace: true });
+    if (ficheId != null && effectiveThreadId != null) {
+      navigate(`/fiche/${ficheId}/thread/${effectiveThreadId}`, { replace: true });
+    } else if (ficheId != null) {
+      navigate(`/fiche/${ficheId}/thread/`, { replace: true });
     }
-  }, [agentId, effectiveThreadId, navigate]);
+  }, [ficheId, effectiveThreadId, navigate]);
 
   // Auto-select most recent thread if threads exist but none selected
-  // This handles the case when navigating to /agent/{id}/thread/ with existing threads
+  // This handles the case when navigating to /fiche/{id}/thread/ with existing threads
   useEffect(() => {
     if (
-      agentId != null &&
+      ficheId != null &&
       selectedThreadId == null &&
       !chatThreadsQuery.isLoading &&
       chatThreads.length > 0
@@ -98,25 +98,25 @@ export default function ChatPage() {
       // Auto-select the first (most recent) thread
       const mostRecentThread = chatThreads[0];
       setSelectedThreadId(mostRecentThread.id);
-      navigate(`/agent/${agentId}/thread/${mostRecentThread.id}`, { replace: true });
+      navigate(`/fiche/${ficheId}/thread/${mostRecentThread.id}`, { replace: true });
     }
-  }, [agentId, selectedThreadId, chatThreads, chatThreadsQuery.isLoading, navigate]);
+  }, [ficheId, selectedThreadId, chatThreads, chatThreadsQuery.isLoading, navigate]);
 
   // Auto-create a default thread on component mount if none exists
   useEffect(() => {
     const initializeThread = async () => {
-      if (agentId == null || selectedThreadId != null || chatThreads.length > 0 || creatingThreadRef.current) {
+      if (ficheId == null || selectedThreadId != null || chatThreads.length > 0 || creatingThreadRef.current) {
         return;
       }
 
       creatingThreadRef.current = true;
 
       try {
-        // Auto-create a default thread for the agent
-        const thread = await createThread(agentId, "Thread 1");
-        await queryClient.invalidateQueries({ queryKey: ["threads", agentId, "chat"] });
+        // Auto-create a default thread for the fiche
+        const thread = await createThread(ficheId, "Thread 1");
+        await queryClient.invalidateQueries({ queryKey: ["threads", ficheId, "chat"] });
         setSelectedThreadId(thread.id);
-        navigate(`/agent/${agentId}/thread/${thread.id}`, { replace: true });
+        navigate(`/fiche/${ficheId}/thread/${thread.id}`, { replace: true });
       } catch (error) {
         console.error('[ChatPage] Failed to auto-create default thread:', error);
         toast.error('Failed to create default chat thread. Please try creating one manually.');
@@ -126,31 +126,31 @@ export default function ChatPage() {
     };
 
     // Only create thread if:
-    // 1. We have an agentId
+    // 1. We have an ficheId
     // 2. No thread is selected
     // 3. The query has finished loading (not in loading state)
     // 4. There are no chat threads
-    if (agentId != null && selectedThreadId == null && !chatThreadsQuery.isLoading && chatThreads.length === 0) {
+    if (ficheId != null && selectedThreadId == null && !chatThreadsQuery.isLoading && chatThreads.length === 0) {
       initializeThread();
     }
-  }, [agentId, selectedThreadId, chatThreads.length, chatThreadsQuery.isLoading, queryClient, navigate]);
+  }, [ficheId, selectedThreadId, chatThreads.length, chatThreadsQuery.isLoading, queryClient, navigate]);
 
   // Use chat actions hook
   const { sendMutation, executeWorkflowMutation, renameThreadMutation } = useChatActions({
-    agentId,
+    ficheId,
     effectiveThreadId,
   });
 
   // Use streaming hook - no subscriptions needed, user:{user_id} is auto-subscribed
   const { streamingMessages, streamingMessageId, pendingTokenBuffer, allStreamingThreadIds } = useThreadStreaming({
-    agentId,
+    ficheId,
     effectiveThreadId,
   });
 
   // Event handlers
   const handleSelectThread = (thread: Thread) => {
     setSelectedThreadId(thread.id);
-    navigate(`/agent/${agentId}/thread/${thread.id}`, { replace: true });
+    navigate(`/fiche/${ficheId}/thread/${thread.id}`, { replace: true });
   };
 
   const handleEditThreadTitle = (thread: Thread, e: React.MouseEvent) => {
@@ -172,7 +172,7 @@ export default function ChatPage() {
       return;
     }
 
-    if (agentId == null) {
+    if (ficheId == null) {
       return;
     }
 
@@ -255,30 +255,30 @@ export default function ChatPage() {
     setShowWorkflowPanel(false);
   };
 
-  // Update document title with agent name for better context
+  // Update document title with fiche name for better context
   useEffect(() => {
-    if (agent) {
-      document.title = `${agent.name} - Swarmlet`;
+    if (fiche) {
+      document.title = `${fiche.name} - Swarmlet`;
     }
     return () => {
-      document.title = "Swarmlet AI Agent Platform";
+      document.title = "Swarmlet AI Fiche Platform";
     };
-  }, [agent]);
+  }, [fiche]);
 
-  if (agentId == null) {
-    return <div>Missing agent context.</div>;
+  if (ficheId == null) {
+    return <div>Missing fiche context.</div>;
   }
 
   const handleCreateThread = async () => {
-    if (agentId == null) return;
+    if (ficheId == null) return;
     // Auto-generate thread name based on the count of existing threads
     const threadCount = chatThreads.length + 1;
     const title = `Thread ${threadCount}`;
     try {
-      const thread = await createThread(agentId, title);
-      queryClient.invalidateQueries({ queryKey: ["threads", agentId, "chat"] });
+      const thread = await createThread(ficheId, title);
+      queryClient.invalidateQueries({ queryKey: ["threads", ficheId, "chat"] });
       // Navigate to the new thread - strict URL state
-      navigate(`/agent/${agentId}/thread/${thread.id}`, { replace: true });
+      navigate(`/fiche/${ficheId}/thread/${thread.id}`, { replace: true });
     } catch {
       toast.error("Failed to create thread", { duration: 6000 });
     }
@@ -304,8 +304,8 @@ export default function ChatPage() {
           >
             ←
           </button>
-          <div className="agent-info">
-            <div className="agent-name">{agent?.name ?? "Fiche"}</div>
+          <div className="fiche-info">
+            <div className="fiche-name">{fiche?.name ?? "Fiche"}</div>
             <div>
               <span className="thread-title-label">Thread: </span>
               <span className="thread-title-text">
@@ -313,7 +313,7 @@ export default function ChatPage() {
               </span>
             </div>
           </div>
-          {agentId != null && (
+          {ficheId != null && (
             <div className="chat-actions">
               <button
                 type="button"
@@ -394,9 +394,9 @@ export default function ChatPage() {
           />
         </div>
       </div>
-      {agentId != null && (
-        <AgentSettingsDrawer
-          agentId={agentId}
+      {ficheId != null && (
+        <FicheSettingsDrawer
+          ficheId={ficheId}
           isOpen={isSettingsDrawerOpen}
           onClose={() => setIsSettingsDrawerOpen(false)}
         />

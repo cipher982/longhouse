@@ -1,17 +1,6 @@
-"""CRUD operations for all models.
+"""CRUD operations for all models."""
 
-This module provides backwards-compatible imports for all CRUD functions.
-"""
-
-# Agent operations
-from .crud_agents import create_agent
-from .crud_agents import create_agent_message
-from .crud_agents import delete_agent
-from .crud_agents import get_agent
-from .crud_agents import get_agent_messages
-from .crud_agents import get_agents
-from .crud_agents import update_agent
-
+# Fiche operations
 # Canvas operations
 from .crud_canvas import get_canvas_layout
 from .crud_canvas import upsert_canvas_layout
@@ -23,19 +12,26 @@ from .crud_connectors import get_connector
 from .crud_connectors import get_connectors
 from .crud_connectors import update_connector
 
+# Course operations
+from .crud_courses import create_course
+from .crud_courses import list_courses
+from .crud_courses import mark_course_failed
+from .crud_courses import mark_course_finished
+from .crud_courses import mark_course_running
+from .crud_fiches import create_fiche
+from .crud_fiches import create_fiche_message
+from .crud_fiches import delete_fiche
+from .crud_fiches import get_fiche
+from .crud_fiches import get_fiche_messages
+from .crud_fiches import get_fiches
+from .crud_fiches import update_fiche
+
 # Message operations
 from .crud_messages import create_thread_message
 from .crud_messages import get_thread_messages
 from .crud_messages import get_unprocessed_messages
 from .crud_messages import mark_message_processed
 from .crud_messages import mark_messages_processed_bulk
-
-# Run operations
-from .crud_runs import create_run
-from .crud_runs import list_runs
-from .crud_runs import mark_failed
-from .crud_runs import mark_finished
-from .crud_runs import mark_running
 
 # Thread operations
 from .crud_threads import create_thread
@@ -79,14 +75,14 @@ from .memory_crud import *  # noqa: F403
 from .runner_crud import *  # noqa: F403
 
 __all__ = [
-    # Agents
-    "create_agent",
-    "create_agent_message",
-    "delete_agent",
-    "get_agent",
-    "get_agent_messages",
-    "get_agents",
-    "update_agent",
+    # Fiches
+    "create_fiche",
+    "create_fiche_message",
+    "delete_fiche",
+    "get_fiche",
+    "get_fiche_messages",
+    "get_fiches",
+    "update_fiche",
     # Canvas
     "get_canvas_layout",
     "upsert_canvas_layout",
@@ -102,12 +98,12 @@ __all__ = [
     "get_unprocessed_messages",
     "mark_message_processed",
     "mark_messages_processed_bulk",
-    # Runs
-    "create_run",
-    "list_runs",
-    "mark_failed",
-    "mark_finished",
-    "mark_running",
+    # Courses
+    "create_course",
+    "list_courses",
+    "mark_course_failed",
+    "mark_course_finished",
+    "mark_course_running",
     # Threads
     "create_thread",
     "delete_thread",

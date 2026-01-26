@@ -3,8 +3,8 @@
  *
  * Provides typed client for Jarvis-specific endpoints:
  * - Authentication (HttpOnly cookie via swarmlet_session)
- * - Agent listing
- * - Run history
+ * - Fiche listing
+ * - Course history
  * - Task dispatch
  * - SSE event streaming
  */
@@ -18,20 +18,20 @@ export interface JarvisAuthResponse {
   session_cookie_name: string;
 }
 
-export interface JarvisAgentSummary {
+export interface JarvisFicheSummary {
   id: number;
   name: string;
   status: string;
   schedule?: string;
-  next_run_at?: string;
+  next_course_at?: string;
   description?: string;
 }
 
-export interface JarvisRunSummary {
+export interface JarvisCourseSummary {
   id: number;
-  agent_id: number;
+  fiche_id: number;
   thread_id?: number;
-  agent_name: string;
+  fiche_name: string;
   status: string;
   summary?: string;
   signal?: string;
@@ -40,22 +40,22 @@ export interface JarvisRunSummary {
   last_event_type?: string;
   last_event_message?: string;
   last_event_at?: string;
-  continuation_of_run_id?: number;
+  continuation_of_course_id?: number;
   created_at: string;
   updated_at: string;
   completed_at?: string;
 }
 
 export interface JarvisDispatchRequest {
-  agent_id: number;
+  fiche_id: number;
   task_override?: string;
 }
 
 export interface JarvisDispatchResponse {
-  run_id: number;
+  course_id: number;
   thread_id: number;
   status: string;
-  agent_name: string;
+  fiche_name: string;
 }
 
 export interface JarvisEventData {
@@ -126,39 +126,39 @@ export class JarvisAPIClient {
   }
 
   /**
-   * List available agents
+   * List available fiches
    */
-  async listAgents(): Promise<JarvisAgentSummary[]> {
-    const response = await this.authenticatedFetch(`${this._baseURL}/api/jarvis/agents`);
+  async listFiches(): Promise<JarvisFicheSummary[]> {
+    const response = await this.authenticatedFetch(`${this._baseURL}/api/jarvis/fiches`);
 
     if (!response.ok) {
-      throw new Error(`Failed to list agents: ${response.statusText}`);
+      throw new Error(`Failed to list fiches: ${response.statusText}`);
     }
 
     return response.json();
   }
 
   /**
-   * Get recent agent runs
+   * Get recent fiche courses
    */
-  async listRuns(options?: { limit?: number; agent_id?: number }): Promise<JarvisRunSummary[]> {
+  async listCourses(options?: { limit?: number; fiche_id?: number }): Promise<JarvisCourseSummary[]> {
     const params = new URLSearchParams();
     if (options?.limit) params.append('limit', options.limit.toString());
-    if (options?.agent_id) params.append('agent_id', options.agent_id.toString());
+    if (options?.fiche_id) params.append('fiche_id', options.fiche_id.toString());
 
-    const url = `${this._baseURL}/api/jarvis/runs${params.toString() ? '?' + params.toString() : ''}`;
+    const url = `${this._baseURL}/api/jarvis/courses${params.toString() ? '?' + params.toString() : ''}`;
 
     const response = await this.authenticatedFetch(url);
 
     if (!response.ok) {
-      throw new Error(`Failed to list runs: ${response.statusText}`);
+      throw new Error(`Failed to list courses: ${response.statusText}`);
     }
 
     return response.json();
   }
 
   /**
-   * Dispatch agent task
+   * Dispatch fiche task
    */
   async dispatch(request: JarvisDispatchRequest): Promise<JarvisDispatchResponse> {
     const response = await this.authenticatedFetch(
@@ -174,22 +174,22 @@ export class JarvisAPIClient {
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ detail: response.statusText }));
-      throw new Error(`Failed to dispatch agent: ${error.detail}`);
+      throw new Error(`Failed to dispatch fiche: ${error.detail}`);
     }
 
     return response.json();
   }
 
   // ---------------------------------------------------------------------------
-  // Supervisor Methods
+  // Concierge Methods
   // ---------------------------------------------------------------------------
 
   /**
-   * Cancel a running supervisor task
+   * Cancel a running concierge course
    */
-  async cancelSupervisor(runId: number): Promise<{ run_id: number; status: string; message: string }> {
+  async cancelConcierge(courseId: number): Promise<{ course_id: number; status: string; message: string }> {
     const response = await this.authenticatedFetch(
-      `${this._baseURL}/api/jarvis/supervisor/${runId}/cancel`,
+      `${this._baseURL}/api/jarvis/concierge/${courseId}/cancel`,
       {
         method: 'POST',
       },
@@ -197,7 +197,7 @@ export class JarvisAPIClient {
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ detail: response.statusText }));
-      throw new Error(`Failed to cancel supervisor: ${error.detail}`);
+      throw new Error(`Failed to cancel concierge: ${error.detail}`);
     }
 
     return response.json();
@@ -209,18 +209,18 @@ export class JarvisAPIClient {
   connectEventStream(handlers: {
     onConnected?: () => void;
     onHeartbeat?: (timestamp: string) => void;
-    onAgentUpdated?: (event: JarvisEventData) => void;
-    onRunCreated?: (event: JarvisEventData) => void;
-  onRunUpdated?: (event: JarvisEventData) => void;
-  onError?: (error: Event) => void;
-}): void {
+    onFicheUpdated?: (event: JarvisEventData) => void;
+    onCourseCreated?: (event: JarvisEventData) => void;
+    onCourseUpdated?: (event: JarvisEventData) => void;
+    onError?: (error: Event) => void;
+  }): void {
     // Close existing connection if any
     this.disconnectEventStream();
 
     // Cookie-based auth - withCredentials: true sends HttpOnly session cookie
-    // In E2E tests, include worker ID query param for DB schema isolation
-    const testWorkerId = typeof window !== 'undefined' ? (window as any).__TEST_WORKER_ID__ : undefined;
-    const url = `${this._baseURL}/api/jarvis/events${testWorkerId ? `?worker=${testWorkerId}` : ''}`;
+    // In E2E tests, include commis ID query param for DB schema isolation
+    const testCommisId = typeof window !== 'undefined' ? (window as any).__TEST_COMMIS_ID__ : undefined;
+    const url = `${this._baseURL}/api/jarvis/events${testCommisId ? `?commis=${testCommisId}` : ''}`;
     this.eventSource = new EventSource(url, { withCredentials: true });
 
     this.eventSource.addEventListener('connected', () => {
@@ -236,30 +236,30 @@ export class JarvisAPIClient {
       }
     });
 
-    this.eventSource.addEventListener('agent_updated', (e: MessageEvent) => {
+    this.eventSource.addEventListener('fiche_updated', (e: MessageEvent) => {
       try {
         const event: JarvisEventData = JSON.parse(e.data);
-        handlers.onAgentUpdated?.(event);
+        handlers.onFicheUpdated?.(event);
       } catch (err) {
-        console.error('Failed to parse agent_updated event:', err);
+        console.error('Failed to parse fiche_updated event:', err);
       }
     });
 
-    this.eventSource.addEventListener('run_created', (e: MessageEvent) => {
+    this.eventSource.addEventListener('course_created', (e: MessageEvent) => {
       try {
         const event: JarvisEventData = JSON.parse(e.data);
-        handlers.onRunCreated?.(event);
+        handlers.onCourseCreated?.(event);
       } catch (err) {
-        console.error('Failed to parse run_created event:', err);
+        console.error('Failed to parse course_created event:', err);
       }
     });
 
-    this.eventSource.addEventListener('run_updated', (e: MessageEvent) => {
+    this.eventSource.addEventListener('course_updated', (e: MessageEvent) => {
       try {
         const event: JarvisEventData = JSON.parse(e.data);
-        handlers.onRunUpdated?.(event);
+        handlers.onCourseUpdated?.(event);
       } catch (err) {
-        console.error('Failed to parse run_updated event:', err);
+        console.error('Failed to parse course_updated event:', err);
       }
     });
 

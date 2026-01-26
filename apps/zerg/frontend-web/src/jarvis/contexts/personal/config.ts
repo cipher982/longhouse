@@ -68,7 +68,7 @@ function getInstructions(): string {
 }
 
 // Tool definitions for informational display only (v2.1 Phase 4).
-// Actual tool execution happens server-side via Supervisor.
+// Actual tool execution happens server-side via Concierge.
 // These are listed here so fallback instructions can describe capabilities.
 const toolsConfig: ToolConfig[] = [
   {

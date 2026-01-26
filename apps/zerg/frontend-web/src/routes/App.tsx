@@ -172,7 +172,7 @@ export default function App() {
           )
         },
         {
-          path: "/agent/:agentId/thread/:threadId?",
+          path: "/fiche/:ficheId/thread/:threadId?",
           element: (
             <ErrorBoundary>
               <Suspense fallback={<PageLoader />}>

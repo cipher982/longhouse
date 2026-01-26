@@ -26,26 +26,26 @@ class TestUserUsageEndpoint:
 
     def test_usage_endpoint_with_runs(self, client, db_session, test_user):
         """User with completed runs should see aggregated stats."""
-        # Create an agent and some runs with costs
-        agent = crud.create_agent(
+        # Create an fiche and some runs with costs
+        fiche = crud.create_fiche(
             db_session,
             owner_id=test_user.id,
-            name="Test Agent",
+            name="Test Fiche",
             system_instructions="Test",
             task_instructions="Test",
             model="gpt-4o",
         )
-        thread = crud.create_thread(db_session, agent_id=agent.id, title="Test Thread")
+        thread = crud.create_thread(db_session, fiche_id=fiche.id, title="Test Thread")
 
         # Create a run with tokens and cost
-        run = crud.create_run(db_session, agent_id=agent.id, thread_id=thread.id, trigger="manual")
-        crud.mark_running(db_session, run.id)
-        crud.mark_finished(db_session, run.id, total_tokens=1000, total_cost_usd=0.05)
+        run = crud.create_course(db_session, fiche_id=fiche.id, thread_id=thread.id, trigger="manual")
+        crud.mark_course_running(db_session, run.id)
+        crud.mark_course_finished(db_session, run.id, total_tokens=1000, total_cost_usd=0.05)
 
         # Create another run
-        run2 = crud.create_run(db_session, agent_id=agent.id, thread_id=thread.id, trigger="manual")
-        crud.mark_running(db_session, run2.id)
-        crud.mark_finished(db_session, run2.id, total_tokens=500, total_cost_usd=0.025)
+        run2 = crud.create_course(db_session, fiche_id=fiche.id, thread_id=thread.id, trigger="manual")
+        crud.mark_course_running(db_session, run2.id)
+        crud.mark_course_finished(db_session, run2.id, total_tokens=500, total_cost_usd=0.025)
 
         resp = client.get("/api/users/me/usage")
         assert resp.status_code == 200
@@ -86,7 +86,7 @@ class TestUsageService:
 
     def test_get_user_usage_with_data(self, db_session, test_user):
         """Service aggregates tokens and costs correctly."""
-        agent = crud.create_agent(
+        fiche = crud.create_fiche(
             db_session,
             owner_id=test_user.id,
             name="Test",
@@ -94,16 +94,16 @@ class TestUsageService:
             task_instructions="Test",
             model="gpt-4o",
         )
-        thread = crud.create_thread(db_session, agent_id=agent.id, title="Test")
+        thread = crud.create_thread(db_session, fiche_id=fiche.id, title="Test")
 
         # Create runs
-        run1 = crud.create_run(db_session, agent_id=agent.id, thread_id=thread.id, trigger="manual")
-        crud.mark_running(db_session, run1.id)
-        crud.mark_finished(db_session, run1.id, total_tokens=100, total_cost_usd=0.01)
+        run1 = crud.create_course(db_session, fiche_id=fiche.id, thread_id=thread.id, trigger="manual")
+        crud.mark_course_running(db_session, run1.id)
+        crud.mark_course_finished(db_session, run1.id, total_tokens=100, total_cost_usd=0.01)
 
-        run2 = crud.create_run(db_session, agent_id=agent.id, thread_id=thread.id, trigger="manual")
-        crud.mark_running(db_session, run2.id)
-        crud.mark_finished(db_session, run2.id, total_tokens=200, total_cost_usd=0.02)
+        run2 = crud.create_course(db_session, fiche_id=fiche.id, thread_id=thread.id, trigger="manual")
+        crud.mark_course_running(db_session, run2.id)
+        crud.mark_course_finished(db_session, run2.id, total_tokens=200, total_cost_usd=0.02)
 
         result = get_user_usage(db_session, test_user.id, "today")
 
@@ -122,7 +122,7 @@ class TestUsageService:
         monkeypatch.setenv("DAILY_COST_PER_USER_CENTS", "100")  # $1.00 limit
 
         # Create minimal usage (well under 80%)
-        agent = crud.create_agent(
+        fiche = crud.create_fiche(
             db_session,
             owner_id=test_user.id,
             name="Test",
@@ -130,10 +130,10 @@ class TestUsageService:
             task_instructions="Test",
             model="gpt-4o",
         )
-        thread = crud.create_thread(db_session, agent_id=agent.id, title="Test")
-        run = crud.create_run(db_session, agent_id=agent.id, thread_id=thread.id, trigger="manual")
-        crud.mark_running(db_session, run.id)
-        crud.mark_finished(db_session, run.id, total_tokens=10, total_cost_usd=0.10)  # 10% of $1
+        thread = crud.create_thread(db_session, fiche_id=fiche.id, title="Test")
+        run = crud.create_course(db_session, fiche_id=fiche.id, thread_id=thread.id, trigger="manual")
+        crud.mark_course_running(db_session, run.id)
+        crud.mark_course_finished(db_session, run.id, total_tokens=10, total_cost_usd=0.10)  # 10% of $1
 
         result = get_user_usage(db_session, test_user.id, "today")
 
@@ -145,7 +145,7 @@ class TestUsageService:
         """status='warning' when 80-99% of limit."""
         monkeypatch.setenv("DAILY_COST_PER_USER_CENTS", "100")  # $1.00 limit
 
-        agent = crud.create_agent(
+        fiche = crud.create_fiche(
             db_session,
             owner_id=test_user.id,
             name="Test",
@@ -153,10 +153,10 @@ class TestUsageService:
             task_instructions="Test",
             model="gpt-4o",
         )
-        thread = crud.create_thread(db_session, agent_id=agent.id, title="Test")
-        run = crud.create_run(db_session, agent_id=agent.id, thread_id=thread.id, trigger="manual")
-        crud.mark_running(db_session, run.id)
-        crud.mark_finished(db_session, run.id, total_tokens=100, total_cost_usd=0.85)  # 85% of $1
+        thread = crud.create_thread(db_session, fiche_id=fiche.id, title="Test")
+        run = crud.create_course(db_session, fiche_id=fiche.id, thread_id=thread.id, trigger="manual")
+        crud.mark_course_running(db_session, run.id)
+        crud.mark_course_finished(db_session, run.id, total_tokens=100, total_cost_usd=0.85)  # 85% of $1
 
         result = get_user_usage(db_session, test_user.id, "today")
 
@@ -167,7 +167,7 @@ class TestUsageService:
         """status='exceeded' when at or over 100% of limit."""
         monkeypatch.setenv("DAILY_COST_PER_USER_CENTS", "100")  # $1.00 limit
 
-        agent = crud.create_agent(
+        fiche = crud.create_fiche(
             db_session,
             owner_id=test_user.id,
             name="Test",
@@ -175,10 +175,10 @@ class TestUsageService:
             task_instructions="Test",
             model="gpt-4o",
         )
-        thread = crud.create_thread(db_session, agent_id=agent.id, title="Test")
-        run = crud.create_run(db_session, agent_id=agent.id, thread_id=thread.id, trigger="manual")
-        crud.mark_running(db_session, run.id)
-        crud.mark_finished(db_session, run.id, total_tokens=1000, total_cost_usd=1.50)  # 150% of $1
+        thread = crud.create_thread(db_session, fiche_id=fiche.id, title="Test")
+        run = crud.create_course(db_session, fiche_id=fiche.id, thread_id=thread.id, trigger="manual")
+        crud.mark_course_running(db_session, run.id)
+        crud.mark_course_finished(db_session, run.id, total_tokens=1000, total_cost_usd=1.50)  # 150% of $1
 
         result = get_user_usage(db_session, test_user.id, "today")
 

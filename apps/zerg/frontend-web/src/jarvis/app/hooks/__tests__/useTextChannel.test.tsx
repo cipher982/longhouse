@@ -8,9 +8,9 @@ import { eventBus } from '../../../lib/event-bus'
 const initializeMock = vi.fn(() => Promise.resolve())
 const sendMessageMock = vi.fn()
 
-vi.mock('../../../lib/supervisor-chat-controller', () => {
+vi.mock('../../../lib/concierge-chat-controller', () => {
   return {
-    SupervisorChatController: class {
+    ConciergeChatController: class {
       initialize = initializeMock
       sendMessage = (...args: unknown[]) => sendMessageMock(...args)
     },
@@ -42,7 +42,7 @@ describe('useTextChannel', () => {
     vi.unstubAllGlobals()
   })
 
-  it('clears isSending on supervisor_complete even if send promise is pending', async () => {
+  it('clears isSending on concierge_complete even if send promise is pending', async () => {
     let resolveSend: (() => void) | undefined
     sendMessageMock.mockImplementation(() => new Promise<void>((resolve) => {
       resolveSend = resolve
@@ -58,8 +58,8 @@ describe('useTextChannel', () => {
     expect(result.current.isSending).toBe(true)
 
     act(() => {
-      eventBus.emit('supervisor:complete', {
-        runId: 1,
+      eventBus.emit('concierge:complete', {
+        courseId: 1,
         result: 'ok',
         status: 'success',
         timestamp: Date.now(),

@@ -1,0 +1,401 @@
+/* ------------------------------------------------------------------
+   Fiche Shelf & Pill Styles – unified with design tokens
+   ------------------------------------------------------------------ */
+
+#fiche-shelf {
+  width: 260px;
+  flex-shrink: 0;
+  background: var(--surface-glass-1);
+  backdrop-filter: blur(var(--blur-md));
+  border-right: 1px solid var(--border-glass-1);
+  padding: var(--space-4);
+  box-sizing: border-box;
+  display: block;
+  overflow-y: auto;
+  height: 100%;
+}
+
+.fiche-shelf-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.fiche-shelf-section + .fiche-shelf-section {
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border-muted);
+}
+
+.fiche-shelf-heading {
+  font-family: var(--font-family-display);
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0 0 var(--space-4) 0;
+}
+
+.shelf-search-label {
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+}
+
+.shelf-search-input {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-glass-1);
+  border-radius: var(--radius-md);
+  background: var(--surface-glass-1);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  outline: none;
+  transition:
+    border-color var(--motion-duration-fast) var(--motion-easing-standard),
+    box-shadow var(--motion-duration-fast) var(--motion-easing-standard);
+}
+
+.shelf-search-input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.shelf-search-input:focus {
+  border-color: var(--color-brand-primary);
+  box-shadow: 0 0 0 2px rgb(99 102 241 / 20%);
+}
+
+.shelf-section-toggle {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  border: none;
+  background: none;
+  font-family: var(--font-family-base);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition: color var(--motion-duration-fast) var(--motion-easing-standard);
+}
+
+.shelf-section-toggle:hover {
+  color: var(--color-brand-primary);
+}
+
+.shelf-section-toggle .caret {
+  width: 16px;
+  display: inline-flex;
+  justify-content: center;
+}
+
+.shelf-section-toggle .count {
+  margin-left: auto;
+  padding: var(--space-0) var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-overlay);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+.shelf-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.recent-list .fiche-pill,
+.recent-list .tool-palette-item {
+  margin-bottom: 0;
+}
+
+.shelf-empty {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.tool-palette-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* Tool palette items - dark theme consistent with fiche nodes */
+.tool-palette-item {
+  cursor: grab;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-glass-2);
+  border: 1px solid var(--border-glass-1);
+  border-left: 3px solid var(--color-intent-success);
+  border-radius: var(--radius-md);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  display: flex;
+  align-items: center;
+  font-weight: 500;
+  user-select: none;
+  touch-action: none;
+}
+
+.tool-palette-item:hover {
+  background: var(--color-surface-elevated);
+  border-color: var(--color-intent-success);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.tool-palette-item .tool-icon {
+  font-size: var(--font-size-md);
+  margin-right: var(--space-2);
+}
+
+.tool-palette-item .tool-name {
+  flex: 1;
+}
+
+/* Fiche shelf header */
+.fiche-shelf-header {
+  font-family: var(--font-family-display);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-4);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+/* Node Palette header */
+.palette-header h3 {
+  font-family: var(--font-family-display);
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0 0 var(--space-4) 0;
+}
+
+/* Palette search input */
+.palette-search-input {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-4);
+  background: var(--color-surface-card);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  outline: none;
+  transition: border-color var(--motion-duration-fast)
+    var(--motion-easing-standard);
+}
+
+.palette-search-input:focus {
+  border-color: var(--color-brand-primary);
+}
+
+/* Palette category header */
+.palette-category-header {
+  margin: 0 0 var(--space-2) 0;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Palette node icon */
+.palette-node-icon {
+  font-size: var(--font-size-md);
+  margin-right: var(--space-2);
+}
+
+/* Palette node name */
+.palette-node-name {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+/* Palette node description */
+.palette-node-description {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+
+/* Palette node - consistent with tool palette items */
+.palette-node {
+  display: flex;
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-1);
+  border: 1px solid var(--border-glass-1);
+  border-radius: var(--radius-md);
+  cursor: grab;
+  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  background: var(--surface-glass-2);
+}
+
+.palette-node:hover,
+.palette-node.hover {
+  border-color: var(--color-brand-primary);
+  background: var(--color-surface-elevated);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Fiche pills */
+.fiche-pill {
+  cursor: grab;
+  margin-bottom: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-glass-2);
+  border: 1px solid var(--border-glass-1);
+  border-left: 3px solid var(--color-brand-primary);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  font-family: var(--font-family-base);
+  color: var(--color-text-primary);
+  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  position: relative;
+  overflow: hidden;
+  padding-left: 40px;
+  display: flex;
+  align-items: center;
+  font-weight: 500;
+  touch-action: none;
+}
+
+/* Fiche pill icon is now rendered as SVG in the component */
+.fiche-pill-icon {
+  position: absolute;
+  left: var(--space-3);
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-brand-primary);
+}
+
+.fiche-pill:hover {
+  background: var(--color-surface-elevated);
+  border-color: var(--color-brand-primary);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.fiche-pill.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--color-surface-section);
+  border-color: var(--color-border-muted);
+}
+
+.fiche-pill.disabled::before {
+  content: "⏸️";
+}
+
+.fiche-pill.disabled:hover {
+  background: var(--color-surface-section);
+  transform: none;
+  box-shadow: none;
+}
+
+/* Loading & empty states */
+.fiche-shelf-loading,
+.fiche-shelf-empty {
+  text-align: center;
+  padding: var(--space-5);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* Drag and drop */
+.fiche-pill.dragging {
+  opacity: 0.92;
+  background: var(--color-brand-primary);
+  box-shadow: var(--shadow-lg);
+  transform: scale(1.05) rotate(-2deg);
+  border: 2px dashed var(--color-brand-secondary);
+  cursor: grabbing;
+  z-index: var(--z-overlay);
+}
+
+#canvas-container.canvas-drop-target {
+  outline: 2px dashed var(--color-brand-secondary);
+  outline-offset: -2px;
+  background-color: rgb(99 102 241 / 8%);
+}
+
+/* Off-canvas responsive behaviour */
+@media (width <= 767px) {
+  #fiche-shelf {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    transform: translateX(-100%);
+    transition: transform var(--motion-duration-normal)
+      var(--motion-easing-standard);
+    width: 240px;
+    box-shadow: var(--shadow-xl);
+    z-index: var(--z-modal);
+  }
+
+  #fiche-shelf.open {
+    transform: translateX(0);
+  }
+}
+
+/* Scrim overlay when shelf is open on mobile */
+.shelf-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgb(9 9 11 / 60%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-duration-fast) var(--motion-easing-standard);
+  z-index: var(--z-overlay);
+  display: none;
+}
+
+/* Activate scrim when shelf is open */
+.shelf-scrim--visible {
+  opacity: 1;
+  pointer-events: none;
+  display: block;
+}
+
+/* Legacy: keep body.shelf-open support for backward compatibility */
+body.shelf-open .shelf-scrim {
+  opacity: 1;
+  pointer-events: none;
+}
+
+/* Disable animations for users who prefer reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  #fiche-shelf {
+    transition: none;
+  }
+
+  .shelf-scrim {
+    transition: none;
+  }
+}
+
+/* Only show scrim on small screens */
+@media (width <= 767px) {
+  .shelf-scrim {
+    display: block;
+  }
+}

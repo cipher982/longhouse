@@ -27,7 +27,7 @@ function getBackendPort(): number {
   return 8001; // Default fallback
 }
 
-export interface CreateAgentRequest {
+export interface CreateFicheRequest {
   name?: string;
   model?: string;
   system_instructions?: string;
@@ -35,7 +35,7 @@ export interface CreateAgentRequest {
   temperature?: number;
 }
 
-export interface Agent {
+export interface Fiche {
   id: string;
   name: string;
   model: string;
@@ -48,13 +48,13 @@ export interface Agent {
 
 export interface CreateThreadRequest {
   title?: string;
-  agent_id: string;
+  fiche_id: string;
 }
 
 export interface Thread {
   id: string;
   title: string;
-  agent_id: string;
+  fiche_id: string;
   created_at: string;
   updated_at: string;
 }
@@ -62,19 +62,19 @@ export interface Thread {
 export class ApiClient {
   private baseUrl: string;
   private headers: Record<string, string>;
-  private workerId: string;
+  private commisId: string;
 
-  constructor(workerId: string = '0', baseUrl?: string) {
-    // Single backend port – per-worker DB isolation is via X-Test-Worker header
+  constructor(commisId: string = '0', baseUrl?: string) {
+    // Single backend port – per-commis DB isolation is via X-Test-Commis header
     const basePort = getBackendPort();
     this.baseUrl = baseUrl || `http://localhost:${basePort}`;
-    this.workerId = workerId;
+    this.commisId = commisId;
     this.headers = {
       'Content-Type': 'application/json',
-      // CRITICAL: X-Test-Worker header routes requests to worker-specific Postgres schema
-      // Without this, requests hit the default schema and can cross-contaminate workers
+      // CRITICAL: X-Test-Commis header routes requests to commis-specific Postgres schema
+      // Without this, requests hit the default schema and can cross-contaminate commis
       // See: docs/work/e2e-test-infrastructure-redesign.md
-      'X-Test-Worker': workerId,
+      'X-Test-Commis': commisId,
     };
   }
 
@@ -124,32 +124,32 @@ export class ApiClient {
     }
   }
 
-  async createAgent(data: CreateAgentRequest = {}): Promise<Agent> {
-    const agentData = {
-      name: data.name || `Test Agent ${Date.now()}`,
+  async createFiche(data: CreateFicheRequest = {}): Promise<Fiche> {
+    const ficheData = {
+      name: data.name || `Test Fiche ${Date.now()}`,
       model: data.model || 'gpt-mock',  // Use test-friendly model
       system_instructions: data.system_instructions || 'You are a helpful AI assistant.',
       task_instructions: data.task_instructions || 'Please help the user with their request.',
       ...data
     };
 
-    return await this.request('POST', '/api/agents', agentData);
+    return await this.request('POST', '/api/fiches', ficheData);
   }
 
-  async getAgent(id: string): Promise<Agent> {
-    return await this.request('GET', `/api/agents/${id}`);
+  async getFiche(id: string): Promise<Fiche> {
+    return await this.request('GET', `/api/fiches/${id}`);
   }
 
-  async updateAgent(id: string, data: Partial<CreateAgentRequest>): Promise<Agent> {
-    return await this.request('PUT', `/api/agents/${id}`, data);
+  async updateFiche(id: string, data: Partial<CreateFicheRequest>): Promise<Fiche> {
+    return await this.request('PUT', `/api/fiches/${id}`, data);
   }
 
-  async deleteAgent(id: string): Promise<void> {
-    await this.request('DELETE', `/api/agents/${id}`);
+  async deleteFiche(id: string): Promise<void> {
+    await this.request('DELETE', `/api/fiches/${id}`);
   }
 
-  async listAgents(): Promise<Agent[]> {
-    return await this.request('GET', '/api/agents');
+  async listFiches(): Promise<Fiche[]> {
+    return await this.request('GET', '/api/fiches');
   }
 
   async createThread(data: CreateThreadRequest): Promise<Thread> {
@@ -169,8 +169,8 @@ export class ApiClient {
     await this.request('DELETE', `/api/threads/${id}`);
   }
 
-  async listThreads(agentId?: string): Promise<Thread[]> {
-    const url = agentId ? `/api/threads?agent_id=${agentId}` : '/api/threads';
+  async listThreads(ficheId?: string): Promise<Thread[]> {
+    const url = ficheId ? `/api/threads?fiche_id=${ficheId}` : '/api/threads';
     return await this.request('GET', url);
   }
 
@@ -182,8 +182,8 @@ export class ApiClient {
     } catch (error) {
       testLog.error('Database reset failed, trying fallback cleanup...');
       // If reset fails, try to manually clean up test data
-      const agents = await this.listAgents();
-      await Promise.all(agents.map(agent => this.deleteAgent(agent.id)));
+      const fiches = await this.listFiches();
+      await Promise.all(fiches.map(fiche => this.deleteFiche(fiche.id)));
     }
   }
 
@@ -192,7 +192,7 @@ export class ApiClient {
   }
 }
 
-// Helper function to create an API client with the correct worker ID
-export function createApiClient(workerId: string): ApiClient {
-  return new ApiClient(workerId);
+// Helper function to create an API client with the correct commis ID
+export function createApiClient(commisId: string): ApiClient {
+  return new ApiClient(commisId);
 }

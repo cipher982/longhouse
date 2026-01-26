@@ -65,7 +65,7 @@ class TestTopicConnectionManager:
 
     async def test_multiple_clients_same_topic(self, topic_manager):
         """Test multiple clients subscribing to the same topic."""
-        topic = "agent:456"
+        topic = "fiche:456"
         client1_ws = AsyncMock()
         client2_ws = AsyncMock()
 
@@ -86,7 +86,7 @@ class TestTopicConnectionManager:
     async def test_client_multiple_topics(self, topic_manager, mock_websocket):
         """Test a client subscribing to multiple topics."""
         client_id = "test-client-1"
-        topics = ["thread:123", "agent:456", "thread:789"]
+        topics = ["thread:123", "fiche:456", "thread:789"]
 
         # Connect and subscribe to multiple topics
         await topic_manager.connect(client_id, mock_websocket)
@@ -107,26 +107,26 @@ class TestTopicConnectionManager:
             assert topic not in topic_manager.topic_subscriptions
         assert client_id not in topic_manager.client_topics
 
-    async def test_handle_agent_event(self, topic_manager, mock_websocket):
-        """Test handling of agent events."""
+    async def test_handle_fiche_event(self, topic_manager, mock_websocket):
+        """Test handling of fiche events."""
         client_id = "test-client-1"
-        agent_id = 123
-        topic = f"agent:{agent_id}"
+        fiche_id = 123
+        topic = f"fiche:{fiche_id}"
 
         # Connect and subscribe
         await topic_manager.connect(client_id, mock_websocket)
         await topic_manager.subscribe_to_topic(client_id, topic)
 
-        # Simulate agent event
-        event_data = {"id": agent_id, "name": "Test Agent", "event_type": EventType.AGENT_UPDATED}
-        await topic_manager._handle_agent_event(event_data)
+        # Simulate fiche event
+        event_data = {"id": fiche_id, "name": "Test Fiche", "event_type": EventType.FICHE_UPDATED}
+        await topic_manager._handle_fiche_event(event_data)
 
         # Verify message was sent
         mock_websocket.send_json.assert_called_once()
         sent_envelope = mock_websocket.send_json.call_args[0][0]
-        assert sent_envelope["type"] == EventType.AGENT_UPDATED
+        assert sent_envelope["type"] == EventType.FICHE_UPDATED
         # event_type should be removed from data to prevent duplication in envelope
-        expected_data = {"id": agent_id, "name": "Test Agent"}
+        expected_data = {"id": fiche_id, "name": "Test Fiche"}
         assert sent_envelope["data"] == expected_data
 
     async def test_handle_thread_event(self, topic_manager, mock_websocket):

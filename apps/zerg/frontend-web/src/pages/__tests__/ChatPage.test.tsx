@@ -11,11 +11,11 @@ import { ConfirmProvider } from "../../components/confirm";
 import type { Thread, ThreadMessage } from "../../services/api";
 
 const apiMocks = vi.hoisted(() => ({
-  fetchAgent: vi.fn(),
+  fetchFiche: vi.fn(),
   fetchThreads: vi.fn(),
   fetchThreadMessages: vi.fn(),
   postThreadMessage: vi.fn(),
-  runThread: vi.fn(),
+  startThreadCourse: vi.fn(),
   createThread: vi.fn(),
   updateThread: vi.fn(),
   fetchWorkflows: vi.fn(),
@@ -33,11 +33,11 @@ vi.mock("../../services/api", async (importOriginal) => {
 });
 
 const {
-  fetchAgent: mockFetchAgent,
+  fetchFiche: mockFetchFiche,
   fetchThreads: mockFetchThreads,
   fetchThreadMessages: mockFetchThreadMessages,
   postThreadMessage: mockPostThreadMessage,
-  runThread: mockRunThread,
+  startThreadCourse: mockStartThreadCourse,
   createThread: mockCreateThread,
   updateThread: mockUpdateThread,
   fetchWorkflows: mockFetchWorkflows,
@@ -45,7 +45,7 @@ const {
   fetchContainerPolicy: mockFetchContainerPolicy,
 } = apiMocks;
 
-function renderChatPage(initialEntry = "/agent/1/thread/42") {
+function renderChatPage(initialEntry = "/fiche/1/thread/42") {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -58,7 +58,7 @@ function renderChatPage(initialEntry = "/agent/1/thread/42") {
         <ShelfProvider>
           <TestRouter initialEntries={[initialEntry]}>
             <Routes>
-              <Route path="/agent/:agentId/thread/:threadId?" element={<ChatPage />} />
+              <Route path="/fiche/:ficheId/thread/:threadId?" element={<ChatPage />} />
             </Routes>
           </TestRouter>
         </ShelfProvider>
@@ -76,9 +76,9 @@ describe("ChatPage", () => {
     const now = new Date().toISOString();
     const thread: Thread = {
       id: 42,
-      agent_id: 1,
+      fiche_id: 1,
       title: "Primary",
-      agent_state: null,
+      fiche_state: null,
       memory_strategy: "buffer",
       active: true,
       thread_type: "chat",
@@ -96,11 +96,11 @@ describe("ChatPage", () => {
       processed: true,
     };
 
-    mockFetchAgent.mockResolvedValue({
+    mockFetchFiche.mockResolvedValue({
       id: 1,
       owner_id: 10,
       owner: null,
-      name: "Demo Agent",
+      name: "Demo Fiche",
       status: "running",
       created_at: now,
       updated_at: now,
@@ -112,10 +112,10 @@ describe("ChatPage", () => {
       last_error: null,
       allowed_tools: [],
       messages: [],
-      next_run_at: null,
-      last_run_at: null,
+      next_course_at: null,
+      last_course_at: null,
     });
-    mockFetchThreads.mockImplementation((_agentId: number, threadType?: string) => {
+    mockFetchThreads.mockImplementation((_ficheId: number, threadType?: string) => {
       // Only return the thread for matching thread_type to avoid duplicate keys
       if (threadType === "chat" || threadType === undefined) {
         return Promise.resolve([threadState]);
@@ -124,7 +124,7 @@ describe("ChatPage", () => {
     });
     mockFetchThreadMessages.mockResolvedValue([message]);
     mockPostThreadMessage.mockResolvedValue({ ...message, id: 100, content: "New human message" });
-    mockRunThread.mockResolvedValue(undefined);
+    mockStartThreadCourse.mockResolvedValue(undefined);
     mockCreateThread.mockResolvedValue({
       ...thread,
       id: 100,
@@ -173,7 +173,7 @@ describe("ChatPage", () => {
 
     await waitFor(() => {
       expect(mockPostThreadMessage).toHaveBeenCalledWith(42, "New human message");
-      expect(mockRunThread).toHaveBeenCalledWith(42);
+      expect(mockStartThreadCourse).toHaveBeenCalledWith(42);
     });
   });
 

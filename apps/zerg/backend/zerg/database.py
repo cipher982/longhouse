@@ -19,62 +19,62 @@ from sqlalchemy.pool import NullPool
 
 from zerg.config import get_settings
 
-# Thread-safe caches for per-worker engines/sessionmakers --------------------
+# Thread-safe caches for per-commis engines/sessionmakers --------------------
 
-_WORKER_ENGINES: Dict[str, Engine] = {}
-_WORKER_SESSIONMAKERS: Dict[str, sessionmaker] = {}
-# Per-worker init locks prevent cross-worker serialization during E2E startup.
-_WORKER_INIT_LOCKS: Dict[str, threading.Lock] = {}
+_COMMIS_ENGINES: Dict[str, Engine] = {}
+_COMMIS_SESSIONMAKERS: Dict[str, sessionmaker] = {}
+# Per-commis init locks prevent cross-commis serialization during E2E startup.
+_COMMIS_INIT_LOCKS: Dict[str, threading.Lock] = {}
 # Use RLock (reentrant) since _get_postgres_schema_session is called while lock is held
-_WORKER_LOCK = threading.RLock()
+_COMMIS_LOCK = threading.RLock()
 logger = logging.getLogger(__name__)
 
 
-def clear_worker_caches():
-    """Clear cached worker engines and sessionmakers.
+def clear_commis_caches():
+    """Clear cached commis engines and sessionmakers.
 
     This is needed for E2E tests to ensure session factories are created
     with the correct configuration after environment variables are set.
     """
-    global _WORKER_ENGINES, _WORKER_SESSIONMAKERS, _WORKER_INIT_LOCKS
-    with _WORKER_LOCK:
-        _WORKER_ENGINES.clear()
-        _WORKER_SESSIONMAKERS.clear()
-        _WORKER_INIT_LOCKS.clear()
+    global _COMMIS_ENGINES, _COMMIS_SESSIONMAKERS, _COMMIS_INIT_LOCKS
+    with _COMMIS_LOCK:
+        _COMMIS_ENGINES.clear()
+        _COMMIS_SESSIONMAKERS.clear()
+        _COMMIS_INIT_LOCKS.clear()
 
 
-def _get_worker_init_lock(worker_id: str) -> threading.Lock:
-    """Get (or create) a per-worker init lock.
+def _get_commis_init_lock(commis_id: str) -> threading.Lock:
+    """Get (or create) a per-commis init lock.
 
-    This avoids serializing initialization for *different* Playwright workers
+    This avoids serializing initialization for *different* Playwright commis
     behind a single global lock while still preventing double-init for the same
-    worker_id.
+    commis_id.
     """
-    with _WORKER_LOCK:
-        lock = _WORKER_INIT_LOCKS.get(worker_id)
+    with _COMMIS_LOCK:
+        lock = _COMMIS_INIT_LOCKS.get(commis_id)
         if lock is None:
             lock = threading.Lock()
-            _WORKER_INIT_LOCKS[worker_id] = lock
+            _COMMIS_INIT_LOCKS[commis_id] = lock
         return lock
 
 
 # ---------------------------------------------------------------------------
-# Playwright worker-based DB isolation (E2E tests)
+# Playwright commis-based DB isolation (E2E tests)
 # ---------------------------------------------------------------------------
 
-# We *dynamically* route each HTTP/WebSocket request to a worker-specific
-# Postgres schema during Playwright runs. The current worker id is injected by
+# We *dynamically* route each HTTP/WebSocket request to a commis-specific
+# Postgres schema during Playwright runs. The current commis id is injected by
 # middleware and stored in a context variable. Importing here avoids a
 # circular dependency (middleware imports *this* module). The conditional
 # import keeps the overhead negligible for production usage.
 
 try:
-    from zerg.middleware.worker_db import current_worker_id
+    from zerg.middleware.commis_db import current_commis_id
 
 except ModuleNotFoundError:
     import contextvars
 
-    current_worker_id = contextvars.ContextVar("current_worker_id", default=None)
+    current_commis_id = contextvars.ContextVar("current_commis_id", default=None)
 
 
 _settings = get_settings()
@@ -91,14 +91,14 @@ _metadata = MetaData(schema=DB_SCHEMA)
 Base = declarative_base(metadata=_metadata)
 
 # Import all models at module level to ensure they are registered with Base
-# This prevents "no such table" errors when worker databases are created
+# This prevents "no such table" errors when commis databases are created
 try:
-    from zerg.models.models import Agent  # noqa: F401
-    from zerg.models.models import AgentMemoryKV  # noqa: F401
-    from zerg.models.models import AgentMessage  # noqa: F401
-    from zerg.models.models import AgentRun  # noqa: F401
     from zerg.models.models import CanvasLayout  # noqa: F401
     from zerg.models.models import Connector  # noqa: F401
+    from zerg.models.models import Course  # noqa: F401
+    from zerg.models.models import Fiche  # noqa: F401
+    from zerg.models.models import FicheMemoryKV  # noqa: F401
+    from zerg.models.models import FicheMessage  # noqa: F401
     from zerg.models.models import MemoryEmbedding  # noqa: F401
     from zerg.models.models import MemoryFile  # noqa: F401
     from zerg.models.models import NodeExecutionState  # noqa: F401
@@ -155,8 +155,8 @@ def make_engine(db_url: str, **kwargs) -> Engine:
         )
 
     # E2E tests: use conservative pool size to prevent connection explosion.
-    # With multiple uvicorn workers, each process creates per-worker engines.
-    # Worst case: uvicorn_workers × playwright_workers × (pool_size + max_overflow)
+    # With multiple uvicorn commis, each process creates per-commis engines.
+    # Worst case: uvicorn_commis × playwright_commis × (pool_size + max_overflow)
     # Example: 6 uvicorn × 16 playwright × 4 = 384 connections (under 500 limit)
     # Configure via E2E_DB_POOL_SIZE and E2E_DB_MAX_OVERFLOW env vars.
     if _settings.e2e_use_postgres_schemas:
@@ -241,24 +241,24 @@ def make_sessionmaker(engine: Engine) -> sessionmaker:
     )
 
 
-def _get_postgres_schema_session(worker_id: str) -> sessionmaker:
-    """Get session factory that uses worker-specific Postgres schema.
+def _get_postgres_schema_session(commis_id: str) -> sessionmaker:
+    """Get session factory that uses commis-specific Postgres schema.
 
-    Each worker gets its own Postgres schema (e.g., e2e_worker_0) for full isolation.
+    Each commis gets its own Postgres schema (e.g., e2e_commis_0) for full isolation.
     Uses connection event listeners to set search_path on every connection.
 
     SECURITY: This is only enabled when E2E_USE_POSTGRES_SCHEMAS=1 (test environments).
-    The X-Test-Worker header allows schema churning, so never enable in production.
+    The X-Test-Commis header allows schema churning, so never enable in production.
 
     Args:
-        worker_id: Worker ID to use for schema naming
+        commis_id: Commis ID to use for schema naming
 
     Returns:
-        A sessionmaker configured for the worker's schema
+        A sessionmaker configured for the commis's schema
     """
     # Fast-path: cached sessionmaker
-    with _WORKER_LOCK:
-        cached = _WORKER_SESSIONMAKERS.get(worker_id)
+    with _COMMIS_LOCK:
+        cached = _COMMIS_SESSIONMAKERS.get(commis_id)
     if cached is not None:
         return cached
 
@@ -269,10 +269,10 @@ def _get_postgres_schema_session(worker_id: str) -> sessionmaker:
 
     from sqlalchemy import text
 
-    from zerg.e2e_schema_manager import ensure_worker_schema
+    from zerg.e2e_schema_manager import ensure_commis_schema
     from zerg.e2e_schema_manager import get_schema_name
 
-    schema_name = get_schema_name(worker_id)
+    schema_name = get_schema_name(commis_id)
 
     # Avoid doing full create_all(checkfirst=True) work on every cold start when
     # schemas are already pre-created in Playwright globalSetup.
@@ -294,7 +294,7 @@ def _get_postgres_schema_session(worker_id: str) -> sessionmaker:
         schema_exists = False
 
     if not schema_exists:
-        ensure_worker_schema(admin_engine, worker_id)
+        ensure_commis_schema(admin_engine, commis_id)
 
     # Dispose the admin engine (releases any remaining connections). With NullPool
     # this is mostly a no-op but good hygiene.
@@ -303,13 +303,13 @@ def _get_postgres_schema_session(worker_id: str) -> sessionmaker:
     except Exception:
         pass
 
-    # Create schema-routed engine for this worker.
+    # Create schema-routed engine for this commis.
     #
     # NOTE: We prefer wiring schema routing into the *connection itself*
     # (libpq `options=-csearch_path=...`) rather than relying solely on runtime
     # `SET search_path` calls. This prevents subtle cases where a pooled
     # connection might retain a default search_path and write to public instead
-    # of the worker schema.
+    # of the commis schema.
     url = make_url(db_url)
     query = dict(url.query)
     existing_options = (query.get("options") or "").strip()
@@ -318,12 +318,12 @@ def _get_postgres_schema_session(worker_id: str) -> sessionmaker:
     engine = make_engine(url.set(query=query).render_as_string(hide_password=False))
     engine = engine.execution_options(schema_translate_map={DB_SCHEMA: schema_name})
 
-    # Create test user for foreign key constraints (E2E tests need a user for agent creation)
+    # Create test user for foreign key constraints (E2E tests need a user for fiche creation)
     # Use ON CONFLICT (email) to handle the unique email constraint - this is what typically
     # fails in race conditions when multiple processes initialize the same schema
     with engine.connect() as conn:
         conn.execute(text(f"SET search_path TO {schema_name}, public"))
-        logger.debug("Worker %s (Postgres schema) ensuring test user exists...", worker_id)
+        logger.debug("Commis %s (Postgres schema) ensuring test user exists...", commis_id)
         conn.execute(
             text("""
                 INSERT INTO users (id, email, role, is_active, provider, provider_user_id,
@@ -337,7 +337,7 @@ def _get_postgres_schema_session(worker_id: str) -> sessionmaker:
         # when DevAuthStrategy creates the dev user with auto-generated ID
         conn.execute(text("SELECT setval('users_id_seq', GREATEST(COALESCE((SELECT MAX(id) FROM users), 0), 1))"))
         conn.commit()
-        logger.debug("Worker %s (Postgres schema) test user ensured", worker_id)
+        logger.debug("Commis %s (Postgres schema) test user ensured", commis_id)
 
     # Add event listener to set search_path on every connection
     @event.listens_for(engine, "connect")
@@ -348,10 +348,10 @@ def _get_postgres_schema_session(worker_id: str) -> sessionmaker:
 
     session_factory = make_sessionmaker(engine)
 
-    with _WORKER_LOCK:
+    with _COMMIS_LOCK:
         # Another thread could have initialized while we were creating (unlikely
-        # with per-worker lock, but keep this safe).
-        existing = _WORKER_SESSIONMAKERS.get(worker_id)
+        # with per-commis lock, but keep this safe).
+        existing = _COMMIS_SESSIONMAKERS.get(commis_id)
         if existing is not None:
             try:
                 engine.dispose()
@@ -359,8 +359,8 @@ def _get_postgres_schema_session(worker_id: str) -> sessionmaker:
                 pass
             return existing
 
-        _WORKER_ENGINES[worker_id] = engine
-        _WORKER_SESSIONMAKERS[worker_id] = session_factory
+        _COMMIS_ENGINES[commis_id] = engine
+        _COMMIS_SESSIONMAKERS[commis_id] = session_factory
         return session_factory
 
 
@@ -373,18 +373,18 @@ def get_session_factory() -> sessionmaker:
         A sessionmaker instance
     """
     # ------------------------------------------------------------------
-    # Playwright E2E tests: isolate database per worker ------------------
+    # Playwright E2E tests: isolate database per commis ------------------
     # ------------------------------------------------------------------
-    # When the *WorkerDBMiddleware* sets `current_worker_id` we route to
-    # a worker-specific Postgres schema for full isolation.
+    # When the *CommisDBMiddleware* sets `current_commis_id` we route to
+    # a commis-specific Postgres schema for full isolation.
     #
-    # Outside the E2E test context (worker_id is None), we use the
+    # Outside the E2E test context (commis_id is None), we use the
     # default engine for unit tests, dev server, and production.
     # ------------------------------------------------------------------
 
-    worker_id = current_worker_id.get()
+    commis_id = current_commis_id.get()
 
-    if worker_id is None:
+    if commis_id is None:
         # --- Default behaviour for non-E2E contexts ---
         # CRITICAL: Reuse the cached default_session_factory to prevent
         # engine proliferation. Creating a new engine per call exhausts
@@ -402,25 +402,25 @@ def get_session_factory() -> sessionmaker:
         engine = make_engine(_apply_search_path(db_url, DB_SCHEMA))
         return make_sessionmaker(engine)
 
-    # --- Per-worker Postgres schema isolation (E2E tests) ---
-    cached = _WORKER_SESSIONMAKERS.get(worker_id)
+    # --- Per-commis Postgres schema isolation (E2E tests) ---
+    cached = _COMMIS_SESSIONMAKERS.get(commis_id)
     if cached is not None:
         return cached
 
-    # Lazily build the engine (per-worker lock avoids cross-worker serialization)
-    init_lock = _get_worker_init_lock(worker_id)
+    # Lazily build the engine (per-commis lock avoids cross-commis serialization)
+    init_lock = _get_commis_init_lock(commis_id)
     with init_lock:
-        cached = _WORKER_SESSIONMAKERS.get(worker_id)
+        cached = _COMMIS_SESSIONMAKERS.get(commis_id)
         if cached is not None:
             return cached
 
         # Route to Postgres schema isolation
         if _settings.e2e_use_postgres_schemas:
-            return _get_postgres_schema_session(worker_id)
+            return _get_postgres_schema_session(commis_id)
 
         # If schema isolation is disabled, something is misconfigured
         raise ValueError(
-            f"Worker ID '{worker_id}' detected but E2E_USE_POSTGRES_SCHEMAS is not enabled. "
+            f"Commis ID '{commis_id}' detected but E2E_USE_POSTGRES_SCHEMAS is not enabled. "
             "Enable Postgres schema isolation for E2E tests."
         )
 
@@ -533,12 +533,12 @@ def initialize_database(engine: Engine = None) -> None:
     """
     # Import all models to ensure they are registered with Base
     # We need to import the models explicitly to ensure they're registered
-    from zerg.models.models import Agent  # noqa: F401
-    from zerg.models.models import AgentMemoryKV  # noqa: F401
-    from zerg.models.models import AgentMessage  # noqa: F401
-    from zerg.models.models import AgentRun  # noqa: F401
     from zerg.models.models import CanvasLayout  # noqa: F401
     from zerg.models.models import Connector  # noqa: F401
+    from zerg.models.models import Course  # noqa: F401
+    from zerg.models.models import Fiche  # noqa: F401
+    from zerg.models.models import FicheMemoryKV  # noqa: F401
+    from zerg.models.models import FicheMessage  # noqa: F401
     from zerg.models.models import MemoryEmbedding  # noqa: F401
     from zerg.models.models import MemoryFile  # noqa: F401
     from zerg.models.models import NodeExecutionState  # noqa: F401

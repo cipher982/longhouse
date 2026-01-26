@@ -2,12 +2,12 @@
  * useTextChannel hook - Text message sending
  *
  * This hook manages sending text messages to the assistant.
- * Uses SupervisorChatController for backend communication.
+ * Uses ConciergeChatController for backend communication.
  */
 
 import { useCallback, useState, useRef, useEffect } from 'react'
 import { useAppState, useAppDispatch, type ChatMessage } from '../context'
-import { SupervisorChatController } from '../../lib/supervisor-chat-controller'
+import { ConciergeChatController } from '../../lib/concierge-chat-controller'
 import { uuid } from '../../lib/uuid'
 import { logger } from '../../core'
 import { eventBus } from '../../lib/event-bus'
@@ -28,28 +28,28 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
   const optionsRef = useRef(options)
   optionsRef.current = options
 
-  // Initialize supervisor chat controller
-  const supervisorChatRef = useRef<SupervisorChatController | null>(null)
+  // Initialize concierge chat controller
+  const conciergeChatRef = useRef<ConciergeChatController | null>(null)
   const initRef = useRef(false)
 
   useEffect(() => {
     if (initRef.current) return
     initRef.current = true
 
-    const controller = new SupervisorChatController({ maxRetries: 3 })
+    const controller = new ConciergeChatController({ maxRetries: 3 })
     controller.initialize().then(() => {
-      supervisorChatRef.current = controller
-      logger.info('[useTextChannel] SupervisorChatController initialized')
+      conciergeChatRef.current = controller
+      logger.info('[useTextChannel] ConciergeChatController initialized')
     }).catch((error) => {
-      logger.error('[useTextChannel] Failed to initialize SupervisorChatController:', error)
+      logger.error('[useTextChannel] Failed to initialize ConciergeChatController:', error)
     })
   }, [])
 
   useEffect(() => {
     const clearSending = () => setIsSending(false)
-    const unsubComplete = eventBus.on('supervisor:complete', clearSending)
-    const unsubDeferred = eventBus.on('supervisor:deferred', clearSending)
-    const unsubError = eventBus.on('supervisor:error', clearSending)
+    const unsubComplete = eventBus.on('concierge:complete', clearSending)
+    const unsubDeferred = eventBus.on('concierge:deferred', clearSending)
+    const unsubError = eventBus.on('concierge:error', clearSending)
 
     return () => {
       unsubComplete()
@@ -72,7 +72,7 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
         return
       }
 
-      if (!supervisorChatRef.current) {
+      if (!conciergeChatRef.current) {
         const err = new Error('Chat not initialized')
         setLastError(err)
         optionsRef.current.onError?.(err)
@@ -128,8 +128,8 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
         // This prevents React batching from skipping the typing indicator
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
 
-        // Send to backend via SupervisorChatController
-        await supervisorChatRef.current.sendMessage(trimmedText, messageId, {
+        // Send to backend via ConciergeChatController
+        await conciergeChatRef.current.sendMessage(trimmedText, messageId, {
           model: preferences.chat_model,
           reasoning_effort: preferences.reasoning_effort,
         })
@@ -151,7 +151,7 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
         optionsRef.current.onError?.(err)
       } finally {
         if (sendCounterRef.current === sendId) {
-          // Response arrives via Supervisor SSE events; keep input unlocked after completion.
+          // Response arrives via Concierge SSE events; keep input unlocked after completion.
           setIsSending(false)
         }
       }

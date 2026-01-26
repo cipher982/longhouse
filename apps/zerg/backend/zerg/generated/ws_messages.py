@@ -50,8 +50,8 @@ class Envelope(BaseModel):
 
 # Message payload schemas
 
-class AgentRef(BaseModel):
-    """Payload for AgentRef messages"""
+class FicheRef(BaseModel):
+    """Payload for FicheRef messages"""
 
     id: int = Field(ge=1, description='')
 
@@ -129,7 +129,7 @@ class ThreadEventData(BaseModel):
     """Payload for ThreadEventData messages"""
 
     thread_id: int = Field(ge=1, description='')
-    agent_id: Optional[int] = Field(default=None, ge=1, description='')
+    fiche_id: Optional[int] = Field(default=None, ge=1, description='')
     title: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -160,28 +160,30 @@ class AssistantIdData(BaseModel):
     thread_id: int = Field(ge=1, description='')
     message_id: int = Field(ge=1, description='')
 
-class AgentEventData(BaseModel):
-    """Payload for AgentEventData messages"""
+class FicheEventData(BaseModel):
+    """Payload for FicheEventData messages"""
 
     id: int = Field(ge=1, description='')
     status: Optional[str] = None
-    last_run_at: Optional[str] = None
-    next_run_at: Optional[str] = None
+    last_course_at: Optional[str] = None
+    next_course_at: Optional[str] = None
     last_error: Optional[str] = None
     name: Optional[str] = None
     description: Optional[str] = None
 
-class RunUpdateData(BaseModel):
-    """Payload for RunUpdateData messages"""
+class CourseUpdateData(BaseModel):
+    """Payload for CourseUpdateData messages"""
 
     id: int = Field(ge=1, description='')
-    agent_id: int = Field(ge=1, description='')
+    fiche_id: int = Field(ge=1, description='')
     thread_id: Optional[int] = Field(default=None, ge=1, description='')
-    status: Literal['queued', 'running', 'success', 'failed']
-    trigger: Optional[Literal['manual', 'schedule', 'chat', 'webhook', 'api']] = None
+    status: Literal['queued', 'running', 'waiting', 'deferred', 'success', 'failed', 'cancelled']
+    trigger: Optional[Literal['manual', 'schedule', 'chat', 'webhook', 'api', 'continuation']] = None
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
     duration_ms: Optional[int] = Field(default=None, ge=0, description='')
+    total_tokens: Optional[int] = Field(default=None, ge=0, description='')
+    total_cost_usd: Optional[float] = Field(default=None, ge=0, description='')
     error: Optional[str] = None
 
 class UserUpdateData(BaseModel):
@@ -225,13 +227,13 @@ class NodeLogData(BaseModel):
 class OpsEventData(BaseModel):
     """Payload for OpsEventData messages"""
 
-    type: Literal['run_started', 'run_success', 'run_failed', 'agent_created', 'agent_updated', 'thread_message_created', 'budget_denied']
-    agent_id: Optional[int] = Field(default=None, ge=1, description='')
-    run_id: Optional[int] = Field(default=None, ge=1, description='')
+    type: Literal['course_started', 'course_success', 'course_failed', 'fiche_created', 'fiche_updated', 'thread_message_created', 'budget_denied']
+    fiche_id: Optional[int] = Field(default=None, ge=1, description='')
+    course_id: Optional[int] = Field(default=None, ge=1, description='')
     thread_id: Optional[int] = Field(default=None, ge=1, description='')
     duration_ms: Optional[int] = Field(default=None, ge=0, description='')
     error: Optional[str] = None
-    agent_name: Optional[str] = None
+    fiche_name: Optional[str] = None
     status: Optional[str] = None
     scope: Optional[Literal['user', 'global']] = None
     percent: Optional[float] = None
@@ -256,8 +258,8 @@ class MessageType(str, Enum):
     STREAM_CHUNK = "stream_chunk"
     STREAM_END = "stream_end"
     ASSISTANT_ID = "assistant_id"
-    AGENT_EVENT = "agent_event"
-    RUN_UPDATE = "run_update"
+    FICHE_EVENT = "fiche_event"
+    COURSE_UPDATE = "course_update"
     USER_UPDATE = "user_update"
     NODE_STATE = "node_state"
     EXECUTION_FINISHED = "execution_finished"

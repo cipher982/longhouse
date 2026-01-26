@@ -1,26 +1,26 @@
-"""Roundabout monitoring for worker supervision.
+"""Roundabout monitoring for commis supervision.
 
 v2.0 Philosophy: Trust the AI, Remove Scaffolding
 -------------------------------------------------
-The roundabout is a polling loop that provides real-time visibility into worker
-execution without polluting the supervisor's long-lived thread context.
+The roundabout is a polling loop that provides real-time visibility into commis
+execution without polluting the concierge's long-lived thread context.
 
-Like glancing at a second monitor: the supervisor polls worker status periodically,
+Like glancing at a second monitor: the concierge polls commis status periodically,
 and the LLM interprets what it sees to decide the next action.
 
 This is v2.0's "trust the AI" approach:
-- Polling (supervisor checking status) = GOOD (like glancing at second monitor)
+- Polling (concierge checking status) = GOOD (like glancing at second monitor)
 - LLM interprets status and decides = GOOD (trust the AI's judgment)
 - Hard guardrails (timeouts, rate limits) = GOOD (safety boundaries, not heuristics)
 - Heuristic decision engine = DEPRECATED (pre-programs LLM decisions)
 
 Implementation:
-- Polling loop every 5 seconds (supervisor checking status)
+- Polling loop every 5 seconds (concierge checking status)
 - Status aggregation from database and events
 - Tool event subscription for activity tracking
 - LLM interprets status and decides: wait, exit, cancel, or peek
 - Hard guardrails: poll interval, max calls budget, timeout
-- Returns structured result when worker completes
+- Returns structured result when commis completes
 - Logs monitoring checks for audit trail
 
 Decision modes (v2.0 default: LLM):
@@ -42,9 +42,10 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 if TYPE_CHECKING:
-    from zerg.models.models import WorkerJob
+    from zerg.models.models import CommisJob
 
 from zerg.config import get_settings
+from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.services.llm_decider import DEFAULT_DECISION_MODE
 from zerg.services.llm_decider import DEFAULT_LLM_MAX_CALLS
 from zerg.services.llm_decider import DEFAULT_LLM_MODEL
@@ -52,7 +53,6 @@ from zerg.services.llm_decider import DEFAULT_LLM_POLL_INTERVAL
 from zerg.services.llm_decider import DecisionMode
 from zerg.services.llm_decider import LLMDeciderStats
 from zerg.services.llm_decider import decide_roundabout_action
-from zerg.services.worker_artifact_store import WorkerArtifactStore
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ ROUNDABOUT_ACTIVITY_LOG_MAX = 20  # max entries to track
 ROUNDABOUT_CANCEL_STUCK_THRESHOLD = 60  # seconds - auto-cancel if stuck this long
 ROUNDABOUT_NO_PROGRESS_POLLS = 6  # consecutive polls with no new events before cancel
 
-# Patterns that suggest worker has a final answer (case-insensitive)
+# Patterns that suggest commis has a final answer (case-insensitive)
 FINAL_ANSWER_PATTERNS = [
     r"Result:",
     r"Summary:",
@@ -81,7 +81,7 @@ class RoundaboutDecision(Enum):
 
     WAIT = "wait"  # Continue monitoring (default)
     EXIT = "exit"  # Saw enough, return early with current findings
-    CANCEL = "cancel"  # Something wrong, abort worker
+    CANCEL = "cancel"  # Something wrong, abort commis
     PEEK = "peek"  # Need more details, return pointer to drill down
 
 
@@ -90,7 +90,7 @@ class DecisionContext:
     """Context for making roundabout decisions."""
 
     job_id: int
-    worker_id: str | None
+    commis_id: str | None
     task: str
     status: str  # queued, running, success, failed
     elapsed_seconds: float
@@ -104,7 +104,7 @@ class DecisionContext:
 
 @dataclass
 class ToolActivity:
-    """Record of a tool call during worker execution."""
+    """Record of a tool call during commis execution."""
 
     tool_name: str
     status: str  # "started", "completed", "failed"
@@ -132,10 +132,10 @@ class ToolIndexEntry:
 
 @dataclass
 class RoundaboutStatus:
-    """Current status of a worker in the roundabout."""
+    """Current status of a commis in the roundabout."""
 
     job_id: int
-    worker_id: str | None
+    commis_id: str | None
     task: str
     status: str  # queued, running, success, failed
     elapsed_seconds: float
@@ -151,9 +151,9 @@ class RoundaboutResult:
 
     status: str  # "complete", "early_exit", "cancelled", "monitor_timeout", "failed", "peek"
     job_id: int
-    worker_id: str | None
+    commis_id: str | None
     duration_seconds: float
-    worker_still_running: bool = False  # True if monitor timed out but worker continues
+    commis_still_running: bool = False  # True if monitor timed out but commis continues
     result: str | None = None
     summary: str | None = None
     error: str | None = None
@@ -161,7 +161,7 @@ class RoundaboutResult:
     decision: RoundaboutDecision | None = None  # The decision that triggered exit
     drill_down_hint: str | None = None  # For peek: what to read next
     tool_index: list[ToolIndexEntry] = field(default_factory=list)  # Execution metadata for tool calls
-    run_id: int | None = None  # Supervisor run ID for evidence correlation
+    course_id: int | None = None  # Concierge run ID for evidence correlation
 
 
 def make_heuristic_decision(ctx: DecisionContext) -> tuple[RoundaboutDecision, str]:
@@ -178,9 +178,9 @@ def make_heuristic_decision(ctx: DecisionContext) -> tuple[RoundaboutDecision, s
     Returns:
         Tuple of (decision, reason)
     """
-    # Priority 1: Worker completed - exit immediately
+    # Priority 1: Commis completed - exit immediately
     if ctx.status in ("success", "failed"):
-        return RoundaboutDecision.EXIT, f"Worker status changed to {ctx.status}"
+        return RoundaboutDecision.EXIT, f"Commis status changed to {ctx.status}"
 
     # Priority 2: Check for final answer patterns in last tool output
     if ctx.last_tool_output:
@@ -217,16 +217,16 @@ def make_heuristic_decision(ctx: DecisionContext) -> tuple[RoundaboutDecision, s
 
 
 class RoundaboutMonitor:
-    """Monitors worker execution with periodic status checks.
+    """Monitors commis execution with periodic status checks.
 
     v2.0 default: LLM interprets status and decides (trust the AI).
 
-    The monitor polls worker status every 5 seconds ("glancing at a second monitor")
+    The monitor polls commis status every 5 seconds ("glancing at a second monitor")
     and the LLM interprets what it sees to decide the next action. Hard guardrails
     (poll interval, max calls, timeout) provide safety boundaries without pre-programming
     the LLM's decisions.
 
-    When the worker completes (or times out), it returns a structured result.
+    When the commis completes (or times out), it returns a structured result.
 
     Decision modes (v2.0 default: LLM):
     - LLM (v2.0 default): Let the AI interpret status and decide
@@ -248,7 +248,7 @@ class RoundaboutMonitor:
         db,
         job_id: int,
         owner_id: int,
-        supervisor_run_id: int | None = None,
+        concierge_course_id: int | None = None,
         timeout_seconds: float = ROUNDABOUT_HARD_TIMEOUT,
         decision_mode: DecisionMode = DEFAULT_DECISION_MODE,
         llm_poll_interval: int = DEFAULT_LLM_POLL_INTERVAL,
@@ -259,7 +259,7 @@ class RoundaboutMonitor:
         self.db = db
         self.job_id = job_id
         self.owner_id = owner_id
-        self.supervisor_run_id = supervisor_run_id
+        self.concierge_course_id = concierge_course_id
         self.timeout_seconds = timeout_seconds
 
         # Phase 5: LLM decision configuration (v2.0 default: LLM mode)
@@ -282,7 +282,7 @@ class RoundaboutMonitor:
         self.llm_timeout_seconds = llm_timeout_seconds
         self.llm_model = llm_model
 
-        self._artifact_store = WorkerArtifactStore()
+        self._artifact_store = CommisArtifactStore()
         self._tool_activities: list[ToolActivity] = []
         self._start_time: datetime | None = None
         self._check_count = 0
@@ -383,18 +383,18 @@ class RoundaboutMonitor:
             return RoundaboutDecision.WAIT, f"LLM error ({e}), continuing to monitor"
 
     async def wait_for_completion(self) -> RoundaboutResult:
-        """Enter the roundabout and wait for worker completion.
+        """Enter the roundabout and wait for commis completion.
 
-        Polls worker status every 5 seconds until:
-        - Worker completes (success or failure)
+        Polls commis status every 5 seconds until:
+        - Commis completes (success or failure)
         - Heuristic decision triggers early exit or cancel
-        - Hard timeout reached (returns monitor_timeout, worker may continue)
+        - Hard timeout reached (returns monitor_timeout, commis may continue)
         - Error occurs
 
         Returns:
             RoundaboutResult with final status and result
         """
-        from zerg.models.models import WorkerJob
+        from zerg.models.models import CommisJob
 
         self._start_time = datetime.now(timezone.utc)
         logger.info(f"Entering roundabout for job {self.job_id}")
@@ -410,35 +410,35 @@ class RoundaboutMonitor:
                 # Check timeout - monitor timeout, not job failure
                 if elapsed > self.timeout_seconds:
                     logger.warning(
-                        f"Roundabout monitor timeout for job {self.job_id} after {elapsed:.1f}s " "(worker may still be running)"
+                        f"Roundabout monitor timeout for job {self.job_id} after {elapsed:.1f}s " "(commis may still be running)"
                     )
                     # Get current job status to check if still running
                     self.db.expire_all()
-                    job = self.db.query(WorkerJob).filter(WorkerJob.id == self.job_id, WorkerJob.owner_id == self.owner_id).first()
-                    worker_running = job and job.status in ("queued", "running")
+                    job = self.db.query(CommisJob).filter(CommisJob.id == self.job_id, CommisJob.owner_id == self.owner_id).first()
+                    commis_running = job and job.status in ("queued", "running")
                     return self._create_timeout_result(
-                        worker_id=job.worker_id if job else None,
-                        worker_still_running=worker_running,
+                        commis_id=job.commis_id if job else None,
+                        commis_still_running=commis_running,
                     )
 
                 # Get current job status
                 self.db.expire_all()  # Refresh from database
-                job = self.db.query(WorkerJob).filter(WorkerJob.id == self.job_id, WorkerJob.owner_id == self.owner_id).first()
+                job = self.db.query(CommisJob).filter(CommisJob.id == self.job_id, CommisJob.owner_id == self.owner_id).first()
 
                 if not job:
                     logger.error(f"Job {self.job_id} not found in roundabout")
                     return self._create_result("failed", error="Job not found")
 
                 # Evaluation Mode Helper:
-                # In testing/eval mode, the background worker processor is disabled.
+                # In testing/eval mode, the background commis processor is disabled.
                 # If we're waiting for a job that is still 'queued', we drain it
-                # synchronously here so the supervisor can proceed with findings.
+                # synchronously here so the concierge can proceed with findings.
                 if get_settings().testing and job.status == "queued":
                     logger.info(f"Eval Mode: Draining job {self.job_id} synchronously in roundabout (immediate)")
                     await self._drain_job_synchronously(job, timeout_seconds=self.timeout_seconds)
                     # Refresh job after draining
                     self.db.expire_all()
-                    job = self.db.query(WorkerJob).filter(WorkerJob.id == self.job_id, WorkerJob.owner_id == self.owner_id).first()
+                    job = self.db.query(CommisJob).filter(CommisJob.id == self.job_id, CommisJob.owner_id == self.owner_id).first()
 
                 # Cache task for decision context
                 self._task = job.task
@@ -446,7 +446,7 @@ class RoundaboutMonitor:
                 # Log monitoring check for audit
                 await self._log_monitoring_check(job, elapsed)
 
-                # Check if worker is done (priority check before heuristics)
+                # Check if commis is done (priority check before heuristics)
                 if job.status in ("success", "failed"):
                     logger.info(f"Roundabout exit for job {self.job_id}: {job.status} after {elapsed:.1f}s")
                     return await self._create_completion_result(job)
@@ -492,9 +492,9 @@ class RoundaboutMonitor:
             # Unsubscribe from events
             await self._unsubscribe_from_tool_events()
 
-    async def _drain_job_synchronously(self, job: "WorkerJob", timeout_seconds: float = 60.0) -> None:
-        """Execute a queued worker job synchronously (eval-only)."""
-        from zerg.services.worker_runner import WorkerRunner
+    async def _drain_job_synchronously(self, job: "CommisJob", timeout_seconds: float = 60.0) -> None:
+        """Execute a queued commis job synchronously (eval-only)."""
+        from zerg.services.commis_runner import CommisRunner
         from zerg.utils.time import utc_now_naive
 
         # Update status to running
@@ -502,24 +502,24 @@ class RoundaboutMonitor:
         job.started_at = utc_now_naive()
         self.db.commit()
 
-        artifact_store = WorkerArtifactStore()
-        runner = WorkerRunner(artifact_store=artifact_store)
+        artifact_store = CommisArtifactStore()
+        runner = CommisRunner(artifact_store=artifact_store)
 
         try:
-            result = await runner.run_worker(
+            result = await runner.run_commis(
                 db=self.db,
                 task=job.task,
-                agent=None,
-                agent_config={"model": job.model, "owner_id": job.owner_id},
+                fiche=None,
+                fiche_config={"model": job.model, "owner_id": job.owner_id},
                 timeout=int(timeout_seconds),
-                event_context={"run_id": self.supervisor_run_id},
+                event_context={"course_id": self.concierge_course_id},
                 job_id=job.id,
             )
 
             # Ensure job is still attached to session
             self.db.refresh(job)
 
-            job.worker_id = result.worker_id
+            job.commis_id = result.commis_id
             job.finished_at = utc_now_naive()
 
             if result.status == "success":
@@ -563,7 +563,7 @@ class RoundaboutMonitor:
             if event_job_id != self.job_id:
                 return
 
-            # Reset no-progress counter - the worker is actively reasoning
+            # Reset no-progress counter - the commis is actively reasoning
             self._polls_without_progress = 0
             logger.debug(f"Job {self.job_id}: Heartbeat received, reset no-progress counter")
 
@@ -605,18 +605,18 @@ class RoundaboutMonitor:
 
     def get_current_status(self) -> RoundaboutStatus:
         """Get current status snapshot (for future decision prompts)."""
-        from zerg.models.models import WorkerJob
+        from zerg.models.models import CommisJob
 
         elapsed = 0.0
         if self._start_time:
             elapsed = (datetime.now(timezone.utc) - self._start_time).total_seconds()
 
-        job = self.db.query(WorkerJob).filter(WorkerJob.id == self.job_id, WorkerJob.owner_id == self.owner_id).first()
+        job = self.db.query(CommisJob).filter(CommisJob.id == self.job_id, CommisJob.owner_id == self.owner_id).first()
 
         if not job:
             return RoundaboutStatus(
                 job_id=self.job_id,
-                worker_id=None,
+                commis_id=None,
                 task="Unknown",
                 status="unknown",
                 elapsed_seconds=elapsed,
@@ -635,7 +635,7 @@ class RoundaboutMonitor:
 
         return RoundaboutStatus(
             job_id=self.job_id,
-            worker_id=job.worker_id,
+            commis_id=job.commis_id,
             task=job.task,
             status=job.status,
             elapsed_seconds=elapsed,
@@ -661,7 +661,7 @@ class RoundaboutMonitor:
 
         return DecisionContext(
             job_id=self.job_id,
-            worker_id=job.worker_id,
+            commis_id=job.commis_id,
             task=job.task,
             status=job.status,
             elapsed_seconds=elapsed,
@@ -711,22 +711,22 @@ class RoundaboutMonitor:
         """Create result for early exit (answer detected in output)."""
         elapsed = (datetime.now(timezone.utc) - self._start_time).total_seconds()
 
-        # Try to get partial result if worker has produced any output
+        # Try to get partial result if commis has produced any output
         partial_result = None
-        if job.worker_id:
+        if job.commis_id:
             try:
-                partial_result = self._artifact_store.get_worker_result(job.worker_id)
+                partial_result = self._artifact_store.get_commis_result(job.commis_id)
             except Exception:
-                pass  # Worker may not have result yet
+                pass  # Commis may not have result yet
 
         activity_summary = self._build_activity_summary(exit_reason=reason)
 
         return RoundaboutResult(
             status="early_exit",
             job_id=self.job_id,
-            worker_id=job.worker_id,
+            commis_id=job.commis_id,
             duration_seconds=elapsed,
-            worker_still_running=job.status in ("queued", "running"),
+            commis_still_running=job.status in ("queued", "running"),
             result=partial_result,
             summary=f"Early exit: {reason}",
             activity_summary=activity_summary,
@@ -754,9 +754,9 @@ class RoundaboutMonitor:
         return RoundaboutResult(
             status="cancelled",
             job_id=self.job_id,
-            worker_id=job.worker_id,
+            commis_id=job.commis_id,
             duration_seconds=elapsed,
-            worker_still_running=False,  # We've marked it cancelled
+            commis_still_running=False,  # We've marked it cancelled
             error=reason,
             activity_summary=activity_summary,
             decision=RoundaboutDecision.CANCEL,
@@ -780,9 +780,9 @@ class RoundaboutMonitor:
         return RoundaboutResult(
             status="peek",
             job_id=self.job_id,
-            worker_id=job.worker_id,
+            commis_id=job.commis_id,
             duration_seconds=elapsed,
-            worker_still_running=job.status in ("queued", "running"),
+            commis_still_running=job.status in ("queued", "running"),
             summary=f"Peek requested: {reason}",
             activity_summary=activity_summary,
             decision=RoundaboutDecision.PEEK,
@@ -827,16 +827,16 @@ class RoundaboutMonitor:
                 if output_preview:
                     self._last_tool_output = output_preview[:500]  # Cap at 500 chars
 
-    def _build_tool_index(self, worker_id: str) -> list[ToolIndexEntry]:
-        """Build tool index from worker artifacts.
+    def _build_tool_index(self, commis_id: str) -> list[ToolIndexEntry]:
+        """Build tool index from commis artifacts.
 
         This reads the tool_calls directory and extracts execution metadata
         (exit codes, sizes, durations) for each tool call.
 
         Parameters
         ----------
-        worker_id
-            Worker ID to read artifacts from
+        commis_id
+            Commis ID to read artifacts from
 
         Returns
         -------
@@ -844,8 +844,8 @@ class RoundaboutMonitor:
             Tool execution metadata entries
         """
         try:
-            worker_dir = self._artifact_store._get_worker_dir(worker_id)
-            tool_calls_dir = worker_dir / "tool_calls"
+            commis_dir = self._artifact_store._get_commis_dir(commis_id)
+            tool_calls_dir = commis_dir / "tool_calls"
 
             if not tool_calls_dir.exists():
                 return []
@@ -886,7 +886,7 @@ class RoundaboutMonitor:
             return tool_index
 
         except Exception as e:
-            logger.warning(f"Failed to build tool index for worker {worker_id}: {e}")
+            logger.warning(f"Failed to build tool index for commis {commis_id}: {e}")
             return []
 
     def _extract_tool_metadata(self, filepath) -> tuple[int | None, bool]:
@@ -950,38 +950,38 @@ class RoundaboutMonitor:
         return None
 
     async def _create_completion_result(self, job) -> RoundaboutResult:
-        """Create result when worker completes."""
+        """Create result when commis completes."""
         elapsed = (datetime.now(timezone.utc) - self._start_time).total_seconds()
 
         result_text = None
         summary = None
         tool_index = []
 
-        if job.worker_id and job.status == "success":
+        if job.commis_id and job.status == "success":
             try:
-                result_text = self._artifact_store.get_worker_result(job.worker_id)
-                metadata = self._artifact_store.get_worker_metadata(job.worker_id)
+                result_text = self._artifact_store.get_commis_result(job.commis_id)
+                metadata = self._artifact_store.get_commis_metadata(job.commis_id)
                 summary = metadata.get("summary", result_text[:200] if result_text else None)
 
                 # Build tool index from artifacts
-                tool_index = self._build_tool_index(job.worker_id)
+                tool_index = self._build_tool_index(job.commis_id)
             except Exception as e:
-                logger.warning(f"Failed to get worker result for {job.worker_id}: {e}")
+                logger.warning(f"Failed to get commis result for {job.commis_id}: {e}")
 
         activity_summary = self._build_activity_summary()
 
         return RoundaboutResult(
             status="complete" if job.status == "success" else "failed",
             job_id=self.job_id,
-            worker_id=job.worker_id,
+            commis_id=job.commis_id,
             duration_seconds=elapsed,
-            worker_still_running=False,
+            commis_still_running=False,
             result=result_text,
             summary=summary,
             error=job.error if job.status == "failed" else None,
             activity_summary=activity_summary,
             tool_index=tool_index,
-            run_id=self.supervisor_run_id,
+            course_id=self.concierge_course_id,
         )
 
     def _create_result(self, status: str, error: str | None = None) -> RoundaboutResult:
@@ -993,14 +993,14 @@ class RoundaboutMonitor:
         return RoundaboutResult(
             status=status,
             job_id=self.job_id,
-            worker_id=None,
+            commis_id=None,
             duration_seconds=elapsed,
-            worker_still_running=False,
+            commis_still_running=False,
             error=error,
             activity_summary=self._build_activity_summary(),
         )
 
-    def _create_timeout_result(self, worker_id: str | None, worker_still_running: bool) -> RoundaboutResult:
+    def _create_timeout_result(self, commis_id: str | None, commis_still_running: bool) -> RoundaboutResult:
         """Create result for monitor timeout (distinct from job failure)."""
         elapsed = 0.0
         if self._start_time:
@@ -1009,20 +1009,20 @@ class RoundaboutMonitor:
         return RoundaboutResult(
             status="monitor_timeout",
             job_id=self.job_id,
-            worker_id=worker_id,
+            commis_id=commis_id,
             duration_seconds=elapsed,
-            worker_still_running=worker_still_running,
+            commis_still_running=commis_still_running,
             error=f"Monitor timeout after {elapsed:.0f}s",
             activity_summary=self._build_activity_summary(),
         )
 
     async def _log_monitoring_check(self, job, elapsed: float) -> None:
         """Log monitoring check for audit trail."""
-        if not job.worker_id:
-            return  # No worker directory yet
+        if not job.commis_id:
+            return  # No commis directory yet
 
         try:
-            monitoring_dir = self._artifact_store._get_worker_dir(job.worker_id) / "monitoring"
+            monitoring_dir = self._artifact_store._get_commis_dir(job.commis_id) / "monitoring"
             monitoring_dir.mkdir(parents=True, exist_ok=True)
 
             check_file = monitoring_dir / f"check_{int(elapsed):04d}s.json"
@@ -1041,21 +1041,21 @@ class RoundaboutMonitor:
 
 
 def format_roundabout_result(result: RoundaboutResult) -> str:
-    """Format roundabout result for supervisor thread.
+    """Format roundabout result for concierge thread.
 
-    This is what gets persisted to the supervisor's conversation history.
+    This is what gets persisted to the concierge's conversation history.
     Returns a compact payload with:
     - Tool index (execution metadata)
-    - Summary (worker's prose, may be empty/garbage)
+    - Summary (commis's prose, may be empty/garbage)
     - Evidence marker for LLM wrapper expansion
 
-    The evidence marker format is: [EVIDENCE:run_id=48,job_id=123,worker_id=abc-123]
+    The evidence marker format is: [EVIDENCE:course_id=48,job_id=123,commis_id=abc-123]
     """
     lines = []
 
     if result.status == "complete":
-        lines.append(f"Worker job {result.job_id} completed successfully.")
-        lines.append(f"Duration: {result.duration_seconds:.1f}s | Worker ID: {result.worker_id}")
+        lines.append(f"Commis job {result.job_id} completed successfully.")
+        lines.append(f"Duration: {result.duration_seconds:.1f}s | Commis ID: {result.commis_id}")
         lines.append("")
 
         # Tool Index (execution metadata, not domain parsing)
@@ -1079,7 +1079,7 @@ def format_roundabout_result(result: RoundaboutResult) -> str:
                 lines.append(f"  {entry.sequence}. {entry.tool_name} [{status}, {duration_str}, {entry.output_bytes}B]")
             lines.append("")
 
-        # Summary (worker's prose, truncated to 500 chars)
+        # Summary (commis's prose, truncated to 500 chars)
         if result.summary:
             summary_truncated = result.summary[:500] if len(result.summary) > 500 else result.summary
             lines.append(f"Summary: {summary_truncated}")
@@ -1091,59 +1091,59 @@ def format_roundabout_result(result: RoundaboutResult) -> str:
             lines.append("")
 
         # Evidence marker for LLM wrapper expansion
-        if result.run_id is not None and result.worker_id is not None:
-            lines.append(f"[EVIDENCE:run_id={result.run_id},job_id={result.job_id},worker_id={result.worker_id}]")
+        if result.course_id is not None and result.commis_id is not None:
+            lines.append(f"[EVIDENCE:course_id={result.course_id},job_id={result.job_id},commis_id={result.commis_id}]")
 
     elif result.status == "failed":
-        lines.append(f"Worker job {result.job_id} failed.")
+        lines.append(f"Commis job {result.job_id} failed.")
         lines.append(f"Duration: {result.duration_seconds:.1f}s")
         if result.error:
             lines.append(f"Error: {result.error}")
         lines.append("")
-        lines.append("Check worker artifacts for details:")
-        lines.append(f"  read_worker_file('{result.job_id}', 'thread.jsonl')")
+        lines.append("Check commis artifacts for details:")
+        lines.append(f"  read_commis_file('{result.job_id}', 'thread.jsonl')")
         lines.append("")
 
         # Evidence marker for LLM wrapper expansion (even for failures - useful tool output may exist)
-        if result.run_id is not None and result.worker_id is not None:
-            lines.append(f"[EVIDENCE:run_id={result.run_id},job_id={result.job_id},worker_id={result.worker_id}]")
+        if result.course_id is not None and result.commis_id is not None:
+            lines.append(f"[EVIDENCE:course_id={result.course_id},job_id={result.job_id},commis_id={result.commis_id}]")
 
     elif result.status == "monitor_timeout":
         lines.append(f"Monitor timeout: stopped watching job {result.job_id} after {result.duration_seconds:.1f}s.")
-        if result.worker_still_running:
-            lines.append("NOTE: The worker is STILL RUNNING in the background.")
+        if result.commis_still_running:
+            lines.append("NOTE: The commis is STILL RUNNING in the background.")
             lines.append("It may complete successfully - check status periodically:")
         else:
-            lines.append("The worker appears to have stopped.")
+            lines.append("The commis appears to have stopped.")
         lines.append(f"  get_commis_metadata('{result.job_id}')")
         lines.append(f"  read_commis_result('{result.job_id}')  # when complete")
         lines.append("")
 
         # Evidence marker for LLM wrapper expansion (even for timeouts - partial output may be useful)
-        if result.run_id is not None and result.worker_id is not None:
-            lines.append(f"[EVIDENCE:run_id={result.run_id},job_id={result.job_id},worker_id={result.worker_id}]")
+        if result.course_id is not None and result.commis_id is not None:
+            lines.append(f"[EVIDENCE:course_id={result.course_id},job_id={result.job_id},commis_id={result.commis_id}]")
 
     elif result.status == "early_exit":
-        lines.append(f"Exited monitoring of worker job {result.job_id} early.")
+        lines.append(f"Exited monitoring of commis job {result.job_id} early.")
         lines.append(f"Elapsed: {result.duration_seconds:.1f}s")
         if result.summary:
             lines.append(f"Partial findings: {result.summary}")
 
     elif result.status == "cancelled":
-        lines.append(f"Worker job {result.job_id} was cancelled.")
+        lines.append(f"Commis job {result.job_id} was cancelled.")
         lines.append(f"Elapsed: {result.duration_seconds:.1f}s")
         if result.error:
             lines.append(f"Reason: {result.error}")
-        if result.worker_still_running:
-            lines.append("NOTE: Worker may still be running - cancellation is best-effort.")
+        if result.commis_still_running:
+            lines.append("NOTE: Commis may still be running - cancellation is best-effort.")
 
     elif result.status == "peek":
-        lines.append(f"Peek requested for worker job {result.job_id}.")
+        lines.append(f"Peek requested for commis job {result.job_id}.")
         lines.append(f"Elapsed: {result.duration_seconds:.1f}s")
         if result.summary:
             lines.append(f"Reason: {result.summary}")
-        if result.worker_still_running:
-            lines.append("Worker is still running in background.")
+        if result.commis_still_running:
+            lines.append("Commis is still running in background.")
         lines.append("")
         if result.drill_down_hint:
             lines.append(result.drill_down_hint)

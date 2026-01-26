@@ -28,11 +28,11 @@ async def test_ops_events_bridge_run_success_broadcast(db_session):
     try:
         # Publish RUN_UPDATED with success
         await event_bus.publish(
-            EventType.RUN_UPDATED,
+            EventType.COURSE_UPDATED,
             {
-                "event_type": "run_updated",
-                "agent_id": 123,
-                "run_id": 456,
+                "event_type": "course_updated",
+                "fiche_id": 123,
+                "course_id": 456,
                 "status": "success",
             },
         )

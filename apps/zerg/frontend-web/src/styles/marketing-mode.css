@@ -11,7 +11,7 @@
    * ============================================================================ */
 
   /* Hide chrome for clean screenshots */
-  body.marketing-mode #agent-shelf,
+  body.marketing-mode #fiche-shelf,
   body.marketing-mode .react-flow__minimap,
   body.marketing-mode .react-flow__controls,
   body.marketing-mode .execution-controls,
@@ -30,8 +30,8 @@
     ) !important;
   }
 
-  /* Agent nodes - purple glow */
-  body.marketing-mode .agent-node {
+  /* Fiche nodes - purple glow */
+  body.marketing-mode .fiche-node {
     background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%) !important;
     border: 2px solid #818cf8 !important;
     border-left: 5px solid #a78bfa !important;
@@ -60,7 +60,7 @@
   }
 
   /* Bright text */
-  body.marketing-mode .agent-name,
+  body.marketing-mode .fiche-name,
   body.marketing-mode .trigger-name,
   body.marketing-mode .tool-name {
     color: #ffffff !important;
@@ -144,8 +144,8 @@
    * DASHBOARD VIVID STYLES
    * ============================================================================ */
 
-  /* Enhance agent cards */
-  body.marketing-mode .agent-card,
+  /* Enhance fiche cards */
+  body.marketing-mode .fiche-card,
   body.marketing-mode .dashboard-card {
     background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%) !important;
     border: 2px solid #818cf8 !important;
@@ -179,8 +179,8 @@
 
   /* Card titles pop */
   body.marketing-mode .card-title,
-  body.marketing-mode .agent-name,
-  body.marketing-mode .dashboard-agent-name {
+  body.marketing-mode .fiche-name,
+  body.marketing-mode .dashboard-fiche-name {
     color: #f3f4f6 !important;
     text-shadow: 0 0 8px rgba(255, 255, 255, 0.2) !important;
   }

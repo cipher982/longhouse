@@ -7,18 +7,18 @@ import pytest
 from sqlalchemy.orm import Session
 
 from zerg.crud.crud import create_user
-from zerg.models.models import AgentRun
+from zerg.models.models import Course
 from zerg.models.models import User
-from zerg.models.models import WorkerJob
+from zerg.models.models import CommisJob
 from zerg.services.evidence_compiler import EvidenceCompiler
 from zerg.services.evidence_compiler import ToolArtifact
-from zerg.services.worker_artifact_store import WorkerArtifactStore
+from zerg.services.commis_artifact_store import CommisArtifactStore
 
 
 @pytest.fixture
-def temp_artifact_store(tmp_path: Path) -> WorkerArtifactStore:
+def temp_artifact_store(tmp_path: Path) -> CommisArtifactStore:
     """Create a temporary artifact store for testing."""
-    return WorkerArtifactStore(base_path=str(tmp_path / "workers"))
+    return CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
 
 @pytest.fixture
@@ -28,20 +28,20 @@ def test_user(db_session: Session) -> User:
 
 
 @pytest.fixture
-def supervisor_run(db_session: Session, sample_agent) -> AgentRun:
-    """Create a supervisor run for testing."""
+def concierge_run(db_session: Session, sample_fiche) -> Course:
+    """Create a concierge run for testing."""
     from zerg.crud import create_thread
-    from zerg.models.enums import RunStatus
-    from zerg.models.enums import RunTrigger
+    from zerg.models.enums import CourseStatus
+    from zerg.models.enums import CourseTrigger
 
-    # Create a thread for the agent
-    thread = create_thread(db_session, agent_id=sample_agent.id, title="Test Run")
+    # Create a thread for the fiche
+    thread = create_thread(db_session, fiche_id=sample_fiche.id, title="Test Run")
 
-    run = AgentRun(
-        agent_id=sample_agent.id,
+    run = Course(
+        fiche_id=sample_fiche.id,
         thread_id=thread.id,
-        status=RunStatus.RUNNING,
-        trigger=RunTrigger.MANUAL,
+        status=CourseStatus.RUNNING,
+        trigger=CourseTrigger.MANUAL,
     )
     db_session.add(run)
     db_session.commit()
@@ -52,42 +52,42 @@ def supervisor_run(db_session: Session, sample_agent) -> AgentRun:
 class TestEvidenceCompiler:
     """Test suite for EvidenceCompiler."""
 
-    def test_compile_no_workers(self, db_session: Session, sample_agent, supervisor_run: AgentRun):
-        """Test compilation with no worker jobs."""
+    def test_compile_no_commis(self, db_session: Session, sample_fiche, concierge_run: Course):
+        """Test compilation with no commis jobs."""
         compiler = EvidenceCompiler(db=db_session)
-        evidence = compiler.compile(run_id=supervisor_run.id, owner_id=sample_agent.owner_id)
+        evidence = compiler.compile(course_id=concierge_run.id, owner_id=sample_fiche.owner_id)
 
         assert evidence == {}
 
-    def test_compile_worker_not_started(
-        self, db_session: Session, sample_agent, supervisor_run: AgentRun, temp_artifact_store: WorkerArtifactStore
+    def test_compile_commis_not_started(
+        self, db_session: Session, sample_fiche, concierge_run: Course, temp_artifact_store: CommisArtifactStore
     ):
-        """Test compilation when worker job exists but hasn't started (no worker_id)."""
-        # Create worker job without worker_id (not started)
-        job = WorkerJob(
-            owner_id=sample_agent.owner_id,
-            supervisor_run_id=supervisor_run.id,
+        """Test compilation when commis job exists but hasn't started (no commis_id)."""
+        # Create commis job without commis_id (not started)
+        job = CommisJob(
+            owner_id=sample_fiche.owner_id,
+            concierge_course_id=concierge_run.id,
             task="Test task",
             status="queued",
-            worker_id=None,  # Not started
+            commis_id=None,  # Not started
         )
         db_session.add(job)
         db_session.commit()
 
         compiler = EvidenceCompiler(artifact_store=temp_artifact_store, db=db_session)
-        evidence = compiler.compile(run_id=supervisor_run.id, owner_id=sample_agent.owner_id)
+        evidence = compiler.compile(course_id=concierge_run.id, owner_id=sample_fiche.owner_id)
 
         assert evidence == {}
 
-    def test_compile_single_worker_with_tool_outputs(
-        self, db_session: Session, sample_agent, supervisor_run: AgentRun, temp_artifact_store: WorkerArtifactStore
+    def test_compile_single_commis_with_tool_outputs(
+        self, db_session: Session, sample_fiche, concierge_run: Course, temp_artifact_store: CommisArtifactStore
     ):
-        """Test compilation with a single worker that has tool outputs."""
-        # Create worker with artifacts
-        worker_id = temp_artifact_store.create_worker(
+        """Test compilation with a single commis that has tool outputs."""
+        # Create commis with artifacts
+        commis_id = temp_artifact_store.create_commis(
             task="Check disk space",
             config={"model": "gpt-4"},
-            owner_id=sample_agent.owner_id,
+            owner_id=sample_fiche.owner_id,
         )
 
         # Add tool outputs
@@ -104,37 +104,37 @@ class TestEvidenceCompiler:
                 },
             }
         )
-        temp_artifact_store.save_tool_output(worker_id, "ssh_exec", ssh_output, sequence=1)
+        temp_artifact_store.save_tool_output(commis_id, "ssh_exec", ssh_output, sequence=1)
 
-        # Create worker job
-        job = WorkerJob(
-            owner_id=sample_agent.owner_id,
-            supervisor_run_id=supervisor_run.id,
+        # Create commis job
+        job = CommisJob(
+            owner_id=sample_fiche.owner_id,
+            concierge_course_id=concierge_run.id,
             task="Check disk space",
             status="success",
-            worker_id=worker_id,
+            commis_id=commis_id,
         )
         db_session.add(job)
         db_session.commit()
 
         compiler = EvidenceCompiler(artifact_store=temp_artifact_store, db=db_session)
-        evidence = compiler.compile(run_id=supervisor_run.id, owner_id=sample_agent.owner_id, budget_bytes=10000)
+        evidence = compiler.compile(course_id=concierge_run.id, owner_id=sample_fiche.owner_id, budget_bytes=10000)
 
         assert job.id in evidence
         assert "001_ssh_exec.txt" in evidence[job.id]
         assert "exit=0" in evidence[job.id]
         assert "df -h" in evidence[job.id]
-        assert "--- Evidence for Worker" in evidence[job.id]
+        assert "--- Evidence for Commis" in evidence[job.id]
         assert "--- End Evidence ---" in evidence[job.id]
 
-    def test_compile_for_job_single_worker(
-        self, db_session: Session, sample_agent, supervisor_run: AgentRun, temp_artifact_store: WorkerArtifactStore
+    def test_compile_for_job_single_commis(
+        self, db_session: Session, sample_fiche, concierge_run: Course, temp_artifact_store: CommisArtifactStore
     ):
-        """Test compile_for_job returns evidence for a single worker."""
-        worker_id = temp_artifact_store.create_worker(
+        """Test compile_for_job returns evidence for a single commis."""
+        commis_id = temp_artifact_store.create_commis(
             task="Check uptime",
             config={"model": "gpt-4"},
-            owner_id=sample_agent.owner_id,
+            owner_id=sample_fiche.owner_id,
         )
 
         uptime_output = json.dumps(
@@ -150,14 +150,14 @@ class TestEvidenceCompiler:
                 },
             }
         )
-        temp_artifact_store.save_tool_output(worker_id, "ssh_exec", uptime_output, sequence=1)
+        temp_artifact_store.save_tool_output(commis_id, "ssh_exec", uptime_output, sequence=1)
 
-        job = WorkerJob(
-            owner_id=sample_agent.owner_id,
-            supervisor_run_id=supervisor_run.id,
+        job = CommisJob(
+            owner_id=sample_fiche.owner_id,
+            concierge_course_id=concierge_run.id,
             task="Check uptime",
             status="success",
-            worker_id=worker_id,
+            commis_id=commis_id,
         )
         db_session.add(job)
         db_session.commit()
@@ -165,24 +165,24 @@ class TestEvidenceCompiler:
         compiler = EvidenceCompiler(artifact_store=temp_artifact_store, db=db_session)
         evidence = compiler.compile_for_job(
             job_id=job.id,
-            worker_id=worker_id,
-            owner_id=sample_agent.owner_id,
+            commis_id=commis_id,
+            owner_id=sample_fiche.owner_id,
             budget_bytes=5000,
         )
 
         assert "tool_calls/001_ssh_exec.txt" in evidence
         assert "uptime" in evidence
-        assert "--- Evidence for Worker" in evidence
+        assert "--- Evidence for Commis" in evidence
         assert "--- End Evidence ---" in evidence
 
     def test_prioritization_failures_first(
-        self, db_session: Session, sample_agent, supervisor_run: AgentRun, temp_artifact_store: WorkerArtifactStore
+        self, db_session: Session, sample_fiche, concierge_run: Course, temp_artifact_store: CommisArtifactStore
     ):
         """Test that failed tool outputs are prioritized first."""
-        worker_id = temp_artifact_store.create_worker(
+        commis_id = temp_artifact_store.create_commis(
             task="Test failures",
             config={"model": "gpt-4"},
-            owner_id=sample_agent.owner_id,
+            owner_id=sample_fiche.owner_id,
         )
 
         # Add successful tool output
@@ -199,7 +199,7 @@ class TestEvidenceCompiler:
                 },
             }
         )
-        temp_artifact_store.save_tool_output(worker_id, "ssh_exec", success_output, sequence=1)
+        temp_artifact_store.save_tool_output(commis_id, "ssh_exec", success_output, sequence=1)
 
         # Add failed tool output (should be prioritized)
         failed_output = json.dumps(
@@ -215,21 +215,21 @@ class TestEvidenceCompiler:
                 },
             }
         )
-        temp_artifact_store.save_tool_output(worker_id, "ssh_exec", failed_output, sequence=2)
+        temp_artifact_store.save_tool_output(commis_id, "ssh_exec", failed_output, sequence=2)
 
-        # Create worker job
-        job = WorkerJob(
-            owner_id=sample_agent.owner_id,
-            supervisor_run_id=supervisor_run.id,
+        # Create commis job
+        job = CommisJob(
+            owner_id=sample_fiche.owner_id,
+            concierge_course_id=concierge_run.id,
             task="Test failures",
             status="success",
-            worker_id=worker_id,
+            commis_id=commis_id,
         )
         db_session.add(job)
         db_session.commit()
 
         compiler = EvidenceCompiler(artifact_store=temp_artifact_store, db=db_session)
-        evidence = compiler.compile(run_id=supervisor_run.id, owner_id=sample_agent.owner_id, budget_bytes=10000)
+        evidence = compiler.compile(course_id=concierge_run.id, owner_id=sample_fiche.owner_id, budget_bytes=10000)
 
         # Failed output should appear first (with [FAILED] tag)
         evidence_str = evidence[job.id]
@@ -241,13 +241,13 @@ class TestEvidenceCompiler:
         assert failed_pos < success_file_pos, "Failed output should appear before success output"
 
     def test_truncation_with_head_tail(
-        self, db_session: Session, sample_agent, supervisor_run: AgentRun, temp_artifact_store: WorkerArtifactStore
+        self, db_session: Session, sample_fiche, concierge_run: Course, temp_artifact_store: CommisArtifactStore
     ):
         """Test that large outputs are truncated with head+tail strategy."""
-        worker_id = temp_artifact_store.create_worker(
+        commis_id = temp_artifact_store.create_commis(
             task="Test truncation",
             config={"model": "gpt-4"},
-            owner_id=sample_agent.owner_id,
+            owner_id=sample_fiche.owner_id,
         )
 
         # Create large output (50KB) to ensure truncation
@@ -265,22 +265,22 @@ class TestEvidenceCompiler:
                 },
             }
         )
-        temp_artifact_store.save_tool_output(worker_id, "ssh_exec", large_output, sequence=1)
+        temp_artifact_store.save_tool_output(commis_id, "ssh_exec", large_output, sequence=1)
 
-        # Create worker job
-        job = WorkerJob(
-            owner_id=sample_agent.owner_id,
-            supervisor_run_id=supervisor_run.id,
+        # Create commis job
+        job = CommisJob(
+            owner_id=sample_fiche.owner_id,
+            concierge_course_id=concierge_run.id,
             task="Test truncation",
             status="success",
-            worker_id=worker_id,
+            commis_id=commis_id,
         )
         db_session.add(job)
         db_session.commit()
 
         # Use small budget to force truncation
         compiler = EvidenceCompiler(artifact_store=temp_artifact_store, db=db_session)
-        evidence = compiler.compile(run_id=supervisor_run.id, owner_id=sample_agent.owner_id, budget_bytes=5000)
+        evidence = compiler.compile(course_id=concierge_run.id, owner_id=sample_fiche.owner_id, budget_bytes=5000)
 
         evidence_str = evidence[job.id]
 
@@ -291,16 +291,16 @@ class TestEvidenceCompiler:
         evidence_bytes = len(evidence_str.encode("utf-8"))
         assert evidence_bytes <= 6000, f"Evidence exceeds budget: {evidence_bytes} bytes"  # Allow margin
 
-    def test_budget_enforcement_multiple_workers(
-        self, db_session: Session, sample_agent, supervisor_run: AgentRun, temp_artifact_store: WorkerArtifactStore
+    def test_budget_enforcement_multiple_commis(
+        self, db_session: Session, sample_fiche, concierge_run: Course, temp_artifact_store: CommisArtifactStore
     ):
-        """Test that budget is divided among multiple workers."""
-        # Create two workers
-        worker1_id = temp_artifact_store.create_worker(task="Worker 1", config={}, owner_id=sample_agent.owner_id)
-        worker2_id = temp_artifact_store.create_worker(task="Worker 2", config={}, owner_id=sample_agent.owner_id)
+        """Test that budget is divided among multiple commis."""
+        # Create two commis
+        commis1_id = temp_artifact_store.create_commis(task="Commis 1", config={}, owner_id=sample_fiche.owner_id)
+        commis2_id = temp_artifact_store.create_commis(task="Commis 2", config={}, owner_id=sample_fiche.owner_id)
 
         # Add outputs to both
-        for worker_id in [worker1_id, worker2_id]:
+        for commis_id in [commis1_id, commis2_id]:
             output = json.dumps(
                 {
                     "ok": True,
@@ -314,30 +314,30 @@ class TestEvidenceCompiler:
                     },
                 }
             )
-            temp_artifact_store.save_tool_output(worker_id, "ssh_exec", output, sequence=1)
+            temp_artifact_store.save_tool_output(commis_id, "ssh_exec", output, sequence=1)
 
-        # Create worker jobs
-        job1 = WorkerJob(
-            owner_id=sample_agent.owner_id,
-            supervisor_run_id=supervisor_run.id,
-            task="Worker 1",
+        # Create commis jobs
+        job1 = CommisJob(
+            owner_id=sample_fiche.owner_id,
+            concierge_course_id=concierge_run.id,
+            task="Commis 1",
             status="success",
-            worker_id=worker1_id,
+            commis_id=commis1_id,
         )
-        job2 = WorkerJob(
-            owner_id=sample_agent.owner_id,
-            supervisor_run_id=supervisor_run.id,
-            task="Worker 2",
+        job2 = CommisJob(
+            owner_id=sample_fiche.owner_id,
+            concierge_course_id=concierge_run.id,
+            task="Commis 2",
             status="success",
-            worker_id=worker2_id,
+            commis_id=commis2_id,
         )
         db_session.add_all([job1, job2])
         db_session.commit()
 
         compiler = EvidenceCompiler(artifact_store=temp_artifact_store, db=db_session)
-        evidence = compiler.compile(run_id=supervisor_run.id, owner_id=sample_agent.owner_id, budget_bytes=4000)
+        evidence = compiler.compile(course_id=concierge_run.id, owner_id=sample_fiche.owner_id, budget_bytes=4000)
 
-        # Both workers should have evidence
+        # Both commis should have evidence
         assert len(evidence) == 2
         assert job1.id in evidence
         assert job2.id in evidence
@@ -347,92 +347,92 @@ class TestEvidenceCompiler:
         assert total_bytes <= 5000, f"Total evidence exceeds budget: {total_bytes} bytes"  # Allow margin
 
     def test_owner_id_security_scoping(
-        self, db_session: Session, sample_agent, supervisor_run: AgentRun, temp_artifact_store: WorkerArtifactStore
+        self, db_session: Session, sample_fiche, concierge_run: Course, temp_artifact_store: CommisArtifactStore
     ):
         """Test that owner_id prevents cross-user evidence leakage."""
         # Create another user
         other_user = create_user(db_session, email="other@example.com")
 
-        # Create worker for test_user
-        worker_id = temp_artifact_store.create_worker(
+        # Create commis for test_user
+        commis_id = temp_artifact_store.create_commis(
             task="Private task",
             config={},
-            owner_id=sample_agent.owner_id,
+            owner_id=sample_fiche.owner_id,
         )
         output = json.dumps({"ok": True, "data": {"result": "sensitive data"}})
-        temp_artifact_store.save_tool_output(worker_id, "ssh_exec", output, sequence=1)
+        temp_artifact_store.save_tool_output(commis_id, "ssh_exec", output, sequence=1)
 
-        # Create worker job
-        job = WorkerJob(
-            owner_id=sample_agent.owner_id,
-            supervisor_run_id=supervisor_run.id,
+        # Create commis job
+        job = CommisJob(
+            owner_id=sample_fiche.owner_id,
+            concierge_course_id=concierge_run.id,
             task="Private task",
             status="success",
-            worker_id=worker_id,
+            commis_id=commis_id,
         )
         db_session.add(job)
         db_session.commit()
 
         # Try to compile with other_user's owner_id
         compiler = EvidenceCompiler(artifact_store=temp_artifact_store, db=db_session)
-        evidence = compiler.compile(run_id=supervisor_run.id, owner_id=other_user.id)
+        evidence = compiler.compile(course_id=concierge_run.id, owner_id=other_user.id)
 
         # Should get no evidence (different owner)
         assert evidence == {}
 
     def test_missing_artifacts_graceful_degradation(
-        self, db_session: Session, sample_agent, supervisor_run: AgentRun, temp_artifact_store: WorkerArtifactStore
+        self, db_session: Session, sample_fiche, concierge_run: Course, temp_artifact_store: CommisArtifactStore
     ):
-        """Test that missing worker artifacts are handled gracefully."""
-        # Create worker job with non-existent worker_id
-        job = WorkerJob(
-            owner_id=sample_agent.owner_id,
-            supervisor_run_id=supervisor_run.id,
+        """Test that missing commis artifacts are handled gracefully."""
+        # Create commis job with non-existent commis_id
+        job = CommisJob(
+            owner_id=sample_fiche.owner_id,
+            concierge_course_id=concierge_run.id,
             task="Test task",
             status="success",
-            worker_id="non-existent-worker",
+            commis_id="non-existent-commis",
         )
         db_session.add(job)
         db_session.commit()
 
         compiler = EvidenceCompiler(artifact_store=temp_artifact_store, db=db_session)
-        evidence = compiler.compile(run_id=supervisor_run.id, owner_id=sample_agent.owner_id)
+        evidence = compiler.compile(course_id=concierge_run.id, owner_id=sample_fiche.owner_id)
 
         # Should have entry with error message
         assert job.id in evidence
         assert "unavailable" in evidence[job.id].lower()
 
     def test_error_envelope_marked_as_failed(
-        self, db_session: Session, sample_agent, supervisor_run: AgentRun, temp_artifact_store: WorkerArtifactStore
+        self, db_session: Session, sample_fiche, concierge_run: Course, temp_artifact_store: CommisArtifactStore
     ):
         """Test that error envelopes (ok=False) are marked as failed."""
-        worker_id = temp_artifact_store.create_worker(task="Test errors", config={}, owner_id=sample_agent.owner_id)
+        commis_id = temp_artifact_store.create_commis(task="Test errors", config={}, owner_id=sample_fiche.owner_id)
 
         # Add error envelope
         error_output = json.dumps({"ok": False, "error": {"type": "EXECUTION_ERROR", "message": "Connection timeout"}})
-        temp_artifact_store.save_tool_output(worker_id, "ssh_exec", error_output, sequence=1)
+        temp_artifact_store.save_tool_output(commis_id, "ssh_exec", error_output, sequence=1)
 
-        # Create worker job
-        job = WorkerJob(
-            owner_id=sample_agent.owner_id,
-            supervisor_run_id=supervisor_run.id,
+        # Create commis job
+        job = CommisJob(
+            owner_id=sample_fiche.owner_id,
+            concierge_course_id=concierge_run.id,
             task="Test errors",
             status="failed",
-            worker_id=worker_id,
+            commis_id=commis_id,
         )
         db_session.add(job)
         db_session.commit()
 
         compiler = EvidenceCompiler(artifact_store=temp_artifact_store, db=db_session)
-        evidence = compiler.compile(run_id=supervisor_run.id, owner_id=sample_agent.owner_id, budget_bytes=10000)
+        evidence = compiler.compile(course_id=concierge_run.id, owner_id=sample_fiche.owner_id, budget_bytes=10000)
 
         # Should be marked as failed
         assert "[FAILED]" in evidence[job.id]
         assert "Connection timeout" in evidence[job.id]
 
-    def test_discover_tool_artifacts(self, temp_artifact_store: WorkerArtifactStore):
+    def test_discover_tool_artifacts(self, temp_artifact_store: CommisArtifactStore):
         """Test artifact discovery and metadata extraction."""
-        worker_id = temp_artifact_store.create_worker(task="Test", config={}, owner_id=1)
+        commis_id = temp_artifact_store.create_commis(task="Test", config={}, owner_id=1)
 
         # Add multiple tool outputs
         outputs = [
@@ -442,10 +442,10 @@ class TestEvidenceCompiler:
         ]
 
         for seq, tool_name, output in outputs:
-            temp_artifact_store.save_tool_output(worker_id, tool_name, output, sequence=seq)
+            temp_artifact_store.save_tool_output(commis_id, tool_name, output, sequence=seq)
 
         compiler = EvidenceCompiler(artifact_store=temp_artifact_store)
-        artifacts = compiler._discover_tool_artifacts(worker_id)
+        artifacts = compiler._discover_tool_artifacts(commis_id)
 
         assert len(artifacts) == 3
 
@@ -463,7 +463,7 @@ class TestEvidenceCompiler:
         assert artifacts[1].failed  # exit_code=127
         assert not artifacts[2].failed  # no exit_code
 
-    def test_prioritize_artifacts(self, temp_artifact_store: WorkerArtifactStore):
+    def test_prioritize_artifacts(self, temp_artifact_store: CommisArtifactStore):
         """Test artifact prioritization logic."""
         # Create artifacts with different properties
         artifacts = [
@@ -487,7 +487,7 @@ class TestEvidenceCompiler:
         assert not prioritized[2].failed
         assert prioritized[2].sequence == 1
 
-    def test_truncate_with_head_tail(self, temp_artifact_store: WorkerArtifactStore):
+    def test_truncate_with_head_tail(self, temp_artifact_store: CommisArtifactStore):
         """Test head+tail truncation strategy."""
         compiler = EvidenceCompiler(artifact_store=temp_artifact_store)
 

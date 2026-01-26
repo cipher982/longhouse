@@ -1,7 +1,7 @@
 """Shared GitHub API utilities for tools and knowledge sync.
 
 Provides reusable HTTP client factories and headers for GitHub API requests.
-Used by both github_tools.py (agent tools) and knowledge_sync_service.py.
+Used by both github_tools.py (fiche tools) and knowledge_sync_service.py.
 """
 
 import httpx
@@ -23,7 +23,7 @@ def github_headers(token: str) -> dict[str, str]:
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "Swarmlet/1.0",
+        "User-Fiche": "Swarmlet/1.0",
     }
 
 

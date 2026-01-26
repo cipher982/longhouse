@@ -22,7 +22,7 @@ from zerg.services.workflow_engine import workflow_engine
 
 
 @pytest.mark.asyncio
-async def test_envelope_format_all_node_types(db, test_user, sample_agent):
+async def test_envelope_format_all_node_types(db, test_user, sample_fiche):
     """Test that all node types produce proper envelope format outputs."""
 
     # Mock tool for testing
@@ -34,7 +34,7 @@ async def test_envelope_format_all_node_types(db, test_user, sample_agent):
         mock_resolver_instance.get_tool = lambda name: mock_tool if name == "grading_tool" else None
         mock_resolver.return_value = mock_resolver_instance
 
-        # Mock AgentRunner
+        # Mock FicheRunner
         async def mock_run_thread(db, thread):
             # Create mock objects that look like ThreadMessage models
             mock_msg1 = type("MockMessage", (), {})()
@@ -53,10 +53,10 @@ async def test_envelope_format_all_node_types(db, test_user, sample_agent):
 
             return [mock_msg1, mock_msg2]
 
-        with patch("zerg.services.node_executors.AgentRunner") as mock_agent_runner:
+        with patch("zerg.services.node_executors.FicheRunner") as mock_fiche_runner:
             mock_runner_instance = type("MockRunner", (), {})()
             mock_runner_instance.run_thread = mock_run_thread
-            mock_agent_runner.return_value = mock_runner_instance
+            mock_fiche_runner.return_value = mock_runner_instance
 
             # Create workflow with all node types
             workflow_data = WorkflowData(
@@ -84,32 +84,32 @@ async def test_envelope_format_all_node_types(db, test_user, sample_agent):
                         position=Position(x=350, y=100),
                         config={"condition": "${tool-1.value.score} >= 90", "condition_type": "expression"},
                     ),
-                    # Agent node (high score branch)
+                    # Fiche node (high score branch)
                     WorkflowNode(
-                        id="agent-1",
-                        type="agent",
+                        id="fiche-1",
+                        type="fiche",
                         position=Position(x=500, y=50),
                         config={
-                            "agent_id": sample_agent.id,
+                            "fiche_id": sample_fiche.id,
                             "message": "Analyze this excellent score: ${tool-1.value.score} (${tool-1.value.grade})",
                         },
                     ),
-                    # Agent node (low score branch)
+                    # Fiche node (low score branch)
                     WorkflowNode(
-                        id="agent-2",
-                        type="agent",
+                        id="fiche-2",
+                        type="fiche",
                         position=Position(x=500, y=150),
-                        config={"agent_id": sample_agent.id, "message": "Analyze this score: ${tool-1.value.score}"},
+                        config={"fiche_id": sample_fiche.id, "message": "Analyze this score: ${tool-1.value.score}"},
                     ),
                 ],
                 edges=[
                     WorkflowEdge(**{"from_node_id": "trigger-1", "to_node_id": "tool-1"}),
                     WorkflowEdge(**{"from_node_id": "tool-1", "to_node_id": "conditional-1"}),
                     WorkflowEdge(
-                        **{"from_node_id": "conditional-1", "to_node_id": "agent-1", "config": {"branch": "true"}}
+                        **{"from_node_id": "conditional-1", "to_node_id": "fiche-1", "config": {"branch": "true"}}
                     ),
                     WorkflowEdge(
-                        **{"from_node_id": "conditional-1", "to_node_id": "agent-2", "config": {"branch": "false"}}
+                        **{"from_node_id": "conditional-1", "to_node_id": "fiche-2", "config": {"branch": "false"}}
                     ),
                 ],
             )
@@ -143,7 +143,7 @@ async def test_envelope_format_all_node_types(db, test_user, sample_agent):
             executed_nodes = {state.node_id: state for state in node_states}
 
             # Verify all nodes completed successfully and have envelope format
-            expected_nodes = ["trigger-1", "tool-1", "conditional-1", "agent-1"]
+            expected_nodes = ["trigger-1", "tool-1", "conditional-1", "fiche-1"]
             for node_id in expected_nodes:
                 assert node_id in executed_nodes, f"Node {node_id} should have executed"
                 state = executed_nodes[node_id]
@@ -170,17 +170,17 @@ async def test_envelope_format_all_node_types(db, test_user, sample_agent):
             assert conditional_state.output["value"]["branch"] == "true"
             assert conditional_state.output["meta"]["node_type"] == "conditional"
 
-            agent_state = executed_nodes["agent-1"]
-            assert "messages" in agent_state.output["value"]
-            assert agent_state.output["value"]["messages_created"] == 2
-            assert agent_state.output["meta"]["node_type"] == "agent"
+            fiche_state = executed_nodes["fiche-1"]
+            assert "messages" in fiche_state.output["value"]
+            assert fiche_state.output["value"]["messages_created"] == 2
+            assert fiche_state.output["meta"]["node_type"] == "fiche"
 
             # Verify high branch executed, low branch did not
-            assert "agent-2" not in executed_nodes
+            assert "fiche-2" not in executed_nodes
 
 
 @pytest.mark.asyncio
-async def test_envelope_format_variable_resolution_edge_cases(db, test_user, sample_agent):
+async def test_envelope_format_variable_resolution_edge_cases(db, test_user, sample_fiche):
     """Test envelope format variable resolution with complex scenarios."""
 
     with patch("zerg.services.node_executors.get_tool_resolver") as mock_resolver:
@@ -199,7 +199,7 @@ async def test_envelope_format_variable_resolution_edge_cases(db, test_user, sam
         mock_resolver_instance.get_tool = lambda name: mock_tool if name == "ml_analyzer" else None
         mock_resolver.return_value = mock_resolver_instance
 
-        # Mock AgentRunner
+        # Mock FicheRunner
         async def mock_run_thread(db, thread):
             # Create mock objects that look like ThreadMessage models
             mock_msg = type("MockMessage", (), {})()
@@ -211,10 +211,10 @@ async def test_envelope_format_variable_resolution_edge_cases(db, test_user, sam
 
             return [mock_msg]
 
-        with patch("zerg.services.node_executors.AgentRunner") as mock_agent_runner:
+        with patch("zerg.services.node_executors.FicheRunner") as mock_fiche_runner:
             mock_runner_instance = type("MockRunner", (), {})()
             mock_runner_instance.run_thread = mock_run_thread
-            mock_agent_runner.return_value = mock_runner_instance
+            mock_fiche_runner.return_value = mock_runner_instance
 
             # Create workflow with complex variable resolution
             workflow_data = WorkflowData(
@@ -236,11 +236,11 @@ async def test_envelope_format_variable_resolution_edge_cases(db, test_user, sam
                         },
                     ),
                     WorkflowNode(
-                        id="agent-complex",
-                        type="agent",
+                        id="fiche-complex",
+                        type="fiche",
                         position=Position(x=500, y=100),
                         config={
-                            "agent_id": sample_agent.id,
+                            "fiche_id": sample_fiche.id,
                             "message": (
                                 "Model analysis complete:\n"
                                 "- Summary: ${tool-complex.value.analysis.summary}\n"
@@ -257,7 +257,7 @@ async def test_envelope_format_variable_resolution_edge_cases(db, test_user, sam
                     WorkflowEdge(
                         **{
                             "from_node_id": "conditional-nested",
-                            "to_node_id": "agent-complex",
+                            "to_node_id": "fiche-complex",
                             "config": {"branch": "true"},
                         }
                     ),
@@ -299,19 +299,19 @@ async def test_envelope_format_variable_resolution_edge_cases(db, test_user, sam
             assert conditional_state.output["value"]["result"]  # 0.95 > 0.9
             assert conditional_state.output["value"]["branch"] == "true"
 
-            # Verify agent was executed (condition was true)
-            agent_state = (
+            # Verify fiche was executed (condition was true)
+            fiche_state = (
                 db.query(NodeExecutionState)
-                .filter_by(workflow_execution_id=execution_id, node_id="agent-complex")
+                .filter_by(workflow_execution_id=execution_id, node_id="fiche-complex")
                 .first()
             )
-            assert agent_state is not None
-            assert agent_state.phase == "finished"
-            assert agent_state.result == "success"
+            assert fiche_state is not None
+            assert fiche_state.phase == "finished"
+            assert fiche_state.result == "success"
 
 
 @pytest.mark.asyncio
-async def test_envelope_format_alias_support(db, test_user, sample_agent):
+async def test_envelope_format_alias_support(db, test_user, sample_fiche):
     """Test that envelope format properly supports legacy aliases (${node.result} → ${node.value})."""
 
     with patch("zerg.services.node_executors.get_tool_resolver") as mock_resolver:
@@ -322,7 +322,7 @@ async def test_envelope_format_alias_support(db, test_user, sample_agent):
         mock_resolver_instance.get_tool = lambda name: mock_tool if name == "number_gen" else None
         mock_resolver.return_value = mock_resolver_instance
 
-        # Mock AgentRunner
+        # Mock FicheRunner
         async def mock_run_thread(db, thread):
             # Create mock objects that look like ThreadMessage models
             mock_msg = type("MockMessage", (), {})()
@@ -334,10 +334,10 @@ async def test_envelope_format_alias_support(db, test_user, sample_agent):
 
             return [mock_msg]
 
-        with patch("zerg.services.node_executors.AgentRunner") as mock_agent_runner:
+        with patch("zerg.services.node_executors.FicheRunner") as mock_fiche_runner:
             mock_runner_instance = type("MockRunner", (), {})()
             mock_runner_instance.run_thread = mock_run_thread
-            mock_agent_runner.return_value = mock_runner_instance
+            mock_fiche_runner.return_value = mock_runner_instance
 
             # Create workflow using legacy ${node.result} alias
             workflow_data = WorkflowData(
@@ -359,11 +359,11 @@ async def test_envelope_format_alias_support(db, test_user, sample_agent):
                         },
                     ),
                     WorkflowNode(
-                        id="agent-alias",
-                        type="agent",
+                        id="fiche-alias",
+                        type="fiche",
                         position=Position(x=500, y=100),
                         config={
-                            "agent_id": sample_agent.id,
+                            "fiche_id": sample_fiche.id,
                             # Envelope format only
                             "message": "Tool result: ${tool-alias}, Value: ${tool-alias.value}, Tool name: ${tool-alias.meta.tool_name}",
                         },
@@ -374,7 +374,7 @@ async def test_envelope_format_alias_support(db, test_user, sample_agent):
                     WorkflowEdge(
                         **{
                             "from_node_id": "conditional-alias",
-                            "to_node_id": "agent-alias",
+                            "to_node_id": "fiche-alias",
                             "config": {"branch": "true"},
                         }
                     ),
@@ -415,15 +415,15 @@ async def test_envelope_format_alias_support(db, test_user, sample_agent):
             assert conditional_state.result == "success"
             assert conditional_state.output["value"]["result"]  # 42 == 42
 
-            # Verify agent was executed
-            agent_state = (
+            # Verify fiche was executed
+            fiche_state = (
                 db.query(NodeExecutionState)
-                .filter_by(workflow_execution_id=execution_id, node_id="agent-alias")
+                .filter_by(workflow_execution_id=execution_id, node_id="fiche-alias")
                 .first()
             )
-            assert agent_state is not None
-            assert agent_state.phase == "finished"
-            assert agent_state.result == "success"
+            assert fiche_state is not None
+            assert fiche_state.phase == "finished"
+            assert fiche_state.result == "success"
 
 
 if __name__ == "__main__":

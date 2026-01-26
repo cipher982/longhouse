@@ -2,7 +2,7 @@ import { request } from "./base";
 import type { Thread, ThreadMessage, ThreadUpdatePayload } from "./types";
 
 type ThreadCreate = {
-  agent_id: number;
+  fiche_id: number;
   title: string;
   thread_type: string;
   memory_strategy: string;
@@ -14,8 +14,8 @@ type ThreadMessageCreate = {
   content: string;
 };
 
-export async function fetchThreads(agentId: number, threadType?: string): Promise<Thread[]> {
-  const params = new URLSearchParams({ agent_id: String(agentId) });
+export async function fetchThreads(ficheId: number, threadType?: string): Promise<Thread[]> {
+  const params = new URLSearchParams({ fiche_id: String(ficheId) });
   if (threadType) {
     params.append("thread_type", threadType);
   }
@@ -32,9 +32,9 @@ export async function fetchThreadMessages(threadId: number): Promise<ThreadMessa
   return request<ThreadMessage[]>(`/threads/${threadId}/messages`);
 }
 
-export async function createThread(agentId: number, title: string): Promise<Thread> {
+export async function createThread(ficheId: number, title: string): Promise<Thread> {
   const payload: ThreadCreate = {
-    agent_id: agentId,
+    fiche_id: ficheId,
     title,
     thread_type: "chat",
     memory_strategy: "buffer",
@@ -57,8 +57,8 @@ export async function postThreadMessage(threadId: number, content: string): Prom
   });
 }
 
-export async function runThread(threadId: number): Promise<void> {
-  await request<void>(`/threads/${threadId}/run`, {
+export async function startThreadCourse(threadId: number): Promise<void> {
+  await request<void>(`/threads/${threadId}/courses`, {
     method: "POST",
   });
 }

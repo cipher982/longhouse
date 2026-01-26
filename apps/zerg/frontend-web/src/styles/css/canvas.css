@@ -16,7 +16,7 @@
   overflow: visible; /* Allow canvas dropdowns to escape */
 }
 
-#app-container.canvas-view > #agent-shelf {
+#app-container.canvas-view > #fiche-shelf {
   flex: 0 0 260px;
   min-width: 260px;
   max-width: 320px;
@@ -407,7 +407,7 @@ body.space-pan #node-canvas {
   transform: translateX(20px);
 }
 
-/* Simple responsive tweak when shelf collapses (redundant with agent_shelf.css but harmless) */
+/* Simple responsive tweak when shelf collapses (redundant with fiche_shelf.css but harmless) */
 @media (width <= 768px) {
   #app-container.canvas-view {
     flex-direction: column;

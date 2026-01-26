@@ -40,14 +40,14 @@ export interface DatabaseResetOptions {
 }
 
 /**
- * Reset database for a specific worker with retry and verification
+ * Reset database for a specific commis with retry and verification
  */
-export async function resetDatabaseForWorker(
-  workerId: string,
+export async function resetDatabaseForCommis(
+  commisId: string,
   options: DatabaseResetOptions = {}
 ): Promise<void> {
   const { retries = 3, timeout = 5000, skipVerification = false } = options;
-  const apiClient = createApiClient(workerId);
+  const apiClient = createApiClient(commisId);
 
   let attempts = 0;
 
@@ -58,11 +58,11 @@ export async function resetDatabaseForWorker(
 
       if (!skipVerification) {
         // Verify reset was successful
-        const agents = await apiClient.listAgents();
-        if (agents.length === 0) {
+        const fiches = await apiClient.listFiches();
+        if (fiches.length === 0) {
           return; // Success
         }
-        testLog.warn(`Database reset attempt ${attempts + 1}: Found ${agents.length} remaining agents`);
+        testLog.warn(`Database reset attempt ${attempts + 1}: Found ${fiches.length} remaining fiches`);
       } else {
         return; // Skip verification, assume success
       }
@@ -84,13 +84,13 @@ export async function resetDatabaseForWorker(
  */
 export async function resetDatabaseViaRequest(
   page: Page,
-  options: DatabaseResetOptions & { workerId?: string } = {}
+  options: DatabaseResetOptions & { commisId?: string } = {}
 ): Promise<void> {
-  const { retries = 3, workerId } = options;
-  const effectiveWorkerId = workerId ?? process.env.TEST_PARALLEL_INDEX ?? process.env.TEST_WORKER_INDEX;
+  const { retries = 3, commisId } = options;
+  const effectiveCommisId = commisId ?? process.env.TEST_PARALLEL_INDEX ?? process.env.TEST_WORKER_INDEX;
   let attempts = 0;
 
-  // Use single backend port; isolation via X-Test-Worker header
+  // Use single backend port; isolation via X-Test-Commis header
   const basePort = getBackendPort();
   const baseUrl = `http://localhost:${basePort}`;
 
@@ -99,7 +99,7 @@ export async function resetDatabaseViaRequest(
       const response = await page.request.post(`${baseUrl}/api/admin/reset-database`, {
         headers: {
           'Content-Type': 'application/json',
-          ...(effectiveWorkerId !== undefined ? { 'X-Test-Worker': effectiveWorkerId } : {}),
+          ...(effectiveCommisId !== undefined ? { 'X-Test-Commis': effectiveCommisId } : {}),
         },
         data: {
           reset_type: 'clear_data',
@@ -131,14 +131,14 @@ export async function resetDatabaseViaRequest(
 
 /**
  * Ensure database is clean before starting a test
- * Automatically handles worker ID from test context
+ * Automatically handles commis ID from test context
  */
-export async function ensureCleanDatabase(page: Page, workerId: string): Promise<void> {
+export async function ensureCleanDatabase(page: Page, commisId: string): Promise<void> {
   try {
-    await resetDatabaseForWorker(workerId, { retries: 2, skipVerification: false });
-    testLog.info(`✅ Database reset successful for worker ${workerId}`);
+    await resetDatabaseForCommis(commisId, { retries: 2, skipVerification: false });
+    testLog.info(`✅ Database reset successful for commis ${commisId}`);
   } catch (error) {
-    testLog.warn(`⚠️  Database reset failed for worker ${workerId}:`, error);
+    testLog.warn(`⚠️  Database reset failed for commis ${commisId}:`, error);
     // Don't throw - let test proceed in case it's a transient issue
   }
 }
@@ -156,13 +156,13 @@ export function createDatabaseResetHook(options: DatabaseResetOptions = {}) {
 /**
  * Verify database is actually empty (useful for debugging isolation issues)
  */
-export async function verifyDatabaseEmpty(workerId: string): Promise<boolean> {
+export async function verifyDatabaseEmpty(commisId: string): Promise<boolean> {
   try {
-    const apiClient = createApiClient(workerId);
-    const agents = await apiClient.listAgents();
-    return agents.length === 0;
+    const apiClient = createApiClient(commisId);
+    const fiches = await apiClient.listFiches();
+    return fiches.length === 0;
   } catch (error) {
-    testLog.warn(`Failed to verify database state for worker ${workerId}:`, error);
+    testLog.warn(`Failed to verify database state for commis ${commisId}:`, error);
     return false;
   }
 }
@@ -170,17 +170,17 @@ export async function verifyDatabaseEmpty(workerId: string): Promise<boolean> {
 /**
  * Get database statistics for debugging
  */
-export async function getDatabaseStats(workerId: string): Promise<{
-  agentCount: number;
-  workerId: string;
+export async function getDatabaseStats(commisId: string): Promise<{
+  ficheCount: number;
+  commisId: string;
   timestamp: string;
 }> {
-  const apiClient = createApiClient(workerId);
-  const agents = await apiClient.listAgents();
+  const apiClient = createApiClient(commisId);
+  const fiches = await apiClient.listFiches();
 
   return {
-    agentCount: agents.length,
-    workerId,
+    ficheCount: fiches.length,
+    commisId,
     timestamp: new Date().toISOString()
   };
 }

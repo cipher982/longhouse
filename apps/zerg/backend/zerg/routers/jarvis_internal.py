@@ -1,13 +1,13 @@
-"""Jarvis internal endpoints for run resume and background completion.
+"""Jarvis internal endpoints for course resume and background completion.
 
 These endpoints are called internally by the backend (not exposed to public API)
-to handle run resume when a supervisor is interrupted and workers complete.
+to handle course resume when a concierge is interrupted and commis complete.
 
-Uses the LangGraph-free supervisor resume pattern:
-- Supervisor calls spawn_worker() and the loop raises AgentInterrupted
-- Run status becomes WAITING
-- Worker completes, calls resume endpoint
-- AgentRunner.run_continuation() continues execution
+Uses the LangGraph-free concierge resume pattern:
+- Concierge calls spawn_commis() and the loop raises CourseInterrupted
+- Course status becomes WAITING
+- Commis completes, calls resume endpoint
+- FicheRunner.run_continuation() continues execution
 """
 
 import logging
@@ -22,117 +22,105 @@ from sqlalchemy.orm import Session
 
 from zerg.database import get_db
 from zerg.dependencies.auth import require_internal_call
-from zerg.models.enums import RunStatus
-from zerg.models.models import AgentRun
+from zerg.models.enums import CourseStatus
+from zerg.models.models import Course
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
-    prefix="/internal/runs",
+    prefix="/internal/courses",
     tags=["internal"],
     dependencies=[Depends(require_internal_call)],
 )
 
 
-class WorkerCompletionPayload(BaseModel):
-    """Payload for worker completion webhook."""
+class CommisCompletionPayload(BaseModel):
+    """Payload for commis completion webhook."""
 
-    job_id: int = Field(..., description="Worker job ID")
-    worker_id: str = Field(..., description="Worker artifact ID")
-    status: str = Field(..., description="Worker status: success or failed")
-    result_summary: str | None = Field(None, description="Brief summary of worker result")
+    job_id: int = Field(..., description="Commis job ID")
+    commis_id: str = Field(..., description="Commis artifact ID")
+    status: str = Field(..., description="Commis status: success or failed")
+    result_summary: str | None = Field(None, description="Brief summary of commis result")
     error: str | None = Field(None, description="Error message if failed")
 
 
-@router.post("/{run_id}/resume")
-async def resume_run(
-    run_id: int,
-    payload: WorkerCompletionPayload,
+@router.post("/{course_id}/resume")
+async def resume_course(
+    course_id: int,
+    payload: CommisCompletionPayload,
     db: Session = Depends(get_db),
 ):
-    """Resume a WAITING run when a worker completes.
+    """Resume a WAITING course when a commis completes.
 
-    Called internally when a worker completes while the supervisor run was
-    WAITING (interrupted by spawn_worker). Uses AgentRunner.run_continuation()
-    to continue the supervisor loop from persisted history.
+    Called internally when a commis completes while the concierge course was
+    WAITING (interrupted by spawn_commis). Uses FicheRunner.run_continuation()
+    to continue the concierge loop from persisted history.
 
     Args:
-        run_id: ID of the WAITING supervisor run
-        payload: Worker completion data
+        course_id: ID of the WAITING concierge course
+        payload: Commis completion data
         db: Database session
 
     Returns:
-        Dict with resumed run info
+        Dict with resumed course info
 
     Raises:
-        404: Run not found
-        500: Error resuming run
+        404: Course not found
+        500: Error resuming course
     """
-    run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
+    course = db.query(Course).filter(Course.id == course_id).first()
 
-    if not run:
+    if not course:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Run {run_id} not found",
+            detail=f"Course {course_id} not found",
         )
 
-    if run.status != RunStatus.WAITING:
-        # If run already completed or failed, this is a no-op (idempotent)
-        logger.info(f"Run {run_id} status is {run.status.value}, skipping resume")
+    if course.status != CourseStatus.WAITING:
+        # If course already completed or failed, this is a no-op (idempotent)
+        logger.info(f"Course {course_id} status is {course.status.value}, skipping resume")
         return {
             "status": "skipped",
-            "reason": f"Run is {run.status.value}, not WAITING",
-            "run_id": run_id,
+            "reason": f"Course is {course.status.value}, not WAITING",
+            "course_id": course_id,
         }
 
-    logger.info(f"Resuming run {run_id} after worker {payload.worker_id} completed with status {payload.status}")
+    logger.info(f"Resuming course {course_id} after commis {payload.commis_id} completed with status {payload.status}")
 
     try:
         # Prepare result text for resume
-        result_text = payload.result_summary or f"Worker job {payload.job_id} completed"
+        result_text = payload.result_summary or f"Commis job {payload.job_id} completed"
         if payload.status == "failed":
-            result_text = f"Worker failed: {payload.error or 'Unknown error'}"
+            result_text = f"Commis failed: {payload.error or 'Unknown error'}"
 
-        # Use resume_supervisor_with_worker_result which:
-        # 1. Locates the tool_call_id for the worker job
-        # 2. Injects the tool result via AgentRunner.run_continuation()
+        # Use resume_concierge_with_commis_result which:
+        # 1. Locates the tool_call_id for the commis job
+        # 2. Injects the tool result via FicheRunner.run_continuation()
         # 3. Emits completion events
-        from zerg.services.worker_resume import resume_supervisor_with_worker_result
+        from zerg.services.commis_resume import resume_concierge_with_commis_result
 
-        result = await resume_supervisor_with_worker_result(
+        result = await resume_concierge_with_commis_result(
             db=db,
-            run_id=run_id,
-            worker_result=result_text,
+            course_id=course_id,
+            commis_result=result_text,
             job_id=payload.job_id,
         )
 
         result_status = result.get("status") if result else "unknown"
-        # Preserve legacy "resumed" status on success, but surface skips/errors/waiting explicitly.
+        # Preserve "resumed" status on success, but surface skips/errors/waiting explicitly.
         resume_status = "resumed"
         if result_status in ("skipped", "error", "waiting"):
             resume_status = result_status
 
         return {
             "status": resume_status,
-            "run_id": run_id,
+            "course_id": course_id,
             "result_status": result_status,
         }
 
     except Exception as e:
-        logger.exception(f"Error resuming run {run_id}: {e}")
+        logger.exception(f"Error resuming course {course_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to resume run: {str(e)}",
+            detail=f"Failed to resume course: {str(e)}",
         )
-
-
-# Keep old endpoint for backwards compatibility during transition
-@router.post("/{run_id}/continue")
-async def continue_run(
-    run_id: int,
-    payload: WorkerCompletionPayload,
-    db: Session = Depends(get_db),
-):
-    """Deprecated: Use /resume instead. Kept for backwards compatibility."""
-    logger.warning(f"Deprecated /continue endpoint called for run {run_id}, redirecting to /resume")
-    return await resume_run(run_id, payload, db)

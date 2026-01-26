@@ -2,11 +2,11 @@
 
 This module generates pytest test cases from YAML datasets.
 Each test case:
-1. Runs the supervisor with the input task
+1. Runs the concierge with the input task
 2. Captures metrics
 3. Runs all assertions
 4. Reports pass/fail
-5. Saves results to per-worker temp files
+5. Saves results to per-commis temp files
 
 Run with: pytest apps/zerg/backend/evals/
 Or via Make: make eval
@@ -19,7 +19,7 @@ import asyncio
 import pytest
 
 from evals.asserters import SkipAssertion, run_assertion
-from evals.results_store import AssertionResult, CaseResult, get_worker_id, save_result_temp
+from evals.results_store import AssertionResult, CaseResult, get_commis_id, save_result_temp
 
 
 def pytest_generate_tests(metafunc):
@@ -90,7 +90,7 @@ async def test_eval_case(eval_case, eval_runner):
     print(f"  Status: {metrics.status}")
     print(f"  Latency: {metrics.latency_ms}ms")
     print(f"  Tokens: {metrics.total_tokens}")
-    print(f"  Workers: {metrics.workers_spawned}")
+    print(f"  Commis: {metrics.commis_spawned}")
     if metrics.result_text:
         result_preview = metrics.result_text[:100] + "..." if len(metrics.result_text) > 100 else metrics.result_text
         print(f"  Result: {result_preview}")
@@ -113,9 +113,9 @@ async def test_eval_case(eval_case, eval_runner):
                 params["pattern"] = assertion.value
             elif assertion.type == "tool_called":
                 params["tool_name"] = assertion.value
-            elif assertion.type in ["worker_result_contains", "artifact_contains"]:
+            elif assertion.type in ["commis_result_contains", "artifact_contains"]:
                 params["value"] = assertion.value
-            elif assertion.type == "worker_tool_called":
+            elif assertion.type == "commis_tool_called":
                 params["tool"] = assertion.value
             elif assertion.type == "artifact_exists":
                 params["path"] = assertion.value
@@ -127,13 +127,13 @@ async def test_eval_case(eval_case, eval_runner):
                 params["max_tokens"] = assertion.max
 
         if assertion.min is not None:
-            if assertion.type == "worker_spawned":
+            if assertion.type == "commis_spawned":
                 params["min_count"] = assertion.min
-            elif assertion.type == "worker_tool_called":
+            elif assertion.type == "commis_tool_called":
                 params["min_calls"] = assertion.min
 
         if assertion.max is not None:
-            if assertion.type == "worker_spawned":
+            if assertion.type == "commis_spawned":
                 params["max_count"] = assertion.max
 
         if assertion.count is not None:
@@ -147,9 +147,9 @@ async def test_eval_case(eval_case, eval_runner):
             params["rubric"] = assertion.rubric
             params["min_score"] = assertion.min_score or 0.7
 
-        # Worker-specific params
-        if assertion.worker_id is not None:
-            params["worker_id"] = assertion.worker_id
+        # Commis-specific params
+        if assertion.commis_id is not None:
+            params["commis_id"] = assertion.commis_id
         if assertion.path is not None:
             params["path"] = assertion.path
         if assertion.tool is not None:
@@ -188,17 +188,17 @@ async def test_eval_case(eval_case, eval_runner):
     print(f"{'='*60}\n")
 
     # Save result to temp file
-    worker_id = get_worker_id()
+    commis_id = get_commis_id()
     case_result = CaseResult(
         id=case.id,
         status="passed" if all_passed else "failed",
         latency_ms=metrics.latency_ms,
         total_tokens=metrics.total_tokens,
-        workers_spawned=metrics.workers_spawned,
+        commis_spawned=metrics.commis_spawned,
         assertions=assertion_results,
         failure_reason=None if all_passed else "One or more assertions failed",
     )
-    save_result_temp(worker_id, case_result)
+    save_result_temp(commis_id, case_result)
 
     # Fail test if any assertion failed
     assert all_passed, f"Test case {case.id} failed one or more assertions"

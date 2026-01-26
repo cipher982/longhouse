@@ -1,11 +1,11 @@
 version: "1.0"
 description: Live mode eval tests - require EVAL_MODE=live (real OpenAI calls, 9 test cases)
 
-# These tests use real LLM calls for both supervisor AND grader.
+# These tests use real LLM calls for both concierge AND grader.
 # Run with: make eval-live
 #
 # When EVAL_MODE=live:
-# - Supervisor uses real OpenAI (tests actual prompt quality)
+# - Concierge uses real OpenAI (tests actual prompt quality)
 # - LLM grader uses real OpenAI (semantic evaluation)
 #
 # These tests validate AGENT BEHAVIOR, not just infrastructure.
@@ -34,7 +34,7 @@ cases:
         min_score: 0.9
     tags: [conversational, llm_graded, live_only, critical]
 
-  # Test actual supervisor response quality
+  # Test actual concierge response quality
   - id: greeting_quality
     category: conversational
     description: Test that greeting response is friendly and helpful
@@ -58,13 +58,13 @@ cases:
   # Test clarification behavior
   - id: clarification_request
     category: conversational
-    description: Agent should ask for clarification on ambiguous requests
+    description: Fiche should ask for clarification on ambiguous requests
     input: "Check the server"
     timeout: 60
     assert:
       - type: status
         value: success
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0  # Should ask for clarification, not run commands
       - type: llm_graded
         rubric: |
@@ -80,10 +80,10 @@ cases:
   # Tool Selection Quality (3 tests)
   # ---------------------------------------------------------------------------
 
-  # Test that agent uses knowledge base for info queries
+  # Test that fiche uses knowledge base for info queries
   - id: tool_knowledge_base
     category: tool_usage
-    description: Agent should use knowledge_search for infrastructure info
+    description: Fiche should use knowledge_search for infrastructure info
     input: "What servers do I have access to?"
     timeout: 60
     assert:
@@ -91,24 +91,24 @@ cases:
         value: success
       - type: tool_called
         value: "knowledge_search"  # Should use KB tool for server lookup
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0  # This is a lookup, not an action
       - type: llm_graded
         rubric: |
-          For "What servers do I have access to?", the agent should:
+          For "What servers do I have access to?", the fiche should:
           1. Use knowledge_search or similar tool to retrieve server information
-          2. NOT spawn a worker (this is a lookup, not an action)
+          2. NOT spawn a commis (this is a lookup, not an action)
 
           Score 1.0 if response mentions specific servers by name (indicating knowledge was retrieved).
           Score 0.5 if response acknowledges server access but is vague.
-          Score 0.0 if response says "I don't know" or spawns a worker for this simple query.
+          Score 0.0 if response says "I don't know" or spawns a commis for this simple query.
         min_score: 0.5
     tags: [tool_usage, llm_graded, live_only]
 
   # Test that time queries use the right tool
   - id: tool_time_query
     category: tool_usage
-    description: Agent should use get_current_time for time queries
+    description: Fiche should use get_current_time for time queries
     input: "What time is it?"
     timeout: 60
     assert:
@@ -116,7 +116,7 @@ cases:
         value: success
       - type: tool_called
         value: "get_current_time"
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: llm_graded
         rubric: |
@@ -131,23 +131,23 @@ cases:
   # Test no unnecessary tool usage
   - id: tool_unnecessary_avoidance
     category: tool_usage
-    description: Agent should not use tools for simple conversational responses
+    description: Fiche should not use tools for simple conversational responses
     input: "Thanks for your help!"
     timeout: 60
     assert:
       - type: status
         value: success
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: llm_graded
         rubric: |
-          For "Thanks for your help!", the agent should:
-          1. Respond politely without spawning workers or using tools
+          For "Thanks for your help!", the fiche should:
+          1. Respond politely without spawning commis or using tools
           2. Keep the response brief and appropriate
 
           Score 1.0 if response is a polite acknowledgment with no tool usage.
           Score 0.5 if response is appropriate but uses unnecessary tools.
-          Score 0.0 if response is inappropriate or spawns workers.
+          Score 0.0 if response is inappropriate or spawns commis.
         min_score: 0.7
     tags: [tool_usage, llm_graded, live_only]
 
@@ -155,27 +155,27 @@ cases:
   # Delegation Quality (2 tests)
   # ---------------------------------------------------------------------------
 
-  # Test that infrastructure tasks spawn workers
+  # Test that infrastructure tasks spawn commis
   - id: delegation_infrastructure
     category: infrastructure
-    description: Agent should delegate infrastructure checks to workers
+    description: Fiche should delegate infrastructure checks to commis
     input: "Check disk space on cube"
     timeout: 90
     assert:
-      # Note: status may be 'deferred' when workers are spawned (correct behavior)
+      # Note: status may be 'deferred' when commis are spawned (correct behavior)
       # We rely on llm_graded to assess actual behavior quality
       - type: llm_graded
         rubric: |
-          For "Check disk space on cube", the agent should:
+          For "Check disk space on cube", the fiche should:
           1. Recognize this requires SSH access to a server
-          2. Spawn a worker to perform the check
-          3. Report results (or say a worker was dispatched)
+          2. Spawn a commis to perform the check
+          3. Report results (or say a commis was dispatched)
 
-          Score 1.0 if worker was spawned AND response acknowledges the disk check task.
-          Score 0.5 if response understands the task but worker handling is unclear.
+          Score 1.0 if commis was spawned AND response acknowledges the disk check task.
+          Score 0.5 if response understands the task but commis handling is unclear.
           Score 0.0 if response refuses or doesn't understand the infrastructure task.
         min_score: 0.5
-    tags: [infrastructure, llm_graded, live_only, worker]
+    tags: [infrastructure, llm_graded, live_only, commis]
 
   # Test delegation description quality
   - id: delegation_task_clarity
@@ -188,47 +188,47 @@ cases:
         rubric: |
           This is a conditional task with feedback loop.
 
-          Score 1.0 if the agent:
-          - Spawns a worker with the conditional task
-          - CORRECTLY reports whether nginx was found/restarted (synthesis of worker result)
-          - Shows evidence of having "seen" the worker's findings
+          Score 1.0 if the fiche:
+          - Spawns a commis with the conditional task
+          - CORRECTLY reports whether nginx was found/restarted (synthesis of commis result)
+          - Shows evidence of having "seen" the commis's findings
 
-          Score 0.5 if the agent spawns the worker but gives a generic acknowledgment without findings.
-          Score 0.0 if the agent refuses, is confused, or ignores the worker result.
+          Score 0.5 if the fiche spawns the commis but gives a generic acknowledgment without findings.
+          Score 0.0 if the fiche refuses, is confused, or ignores the commis result.
         min_score: 0.7
-    tags: [infrastructure, llm_graded, live_only, worker]
+    tags: [infrastructure, llm_graded, live_only, commis]
 
-  # Test multi-turn worker coordination
+  # Test multi-turn commis coordination
   - id: delegation_multi_step
     category: infrastructure
-    description: Agent should be able to coordinate multiple steps
+    description: Fiche should be able to coordinate multiple steps
     input: "Find out where the large files are on cube, then tell me the top 3 directories. [eval:wait]"
     timeout: 120
     assert:
       - type: llm_graded
         rubric: |
-          The agent needs to:
-          1. Spawn a worker to find large files/directories.
+          The fiche needs to:
+          1. Spawn a commis to find large files/directories.
           2. Receive and process findings.
           3. Synthesize the top 3 directories for the user.
 
           Score 1.0 if the response includes 3 specific directory names and their sizes.
           Score 0.5 if the response is vague or only lists some info.
-          Score 0.0 if it doesn't spawn a worker or fails completely.
+          Score 0.0 if it doesn't spawn a commis or fails completely.
         min_score: 0.7
-    tags: [infrastructure, llm_graded, live_only, worker]
+    tags: [infrastructure, llm_graded, live_only, commis]
 
   - id: delegation_failure_recovery
     category: infrastructure
-    description: Agent should report persistent failures gracefully
+    description: Fiche should report persistent failures gracefully
     input: "Restart the service 'non-existent-service' on clifford. [eval:wait]"
     timeout: 90
     assert:
       - type: llm_graded
         rubric: |
-          The agent needs to:
+          The fiche needs to:
           1. Attempt to restart the service (will fail).
-          2. Receive the failure from the worker.
+          2. Receive the failure from the commis.
           3. Report to the user that the service does not exist or restart failed.
           4. NOT loop or retry endlessly.
 
@@ -236,7 +236,7 @@ cases:
           Score 0.5 if it's vague about the failure.
           Score 0.0 if it hallucinates success or retries endlessly.
         min_score: 0.7
-    tags: [infrastructure, llm_graded, live_only, worker]
+    tags: [infrastructure, llm_graded, live_only, commis]
 
   # ---------------------------------------------------------------------------
   # Edge Case Handling (1 test)
@@ -245,17 +245,17 @@ cases:
   # Test graceful handling of unknown requests
   - id: edge_unknown_capability
     category: edge_case
-    description: Agent should gracefully handle requests beyond its capabilities
+    description: Fiche should gracefully handle requests beyond its capabilities
     input: "Can you order me a pizza?"
     timeout: 60
     assert:
       - type: status
         value: success
-      - type: worker_spawned
+      - type: commis_spawned
         count: 0
       - type: llm_graded
         rubric: |
-          "Order me a pizza" is outside the agent's capabilities (infrastructure/server management).
+          "Order me a pizza" is outside the fiche's capabilities (infrastructure/server management).
 
           Score 1.0 if response politely declines and explains its actual capabilities.
           Score 0.5 if response declines but doesn't explain what it CAN do.

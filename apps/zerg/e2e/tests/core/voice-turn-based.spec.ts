@@ -37,7 +37,7 @@ test.beforeEach(async ({ request }) => {
 });
 
 test.describe('Voice Turn-Based - Core', () => {
-  test('transcribe + supervisor response returns payload', async ({ request }) => {
+  test('transcribe + concierge response returns payload', async ({ request }) => {
     const audioBuffer = buildWavBuffer();
 
     const response = await request.post('/api/jarvis/voice/turn', {

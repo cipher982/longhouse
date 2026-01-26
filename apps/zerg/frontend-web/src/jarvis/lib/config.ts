@@ -89,28 +89,28 @@ export function toAbsoluteUrl(url: string): string {
     }
   }
 
-  // Playwright E2E: route HTTP requests to the per-worker SQLite DB even when
+  // Playwright E2E: route HTTP requests to the per-commis SQLite DB even when
   // intermediaries (like Vite dev proxy) drop custom headers.
-  const e2eWorkerId =
-    typeof window !== 'undefined' && (window as any).__TEST_WORKER_ID__ !== undefined
-      ? String((window as any).__TEST_WORKER_ID__)
+  const e2eCommisId =
+    typeof window !== 'undefined' && (window as any).__TEST_COMMIS_ID__ !== undefined
+      ? String((window as any).__TEST_COMMIS_ID__)
       : null;
 
-  const maybeAppendWorkerParam = (absoluteOrRelative: string): string => {
-    if (!e2eWorkerId) return absoluteOrRelative;
+  const maybeAppendCommisParam = (absoluteOrRelative: string): string => {
+    if (!e2eCommisId) return absoluteOrRelative;
     // Only tag API calls; never touch external URLs.
     if (!absoluteOrRelative.includes('/api/')) return absoluteOrRelative;
-    if (/[?&]worker=/.test(absoluteOrRelative)) return absoluteOrRelative;
+    if (/[?&]commis=/.test(absoluteOrRelative)) return absoluteOrRelative;
     const sep = absoluteOrRelative.includes('?') ? '&' : '?';
-    return `${absoluteOrRelative}${sep}worker=${encodeURIComponent(e2eWorkerId)}`;
+    return `${absoluteOrRelative}${sep}commis=${encodeURIComponent(e2eCommisId)}`;
   };
 
   // Fast path for common app URLs like "/api/..."
-  if (url.startsWith('/')) return maybeAppendWorkerParam(`${origin}${url}`);
+  if (url.startsWith('/')) return maybeAppendCommisParam(`${origin}${url}`);
 
   // Best-effort for other relative URLs ("./foo", "foo")
   try {
-    return maybeAppendWorkerParam(new URL(url, `${origin}/`).toString());
+    return maybeAppendCommisParam(new URL(url, `${origin}/`).toString());
   } catch {
     return url;
   }

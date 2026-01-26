@@ -22,8 +22,8 @@ export type CommisStatus = "success" | "failed";
 export interface ConnectedPayload {
   /** Connection confirmation message */
   message: string;
-  /** Run ID for this SSE stream */
-  run_id: number;
+  /** Course ID for this SSE stream */
+  course_id: number;
   /** Optional client-provided correlation ID */
   client_correlation_id?: string;
 }
@@ -36,24 +36,24 @@ export interface HeartbeatPayload {
 }
 
 export interface ConciergeStartedPayload {
-  /** Run ID (may be omitted in legacy events) */
-  run_id?: number;
+  /** Course ID (may be omitted in legacy events) */
+  course_id?: number;
   /** Thread ID for this conversation */
   thread_id: number;
   /** User's task/question */
   task: string;
   /** Unique identifier for the assistant message (stable across tokens/completion) */
   message_id: string;
-  /** For continuation runs, the message_id of the original run's message */
+  /** For continuation courses, the message_id of the original course's message */
   continuation_of_message_id?: string;
-  /** End-to-end trace ID for debugging (copy from UI for agent debugging) */
+  /** End-to-end trace ID for debugging (copy from UI for fiche debugging) */
   trace_id?: string;
 }
 
 export interface ConciergeThinkingPayload {
   /** Thinking status message */
   message: string;
-  run_id?: number;
+  course_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
@@ -61,7 +61,7 @@ export interface ConciergeThinkingPayload {
 export interface ConciergeTokenPayload {
   /** LLM token (may be empty string) */
   token: string;
-  run_id?: number;
+  course_id?: number;
   thread_id?: number;
   /** Unique identifier for the assistant message */
   message_id?: string;
@@ -77,8 +77,8 @@ export interface ConciergeCompletePayload {
   /** Execution duration in milliseconds */
   duration_ms?: number;
   usage?: UsageData;
-  run_id?: number;
-  agent_id?: number;
+  course_id?: number;
+  fiche_id?: number;
   thread_id?: number;
   /** URL for debug/inspection */
   debug_url?: string;
@@ -91,12 +91,12 @@ export interface ConciergeCompletePayload {
 export interface ConciergeDeferredPayload {
   /** Deferred status message */
   message: string;
-  /** URL to re-attach to the running execution */
+  /** URL to re-attach to the running course execution */
   attach_url?: string;
   /** Timeout that triggered deferral */
   timeout_seconds?: number;
-  run_id?: number;
-  agent_id?: number;
+  course_id?: number;
+  fiche_id?: number;
   thread_id?: number;
   /** Unique identifier for the assistant message */
   message_id?: string;
@@ -111,8 +111,8 @@ export interface ConciergeWaitingPayload {
   job_id?: number;
   /** If false, keep SSE stream open while waiting */
   close_stream?: boolean;
-  run_id?: number;
-  agent_id?: number;
+  course_id?: number;
+  fiche_id?: number;
   thread_id?: number;
   /** Unique identifier for the assistant message */
   message_id?: string;
@@ -121,8 +121,8 @@ export interface ConciergeWaitingPayload {
 }
 
 export interface ConciergeResumedPayload {
-  run_id?: number;
-  agent_id?: number;
+  course_id?: number;
+  fiche_id?: number;
   thread_id: number;
   /** Unique identifier for the assistant message */
   message_id: string;
@@ -135,7 +135,7 @@ export interface ErrorPayload {
   error?: string;
   /** Alternative error message field */
   message?: string;
-  run_id?: number;
+  course_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
@@ -149,7 +149,7 @@ export interface CommisSpawnedPayload {
   task: string;
   /** LLM model for commis */
   model?: string;
-  run_id?: number;
+  course_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
@@ -158,7 +158,7 @@ export interface CommisStartedPayload {
   job_id: number;
   /** Commis execution ID */
   commis_id: string;
-  run_id?: number;
+  course_id?: number;
   /** Commis task (may be truncated) */
   task?: string;
   /** End-to-end trace ID for debugging */
@@ -173,7 +173,7 @@ export interface CommisCompletePayload {
   duration_ms?: number;
   /** Error message (only present if status=failed) */
   error?: string;
-  run_id?: number;
+  course_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
@@ -184,7 +184,7 @@ export interface CommisSummaryReadyPayload {
   commis_id?: string;
   /** Extracted commis summary */
   summary: string;
-  run_id?: number;
+  course_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
@@ -196,8 +196,8 @@ export interface CommisToolStartedPayload {
   tool_call_id: string;
   /** Preview of tool arguments (may be truncated) */
   tool_args_preview?: string;
-  /** Required for security (prevents cross-run leakage) */
-  run_id?: number;
+  /** Required for security (prevents cross-course leakage) */
+  course_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
@@ -209,7 +209,7 @@ export interface CommisToolCompletedPayload {
   duration_ms: number;
   /** Preview of tool result (may be truncated) */
   result_preview?: string;
-  run_id?: number;
+  course_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
@@ -221,7 +221,7 @@ export interface CommisToolFailedPayload {
   duration_ms: number;
   /** Error message */
   error: string;
-  run_id?: number;
+  course_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
@@ -234,8 +234,8 @@ export interface ConciergeToolStartedPayload {
   tool_args_preview?: string;
   /** Full tool arguments (for persistence/raw view) */
   tool_args?: Record<string, any>;
-  /** Concierge run ID for correlation */
-  run_id?: number;
+  /** Concierge course ID for correlation */
+  course_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
@@ -250,7 +250,7 @@ export interface ConciergeToolProgressPayload {
   progress_pct?: number;
   /** Optional structured data (metrics, artifacts preview) */
   data?: Record<string, any>;
-  run_id?: number;
+  course_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
@@ -263,7 +263,7 @@ export interface ConciergeToolCompletedPayload {
   result_preview?: string;
   /** Full result (for persistence/raw view) */
   result?: Record<string, any>;
-  run_id?: number;
+  course_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
@@ -276,7 +276,7 @@ export interface ConciergeToolFailedPayload {
   error: string;
   /** Full error details (stack trace, context) */
   error_details?: Record<string, any>;
-  run_id?: number;
+  course_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }

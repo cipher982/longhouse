@@ -13,9 +13,9 @@ import pytest
 from langgraph.checkpoint.memory import MemorySaver
 
 from zerg.events import EventType, event_bus
-from zerg.models.enums import RunStatus
-from zerg.models.models import AgentRun
-from zerg.services.supervisor_service import SupervisorService
+from zerg.models.enums import CourseStatus
+from zerg.models.models import Course
+from zerg.services.concierge_service import ConciergeService
 
 
 class TestReturnOnDeferred:
@@ -49,13 +49,13 @@ class TestReturnOnDeferred:
             await asyncio.sleep(0.5)
             return [SimpleNamespace(role="assistant", content="completed")]
 
-        service = SupervisorService(db_session)
+        service = ConciergeService(db_session)
 
         with (
             patch("zerg.services.checkpointer.get_checkpointer", return_value=MemorySaver()),
-            patch("zerg.managers.agent_runner.AgentRunner.run_thread", new=AsyncMock(side_effect=slow_success)),
+            patch("zerg.managers.fiche_runner.FicheRunner.run_thread", new=AsyncMock(side_effect=slow_success)),
         ):
-            result = await service.run_supervisor(
+            result = await service.run_concierge(
                 owner_id=test_user.id,
                 task="slow task",
                 timeout=0.1,  # Short timeout to trigger deferred
@@ -66,8 +66,8 @@ class TestReturnOnDeferred:
         assert result.status == "deferred"
 
         # DB status should be DEFERRED
-        run = db_session.query(AgentRun).filter(AgentRun.id == result.run_id).first()
-        assert run.status == RunStatus.DEFERRED
+        run = db_session.query(Course).filter(Course.id == result.course_id).first()
+        assert run.status == CourseStatus.DEFERRED
 
         # Should have emitted CONCIERGE_DEFERRED event
         event_types = [e[0] for e in captured_events]
@@ -83,13 +83,13 @@ class TestReturnOnDeferred:
             await asyncio.sleep(0.3)
             return [SimpleNamespace(role="assistant", content="completed after timeout")]
 
-        service = SupervisorService(db_session)
+        service = ConciergeService(db_session)
 
         with (
             patch("zerg.services.checkpointer.get_checkpointer", return_value=MemorySaver()),
-            patch("zerg.managers.agent_runner.AgentRunner.run_thread", new=AsyncMock(side_effect=slow_success)),
+            patch("zerg.managers.fiche_runner.FicheRunner.run_thread", new=AsyncMock(side_effect=slow_success)),
         ):
-            result = await service.run_supervisor(
+            result = await service.run_concierge(
                 owner_id=test_user.id,
                 task="slow task that completes",
                 timeout=0.1,  # Short timeout
@@ -100,8 +100,8 @@ class TestReturnOnDeferred:
         assert result.status == "success"
 
         # DB status should be SUCCESS
-        run = db_session.query(AgentRun).filter(AgentRun.id == result.run_id).first()
-        assert run.status == RunStatus.SUCCESS
+        run = db_session.query(Course).filter(Course.id == result.course_id).first()
+        assert run.status == CourseStatus.SUCCESS
 
         # Should have both DEFERRED and COMPLETE events
         event_types = [e[0] for e in captured_events]
@@ -118,13 +118,13 @@ class TestReturnOnDeferred:
             await asyncio.sleep(0.3)
             raise RuntimeError("simulated failure")
 
-        service = SupervisorService(db_session)
+        service = ConciergeService(db_session)
 
         with (
             patch("zerg.services.checkpointer.get_checkpointer", return_value=MemorySaver()),
-            patch("zerg.managers.agent_runner.AgentRunner.run_thread", new=AsyncMock(side_effect=slow_fail)),
+            patch("zerg.managers.fiche_runner.FicheRunner.run_thread", new=AsyncMock(side_effect=slow_fail)),
         ):
-            result = await service.run_supervisor(
+            result = await service.run_concierge(
                 owner_id=test_user.id,
                 task="slow task that fails",
                 timeout=0.1,
@@ -136,8 +136,8 @@ class TestReturnOnDeferred:
         assert "simulated failure" in result.error
 
         # DB status should be FAILED
-        run = db_session.query(AgentRun).filter(AgentRun.id == result.run_id).first()
-        assert run.status == RunStatus.FAILED
+        run = db_session.query(Course).filter(Course.id == result.course_id).first()
+        assert run.status == CourseStatus.FAILED
 
         # Should have DEFERRED and ERROR events
         event_types = [e[0] for e in captured_events]
@@ -153,13 +153,13 @@ class TestReturnOnDeferred:
         async def fast_success(*_args, **_kwargs):
             return [SimpleNamespace(role="assistant", content="quick result")]
 
-        service = SupervisorService(db_session)
+        service = ConciergeService(db_session)
 
         with (
             patch("zerg.services.checkpointer.get_checkpointer", return_value=MemorySaver()),
-            patch("zerg.managers.agent_runner.AgentRunner.run_thread", new=AsyncMock(side_effect=fast_success)),
+            patch("zerg.managers.fiche_runner.FicheRunner.run_thread", new=AsyncMock(side_effect=fast_success)),
         ):
-            result = await service.run_supervisor(
+            result = await service.run_concierge(
                 owner_id=test_user.id,
                 task="fast task",
                 timeout=10,  # Long timeout - won't trigger

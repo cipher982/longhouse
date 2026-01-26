@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from tests.conftest import TEST_MODEL
-from tests.conftest import TEST_WORKER_MODEL
+from tests.conftest import TEST_COMMIS_MODEL
 from zerg.config import Settings
 from zerg.crud import crud
 from zerg.main import app
@@ -56,7 +56,7 @@ def _mock_settings_with_allowlist(allowed_model: str):
         max_users=real_settings.max_users,
         admin_emails=real_settings.admin_emails,
         allowed_models_non_admin=allowed_model,  # Override this
-        daily_runs_per_user=real_settings.daily_runs_per_user,
+        daily_courses_per_user=real_settings.daily_courses_per_user,
         daily_cost_per_user_cents=real_settings.daily_cost_per_user_cents,
         daily_cost_global_cents=real_settings.daily_cost_global_cents,
         discord_webhook_url=real_settings.discord_webhook_url,
@@ -79,10 +79,10 @@ def _mock_settings_with_allowlist(allowed_model: str):
         container_tools_enabled=real_settings.container_tools_enabled,
         roundabout_routing_model=real_settings.roundabout_routing_model,
         roundabout_llm_timeout=real_settings.roundabout_llm_timeout,
-        supervisor_tool_output_max_chars=real_settings.supervisor_tool_output_max_chars,
-        supervisor_tool_output_preview_chars=real_settings.supervisor_tool_output_preview_chars,
+        concierge_tool_output_max_chars=real_settings.concierge_tool_output_max_chars,
+        concierge_tool_output_preview_chars=real_settings.concierge_tool_output_preview_chars,
         e2e_use_postgres_schemas=real_settings.e2e_use_postgres_schemas,
-        e2e_worker_id=real_settings.e2e_worker_id,
+        e2e_commis_id=real_settings.e2e_commis_id,
         jobs_git_repo_url=real_settings.jobs_git_repo_url,
         jobs_git_branch=real_settings.jobs_git_branch,
         jobs_git_token=real_settings.jobs_git_token,
@@ -93,20 +93,20 @@ def _mock_settings_with_allowlist(allowed_model: str):
 
 
 @pytest.mark.asyncio
-async def test_non_admin_create_agent_disallowed_model(client, db_session, _dev_user):
-    # Mock get_settings to return allowlist restricted to TEST_WORKER_MODEL
-    mock_settings = _mock_settings_with_allowlist(TEST_WORKER_MODEL)
+async def test_non_admin_create_fiche_disallowed_model(client, db_session, _dev_user):
+    # Mock get_settings to return allowlist restricted to TEST_COMMIS_MODEL
+    mock_settings = _mock_settings_with_allowlist(TEST_COMMIS_MODEL)
 
-    # Attempt to create agent with a disallowed model
+    # Attempt to create fiche with a disallowed model
     from zerg.dependencies.auth import get_current_user
 
     app.dependency_overrides[get_current_user] = lambda: _dev_user
     try:
-        with patch("zerg.routers.agents.get_settings", return_value=mock_settings):
+        with patch("zerg.routers.fiches.get_settings", return_value=mock_settings):
             resp = client.post(
-                "/api/agents",
+                "/api/fiches",
                 json={
-                    "name": "NA agent",
+                    "name": "NA fiche",
                     "system_instructions": "sys",
                     "task_instructions": "task",
                     "model": TEST_MODEL,  # not in allowlist
@@ -122,21 +122,21 @@ async def test_non_admin_create_agent_disallowed_model(client, db_session, _dev_
 
 
 @pytest.mark.asyncio
-async def test_non_admin_create_agent_allowed_model(client, db_session, _dev_user):
-    mock_settings = _mock_settings_with_allowlist(TEST_WORKER_MODEL)
+async def test_non_admin_create_fiche_allowed_model(client, db_session, _dev_user):
+    mock_settings = _mock_settings_with_allowlist(TEST_COMMIS_MODEL)
 
     from zerg.dependencies.auth import get_current_user
 
     app.dependency_overrides[get_current_user] = lambda: _dev_user
     try:
-        with patch("zerg.routers.agents.get_settings", return_value=mock_settings):
+        with patch("zerg.routers.fiches.get_settings", return_value=mock_settings):
             resp = client.post(
-                "/api/agents",
+                "/api/fiches",
                 json={
-                    "name": "OK agent",
+                    "name": "OK fiche",
                     "system_instructions": "sys",
                     "task_instructions": "task",
-                    "model": TEST_WORKER_MODEL,
+                    "model": TEST_COMMIS_MODEL,
                     "schedule": None,
                     "config": {},
                 },
@@ -146,24 +146,24 @@ async def test_non_admin_create_agent_allowed_model(client, db_session, _dev_use
             del app.dependency_overrides[get_current_user]
     assert resp.status_code == 201, resp.text
     data = resp.json()
-    assert data["model"] == TEST_WORKER_MODEL
+    assert data["model"] == TEST_COMMIS_MODEL
 
 
 @pytest.mark.asyncio
 async def test_admin_bypasses_model_allowlist(client, db_session):
     # Restrict allowlist, but override current_user to ADMIN
-    mock_settings = _mock_settings_with_allowlist(TEST_WORKER_MODEL)
+    mock_settings = _mock_settings_with_allowlist(TEST_COMMIS_MODEL)
     admin = _make_admin_user(db_session)
 
     from zerg.dependencies.auth import get_current_user
 
     app.dependency_overrides[get_current_user] = lambda: admin
     try:
-        with patch("zerg.routers.agents.get_settings", return_value=mock_settings):
+        with patch("zerg.routers.fiches.get_settings", return_value=mock_settings):
             resp = client.post(
-                "/api/agents",
+                "/api/fiches",
                 json={
-                    "name": "Admin agent",
+                    "name": "Admin fiche",
                     "system_instructions": "sys",
                     "task_instructions": "task",
                     "model": TEST_MODEL,  # disallowed for non-admins
@@ -182,7 +182,7 @@ async def test_admin_bypasses_model_allowlist(client, db_session):
 
 @pytest.mark.asyncio
 async def test_models_endpoint_filtered_for_non_admin(client, db_session, _dev_user):
-    mock_settings = _mock_settings_with_allowlist(TEST_WORKER_MODEL)
+    mock_settings = _mock_settings_with_allowlist(TEST_COMMIS_MODEL)
     from zerg.dependencies.auth import get_current_user
 
     app.dependency_overrides[get_current_user] = lambda: _dev_user
@@ -194,12 +194,12 @@ async def test_models_endpoint_filtered_for_non_admin(client, db_session, _dev_u
             del app.dependency_overrides[get_current_user]
     assert resp.status_code == 200
     ids = {m["id"] for m in resp.json()}
-    assert ids == {TEST_WORKER_MODEL}
+    assert ids == {TEST_COMMIS_MODEL}
 
 
 @pytest.mark.asyncio
 async def test_models_endpoint_admin_sees_all(client, db_session):
-    mock_settings = _mock_settings_with_allowlist(TEST_WORKER_MODEL)
+    mock_settings = _mock_settings_with_allowlist(TEST_COMMIS_MODEL)
     admin = _make_admin_user(db_session)
 
     from zerg.dependencies.auth import get_current_user
@@ -215,26 +215,26 @@ async def test_models_endpoint_admin_sees_all(client, db_session):
     assert resp.status_code == 200
     ids = {m["id"] for m in resp.json()}
     # Registry includes more than the single allowed id
-    assert TEST_WORKER_MODEL in ids and len(ids) > 1
+    assert TEST_COMMIS_MODEL in ids and len(ids) > 1
 
 
 @pytest.mark.asyncio
-async def test_non_admin_update_agent_disallowed_model(client, db_session, _dev_user):
-    mock_settings = _mock_settings_with_allowlist(TEST_WORKER_MODEL)
+async def test_non_admin_update_fiche_disallowed_model(client, db_session, _dev_user):
+    mock_settings = _mock_settings_with_allowlist(TEST_COMMIS_MODEL)
     # Ensure current user is non-admin dev user
     from zerg.dependencies.auth import get_current_user
 
     app.dependency_overrides[get_current_user] = lambda: _dev_user
     try:
-        with patch("zerg.routers.agents.get_settings", return_value=mock_settings):
-            # Create an allowed agent first
+        with patch("zerg.routers.fiches.get_settings", return_value=mock_settings):
+            # Create an allowed fiche first
             resp = client.post(
-                "/api/agents",
+                "/api/fiches",
                 json={
-                    "name": "Agent",
+                    "name": "Fiche",
                     "system_instructions": "sys",
                     "task_instructions": "task",
-                    "model": TEST_WORKER_MODEL,
+                    "model": TEST_COMMIS_MODEL,
                     "schedule": None,
                     "config": {},
                 },
@@ -244,7 +244,7 @@ async def test_non_admin_update_agent_disallowed_model(client, db_session, _dev_
 
             # Try to update to disallowed model
             resp2 = client.put(
-                f"/api/agents/{aid}",
+                f"/api/fiches/{aid}",
                 json={
                     "model": TEST_MODEL,
                 },

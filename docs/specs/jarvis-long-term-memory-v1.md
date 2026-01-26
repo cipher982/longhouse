@@ -88,7 +88,7 @@ We will add a Zerg-native **Memory Files** system backed by Postgres. Agents int
 
 | Tier | Purpose | Storage | Access | Example |
 |------|---------|---------|--------|---------|
-| Procedural | Stable preferences/rules | `AgentMemoryKV` | `agent_memory_*` tools | “Always ask for server name” |
+| Procedural | Stable preferences/rules | `AgentMemoryKV` | `fiche_memory_*` tools | “Always ask for server name” |
 | Semantic | Facts/docs | Knowledge Base | `knowledge_search` tool | “Zerg server IPs” |
 | Episodic | Past interactions | Memory Files | `memory_*` tools | “HDRPop troubleshooting Jan 5” |
 

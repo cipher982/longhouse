@@ -1,5 +1,5 @@
 /**
- * Minimal Reporter for AI Agent Consumption
+ * Minimal Reporter for AI Fiche Consumption
  *
  * Progressive disclosure pattern:
  * - stdout: 3-4 lines (pass count, fail list if any)
@@ -7,7 +7,7 @@
  * - test-results/errors.txt: Human-readable error details
  *
  * Design principles:
- * - AI agents need pass/fail signal, not verbose logs
+ * - AI fiches need pass/fail signal, not verbose logs
  * - Details available on-demand via file queries
  * - Machine-readable JSON for programmatic access
  */

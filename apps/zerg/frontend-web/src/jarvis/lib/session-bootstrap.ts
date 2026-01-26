@@ -7,7 +7,7 @@
  * previously fetched history separately, causing divergence.
  *
  * ARCHITECTURE:
- * Server history (Supervisor/Postgres) ──single query──> Bootstrap Result ──> UI (full history)
+ * Server history (Concierge/Postgres) ──single query──> Bootstrap Result ──> UI (full history)
  *                                                                    ──> Realtime (trimmed + mapped)
  */
 

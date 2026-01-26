@@ -18,15 +18,15 @@ test.describe('Error Handling and Edge Cases', () => {
   test('API error handling with invalid data', async ({ page, request }) => {
     console.log('🚀 Starting API error handling test...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
-    console.log('📊 Worker ID:', workerId);
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
+    console.log('📊 Commis ID:', commisId);
 
-    // Test 1: Invalid agent creation - missing required fields
-    console.log('📊 Test 1: Invalid agent creation - missing fields');
+    // Test 1: Invalid fiche creation - missing required fields
+    console.log('📊 Test 1: Invalid fiche creation - missing fields');
     try {
-      const response = await request.post('/api/agents', {
+      const response = await request.post('/api/fiches', {
         headers: {
-          'X-Test-Worker': workerId,
+          'X-Test-Commis': commisId,
           'Content-Type': 'application/json',
         },
         data: {
@@ -35,7 +35,7 @@ test.describe('Error Handling and Edge Cases', () => {
         }
       });
 
-      console.log('📊 Invalid agent creation status:', response.status());
+      console.log('📊 Invalid fiche creation status:', response.status());
       expect(response.status()).toBe(422); // Validation error expected
 
       const errorResponse = await response.json();
@@ -49,9 +49,9 @@ test.describe('Error Handling and Edge Cases', () => {
     // Test 2: Invalid JSON payload
     console.log('📊 Test 2: Invalid JSON payload');
     try {
-      const response = await request.post('/api/agents', {
+      const response = await request.post('/api/fiches', {
         headers: {
-          'X-Test-Worker': workerId,
+          'X-Test-Commis': commisId,
           'Content-Type': 'application/json',
         },
         data: 'invalid-json-string'
@@ -68,9 +68,9 @@ test.describe('Error Handling and Edge Cases', () => {
     console.log('📊 Test 3: Large payload handling');
     try {
       const largeString = 'x'.repeat(10000); // 10KB string
-      const response = await request.post('/api/agents', {
+      const response = await request.post('/api/fiches', {
         headers: {
-          'X-Test-Worker': workerId,
+          'X-Test-Commis': commisId,
           'Content-Type': 'application/json',
         },
         data: {
@@ -94,8 +94,8 @@ test.describe('Error Handling and Edge Cases', () => {
     // Test 4: Invalid HTTP methods
     console.log('📊 Test 4: Invalid HTTP methods');
     try {
-      const response = await request.patch('/api/agents', {
-        headers: { 'X-Test-Worker': workerId },
+      const response = await request.patch('/api/fiches', {
+        headers: { 'X-Test-Commis': commisId },
         data: { test: 'data' }
       });
 
@@ -109,8 +109,8 @@ test.describe('Error Handling and Edge Cases', () => {
     // Test 5: Non-existent resource access
     console.log('📊 Test 5: Non-existent resource access');
     try {
-      const response = await request.get('/api/agents/999999', {
-        headers: { 'X-Test-Worker': workerId }
+      const response = await request.get('/api/fiches/999999', {
+        headers: { 'X-Test-Commis': commisId }
       });
 
       console.log('📊 Non-existent resource status:', response.status());
@@ -126,39 +126,39 @@ test.describe('Error Handling and Edge Cases', () => {
   test('Database constraint and data integrity', async ({ page, request }) => {
     console.log('🚀 Starting database constraint test...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
-    // Test 1: Create agent with duplicate name (if uniqueness enforced)
+    // Test 1: Create fiche with duplicate name (if uniqueness enforced)
     console.log('📊 Test 1: Duplicate name handling');
-    const agentName = `Duplicate Test Agent ${Date.now()}`;
+    const ficheName = `Duplicate Test Fiche ${Date.now()}`;
 
-    // Create first agent
-    const firstResponse = await request.post('/api/agents', {
+    // Create first fiche
+    const firstResponse = await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {
-        name: agentName,
-        system_instructions: 'First agent',
+        name: ficheName,
+        system_instructions: 'First fiche',
         task_instructions: 'Test duplicate handling',
         model: 'gpt-mock',
       }
     });
 
     expect(firstResponse.status()).toBe(201);
-    const firstAgent = await firstResponse.json();
-    console.log('📊 First agent created:', firstAgent.id);
+    const firstFiche = await firstResponse.json();
+    console.log('📊 First fiche created:', firstFiche.id);
 
     // Attempt to create duplicate
-    const duplicateResponse = await request.post('/api/agents', {
+    const duplicateResponse = await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {
-        name: agentName,
-        system_instructions: 'Second agent with same name',
+        name: ficheName,
+        system_instructions: 'Second fiche with same name',
         task_instructions: 'Test duplicate handling',
         model: 'gpt-mock',
       }
@@ -175,9 +175,9 @@ test.describe('Error Handling and Edge Cases', () => {
     console.log('📊 Test 2: Field length validation');
     const extremelyLongName = 'x'.repeat(1000);
 
-    const longFieldResponse = await request.post('/api/agents', {
+    const longFieldResponse = await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {
@@ -201,20 +201,20 @@ test.describe('Error Handling and Edge Cases', () => {
   test('Concurrent operations and race conditions', async ({ page, request }) => {
     console.log('🚀 Starting concurrency test...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
     const timestamp = Date.now();
 
-    // Test 1: Concurrent agent creation
-    console.log('📊 Test 1: Concurrent agent creation');
+    // Test 1: Concurrent fiche creation
+    console.log('📊 Test 1: Concurrent fiche creation');
     const concurrentRequests = Array.from({ length: 5 }, (_, i) =>
-      request.post('/api/agents', {
+      request.post('/api/fiches', {
         headers: {
-          'X-Test-Worker': workerId,
+          'X-Test-Commis': commisId,
           'Content-Type': 'application/json',
         },
         data: {
-          name: `Concurrent Agent ${i} ${timestamp}`,
-          system_instructions: `Concurrent test agent ${i}`,
+          name: `Concurrent Fiche ${i} ${timestamp}`,
+          system_instructions: `Concurrent test fiche ${i}`,
           task_instructions: 'Test concurrent creation',
           model: 'gpt-mock',
         }
@@ -235,8 +235,8 @@ test.describe('Error Handling and Edge Cases', () => {
     // Test 2: Rapid-fire requests to same endpoint
     console.log('📊 Test 2: Rapid-fire GET requests');
     const rapidRequests = Array.from({ length: 10 }, () =>
-      request.get('/api/agents', {
-        headers: { 'X-Test-Worker': workerId }
+      request.get('/api/fiches', {
+        headers: { 'X-Test-Commis': commisId }
       })
     );
 
@@ -254,7 +254,7 @@ test.describe('Error Handling and Edge Cases', () => {
   test('UI error state handling', async ({ page, request }) => {
     console.log('🚀 Starting UI error state test...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Navigate to application
     await page.goto('/');

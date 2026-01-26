@@ -1,5 +1,5 @@
 /**
- * ToolCard - Displays a supervisor tool call with progressive disclosure
+ * ToolCard - Displays a concierge tool call with progressive disclosure
  *
  * Three levels of detail:
  * - Collapsed (default): icon + name + status + duration
@@ -13,11 +13,11 @@
  */
 
 import React, { useState, useMemo } from 'react';
-import type { SupervisorToolCall, ToolLogEntry } from '../../lib/supervisor-tool-store';
+import type { ConciergeToolCall, ToolLogEntry } from '../../lib/concierge-tool-store';
 import './ToolCard.css';
 
 interface ToolCardProps {
-  tool: SupervisorToolCall;
+  tool: ConciergeToolCall;
 }
 
 // Tool name to icon mapping
@@ -60,7 +60,7 @@ function formatDuration(ms: number | undefined, startedAt: number, status: strin
   return `${(duration / 1000).toFixed(1)}s`;
 }
 
-function getStatusIcon(status: SupervisorToolCall['status']): string {
+function getStatusIcon(status: ConciergeToolCall['status']): string {
   switch (status) {
     case 'running':
       return '⏳';

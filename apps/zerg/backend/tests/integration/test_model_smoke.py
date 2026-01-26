@@ -223,7 +223,7 @@ class TestMakeLlmIntegration:
     @pytest.mark.parametrize("model", OPENAI_MODELS, ids=lambda m: m.id)
     def test_make_llm_openai_models(self, model):
         """_make_llm should correctly configure OpenAI models."""
-        from zerg.services.supervisor_react_engine import _make_llm
+        from zerg.services.concierge_react_engine import _make_llm
 
         llm = _make_llm(model.id, tools=TEST_TOOLS)
 
@@ -239,7 +239,7 @@ class TestMakeLlmIntegration:
     @pytest.mark.parametrize("model", GROQ_MODELS, ids=lambda m: m.id)
     def test_make_llm_groq_models(self, model):
         """_make_llm should correctly configure Groq models with base_url."""
-        from zerg.services.supervisor_react_engine import _make_llm
+        from zerg.services.concierge_react_engine import _make_llm
 
         llm = _make_llm(model.id, tools=TEST_TOOLS)
 
@@ -254,7 +254,7 @@ class TestMakeLlmIntegration:
     @pytest.mark.skipif(not has_openai_key(), reason="OPENAI_API_KEY not set")
     def test_make_llm_with_reasoning_effort(self):
         """_make_llm should pass reasoning_effort for capable models."""
-        from zerg.services.supervisor_react_engine import _make_llm
+        from zerg.services.concierge_react_engine import _make_llm
 
         # Get a model that supports reasoning
         reasoning_model = next(

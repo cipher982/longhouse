@@ -103,13 +103,13 @@ def test_internal_endpoint_requires_token(monkeypatch, client, db_session):
 
     resp = client.post(
         "/api/internal/runs/123/continue",
-        json={"job_id": 1, "worker_id": "w1", "status": "success", "result_summary": "ok"},
+        json={"job_id": 1, "commis_id": "w1", "status": "success", "result_summary": "ok"},
     )
     assert resp.status_code == 403
 
     resp_ok = client.post(
         "/api/internal/runs/123/continue",
         headers={"X-Internal-Token": "super-secret-token-123456"},
-        json={"job_id": 1, "worker_id": "w1", "status": "success", "result_summary": "ok"},
+        json={"job_id": 1, "commis_id": "w1", "status": "success", "result_summary": "ok"},
     )
     assert resp_ok.status_code == 404

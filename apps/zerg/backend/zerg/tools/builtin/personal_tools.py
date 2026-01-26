@@ -1,6 +1,6 @@
 """Personal tools for Jarvis integration (Phase 4 v2.1).
 
-These tools enable Supervisor to access personal data sources:
+These tools enable Concierge to access personal data sources:
 - Location: GPS position from Traccar tracking server
 - Health: Recovery/sleep/strain from WHOOP
 - Notes: Search Obsidian vault via Runner
@@ -45,7 +45,7 @@ def _run_coro_sync(coro: Any) -> Any:
     except RuntimeError:
         return asyncio.run(coro)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_commis=1) as pool:
         return pool.submit(lambda: asyncio.run(coro)).result()
 
 
@@ -537,8 +537,8 @@ def search_notes(
     rg_command = f'rg -i -C 1 --max-count 3 --type md "{safe_query}" {expanded_vault} 2>/dev/null | head -n 100'
 
     try:
-        # Execute via runner using supervisor-safe method
-        # runner_exec requires worker context, so we use the dispatcher directly
+        # Execute via runner using concierge-safe method
+        # runner_exec requires commis context, so we use the dispatcher directly
         from zerg.crud import runner_crud
         from zerg.database import get_db
         from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
@@ -574,8 +574,8 @@ def search_notes(
                     runner_id=runner.id,
                     command=rg_command,
                     timeout_secs=30,
-                    worker_id=None,  # No worker context for Supervisor tools
-                    run_id=None,
+                    commis_id=None,  # No commis context for Concierge tools
+                    course_id=None,
                 )
             )
         finally:

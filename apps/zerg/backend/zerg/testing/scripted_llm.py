@@ -1,7 +1,7 @@
 """Scripted LLM implementation for deterministic unit tests.
 
 This module provides a lightweight, scenario-driven chat model used by tests to
-exercise supervisor/worker plumbing without calling real LLM APIs.
+exercise concierge/commis plumbing without calling real LLM APIs.
 
 It is intentionally minimal: only the behaviors required by the unit tests are
 implemented.
@@ -29,19 +29,19 @@ from langchain_core.outputs import ChatResult
 
 def detect_role_from_messages(messages: List[BaseMessage]) -> str:
     """Best-effort role detector used by scripted scenarios."""
-    # If we see a spawn_commis call, assume supervisor.
+    # If we see a spawn_commis call, assume concierge.
     for msg in messages:
         if isinstance(msg, AIMessage) and msg.tool_calls:
             for call in msg.tool_calls:
                 if call.get("name") == "spawn_commis":
-                    return "supervisor"
+                    return "concierge"
 
     # Otherwise, infer from system prompt length (tests use this heuristic).
     first_system = next((m for m in messages if isinstance(m, SystemMessage)), None)
     if first_system and len(str(first_system.content)) > 1000:
-        return "supervisor"
+        return "concierge"
 
-    return "worker"
+    return "commis"
 
 
 def find_matching_scenario(prompt: str, role: str) -> Optional[Dict[str, Any]]:
@@ -58,7 +58,7 @@ def find_matching_scenario(prompt: str, role: str) -> Optional[Dict[str, Any]]:
     is_parallel = "parallel" in text or host_count >= 2
     is_math = "2+2" in text or "2 + 2" in text
 
-    # Session continuity / workspace worker scenarios
+    # Session continuity / workspace commis scenarios
     is_resume = any(k in text for k in ("resume", "continue session", "pick up where"))
     is_workspace = any(k in text for k in ("workspace", "git repo", "code change", "repository"))
     # Extract session ID if present (UUID-like pattern or explicit session ID mention)
@@ -67,49 +67,49 @@ def find_matching_scenario(prompt: str, role: str) -> Optional[Dict[str, Any]]:
     session_match = re.search(r"session[:\s]+([a-f0-9-]{36})", text) or re.search(r"([a-f0-9-]{36})", text)
     resume_session_id = session_match.group(1) if session_match else None
 
-    if role == "worker":
+    if role == "commis":
         if is_disk and (is_cube or is_clifford or is_zerg):
             return {
-                "role": "worker",
-                "name": "disk_space_worker",
+                "role": "commis",
+                "name": "disk_space_commis",
                 "evidence_keyword": "45%",
             }
         return None
 
-    # Supervisor: workspace worker scenarios (session continuity, git repos)
-    if role == "supervisor" and (is_resume or is_workspace):
+    # Concierge: workspace commis scenarios (session continuity, git repos)
+    if role == "concierge" and (is_resume or is_workspace):
         return {
-            "role": "supervisor",
-            "name": "workspace_worker_supervisor",
+            "role": "concierge",
+            "name": "workspace_commis_concierge",
             "evidence_keyword": "workspace",
             "resume_session_id": resume_session_id,
         }
 
-    if role == "supervisor" and is_math:
+    if role == "concierge" and is_math:
         return {
-            "role": "supervisor",
+            "role": "concierge",
             "name": "math_simple",
             "evidence_keyword": None,
         }
 
-    # Supervisor: parallel disk checks first, then single-host disk checks.
+    # Concierge: parallel disk checks first, then single-host disk checks.
     if is_disk and is_parallel:
         return {
-            "role": "supervisor",
-            "name": "disk_space_parallel_supervisor",
+            "role": "concierge",
+            "name": "disk_space_parallel_concierge",
             "evidence_keyword": "45%",
         }
 
-    # Supervisor: match disk check and provide a generic fallback for everything else.
+    # Concierge: match disk check and provide a generic fallback for everything else.
     if is_disk and is_cube:
         return {
-            "role": "supervisor",
-            "name": "disk_space_supervisor",
+            "role": "concierge",
+            "name": "disk_space_concierge",
             "evidence_keyword": "45%",
         }
 
     return {
-        "role": "supervisor",
+        "role": "concierge",
         "name": "generic_fallback",
         "evidence_keyword": None,
     }
@@ -127,7 +127,7 @@ class ScriptedChatLLM(BaseChatModel):
     """A deterministic chat model driven by simple prompt scenarios.
 
     Supports both static scenarios (default behavior) and sequenced responses
-    for testing supervisor replay behavior where the LLM might produce different
+    for testing concierge replay behavior where the LLM might produce different
     outputs on subsequent calls.
 
     Usage with sequences:
@@ -229,9 +229,9 @@ class ScriptedChatLLM(BaseChatModel):
             scenario = find_matching_scenario(prompt, role)
 
             # Determine final text based on scenario type
-            if scenario and scenario.get("name") == "workspace_worker_supervisor":
-                # Workspace worker completed - summarize the result
-                final_text = "Workspace worker completed successfully. Repository analyzed and changes captured."
+            if scenario and scenario.get("name") == "workspace_commis_concierge":
+                # Workspace commis completed - summarize the result
+                final_text = "Workspace commis completed successfully. Repository analyzed and changes captured."
             elif "45%" in content:
                 # Disk space check with evidence in tool result
                 final_text = "Cube is at 45% disk usage; biggest usage is Docker images/volumes."
@@ -246,12 +246,12 @@ class ScriptedChatLLM(BaseChatModel):
 
         scenario = find_matching_scenario(prompt, role)
 
-        if role == "supervisor" and scenario and scenario.get("name") == "math_simple":
+        if role == "concierge" and scenario and scenario.get("name") == "math_simple":
             ai_message = AIMessage(content="4", tool_calls=[])
             return ChatResult(generations=[ChatGeneration(message=ai_message)])
 
-        # Workspace worker scenario: spawns spawn_workspace_commis with git repo and optional resume
-        if role == "supervisor" and scenario and scenario.get("name") == "workspace_worker_supervisor":
+        # Workspace commis scenario: spawns spawn_workspace_commis with git repo and optional resume
+        if role == "concierge" and scenario and scenario.get("name") == "workspace_commis_concierge":
             # Use a public test repo that's small and fast to clone
             args = {
                 "task": "Analyze the repository and list the main files",
@@ -269,7 +269,7 @@ class ScriptedChatLLM(BaseChatModel):
             ai_message = AIMessage(content="", tool_calls=[tool_call])
             return ChatResult(generations=[ChatGeneration(message=ai_message)])
 
-        if role == "supervisor" and scenario and scenario.get("name") == "disk_space_parallel_supervisor":
+        if role == "concierge" and scenario and scenario.get("name") == "disk_space_parallel_concierge":
             tasks = [
                 "Check disk space on cube and identify what is using space",
                 "Check disk space on clifford and identify what is using space",
@@ -286,7 +286,7 @@ class ScriptedChatLLM(BaseChatModel):
             ai_message = AIMessage(content="", tool_calls=tool_calls)
             return ChatResult(generations=[ChatGeneration(message=ai_message)])
 
-        if role == "supervisor" and scenario and scenario.get("name") == "disk_space_supervisor":
+        if role == "concierge" and scenario and scenario.get("name") == "disk_space_concierge":
             tool_call = {
                 "id": f"call_{uuid.uuid4().hex[:8]}",
                 "name": "spawn_commis",
@@ -295,7 +295,7 @@ class ScriptedChatLLM(BaseChatModel):
             ai_message = AIMessage(content="", tool_calls=[tool_call])
             return ChatResult(generations=[ChatGeneration(message=ai_message)])
 
-        if role == "worker" and scenario and scenario.get("name") == "disk_space_worker":
+        if role == "commis" and scenario and scenario.get("name") == "disk_space_commis":
             tool_call = {
                 "id": f"call_{uuid.uuid4().hex[:8]}",
                 "name": "get_current_time",

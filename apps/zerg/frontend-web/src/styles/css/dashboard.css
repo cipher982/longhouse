@@ -14,20 +14,20 @@
     overflow-y: auto;
     min-height: 0;
 
-    .run-history-table {
+    .course-history-table {
     width: 100%;
     border-collapse: collapse;
     margin-top: var(--space-3);
     font-size: var(--font-size-sm);
   }
 
-  .run-history-table th,
-  .run-history-table td {
+  .course-history-table th,
+  .course-history-table td {
     padding: var(--space-2) var(--space-3);
     line-height: var(--font-line-height-snug);
   }
 
-  .run-history-table th {
+  .course-history-table th {
     text-align: left;
     font-weight: 500;
     font-size: var(--font-size-xs);
@@ -37,13 +37,13 @@
     border-bottom: 1px solid var(--color-border-subtle);
   }
 
-  .run-history-table td {
+  .course-history-table td {
     color: var(--color-text-primary);
   }
 
   /* Right-align numeric columns */
-  .run-history-table td:nth-child(5),
-  .run-history-table td:nth-child(6) {
+  .course-history-table td:nth-child(5),
+  .course-history-table td:nth-child(6) {
     text-align: right;
     font-variant-numeric: tabular-nums;
   }
@@ -55,12 +55,12 @@
     user-select: none;
   }
 
-  .run-kebab-cell {
+  .course-kebab-cell {
     width: 22px;
     text-align: center;
   }
 
-  .run-toggle-link {
+  .course-toggle-link {
     display: inline-block;
     margin-top: var(--spacing-xs);
     font-size: var(--font-size-xs);
@@ -70,19 +70,19 @@
     user-select: none;
   }
 
-  .run-toggle-link:hover {
+  .course-toggle-link:hover {
     text-decoration: underline;
   }
 
   /* -------------------------------------------------------------
-   Agents table (main dashboard list) overrides
+   Fiches table (main dashboard list) overrides
    ------------------------------------------------------------- */
 
-  .agents-table tr.agent-row {
+  .fiches-table tr.fiche-row {
     cursor: pointer;
   }
 
-  .agents-table tr.agent-row.error-row td {
+  .fiches-table tr.fiche-row.error-row td {
     border-left: 4px solid var(--color-intent-error);
   }
 
@@ -145,7 +145,7 @@
     border-bottom: 1px solid var(--color-border-subtle);
   }
 
-  /* Container that groups the Create-Agent & Reset-DB buttons */
+  /* Container that groups the Create-Fiche & Reset-DB buttons */
   .button-container {
     display: flex;
     gap: var(--spacing-sm);
@@ -182,7 +182,7 @@
     color: var(--color-text-muted);
   }
 
-  #agent-search {
+  #fiche-search {
     background: transparent;
     border: none;
     color: var(--color-text-primary);
@@ -192,7 +192,7 @@
     font-size: var(--font-size-sm);
   }
 
-  #agent-search::placeholder {
+  #fiche-search::placeholder {
     color: var(--color-text-muted);
   }
 
@@ -231,7 +231,7 @@
     line-height: 1;
   }
 
-  /* Slider toggle (My vs All agents)                                    */
+  /* Slider toggle (My vs All fiches)                                    */
 
   /* ------------------------------------------------------------------ */
 
@@ -320,7 +320,7 @@
   }
 
   /* Sticky actions column */
-  .agents-table th.actions-header {
+  .fiches-table th.actions-header {
     position: sticky;
     right: 0;
     background: var(--color-surface-secondary);
@@ -395,7 +395,7 @@
   }
 
   /* -------------------------------------------------------------
-   Agent Detail & Debug modal content
+   Fiche Detail & Debug modal content
    ------------------------------------------------------------- */
 
   .overview-list {
@@ -424,7 +424,7 @@
     margin-top: var(--spacing-md);
   }
 
-  .agent-detail-container {
+  .fiche-detail-container {
     padding: var(--spacing-md);
     display: flex;
     flex-direction: column;
@@ -471,16 +471,16 @@
     transform: translateY(-2px);
   }
 
-  .last-run-indicator {
+  .last-course-indicator {
     margin-left: var(--space-1);
     font-size: var(--font-size-xs);
   }
 
-  .last-run-success {
+  .last-course-success {
     color: var(--color-intent-success);
   }
 
-  .last-run-failure {
+  .last-course-failure {
     color: var(--color-intent-error);
   }
 
@@ -514,13 +514,13 @@
 
   /* Responsive tweaks */
   @media (width <= 992px) {
-    .agents-table th,
-    .agents-table td {
+    .fiches-table th,
+    .fiches-table td {
       padding: var(--spacing-sm) var(--spacing-md);
       white-space: nowrap;
     }
 
-    .agents-table tr:hover .actions-cell {
+    .fiches-table tr:hover .actions-cell {
       background: var(--color-surface-overlay);
     }
   }
@@ -540,21 +540,21 @@
       width: 100%;
     }
 
-    .agents-table {
+    .fiches-table {
       display: block;
       width: 100%;
     }
 
-    .agents-table thead {
+    .fiches-table thead {
       display: none;
     }
 
-    .agents-table tbody {
+    .fiches-table tbody {
       display: block;
     }
 
-    .agents-table tr,
-    .agents-table tr.agent-row {
+    .fiches-table tr,
+    .fiches-table tr.fiche-row {
       display: block;
       height: auto; /* reset fixed 48px height */
       background: var(--color-surface-section);
@@ -564,21 +564,21 @@
       border: 1px solid var(--color-border-subtle);
     }
 
-    .agents-table td {
+    .fiches-table td {
       display: flex;
       justify-content: space-between;
       padding: var(--spacing-xs) 0;
       border-bottom: none;
     }
 
-    .agents-table td::before {
+    .fiches-table td::before {
       content: attr(data-label);
       font-weight: 600;
       color: var(--text-secondary);
     }
 
     /* Reset sticky positioning for mobile card layout */
-    .agents-table td.actions-cell {
+    .fiches-table td.actions-cell {
       position: static;
       width: auto;
       box-shadow: none;
@@ -590,7 +590,7 @@
       padding-top: var(--spacing-sm);
     }
 
-    .agents-table td.actions-cell::before {
+    .fiches-table td.actions-cell::before {
       display: none;
     }
   }
@@ -774,7 +774,7 @@
     color: var(--color-text-muted);
   }
 
-  /* Token and run details */
+  /* Token and course details */
   .usage-widget-details {
     font-size: var(--font-size-xs);
     color: var(--color-text-muted);

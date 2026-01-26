@@ -101,7 +101,7 @@ class TestServiceLoginBasics:
 class TestSmokeRunIdIsolation:
     """Tests for per-run smoke user isolation."""
 
-    def test_creates_isolated_user_with_run_id(self, monkeypatch, unauthenticated_client: TestClient, db_session):
+    def test_creates_isolated_user_with_course_id(self, monkeypatch, unauthenticated_client: TestClient, db_session):
         """Service login with X-Smoke-Run-Id creates isolated user."""
         monkeypatch.setattr(auth_dep, "AUTH_DISABLED", False)
 
@@ -110,25 +110,25 @@ class TestSmokeRunIdIsolation:
         monkeypatch.setattr(original_settings, "smoke_test_secret", test_secret)
         monkeypatch.setattr(auth_router, "_settings", original_settings)
 
-        run_id = "smoke-run-abc123"
+        course_id = "smoke-run-abc123"
 
         resp = unauthenticated_client.post(
             "/api/auth/service-login",
             headers={
                 "X-Service-Secret": test_secret,
-                "X-Smoke-Run-Id": run_id,
+                "X-Smoke-Run-Id": course_id,
             },
         )
 
         assert resp.status_code == 200
 
         # Verify isolated smoke user was created
-        expected_email = f"smoke+{run_id}@service.local"
+        expected_email = f"smoke+{course_id}@service.local"
         user = crud.get_user_by_email(db_session, expected_email)
         assert user is not None
         assert user.role == "USER"
 
-    def test_sanitizes_run_id_special_chars(self, monkeypatch, unauthenticated_client: TestClient, db_session):
+    def test_sanitizes_course_id_special_chars(self, monkeypatch, unauthenticated_client: TestClient, db_session):
         """Run ID special characters are sanitized to prevent injection."""
         monkeypatch.setattr(auth_dep, "AUTH_DISABLED", False)
 
@@ -138,13 +138,13 @@ class TestSmokeRunIdIsolation:
         monkeypatch.setattr(auth_router, "_settings", original_settings)
 
         # Malicious run ID with special chars
-        malicious_run_id = "run@evil.com/../../../etc/passwd"
+        malicious_course_id = "run@evil.com/../../../etc/passwd"
 
         resp = unauthenticated_client.post(
             "/api/auth/service-login",
             headers={
                 "X-Service-Secret": test_secret,
-                "X-Smoke-Run-Id": malicious_run_id,
+                "X-Smoke-Run-Id": malicious_course_id,
             },
         )
 
@@ -155,13 +155,13 @@ class TestSmokeRunIdIsolation:
         user = crud.get_user_by_email(db_session, "smoke@service.local")
         assert user is None  # Should NOT create default user
 
-        # Find the created user - it should have sanitized run_id
+        # Find the created user - it should have sanitized course_id
         # The email pattern uses only safe characters
         users = db_session.query(crud.User).filter(crud.User.email.like("smoke+%@service.local")).all()
         assert len(users) == 1
         assert "@evil.com" not in users[0].email  # @ should be sanitized
 
-    def test_truncates_long_run_id(self, monkeypatch, unauthenticated_client: TestClient, db_session):
+    def test_truncates_long_course_id(self, monkeypatch, unauthenticated_client: TestClient, db_session):
         """Run ID is truncated to prevent excessively long emails."""
         monkeypatch.setattr(auth_dep, "AUTH_DISABLED", False)
 
@@ -171,13 +171,13 @@ class TestSmokeRunIdIsolation:
         monkeypatch.setattr(auth_router, "_settings", original_settings)
 
         # Very long run ID
-        long_run_id = "a" * 200
+        long_course_id = "a" * 200
 
         resp = unauthenticated_client.post(
             "/api/auth/service-login",
             headers={
                 "X-Service-Secret": test_secret,
-                "X-Smoke-Run-Id": long_run_id,
+                "X-Smoke-Run-Id": long_course_id,
             },
         )
 
@@ -189,7 +189,7 @@ class TestSmokeRunIdIsolation:
         user = crud.get_user_by_email(db_session, expected_email)
         assert user is not None
 
-    def test_empty_run_id_falls_back_to_default(self, monkeypatch, unauthenticated_client: TestClient, db_session):
+    def test_empty_course_id_falls_back_to_default(self, monkeypatch, unauthenticated_client: TestClient, db_session):
         """Empty or whitespace-only run ID falls back to default user."""
         monkeypatch.setattr(auth_dep, "AUTH_DISABLED", False)
 
@@ -213,7 +213,7 @@ class TestSmokeRunIdIsolation:
         user = crud.get_user_by_email(db_session, "smoke@service.local")
         assert user is not None
 
-    def test_different_run_ids_create_different_users(self, monkeypatch, unauthenticated_client: TestClient, db_session):
+    def test_different_course_ids_create_different_users(self, monkeypatch, unauthenticated_client: TestClient, db_session):
         """Different run IDs create different isolated users."""
         monkeypatch.setattr(auth_dep, "AUTH_DISABLED", False)
 
@@ -222,24 +222,24 @@ class TestSmokeRunIdIsolation:
         monkeypatch.setattr(original_settings, "smoke_test_secret", test_secret)
         monkeypatch.setattr(auth_router, "_settings", original_settings)
 
-        run_ids = ["run-1", "run-2", "run-3"]
+        course_ids = ["run-1", "run-2", "run-3"]
 
-        for run_id in run_ids:
+        for course_id in course_ids:
             resp = unauthenticated_client.post(
                 "/api/auth/service-login",
                 headers={
                     "X-Service-Secret": test_secret,
-                    "X-Smoke-Run-Id": run_id,
+                    "X-Smoke-Run-Id": course_id,
                 },
             )
             assert resp.status_code == 200
 
         # Verify each user was created
-        for run_id in run_ids:
-            user = crud.get_user_by_email(db_session, f"smoke+{run_id}@service.local")
+        for course_id in course_ids:
+            user = crud.get_user_by_email(db_session, f"smoke+{course_id}@service.local")
             assert user is not None
 
-    def test_same_run_id_returns_same_user(self, monkeypatch, unauthenticated_client: TestClient, db_session):
+    def test_same_course_id_returns_same_user(self, monkeypatch, unauthenticated_client: TestClient, db_session):
         """Same run ID reuses the same isolated user."""
         monkeypatch.setattr(auth_dep, "AUTH_DISABLED", False)
 
@@ -248,20 +248,20 @@ class TestSmokeRunIdIsolation:
         monkeypatch.setattr(original_settings, "smoke_test_secret", test_secret)
         monkeypatch.setattr(auth_router, "_settings", original_settings)
 
-        run_id = "reusable-run-id"
+        course_id = "reusable-run-id"
 
         # First login
         resp1 = unauthenticated_client.post(
             "/api/auth/service-login",
             headers={
                 "X-Service-Secret": test_secret,
-                "X-Smoke-Run-Id": run_id,
+                "X-Smoke-Run-Id": course_id,
             },
         )
         assert resp1.status_code == 200
 
         # Get user ID from first login
-        user1 = crud.get_user_by_email(db_session, f"smoke+{run_id}@service.local")
+        user1 = crud.get_user_by_email(db_session, f"smoke+{course_id}@service.local")
         user1_id = user1.id
 
         # Second login with same run ID
@@ -269,13 +269,13 @@ class TestSmokeRunIdIsolation:
             "/api/auth/service-login",
             headers={
                 "X-Service-Secret": test_secret,
-                "X-Smoke-Run-Id": run_id,
+                "X-Smoke-Run-Id": course_id,
             },
         )
         assert resp2.status_code == 200
 
         # Should be same user
-        user2 = crud.get_user_by_email(db_session, f"smoke+{run_id}@service.local")
+        user2 = crud.get_user_by_email(db_session, f"smoke+{course_id}@service.local")
         assert user2.id == user1_id
 
 
@@ -328,13 +328,13 @@ class TestServiceLoginSecurity:
         monkeypatch.setattr(original_settings, "smoke_test_secret", test_secret)
         monkeypatch.setattr(auth_router, "_settings", original_settings)
 
-        run_id = "jwt-test-run"
+        course_id = "jwt-test-run"
 
         resp = unauthenticated_client.post(
             "/api/auth/service-login",
             headers={
                 "X-Service-Secret": test_secret,
-                "X-Smoke-Run-Id": run_id,
+                "X-Smoke-Run-Id": course_id,
             },
         )
 
@@ -346,7 +346,7 @@ class TestServiceLoginSecurity:
 
         payload = _decode_jwt_fallback(token, auth_dep.JWT_SECRET)
 
-        expected_email = f"smoke+{run_id}@service.local"
+        expected_email = f"smoke+{course_id}@service.local"
         assert payload["email"] == expected_email
         assert "sub" in payload  # User ID
         assert "exp" in payload  # Expiry
@@ -368,7 +368,7 @@ class TestServiceLoginRaceConditions:
         monkeypatch.setattr(original_settings, "smoke_test_secret", test_secret)
         monkeypatch.setattr(auth_router, "_settings", original_settings)
 
-        run_id = "concurrent-test-run"
+        course_id = "concurrent-test-run"
 
         def make_request():
             # Note: This creates a new client for each thread to avoid
@@ -396,12 +396,12 @@ class TestServiceLoginRaceConditions:
                     "/api/auth/service-login",
                     headers={
                         "X-Service-Secret": test_secret,
-                        "X-Smoke-Run-Id": run_id,
+                        "X-Smoke-Run-Id": course_id,
                     },
                 )
 
         # Run multiple concurrent requests
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_commis=5) as executor:
             futures = [executor.submit(make_request) for _ in range(5)]
             results = [f.result() for f in futures]
 

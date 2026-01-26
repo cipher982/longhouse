@@ -1,13 +1,13 @@
 """Lazy tool binder for on-demand tool loading.
 
 This module provides the LazyToolBinder class which manages tool loading
-for the supervisor ReAct loop. It:
+for the concierge ReAct loop. It:
 
-1. Pre-loads core tools (spawn_worker, contact_user, etc.)
+1. Pre-loads core tools (spawn_commis, contact_user, etc.)
 2. Lazy-loads other tools on first use
 3. Tracks which tools have been loaded for rebinding
 
-Usage in supervisor:
+Usage in concierge:
     binder = LazyToolBinder(resolver, allowed_tools)
 
     # Get currently bound tools for LLM
@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 
 class LazyToolBinder:
-    """Manages lazy loading of tools for supervisor execution.
+    """Manages lazy loading of tools for concierge execution.
 
     Core tools are loaded upfront. Other tools are loaded on-demand
     when the LLM tries to use them.

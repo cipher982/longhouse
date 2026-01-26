@@ -1,6 +1,6 @@
 # Zerg Backend (FastAPI)
 
-This is the backend service for Swarmlet/Zerg (API, supervisor, workers, SSE/WS).
+This is the backend service for Swarmlet/Zerg (API, concierge, commis, SSE/WS).
 
 ## Start (repo root)
 

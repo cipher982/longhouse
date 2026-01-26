@@ -1,4 +1,4 @@
-"""add_tool_call_id_to_worker_jobs
+"""add_tool_call_id_to_commis_jobs
 
 Revision ID: 12e00ff4d7fa
 Revises: s3t4u5v6w7x8
@@ -18,20 +18,20 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Add tool_call_id column and idempotency index to worker_jobs."""
-    op.add_column('worker_jobs', sa.Column('tool_call_id', sa.String(length=64), nullable=True))
-    op.create_index(op.f('ix_worker_jobs_tool_call_id'), 'worker_jobs', ['tool_call_id'], unique=False)
+    """Add tool_call_id column and idempotency index to commis_jobs."""
+    op.add_column('commis_jobs', sa.Column('tool_call_id', sa.String(length=64), nullable=True))
+    op.create_index(op.f('ix_commis_jobs_tool_call_id'), 'commis_jobs', ['tool_call_id'], unique=False)
     op.create_index(
-        'ix_worker_jobs_idempotency',
-        'worker_jobs',
-        ['supervisor_run_id', 'tool_call_id'],
+        'ix_commis_jobs_idempotency',
+        'commis_jobs',
+        ['concierge_course_id', 'tool_call_id'],
         unique=True,
-        postgresql_where=sa.text('supervisor_run_id IS NOT NULL AND tool_call_id IS NOT NULL')
+        postgresql_where=sa.text('concierge_course_id IS NOT NULL AND tool_call_id IS NOT NULL')
     )
 
 
 def downgrade() -> None:
     """Remove tool_call_id column and indexes."""
-    op.drop_index('ix_worker_jobs_idempotency', table_name='worker_jobs', postgresql_where=sa.text('supervisor_run_id IS NOT NULL AND tool_call_id IS NOT NULL'))
-    op.drop_index(op.f('ix_worker_jobs_tool_call_id'), table_name='worker_jobs')
-    op.drop_column('worker_jobs', 'tool_call_id')
+    op.drop_index('ix_commis_jobs_idempotency', table_name='commis_jobs', postgresql_where=sa.text('concierge_course_id IS NOT NULL AND tool_call_id IS NOT NULL'))
+    op.drop_index(op.f('ix_commis_jobs_tool_call_id'), table_name='commis_jobs')
+    op.drop_column('commis_jobs', 'tool_call_id')

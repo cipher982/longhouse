@@ -128,7 +128,7 @@
   min-width: 20px;
 }
 
-.task-agent-name {
+.task-fiche-name {
   flex: 1;
   font-weight: 600;
   font-size: var(--font-size-sm);

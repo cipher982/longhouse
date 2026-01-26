@@ -33,10 +33,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Context for per-agent tool filtering
+# Context for per-fiche tool filtering
 # ---------------------------------------------------------------------------
 
-# Allowlist for current agent context (None = all allowed)
+# Allowlist for current fiche context (None = all allowed)
 _search_allowed_tools: ContextVar[list[str] | None] = ContextVar("search_allowed_tools", default=None)
 
 # Max results cap for current context (used to align with rebind cap)
@@ -47,9 +47,9 @@ def set_search_context(
     allowed_tools: list[str] | None = None,
     max_results: int = 20,
 ) -> None:
-    """Set the search context for the current agent.
+    """Set the search context for the current fiche.
 
-    Call this before running supervisor to configure search_tools behavior.
+    Call this before running concierge to configure search_tools behavior.
 
     Args:
         allowed_tools: Optional allowlist (supports wildcards like "github_*").
@@ -61,7 +61,7 @@ def set_search_context(
 
 
 def clear_search_context() -> None:
-    """Clear the search context after supervisor completes."""
+    """Clear the search context after concierge completes."""
     _search_allowed_tools.set(None)
     _search_max_results.set(20)
 
@@ -362,18 +362,18 @@ def delete_embeddings_cache() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Search tools meta-tool (for agents)
+# Search tools meta-tool (for fiches)
 # ---------------------------------------------------------------------------
 
 
-async def search_tools_for_agent(
+async def search_tools_for_fiche(
     query: str,
     max_results: int = 5,
 ) -> dict:
-    """Search tools by description - designed for agent use.
+    """Search tools by description - designed for fiche use.
 
-    This function is wrapped as a tool that agents can call to discover
-    available tools. Results are filtered by the current agent's allowlist
+    This function is wrapped as a tool that fiches can call to discover
+    available tools. Results are filtered by the current fiche's allowlist
     (set via set_search_context) and capped by the context's max_results.
 
     Args:
@@ -389,7 +389,7 @@ async def search_tools_for_agent(
     """
     index = await get_tool_search_index()
 
-    # Get context-based cap (aligned with MAX_TOOLS_FROM_SEARCH in supervisor)
+    # Get context-based cap (aligned with MAX_TOOLS_FROM_SEARCH in concierge)
     context_cap = _search_max_results.get()
     effective_max = min(max_results, context_cap)
 

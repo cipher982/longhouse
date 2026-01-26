@@ -1,6 +1,6 @@
 """SSH-related tools for remote command execution.
 
-This tool enables worker agents to execute commands on remote infrastructure servers.
+This tool enables commis fiches to execute commands on remote infrastructure servers.
 It implements the "shell-first philosophy" where SSH access is the primitive for
 remote operations, rather than modeling each command as a separate tool.
 
@@ -174,8 +174,8 @@ def ssh_exec(
 ) -> Dict[str, Any]:
     """Execute a command on a remote server via SSH.
 
-    This tool enables worker agents to run commands on infrastructure servers.
-    Workers already know how to use standard Unix tools (df, docker, journalctl, etc.)
+    This tool enables commis fiches to run commands on infrastructure servers.
+    Commis already know how to use standard Unix tools (df, docker, journalctl, etc.)
     - this gives them the primitive to access remote systems.
 
     NOTE: This is a legacy tool. For multi-tenant deployments, prefer the Runner
@@ -290,7 +290,7 @@ def ssh_exec(
             ssh_cmd.extend(["-o", "IdentitiesOnly=yes"])
             ssh_cmd.extend(["-i", str(key_path)])
         else:
-            logger.warning("SSH key not found; relying on default SSH agent/keys")
+            logger.warning("SSH key not found; relying on default SSH fiche/keys")
 
         ssh_cmd.extend([f"{user}@{hostname}", command])
 
@@ -318,7 +318,7 @@ def ssh_exec(
             stderr = stderr[:MAX_OUTPUT_SIZE] + "\n... [stderr truncated]"
 
         # SSH uses exit code 255 for connection-level failures. Treat these as errors so
-        # workers can fail-fast and report actionable setup issues (keys, host reachability, etc).
+        # commis can fail-fast and report actionable setup issues (keys, host reachability, etc).
         if result.returncode == 255:
             detail = (stderr or stdout or "").strip()
             msg = f"SSH connection failed to {host}"

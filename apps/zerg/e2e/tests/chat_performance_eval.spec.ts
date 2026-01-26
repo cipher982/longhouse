@@ -4,19 +4,19 @@
  * Profiles REAL user experience latency using:
  * 1. DOM timing - When does the user actually SEE content?
  * 2. Console capture - Frontend TimelineLogger output (?log=timeline)
- * 3. Backend API - Server-side breakdown via /runs/{id}/timeline
+ * 3. Backend API - Server-side breakdown via /courses/{id}/timeline
  *
  * These tests measure what USERS experience, not internal API timing.
  *
- * Phase 1: Granular Supervisor Response Profiling
+ * Phase 1: Granular Concierge Response Profiling
  * - Track assistant bubble appearance
  * - Track typing dots visibility
  * - Track first actual token rendering
  * - Track streaming completion
  *
- * Phase 2: Worker Progress UI Profiling
- * - Track worker progress panel appearance
- * - Track individual worker events
+ * Phase 2: Commis Progress UI Profiling
+ * - Track commis progress panel appearance
+ * - Track individual commis events
  * - Track tool call timing
  */
 
@@ -34,9 +34,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 /**
- * Phase 1: Supervisor Response Metrics
+ * Phase 1: Concierge Response Metrics
  */
-interface SupervisorMetrics {
+interface ConciergeMetrics {
   bubbleAppearedAt: number | null;     // .message.assistant first visible
   typingDotsShownAt: number | null;    // .thinking-dots visible
   firstTokenAt: number | null;         // Actual text content appears
@@ -50,19 +50,19 @@ interface SupervisorMetrics {
 }
 
 /**
- * Phase 2: Worker Progress Metrics
+ * Phase 2: Commis Progress Metrics
  */
-interface WorkerMetrics {
-  panelAppearedAt: number | null;      // .worker-progress--active visible
-  firstWorkerEventAt: number | null;   // First worker spawned/started
-  workerCompleteAt: number | null;     // All workers completed
-  workerEvents: WorkerEvent[];         // Individual worker events
+interface CommisMetrics {
+  panelAppearedAt: number | null;      // .commis-progress--active visible
+  firstCommisEventAt: number | null;   // First commis spawned/started
+  commisCompleteAt: number | null;     // All commis completed
+  commisEvents: CommisEvent[];         // Individual commis events
 }
 
-interface WorkerEvent {
+interface CommisEvent {
   timestamp: number;
   type: 'spawned' | 'started' | 'tool' | 'complete' | 'failed';
-  workerId?: string;
+  commisId?: string;
   toolName?: string;
   durationMs?: number;
 }
@@ -75,14 +75,14 @@ interface PerformanceMetrics {
   sendClickedAt: number;
   timeToFirstToken: number | null;
   timeToComplete: number | null;
-  runId: number | null;
+  courseId: number | null;
   backendTimeline: BackendTimelineMetrics | null;
 
-  // Phase 1: Supervisor metrics
-  supervisor: SupervisorMetrics;
+  // Phase 1: Concierge metrics
+  concierge: ConciergeMetrics;
 
-  // Phase 2: Worker metrics
-  worker: WorkerMetrics;
+  // Phase 2: Commis metrics
+  commis: CommisMetrics;
 
   // Timeline from console (if available)
   timelineEvents: TimelineEvent[];
@@ -95,12 +95,12 @@ interface TimelineEvent {
 }
 
 interface BackendTimelineMetrics {
-  runId: number;
+  courseId: number;
   correlationId: string | null;
   summary: {
     totalDurationMs: number;
-    supervisorThinkingMs: number | null;
-    workerExecutionMs: number | null;
+    conciergeThinkingMs: number | null;
+    commisExecutionMs: number | null;
     toolExecutionMs: number | null;
   };
   eventCounts: Record<string, number>;
@@ -159,23 +159,23 @@ function parseUsageTitle(title: string): {
   return result;
 }
 
-async function fetchBackendTimeline(request: APIRequestContext, runId: number): Promise<BackendTimelineMetrics | null> {
+async function fetchBackendTimeline(request: APIRequestContext, courseId: number): Promise<BackendTimelineMetrics | null> {
   try {
-    const resp = await request.get(`/api/jarvis/runs/${runId}/timeline`);
+    const resp = await request.get(`/api/jarvis/courses/${courseId}/timeline`);
     if (!resp.ok()) {
       const body = await resp.text().catch(() => '');
-      console.log(`⚠️ Backend timeline fetch failed (run_id=${runId}): HTTP ${resp.status()} ${body.slice(0, 200)}`);
+      console.log(`⚠️ Backend timeline fetch failed (course_id=${courseId}): HTTP ${resp.status()} ${body.slice(0, 200)}`);
       return null;
     }
 
     const payload = await resp.json() as {
       correlation_id: string | null;
-      run_id: number;
+      course_id: number;
       events: Array<{ phase: string }>;
       summary: {
         total_duration_ms: number;
-        supervisor_thinking_ms: number | null;
-        worker_execution_ms: number | null;
+        concierge_thinking_ms: number | null;
+        commis_execution_ms: number | null;
         tool_execution_ms: number | null;
       };
     };
@@ -186,12 +186,12 @@ async function fetchBackendTimeline(request: APIRequestContext, runId: number): 
     }
 
     return {
-      runId: payload.run_id,
+      courseId: payload.course_id,
       correlationId: payload.correlation_id,
       summary: {
         totalDurationMs: payload.summary.total_duration_ms,
-        supervisorThinkingMs: payload.summary.supervisor_thinking_ms,
-        workerExecutionMs: payload.summary.worker_execution_ms,
+        conciergeThinkingMs: payload.summary.concierge_thinking_ms,
+        commisExecutionMs: payload.summary.commis_execution_ms,
         toolExecutionMs: payload.summary.tool_execution_ms,
       },
       eventCounts,
@@ -208,15 +208,15 @@ async function measureChatPerformance(
   page: Page,
   request: APIRequestContext,
   message: string,
-  opts?: { trackWorkerPanel?: boolean }
+  opts?: { trackCommisPanel?: boolean }
 ): Promise<PerformanceMetrics> {
   const metrics: PerformanceMetrics = {
     sendClickedAt: 0,
     timeToFirstToken: null,
     timeToComplete: null,
-    runId: null,
+    courseId: null,
     backendTimeline: null,
-    supervisor: {
+    concierge: {
       bubbleAppearedAt: null,
       typingDotsShownAt: null,
       firstTokenAt: null,
@@ -228,11 +228,11 @@ async function measureChatPerformance(
       tokensPerSecond: null,
       assistantCharCount: null,
     },
-    worker: {
+    commis: {
       panelAppearedAt: null,
-      firstWorkerEventAt: null,
-      workerCompleteAt: null,
-      workerEvents: [],
+      firstCommisEventAt: null,
+      commisCompleteAt: null,
+      commisEvents: [],
     },
     timelineEvents: [],
   };
@@ -267,13 +267,13 @@ async function measureChatPerformance(
   // Track the new assistant message (the one that appears after our send)
   const newAssistantMessage = page.locator('.message.assistant').nth(initialAssistantCount);
 
-  // Phase 1 Tracking: Supervisor Response Timeline
+  // Phase 1 Tracking: Concierge Response Timeline
 
   // 1. Wait for assistant bubble to appear
   try {
     await expect(newAssistantMessage).toBeVisible({ timeout: 30000 });
-    metrics.supervisor.bubbleAppearedAt = Date.now();
-    const bubbleTime = metrics.supervisor.bubbleAppearedAt - metrics.sendClickedAt;
+    metrics.concierge.bubbleAppearedAt = Date.now();
+    const bubbleTime = metrics.concierge.bubbleAppearedAt - metrics.sendClickedAt;
     console.log(`💬 Bubble appeared: ${bubbleTime}ms`);
   } catch {
     console.log('⚠️ Assistant message did not appear within timeout');
@@ -284,8 +284,8 @@ async function measureChatPerformance(
   const typingDots = newAssistantMessage.locator('.thinking-dots');
   try {
     await expect(typingDots).toBeVisible({ timeout: 5000 });
-    metrics.supervisor.typingDotsShownAt = Date.now();
-    const typingTime = metrics.supervisor.typingDotsShownAt - metrics.sendClickedAt;
+    metrics.concierge.typingDotsShownAt = Date.now();
+    const typingTime = metrics.concierge.typingDotsShownAt - metrics.sendClickedAt;
     console.log(`⏳ Typing dots shown: ${typingTime}ms`);
   } catch {
     // Not all responses show typing dots; ignore.
@@ -309,28 +309,28 @@ async function measureChatPerformance(
       { timeout: 45000 }
     );
 
-    metrics.supervisor.firstTokenAt = Date.now();
-    metrics.timeToFirstToken = metrics.supervisor.firstTokenAt - metrics.sendClickedAt;
+    metrics.concierge.firstTokenAt = Date.now();
+    metrics.timeToFirstToken = metrics.concierge.firstTokenAt - metrics.sendClickedAt;
     console.log(`⚡ First token visible: ${metrics.timeToFirstToken}ms`);
   } catch {
     console.log('❌ First token never became visible within timeout');
   }
 
-  // Phase 2 Tracking: Worker Progress UI (optional; keep it cheap so perf tests don’t add their own latency)
-  if (opts?.trackWorkerPanel) {
-    const workerPanel = page.locator('.worker-progress.worker-progress--active');
+  // Phase 2 Tracking: Commis Progress UI (optional; keep it cheap so perf tests don’t add their own latency)
+  if (opts?.trackCommisPanel) {
+    const commisPanel = page.locator('.commis-progress.commis-progress--active');
     try {
-      await workerPanel.waitFor({ state: 'visible', timeout: 3000 });
-      metrics.worker.panelAppearedAt = Date.now();
-      const panelTime = metrics.worker.panelAppearedAt - metrics.sendClickedAt;
-      console.log(`🔧 Worker panel visible: ${panelTime}ms`);
+      await commisPanel.waitFor({ state: 'visible', timeout: 3000 });
+      metrics.commis.panelAppearedAt = Date.now();
+      const panelTime = metrics.commis.panelAppearedAt - metrics.sendClickedAt;
+      console.log(`🔧 Commis panel visible: ${panelTime}ms`);
 
-      // Quick snapshot of current worker state
-      const workerCount = await page.locator('.supervisor-worker').count();
-      if (workerCount > 0) {
-        metrics.worker.firstWorkerEventAt = Date.now();
-        console.log(`👷 Workers visible: ${workerCount}`);
-        metrics.worker.workerEvents.push({
+      // Quick snapshot of current commis state
+      const commisCount = await page.locator('.concierge-commis').count();
+      if (commisCount > 0) {
+        metrics.commis.firstCommisEventAt = Date.now();
+        console.log(`👷 Commis visible: ${commisCount}`);
+        metrics.commis.commisEvents.push({
           timestamp: Date.now(),
           type: 'spawned',
         });
@@ -354,8 +354,8 @@ async function measureChatPerformance(
       { timeout: 75000 }
     );
 
-    metrics.supervisor.streamingCompleteAt = Date.now();
-    metrics.timeToComplete = metrics.supervisor.streamingCompleteAt - metrics.sendClickedAt;
+    metrics.concierge.streamingCompleteAt = Date.now();
+    metrics.timeToComplete = metrics.concierge.streamingCompleteAt - metrics.sendClickedAt;
     console.log(`✅ Streaming complete: ${metrics.timeToComplete}ms`);
   } catch {
     console.log('❌ Message never reached final/error/canceled within timeout');
@@ -364,7 +364,7 @@ async function measureChatPerformance(
   // Extract assistant content length (visible text)
   try {
     const assistantText = (await newAssistantMessage.locator('.message-content').innerText()).trim();
-    metrics.supervisor.assistantCharCount = assistantText.length;
+    metrics.concierge.assistantCharCount = assistantText.length;
   } catch {
     // ignore
   }
@@ -375,20 +375,20 @@ async function measureChatPerformance(
     const title = await usageEl.getAttribute('title');
     if (title) {
       const parsed = parseUsageTitle(title);
-      metrics.supervisor.totalTokens = parsed.totalTokens;
-      metrics.supervisor.promptTokens = parsed.promptTokens;
-      metrics.supervisor.completionTokens = parsed.completionTokens;
-      metrics.supervisor.reasoningTokens = parsed.reasoningTokens;
+      metrics.concierge.totalTokens = parsed.totalTokens;
+      metrics.concierge.promptTokens = parsed.promptTokens;
+      metrics.concierge.completionTokens = parsed.completionTokens;
+      metrics.concierge.reasoningTokens = parsed.reasoningTokens;
     }
   } catch {
     // ignore
   }
 
   // Calculate tokens per second if we have the data
-  if (metrics.supervisor.firstTokenAt && metrics.supervisor.streamingCompleteAt && metrics.supervisor.completionTokens) {
-    const streamDuration = metrics.supervisor.streamingCompleteAt - metrics.supervisor.firstTokenAt;
+  if (metrics.concierge.firstTokenAt && metrics.concierge.streamingCompleteAt && metrics.concierge.completionTokens) {
+    const streamDuration = metrics.concierge.streamingCompleteAt - metrics.concierge.firstTokenAt;
     if (streamDuration >= 200) {
-      metrics.supervisor.tokensPerSecond = (metrics.supervisor.completionTokens / streamDuration) * 1000;
+      metrics.concierge.tokensPerSecond = (metrics.concierge.completionTokens / streamDuration) * 1000;
     }
   }
 
@@ -408,25 +408,25 @@ async function measureChatPerformance(
       });
 
       // Best-effort run id extraction from timeline metadata (avoids relying on /runs list).
-      if (metrics.runId === null && match[3]) {
-        const runMatch = match[3].match(/run_id=(\d+)/);
+      if (metrics.courseId === null && match[3]) {
+        const runMatch = match[3].match(/course_id=(\d+)/);
         if (runMatch) {
-          metrics.runId = parseInt(runMatch[1], 10);
+          metrics.courseId = parseInt(runMatch[1], 10);
         }
       }
     }
   }
 
   // Fetch backend timeline summary (best-effort)
-  if (metrics.runId) {
-    const backendTimeline = await fetchBackendTimeline(request, metrics.runId);
+  if (metrics.courseId) {
+    const backendTimeline = await fetchBackendTimeline(request, metrics.courseId);
     metrics.backendTimeline = backendTimeline;
     if (backendTimeline) {
       // Collapse into a single synthetic timeline event for easy log reading
       metrics.timelineEvents.push({
         phase: 'backend_timeline',
         offsetMs: backendTimeline.summary.totalDurationMs,
-        metadata: `supervisor=${backendTimeline.summary.supervisorThinkingMs ?? 'n/a'}ms worker=${backendTimeline.summary.workerExecutionMs ?? 'n/a'}ms tool=${backendTimeline.summary.toolExecutionMs ?? 'n/a'}ms`,
+        metadata: `concierge=${backendTimeline.summary.conciergeThinkingMs ?? 'n/a'}ms commis=${backendTimeline.summary.commisExecutionMs ?? 'n/a'}ms tool=${backendTimeline.summary.toolExecutionMs ?? 'n/a'}ms`,
       });
     }
   }
@@ -466,54 +466,54 @@ function printMetricsSummary(metrics: PerformanceMetrics): void {
   console.log('⏱️  Basic Timing:');
   console.log(`   Time to First Token: ${metrics.timeToFirstToken}ms`);
   console.log(`   Time to Complete: ${metrics.timeToComplete}ms`);
-  console.log(`   Run ID: ${metrics.runId ?? 'n/a'}`);
+  console.log(`   Run ID: ${metrics.courseId ?? 'n/a'}`);
 
-  // Supervisor breakdown
-  console.log('\n🤖 Supervisor Response Breakdown:');
-  if (metrics.supervisor.bubbleAppearedAt) {
-    const bubbleTime = metrics.supervisor.bubbleAppearedAt - metrics.sendClickedAt;
+  // Concierge breakdown
+  console.log('\n🤖 Concierge Response Breakdown:');
+  if (metrics.concierge.bubbleAppearedAt) {
+    const bubbleTime = metrics.concierge.bubbleAppearedAt - metrics.sendClickedAt;
     console.log(`   Bubble appeared: ${bubbleTime}ms`);
   }
-  if (metrics.supervisor.typingDotsShownAt) {
-    const typingTime = metrics.supervisor.typingDotsShownAt - metrics.sendClickedAt;
+  if (metrics.concierge.typingDotsShownAt) {
+    const typingTime = metrics.concierge.typingDotsShownAt - metrics.sendClickedAt;
     console.log(`   Typing dots: ${typingTime}ms`);
   }
-  if (metrics.supervisor.firstTokenAt) {
-    const tokenTime = metrics.supervisor.firstTokenAt - metrics.sendClickedAt;
+  if (metrics.concierge.firstTokenAt) {
+    const tokenTime = metrics.concierge.firstTokenAt - metrics.sendClickedAt;
     console.log(`   First token: ${tokenTime}ms`);
   }
-  if (metrics.supervisor.streamingCompleteAt) {
-    const completeTime = metrics.supervisor.streamingCompleteAt - metrics.sendClickedAt;
+  if (metrics.concierge.streamingCompleteAt) {
+    const completeTime = metrics.concierge.streamingCompleteAt - metrics.sendClickedAt;
     console.log(`   Streaming complete: ${completeTime}ms`);
   }
-  if (metrics.supervisor.assistantCharCount !== null) {
-    console.log(`   Visible chars: ${metrics.supervisor.assistantCharCount}`);
+  if (metrics.concierge.assistantCharCount !== null) {
+    console.log(`   Visible chars: ${metrics.concierge.assistantCharCount}`);
   }
-  if (metrics.supervisor.completionTokens !== null) {
-    console.log(`   Output tokens: ${metrics.supervisor.completionTokens}`);
+  if (metrics.concierge.completionTokens !== null) {
+    console.log(`   Output tokens: ${metrics.concierge.completionTokens}`);
   }
-  if (metrics.supervisor.tokensPerSecond) {
-    console.log(`   Tokens/sec: ${metrics.supervisor.tokensPerSecond.toFixed(1)}`);
+  if (metrics.concierge.tokensPerSecond) {
+    console.log(`   Tokens/sec: ${metrics.concierge.tokensPerSecond.toFixed(1)}`);
   }
   if (metrics.backendTimeline) {
     const t = metrics.backendTimeline.summary;
-    console.log(`   Backend timeline: total=${t.totalDurationMs}ms supervisor=${t.supervisorThinkingMs ?? 'n/a'}ms worker=${t.workerExecutionMs ?? 'n/a'}ms tool=${t.toolExecutionMs ?? 'n/a'}ms`);
+    console.log(`   Backend timeline: total=${t.totalDurationMs}ms concierge=${t.conciergeThinkingMs ?? 'n/a'}ms commis=${t.commisExecutionMs ?? 'n/a'}ms tool=${t.toolExecutionMs ?? 'n/a'}ms`);
   }
 
-  // Worker breakdown (if any)
-  if (metrics.worker.panelAppearedAt) {
-    console.log('\n🔧 Worker Progress:');
-    const panelTime = metrics.worker.panelAppearedAt - metrics.sendClickedAt;
+  // Commis breakdown (if any)
+  if (metrics.commis.panelAppearedAt) {
+    console.log('\n🔧 Commis Progress:');
+    const panelTime = metrics.commis.panelAppearedAt - metrics.sendClickedAt;
     console.log(`   Panel appeared: ${panelTime}ms`);
-    if (metrics.worker.firstWorkerEventAt) {
-      const firstWorker = metrics.worker.firstWorkerEventAt - metrics.sendClickedAt;
-      console.log(`   First worker: ${firstWorker}ms`);
+    if (metrics.commis.firstCommisEventAt) {
+      const firstCommis = metrics.commis.firstCommisEventAt - metrics.sendClickedAt;
+      console.log(`   First commis: ${firstCommis}ms`);
     }
-    if (metrics.worker.workerCompleteAt) {
-      const workerDone = metrics.worker.workerCompleteAt - metrics.sendClickedAt;
-      console.log(`   Workers done: ${workerDone}ms`);
+    if (metrics.commis.commisCompleteAt) {
+      const commisDone = metrics.commis.commisCompleteAt - metrics.sendClickedAt;
+      console.log(`   Commis done: ${commisDone}ms`);
     }
-    console.log(`   Worker events: ${metrics.worker.workerEvents.length}`);
+    console.log(`   Commis events: ${metrics.commis.commisEvents.length}`);
   }
 
   // Timeline events
@@ -575,13 +575,13 @@ test.describe('Chat Performance Evaluation', () => {
     // Key metric: TTFT
     expect(metrics.timeToFirstToken).not.toBeNull();
     console.log(`\n📊 TTFT: ${metrics.timeToFirstToken}ms`);
-    console.log(`   Prompt tokens: ${metrics.supervisor.promptTokens ?? 'n/a'}`);
+    console.log(`   Prompt tokens: ${metrics.concierge.promptTokens ?? 'n/a'}`);
 
     // Sanity: Should complete quickly (tiny output)
     expect(metrics.timeToComplete).not.toBeNull();
     expect(metrics.timeToComplete!).toBeLessThan(30000);
 
-    // Guardrail: Simple math shouldn't spawn workers
+    // Guardrail: Simple math shouldn't spawn commis
     if (metrics.backendTimeline) {
       expect(metrics.backendTimeline.eventCounts['commis_spawned'] ?? 0).toBe(0);
     }
@@ -616,15 +616,15 @@ test.describe('Chat Performance Evaluation', () => {
     printMetricsSummary(metrics);
 
     // Must have meaningful output to measure throughput
-    expect(metrics.supervisor.completionTokens).not.toBeNull();
-    expect(metrics.supervisor.completionTokens!).toBeGreaterThan(100);
+    expect(metrics.concierge.completionTokens).not.toBeNull();
+    expect(metrics.concierge.completionTokens!).toBeGreaterThan(100);
 
     // Calculate throughput
-    const streamDuration = (metrics.supervisor.streamingCompleteAt ?? 0) - (metrics.supervisor.firstTokenAt ?? 0);
-    const tokensPerSec = metrics.supervisor.tokensPerSecond;
+    const streamDuration = (metrics.concierge.streamingCompleteAt ?? 0) - (metrics.concierge.firstTokenAt ?? 0);
+    const tokensPerSec = metrics.concierge.tokensPerSecond;
 
     console.log(`\n📊 Throughput Analysis:`);
-    console.log(`   Completion tokens: ${metrics.supervisor.completionTokens}`);
+    console.log(`   Completion tokens: ${metrics.concierge.completionTokens}`);
     console.log(`   Stream duration: ${streamDuration}ms`);
     console.log(`   Tokens/sec: ${tokensPerSec?.toFixed(1) ?? 'n/a'}`);
 
@@ -634,7 +634,7 @@ test.describe('Chat Performance Evaluation', () => {
       console.log(`   Assessment: ${tokensPerSec > 30 ? '✅ Good' : tokensPerSec > 15 ? '⚠️ Acceptable' : '❌ Slow'}`);
     }
 
-    // Guardrail: Explanation shouldn't spawn workers
+    // Guardrail: Explanation shouldn't spawn commis
     if (metrics.backendTimeline) {
       expect(metrics.backendTimeline.eventCounts['commis_spawned'] ?? 0).toBe(0);
     }
@@ -643,22 +643,22 @@ test.describe('Chat Performance Evaluation', () => {
   });
 
   /**
-   * TEST 3: Worker Overhead
+   * TEST 3: Commis Overhead
    *
-   * Measures: Additional latency when spawning a worker vs direct response
-   * Purpose: Quantify the cost of the supervisor → worker delegation
+   * Measures: Additional latency when spawning a commis vs direct response
+   * Purpose: Quantify the cost of the concierge → commis delegation
    *
-   * Worker path adds:
+   * Commis path adds:
    * - Tool call decision: ~500-1000ms
-   * - Worker spawn + prompt: ~500-1000ms
-   * - Worker execution: varies
+   * - Commis spawn + prompt: ~500-1000ms
+   * - Commis execution: varies
    * - Result synthesis: ~500-1000ms
    */
-  test('worker overhead - measures delegation latency cost', async ({ page, request }) => {
-    console.log('\n🧪 TEST: Worker Overhead\n');
-    console.log('Purpose: Measure extra latency from supervisor → worker delegation\n');
+  test('commis overhead - measures delegation latency cost', async ({ page, request }) => {
+    console.log('\n🧪 TEST: Commis Overhead\n');
+    console.log('Purpose: Measure extra latency from concierge → commis delegation\n');
 
-    // Direct response (no worker)
+    // Direct response (no commis)
     console.log('--- Direct response (baseline) ---');
     await navigateToChatWithTimeline(page);
     const directMetrics = await measureChatPerformance(
@@ -668,39 +668,39 @@ test.describe('Chat Performance Evaluation', () => {
     );
     console.log(`Direct: TTFT=${directMetrics.timeToFirstToken}ms, Total=${directMetrics.timeToComplete}ms`);
 
-    // Worker response (triggers spawn_commis)
-    console.log('\n--- Worker response (with delegation) ---');
+    // Commis response (triggers spawn_commis)
+    console.log('\n--- Commis response (with delegation) ---');
     await navigateToChatWithTimeline(page);
-    const workerMetrics = await measureChatPerformance(
+    const commisMetrics = await measureChatPerformance(
       page,
       request,
       'Check the current time on the system.',
-      { trackWorkerPanel: true }
+      { trackCommisPanel: true }
     );
-    console.log(`Worker: TTFT=${workerMetrics.timeToFirstToken}ms, Total=${workerMetrics.timeToComplete}ms`);
+    console.log(`Commis: TTFT=${commisMetrics.timeToFirstToken}ms, Total=${commisMetrics.timeToComplete}ms`);
 
     // Analysis
-    const ttftOverhead = (workerMetrics.timeToFirstToken ?? 0) - (directMetrics.timeToFirstToken ?? 0);
-    const totalOverhead = (workerMetrics.timeToComplete ?? 0) - (directMetrics.timeToComplete ?? 0);
+    const ttftOverhead = (commisMetrics.timeToFirstToken ?? 0) - (directMetrics.timeToFirstToken ?? 0);
+    const totalOverhead = (commisMetrics.timeToComplete ?? 0) - (directMetrics.timeToComplete ?? 0);
 
-    console.log(`\n📊 Worker Overhead:`);
+    console.log(`\n📊 Commis Overhead:`);
     console.log(`   TTFT overhead: ${ttftOverhead}ms`);
     console.log(`   Total overhead: ${totalOverhead}ms`);
 
-    // Worker should have spawned
-    if (workerMetrics.backendTimeline) {
-      const spawned = workerMetrics.backendTimeline.eventCounts['commis_spawned'] ?? 0;
-      console.log(`   Workers spawned: ${spawned}`);
+    // Commis should have spawned
+    if (commisMetrics.backendTimeline) {
+      const spawned = commisMetrics.backendTimeline.eventCounts['commis_spawned'] ?? 0;
+      console.log(`   Commis spawned: ${spawned}`);
       // Note: We don't assert spawned > 0 because the model might answer directly
     }
 
-    // Direct should NOT have spawned workers
+    // Direct should NOT have spawned commis
     if (directMetrics.backendTimeline) {
       expect(directMetrics.backendTimeline.eventCounts['commis_spawned'] ?? 0).toBe(0);
     }
 
-    exportMetrics('worker-direct', directMetrics);
-    exportMetrics('worker-delegated', workerMetrics);
+    exportMetrics('commis-direct', directMetrics);
+    exportMetrics('commis-delegated', commisMetrics);
   });
 
   /**
@@ -712,7 +712,7 @@ test.describe('Chat Performance Evaluation', () => {
    * This is the "golden path" test - a realistic user query that should:
    * - Get a helpful response
    * - Complete in reasonable time
-   * - Not spawn workers unnecessarily
+   * - Not spawn commis unnecessarily
    */
   test('e2e happy path - realistic user query', async ({ page, request }) => {
     console.log('\n🧪 TEST: E2E Happy Path\n');
@@ -729,20 +729,20 @@ test.describe('Chat Performance Evaluation', () => {
     printMetricsSummary(metrics);
 
     // All phases should complete
-    expect(metrics.supervisor.bubbleAppearedAt).not.toBeNull();
-    expect(metrics.supervisor.firstTokenAt).not.toBeNull();
-    expect(metrics.supervisor.streamingCompleteAt).not.toBeNull();
+    expect(metrics.concierge.bubbleAppearedAt).not.toBeNull();
+    expect(metrics.concierge.firstTokenAt).not.toBeNull();
+    expect(metrics.concierge.streamingCompleteAt).not.toBeNull();
     expect(metrics.timeToComplete).not.toBeNull();
 
     // Should have meaningful content
-    expect(metrics.supervisor.assistantCharCount).not.toBeNull();
-    expect(metrics.supervisor.assistantCharCount!).toBeGreaterThan(50);
-    expect(metrics.supervisor.assistantCharCount!).toBeLessThan(2000);
+    expect(metrics.concierge.assistantCharCount).not.toBeNull();
+    expect(metrics.concierge.assistantCharCount!).toBeGreaterThan(50);
+    expect(metrics.concierge.assistantCharCount!).toBeLessThan(2000);
 
     // Should complete in reasonable time
     expect(metrics.timeToComplete!).toBeLessThan(60000);
 
-    // Shouldn't spawn workers for simple advice
+    // Shouldn't spawn commis for simple advice
     if (metrics.backendTimeline) {
       expect(metrics.backendTimeline.eventCounts['commis_spawned'] ?? 0).toBe(0);
     }

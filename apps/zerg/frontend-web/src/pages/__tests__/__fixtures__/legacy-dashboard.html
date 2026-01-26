@@ -1,50 +1,50 @@
 <div id="dashboard" class="dashboard">
   <div class="dashboard-header">
     <div class="button-container">
-      <button id="create-agent-button" type="button" class="create-agent-button" data-testid="create-agent-btn">Create Agent</button>
+      <button id="create-fiche-button" type="button" class="create-fiche-button" data-testid="create-fiche-btn">Create Fiche</button>
     </div>
   </div>
-  <table id="agents-table" class="agents-table">
+  <table id="fiches-table" class="fiches-table">
     <thead>
       <tr>
         <th scope="col" data-column="name" role="button" tabindex="0">Name<span class="sort-indicator">▲</span></th>
         <th scope="col" data-column="status" role="button" tabindex="0">Status</th>
-        <th scope="col" data-column="last_run" role="button" tabindex="0">Last Run</th>
-        <th scope="col" data-column="next_run" role="button" tabindex="0">Next Run</th>
+        <th scope="col" data-column="last_course" role="button" tabindex="0">Last Course</th>
+        <th scope="col" data-column="next_course" role="button" tabindex="0">Next Course</th>
         <th scope="col" data-column="success_rate" role="button" tabindex="0">Success Rate</th>
         <th scope="col" class="actions-header" data-column="actions" role="button" tabindex="0">Actions</th>
       </tr>
     </thead>
-    <tbody id="agents-table-body">
-      <tr data-agent-id="1" aria-expanded="false" tabindex="0">
+    <tbody id="fiches-table-body">
+      <tr data-fiche-id="1" aria-expanded="false" tabindex="0">
         <td data-label="Name">Alpha</td>
         <td data-label="Status"><span class="status-indicator status-running">● Running</span></td>
-        <td data-label="Last Run">2025-09-24&nbsp;10:00</td>
-        <td data-label="Next Run">2025-09-24&nbsp;12:00</td>
+        <td data-label="Last Course">2025-09-24&nbsp;10:00</td>
+        <td data-label="Next Course">2025-09-24&nbsp;12:00</td>
         <td data-label="Success Rate">0.0% (0)</td>
         <td class="actions-cell" data-label="Actions">
           <div class="actions-cell-inner">
-            <button type="button" class="action-btn run-btn disabled" data-testid="run-agent-1" disabled="" title="Agent is already running" aria-label="Agent is already running"><i data-feather="play"></i></button>
-            <button type="button" class="action-btn edit-btn" data-testid="edit-agent-1" title="Edit Agent" aria-label="Edit Agent"><i data-feather="edit-3"></i></button>
-            <button type="button" class="action-btn chat-btn" data-testid="chat-agent-1" title="Chat with Agent" aria-label="Chat with Agent"><i data-feather="message-circle"></i></button>
-            <button type="button" class="action-btn debug-btn" data-testid="debug-agent-1" title="Debug / Info" aria-label="Debug / Info"><i data-feather="settings"></i></button>
-            <button type="button" class="action-btn delete-btn" data-testid="delete-agent-1" title="Delete Agent" aria-label="Delete Agent"><i data-feather="trash-2"></i></button>
+            <button type="button" class="action-btn run-btn disabled" data-testid="run-fiche-1" disabled="" title="Fiche is already running" aria-label="Fiche is already running"><i data-feather="play"></i></button>
+            <button type="button" class="action-btn edit-btn" data-testid="edit-fiche-1" title="Edit Fiche" aria-label="Edit Fiche"><i data-feather="edit-3"></i></button>
+            <button type="button" class="action-btn chat-btn" data-testid="chat-fiche-1" title="Chat with Fiche" aria-label="Chat with Fiche"><i data-feather="message-circle"></i></button>
+            <button type="button" class="action-btn debug-btn" data-testid="debug-fiche-1" title="Debug / Info" aria-label="Debug / Info"><i data-feather="settings"></i></button>
+            <button type="button" class="action-btn delete-btn" data-testid="delete-fiche-1" title="Delete Fiche" aria-label="Delete Fiche"><i data-feather="trash-2"></i></button>
           </div>
         </td>
       </tr>
-      <tr data-agent-id="2" aria-expanded="false" class="error-row" tabindex="0">
+      <tr data-fiche-id="2" aria-expanded="false" class="error-row" tabindex="0">
         <td data-label="Name">Beta</td>
         <td data-label="Status"><span class="status-indicator status-error">⚠ Error</span><span class="info-icon" title="Failed to execute">ℹ</span></td>
-        <td data-label="Last Run">-</td>
-        <td data-label="Next Run">-</td>
+        <td data-label="Last Course">-</td>
+        <td data-label="Next Course">-</td>
         <td data-label="Success Rate">0.0% (0)</td>
         <td class="actions-cell" data-label="Actions">
           <div class="actions-cell-inner">
-            <button type="button" class="action-btn run-btn" data-testid="run-agent-2" title="Run Agent" aria-label="Run Agent"><i data-feather="play"></i></button>
-            <button type="button" class="action-btn edit-btn" data-testid="edit-agent-2" title="Edit Agent" aria-label="Edit Agent"><i data-feather="edit-3"></i></button>
-            <button type="button" class="action-btn chat-btn" data-testid="chat-agent-2" title="Chat with Agent" aria-label="Chat with Agent"><i data-feather="message-circle"></i></button>
-            <button type="button" class="action-btn debug-btn" data-testid="debug-agent-2" title="Debug / Info" aria-label="Debug / Info"><i data-feather="settings"></i></button>
-            <button type="button" class="action-btn delete-btn" data-testid="delete-agent-2" title="Delete Agent" aria-label="Delete Agent"><i data-feather="trash-2"></i></button>
+            <button type="button" class="action-btn run-btn" data-testid="run-fiche-2" title="Run Fiche" aria-label="Run Fiche"><i data-feather="play"></i></button>
+            <button type="button" class="action-btn edit-btn" data-testid="edit-fiche-2" title="Edit Fiche" aria-label="Edit Fiche"><i data-feather="edit-3"></i></button>
+            <button type="button" class="action-btn chat-btn" data-testid="chat-fiche-2" title="Chat with Fiche" aria-label="Chat with Fiche"><i data-feather="message-circle"></i></button>
+            <button type="button" class="action-btn debug-btn" data-testid="debug-fiche-2" title="Debug / Info" aria-label="Debug / Info"><i data-feather="settings"></i></button>
+            <button type="button" class="action-btn delete-btn" data-testid="delete-fiche-2" title="Delete Fiche" aria-label="Delete Fiche"><i data-feather="trash-2"></i></button>
           </div>
         </td>
       </tr>

@@ -61,7 +61,7 @@ async def websocket_endpoint(
     Args:
         websocket: The WebSocket connection
         initial_topics: Optional comma-separated list of topics to subscribe to
-            immediately upon connection (e.g., "agent:123,thread:45")
+            immediately upon connection (e.g., "fiche:123,thread:45")
         token: Optional JWT from query param (for non-browser clients)
 
     Auth order:

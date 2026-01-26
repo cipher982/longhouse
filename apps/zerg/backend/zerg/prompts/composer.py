@@ -1,14 +1,14 @@
 """Prompt composer - builds final prompts from templates + user context.
 
-This module takes base templates (generic agent behavior) and injects user-specific
+This module takes base templates (generic fiche behavior) and injects user-specific
 context (servers, integrations, preferences) to create complete system prompts.
 """
 
 from zerg.crud import runner_crud
 from zerg.database import get_db
+from zerg.prompts.templates import BASE_COMMIS_PROMPT
+from zerg.prompts.templates import BASE_CONCIERGE_PROMPT
 from zerg.prompts.templates import BASE_JARVIS_PROMPT
-from zerg.prompts.templates import BASE_SUPERVISOR_PROMPT
-from zerg.prompts.templates import BASE_WORKER_PROMPT
 
 
 def format_user_context(ctx: dict) -> str:
@@ -115,9 +115,9 @@ def format_integrations(integrations: dict) -> str:
 
 
 def format_online_runners(owner_id: int) -> str:
-    """Format available runners for worker prompt.
+    """Format available runners for commis prompt.
 
-    Queries the database for online runners and formats them for the worker.
+    Queries the database for online runners and formats them for the commis.
 
     Args:
         owner_id: User ID to get runners for
@@ -149,36 +149,36 @@ If ssh_exec fails, report the error and stop. Runner daemons provide faster,
 more secure execution when available."""
 
 
-def build_supervisor_prompt(user) -> str:
-    """Build complete supervisor prompt with user context.
+def build_concierge_prompt(user) -> str:
+    """Build complete concierge prompt with user context.
 
     Args:
         user: SQLAlchemy User model instance
 
     Returns:
-        Complete system prompt for supervisor agents
+        Complete system prompt for concierge fiches
     """
     ctx = user.context or {}
 
-    return BASE_SUPERVISOR_PROMPT.format(
+    return BASE_CONCIERGE_PROMPT.format(
         user_context=format_user_context(ctx),
         servers=format_servers(ctx.get("servers", [])),
         integrations=format_integrations(ctx.get("integrations", {})),
     )
 
 
-def build_worker_prompt(user) -> str:
-    """Build complete worker prompt with user context.
+def build_commis_prompt(user) -> str:
+    """Build complete commis prompt with user context.
 
     Args:
         user: SQLAlchemy User model instance
 
     Returns:
-        Complete system prompt for worker agents
+        Complete system prompt for commis
     """
     ctx = user.context or {}
 
-    return BASE_WORKER_PROMPT.format(
+    return BASE_COMMIS_PROMPT.format(
         servers=format_servers(ctx.get("servers", [])),
         user_context=format_user_context(ctx),
         online_runners=format_online_runners(user.id),

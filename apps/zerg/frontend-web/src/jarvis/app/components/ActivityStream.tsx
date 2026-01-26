@@ -1,35 +1,35 @@
 /**
- * ActivityStream - Displays supervisor tool calls inline in conversation
+ * ActivityStream - Displays concierge tool calls inline in conversation
  *
  * Shows tool cards between user message and assistant response.
  * Provides real-time updates during execution and persists after completion.
  *
  * Usage:
- *   <ActivityStream runId={currentRunId} />
+ *   <ActivityStream courseId={currentCourseId} />
  *
  * Design: Stack of ToolCards, ordered by start time
  */
 
 import React, { useSyncExternalStore } from 'react';
-import { supervisorToolStore } from '../../lib/supervisor-tool-store';
+import { conciergeToolStore } from '../../lib/concierge-tool-store';
 import { ToolCard } from './ToolCard';
-import { WorkerToolCard } from './WorkerToolCard';
+import { CommisToolCard } from './CommisToolCard';
 import './ActivityStream.css';
 
 interface ActivityStreamProps {
-  runId: number | null;
+  courseId: number | null;
   className?: string;
 }
 
-export function ActivityStream({ runId, className }: ActivityStreamProps): React.ReactElement | null {
+export function ActivityStream({ courseId, className }: ActivityStreamProps): React.ReactElement | null {
   // Subscribe to store updates - triggers re-render when state changes
   useSyncExternalStore(
-    supervisorToolStore.subscribe.bind(supervisorToolStore),
-    () => supervisorToolStore.getState()
+    conciergeToolStore.subscribe.bind(conciergeToolStore),
+    () => conciergeToolStore.getState()
   );
 
-  // Filter and sort tools for this run
-  const tools = runId != null ? supervisorToolStore.getToolsForRun(runId) : [];
+  // Filter and sort tools for this course
+  const tools = courseId != null ? conciergeToolStore.getToolsForCourse(courseId) : [];
 
   // Don't render if no tools
   if (tools.length === 0) {
@@ -40,31 +40,31 @@ export function ActivityStream({ runId, className }: ActivityStreamProps): React
     if (t.status === 'running') return true;
     if (t.toolName !== 'spawn_commis') return false;
 
-    const workerStatus = (t.result as any)?.workerStatus;
+    const commisStatus = (t.result as any)?.commisStatus;
     const nestedTools = (t.result as any)?.nestedTools || [];
 
-    if (workerStatus === 'spawned' || workerStatus === 'running') return true;
+    if (commisStatus === 'spawned' || commisStatus === 'running') return true;
     if (nestedTools.some((nt: any) => nt.status === 'running')) return true;
 
     return false;
   });
 
-  // Check if supervisor is deferred (workers continuing in background)
-  const isDeferred = supervisorToolStore.isDeferred(runId);
+  // Check if concierge is deferred (commis continuing in background)
+  const isDeferred = conciergeToolStore.isDeferred(courseId);
 
-  // Count detached workers before this one for stacking offset
-  let detachedWorkerIndex = 0;
+  // Count detached commis before this one for stacking offset
+  let detachedCommisIndex = 0;
 
   return (
     <div className={`activity-stream ${className || ''} ${hasActiveWork ? 'activity-stream--active' : ''}`}>
       {tools.map(tool => {
-        // Use WorkerToolCard for spawn_commis, regular ToolCard for everything else
+        // Use CommisToolCard for spawn_commis, regular ToolCard for everything else
         if (tool.toolName === 'spawn_commis') {
-          // Mark worker as detached if it's still running while supervisor is deferred
-          const workerStatus = (tool.result as any)?.workerStatus;
-          const isDetached = isDeferred && (workerStatus === 'running' || workerStatus === 'spawned');
-          const detachedIndex = isDetached ? detachedWorkerIndex++ : 0;
-          return <WorkerToolCard key={tool.toolCallId} tool={tool} isDetached={isDetached} detachedIndex={detachedIndex} />;
+          // Mark commis as detached if it's still running while concierge is deferred
+          const commisStatus = (tool.result as any)?.commisStatus;
+          const isDetached = isDeferred && (commisStatus === 'running' || commisStatus === 'spawned');
+          const detachedIndex = isDetached ? detachedCommisIndex++ : 0;
+          return <CommisToolCard key={tool.toolCallId} tool={tool} isDetached={isDetached} detachedIndex={detachedIndex} />;
         }
         return <ToolCard key={tool.toolCallId} tool={tool} />;
       })}

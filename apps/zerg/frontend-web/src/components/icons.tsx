@@ -382,7 +382,7 @@ export function CodeIcon(props: IconProps) {
   );
 }
 
-export function AgentIcon(props: IconProps) {
+export function FicheIcon(props: IconProps) {
   return (
     <svg {...baseProps} {...props} aria-hidden="true" focusable="false">
       <rect x="3" y="4" width="18" height="16" rx="3" />

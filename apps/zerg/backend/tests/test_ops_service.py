@@ -4,21 +4,21 @@ from datetime import timedelta
 from zerg.crud import crud
 from zerg.services.ops_service import get_summary
 from zerg.services.ops_service import get_timeseries
-from zerg.services.ops_service import get_top_agents
+from zerg.services.ops_service import get_top_fiches
 
 
 def _mk_run(
-    db, agent_id: int, thread_id: int, *, started_at, finished_at=None, status="running", duration_ms=None, cost=None
+    db, fiche_id: int, thread_id: int, *, started_at, finished_at=None, status="running", duration_ms=None, cost=None
 ):
-    run = crud.create_run(db, agent_id=agent_id, thread_id=thread_id, trigger="api", status="queued")
-    crud.mark_running(db, run.id, started_at=started_at)
+    run = crud.create_course(db, fiche_id=fiche_id, thread_id=thread_id, trigger="api", status="queued")
+    crud.mark_course_running(db, run.id, started_at=started_at)
     if finished_at is not None:
         if status == "success":
-            crud.mark_finished(db, run.id, finished_at=finished_at, duration_ms=duration_ms, total_cost_usd=cost)
+            crud.mark_course_finished(db, run.id, finished_at=finished_at, duration_ms=duration_ms, total_cost_usd=cost)
         elif status == "failed":
-            crud.mark_failed(db, run.id, finished_at=finished_at, duration_ms=duration_ms, error="x")
+            crud.mark_course_failed(db, run.id, finished_at=finished_at, duration_ms=duration_ms, error="x")
         else:
-            crud.mark_finished(db, run.id, finished_at=finished_at, duration_ms=duration_ms)
+            crud.mark_course_finished(db, run.id, finished_at=finished_at, duration_ms=duration_ms)
     return run
 
 
@@ -26,16 +26,16 @@ def test_summary_basic(db_session):
     # Create admin current user
     admin = crud.create_user(db_session, email="ops-admin@local", provider=None, role="ADMIN")
 
-    # Agent and thread for admin
-    agent = crud.create_agent(
+    # Fiche and thread for admin
+    fiche = crud.create_fiche(
         db_session,
         owner_id=admin.id,
-        name="ops-agent",
+        name="ops-fiche",
         system_instructions="s",
         task_instructions="t",
         model="gpt-mock",
     )
-    thread = crud.create_thread(db=db_session, agent_id=agent.id, title="t1", active=True, agent_state={})
+    thread = crud.create_thread(db=db_session, fiche_id=fiche.id, title="t1", active=True, fiche_state={})
 
     # Use a stable "today" timestamp that won't cross a UTC day boundary during the test run.
     # These tests query by UTC date, so running near 00:00Z can otherwise flake.
@@ -44,7 +44,7 @@ def test_summary_basic(db_session):
     # 1 success with cost and duration
     _mk_run(
         db_session,
-        agent.id,
+        fiche.id,
         thread.id,
         started_at=today - timedelta(minutes=30),
         finished_at=today - timedelta(minutes=29),
@@ -55,7 +55,7 @@ def test_summary_basic(db_session):
     # 1 failed within last hour
     _mk_run(
         db_session,
-        agent.id,
+        fiche.id,
         thread.id,
         started_at=today - timedelta(minutes=10),
         finished_at=today - timedelta(minutes=9),
@@ -72,25 +72,25 @@ def test_summary_basic(db_session):
     assert s["cost_today_usd"] is None or isinstance(s["cost_today_usd"], float)
     assert "budget_user" in s and "budget_global" in s
     assert isinstance(s["active_users_24h"], int)
-    assert isinstance(s["agents_total"], int)
+    assert isinstance(s["fiches_total"], int)
     assert "latency_ms" in s and set(s["latency_ms"].keys()) == {"p50", "p95"}
     assert isinstance(s["errors_last_hour"], int)
-    assert isinstance(s["top_agents_today"], list)
+    assert isinstance(s["top_fiches_today"], list)
 
 
 def test_timeseries_zero_fill_runs(db_session):
     admin = crud.create_user(db_session, email="ops-admin2@local", provider=None, role="ADMIN")
-    agent = crud.create_agent(
+    fiche = crud.create_fiche(
         db_session, owner_id=admin.id, name="a", system_instructions="s", task_instructions="t", model="gpt-mock"
     )
-    thread = crud.create_thread(db=db_session, agent_id=agent.id, title="t", active=True, agent_state={})
+    thread = crud.create_thread(db=db_session, fiche_id=fiche.id, title="t", active=True, fiche_state={})
 
     base = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
     h3 = base.replace(hour=3)
     h15 = base.replace(hour=15)
     _mk_run(
         db_session,
-        agent.id,
+        fiche.id,
         thread.id,
         started_at=h3 + timedelta(minutes=1),
         finished_at=h3 + timedelta(minutes=2),
@@ -98,7 +98,7 @@ def test_timeseries_zero_fill_runs(db_session):
     )
     _mk_run(
         db_session,
-        agent.id,
+        fiche.id,
         thread.id,
         started_at=h15 + timedelta(minutes=1),
         finished_at=h15 + timedelta(minutes=2),
@@ -114,16 +114,16 @@ def test_timeseries_zero_fill_runs(db_session):
     assert vals[15] >= 1
 
 
-def test_top_agents_ordering_and_limit(db_session):
+def test_top_fiches_ordering_and_limit(db_session):
     admin = crud.create_user(db_session, email="ops-admin3@local", provider=None, role="ADMIN")
-    a1 = crud.create_agent(
+    a1 = crud.create_fiche(
         db_session, owner_id=admin.id, name="A1", system_instructions="s", task_instructions="t", model="gpt-mock"
     )
-    a2 = crud.create_agent(
+    a2 = crud.create_fiche(
         db_session, owner_id=admin.id, name="A2", system_instructions="s", task_instructions="t", model="gpt-mock"
     )
-    t1 = crud.create_thread(db=db_session, agent_id=a1.id, title="t1", active=True, agent_state={})
-    t2 = crud.create_thread(db=db_session, agent_id=a2.id, title="t2", active=True, agent_state={})
+    t1 = crud.create_thread(db=db_session, fiche_id=a1.id, title="t1", active=True, fiche_state={})
+    t2 = crud.create_thread(db=db_session, fiche_id=a2.id, title="t2", active=True, fiche_state={})
     # Avoid UTC day-boundary flakes: ops queries group/filter by UTC date.
     now = datetime.combine(datetime.utcnow().date(), datetime.min.time()) + timedelta(hours=12)
     # A1: 3 runs
@@ -146,9 +146,9 @@ def test_top_agents_ordering_and_limit(db_session):
         status="success",
     )
 
-    top = get_top_agents(db_session, window="today", limit=1)
+    top = get_top_fiches(db_session, window="today", limit=1)
     assert len(top) == 1
-    assert top[0]["agent_id"] == a1.id
+    assert top[0]["fiche_id"] == a1.id
 
 
 def test_timeseries_database_compatibility_regression(db_session):
@@ -160,16 +160,16 @@ def test_timeseries_database_compatibility_regression(db_session):
     if anyone reverts back to SQLite-specific func.strftime() calls.
     """
     admin = crud.create_user(db_session, email="ops-admin-regression@local", provider=None, role="ADMIN")
-    agent = crud.create_agent(
+    fiche = crud.create_fiche(
         db_session,
         owner_id=admin.id,
-        name="regression-agent",
+        name="regression-fiche",
         system_instructions="s",
         task_instructions="t",
         model="gpt-mock",
     )
     thread = crud.create_thread(
-        db=db_session, agent_id=agent.id, title="regression-thread", active=True, agent_state={}
+        db=db_session, fiche_id=fiche.id, title="regression-thread", active=True, fiche_state={}
     )
 
     # Create a specific time base for predictable hour extraction - ensure it's today
@@ -183,7 +183,7 @@ def test_timeseries_database_compatibility_regression(db_session):
     # Test data for runs_by_hour: Create runs at different hours
     _mk_run(
         db_session,
-        agent.id,
+        fiche.id,
         thread.id,
         started_at=h5 + timedelta(minutes=15),  # Hour 5
         finished_at=h5 + timedelta(minutes=16),
@@ -193,7 +193,7 @@ def test_timeseries_database_compatibility_regression(db_session):
     )
     _mk_run(
         db_session,
-        agent.id,
+        fiche.id,
         thread.id,
         started_at=h10 + timedelta(minutes=20),  # Hour 10
         finished_at=h10 + timedelta(minutes=21),
@@ -205,7 +205,7 @@ def test_timeseries_database_compatibility_regression(db_session):
     # Test data for errors_by_hour: Create failed runs at specific hours
     _mk_run(
         db_session,
-        agent.id,
+        fiche.id,
         thread.id,
         started_at=h10 + timedelta(minutes=25),  # Hour 10 (error)
         finished_at=h10 + timedelta(minutes=26),
@@ -214,7 +214,7 @@ def test_timeseries_database_compatibility_regression(db_session):
     )
     _mk_run(
         db_session,
-        agent.id,
+        fiche.id,
         thread.id,
         started_at=h14 + timedelta(minutes=10),  # Hour 14 (error)
         finished_at=h14 + timedelta(minutes=11),
@@ -225,7 +225,7 @@ def test_timeseries_database_compatibility_regression(db_session):
     # Test data for cost_by_hour: Additional runs with costs
     _mk_run(
         db_session,
-        agent.id,
+        fiche.id,
         thread.id,
         started_at=h14 + timedelta(minutes=30),  # Hour 14
         finished_at=h14 + timedelta(minutes=31),

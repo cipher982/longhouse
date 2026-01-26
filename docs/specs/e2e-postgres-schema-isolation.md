@@ -98,12 +98,12 @@ Schemas are:
 - **Fast to create**: `CREATE SCHEMA` is nearly instant vs `CREATE DATABASE`
 - **Per-worker connection pools**: Each worker ID gets its own engine/pool (better isolation but more connections)
 - **Full isolation**: Each schema has its own tables, no cross-contamination
-- **Simple cleanup**: `DROP SCHEMA e2e_worker_0 CASCADE`
+- **Simple cleanup**: `DROP SCHEMA e2e_commis_0 CASCADE`
 
 ### Design Decisions & Tradeoffs
 
-**Connection Pool Strategy**: The implementation creates a separate SQLAlchemy engine (and connection pool) for each worker ID. This increases total connection count but provides:
-- **Better isolation**: No possibility of cross-worker connection reuse
+**Connection Pool Strategy**: The implementation creates a separate SQLAlchemy engine (and connection pool) for each commis ID. This increases total connection count but provides:
+- **Better isolation**: No possibility of cross-commis connection reuse
 - **Cleaner architecture**: Each worker is truly independent
 - **Safer cleanup**: Dropping a schema doesn't affect other workers' active connections
 
@@ -118,12 +118,12 @@ Schemas are:
 ```
 Playwright Worker 0                    Backend
        │                                  │
-       ├─── HTTP + X-Test-Worker: 0 ────►│
-       │                                  ├─► worker_db.py middleware
-       │                                  │   extracts worker_id
+       ├─── HTTP + X-Test-Commis: 0 ────►│
+       │                                  ├─► commis_db.py middleware
+       │                                  │   extracts commis_id
        │                                  │
        │                                  ├─► database.py
-       │                                  │   routes to sqlite:///worker_0.db
+       │                                  │   routes to sqlite:///commis_0.db
        │                                  │
        │                                  ├─► test_db_manager.py
        │                                  │   creates/manages SQLite file
@@ -134,13 +134,13 @@ Playwright Worker 0                    Backend
 ```
 Playwright Worker 0                    Backend                     Postgres
        │                                  │                            │
-       ├─── HTTP + X-Test-Worker: 0 ────►│                            │
-       │                                  ├─► worker_db.py middleware  │
-       │                                  │   extracts worker_id       │
+       ├─── HTTP + X-Test-Commis: 0 ────►│                            │
+       │                                  ├─► commis_db.py middleware  │
+       │                                  │   extracts commis_id       │
        │                                  │                            │
        │                                  ├─► database.py              │
        │                                  │   SET search_path = ────────►
-       │                                  │   e2e_worker_0             │
+       │                                  │   e2e_commis_0             │
        │                                  │                            │
        │                                  ├─► schema_manager.py        │
        │                                  │   CREATE SCHEMA IF ─────────►
@@ -153,12 +153,12 @@ PostgreSQL's `search_path` controls which schema is used for unqualified table n
 
 ```sql
 -- Worker 0's connection
-SET search_path TO e2e_worker_0;
-SELECT * FROM agents;  -- Actually queries e2e_worker_0.agents
+SET search_path TO e2e_commis_0;
+SELECT * FROM fiches;  -- Actually queries e2e_commis_0.fiches
 
 -- Worker 1's connection
-SET search_path TO e2e_worker_1;
-SELECT * FROM agents;  -- Actually queries e2e_worker_1.agents
+SET search_path TO e2e_commis_1;
+SELECT * FROM fiches;  -- Actually queries e2e_commis_1.fiches
 ```
 
 This requires **no changes to SQLAlchemy models** - they continue to use unqualified table names.
@@ -171,7 +171,7 @@ This requires **no changes to SQLAlchemy models** - they continue to use unquali
 |------|--------|
 | `zerg/database.py` | Replace SQLite routing with `search_path` setting |
 | `zerg/test_db_manager.py` | Replace SQLite file management with schema management |
-| `zerg/middleware/worker_db.py` | No change (already extracts worker_id) |
+| `zerg/middleware/commis_db.py` | No change (already extracts commis_id) |
 | `zerg/core/config.py` | Add `E2E_USE_POSTGRES_SCHEMAS` flag |
 
 ### E2E Test Changes
@@ -187,7 +187,7 @@ This requires **no changes to SQLAlchemy models** - they continue to use unquali
 
 | File | Reason |
 |------|--------|
-| `e2e/tests/fixtures.ts` | Already injects `X-Test-Worker` header correctly |
+| `e2e/tests/fixtures.ts` | Already injects `X-Test-Commis` header correctly |
 | `e2e/playwright.config.js` | Backend URL routing unchanged |
 | All `.spec.ts` files | Isolation is transparent to tests |
 | SQLAlchemy models | `search_path` handles schema routing |

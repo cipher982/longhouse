@@ -1,7 +1,7 @@
 /**
  * API functions for user contacts management.
  *
- * Approved contacts are used by agents to validate email/SMS recipients.
+ * Approved contacts are used by fiches to validate email/SMS recipients.
  */
 
 import { request } from "./base";

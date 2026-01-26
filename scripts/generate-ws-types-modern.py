@@ -134,7 +134,7 @@ export interface Envelope<T = unknown> {
   v: number;
   /** Message type identifier */
   type: string;
-  /** Topic routing string (e.g., 'agent:123', 'thread:456') */
+  /** Topic routing string (e.g., 'fiche:123', 'thread:456') */
   topic: string;
   /** Optional request correlation ID */
   req_id?: string;

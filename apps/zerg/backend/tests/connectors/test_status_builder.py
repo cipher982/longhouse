@@ -1,7 +1,7 @@
 """Tests for connector status builder.
 
-This module tests the build_connector_status and build_agent_context functions
-that create structured status information for agent prompt injection.
+This module tests the build_connector_status and build_fiche_context functions
+that create structured status information for fiche prompt injection.
 """
 
 import json
@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from zerg.connectors.registry import ConnectorType
-from zerg.connectors.status_builder import build_agent_context
+from zerg.connectors.status_builder import build_fiche_context
 from zerg.connectors.status_builder import build_connector_status
 from zerg.connectors.status_builder import get_capabilities_for_connector
 from zerg.connectors.status_builder import get_tools_for_connector
@@ -135,7 +135,7 @@ def test_build_connector_status_no_connectors(db_session: Session, test_user: Us
     status = build_connector_status(
         db=db_session,
         owner_id=test_user.id,
-        agent_id=None,
+        fiche_id=None,
     )
 
     # Should have status for all connector types
@@ -177,7 +177,7 @@ def test_build_connector_status_with_configured(db_session: Session, test_user: 
     status = build_connector_status(
         db=db_session,
         owner_id=test_user.id,
-        agent_id=None,
+        fiche_id=None,
     )
 
     # GitHub should be connected
@@ -199,8 +199,8 @@ def test_build_connector_status_with_configured(db_session: Session, test_user: 
     assert "tools" not in status["discord"]
 
 
-def test_build_connector_status_with_agent_id(db_session: Session, test_user: User, sample_agent):
-    """Test build_connector_status with agent-level credential override."""
+def test_build_connector_status_with_fiche_id(db_session: Session, test_user: User, sample_fiche):
+    """Test build_connector_status with fiche-level credential override."""
     from zerg.models.models import AccountConnectorCredential
     from zerg.models.models import ConnectorCredential
 
@@ -213,31 +213,31 @@ def test_build_connector_status_with_agent_id(db_session: Session, test_user: Us
     )
     db_session.add(account_cred)
 
-    # Create agent-level override for the same connector
-    agent_cred = ConnectorCredential(
-        agent_id=sample_agent.id,
+    # Create fiche-level override for the same connector
+    fiche_cred = ConnectorCredential(
+        fiche_id=sample_fiche.id,
         connector_type="github",
-        encrypted_value="agent_level_token",
+        encrypted_value="fiche_level_token",
         test_status="success",
     )
-    db_session.add(agent_cred)
+    db_session.add(fiche_cred)
     db_session.commit()
 
-    # Query with agent_id should find the agent-level credential
+    # Query with fiche_id should find the fiche-level credential
     status = build_connector_status(
         db=db_session,
         owner_id=test_user.id,
-        agent_id=sample_agent.id,
+        fiche_id=sample_fiche.id,
     )
 
-    # GitHub should be connected (agent-level credential takes precedence)
+    # GitHub should be connected (fiche-level credential takes precedence)
     assert status["github"]["status"] == "connected"
     assert "tools" in status["github"]
     assert "github_create_issue" in status["github"]["tools"]
 
 
-def test_build_agent_context_format(db_session: Session, test_user: User):
-    """Test build_agent_context returns properly formatted XML with JSON."""
+def test_build_fiche_context_format(db_session: Session, test_user: User):
+    """Test build_fiche_context returns properly formatted XML with JSON."""
     from zerg.models.models import AccountConnectorCredential
 
     # Create credentials for GitHub and Slack
@@ -257,10 +257,10 @@ def test_build_agent_context_format(db_session: Session, test_user: User):
     db_session.add(slack_cred)
     db_session.commit()
 
-    context = build_agent_context(
+    context = build_fiche_context(
         db=db_session,
         owner_id=test_user.id,
-        agent_id=None,
+        fiche_id=None,
     )
 
     # Should be a string
@@ -289,18 +289,18 @@ def test_build_agent_context_format(db_session: Session, test_user: User):
     assert connector_data["slack"]["status"] == "connected"
 
 
-def test_build_agent_context_timestamp_format(db_session: Session, test_user: User):
-    """Test build_agent_context uses correct ISO 8601 timestamp format with Z suffix."""
+def test_build_fiche_context_timestamp_format(db_session: Session, test_user: User):
+    """Test build_fiche_context uses correct ISO 8601 timestamp format with Z suffix."""
     # Mock datetime to control timestamp
     mock_time = datetime(2025, 1, 17, 15, 30, 45, tzinfo=timezone.utc)
     with patch("zerg.connectors.status_builder.datetime") as mock_datetime:
         mock_datetime.now.return_value = mock_time
         mock_datetime.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
 
-        context = build_agent_context(
+        context = build_fiche_context(
             db=db_session,
             owner_id=test_user.id,
-            agent_id=None,
+            fiche_id=None,
         )
 
         # Should contain the exact timestamp we mocked
@@ -312,13 +312,13 @@ def test_build_agent_context_timestamp_format(db_session: Session, test_user: Us
         assert f'captured_at="{expected_timestamp}"' in context
 
 
-def test_build_agent_context_includes_all_connector_types(db_session: Session, test_user: User):
-    """Test build_agent_context includes status for all connector types."""
+def test_build_fiche_context_includes_all_connector_types(db_session: Session, test_user: User):
+    """Test build_fiche_context includes status for all connector types."""
     # No credentials configured - all should be included but not_configured
-    context = build_agent_context(
+    context = build_fiche_context(
         db=db_session,
         owner_id=test_user.id,
-        agent_id=None,
+        fiche_id=None,
     )
 
     # Extract and parse JSON
@@ -352,7 +352,7 @@ def test_build_connector_status_mixed_connectors(db_session: Session, test_user:
     status = build_connector_status(
         db=db_session,
         owner_id=test_user.id,
-        agent_id=None,
+        fiche_id=None,
     )
 
     # Configured ones should be connected
@@ -387,7 +387,7 @@ def test_build_connector_status_invalid_credentials(db_session: Session, test_us
     status = build_connector_status(
         db=db_session,
         owner_id=test_user.id,
-        agent_id=None,
+        fiche_id=None,
     )
 
     # GitHub should show as invalid_credentials
@@ -418,7 +418,7 @@ def test_build_connector_status_untested_credentials(db_session: Session, test_u
     status = build_connector_status(
         db=db_session,
         owner_id=test_user.id,
-        agent_id=None,
+        fiche_id=None,
     )
 
     # Untested credentials should be treated as connected (optimistic)
@@ -437,7 +437,7 @@ def test_get_unavailable_tools_no_connectors(db_session: Session, test_user: Use
     unavailable = get_unavailable_tools(
         db=db_session,
         owner_id=test_user.id,
-        agent_id=None,
+        fiche_id=None,
     )
 
     # Should include tools from all connectors since none are configured
@@ -475,7 +475,7 @@ def test_get_unavailable_tools_with_connected(db_session: Session, test_user: Us
     unavailable = get_unavailable_tools(
         db=db_session,
         owner_id=test_user.id,
-        agent_id=None,
+        fiche_id=None,
     )
 
     # GitHub tools should NOT be in unavailable (connector is connected)
@@ -504,7 +504,7 @@ def test_get_unavailable_tools_with_failed_credentials(db_session: Session, test
     unavailable = get_unavailable_tools(
         db=db_session,
         owner_id=test_user.id,
-        agent_id=None,
+        fiche_id=None,
     )
 
     # Slack tools should be unavailable since credentials failed

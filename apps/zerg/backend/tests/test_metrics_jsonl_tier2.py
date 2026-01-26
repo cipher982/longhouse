@@ -7,27 +7,27 @@ from pathlib import Path
 
 import pytest
 
-from zerg.services.worker_artifact_store import WorkerArtifactStore
-from zerg.worker_metrics import MetricsCollector
-from zerg.worker_metrics import get_metrics_collector
-from zerg.worker_metrics import reset_metrics_collector
-from zerg.worker_metrics import set_metrics_collector
+from zerg.services.commis_artifact_store import CommisArtifactStore
+from zerg.commis_metrics import MetricsCollector
+from zerg.commis_metrics import get_metrics_collector
+from zerg.commis_metrics import reset_metrics_collector
+from zerg.commis_metrics import set_metrics_collector
 
 
 @pytest.fixture
 def metrics_artifact_store(tmp_path):
     """Create a test artifact store for metrics verification."""
-    return WorkerArtifactStore(base_path=str(tmp_path))
+    return CommisArtifactStore(base_path=str(tmp_path))
 
 
 def test_metrics_jsonl_creation(metrics_artifact_store):
     """Verify that metrics.jsonl is created with proper structure."""
-    # Create a test worker
-    worker_id = metrics_artifact_store.create_worker("Test metrics collection", config={})
-    metrics_artifact_store.start_worker(worker_id)
+    # Create a test commis
+    commis_id = metrics_artifact_store.create_commis("Test metrics collection", config={})
+    metrics_artifact_store.start_commis(commis_id)
 
     # Set up metrics collector
-    collector = MetricsCollector(worker_id)
+    collector = MetricsCollector(commis_id)
     set_metrics_collector(collector)
 
     # Record test metrics
@@ -55,12 +55,12 @@ def test_metrics_jsonl_creation(metrics_artifact_store):
     collector.flush(metrics_artifact_store)
     reset_metrics_collector()
 
-    # Complete the worker
-    metrics_artifact_store.complete_worker(worker_id, status="success")
+    # Complete the commis
+    metrics_artifact_store.complete_commis(commis_id, status="success")
 
     # Verify metrics.jsonl exists
-    worker_dir = Path(metrics_artifact_store.base_path) / worker_id
-    metrics_path = worker_dir / "metrics.jsonl"
+    commis_dir = Path(metrics_artifact_store.base_path) / commis_id
+    metrics_path = commis_dir / "metrics.jsonl"
 
     assert metrics_path.exists(), f"metrics.jsonl should exist at {metrics_path}"
 
@@ -98,14 +98,14 @@ def test_metrics_jsonl_creation(metrics_artifact_store):
     assert tool_event["success"] is True, "tool_call should be successful"
 
 
-def test_read_worker_file_can_access_metrics(metrics_artifact_store):
-    """Verify that read_worker_file can access metrics.jsonl (for supervisor access)."""
-    # Create a test worker with metrics
-    worker_id = metrics_artifact_store.create_worker("Test supervisor access", config={})
-    metrics_artifact_store.start_worker(worker_id)
+def test_read_commis_file_can_access_metrics(metrics_artifact_store):
+    """Verify that read_commis_file can access metrics.jsonl (for concierge access)."""
+    # Create a test commis with metrics
+    commis_id = metrics_artifact_store.create_commis("Test concierge access", config={})
+    metrics_artifact_store.start_commis(commis_id)
 
     # Create and flush metrics
-    collector = MetricsCollector(worker_id)
+    collector = MetricsCollector(commis_id)
     set_metrics_collector(collector)
 
     start_ts = datetime.now(timezone.utc)
@@ -121,10 +121,10 @@ def test_read_worker_file_can_access_metrics(metrics_artifact_store):
     collector.flush(metrics_artifact_store)
     reset_metrics_collector()
 
-    metrics_artifact_store.complete_worker(worker_id, status="success")
+    metrics_artifact_store.complete_commis(commis_id, status="success")
 
-    # Verify supervisor can read metrics.jsonl via read_worker_file
-    metrics_content = metrics_artifact_store.read_worker_file(worker_id, "metrics.jsonl")
+    # Verify concierge can read metrics.jsonl via read_commis_file
+    metrics_content = metrics_artifact_store.read_commis_file(commis_id, "metrics.jsonl")
 
     assert metrics_content, "metrics.jsonl should have content"
     assert "llm_call" in metrics_content, "metrics.jsonl should contain llm_call events"
@@ -142,7 +142,7 @@ def test_metrics_collector_context_isolation():
     assert get_metrics_collector() is None
 
     # Set collector 1
-    collector1 = MetricsCollector("worker-1")
+    collector1 = MetricsCollector("commis-1")
     set_metrics_collector(collector1)
     assert get_metrics_collector() is collector1
 
@@ -151,7 +151,7 @@ def test_metrics_collector_context_isolation():
     assert get_metrics_collector() is None
 
     # Set collector 2
-    collector2 = MetricsCollector("worker-2")
+    collector2 = MetricsCollector("commis-2")
     set_metrics_collector(collector2)
     assert get_metrics_collector() is collector2
 

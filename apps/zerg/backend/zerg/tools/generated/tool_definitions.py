@@ -9,10 +9,10 @@ from typing import Optional
 class ToolName(str, Enum):
     """Built-in tool names available in the registry."""
 
-    AGENT_MEMORY_DELETE = "agent_memory_delete"
-    AGENT_MEMORY_EXPORT = "agent_memory_export"
-    AGENT_MEMORY_GET = "agent_memory_get"
-    AGENT_MEMORY_SET = "agent_memory_set"
+    FICHE_MEMORY_DELETE = "fiche_memory_delete"
+    FICHE_MEMORY_EXPORT = "fiche_memory_export"
+    FICHE_MEMORY_GET = "fiche_memory_get"
+    FICHE_MEMORY_SET = "fiche_memory_set"
     CONTACT_USER = "contact_user"
     CONTAINER_EXEC = "container_exec"
     DATETIME_DIFF = "datetime_diff"
@@ -90,7 +90,7 @@ class ToolName(str, Enum):
 class ServerName(str, Enum):
     """Server/module names for tools."""
 
-    AGENT_MEMORY = "agent_memory"
+    FICHE_MEMORY = "fiche_memory"
     CONNECTOR = "connector"
     CONTACT_USER = "contact_user"
     CONTAINER = "container"
@@ -112,7 +112,7 @@ class ServerName(str, Enum):
     SLACK = "slack"
     SMS = "sms"
     SSH = "ssh"
-    SUPERVISOR = "supervisor"
+    SUPERVISOR = "concierge"
     TASK = "task"
     TOOL_DISCOVERY = "tool_discovery"
     UUID = "uuid"
@@ -122,10 +122,10 @@ class ServerName(str, Enum):
 
 # Tool to server mapping for validation
 TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
-    ToolName.AGENT_MEMORY_DELETE: ServerName.AGENT_MEMORY,
-    ToolName.AGENT_MEMORY_EXPORT: ServerName.AGENT_MEMORY,
-    ToolName.AGENT_MEMORY_GET: ServerName.AGENT_MEMORY,
-    ToolName.AGENT_MEMORY_SET: ServerName.AGENT_MEMORY,
+    ToolName.FICHE_MEMORY_DELETE: ServerName.FICHE_MEMORY,
+    ToolName.FICHE_MEMORY_EXPORT: ServerName.FICHE_MEMORY,
+    ToolName.FICHE_MEMORY_GET: ServerName.FICHE_MEMORY,
+    ToolName.FICHE_MEMORY_SET: ServerName.FICHE_MEMORY,
     ToolName.CONTACT_USER: ServerName.CONTACT_USER,
     ToolName.CONTAINER_EXEC: ServerName.CONTAINER,
     ToolName.DATETIME_DIFF: ServerName.DATETIME,

@@ -17,10 +17,10 @@ from zerg.dependencies.auth import require_admin
 from zerg.models.models import User as UserModel
 from zerg.schemas.ops import OpsSummary
 from zerg.schemas.ops import TimeSeriesResponse
-from zerg.schemas.ops import TopAgentsResponse
+from zerg.schemas.ops import TopFichesResponse
 from zerg.services.ops_service import get_summary as svc_get_summary
 from zerg.services.ops_service import get_timeseries as svc_get_timeseries
-from zerg.services.ops_service import get_top_agents as svc_get_top_agents
+from zerg.services.ops_service import get_top_fiches as svc_get_top_fiches
 
 router = APIRouter(prefix="/ops", tags=["ops"], dependencies=[Depends(require_admin)])
 
@@ -62,7 +62,7 @@ def get_summary(current_user: UserModel = Depends(require_admin), db: Session = 
 def get_timeseries(
     metric: str = Query(
         ...,
-        pattern="^(runs_by_hour|errors_by_hour|cost_by_hour|runs_by_day|errors_by_day|cost_by_day)$",
+        pattern="^(courses_by_hour|errors_by_hour|cost_by_hour|courses_by_day|errors_by_day|cost_by_day)$",
     ),
     window: str = Query("today", pattern="^(today|7d|30d)$"),
     db: Session = Depends(get_db),
@@ -74,17 +74,17 @@ def get_timeseries(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/top", response_model=TopAgentsResponse)
+@router.get("/top", response_model=TopFichesResponse)
 def get_top(
-    kind: str = Query("agents", pattern="^agents$"),
+    kind: str = Query("fiches", pattern="^fiches$"),
     window: str = Query("today", pattern="^(today|7d|30d)$"),
     limit: int = 5,
     db: Session = Depends(get_db),
 ):
-    if kind != "agents":
-        raise HTTPException(status_code=400, detail="Only kind=agents supported")
+    if kind != "fiches":
+        raise HTTPException(status_code=400, detail="Only kind=fiches supported")
     try:
-        top_agents = svc_get_top_agents(db, window=window, limit=limit)
-        return TopAgentsResponse(top_agents=top_agents)
+        top_fiches = svc_get_top_fiches(db, window=window, limit=limit)
+        return TopFichesResponse(top_fiches=top_fiches)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

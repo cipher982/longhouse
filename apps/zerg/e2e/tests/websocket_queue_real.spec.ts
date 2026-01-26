@@ -415,8 +415,8 @@ test.describe('WebSocket Bounded Message Queue (Real E2E)', () => {
     // Try to send subscribe messages while disconnected
     await page.evaluate(() => {
       const sendMsg = (window as any).__testSendMessage;
-      sendMsg({ type: 'subscribe', topics: ['agent:1', 'agent:2'] });
-      sendMsg({ type: 'subscribe', topics: ['agent:3', 'agent:4'] });
+      sendMsg({ type: 'subscribe', topics: ['fiche:1', 'fiche:2'] });
+      sendMsg({ type: 'subscribe', topics: ['fiche:3', 'fiche:4'] });
     });
 
     await page.waitForTimeout(200);

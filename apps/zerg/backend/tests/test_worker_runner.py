@@ -1,138 +1,138 @@
-"""Tests for WorkerRunner service."""
+"""Tests for CommisRunner service."""
 
 import tempfile
 
 import pytest
 
-from tests.conftest import TEST_WORKER_MODEL
-from zerg.services.worker_artifact_store import WorkerArtifactStore
-from zerg.services.worker_runner import WorkerRunner
+from tests.conftest import TEST_COMMIS_MODEL
+from zerg.services.commis_artifact_store import CommisArtifactStore
+from zerg.services.commis_runner import CommisRunner
 
 
 @pytest.fixture
 def temp_store():
     """Create a temporary artifact store for testing."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        yield WorkerArtifactStore(base_path=tmpdir)
+        yield CommisArtifactStore(base_path=tmpdir)
 
 
 @pytest.fixture
-def worker_runner(temp_store):
-    """Create a WorkerRunner with temp storage."""
-    return WorkerRunner(artifact_store=temp_store)
+def commis_runner(temp_store):
+    """Create a CommisRunner with temp storage."""
+    return CommisRunner(artifact_store=temp_store)
 
 
 @pytest.mark.asyncio
-async def test_run_worker_simple_task(worker_runner, temp_store, db_session, test_user):
-    """Test running a simple worker task."""
+async def test_run_commis_simple_task(commis_runner, temp_store, db_session, test_user):
+    """Test running a simple commis task."""
     from zerg.crud import crud
 
-    # Create a test agent
-    agent = crud.create_agent(
+    # Create a test fiche
+    fiche = crud.create_fiche(
         db=db_session,
         owner_id=test_user.id,
-        name="Test Agent",
-        model=TEST_WORKER_MODEL,
+        name="Test Fiche",
+        model=TEST_COMMIS_MODEL,
         system_instructions="You are a helpful assistant.",
         task_instructions="",
     )
     db_session.commit()
-    db_session.refresh(agent)
+    db_session.refresh(fiche)
 
-    # Run worker with simple task
+    # Run commis with simple task
     task = "What is 2+2?"
-    result = await worker_runner.run_worker(
+    result = await commis_runner.run_commis(
         db=db_session,
         task=task,
-        agent=agent,
+        fiche=fiche,
     )
 
     # Verify result structure
-    assert result.worker_id is not None
+    assert result.commis_id is not None
     assert result.status == "success"
     assert result.duration_ms >= 0
     # Result content depends on LLM, so we just check it exists
     assert result.result is not None
 
-    # Verify worker directory created
-    worker_dir = temp_store.base_path / result.worker_id
-    assert worker_dir.exists()
+    # Verify commis directory created
+    commis_dir = temp_store.base_path / result.commis_id
+    assert commis_dir.exists()
 
     # Verify metadata
-    metadata = temp_store.get_worker_metadata(result.worker_id)
+    metadata = temp_store.get_commis_metadata(result.commis_id)
     assert metadata["status"] == "success"
     assert metadata["task"] == task
     assert metadata["finished_at"] is not None
     assert metadata["duration_ms"] >= 0
 
     # Verify result.txt exists
-    result_path = worker_dir / "result.txt"
+    result_path = commis_dir / "result.txt"
     assert result_path.exists()
 
     # Verify thread.jsonl exists
-    thread_path = worker_dir / "thread.jsonl"
+    thread_path = commis_dir / "thread.jsonl"
     assert thread_path.exists()
 
 
 @pytest.mark.asyncio
-async def test_run_worker_without_agent(worker_runner, temp_store, db_session, test_user):
-    """Test running a worker without providing an agent (creates temporary agent)."""
+async def test_run_commis_without_agent(commis_runner, temp_store, db_session, test_user):
+    """Test running a commis without providing an fiche (creates temporary fiche)."""
     task = "Say hello world"
 
-    result = await worker_runner.run_worker(
+    result = await commis_runner.run_commis(
         db=db_session,
         task=task,
-        agent=None,  # No agent provided
-        agent_config={"model": TEST_WORKER_MODEL},
+        fiche=None,  # No fiche provided
+        fiche_config={"model": TEST_COMMIS_MODEL},
     )
 
     # Verify result
-    assert result.worker_id is not None
+    assert result.commis_id is not None
     assert result.status == "success"
 
-    # Verify worker artifacts
-    metadata = temp_store.get_worker_metadata(result.worker_id)
+    # Verify commis artifacts
+    metadata = temp_store.get_commis_metadata(result.commis_id)
     assert metadata["status"] == "success"
-    assert metadata["config"]["model"] == TEST_WORKER_MODEL
+    assert metadata["config"]["model"] == TEST_COMMIS_MODEL
 
 
 @pytest.mark.asyncio
-async def test_run_worker_with_tool_calls(worker_runner, temp_store, db_session, test_user):
+async def test_run_commis_with_tool_calls(commis_runner, temp_store, db_session, test_user):
     """Test that tool calls are captured and persisted."""
     from zerg.crud import crud
 
-    # Create agent with tools enabled
-    agent = crud.create_agent(
+    # Create fiche with tools enabled
+    fiche = crud.create_fiche(
         db=db_session,
         owner_id=test_user.id,
-        name="Test Agent with Tools",
-        model=TEST_WORKER_MODEL,
+        name="Test Fiche with Tools",
+        model=TEST_COMMIS_MODEL,
         system_instructions="You are a helpful assistant with access to tools.",
         task_instructions="",
     )
     db_session.commit()
-    db_session.refresh(agent)
+    db_session.refresh(fiche)
 
-    # Run worker with task that likely triggers tools
+    # Run commis with task that likely triggers tools
     # Note: This depends on LLM behavior and tools available
     task = "Check the current time"
 
-    result = await worker_runner.run_worker(
+    result = await commis_runner.run_commis(
         db=db_session,
         task=task,
-        agent=agent,
+        fiche=fiche,
     )
 
-    # Verify worker completed
+    # Verify commis completed
     assert result.status == "success"
 
     # Check if tool_calls directory has files (may be empty if no tools used)
-    worker_dir = temp_store.base_path / result.worker_id
-    tool_calls_dir = worker_dir / "tool_calls"
+    commis_dir = temp_store.base_path / result.commis_id
+    tool_calls_dir = commis_dir / "tool_calls"
     assert tool_calls_dir.exists()
 
     # Thread should have messages
-    thread_path = worker_dir / "thread.jsonl"
+    thread_path = commis_dir / "thread.jsonl"
     assert thread_path.exists()
     with open(thread_path, "r") as f:
         lines = f.readlines()
@@ -140,73 +140,73 @@ async def test_run_worker_with_tool_calls(worker_runner, temp_store, db_session,
 
 
 @pytest.mark.asyncio
-async def test_run_worker_handles_errors(worker_runner, temp_store, db_session, test_user):
-    """Test that worker errors are captured properly."""
+async def test_run_commis_handles_errors(commis_runner, temp_store, db_session, test_user):
+    """Test that commis errors are captured properly."""
     from unittest.mock import AsyncMock
     from unittest.mock import patch
 
     from zerg.crud import crud
 
-    # Create test agent
-    agent = crud.create_agent(
+    # Create test fiche
+    fiche = crud.create_fiche(
         db=db_session,
         owner_id=test_user.id,
-        name="Test Agent",
-        model=TEST_WORKER_MODEL,
+        name="Test Fiche",
+        model=TEST_COMMIS_MODEL,
         system_instructions="You are a helpful assistant.",
         task_instructions="",
     )
     db_session.commit()
-    db_session.refresh(agent)
+    db_session.refresh(fiche)
 
-    # Mock AgentRunner to raise an error
-    with patch("zerg.services.worker_runner.AgentRunner") as mock_runner_class:
+    # Mock FicheRunner to raise an error
+    with patch("zerg.services.commis_runner.FicheRunner") as mock_runner_class:
         mock_instance = AsyncMock()
-        mock_instance.run_thread.side_effect = RuntimeError("Simulated agent failure")
+        mock_instance.run_thread.side_effect = RuntimeError("Simulated fiche failure")
         mock_runner_class.return_value = mock_instance
 
-        result = await worker_runner.run_worker(
+        result = await commis_runner.run_commis(
             db=db_session,
             task="This should fail",
-            agent=agent,
+            fiche=fiche,
         )
 
         # Verify error captured
         assert result.status == "failed"
         assert result.error is not None
-        assert "Simulated agent failure" in result.error
+        assert "Simulated fiche failure" in result.error
 
-        # Verify worker metadata reflects failure
-        metadata = temp_store.get_worker_metadata(result.worker_id)
+        # Verify commis metadata reflects failure
+        metadata = temp_store.get_commis_metadata(result.commis_id)
         assert metadata["status"] == "failed"
         assert metadata["error"] is not None
 
 
 @pytest.mark.asyncio
-async def test_worker_message_persistence(worker_runner, temp_store, db_session, test_user):
+async def test_commis_message_persistence(commis_runner, temp_store, db_session, test_user):
     """Test that all messages are persisted to thread.jsonl."""
     from zerg.crud import crud
 
-    agent = crud.create_agent(
+    fiche = crud.create_fiche(
         db=db_session,
         owner_id=test_user.id,
-        name="Test Agent",
-        model=TEST_WORKER_MODEL,
+        name="Test Fiche",
+        model=TEST_COMMIS_MODEL,
         system_instructions="You are a helpful assistant.",
         task_instructions="",
     )
     db_session.commit()
-    db_session.refresh(agent)
+    db_session.refresh(fiche)
 
-    result = await worker_runner.run_worker(
+    result = await commis_runner.run_commis(
         db=db_session,
         task="Say hello",
-        agent=agent,
+        fiche=fiche,
     )
 
     # Read thread.jsonl
-    worker_dir = temp_store.base_path / result.worker_id
-    thread_path = worker_dir / "thread.jsonl"
+    commis_dir = temp_store.base_path / result.commis_id
+    thread_path = commis_dir / "thread.jsonl"
 
     import json
 
@@ -227,25 +227,25 @@ async def test_worker_message_persistence(worker_runner, temp_store, db_session,
 
 
 @pytest.mark.asyncio
-async def test_worker_result_extraction(worker_runner, temp_store, db_session, test_user):
+async def test_commis_result_extraction(commis_runner, temp_store, db_session, test_user):
     """Test that final result is correctly extracted from assistant messages."""
     from zerg.crud import crud
 
-    agent = crud.create_agent(
+    fiche = crud.create_fiche(
         db=db_session,
         owner_id=test_user.id,
-        name="Test Agent",
-        model=TEST_WORKER_MODEL,
+        name="Test Fiche",
+        model=TEST_COMMIS_MODEL,
         system_instructions="You are a helpful assistant. Always end your response with 'DONE'.",
         task_instructions="",
     )
     db_session.commit()
-    db_session.refresh(agent)
+    db_session.refresh(fiche)
 
-    result = await worker_runner.run_worker(
+    result = await commis_runner.run_commis(
         db=db_session,
         task="Count to three",
-        agent=agent,
+        fiche=fiche,
     )
 
     # Verify result extracted
@@ -255,7 +255,7 @@ async def test_worker_result_extraction(worker_runner, temp_store, db_session, t
     # The important thing is that it doesn't fail
 
     # Verify result saved to file
-    saved_result = temp_store.get_worker_result(result.worker_id)
+    saved_result = temp_store.get_commis_result(result.commis_id)
     # If result is empty, saved_result will be "(No result generated)"
     if result.result:
         assert saved_result == result.result
@@ -264,131 +264,131 @@ async def test_worker_result_extraction(worker_runner, temp_store, db_session, t
 
 
 @pytest.mark.asyncio
-async def test_worker_config_persistence(worker_runner, temp_store, db_session, test_user):
-    """Test that worker config is persisted in metadata."""
+async def test_commis_config_persistence(commis_runner, temp_store, db_session, test_user):
+    """Test that commis config is persisted in metadata."""
     from zerg.crud import crud
 
-    agent = crud.create_agent(
+    fiche = crud.create_fiche(
         db=db_session,
         owner_id=test_user.id,
-        name="Test Agent",
-        model=TEST_WORKER_MODEL,
+        name="Test Fiche",
+        model=TEST_COMMIS_MODEL,
         system_instructions="You are a helpful assistant.",
         task_instructions="",
     )
     db_session.commit()
-    db_session.refresh(agent)
+    db_session.refresh(fiche)
 
     config = {
-        "model": TEST_WORKER_MODEL,
+        "model": TEST_COMMIS_MODEL,
         "timeout": 300,
         "custom_param": "test_value",
     }
 
-    result = await worker_runner.run_worker(
+    result = await commis_runner.run_commis(
         db=db_session,
         task="Test task",
-        agent=agent,
-        agent_config=config,
+        fiche=fiche,
+        fiche_config=config,
     )
 
     # Verify config in metadata
-    metadata = temp_store.get_worker_metadata(result.worker_id)
-    assert metadata["config"]["model"] == TEST_WORKER_MODEL
+    metadata = temp_store.get_commis_metadata(result.commis_id)
+    assert metadata["config"]["model"] == TEST_COMMIS_MODEL
     assert metadata["config"]["timeout"] == 300
     assert metadata["config"]["custom_param"] == "test_value"
 
 
 @pytest.mark.asyncio
-async def test_worker_artifacts_readable(worker_runner, temp_store, db_session, test_user):
-    """Test that all worker artifacts are readable after completion."""
+async def test_commis_artifacts_readable(commis_runner, temp_store, db_session, test_user):
+    """Test that all commis artifacts are readable after completion."""
     from zerg.crud import crud
 
-    agent = crud.create_agent(
+    fiche = crud.create_fiche(
         db=db_session,
         owner_id=test_user.id,
-        name="Test Agent",
-        model=TEST_WORKER_MODEL,
+        name="Test Fiche",
+        model=TEST_COMMIS_MODEL,
         system_instructions="You are a helpful assistant.",
         task_instructions="",
     )
     db_session.commit()
-    db_session.refresh(agent)
+    db_session.refresh(fiche)
 
-    result = await worker_runner.run_worker(
+    result = await commis_runner.run_commis(
         db=db_session,
         task="Explain what 2+2 equals",
-        agent=agent,
+        fiche=fiche,
     )
 
     # Test reading various artifacts
-    worker_id = result.worker_id
+    commis_id = result.commis_id
 
     # Read metadata
-    metadata = temp_store.get_worker_metadata(worker_id)
-    assert metadata["worker_id"] == worker_id
+    metadata = temp_store.get_commis_metadata(commis_id)
+    assert metadata["commis_id"] == commis_id
 
     # Read result
-    saved_result = temp_store.get_worker_result(worker_id)
+    saved_result = temp_store.get_commis_result(commis_id)
     assert saved_result is not None
 
     # Read thread messages
-    thread_content = temp_store.read_commis_file(worker_id, "thread.jsonl")
+    thread_content = temp_store.read_commis_file(commis_id, "thread.jsonl")
     assert len(thread_content) > 0
 
-    # List should include this worker
-    workers = temp_store.list_commis(limit=10)
-    worker_ids = [w["worker_id"] for w in workers]
-    assert worker_id in worker_ids
+    # List should include this commis
+    commis = temp_store.list_commis(limit=10)
+    commis_ids = [w["commis_id"] for w in commis]
+    assert commis_id in commis_ids
 
 
 @pytest.mark.asyncio
-async def test_temporary_agent_has_infrastructure_tools(worker_runner, temp_store, db_session, test_user):
-    """Test that temporary agents created for workers have ssh_exec and other infra tools."""
+async def test_temporary_fiche_has_infrastructure_tools(commis_runner, temp_store, db_session, test_user):
+    """Test that temporary fiches created for commis have ssh_exec and other infra tools."""
     from zerg.crud import crud
 
-    # Run worker without providing an agent (creates temporary agent)
+    # Run commis without providing an fiche (creates temporary fiche)
     task = "Test infrastructure tools"
-    result = await worker_runner.run_worker(
+    result = await commis_runner.run_commis(
         db=db_session,
         task=task,
-        agent=None,
-        agent_config={"model": TEST_WORKER_MODEL, "owner_id": test_user.id},
+        fiche=None,
+        fiche_config={"model": TEST_COMMIS_MODEL, "owner_id": test_user.id},
     )
 
-    # Worker should complete (temporary agent is cleaned up)
+    # Commis should complete (temporary fiche is cleaned up)
     assert result.status == "success"
 
     # Verify metadata captures expected tools in config
-    # The temporary agent gets deleted, but we can verify from the worker's perspective
-    metadata = temp_store.get_worker_metadata(result.worker_id)
+    # The temporary fiche gets deleted, but we can verify from the commis's perspective
+    metadata = temp_store.get_commis_metadata(result.commis_id)
     assert metadata["status"] == "success"
 
-    # Verify the worker runner gives infrastructure tools to temp agents
+    # Verify the commis runner gives infrastructure tools to temp fiches
     # by checking the defaults in the code
-    from zerg.services.worker_runner import WorkerRunner
+    from zerg.services.commis_runner import CommisRunner
 
-    # Create a new temporary agent to inspect its tools
-    runner = WorkerRunner(artifact_store=temp_store)
-    temp_agent = await runner._create_temporary_agent(
+    # Create a new temporary fiche to inspect its tools
+    runner = CommisRunner(artifact_store=temp_store)
+    temp_fiche = await runner._create_temporary_fiche(
         db=db_session,
         task="test",
-        config={"owner_id": test_user.id, "model": TEST_WORKER_MODEL},
+        config={"owner_id": test_user.id, "model": TEST_COMMIS_MODEL},
     )
 
     try:
-        # Verify the agent has infrastructure tools
-        assert "ssh_exec" in temp_agent.allowed_tools
-        assert "http_request" in temp_agent.allowed_tools
-        assert "get_current_time" in temp_agent.allowed_tools
-        # V1.1: knowledge_search should be available to workers
-        assert "knowledge_search" in temp_agent.allowed_tools
-        # V1.2: web research tools should be available to workers
-        assert "web_search" in temp_agent.allowed_tools
-        assert "web_fetch" in temp_agent.allowed_tools
+        # Verify the fiche has infrastructure tools
+        assert "ssh_exec" in temp_fiche.allowed_tools
+        assert "http_request" in temp_fiche.allowed_tools
+        assert "get_current_time" in temp_fiche.allowed_tools
+        # V1.1: knowledge_search should be available to commis
+        assert "knowledge_search" in temp_fiche.allowed_tools
+        # V1.2: web research tools should be available to commis
+        assert "web_search" in temp_fiche.allowed_tools
+        assert "web_fetch" in temp_fiche.allowed_tools
     finally:
-        # Clean up the test agent
-        crud.delete_agent(db_session, temp_agent.id)
+        # Clean up the test fiche
+        crud.delete_fiche(db_session, temp_fiche.id)
         db_session.commit()
 
 
@@ -400,7 +400,7 @@ class TestSynthesizeFromToolOutputs:
         from langchain_core.messages import AIMessage
         from langchain_core.messages import ToolMessage
 
-        runner = WorkerRunner(artifact_store=temp_store)
+        runner = CommisRunner(artifact_store=temp_store)
         messages = [
             AIMessage(content="", tool_calls=[{"id": "call_1", "name": "ssh_exec", "args": {}}]),
             ToolMessage(content="disk usage: 50GB used, 100GB total", tool_call_id="call_1", name="ssh_exec"),
@@ -412,13 +412,13 @@ class TestSynthesizeFromToolOutputs:
         assert result is not None
         assert "ssh_exec" in result
         assert "50GB" in result
-        assert "Worker completed task but produced no final summary" in result
+        assert "Commis completed task but produced no final summary" in result
 
     def test_synthesize_no_tool_outputs(self, temp_store):
         """Test that synthesis returns None when no tool outputs exist."""
         from langchain_core.messages import AIMessage
 
-        runner = WorkerRunner(artifact_store=temp_store)
+        runner = CommisRunner(artifact_store=temp_store)
         messages = [
             AIMessage(content=""),  # Empty message, no tools
         ]
@@ -432,7 +432,7 @@ class TestSynthesizeFromToolOutputs:
         from langchain_core.messages import AIMessage
         from langchain_core.messages import ToolMessage
 
-        runner = WorkerRunner(artifact_store=temp_store)
+        runner = CommisRunner(artifact_store=temp_store)
         messages = [
             AIMessage(
                 content="",
@@ -465,7 +465,7 @@ class TestSynthesizeFromToolOutputs:
         from langchain_core.messages import AIMessage
         from langchain_core.messages import ToolMessage
 
-        runner = WorkerRunner(artifact_store=temp_store)
+        runner = CommisRunner(artifact_store=temp_store)
         long_output = "x" * 3000  # Longer than 2000 char limit
         messages = [
             AIMessage(content="", tool_calls=[{"id": "call_1", "name": "ssh_exec", "args": {}}]),
@@ -489,20 +489,20 @@ class TestTimestampFix:
         from zerg.services.thread_service import _db_to_langchain
 
         # Create a thread message with empty content
-        agent = crud.create_agent(
+        fiche = crud.create_fiche(
             db=db_session,
             owner_id=test_user.id,
-            name="Test Agent",
+            name="Test Fiche",
             model="gpt-4o-mini",
             system_instructions="test",
             task_instructions="",
         )
         thread = crud.create_thread(
             db=db_session,
-            agent_id=agent.id,
+            fiche_id=fiche.id,
             title="Test Thread",
             active=True,
-            agent_state={},
+            fiche_state={},
             memory_strategy="buffer",
             thread_type="chat",
         )
@@ -529,20 +529,20 @@ class TestTimestampFix:
         from zerg.crud import crud
         from zerg.services.thread_service import _db_to_langchain
 
-        agent = crud.create_agent(
+        fiche = crud.create_fiche(
             db=db_session,
             owner_id=test_user.id,
-            name="Test Agent",
+            name="Test Fiche",
             model="gpt-4o-mini",
             system_instructions="test",
             task_instructions="",
         )
         thread = crud.create_thread(
             db=db_session,
-            agent_id=agent.id,
+            fiche_id=fiche.id,
             title="Test Thread",
             active=True,
-            agent_state={},
+            fiche_state={},
             memory_strategy="buffer",
             thread_type="chat",
         )
@@ -571,20 +571,20 @@ class TestTimestampFix:
         from zerg.crud import crud
         from zerg.services.thread_service import _db_to_langchain
 
-        agent = crud.create_agent(
+        fiche = crud.create_fiche(
             db=db_session,
             owner_id=test_user.id,
-            name="Test Agent",
+            name="Test Fiche",
             model="gpt-4o-mini",
             system_instructions="test",
             task_instructions="",
         )
         thread = crud.create_thread(
             db=db_session,
-            agent_id=agent.id,
+            fiche_id=fiche.id,
             title="Test Thread",
             active=True,
-            agent_state={},
+            fiche_state={},
             memory_strategy="buffer",
             thread_type="chat",
         )

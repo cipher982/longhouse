@@ -153,7 +153,7 @@ KEY_FILES=(
     "apps/zerg/backend/zerg/routers/jarvis.py"
     "apps/zerg/frontend-web/src/pages/JarvisChatPage.tsx"
     "apps/zerg/frontend-web/src/jarvis/lib/state-manager.ts"
-    "apps/zerg/backend/scripts/seed_jarvis_agents.py"
+    "apps/zerg/backend/scripts/seed_jarvis_fiches.py"
     "docs/DEPLOYMENT.md"
 )
 
@@ -175,16 +175,16 @@ if [ -f "apps/zerg/backend/app.db" ]; then
 
     # Check for tables
     TABLES=$(sqlite3 apps/zerg/backend/app.db ".tables" 2>/dev/null || echo "")
-    if echo "$TABLES" | grep -q "agent_runs"; then
-        check_pass "agent_runs table exists"
+    if echo "$TABLES" | grep -q "courses"; then
+        check_pass "courses table exists"
     else
-        check_warn "agent_runs table missing - run: cd apps/zerg/backend && uv run alembic upgrade head"
+        check_warn "courses table missing - run: cd apps/zerg/backend && uv run alembic upgrade head"
     fi
 
-    if echo "$TABLES" | grep -q "agents"; then
-        check_pass "agents table exists"
+    if echo "$TABLES" | grep -q "fiches"; then
+        check_pass "fiches table exists"
     else
-        check_warn "agents table missing - run migrations"
+        check_warn "fiches table missing - run migrations"
     fi
 else
     check_info "Database not initialized - will be created on first run"
@@ -196,7 +196,7 @@ echo "6. Migrations"
 echo "-------------"
 
 if [ -f "apps/zerg/backend/alembic/versions/a1b2c3d4e5f6_add_summary_to_agent_run.py" ]; then
-    check_pass "AgentRun.summary migration exists"
+    check_pass "Course summary migration exists (legacy filename)"
 else
     check_fail "Summary column migration missing"
 fi
@@ -217,7 +217,7 @@ if [ $ERRORS -eq 0 ] && [ $WARNINGS -eq 0 ]; then
     echo ""
     echo "Next steps:"
     echo "  1. Run migrations: cd apps/zerg/backend && uv run alembic upgrade head"
-    echo "  2. Seed agents: make seed-agents"
+    echo "  2. Seed fiches: make seed-fiches"
     echo "  3. Start platform: make dev"
     echo "  4. Run tests: make test-all"
 elif [ $ERRORS -eq 0 ]; then

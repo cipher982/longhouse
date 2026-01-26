@@ -4,43 +4,43 @@
  */
 
 export interface paths {
-    "/api/agents": {
+    "/api/fiches": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Read Agents */
-        get: operations["read_agents_api_agents_get"];
+        /** Read Fiches */
+        get: operations["read_fiches_api_fiches_get"];
         put?: never;
-        /** Create Agent */
-        post: operations["create_agent_api_agents_post"];
+        /** Create Fiche */
+        post: operations["create_fiche_api_fiches_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/agents/": {
+    "/api/fiches/": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Read Agents */
-        get: operations["read_agents_api_agents__get"];
+        /** Read Fiches */
+        get: operations["read_fiches_api_fiches__get"];
         put?: never;
-        /** Create Agent */
-        post: operations["create_agent_api_agents__post"];
+        /** Create Fiche */
+        post: operations["create_fiche_api_fiches__post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/agents/dashboard": {
+    "/api/fiches/dashboard": {
         parameters: {
             query?: never;
             header?: never;
@@ -48,7 +48,7 @@ export interface paths {
             cookie?: never;
         };
         /** Read Dashboard Snapshot */
-        get: operations["read_dashboard_snapshot_api_agents_dashboard_get"];
+        get: operations["read_dashboard_snapshot_api_fiches_dashboard_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -57,34 +57,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/agents/{agent_id}": {
+    "/api/fiches/{fiche_id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Read Agent */
-        get: operations["read_agent_api_agents__agent_id__get"];
-        /** Update Agent */
-        put: operations["update_agent_api_agents__agent_id__put"];
+        /** Read Fiche */
+        get: operations["read_fiche_api_fiches__fiche_id__get"];
+        /** Update Fiche */
+        put: operations["update_fiche_api_fiches__fiche_id__put"];
         post?: never;
-        /** Delete Agent */
-        delete: operations["delete_agent_api_agents__agent_id__delete"];
+        /** Delete Fiche */
+        delete: operations["delete_fiche_api_fiches__fiche_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/agents/{agent_id}/details": {
+    "/api/fiches/{fiche_id}/details": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Read Agent Details */
-        get: operations["read_agent_details_api_agents__agent_id__details_get"];
+        /** Read Fiche Details */
+        get: operations["read_fiche_details_api_fiches__fiche_id__details_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -93,25 +93,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/agents/{agent_id}/messages": {
+    "/api/fiches/{fiche_id}/messages": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Read Agent Messages */
-        get: operations["read_agent_messages_api_agents__agent_id__messages_get"];
+        /** Read Fiche Messages */
+        get: operations["read_fiche_messages_api_fiches__fiche_id__messages_get"];
         put?: never;
-        /** Create Agent Message */
-        post: operations["create_agent_message_api_agents__agent_id__messages_post"];
+        /** Create Fiche Message */
+        post: operations["create_fiche_message_api_fiches__fiche_id__messages_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/agents/{agent_id}/task": {
+    "/api/fiches/{fiche_id}/task": {
         parameters: {
             query?: never;
             header?: never;
@@ -120,15 +120,15 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Run Agent Task */
-        post: operations["run_agent_task_api_agents__agent_id__task_post"];
+        /** Run Fiche Task */
+        post: operations["run_fiche_task_api_fiches__fiche_id__task_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/agents/{agent_id}/mcp-servers/": {
+    "/api/fiches/{fiche_id}/mcp-servers/": {
         parameters: {
             query?: never;
             header?: never;
@@ -137,22 +137,22 @@ export interface paths {
         };
         /**
          * List Mcp Servers
-         * @description List all MCP servers configured for an agent.
+         * @description List all MCP servers configured for a fiche.
          */
-        get: operations["list_mcp_servers_api_agents__agent_id__mcp_servers__get"];
+        get: operations["list_mcp_servers_api_fiches__fiche_id__mcp_servers__get"];
         put?: never;
         /**
          * Add Mcp Server
-         * @description Add an MCP server to an agent.
+         * @description Add an MCP server to a fiche.
          */
-        post: operations["add_mcp_server_api_agents__agent_id__mcp_servers__post"];
+        post: operations["add_mcp_server_api_fiches__fiche_id__mcp_servers__post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/agents/{agent_id}/mcp-servers/{server_name}": {
+    "/api/fiches/{fiche_id}/mcp-servers/{server_name}": {
         parameters: {
             query?: never;
             header?: never;
@@ -164,15 +164,15 @@ export interface paths {
         post?: never;
         /**
          * Remove Mcp Server
-         * @description Remove an MCP server from an agent.
+         * @description Remove an MCP server from a fiche.
          */
-        delete: operations["remove_mcp_server_api_agents__agent_id__mcp_servers__server_name__delete"];
+        delete: operations["remove_mcp_server_api_fiches__fiche_id__mcp_servers__server_name__delete"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/agents/{agent_id}/mcp-servers/test": {
+    "/api/fiches/{fiche_id}/mcp-servers/test": {
         parameters: {
             query?: never;
             header?: never;
@@ -185,14 +185,14 @@ export interface paths {
          * Test Mcp Connection
          * @description Test connection to an MCP server without saving it.
          */
-        post: operations["test_mcp_connection_api_agents__agent_id__mcp_servers_test_post"];
+        post: operations["test_mcp_connection_api_fiches__fiche_id__mcp_servers_test_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/agents/{agent_id}/mcp-servers/available-tools": {
+    "/api/fiches/{fiche_id}/mcp-servers/available-tools": {
         parameters: {
             query?: never;
             header?: never;
@@ -201,9 +201,9 @@ export interface paths {
         };
         /**
          * Get Available Tools
-         * @description Get all available tools for an agent (built-in + MCP).
+         * @description Get all available tools for a fiche (built-in + MCP).
          */
-        get: operations["get_available_tools_api_agents__agent_id__mcp_servers_available_tools_get"];
+        get: operations["get_available_tools_api_fiches__fiche_id__mcp_servers_available_tools_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -221,7 +221,7 @@ export interface paths {
         };
         /**
          * Read Threads
-         * @description Get all threads, optionally filtered by agent_id, thread_type, and/or title.
+         * @description Get all threads, optionally filtered by fiche_id, thread_type, and/or title.
          *
          *     If `title` is provided, returns threads matching that title.
          */
@@ -247,7 +247,7 @@ export interface paths {
         };
         /**
          * Read Threads
-         * @description Get all threads, optionally filtered by agent_id, thread_type, and/or title.
+         * @description Get all threads, optionally filtered by fiche_id, thread_type, and/or title.
          *
          *     If `title` is provided, returns threads matching that title.
          */
@@ -322,7 +322,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/threads/{thread_id}/run": {
+    "/api/threads/{thread_id}/courses": {
         parameters: {
             query?: never;
             header?: never;
@@ -332,10 +332,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Run Thread
+         * Start Thread Course
          * @description Process any unprocessed messages in the thread and stream back the result.
          */
-        post: operations["run_thread_api_threads__thread_id__run_post"];
+        post: operations["start_thread_course_api_threads__thread_id__courses_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -405,6 +405,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/seed-scenario": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Seed Scenario Data
+         * @description Seed deterministic scenario data for demos and E2E tests.
+         */
+        post: operations["seed_scenario_data_api_admin_seed_scenario_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/migration-log": {
         parameters: {
             query?: never;
@@ -456,7 +476,7 @@ export interface paths {
          * Debug Db Schema
          * @description Debug endpoint: returns current_schema + search_path for this request.
          *
-         *     TESTING-only. Useful to validate Postgres schema routing (X-Test-Worker).
+         *     TESTING-only. Useful to validate Postgres schema routing (X-Test-Commis).
          */
         get: operations["debug_db_schema_api_admin_debug_db_schema_get"];
         put?: never;
@@ -478,7 +498,7 @@ export interface paths {
         put?: never;
         /**
          * Configure Test Model
-         * @description Configure the supervisor agent to use a test model.
+         * @description Configure the concierge fiche to use a test model.
          *
          *     This is a TEST-ONLY endpoint for E2E tests that need deterministic LLM behavior.
          *     Only available when TESTING=1 is set.
@@ -487,7 +507,7 @@ export interface paths {
          *         request: Contains the model to use (default: gpt-scripted)
          *
          *     Returns:
-         *         Success message with agent ID
+         *         Success message with fiche ID
          */
         post: operations["configure_test_model_api_admin_configure_test_model_post"];
         delete?: never;
@@ -533,11 +553,101 @@ export interface paths {
          *     Returns:
          *     - User info with usage summary for all periods
          *     - Daily breakdown for the specified period
-         *     - Top agents by cost for the specified period
+         *     - Top fiches by cost for the specified period
          *
          *     Admin-only endpoint.
          */
         get: operations["get_user_usage_details_api_admin_users__user_id__usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/bootstrap/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Seed Context
+         * @description Seed user context for the admin user.
+         *
+         *     This replaces file-based seeding from ~/.config/zerg/user_context.json.
+         *     Seeds context for all admin users (idempotent - skips users with existing context).
+         */
+        post: operations["seed_context_api_admin_bootstrap_context_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/bootstrap/runners": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Seed Runners
+         * @description Seed runners for the admin user.
+         *
+         *     This replaces file-based seeding from ~/.config/zerg/runners.json.
+         *     Idempotent - skips runners that already exist.
+         */
+        post: operations["seed_runners_api_admin_bootstrap_runners_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/bootstrap/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Seed Credentials
+         * @description Seed personal credentials for the admin user.
+         *
+         *     This replaces file-based seeding from ~/.config/zerg/personal_credentials.json.
+         *     All credentials are Fernet-encrypted before storage.
+         *     Idempotent - skips credentials that already exist.
+         */
+        post: operations["seed_credentials_api_admin_bootstrap_credentials_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/bootstrap/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Bootstrap Status
+         * @description Get status of what's configured vs missing.
+         */
+        get: operations["get_bootstrap_status_api_admin_bootstrap_status_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -664,13 +774,13 @@ export interface paths {
         };
         /**
          * List Triggers
-         * @description List all triggers, optionally filtered by agent_id.
+         * @description List all triggers, optionally filtered by fiche_id.
          */
         get: operations["list_triggers_api_triggers__get"];
         put?: never;
         /**
          * Create Trigger
-         * @description Create a new trigger for an agent.
+         * @description Create a new trigger for a fiche.
          *
          *     If the trigger is of type *email* and the provider is **gmail** we kick off
          *     an asynchronous helper that ensures a Gmail *watch* is registered.  The
@@ -902,7 +1012,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/agents/{agent_id}/runs": {
+    "/api/fiches/{fiche_id}/courses": {
         parameters: {
             query?: never;
             header?: never;
@@ -910,10 +1020,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List Agent Runs
-         * @description Return latest *limit* runs for the given agent (descending).
+         * List Courses
+         * @description Return latest *limit* courses for the given fiche (descending).
          */
-        get: operations["list_agent_runs_api_agents__agent_id__runs_get"];
+        get: operations["list_courses_api_fiches__fiche_id__courses_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -922,15 +1032,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/runs/{run_id}": {
+    "/api/courses/{course_id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Run */
-        get: operations["get_run_api_runs__run_id__get"];
+        /** Get Course */
+        get: operations["get_course_api_courses__course_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1802,6 +1912,102 @@ export interface paths {
         patch: operations["update_user_context_api_users_me_context_patch"];
         trace?: never;
     };
+    "/api/user/contacts/email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Email Contacts
+         * @description List all approved email contacts for the current user.
+         */
+        get: operations["list_email_contacts_api_user_contacts_email_get"];
+        put?: never;
+        /**
+         * Create Email Contact
+         * @description Add a new approved email contact.
+         */
+        post: operations["create_email_contact_api_user_contacts_email_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/user/contacts/email/{contact_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update Email Contact
+         * @description Update an existing email contact.
+         */
+        put: operations["update_email_contact_api_user_contacts_email__contact_id__put"];
+        post?: never;
+        /**
+         * Delete Email Contact
+         * @description Delete an email contact.
+         */
+        delete: operations["delete_email_contact_api_user_contacts_email__contact_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/user/contacts/phone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Phone Contacts
+         * @description List all approved phone contacts for the current user.
+         */
+        get: operations["list_phone_contacts_api_user_contacts_phone_get"];
+        put?: never;
+        /**
+         * Create Phone Contact
+         * @description Add a new approved phone contact.
+         */
+        post: operations["create_phone_contact_api_user_contacts_phone_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/user/contacts/phone/{contact_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update Phone Contact
+         * @description Update an existing phone contact.
+         */
+        put: operations["update_phone_contact_api_user_contacts_phone__contact_id__put"];
+        post?: never;
+        /**
+         * Delete Phone Contact
+         * @description Delete a phone contact.
+         */
+        delete: operations["delete_phone_contact_api_user_contacts_phone__contact_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/templates/": {
         parameters: {
             query?: never;
@@ -1911,7 +2117,7 @@ export interface paths {
         patch: operations["patch_layout_api_graph_layout_patch"];
         trace?: never;
     };
-    "/api/jarvis/agents": {
+    "/api/jarvis/fiches": {
         parameters: {
             query?: never;
             header?: never;
@@ -1919,20 +2125,20 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List Jarvis Agents
-         * @description List available agents for Jarvis UI.
+         * List Jarvis Fiches
+         * @description List available fiches for Jarvis UI.
          *
-         *     Returns a minimal summary of all active agents including their schedules
-         *     and next run times. This powers the agent selection UI in Jarvis.
+         *     Returns a minimal summary of all active fiches including their schedules
+         *     and next course times. This powers the fiche selection UI in Jarvis.
          *
          *     Args:
          *         db: Database session
          *         current_user: Authenticated user (Jarvis service account)
          *
          *     Returns:
-         *         List of agent summaries
+         *         List of fiche summaries
          */
-        get: operations["list_jarvis_agents_api_jarvis_agents_get"];
+        get: operations["list_jarvis_fiches_api_jarvis_fiches_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1941,7 +2147,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/runs": {
+    "/api/jarvis/courses": {
         parameters: {
             query?: never;
             header?: never;
@@ -1949,22 +2155,22 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List Jarvis Runs
-         * @description List recent agent runs for Jarvis Task Inbox.
+         * List Jarvis Courses
+         * @description List recent fiche courses for Jarvis Task Inbox.
          *
-         *     Returns recent run history with summaries, filtered by agent if specified.
+         *     Returns recent course history with summaries, filtered by fiche if specified.
          *     This powers the Task Inbox UI in Jarvis showing all automated activity.
          *
          *     Args:
-         *         limit: Maximum number of runs to return (default 50)
-         *         agent_id: Optional filter by specific agent
+         *         limit: Maximum number of courses to return (default 50)
+         *         fiche_id: Optional filter by specific fiche
          *         db: Database session
          *         current_user: Authenticated user (Jarvis service account)
          *
          *     Returns:
-         *         List of run summaries ordered by created_at descending
+         *         List of course summaries ordered by created_at descending
          */
-        get: operations["list_jarvis_runs_api_jarvis_runs_get"];
+        get: operations["list_jarvis_courses_api_jarvis_courses_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1973,7 +2179,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/runs/active": {
+    "/api/jarvis/courses/active": {
         parameters: {
             query?: never;
             header?: never;
@@ -1981,22 +2187,22 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Active Run
-         * @description Get the user's currently running agent run (if any).
+         * Get Active Course
+         * @description Get the user's currently running concierge course (if any).
          *
-         *     Returns the most recent RUNNING, WAITING, or DEFERRED run for the user's supervisor agent.
-         *     Returns 204 No Content if no active run exists.
+         *     Returns the most recent RUNNING, WAITING, or DEFERRED course for the user's concierge fiche.
+         *     Returns 204 No Content if no active course exists.
          *
-         *     This endpoint enables run reconnection after page refresh.
+         *     This endpoint enables course reconnection after page refresh.
          *
          *     Args:
          *         db: Database session
          *         current_user: Authenticated user (multi-tenant filtered)
          *
          *     Returns:
-         *         JSONResponse with run details if found, or 204 No Content
+         *         JSONResponse with course details if found, or 204 No Content
          */
-        get: operations["get_active_run_api_jarvis_runs_active_get"];
+        get: operations["get_active_course_api_jarvis_courses_active_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2005,7 +2211,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/runs/{run_id}": {
+    "/api/jarvis/courses/{course_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -2013,24 +2219,24 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Run Status
-         * @description Get current status of a specific run.
+         * Get Course Status
+         * @description Get current status of a specific course.
          *
          *     Returns detailed status including timing, errors, and result if completed.
-         *     This endpoint is used for polling run status after async task submission.
+         *     This endpoint is used for polling course status after async task submission.
          *
          *     Args:
-         *         run_id: ID of the run to query
+         *         course_id: ID of the course to query
          *         db: Database session
          *         current_user: Authenticated user (multi-tenant filtered)
          *
          *     Returns:
-         *         Run status with result if completed
+         *         Course status with result if completed
          *
          *     Raises:
-         *         HTTPException: 404 if run not found or not owned by user
+         *         HTTPException: 404 if course not found or not owned by user
          */
-        get: operations["get_run_status_api_jarvis_runs__run_id__get"];
+        get: operations["get_course_status_api_jarvis_courses__course_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2039,7 +2245,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/runs/{run_id}/stream": {
+    "/api/jarvis/courses/{course_id}/stream": {
         parameters: {
             query?: never;
             header?: never;
@@ -2047,22 +2253,22 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Attach To Run Stream
-         * @description Attach to an existing run's event stream.
+         * Attach To Course Stream
+         * @description Attach to an existing course's event stream.
          *
-         *     For RUNNING runs: Streams events via SSE as they occur.
-         *     For completed runs: Returns a single completion event and closes.
+         *     For RUNNING courses: Streams events via SSE as they occur.
+         *     For completed courses: Returns a single completion event and closes.
          *
-         *     This enables run reconnection after page refresh.
+         *     This enables course reconnection after page refresh.
          *
          *     Args:
-         *         run_id: ID of the run to attach to
+         *         course_id: ID of the course to attach to
          *         current_user: Authenticated user (multi-tenant filtered)
          *
          *     Returns:
          *         EventSourceResponse for SSE streaming
          */
-        get: operations["attach_to_run_stream_api_jarvis_runs__run_id__stream_get"];
+        get: operations["attach_to_course_stream_api_jarvis_courses__course_id__stream_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2071,7 +2277,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/runs/{run_id}/events": {
+    "/api/jarvis/courses/{course_id}/events": {
         parameters: {
             query?: never;
             header?: never;
@@ -2079,26 +2285,26 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Run Events
-         * @description Get events for a specific run.
+         * Get Course Events
+         * @description Get events for a specific course.
          *
-         *     Returns events stored during run execution, optionally filtered by type.
+         *     Returns events stored during course execution, optionally filtered by type.
          *     This endpoint is useful for E2E testing to verify tool calls and lifecycle events.
          *
          *     Args:
-         *         run_id: ID of the run to query
-         *         event_type: Optional filter by event type (e.g., "supervisor_tool_started")
+         *         course_id: ID of the course to query
+         *         event_type: Optional filter by event type (e.g., "concierge_tool_started")
          *         limit: Maximum number of events to return (default 100)
          *         db: Database session
          *         current_user: Authenticated user (multi-tenant filtered)
          *
          *     Returns:
-         *         List of events for the run
+         *         List of events for the course
          *
          *     Raises:
-         *         HTTPException: 404 if run not found or not owned by user
+         *         HTTPException: 404 if course not found or not owned by user
          */
-        get: operations["get_run_events_api_jarvis_runs__run_id__events_get"];
+        get: operations["get_course_events_api_jarvis_courses__course_id__events_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2107,7 +2313,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/runs/{run_id}/timeline": {
+    "/api/jarvis/courses/{course_id}/timeline": {
         parameters: {
             query?: never;
             header?: never;
@@ -2115,14 +2321,14 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Run Timeline
-         * @description Get timing timeline for a specific run.
+         * Get Course Timeline
+         * @description Get timing timeline for a specific course.
          *
          *     Returns structured timing data with phase-based events and summary statistics.
          *     This endpoint powers performance profiling and observability for Jarvis chat.
          *
          *     Args:
-         *         run_id: ID of the run to query
+         *         course_id: ID of the course to query
          *         db: Database session
          *         current_user: Authenticated user (multi-tenant filtered)
          *
@@ -2130,9 +2336,9 @@ export interface paths {
          *         Timeline with events and timing summary
          *
          *     Raises:
-         *         HTTPException: 404 if run not found or not owned by user
+         *         HTTPException: 404 if course not found or not owned by user
          */
-        get: operations["get_run_timeline_api_jarvis_runs__run_id__timeline_get"];
+        get: operations["get_course_timeline_api_jarvis_courses__course_id__timeline_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2152,22 +2358,22 @@ export interface paths {
         put?: never;
         /**
          * Jarvis Dispatch
-         * @description Dispatch agent task from Jarvis.
+         * @description Dispatch fiche task from Jarvis.
          *
-         *     Triggers immediate execution of an agent task and returns run/thread IDs
+         *     Triggers immediate execution of a fiche task and returns course/thread IDs
          *     for tracking. Jarvis can then listen to the SSE stream for updates.
          *
          *     Args:
-         *         request: Dispatch request with agent_id and optional task override
+         *         request: Dispatch request with fiche_id and optional task override
          *         db: Database session
          *         current_user: Authenticated user (Jarvis service account)
          *
          *     Returns:
-         *         JarvisDispatchResponse with run and thread IDs
+         *         JarvisDispatchResponse with course and thread IDs
          *
          *     Raises:
-         *         404: Agent not found
-         *         409: Agent already running
+         *         404: Fiche not found
+         *         409: Fiche already running
          *         500: Execution error
          */
         post: operations["jarvis_dispatch_api_jarvis_dispatch_post"];
@@ -2177,7 +2383,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/supervisor": {
+    "/api/jarvis/concierge": {
         parameters: {
             query?: never;
             header?: never;
@@ -2187,18 +2393,18 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Jarvis Supervisor
-         * @description Dispatch a task to the supervisor agent.
+         * Jarvis Concierge
+         * @description Dispatch a task to the concierge fiche.
          *
-         *     The supervisor is the "one brain" that coordinates workers and maintains
-         *     long-term context. Each user has a single supervisor thread that persists
+         *     The concierge is the "one brain" that coordinates commis and maintains
+         *     long-term context. Each user has a single concierge thread that persists
          *     across sessions.
          *
          *     This endpoint:
-         *     1. Finds or creates the user's supervisor thread (idempotent)
-         *     2. Creates a new run attached to that thread
-         *     3. Kicks off supervisor execution in the background
-         *     4. Returns immediately with run_id and stream_url
+         *     1. Finds or creates the user's concierge thread (idempotent)
+         *     2. Creates a new course attached to that thread
+         *     3. Kicks off concierge execution in the background
+         *     4. Returns immediately with course_id and stream_url
          *
          *     Args:
          *         request: Task and optional context/preferences
@@ -2206,28 +2412,28 @@ export interface paths {
          *         current_user: Authenticated user
          *
          *     Returns:
-         *         JarvisSupervisorResponse with run_id, thread_id, and stream_url
+         *         JarvisConciergeResponse with course_id, thread_id, and stream_url
          *
          *     Example:
-         *         POST /api/jarvis/supervisor
+         *         POST /api/jarvis/concierge
          *         {"task": "Check my server health"}
          *
          *         Response:
          *         {
-         *             "run_id": 456,
+         *             "course_id": 456,
          *             "thread_id": 789,
          *             "status": "running",
-         *             "stream_url": "/api/stream/runs/456"
+         *             "stream_url": "/api/stream/courses/456"
          *         }
          */
-        post: operations["jarvis_supervisor_api_jarvis_supervisor_post"];
+        post: operations["jarvis_concierge_api_jarvis_concierge_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/supervisor/{run_id}/cancel": {
+    "/api/jarvis/concierge/{course_id}/cancel": {
         parameters: {
             query?: never;
             header?: never;
@@ -2237,24 +2443,24 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Jarvis Supervisor Cancel
-         * @description Cancel a running supervisor investigation.
+         * Jarvis Concierge Cancel
+         * @description Cancel a running concierge investigation.
          *
-         *     Marks the run as cancelled and emits a cancellation event to SSE subscribers.
-         *     If the run is already complete, returns the current status without error.
+         *     Marks the course as cancelled and emits a cancellation event to SSE subscribers.
+         *     If the course is already complete, returns the current status without error.
          *
          *     Args:
-         *         run_id: The supervisor run ID to cancel
+         *         course_id: The concierge course ID to cancel
          *         db: Database session
          *         current_user: Authenticated user
          *
          *     Returns:
-         *         JarvisCancelResponse with run status
+         *         JarvisCancelResponse with course status
          *
          *     Raises:
-         *         HTTPException 404: If run not found or doesn't belong to user
+         *         HTTPException 404: If course not found or doesn't belong to user
          */
-        post: operations["jarvis_supervisor_cancel_api_jarvis_supervisor__run_id__cancel_post"];
+        post: operations["jarvis_concierge_cancel_api_jarvis_concierge__course_id__cancel_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2272,10 +2478,10 @@ export interface paths {
         put?: never;
         /**
          * Jarvis Chat
-         * @description Text chat endpoint - streams responses from Supervisor.
+         * @description Text chat endpoint - streams responses from Concierge.
          *
-         *     This endpoint provides a simpler alternative to /supervisor for text-only
-         *     chat. It still uses the Supervisor under the hood but returns an SSE stream
+         *     This endpoint provides a simpler alternative to /concierge for text-only
+         *     chat. It still uses the Concierge under the hood but returns an SSE stream
          *     directly instead of requiring a separate connection.
          *
          *     Args:
@@ -2290,11 +2496,151 @@ export interface paths {
          *         {"message": "What's the weather?"}
          *
          *         Streams SSE events:
-         *         - supervisor_started: Chat processing started
-         *         - supervisor_thinking: Supervisor analyzing
-         *         - supervisor_complete: Final response with result
+         *         - concierge_started: Chat processing started
+         *         - concierge_thinking: Concierge analyzing
+         *         - concierge_complete: Final response with result
          */
         post: operations["jarvis_chat_api_jarvis_chat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/tts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Convert Text To Speech
+         * @description Convert text to speech and return audio.
+         *
+         *     Returns audio data directly in the response body.
+         *     Content-Type will be audio/mpeg for MP3 format.
+         */
+        post: operations["convert_text_to_speech_api_jarvis_tts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/tts/json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Convert Text To Speech Json
+         * @description Convert text to speech and return metadata (without audio).
+         *
+         *     Use this endpoint to check if TTS would succeed without actually
+         *     generating the audio. Useful for validation.
+         */
+        post: operations["convert_text_to_speech_json_api_jarvis_tts_json_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/tts/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Text To Speech
+         * @description Stream audio generation.
+         *
+         *     For now, this streams the complete audio once generated.
+         *     Future: implement true streaming with ElevenLabs.
+         */
+        get: operations["stream_text_to_speech_api_jarvis_tts_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/tts/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Tts Status
+         * @description Get TTS service status and configuration.
+         */
+        get: operations["get_tts_status_api_jarvis_tts_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/tts/voices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Voices
+         * @description List available TTS voices.
+         *
+         *     Args:
+         *         provider: Filter by provider (openai, elevenlabs, edge, or all)
+         *
+         *     Returns:
+         *         List of available voices with metadata
+         */
+        get: operations["list_voices_api_jarvis_tts_voices_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/voice/turn": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Voice Turn
+         * @description Turn-based voice: audio -> transcript -> concierge response.
+         *
+         *     This endpoint is optimized for "Alexa-style" interactions:
+         *     - User speaks once
+         *     - System transcribes
+         *     - Concierge responds with text
+         */
+        post: operations["voice_turn_api_jarvis_voice_turn_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2335,7 +2681,7 @@ export interface paths {
          * Jarvis Events
          * @description Server-Sent Events stream for Jarvis.
          *
-         *     Provides real-time updates for agent and run events. Jarvis listens to this
+         *     Provides real-time updates for fiche and course events. Jarvis listens to this
          *     stream to update the Task Inbox UI without polling.
          *
          *     Authentication:
@@ -2346,9 +2692,9 @@ export interface paths {
          *     Event types:
          *     - connected: Initial connection confirmation
          *     - heartbeat: Keep-alive ping every 30 seconds
-         *     - agent_updated: Agent status or configuration changed
-         *     - run_created: New agent run started
-         *     - run_updated: Agent run status changed (running → success/failed)
+         *     - fiche_updated: Fiche status or configuration changed
+         *     - course_created: New fiche course started
+         *     - course_updated: Fiche course status changed (running → success/failed)
          *
          *     Args:
          *         current_user: Authenticated user (Jarvis service account)
@@ -2374,9 +2720,9 @@ export interface paths {
         };
         /**
          * Jarvis History
-         * @description Get conversation history from Supervisor thread.
+         * @description Get conversation history from Concierge thread.
          *
-         *     Returns paginated message history from the user's supervisor thread.
+         *     Returns paginated message history from the user's concierge thread.
          *     Only includes user and assistant messages (filters out system messages).
          *
          *     Args:
@@ -2393,13 +2739,13 @@ export interface paths {
         post?: never;
         /**
          * Jarvis Clear History
-         * @description Clear conversation history by deleting all messages from Supervisor thread.
+         * @description Clear conversation history by deleting all messages from Concierge thread.
          *
-         *     This clears all conversation messages from the user's Supervisor thread.
-         *     The thread itself and the agent's system instructions are preserved.
+         *     This clears all conversation messages from the user's Concierge thread.
+         *     The thread itself and the fiche's system instructions are preserved.
          *
-         *     System prompts are injected fresh on every run from agent.system_instructions,
-         *     so clearing history doesn't affect the agent's behavior.
+         *     System prompts are injected fresh on every course from fiche.system_instructions,
+         *     so clearing history doesn't affect the fiche's behavior.
          *
          *     Args:
          *         db: Database session
@@ -2436,7 +2782,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/supervisor/thread": {
+    "/api/jarvis/concierge/thread": {
         parameters: {
             query?: never;
             header?: never;
@@ -2444,12 +2790,12 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Supervisor Thread
-         * @description Get the supervisor thread for the current user.
+         * Get Concierge Thread
+         * @description Get the concierge thread for the current user.
          *
-         *     Returns basic information about the user's supervisor thread.
+         *     Returns basic information about the user's concierge thread.
          */
-        get: operations["get_supervisor_thread_api_jarvis_supervisor_thread_get"];
+        get: operations["get_concierge_thread_api_jarvis_concierge_thread_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2529,7 +2875,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/internal/runs/{run_id}/resume": {
+    "/api/internal/courses/{course_id}/resume": {
         parameters: {
             query?: never;
             header?: never;
@@ -2539,46 +2885,26 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Resume Run
-         * @description Resume a WAITING run when a worker completes.
+         * Resume Course
+         * @description Resume a WAITING course when a commis completes.
          *
-         *     Called internally when a worker completes while the supervisor run was
-         *     WAITING (interrupted by spawn_worker). Uses LangGraph's Command(resume=...)
-         *     to continue the graph from where interrupt() was called.
+         *     Called internally when a commis completes while the concierge course was
+         *     WAITING (interrupted by spawn_commis). Uses FicheRunner.run_continuation()
+         *     to continue the concierge loop from persisted history.
          *
          *     Args:
-         *         run_id: ID of the WAITING supervisor run
-         *         payload: Worker completion data
+         *         course_id: ID of the WAITING concierge course
+         *         payload: Commis completion data
          *         db: Database session
          *
          *     Returns:
-         *         Dict with resumed run info
+         *         Dict with resumed course info
          *
          *     Raises:
-         *         404: Run not found
-         *         500: Error resuming run
+         *         404: Course not found
+         *         500: Error resuming course
          */
-        post: operations["resume_run_api_internal_runs__run_id__resume_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/internal/runs/{run_id}/continue": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Continue Run
-         * @description Deprecated: Use /resume instead. Kept for backwards compatibility.
-         */
-        post: operations["continue_run_api_internal_runs__run_id__continue_post"];
+        post: operations["resume_course_api_internal_courses__course_id__resume_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2649,7 +2975,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/stream/runs/{run_id}": {
+    "/api/stream/courses/{course_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -2657,28 +2983,28 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Stream Run Replay
-         * @description Stream run events with replay support (Resumable SSE v1).
+         * Stream Course Replay
+         * @description Stream course events with replay support (Resumable SSE v1).
          *
          *     This endpoint enables clients to reconnect and catch up on missed events by:
          *     1. Replaying historical events from the database
          *     2. Continuing with live events via EventBus
          *
-         *     For completed runs: Replays all events and closes the stream.
-         *     For active runs (RUNNING/DEFERRED): Replays historical + streams live events.
+         *     For completed courses: Replays all events and closes the stream.
+         *     For active courses (RUNNING/DEFERRED): Replays historical + streams live events.
          *
          *     Args:
-         *         run_id: Run identifier
+         *         course_id: Course identifier
          *         request: HTTP request (for Last-Event-ID header)
          *         after_event_id: Resume from this event ID (0 = from start)
-         *         include_tokens: Whether to include SUPERVISOR_TOKEN events (default: true)
+         *         include_tokens: Whether to include CONCIERGE_TOKEN events (default: true)
          *         current_user: Authenticated user (multi-tenant filtered)
          *
          *     Returns:
          *         EventSourceResponse for SSE streaming
          *
          *     Raises:
-         *         HTTPException: 404 if run not found or not owned by user
+         *         HTTPException: 404 if course not found or not owned by user
          *
          *     SSE Format:
          *         id: {event.id}
@@ -2687,19 +3013,19 @@ export interface paths {
          *
          *     Examples:
          *         # Start from beginning
-         *         GET /api/stream/runs/123
+         *         GET /api/stream/courses/123
          *
          *         # Resume from last-event-id (standard SSE reconnect)
-         *         GET /api/stream/runs/123
+         *         GET /api/stream/courses/123
          *         Last-Event-ID: 456
          *
          *         # Resume from specific event ID
-         *         GET /api/stream/runs/123?after_event_id=456
+         *         GET /api/stream/courses/123?after_event_id=456
          *
          *         # Skip token events (for bandwidth optimization)
-         *         GET /api/stream/runs/123?include_tokens=false
+         *         GET /api/stream/courses/123?include_tokens=false
          */
-        get: operations["stream_run_replay_api_stream_runs__run_id__get"];
+        get: operations["stream_course_replay_api_stream_courses__course_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2845,7 +3171,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/agents/{agent_id}/connectors/": {
+    "/api/fiches/{fiche_id}/connectors/": {
         parameters: {
             query?: never;
             header?: never;
@@ -2853,33 +3179,33 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List Agent Connectors
-         * @description List all connector types and their configuration status for an agent.
+         * List Fiche Connectors
+         * @description List all connector types and their configuration status for a fiche.
          *
          *     Returns all available connector types with:
          *     - Metadata (name, description, required fields)
-         *     - Whether credentials are configured for this agent
+         *     - Whether credentials are configured for this fiche
          *     - Test status and metadata from last test
          */
-        get: operations["list_agent_connectors_api_agents__agent_id__connectors__get"];
+        get: operations["list_fiche_connectors_api_fiches__fiche_id__connectors__get"];
         put?: never;
         /**
          * Configure Connector
-         * @description Configure (create or update) connector credentials for an agent.
+         * @description Configure (create or update) connector credentials for a fiche.
          *
          *     If credentials already exist for this connector type, they are updated.
          *     Otherwise, new credentials are created.
          *
          *     Test status is reset to 'untested' when credentials are updated.
          */
-        post: operations["configure_connector_api_agents__agent_id__connectors__post"];
+        post: operations["configure_connector_api_fiches__fiche_id__connectors__post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/agents/{agent_id}/connectors/test": {
+    "/api/fiches/{fiche_id}/connectors/test": {
         parameters: {
             query?: never;
             header?: never;
@@ -2895,14 +3221,14 @@ export interface paths {
          *     This endpoint allows testing credentials without persisting them.
          *     Useful for validating credentials in the UI before committing.
          */
-        post: operations["test_credentials_before_save_api_agents__agent_id__connectors_test_post"];
+        post: operations["test_credentials_before_save_api_fiches__fiche_id__connectors_test_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/agents/{agent_id}/connectors/{connector_type}/test": {
+    "/api/fiches/{fiche_id}/connectors/{connector_type}/test": {
         parameters: {
             query?: never;
             header?: never;
@@ -2917,14 +3243,14 @@ export interface paths {
          *
          *     Tests the stored credentials and updates the test_status and metadata.
          */
-        post: operations["test_configured_connector_api_agents__agent_id__connectors__connector_type__test_post"];
+        post: operations["test_configured_connector_api_fiches__fiche_id__connectors__connector_type__test_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/agents/{agent_id}/connectors/{connector_type}": {
+    "/api/fiches/{fiche_id}/connectors/{connector_type}": {
         parameters: {
             query?: never;
             header?: never;
@@ -2936,11 +3262,11 @@ export interface paths {
         post?: never;
         /**
          * Delete Connector
-         * @description Remove connector credentials from an agent.
+         * @description Remove connector credentials from a fiche.
          *
          *     This deletes the stored credentials permanently.
          */
-        delete: operations["delete_connector_api_agents__agent_id__connectors__connector_type__delete"];
+        delete: operations["delete_connector_api_fiches__fiche_id__connectors__connector_type__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3040,7 +3366,7 @@ export interface paths {
          * @description Remove account-level connector credentials.
          *
          *     This deletes the stored credentials permanently.
-         *     Note: Any agents with per-agent overrides will still work.
+         *     Note: Any fiches with per-fiche overrides will still work.
          */
         delete: operations["delete_account_connector_api_account_connectors__connector_type__delete"];
         options?: never;
@@ -3134,6 +3460,438 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/waitlist": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Join Waitlist
+         * @description Add email to waitlist.
+         *
+         *     This endpoint is public (no auth required) since we want to collect
+         *     signups from visitors who haven't signed up yet.
+         */
+        post: operations["join_waitlist_api_waitlist_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Jobs
+         * @description List all registered scheduled jobs.
+         *
+         *     Args:
+         *         enabled_only: If True, only return enabled jobs
+         */
+        get: operations["list_jobs_api_jobs__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job
+         * @description Get details for a specific job.
+         */
+        get: operations["get_job_api_jobs__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Job
+         * @description Manually trigger a job execution.
+         *
+         *     This runs the job immediately regardless of its cron schedule or
+         *     enabled status. Useful for:
+         *     - Smoke testing migrated jobs
+         *     - Manual ad-hoc execution
+         *     - Debugging job behavior
+         *
+         *     The job runs with full retry support and timeout enforcement.
+         */
+        post: operations["run_job_api_jobs__job_id__run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enable Job
+         * @description Enable a job for scheduled execution.
+         */
+        post: operations["enable_job_api_jobs__job_id__enable_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disable Job
+         * @description Disable a job from scheduled execution.
+         */
+        post: operations["disable_job_api_jobs__job_id__disable_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/queue/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Queue State
+         * @description Get recent queue entries (admin only).
+         *
+         *     Returns recent entries from the job queue for debugging.
+         *     Queue must be enabled (JOB_QUEUE_ENABLED=1) for entries to exist.
+         */
+        get: operations["get_queue_state_api_jobs_queue_state_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/traces/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Traces
+         * @description List recent traces (admin only).
+         *
+         *     Returns recent traces sorted by creation time for discovery.
+         *     Use this to find trace IDs to debug.
+         */
+        get: operations["list_traces_api_traces__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/traces/{trace_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Trace
+         * @description Get unified trace timeline (admin only).
+         *
+         *     Returns a unified timeline of events across concierge runs, commis, and LLM calls.
+         *
+         *     Levels:
+         *     - summary: High-level timeline with key events (default)
+         *     - full: Include LLM message details
+         *     - errors: Only show errors and anomalies
+         */
+        get: operations["get_trace_api_traces__trace_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/reliability/system-health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * System Health
+         * @description Aggregated system health status (admin only).
+         *
+         *     Returns commis pool status, recent error counts, and overall health indicator.
+         */
+        get: operations["system_health_api_reliability_system_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/reliability/errors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Error Analysis
+         * @description Error frequency and patterns (admin only).
+         *
+         *     Returns recent failed courses with error details for analysis.
+         */
+        get: operations["error_analysis_api_reliability_errors_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/reliability/performance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Performance Metrics
+         * @description P50/P95 latency metrics (admin only).
+         *
+         *     Returns latency percentiles for concierge courses.
+         *     Limited to 10000 samples to prevent memory issues.
+         */
+        get: operations["performance_metrics_api_reliability_performance_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/reliability/commis/stuck": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stuck Commis
+         * @description Commis in running state beyond threshold (admin only).
+         *
+         *     Returns commis that have been running longer than the threshold,
+         *     which may indicate stuck or failed processes.
+         */
+        get: operations["stuck_commis_api_reliability_commis_stuck_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/reliability/runners": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Runner Status
+         * @description Current runner status (admin only).
+         *
+         *     Returns status of all runners in the system.
+         */
+        get: operations["runner_status_api_reliability_runners_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/skills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Skills
+         * @description List all available skills.
+         *
+         *     Returns skills from all sources (bundled, user, workspace) with
+         *     eligibility information based on current environment.
+         */
+        get: operations["list_skills_api_skills_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/skills/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Skill Commands
+         * @description List user-invocable skill commands.
+         *
+         *     Returns skills that can be invoked via slash commands,
+         *     formatted for UI command palettes.
+         */
+        get: operations["list_skill_commands_api_skills_commands_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/skills/prompt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Skills Prompt
+         * @description Generate skills prompt for system prompt injection.
+         *
+         *     Returns a formatted markdown prompt containing eligible skills,
+         *     suitable for including in an fiche's system prompt.
+         */
+        get: operations["get_skills_prompt_api_skills_prompt_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/skills/{skill_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Skill
+         * @description Get detailed information about a specific skill.
+         *
+         *     Returns the skill's content, requirements, and eligibility status.
+         */
+        get: operations["get_skill_api_skills__skill_name__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/skills/reload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reload Skills
+         * @description Reload skills from filesystem.
+         *
+         *     Forces a reload of all skills, useful after adding/modifying skills.
+         */
+        post: operations["reload_skills_api_skills_reload_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/reset-database": {
         parameters: {
             query?: never;
@@ -3200,7 +3958,7 @@ export interface components {
          * @description Status of a connector type at account level.
          *
          *     Similar to ConnectorStatusResponse but for account-level credentials
-         *     that are shared across all agents owned by the user.
+         *     that are shared across all fiches owned by the user.
          */
         AccountConnectorStatusResponse: {
             /**
@@ -3276,8 +4034,8 @@ export interface components {
             summary: components["schemas"]["PeriodUsage"];
             /** Daily Breakdown */
             daily_breakdown: components["schemas"]["DailyBreakdown"][];
-            /** Top Agents */
-            top_agents: components["schemas"]["TopAgentUsage"][];
+            /** Top Fiches */
+            top_fiches: components["schemas"]["TopFicheUsage"][];
         };
         /**
          * AdminUserRow
@@ -3312,161 +4070,6 @@ export interface components {
             /** Offset */
             offset: number;
         };
-        /** Agent */
-        Agent: {
-            /** Name */
-            name: string;
-            /** System Instructions */
-            system_instructions: string;
-            /** Task Instructions */
-            task_instructions: string;
-            /** Model */
-            model: string;
-            /** Schedule */
-            schedule?: string | null;
-            /** Config */
-            config?: Record<string, never> | null;
-            /** Last Error */
-            last_error?: string | null;
-            /** Allowed Tools */
-            allowed_tools?: string[] | null;
-            /** Id */
-            id: number;
-            /** Owner Id */
-            owner_id: number;
-            owner?: components["schemas"]["UserOut"] | null;
-            /** Status */
-            status: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-            /**
-             * Messages
-             * @default []
-             */
-            messages: components["schemas"]["AgentMessage"][];
-            /** Next Run At */
-            next_run_at?: string | null;
-            /** Last Run At */
-            last_run_at?: string | null;
-        };
-        /**
-         * AgentCreate
-         * @description Schema for agent creation. Name is auto-generated by backend.
-         */
-        AgentCreate: {
-            /** System Instructions */
-            system_instructions: string;
-            /** Task Instructions */
-            task_instructions: string;
-            /** Model */
-            model: string;
-            /** Schedule */
-            schedule?: string | null;
-            /** Config */
-            config?: Record<string, never> | null;
-            /** Allowed Tools */
-            allowed_tools?: string[] | null;
-        };
-        /**
-         * AgentDetails
-         * @description Envelope object returned by the Agent *details* REST endpoint.
-         *
-         *     In Phase 1 we only populate the mandatory ``agent`` field.  The optional
-         *     ``threads``, ``runs`` and ``stats`` keys are included so that the response
-         *     shape is forwards-compatible with the richer payloads planned for future
-         *     phases (see *agent_debug_modal_design.md*).
-         */
-        AgentDetails: {
-            agent: components["schemas"]["Agent"];
-            /** Threads */
-            threads?: components["schemas"]["Thread"][] | null;
-            /** Runs */
-            runs?: unknown[] | null;
-            /** Stats */
-            stats?: Record<string, never> | null;
-        };
-        /** AgentMessage */
-        AgentMessage: {
-            /** Id */
-            id: number;
-            /** Agent Id */
-            agent_id: number;
-            /** Role */
-            role: string;
-            /** Content */
-            content: string;
-            /**
-             * Timestamp
-             * Format: date-time
-             */
-            timestamp: string;
-        };
-        /** AgentRunOut */
-        AgentRunOut: {
-            /** Id */
-            id: number;
-            /** Agent Id */
-            agent_id: number;
-            /** Thread Id */
-            thread_id: number;
-            status: components["schemas"]["RunStatus"];
-            trigger: components["schemas"]["RunTrigger"];
-            /** Started At */
-            started_at?: string | null;
-            /** Finished At */
-            finished_at?: string | null;
-            /** Duration Ms */
-            duration_ms?: number | null;
-            /** Total Tokens */
-            total_tokens?: number | null;
-            /** Total Cost Usd */
-            total_cost_usd?: number | null;
-            /** Error */
-            error?: string | null;
-        };
-        /** AgentRunsBundle */
-        AgentRunsBundle: {
-            /** Agent Id */
-            agent_id: number;
-            /**
-             * Runs
-             * @default []
-             */
-            runs: components["schemas"]["AgentRunOut"][];
-        };
-        /**
-         * AgentStatus
-         * @enum {string}
-         */
-        AgentStatus: "idle" | "running" | "error" | "processing";
-        /** AgentUpdate */
-        AgentUpdate: {
-            /** Name */
-            name?: string | null;
-            /** System Instructions */
-            system_instructions?: string | null;
-            /** Task Instructions */
-            task_instructions?: string | null;
-            /** Model */
-            model?: string | null;
-            status?: components["schemas"]["AgentStatus"] | null;
-            /** Schedule */
-            schedule?: string | null;
-            /** Config */
-            config?: Record<string, never> | null;
-            /** Last Error */
-            last_error?: string | null;
-            /** Allowed Tools */
-            allowed_tools?: string[] | null;
-        };
         /** Body_upload_current_user_avatar_api_users_me_avatar_post */
         Body_upload_current_user_avatar_api_users_me_avatar_post: {
             /**
@@ -3475,6 +4078,100 @@ export interface components {
              * @description Avatar image file (PNG/JPEG/WebP ≤2 MB)
              */
             file: string;
+        };
+        /** Body_voice_turn_api_jarvis_voice_turn_post */
+        Body_voice_turn_api_jarvis_voice_turn_post: {
+            /**
+             * Audio
+             * Format: binary
+             * @description Audio file to transcribe
+             */
+            audio: string;
+            /**
+             * Stt Prompt
+             * @description Optional transcription prompt
+             */
+            stt_prompt?: string | null;
+            /**
+             * Stt Language
+             * @description Optional ISO-639-1 language hint
+             */
+            stt_language?: string | null;
+            /**
+             * Stt Model
+             * @description Override STT model
+             */
+            stt_model?: string | null;
+            /**
+             * Return Audio
+             * @description Include synthesized audio response
+             * @default true
+             */
+            return_audio: boolean;
+            /**
+             * Tts Provider
+             * @description Override TTS provider (edge, elevenlabs)
+             */
+            tts_provider?: string | null;
+            /**
+             * Tts Voice Id
+             * @description Override TTS voice ID/name
+             */
+            tts_voice_id?: string | null;
+            /**
+             * Model
+             * @description Override concierge model
+             */
+            model?: string | null;
+        };
+        /**
+         * BootstrapStatusItem
+         * @description Status of a single bootstrap category.
+         */
+        BootstrapStatusItem: {
+            /**
+             * Configured
+             * @description Whether this category is configured
+             */
+            configured: boolean;
+            /**
+             * Details
+             * @description Additional details
+             */
+            details?: string | null;
+        };
+        /**
+         * BootstrapStatusResponse
+         * @description Response showing what's configured vs missing.
+         */
+        BootstrapStatusResponse: {
+            /** @description User context status */
+            context: components["schemas"]["BootstrapStatusItem"];
+            /** @description Runners status */
+            runners: components["schemas"]["BootstrapStatusItem"];
+            /** @description Personal credentials status */
+            credentials: components["schemas"]["BootstrapStatusItem"];
+        };
+        /**
+         * BootstrapSuccessResponse
+         * @description Generic success response for bootstrap operations.
+         */
+        BootstrapSuccessResponse: {
+            /**
+             * Success
+             * @default true
+             */
+            success: boolean;
+            /**
+             * Message
+             * @description Operation result message
+             */
+            message: string;
+            /**
+             * Details
+             * @description Additional details
+             */
+            details?: Record<string, never> | null;
         };
         /**
          * BudgetInfo
@@ -3499,6 +4196,93 @@ export interface components {
          */
         CanvasUpdate: {
             canvas: components["schemas"]["WorkflowData-Input"];
+        };
+        /**
+         * CommisCompletionPayload
+         * @description Payload for commis completion webhook.
+         */
+        CommisCompletionPayload: {
+            /**
+             * Job Id
+             * @description Commis job ID
+             */
+            job_id: number;
+            /**
+             * Commis Id
+             * @description Commis artifact ID
+             */
+            commis_id: string;
+            /**
+             * Status
+             * @description Commis status: success or failed
+             */
+            status: string;
+            /**
+             * Result Summary
+             * @description Brief summary of commis result
+             */
+            result_summary?: string | null;
+            /**
+             * Error
+             * @description Error message if failed
+             */
+            error?: string | null;
+        };
+        /**
+         * CommisInfo
+         * @description Commis spawned by spawn_commis tool.
+         */
+        CommisInfo: {
+            /** Job Id */
+            job_id: number;
+            /** Task */
+            task: string;
+            /** Status */
+            status: string;
+            /** Summary */
+            summary?: string | null;
+            /**
+             * Tools
+             * @default []
+             */
+            tools: components["schemas"]["CommisToolInfo"][];
+        };
+        /**
+         * CommisToolInfo
+         * @description Tool executed by a commis.
+         */
+        CommisToolInfo: {
+            /** Tool Name */
+            tool_name: string;
+            /** Status */
+            status: string;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** Result Preview */
+            result_preview?: string | null;
+            /** Error */
+            error?: string | null;
+        };
+        /**
+         * ConciergeThreadInfo
+         * @description Concierge thread information.
+         */
+        ConciergeThreadInfo: {
+            /**
+             * Thread Id
+             * @description Thread ID
+             */
+            thread_id: number;
+            /**
+             * Title
+             * @description Thread title
+             */
+            title: string;
+            /**
+             * Message Count
+             * @description Number of messages in thread
+             */
+            message_count: number;
         };
         /**
          * ConfigureTestModelRequest
@@ -3536,7 +4320,7 @@ export interface components {
         };
         /**
          * ConnectorStatusResponse
-         * @description Status of a connector type for an agent.
+         * @description Status of a connector type for an fiche.
          *
          *     Used in the list endpoint to show all available connectors
          *     and their configuration status.
@@ -3685,6 +4469,47 @@ export interface components {
             context: Record<string, never>;
         };
         /**
+         * ContextSeedRequest
+         * @description Request to seed user context for the admin user.
+         *
+         *     This replaces file-based seeding from ~/.config/zerg/user_context.json.
+         *     The context is stored in the User.context JSONB column.
+         */
+        ContextSeedRequest: {
+            /**
+             * Servers
+             * @description List of servers with name, ip, purpose, ssh_user, etc.
+             */
+            servers?: Record<string, never>[];
+            /**
+             * Integrations
+             * @description Integration configs (github, email, etc.)
+             */
+            integrations?: Record<string, never>;
+            /**
+             * Display Name
+             * @description User's preferred display name
+             */
+            display_name?: string | null;
+            /**
+             * Role
+             * @description User's job role or title
+             */
+            role?: string | null;
+            /**
+             * Location
+             * @description User's primary location
+             */
+            location?: string | null;
+            /**
+             * Custom Instructions
+             * @description Custom instructions for fiche behavior
+             */
+            custom_instructions?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * ContextUpdate
          * @description Request model for updating context.
          */
@@ -3692,6 +4517,104 @@ export interface components {
             /** Context */
             context: Record<string, never>;
         };
+        /** CourseBundle */
+        CourseBundle: {
+            /** Fiche Id */
+            fiche_id: number;
+            /**
+             * Courses
+             * @default []
+             */
+            courses: components["schemas"]["CourseOut"][];
+        };
+        /**
+         * CourseEventRecord
+         * @description Single event from a course.
+         */
+        CourseEventRecord: {
+            /** Id */
+            id: number;
+            /** Event Type */
+            event_type: string;
+            /** Payload */
+            payload: Record<string, never>;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * CourseEventsResponse
+         * @description Response for course events query.
+         */
+        CourseEventsResponse: {
+            /** Course Id */
+            course_id: number;
+            /** Events */
+            events: components["schemas"]["CourseEventRecord"][];
+            /** Total */
+            total: number;
+        };
+        /** CourseOut */
+        CourseOut: {
+            /** Id */
+            id: number;
+            /** Fiche Id */
+            fiche_id: number;
+            /** Thread Id */
+            thread_id: number;
+            status: components["schemas"]["CourseStatus"];
+            trigger: components["schemas"]["CourseTrigger"];
+            /** Started At */
+            started_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** Total Tokens */
+            total_tokens?: number | null;
+            /** Total Cost Usd */
+            total_cost_usd?: number | null;
+            /** Error */
+            error?: string | null;
+            /**
+             * Display Type
+             * @default course
+             */
+            display_type: string;
+        };
+        /**
+         * CourseStatus
+         * @enum {string}
+         */
+        CourseStatus: "queued" | "running" | "waiting" | "deferred" | "success" | "failed" | "cancelled";
+        /**
+         * CourseStatusResponse
+         * @description Detailed status of a specific course.
+         */
+        CourseStatusResponse: {
+            /** Course Id */
+            course_id: number;
+            /** Status */
+            status: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Result */
+            result?: string | null;
+        };
+        /**
+         * CourseTrigger
+         * @enum {string}
+         */
+        CourseTrigger: "manual" | "schedule" | "chat" | "webhook" | "api" | "continuation";
         /**
          * CredentialFieldSchema
          * @description Schema for a single credential field definition.
@@ -3724,6 +4647,23 @@ export interface components {
             required: boolean;
         };
         /**
+         * CredentialsSeedRequest
+         * @description Request to seed personal credentials for the admin user.
+         *
+         *     This replaces file-based seeding from ~/.config/zerg/personal_credentials.json.
+         *     All credentials are Fernet-encrypted before storage.
+         */
+        CredentialsSeedRequest: {
+            /** @description Traccar GPS credentials */
+            traccar?: components["schemas"]["TraccarCredentials"] | null;
+            /** @description WHOOP health credentials */
+            whoop?: components["schemas"]["WhoopCredentials"] | null;
+            /** @description Obsidian vault credentials */
+            obsidian?: components["schemas"]["ObsidianCredentials"] | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * DailyBreakdown
          * @description Single day's usage stats.
          */
@@ -3737,8 +4677,8 @@ export interface components {
             tokens: number;
             /** Cost Usd */
             cost_usd: number;
-            /** Runs */
-            runs: number;
+            /** Courses */
+            courses: number;
         };
         /** DashboardSnapshot */
         DashboardSnapshot: {
@@ -3749,12 +4689,12 @@ export interface components {
              * Format: date-time
              */
             fetched_at: string;
-            /** Runs Limit */
-            runs_limit: number;
-            /** Agents */
-            agents: components["schemas"]["Agent"][];
-            /** Runs */
-            runs: components["schemas"]["AgentRunsBundle"][];
+            /** Courses Limit */
+            courses_limit: number;
+            /** Fiches */
+            fiches: components["schemas"]["Fiche"][];
+            /** Courses */
+            courses: components["schemas"]["CourseBundle"][];
         };
         /**
          * DatabaseResetRequest
@@ -3765,6 +4705,63 @@ export interface components {
             confirmation_password?: string | null;
             /** @default clear_data */
             reset_type: components["schemas"]["ResetType"];
+        };
+        /**
+         * EmailContactCreate
+         * @description Schema for creating an email contact.
+         */
+        EmailContactCreate: {
+            /**
+             * Name
+             * @description Contact name
+             */
+            name: string;
+            /**
+             * Email
+             * @description Email address
+             */
+            email: string;
+            /**
+             * Notes
+             * @description Optional notes
+             */
+            notes?: string | null;
+        };
+        /**
+         * EmailContactOut
+         * @description Schema for email contact response.
+         */
+        EmailContactOut: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Email */
+            email: string;
+            /** Notes */
+            notes: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * EmailContactUpdate
+         * @description Schema for updating an email contact.
+         */
+        EmailContactUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Email */
+            email?: string | null;
+            /** Notes */
+            notes?: string | null;
         };
         /**
          * EnrollTokenResponse
@@ -3818,28 +4815,137 @@ export interface components {
             /** Result */
             result?: unknown | null;
         };
+        /** Fiche */
+        Fiche: {
+            /** Name */
+            name: string;
+            /** System Instructions */
+            system_instructions: string;
+            /** Task Instructions */
+            task_instructions: string;
+            /** Model */
+            model: string;
+            /** Schedule */
+            schedule?: string | null;
+            /** Config */
+            config?: Record<string, never> | null;
+            /** Last Error */
+            last_error?: string | null;
+            /** Allowed Tools */
+            allowed_tools?: string[] | null;
+            /** Id */
+            id: number;
+            /** Owner Id */
+            owner_id: number;
+            owner?: components["schemas"]["UserOut"] | null;
+            /** Status */
+            status: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /**
+             * Messages
+             * @default []
+             */
+            messages: components["schemas"]["FicheMessage"][];
+            /** Next Course At */
+            next_course_at?: string | null;
+            /** Last Course At */
+            last_course_at?: string | null;
+            /**
+             * Display Type
+             * @default fiche
+             */
+            display_type: string;
+        };
+        /**
+         * FicheCreate
+         * @description Schema for fiche creation. Name is auto-generated by backend.
+         */
+        FicheCreate: {
+            /** System Instructions */
+            system_instructions: string;
+            /** Task Instructions */
+            task_instructions: string;
+            /** Model */
+            model: string;
+            /** Schedule */
+            schedule?: string | null;
+            /** Config */
+            config?: Record<string, never> | null;
+            /** Allowed Tools */
+            allowed_tools?: string[] | null;
+        };
+        /**
+         * FicheDetails
+         * @description Envelope object returned by the Fiche *details* REST endpoint.
+         *
+         *     In Phase 1 we only populate the mandatory ``fiche`` field.  The optional
+         *     ``threads``, ``courses`` and ``stats`` keys are included so that the response
+         *     shape is forwards-compatible with the richer payloads planned for future
+         *     phases (see *fiche_debug_modal_design.md*).
+         */
+        FicheDetails: {
+            fiche: components["schemas"]["Fiche"];
+            /** Threads */
+            threads?: components["schemas"]["Thread"][] | null;
+            /** Courses */
+            courses?: unknown[] | null;
+            /** Stats */
+            stats?: Record<string, never> | null;
+        };
+        /** FicheMessage */
+        FicheMessage: {
+            /** Id */
+            id: number;
+            /** Fiche Id */
+            fiche_id: number;
+            /** Role */
+            role: string;
+            /** Content */
+            content: string;
+            /**
+             * Timestamp
+             * Format: date-time
+             */
+            timestamp: string;
+        };
+        /**
+         * FicheStatus
+         * @enum {string}
+         */
+        FicheStatus: "idle" | "running" | "error" | "processing";
+        /** FicheUpdate */
+        FicheUpdate: {
+            /** Name */
+            name?: string | null;
+            /** System Instructions */
+            system_instructions?: string | null;
+            /** Task Instructions */
+            task_instructions?: string | null;
+            /** Model */
+            model?: string | null;
+            status?: components["schemas"]["FicheStatus"] | null;
+            /** Schedule */
+            schedule?: string | null;
+            /** Config */
+            config?: Record<string, never> | null;
+            /** Last Error */
+            last_error?: string | null;
+            /** Allowed Tools */
+            allowed_tools?: string[] | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
-        };
-        /**
-         * JarvisAgentSummary
-         * @description Minimal agent summary for Jarvis UI.
-         */
-        JarvisAgentSummary: {
-            /** Id */
-            id: number;
-            /** Name */
-            name: string;
-            /** Status */
-            status: string;
-            /** Schedule */
-            schedule?: string | null;
-            /** Next Run At */
-            next_run_at?: string | null;
-            /** Description */
-            description?: string | null;
         };
         /**
          * JarvisAuthRequest
@@ -3898,17 +5004,17 @@ export interface components {
         };
         /**
          * JarvisCancelResponse
-         * @description Response from supervisor cancellation.
+         * @description Response from concierge cancellation.
          */
         JarvisCancelResponse: {
             /**
-             * Run Id
-             * @description The cancelled run ID
+             * Course Id
+             * @description The cancelled course ID
              */
-            run_id: number;
+            course_id: number;
             /**
              * Status
-             * @description Run status after cancellation
+             * @description Course status after cancellation
              */
             status: string;
             /**
@@ -3943,10 +5049,15 @@ export interface components {
              * @description Optional LLM usage metadata for this assistant response
              */
             usage?: Record<string, never> | null;
+            /**
+             * Tool Calls
+             * @description Tool calls made by this assistant message
+             */
+            tool_calls?: components["schemas"]["ToolCallInfo"][] | null;
         };
         /**
          * JarvisChatRequest
-         * @description Request for text chat with Supervisor.
+         * @description Request for text chat with Concierge.
          */
         JarvisChatRequest: {
             /**
@@ -3969,17 +5080,113 @@ export interface components {
              * @description Reasoning effort: none, low, medium, high
              */
             reasoning_effort?: string | null;
+            /**
+             * Replay Scenario
+             * @description Replay scenario name (dev only, requires REPLAY_MODE_ENABLED=true)
+             */
+            replay_scenario?: string | null;
+        };
+        /**
+         * JarvisConciergeRequest
+         * @description Request to dispatch a task to the concierge fiche.
+         */
+        JarvisConciergeRequest: {
+            /**
+             * Task
+             * @description Natural language task for the concierge
+             */
+            task: string;
+            /**
+             * Context
+             * @description Optional context including conversation_id and previous_messages
+             */
+            context?: Record<string, never> | null;
+            /**
+             * Preferences
+             * @description Optional preferences like verbosity and notify_on_complete
+             */
+            preferences?: Record<string, never> | null;
+        };
+        /**
+         * JarvisConciergeResponse
+         * @description Response from concierge dispatch.
+         */
+        JarvisConciergeResponse: {
+            /**
+             * Course Id
+             * @description Concierge course ID for tracking
+             */
+            course_id: number;
+            /**
+             * Thread Id
+             * @description Concierge thread ID (long-lived)
+             */
+            thread_id: number;
+            /**
+             * Status
+             * @description Initial course status
+             */
+            status: string;
+            /**
+             * Stream Url
+             * @description SSE stream URL for progress updates
+             */
+            stream_url: string;
+        };
+        /**
+         * JarvisCourseSummary
+         * @description Minimal course summary for Jarvis Task Inbox.
+         */
+        JarvisCourseSummary: {
+            /** Id */
+            id: number;
+            /** Fiche Id */
+            fiche_id: number;
+            /** Thread Id */
+            thread_id?: number | null;
+            /** Fiche Name */
+            fiche_name: string;
+            /** Status */
+            status: string;
+            /** Summary */
+            summary?: string | null;
+            /** Signal */
+            signal?: string | null;
+            /** Signal Source */
+            signal_source?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Last Event Type */
+            last_event_type?: string | null;
+            /** Last Event Message */
+            last_event_message?: string | null;
+            /** Last Event At */
+            last_event_at?: string | null;
+            /** Continuation Of Course Id */
+            continuation_of_course_id?: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Completed At */
+            completed_at?: string | null;
         };
         /**
          * JarvisDispatchRequest
-         * @description Jarvis dispatch request to trigger agent execution.
+         * @description Jarvis dispatch request to trigger fiche execution.
          */
         JarvisDispatchRequest: {
             /**
-             * Agent Id
-             * @description ID of agent to execute
+             * Fiche Id
+             * @description ID of fiche to execute
              */
-            agent_id: number;
+            fiche_id: number;
             /**
              * Task Override
              * @description Optional task instruction override
@@ -3988,14 +5195,14 @@ export interface components {
         };
         /**
          * JarvisDispatchResponse
-         * @description Jarvis dispatch response with run/thread IDs.
+         * @description Jarvis dispatch response with course/thread IDs.
          */
         JarvisDispatchResponse: {
             /**
-             * Run Id
-             * @description AgentRun ID for tracking execution
+             * Course Id
+             * @description Course ID for tracking execution
              */
-            run_id: number;
+            course_id: number;
             /**
              * Thread Id
              * @description Thread ID containing conversation
@@ -4003,14 +5210,32 @@ export interface components {
             thread_id: number;
             /**
              * Status
-             * @description Initial run status
+             * @description Initial course status
              */
             status: string;
             /**
-             * Agent Name
-             * @description Name of agent being executed
+             * Fiche Name
+             * @description Name of fiche being executed
              */
-            agent_name: string;
+            fiche_name: string;
+        };
+        /**
+         * JarvisFicheSummary
+         * @description Minimal fiche summary for Jarvis UI.
+         */
+        JarvisFicheSummary: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Status */
+            status: string;
+            /** Schedule */
+            schedule?: string | null;
+            /** Next Course At */
+            next_course_at?: string | null;
+            /** Description */
+            description?: string | null;
         };
         /**
          * JarvisHistoryResponse
@@ -4048,6 +5273,11 @@ export interface components {
              * @description Brief description
              */
             description: string;
+            /**
+             * Capabilities
+             * @description Model capabilities (reasoning, etc.)
+             */
+            capabilities?: Record<string, never> | null;
         };
         /**
          * JarvisPreferences
@@ -4082,81 +5312,54 @@ export interface components {
             reasoning_effort?: string | null;
         };
         /**
-         * JarvisRunSummary
-         * @description Minimal run summary for Jarvis Task Inbox.
+         * JobInfo
+         * @description Job information for API responses.
          */
-        JarvisRunSummary: {
+        JobInfo: {
             /** Id */
-            id: number;
-            /** Agent Id */
-            agent_id: number;
-            /** Agent Name */
-            agent_name: string;
+            id: string;
+            /** Cron */
+            cron: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Timeout Seconds */
+            timeout_seconds: number;
+            /** Max Attempts */
+            max_attempts: number;
+            /** Tags */
+            tags: string[];
+            /** Project */
+            project: string | null;
+            /** Description */
+            description: string;
+        };
+        /**
+         * JobListResponse
+         * @description Response for listing jobs.
+         */
+        JobListResponse: {
+            /** Jobs */
+            jobs: components["schemas"]["JobInfo"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * JobRunResponse
+         * @description Response for job execution.
+         */
+        JobRunResponse: {
+            /** Job Id */
+            job_id: string;
             /** Status */
             status: string;
-            /** Summary */
-            summary?: string | null;
-            /** Continuation Of Run Id */
-            continuation_of_run_id?: number | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-            /** Completed At */
-            completed_at?: string | null;
-        };
-        /**
-         * JarvisSupervisorRequest
-         * @description Request to dispatch a task to the supervisor agent.
-         */
-        JarvisSupervisorRequest: {
-            /**
-             * Task
-             * @description Natural language task for the supervisor
-             */
-            task: string;
-            /**
-             * Context
-             * @description Optional context including conversation_id and previous_messages
-             */
-            context?: Record<string, never> | null;
-            /**
-             * Preferences
-             * @description Optional preferences like verbosity and notify_on_complete
-             */
-            preferences?: Record<string, never> | null;
-        };
-        /**
-         * JarvisSupervisorResponse
-         * @description Response from supervisor dispatch.
-         */
-        JarvisSupervisorResponse: {
-            /**
-             * Run Id
-             * @description Supervisor run ID for tracking
-             */
-            run_id: number;
-            /**
-             * Thread Id
-             * @description Supervisor thread ID (long-lived)
-             */
-            thread_id: number;
-            /**
-             * Status
-             * @description Initial run status
-             */
-            status: string;
-            /**
-             * Stream Url
-             * @description SSE stream URL for progress updates
-             */
-            stream_url: string;
+            /** Duration Ms */
+            duration_ms: number;
+            /** Result */
+            result?: Record<string, never> | null;
+            /** Error */
+            error?: string | null;
+            /** Error Type */
+            error_type?: string | null;
         };
         /** KnowledgeDocument */
         KnowledgeDocument: {
@@ -4279,20 +5482,38 @@ export interface components {
          */
         MCPServerAddRequest: {
             /**
+             * Transport
+             * @description Transport type: 'http' (default) or 'stdio'
+             * @default http
+             */
+            transport: string;
+            /**
              * Preset
              * @description Name of a preset MCP server (e.g., 'github', 'linear')
              */
             preset?: string;
             /**
              * Url
-             * @description URL of the custom MCP server
+             * @description URL of the custom MCP server (http transport)
              */
             url?: string;
             /**
              * Name
-             * @description Name for the custom MCP server
+             * @description Name for the MCP server
              */
             name?: string;
+            /**
+             * Command
+             * @description Command to spawn the MCP server (stdio transport)
+             */
+            command?: string;
+            /**
+             * Env
+             * @description Environment variables for stdio server
+             */
+            env?: {
+                [key: string]: string;
+            };
             /**
              * Auth Token
              * @description Authentication token for the MCP server
@@ -4311,8 +5532,21 @@ export interface components {
         MCPServerResponse: {
             /** Name */
             name: string;
-            /** Url */
-            url: string;
+            /**
+             * Transport
+             * @default http
+             */
+            transport: string;
+            /**
+             * Url
+             * @description Server URL (http transport)
+             */
+            url?: string | null;
+            /**
+             * Command
+             * @description Server command (stdio transport)
+             */
+            command?: string | null;
             /** Tools */
             tools: string[];
             /**
@@ -4324,7 +5558,7 @@ export interface components {
              * Error
              * @description Error message if status is 'error'
              */
-            error?: string;
+            error?: string | null;
         };
         /**
          * MCPTestConnectionResponse
@@ -4349,8 +5583,8 @@ export interface components {
         MessageResponse: {
             /** Id */
             id: number;
-            /** Agent Id */
-            agent_id: number;
+            /** Fiche Id */
+            fiche_id: number;
             /** Role */
             role: string;
             /** Content */
@@ -4361,12 +5595,40 @@ export interface components {
              */
             timestamp: string;
         };
+        /**
+         * MissingRequirementsResponse
+         * @description Missing requirements in API response.
+         */
+        MissingRequirementsResponse: {
+            /** Bins */
+            bins?: string[];
+            /** Env */
+            env?: string[];
+            /** Config */
+            config?: string[];
+        };
         /** NodePos */
         NodePos: {
             /** X */
             x: number;
             /** Y */
             y: number;
+        };
+        /**
+         * ObsidianCredentials
+         * @description Obsidian vault access credentials.
+         */
+        ObsidianCredentials: {
+            /**
+             * Vault Path
+             * @description Path to Obsidian vault
+             */
+            vault_path: string;
+            /**
+             * Runner Name
+             * @description Runner name with vault access
+             */
+            runner_name: string;
         };
         /**
          * OpsSeriesPoint
@@ -4383,37 +5645,37 @@ export interface components {
          * @description Operations summary with all KPIs.
          */
         OpsSummary: {
-            /** Runs Today */
-            runs_today: number;
+            /** Courses Today */
+            courses_today: number;
             /** Cost Today Usd */
             cost_today_usd: number | null;
             budget_user: components["schemas"]["BudgetInfo"];
             budget_global: components["schemas"]["BudgetInfo"];
             /** Active Users 24H */
             active_users_24h: number;
-            /** Agents Total */
-            agents_total: number;
-            /** Agents Scheduled */
-            agents_scheduled: number;
+            /** Fiches Total */
+            fiches_total: number;
+            /** Fiches Scheduled */
+            fiches_scheduled: number;
             latency_ms: components["schemas"]["LatencyStats"];
             /** Errors Last Hour */
             errors_last_hour: number;
-            /** Top Agents Today */
-            top_agents_today: components["schemas"]["OpsTopAgent"][];
+            /** Top Fiches Today */
+            top_fiches_today: components["schemas"]["OpsTopFiche"][];
         };
         /**
-         * OpsTopAgent
-         * @description Top performing agent information.
+         * OpsTopFiche
+         * @description Top performing fiche information.
          */
-        OpsTopAgent: {
-            /** Agent Id */
-            agent_id: number;
+        OpsTopFiche: {
+            /** Fiche Id */
+            fiche_id: number;
             /** Name */
             name: string;
             /** Owner Email */
             owner_email: string;
-            /** Runs */
-            runs: number;
+            /** Courses */
+            courses: number;
             /** Cost Usd */
             cost_usd: number | null;
             /** P95 Ms */
@@ -4435,10 +5697,67 @@ export interface components {
              */
             cost_usd: number;
             /**
-             * Runs
-             * @description Number of runs
+             * Courses
+             * @description Number of courses
              */
-            runs: number;
+            courses: number;
+        };
+        /**
+         * PhoneContactCreate
+         * @description Schema for creating a phone contact.
+         */
+        PhoneContactCreate: {
+            /**
+             * Name
+             * @description Contact name
+             */
+            name: string;
+            /**
+             * Phone
+             * @description Phone number (E.164 format)
+             */
+            phone: string;
+            /**
+             * Notes
+             * @description Optional notes
+             */
+            notes?: string | null;
+        };
+        /**
+         * PhoneContactOut
+         * @description Schema for phone contact response.
+         */
+        PhoneContactOut: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Phone */
+            phone: string;
+            /** Notes */
+            notes: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * PhoneContactUpdate
+         * @description Schema for updating a phone contact.
+         */
+        PhoneContactUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Phone */
+            phone?: string | null;
+            /** Notes */
+            notes?: string | null;
         };
         /**
          * Position
@@ -4504,71 +5823,49 @@ export interface components {
             nextCursor: number;
         };
         /**
+         * QueueEntryInfo
+         * @description Queue entry information for API responses.
+         */
+        QueueEntryInfo: {
+            /** Id */
+            id: string;
+            /** Job Id */
+            job_id: string;
+            /** Status */
+            status: string;
+            /** Scheduled For */
+            scheduled_for: string;
+            /** Attempts */
+            attempts: number;
+            /** Max Attempts */
+            max_attempts: number;
+            /** Lease Owner */
+            lease_owner: string | null;
+            /** Last Error */
+            last_error: string | null;
+            /** Created At */
+            created_at: string;
+            /** Finished At */
+            finished_at: string | null;
+        };
+        /**
+         * QueueStateResponse
+         * @description Response for queue state query.
+         */
+        QueueStateResponse: {
+            /** Entries */
+            entries: components["schemas"]["QueueEntryInfo"][];
+            /** Total */
+            total: number;
+            /** Queue Enabled */
+            queue_enabled: boolean;
+        };
+        /**
          * ResetType
          * @description Database reset operation types.
          * @enum {string}
          */
         ResetType: "clear_data" | "full_rebuild";
-        /**
-         * RunEvent
-         * @description Single event from a run.
-         */
-        RunEvent: {
-            /** Id */
-            id: number;
-            /** Event Type */
-            event_type: string;
-            /** Payload */
-            payload: Record<string, never>;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
-        /**
-         * RunEventsResponse
-         * @description Response for run events query.
-         */
-        RunEventsResponse: {
-            /** Run Id */
-            run_id: number;
-            /** Events */
-            events: components["schemas"]["RunEvent"][];
-            /** Total */
-            total: number;
-        };
-        /**
-         * RunStatus
-         * @enum {string}
-         */
-        RunStatus: "queued" | "running" | "waiting" | "deferred" | "success" | "failed" | "cancelled";
-        /**
-         * RunStatusResponse
-         * @description Detailed status of a specific run.
-         */
-        RunStatusResponse: {
-            /** Run Id */
-            run_id: number;
-            /** Status */
-            status: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Finished At */
-            finished_at?: string | null;
-            /** Error */
-            error?: string | null;
-            /** Result */
-            result?: string | null;
-        };
-        /**
-         * RunTrigger
-         * @enum {string}
-         */
-        RunTrigger: "manual" | "schedule" | "chat" | "webhook" | "api";
         /**
          * RunnerListResponse
          * @description Response for listing runners.
@@ -4686,6 +5983,34 @@ export interface components {
             message: string;
         };
         /**
+         * RunnerSeedItem
+         * @description Single runner configuration for seeding.
+         */
+        RunnerSeedItem: {
+            /**
+             * Name
+             * @description Runner name
+             */
+            name: string;
+            /**
+             * Secret
+             * @description Plaintext secret (will be hashed)
+             */
+            secret: string;
+            /**
+             * Labels
+             * @description Optional labels
+             */
+            labels?: {
+                [key: string]: string;
+            } | null;
+            /**
+             * Capabilities
+             * @description Runner capabilities
+             */
+            capabilities?: string[];
+        };
+        /**
          * RunnerSuccessResponse
          * @description Generic success response for runner operations.
          */
@@ -4721,12 +6046,167 @@ export interface components {
              */
             capabilities?: string[] | null;
         };
+        /**
+         * RunnersSeedRequest
+         * @description Request to seed runners for the admin user.
+         *
+         *     This replaces file-based seeding from ~/.config/zerg/runners.json.
+         */
+        RunnersSeedRequest: {
+            /**
+             * Runners
+             * @description List of runners to seed
+             */
+            runners: components["schemas"]["RunnerSeedItem"][];
+        };
+        /**
+         * ScenarioSeedRequest
+         * @description Request model for seeding deterministic scenario data.
+         */
+        ScenarioSeedRequest: {
+            /** Name */
+            name: string;
+            /**
+             * Clean
+             * @default true
+             */
+            clean: boolean;
+        };
         /** ScheduleWorkflowPayload */
         ScheduleWorkflowPayload: {
             /** Cron Expression */
             cron_expression: string;
             /** Trigger Config */
             trigger_config?: Record<string, never>;
+        };
+        /**
+         * SkillCommandResponse
+         * @description User-invocable skill command.
+         */
+        SkillCommandResponse: {
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /**
+             * Emoji
+             * @default
+             */
+            emoji: string;
+        };
+        /**
+         * SkillDetailResponse
+         * @description Detailed skill information.
+         */
+        SkillDetailResponse: {
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /**
+             * Emoji
+             * @default
+             */
+            emoji: string;
+            /** Source */
+            source: string;
+            /** Eligible */
+            eligible: boolean;
+            /** User Invocable */
+            user_invocable: boolean;
+            /** Model Invocable */
+            model_invocable: boolean;
+            missing_requirements: components["schemas"]["MissingRequirementsResponse"];
+            /**
+             * Homepage
+             * @default
+             */
+            homepage: string;
+            /**
+             * Content
+             * @default
+             */
+            content: string;
+            requirements: components["schemas"]["SkillRequirementsResponse"];
+            /**
+             * Base Dir
+             * @default
+             */
+            base_dir: string;
+        };
+        /**
+         * SkillListResponse
+         * @description Response for listing skills.
+         */
+        SkillListResponse: {
+            /** Skills */
+            skills: components["schemas"]["SkillResponse"][];
+            /** Total */
+            total: number;
+            /** Eligible Count */
+            eligible_count: number;
+        };
+        /**
+         * SkillPromptResponse
+         * @description Response for skill prompt generation.
+         */
+        SkillPromptResponse: {
+            /** Prompt */
+            prompt: string;
+            /** Skill Count */
+            skill_count: number;
+            /** Version */
+            version: number;
+        };
+        /**
+         * SkillRequirementsResponse
+         * @description Skill requirements in API response.
+         */
+        SkillRequirementsResponse: {
+            /**
+             * Bins
+             * @description Required binaries
+             */
+            bins?: string[];
+            /**
+             * Env
+             * @description Required env vars
+             */
+            env?: string[];
+            /**
+             * Config
+             * @description Required config keys
+             */
+            config?: string[];
+        };
+        /**
+         * SkillResponse
+         * @description Skill information in API response.
+         */
+        SkillResponse: {
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /**
+             * Emoji
+             * @default
+             */
+            emoji: string;
+            /** Source */
+            source: string;
+            /** Eligible */
+            eligible: boolean;
+            /** User Invocable */
+            user_invocable: boolean;
+            /** Model Invocable */
+            model_invocable: boolean;
+            missing_requirements: components["schemas"]["MissingRequirementsResponse"];
+            /**
+             * Homepage
+             * @default
+             */
+            homepage: string;
         };
         /**
          * SuperAdminStatusResponse
@@ -4737,27 +6217,6 @@ export interface components {
             is_super_admin: boolean;
             /** Requires Password */
             requires_password: boolean;
-        };
-        /**
-         * SupervisorThreadInfo
-         * @description Supervisor thread information.
-         */
-        SupervisorThreadInfo: {
-            /**
-             * Thread Id
-             * @description Thread ID
-             */
-            thread_id: number;
-            /**
-             * Title
-             * @description Thread title
-             */
-            title: string;
-            /**
-             * Message Count
-             * @description Number of messages in thread
-             */
-            message_count: number;
         };
         /**
          * SyncOp
@@ -4790,6 +6249,89 @@ export interface components {
              */
             ts: string;
         };
+        /**
+         * TTSRequest
+         * @description Request to convert text to speech.
+         */
+        TTSRequest: {
+            /**
+             * Text
+             * @description Text to convert to speech
+             */
+            text: string;
+            /**
+             * Provider
+             * @description TTS provider: openai, elevenlabs, or edge (default: auto)
+             */
+            provider?: string | null;
+            /**
+             * Voice Id
+             * @description Voice ID/name for the selected provider
+             */
+            voice_id?: string | null;
+        };
+        /**
+         * TTSResponse
+         * @description Response from TTS conversion (metadata only).
+         */
+        TTSResponse: {
+            /**
+             * Success
+             * @description Whether conversion succeeded
+             */
+            success: boolean;
+            /**
+             * Latency Ms
+             * @description Conversion latency in milliseconds
+             */
+            latency_ms?: number | null;
+            /**
+             * Provider
+             * @description Provider used for conversion
+             */
+            provider?: string | null;
+            /**
+             * Output Format
+             * @description Audio output format
+             */
+            output_format?: string | null;
+            /**
+             * Content Type
+             * @description Audio MIME type
+             */
+            content_type?: string | null;
+            /**
+             * Error
+             * @description Error message if failed
+             */
+            error?: string | null;
+        };
+        /**
+         * TTSStatusResponse
+         * @description TTS service status.
+         */
+        TTSStatusResponse: {
+            /**
+             * Enabled
+             * @description Whether TTS is enabled
+             */
+            enabled: boolean;
+            /**
+             * Default Provider
+             * @description Default TTS provider
+             */
+            default_provider: string;
+            /**
+             * Available Providers
+             * @description List of available providers
+             */
+            available_providers: string[];
+            /**
+             * Max Text Length
+             * @description Maximum text length for TTS
+             */
+            max_text_length: number;
+        };
         /** TemplateDeployRequest */
         TemplateDeployRequest: {
             /** Template Id */
@@ -4803,8 +6345,8 @@ export interface components {
         Thread: {
             /** Title */
             title: string;
-            /** Agent State */
-            agent_state?: Record<string, never> | null;
+            /** Fiche State */
+            fiche_state?: Record<string, never> | null;
             /**
              * Memory Strategy
              * @default buffer
@@ -4822,8 +6364,8 @@ export interface components {
             thread_type: string | null;
             /** Id */
             id: number;
-            /** Agent Id */
-            agent_id: number;
+            /** Fiche Id */
+            fiche_id: number;
             /**
              * Created At
              * Format: date-time
@@ -4844,8 +6386,8 @@ export interface components {
         ThreadCreate: {
             /** Title */
             title: string;
-            /** Agent State */
-            agent_state?: Record<string, never> | null;
+            /** Fiche State */
+            fiche_state?: Record<string, never> | null;
             /**
              * Memory Strategy
              * @default buffer
@@ -4861,8 +6403,8 @@ export interface components {
              * @default chat
              */
             thread_type: string | null;
-            /** Agent Id */
-            agent_id: number;
+            /** Fiche Id */
+            fiche_id: number;
         };
         /** ThreadMessageCreate */
         ThreadMessageCreate: {
@@ -4912,12 +6454,51 @@ export interface components {
             /** Tool Name */
             tool_name?: string | null;
         };
+        /**
+         * ThreadSummary
+         * @description Thread summary for list endpoints (no messages payload).
+         */
+        ThreadSummary: {
+            /** Title */
+            title: string;
+            /** Fiche State */
+            fiche_state?: Record<string, never> | null;
+            /**
+             * Memory Strategy
+             * @default buffer
+             */
+            memory_strategy: string | null;
+            /**
+             * Active
+             * @default true
+             */
+            active: boolean | null;
+            /**
+             * Thread Type
+             * @default chat
+             */
+            thread_type: string | null;
+            /** Id */
+            id: number;
+            /** Fiche Id */
+            fiche_id: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** ThreadUpdate */
         ThreadUpdate: {
             /** Title */
             title?: string | null;
-            /** Agent State */
-            agent_state?: Record<string, never> | null;
+            /** Fiche State */
+            fiche_state?: Record<string, never> | null;
             /** Memory Strategy */
             memory_strategy?: string | null;
             /** Active */
@@ -4949,28 +6530,28 @@ export interface components {
         };
         /**
          * TimelineResponse
-         * @description Full timeline response for a run.
+         * @description Full timeline response for a course.
          */
         TimelineResponse: {
             /** Correlation Id */
             correlation_id: string | null;
-            /** Run Id */
-            run_id: number;
+            /** Course Id */
+            course_id: number;
             /** Events */
             events: components["schemas"]["TimelineEvent"][];
             summary: components["schemas"]["TimelineSummary"];
         };
         /**
          * TimelineSummary
-         * @description Timing summary for a run.
+         * @description Timing summary for a course.
          */
         TimelineSummary: {
             /** Total Duration Ms */
             total_duration_ms: number;
-            /** Supervisor Thinking Ms */
-            supervisor_thinking_ms?: number | null;
-            /** Worker Execution Ms */
-            worker_execution_ms?: number | null;
+            /** Concierge Thinking Ms */
+            concierge_thinking_ms?: number | null;
+            /** Commis Execution Ms */
+            commis_execution_ms?: number | null;
             /** Tool Execution Ms */
             tool_execution_ms?: number | null;
         };
@@ -5008,33 +6589,74 @@ export interface components {
             expires_in: number;
         };
         /**
-         * TopAgentUsage
-         * @description Agent usage stats for user detail view.
+         * ToolCallInfo
+         * @description Tool call made by concierge.
          */
-        TopAgentUsage: {
-            /** Agent Id */
-            agent_id: number;
+        ToolCallInfo: {
+            /** Tool Call Id */
+            tool_call_id: string;
+            /** Tool Name */
+            tool_name: string;
+            /** Args */
+            args?: Record<string, never> | null;
+            /** Result */
+            result?: string | null;
+            commis?: components["schemas"]["CommisInfo"] | null;
+        };
+        /**
+         * TopFicheUsage
+         * @description Fiche usage stats for user detail view.
+         */
+        TopFicheUsage: {
+            /** Fiche Id */
+            fiche_id: number;
             /** Name */
             name: string;
             /** Tokens */
             tokens: number;
             /** Cost Usd */
             cost_usd: number;
-            /** Runs */
-            runs: number;
+            /** Courses */
+            courses: number;
         };
         /**
-         * TopAgentsResponse
-         * @description Response containing top agents list.
+         * TopFichesResponse
+         * @description Response containing top fiches list.
          */
-        TopAgentsResponse: {
-            /** Top Agents */
-            top_agents: components["schemas"]["OpsTopAgent"][];
+        TopFichesResponse: {
+            /** Top Fiches */
+            top_fiches: components["schemas"]["OpsTopFiche"][];
+        };
+        /**
+         * TraccarCredentials
+         * @description Traccar GPS tracking credentials.
+         */
+        TraccarCredentials: {
+            /**
+             * Url
+             * @description Traccar server URL
+             */
+            url: string;
+            /**
+             * Username
+             * @description Traccar username
+             */
+            username: string;
+            /**
+             * Password
+             * @description Traccar password
+             */
+            password: string;
+            /**
+             * Device Id
+             * @description Device ID to query
+             */
+            device_id: string;
         };
         /** Trigger */
         Trigger: {
-            /** Agent Id */
-            agent_id: number;
+            /** Fiche Id */
+            fiche_id: number;
             /**
              * Type
              * @default webhook
@@ -5054,8 +6676,8 @@ export interface components {
         };
         /** TriggerCreate */
         TriggerCreate: {
-            /** Agent Id */
-            agent_id: number;
+            /** Fiche Id */
+            fiche_id: number;
             /**
              * Type
              * @default webhook
@@ -5151,10 +6773,10 @@ export interface components {
              */
             cost_usd: number;
             /**
-             * Runs
-             * @description Number of agent runs in period
+             * Courses
+             * @description Number of courses in period
              */
-            runs: number;
+            courses: number;
             /** @description Daily budget limit info (always today's limit) */
             limit: components["schemas"]["UsageLimit"];
         };
@@ -5198,35 +6820,139 @@ export interface components {
             zoom: number;
         };
         /**
-         * WorkerCompletionPayload
-         * @description Payload for worker completion webhook.
+         * VoiceAudioResponse
+         * @description Optional audio payload for TTS output.
          */
-        WorkerCompletionPayload: {
-            /**
-             * Job Id
-             * @description Worker job ID
-             */
-            job_id: number;
-            /**
-             * Worker Id
-             * @description Worker artifact ID
-             */
-            worker_id: string;
-            /**
-             * Status
-             * @description Worker status: success or failed
-             */
-            status: string;
-            /**
-             * Result Summary
-             * @description Brief summary of worker result
-             */
-            result_summary?: string | null;
-            /**
-             * Error
-             * @description Error message if failed
-             */
+        VoiceAudioResponse: {
+            /** Audio Base64 */
+            audio_base64: string;
+            /** Content Type */
+            content_type: string;
+            /** Provider */
+            provider?: string | null;
+            /** Latency Ms */
+            latency_ms?: number | null;
+            /** Error */
             error?: string | null;
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+        };
+        /**
+         * VoiceInfo
+         * @description Information about a TTS voice.
+         */
+        VoiceInfo: {
+            /**
+             * Id
+             * @description Voice identifier
+             */
+            id: string;
+            /**
+             * Name
+             * @description Human-readable voice name
+             */
+            name: string;
+            /**
+             * Provider
+             * @description Provider this voice belongs to
+             */
+            provider: string;
+            /**
+             * Language
+             * @description Language code
+             */
+            language: string;
+            /**
+             * Gender
+             * @description Voice gender (male/female/neutral)
+             */
+            gender?: string | null;
+        };
+        /**
+         * VoiceTurnResponse
+         * @description Response for a turn-based voice interaction.
+         */
+        VoiceTurnResponse: {
+            /** Transcript */
+            transcript: string;
+            /** Response Text */
+            response_text?: string | null;
+            /** Status */
+            status: string;
+            /** Course Id */
+            course_id?: number | null;
+            /** Thread Id */
+            thread_id?: number | null;
+            /** Error */
+            error?: string | null;
+            /** Stt Model */
+            stt_model?: string | null;
+            tts?: components["schemas"]["VoiceAudioResponse"] | null;
+        };
+        /**
+         * VoicesResponse
+         * @description List of available voices.
+         */
+        VoicesResponse: {
+            /**
+             * Voices
+             * @description Available voices
+             */
+            voices: components["schemas"]["VoiceInfo"][];
+        };
+        /**
+         * WaitlistRequest
+         * @description Request body for waitlist signup.
+         */
+        WaitlistRequest: {
+            /** Email */
+            email: string;
+            /**
+             * Source
+             * @default pricing_pro
+             */
+            source: string;
+            /** Notes */
+            notes?: string | null;
+        };
+        /**
+         * WaitlistResponse
+         * @description Response for waitlist signup.
+         */
+        WaitlistResponse: {
+            /** Success */
+            success: boolean;
+            /** Message */
+            message: string;
+        };
+        /**
+         * WhoopCredentials
+         * @description WHOOP health tracker OAuth credentials.
+         */
+        WhoopCredentials: {
+            /**
+             * Client Id
+             * @description OAuth client ID
+             */
+            client_id: string;
+            /**
+             * Client Secret
+             * @description OAuth client secret
+             */
+            client_secret: string;
+            /**
+             * Access Token
+             * @description OAuth access token
+             */
+            access_token: string;
+            /**
+             * Refresh Token
+             * @description OAuth refresh token
+             */
+            refresh_token?: string | null;
         };
         /** Workflow */
         Workflow: {
@@ -5298,7 +7024,7 @@ export interface components {
         };
         /**
          * WorkflowNode
-         * @description A workflow node (agent, tool, trigger, or conditional).
+         * @description A workflow node (fiche, tool, trigger, or conditional).
          */
         WorkflowNode: {
             /** Id */
@@ -5307,7 +7033,7 @@ export interface components {
              * Type
              * @enum {string}
              */
-            type: "agent" | "tool" | "trigger" | "conditional";
+            type: "fiche" | "tool" | "trigger" | "conditional";
             position: components["schemas"]["Position"];
             /** Config */
             config?: Record<string, never>;
@@ -5378,7 +7104,7 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    read_agents_api_agents_get: {
+    read_fiches_api_fiches_get: {
         parameters: {
             query?: {
                 scope?: string;
@@ -5398,7 +7124,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Agent"][];
+                    "application/json": components["schemas"]["Fiche"][];
                 };
             };
             /** @description Validation Error */
@@ -5412,7 +7138,7 @@ export interface operations {
             };
         };
     };
-    create_agent_api_agents_post: {
+    create_fiche_api_fiches_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -5425,7 +7151,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AgentCreate"];
+                "application/json": components["schemas"]["FicheCreate"];
             };
         };
         responses: {
@@ -5435,7 +7161,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Agent"];
+                    "application/json": components["schemas"]["Fiche"];
                 };
             };
             /** @description Validation Error */
@@ -5449,7 +7175,7 @@ export interface operations {
             };
         };
     };
-    read_agents_api_agents__get: {
+    read_fiches_api_fiches__get: {
         parameters: {
             query?: {
                 scope?: string;
@@ -5469,7 +7195,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Agent"][];
+                    "application/json": components["schemas"]["Fiche"][];
                 };
             };
             /** @description Validation Error */
@@ -5483,7 +7209,7 @@ export interface operations {
             };
         };
     };
-    create_agent_api_agents__post: {
+    create_fiche_api_fiches__post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -5496,7 +7222,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AgentCreate"];
+                "application/json": components["schemas"]["FicheCreate"];
             };
         };
         responses: {
@@ -5506,7 +7232,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Agent"];
+                    "application/json": components["schemas"]["Fiche"];
                 };
             };
             /** @description Validation Error */
@@ -5520,11 +7246,11 @@ export interface operations {
             };
         };
     };
-    read_dashboard_snapshot_api_agents_dashboard_get: {
+    read_dashboard_snapshot_api_fiches_dashboard_get: {
         parameters: {
             query?: {
                 scope?: string;
-                runs_limit?: number;
+                courses_limit?: number;
                 skip?: number;
                 limit?: number;
                 session_factory?: unknown;
@@ -5555,14 +7281,14 @@ export interface operations {
             };
         };
     };
-    read_agent_api_agents__agent_id__get: {
+    read_fiche_api_fiches__fiche_id__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                agent_id: number;
+                fiche_id: number;
             };
             cookie?: never;
         };
@@ -5574,7 +7300,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Agent"];
+                    "application/json": components["schemas"]["Fiche"];
                 };
             };
             /** @description Validation Error */
@@ -5588,20 +7314,20 @@ export interface operations {
             };
         };
     };
-    update_agent_api_agents__agent_id__put: {
+    update_fiche_api_fiches__fiche_id__put: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                agent_id: number;
+                fiche_id: number;
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AgentUpdate"];
+                "application/json": components["schemas"]["FicheUpdate"];
             };
         };
         responses: {
@@ -5611,7 +7337,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Agent"];
+                    "application/json": components["schemas"]["Fiche"];
                 };
             };
             /** @description Validation Error */
@@ -5625,14 +7351,14 @@ export interface operations {
             };
         };
     };
-    delete_agent_api_agents__agent_id__delete: {
+    delete_fiche_api_fiches__fiche_id__delete: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                agent_id: number;
+                fiche_id: number;
             };
             cookie?: never;
         };
@@ -5656,7 +7382,7 @@ export interface operations {
             };
         };
     };
-    read_agent_details_api_agents__agent_id__details_get: {
+    read_fiche_details_api_fiches__fiche_id__details_get: {
         parameters: {
             query?: {
                 include?: string | null;
@@ -5664,7 +7390,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                agent_id: number;
+                fiche_id: number;
             };
             cookie?: never;
         };
@@ -5676,7 +7402,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AgentDetails"];
+                    "application/json": components["schemas"]["FicheDetails"];
                 };
             };
             /** @description Validation Error */
@@ -5690,7 +7416,7 @@ export interface operations {
             };
         };
     };
-    read_agent_messages_api_agents__agent_id__messages_get: {
+    read_fiche_messages_api_fiches__fiche_id__messages_get: {
         parameters: {
             query?: {
                 skip?: number;
@@ -5699,7 +7425,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                agent_id: number;
+                fiche_id: number;
             };
             cookie?: never;
         };
@@ -5725,14 +7451,14 @@ export interface operations {
             };
         };
     };
-    create_agent_message_api_agents__agent_id__messages_post: {
+    create_fiche_message_api_fiches__fiche_id__messages_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                agent_id: number;
+                fiche_id: number;
             };
             cookie?: never;
         };
@@ -5762,14 +7488,14 @@ export interface operations {
             };
         };
     };
-    run_agent_task_api_agents__agent_id__task_post: {
+    run_fiche_task_api_fiches__fiche_id__task_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                agent_id: number;
+                fiche_id: number;
             };
             cookie?: never;
         };
@@ -5795,14 +7521,14 @@ export interface operations {
             };
         };
     };
-    list_mcp_servers_api_agents__agent_id__mcp_servers__get: {
+    list_mcp_servers_api_fiches__fiche_id__mcp_servers__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                agent_id: number;
+                fiche_id: number;
             };
             cookie?: never;
         };
@@ -5828,14 +7554,14 @@ export interface operations {
             };
         };
     };
-    add_mcp_server_api_agents__agent_id__mcp_servers__post: {
+    add_mcp_server_api_fiches__fiche_id__mcp_servers__post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                agent_id: number;
+                fiche_id: number;
             };
             cookie?: never;
         };
@@ -5851,7 +7577,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Agent"];
+                    "application/json": components["schemas"]["Fiche"];
                 };
             };
             /** @description Validation Error */
@@ -5865,14 +7591,14 @@ export interface operations {
             };
         };
     };
-    remove_mcp_server_api_agents__agent_id__mcp_servers__server_name__delete: {
+    remove_mcp_server_api_fiches__fiche_id__mcp_servers__server_name__delete: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                agent_id: number;
+                fiche_id: number;
                 server_name: string;
             };
             cookie?: never;
@@ -5897,14 +7623,14 @@ export interface operations {
             };
         };
     };
-    test_mcp_connection_api_agents__agent_id__mcp_servers_test_post: {
+    test_mcp_connection_api_fiches__fiche_id__mcp_servers_test_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                agent_id: number;
+                fiche_id: number;
             };
             cookie?: never;
         };
@@ -5934,14 +7660,14 @@ export interface operations {
             };
         };
     };
-    get_available_tools_api_agents__agent_id__mcp_servers_available_tools_get: {
+    get_available_tools_api_fiches__fiche_id__mcp_servers_available_tools_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                agent_id: number;
+                fiche_id: number;
             };
             cookie?: never;
         };
@@ -5970,7 +7696,7 @@ export interface operations {
     read_threads_api_threads_get: {
         parameters: {
             query?: {
-                agent_id?: number | null;
+                fiche_id?: number | null;
                 thread_type?: string | null;
                 title?: string | null;
                 skip?: number;
@@ -5989,7 +7715,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Thread"][];
+                    "application/json": components["schemas"]["ThreadSummary"][];
                 };
             };
             /** @description Validation Error */
@@ -6041,7 +7767,7 @@ export interface operations {
     read_threads_api_threads__get: {
         parameters: {
             query?: {
-                agent_id?: number | null;
+                fiche_id?: number | null;
                 thread_type?: string | null;
                 title?: string | null;
                 skip?: number;
@@ -6060,7 +7786,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Thread"][];
+                    "application/json": components["schemas"]["ThreadSummary"][];
                 };
             };
             /** @description Validation Error */
@@ -6282,7 +8008,7 @@ export interface operations {
             };
         };
     };
-    run_thread_api_threads__thread_id__run_post: {
+    start_thread_course_api_threads__thread_id__courses_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -6383,7 +8109,7 @@ export interface operations {
                 session_factory?: unknown;
             };
             header?: {
-                "X-Test-Worker"?: string | null;
+                "X-Test-Commis"?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -6391,6 +8117,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["DatabaseResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    seed_scenario_data_api_admin_seed_scenario_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScenarioSeedRequest"];
             };
         };
         responses: {
@@ -6482,7 +8243,7 @@ export interface operations {
                 session_factory?: unknown;
             };
             header?: {
-                "X-Test-Worker"?: string | null;
+                "X-Test-Commis"?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -6607,6 +8368,150 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminUserDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    seed_context_api_admin_bootstrap_context_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContextSeedRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootstrapSuccessResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    seed_runners_api_admin_bootstrap_runners_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunnersSeedRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootstrapSuccessResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    seed_credentials_api_admin_bootstrap_credentials_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialsSeedRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootstrapSuccessResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_bootstrap_status_api_admin_bootstrap_status_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootstrapStatusResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6787,8 +8692,8 @@ export interface operations {
     list_triggers_api_triggers__get: {
         parameters: {
             query?: {
-                /** @description Filter triggers by agent ID */
-                agent_id?: number | null;
+                /** @description Filter triggers by fiche ID */
+                fiche_id?: number | null;
                 session_factory?: unknown;
             };
             header?: never;
@@ -7260,7 +9165,7 @@ export interface operations {
             };
         };
     };
-    list_agent_runs_api_agents__agent_id__runs_get: {
+    list_courses_api_fiches__fiche_id__courses_get: {
         parameters: {
             query?: {
                 limit?: number;
@@ -7268,7 +9173,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                agent_id: number;
+                fiche_id: number;
             };
             cookie?: never;
         };
@@ -7280,7 +9185,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AgentRunOut"][];
+                    "application/json": components["schemas"]["CourseOut"][];
                 };
             };
             /** @description Validation Error */
@@ -7294,14 +9199,14 @@ export interface operations {
             };
         };
     };
-    get_run_api_runs__run_id__get: {
+    get_course_api_courses__course_id__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                run_id: number;
+                course_id: number;
             };
             cookie?: never;
         };
@@ -7313,7 +9218,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AgentRunOut"];
+                    "application/json": components["schemas"]["CourseOut"];
                 };
             };
             /** @description Validation Error */
@@ -8855,6 +10760,274 @@ export interface operations {
             };
         };
     };
+    list_email_contacts_api_user_contacts_email_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmailContactOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_email_contact_api_user_contacts_email_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailContactCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmailContactOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_email_contact_api_user_contacts_email__contact_id__put: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                contact_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailContactUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmailContactOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_email_contact_api_user_contacts_email__contact_id__delete: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                contact_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_phone_contacts_api_user_contacts_phone_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PhoneContactOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_phone_contact_api_user_contacts_phone_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PhoneContactCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PhoneContactOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_phone_contact_api_user_contacts_phone__contact_id__put: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                contact_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PhoneContactUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PhoneContactOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_phone_contact_api_user_contacts_phone__contact_id__delete: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                contact_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_templates_api_templates__get: {
         parameters: {
             query?: {
@@ -9090,7 +11263,7 @@ export interface operations {
             };
         };
     };
-    list_jarvis_agents_api_jarvis_agents_get: {
+    list_jarvis_fiches_api_jarvis_fiches_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9109,7 +11282,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JarvisAgentSummary"][];
+                    "application/json": components["schemas"]["JarvisFicheSummary"][];
                 };
             };
             /** @description Validation Error */
@@ -9123,11 +11296,11 @@ export interface operations {
             };
         };
     };
-    list_jarvis_runs_api_jarvis_runs_get: {
+    list_jarvis_courses_api_jarvis_courses_get: {
         parameters: {
             query?: {
                 limit?: number;
-                agent_id?: number | null;
+                fiche_id?: number | null;
                 session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
@@ -9144,7 +11317,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JarvisRunSummary"][];
+                    "application/json": components["schemas"]["JarvisCourseSummary"][];
                 };
             };
             /** @description Validation Error */
@@ -9158,7 +11331,7 @@ export interface operations {
             };
         };
     };
-    get_active_run_api_jarvis_runs_active_get: {
+    get_active_course_api_jarvis_courses_active_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9191,7 +11364,7 @@ export interface operations {
             };
         };
     };
-    get_run_status_api_jarvis_runs__run_id__get: {
+    get_course_status_api_jarvis_courses__course_id__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9200,7 +11373,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                run_id: number;
+                course_id: number;
             };
             cookie?: never;
         };
@@ -9212,7 +11385,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RunStatusResponse"];
+                    "application/json": components["schemas"]["CourseStatusResponse"];
                 };
             };
             /** @description Validation Error */
@@ -9226,7 +11399,7 @@ export interface operations {
             };
         };
     };
-    attach_to_run_stream_api_jarvis_runs__run_id__stream_get: {
+    attach_to_course_stream_api_jarvis_courses__course_id__stream_get: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -9235,7 +11408,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                run_id: number;
+                course_id: number;
             };
             cookie?: never;
         };
@@ -9261,7 +11434,7 @@ export interface operations {
             };
         };
     };
-    get_run_events_api_jarvis_runs__run_id__events_get: {
+    get_course_events_api_jarvis_courses__course_id__events_get: {
         parameters: {
             query?: {
                 event_type?: string | null;
@@ -9272,7 +11445,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                run_id: number;
+                course_id: number;
             };
             cookie?: never;
         };
@@ -9284,7 +11457,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RunEventsResponse"];
+                    "application/json": components["schemas"]["CourseEventsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -9298,7 +11471,7 @@ export interface operations {
             };
         };
     };
-    get_run_timeline_api_jarvis_runs__run_id__timeline_get: {
+    get_course_timeline_api_jarvis_courses__course_id__timeline_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9307,7 +11480,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                run_id: number;
+                course_id: number;
             };
             cookie?: never;
         };
@@ -9370,7 +11543,7 @@ export interface operations {
             };
         };
     };
-    jarvis_supervisor_api_jarvis_supervisor_post: {
+    jarvis_concierge_api_jarvis_concierge_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9383,7 +11556,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["JarvisSupervisorRequest"];
+                "application/json": components["schemas"]["JarvisConciergeRequest"];
             };
         };
         responses: {
@@ -9393,7 +11566,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JarvisSupervisorResponse"];
+                    "application/json": components["schemas"]["JarvisConciergeResponse"];
                 };
             };
             /** @description Validation Error */
@@ -9407,7 +11580,7 @@ export interface operations {
             };
         };
     };
-    jarvis_supervisor_cancel_api_jarvis_supervisor__run_id__cancel_post: {
+    jarvis_concierge_cancel_api_jarvis_concierge__course_id__cancel_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9416,7 +11589,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                run_id: number;
+                course_id: number;
             };
             cookie?: never;
         };
@@ -9466,6 +11639,217 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    convert_text_to_speech_api_jarvis_tts_post: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TTSRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    convert_text_to_speech_json_api_jarvis_tts_json_post: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TTSRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TTSResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_text_to_speech_api_jarvis_tts_stream_get: {
+        parameters: {
+            query: {
+                text: string;
+                provider?: string | null;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tts_status_api_jarvis_tts_status_get: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TTSStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_voices_api_jarvis_tts_voices_get: {
+        parameters: {
+            query?: {
+                provider?: string | null;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoicesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    voice_turn_api_jarvis_voice_turn_post: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_voice_turn_api_jarvis_voice_turn_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceTurnResponse"];
                 };
             };
             /** @description Validation Error */
@@ -9646,7 +12030,7 @@ export interface operations {
             };
         };
     };
-    get_supervisor_thread_api_jarvis_supervisor_thread_get: {
+    get_concierge_thread_api_jarvis_concierge_thread_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9665,7 +12049,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SupervisorThreadInfo"];
+                    "application/json": components["schemas"]["ConciergeThreadInfo"];
                 };
             };
             /** @description Validation Error */
@@ -9815,57 +12199,20 @@ export interface operations {
             };
         };
     };
-    resume_run_api_internal_runs__run_id__resume_post: {
+    resume_course_api_internal_courses__course_id__resume_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                run_id: number;
+                course_id: number;
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["WorkerCompletionPayload"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    continue_run_api_internal_runs__run_id__continue_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                run_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WorkerCompletionPayload"];
+                "application/json": components["schemas"]["CommisCompletionPayload"];
             };
         };
         responses: {
@@ -9961,7 +12308,7 @@ export interface operations {
             };
         };
     };
-    stream_run_replay_api_stream_runs__run_id__get: {
+    stream_course_replay_api_stream_courses__course_id__get: {
         parameters: {
             query?: {
                 after_event_id?: number;
@@ -9972,7 +12319,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                run_id: number;
+                course_id: number;
             };
             cookie?: never;
         };
@@ -10153,7 +12500,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TopAgentsResponse"];
+                    "application/json": components["schemas"]["TopFichesResponse"];
                 };
             };
             /** @description Validation Error */
@@ -10198,14 +12545,14 @@ export interface operations {
             };
         };
     };
-    list_agent_connectors_api_agents__agent_id__connectors__get: {
+    list_fiche_connectors_api_fiches__fiche_id__connectors__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                agent_id: number;
+                fiche_id: number;
             };
             cookie?: never;
         };
@@ -10231,14 +12578,14 @@ export interface operations {
             };
         };
     };
-    configure_connector_api_agents__agent_id__connectors__post: {
+    configure_connector_api_fiches__fiche_id__connectors__post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                agent_id: number;
+                fiche_id: number;
             };
             cookie?: never;
         };
@@ -10268,14 +12615,14 @@ export interface operations {
             };
         };
     };
-    test_credentials_before_save_api_agents__agent_id__connectors_test_post: {
+    test_credentials_before_save_api_fiches__fiche_id__connectors_test_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                agent_id: number;
+                fiche_id: number;
             };
             cookie?: never;
         };
@@ -10305,7 +12652,7 @@ export interface operations {
             };
         };
     };
-    test_configured_connector_api_agents__agent_id__connectors__connector_type__test_post: {
+    test_configured_connector_api_fiches__fiche_id__connectors__connector_type__test_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10313,7 +12660,7 @@ export interface operations {
             header?: never;
             path: {
                 connector_type: string;
-                agent_id: number;
+                fiche_id: number;
             };
             cookie?: never;
         };
@@ -10339,7 +12686,7 @@ export interface operations {
             };
         };
     };
-    delete_connector_api_agents__agent_id__connectors__connector_type__delete: {
+    delete_connector_api_fiches__fiche_id__connectors__connector_type__delete: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10347,7 +12694,7 @@ export interface operations {
             header?: never;
             path: {
                 connector_type: string;
-                agent_id: number;
+                fiche_id: number;
             };
             cookie?: never;
         };
@@ -10638,13 +12985,648 @@ export interface operations {
             };
         };
     };
+    join_waitlist_api_waitlist_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WaitlistRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WaitlistResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_jobs_api_jobs__get: {
+        parameters: {
+            query?: {
+                enabled_only?: boolean;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_api_jobs__job_id__get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_job_api_jobs__job_id__run_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enable_job_api_jobs__job_id__enable_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    disable_job_api_jobs__job_id__disable_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_queue_state_api_jobs_queue_state_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueStateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_traces_api_traces__get: {
+        parameters: {
+            query?: {
+                /** @description Maximum traces to return */
+                limit?: number;
+                /** @description Number of traces to skip */
+                offset?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_trace_api_traces__trace_id__get: {
+        parameters: {
+            query?: {
+                /** @description Detail level */
+                level?: "summary" | "full" | "errors";
+                /** @description Maximum events to return */
+                max_events?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                trace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    system_health_api_reliability_system_health_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    error_analysis_api_reliability_errors_get: {
+        parameters: {
+            query?: {
+                /** @description Time window in hours */
+                hours?: number;
+                /** @description Maximum errors to return */
+                limit?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    performance_metrics_api_reliability_performance_get: {
+        parameters: {
+            query?: {
+                /** @description Time window in hours */
+                hours?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stuck_commis_api_reliability_commis_stuck_get: {
+        parameters: {
+            query?: {
+                /** @description Threshold in minutes */
+                threshold_mins?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    runner_status_api_reliability_runners_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_skills_api_skills_get: {
+        parameters: {
+            query?: {
+                /** @description Workspace path to load skills from */
+                workspace_path?: string | null;
+                /** @description Filter by source (bundled, user, workspace) */
+                source?: string | null;
+                /** @description Only return eligible skills */
+                eligible_only?: boolean;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_skill_commands_api_skills_commands_get: {
+        parameters: {
+            query?: {
+                workspace_path?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillCommandResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_skills_prompt_api_skills_prompt_get: {
+        parameters: {
+            query?: {
+                workspace_path?: string | null;
+                /** @description Comma-separated skill names/patterns to include */
+                allowed?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillPromptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_skill_api_skills__skill_name__get: {
+        parameters: {
+            query?: {
+                workspace_path?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                skill_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reload_skills_api_skills_reload_post: {
+        parameters: {
+            query?: {
+                workspace_path?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     _legacy_reset_database_admin_reset_database_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: {
-                "X-Test-Worker"?: string | null;
+                "X-Test-Commis"?: string | null;
             };
             path?: never;
             cookie?: never;

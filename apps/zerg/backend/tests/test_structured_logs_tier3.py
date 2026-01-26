@@ -6,12 +6,12 @@ from datetime import timezone
 
 import pytest
 
-from zerg.context import WorkerContext
-from zerg.context import reset_worker_context
-from zerg.context import set_worker_context
-from zerg.worker_metrics import MetricsCollector
-from zerg.worker_metrics import reset_metrics_collector
-from zerg.worker_metrics import set_metrics_collector
+from zerg.context import CommisContext
+from zerg.context import reset_commis_context
+from zerg.context import set_commis_context
+from zerg.commis_metrics import MetricsCollector
+from zerg.commis_metrics import reset_metrics_collector
+from zerg.commis_metrics import set_metrics_collector
 
 
 @pytest.fixture
@@ -24,23 +24,23 @@ def capture_logs(caplog):
 def test_llm_call_structured_logging(capture_logs):
     """Verify that LLM calls emit structured logs for grep-ability."""
 
-    # Set up worker context
-    ctx = WorkerContext(
-        worker_id="test-worker-123",
+    # Set up commis context
+    ctx = CommisContext(
+        commis_id="test-commis-123",
         owner_id=1,
-        run_id="run-456",
+        course_id="run-456",
         job_id=789,
         task="Test task",
     )
-    token = set_worker_context(ctx)
+    token = set_commis_context(ctx)
 
     # Set up metrics collector
-    collector = MetricsCollector(ctx.worker_id)
+    collector = MetricsCollector(ctx.commis_id)
     set_metrics_collector(collector)
 
     try:
         # Simulate LLM call completion with structured logging
-        # This is what happens in worker_runner.py during summary extraction
+        # This is what happens in commis_runner.py during summary extraction
         start_time = datetime.now(timezone.utc)
         end_time = datetime.now(timezone.utc)
         duration_ms = 123
@@ -55,14 +55,14 @@ def test_llm_call_structured_logging(capture_logs):
             total_tokens=150,
         )
 
-        # Emit structured log (simulating what worker_runner does)
+        # Emit structured log (simulating what commis_runner does)
         logger = logging.getLogger("zerg.test")
         log_extra = {
             "event": "llm_call_complete",
             "phase": "test_phase",
             "model": "gpt-5-mini",
             "duration_ms": duration_ms,
-            "worker_id": ctx.worker_id,
+            "commis_id": ctx.commis_id,
             "prompt_tokens": 100,
             "completion_tokens": 50,
             "total_tokens": 150,
@@ -81,32 +81,32 @@ def test_llm_call_structured_logging(capture_logs):
         assert log_record.event == "llm_call_complete"
         assert hasattr(log_record, "phase"), "Log should have 'phase' attribute"
         assert hasattr(log_record, "duration_ms"), "Log should have 'duration_ms' attribute"
-        assert hasattr(log_record, "worker_id"), "Log should have 'worker_id' attribute"
-        assert log_record.worker_id == "test-worker-123"
+        assert hasattr(log_record, "commis_id"), "Log should have 'commis_id' attribute"
+        assert log_record.commis_id == "test-commis-123"
 
     finally:
-        reset_worker_context(token)
+        reset_commis_context(token)
         reset_metrics_collector()
 
 
 def test_tool_call_structured_logging(capture_logs):
     """Verify that tool calls emit structured logs for grep-ability."""
-    from zerg.context import WorkerContext
-    from zerg.context import reset_worker_context
-    from zerg.context import set_worker_context
+    from zerg.context import CommisContext
+    from zerg.context import reset_commis_context
+    from zerg.context import set_commis_context
 
-    # Set up worker context
-    ctx = WorkerContext(
-        worker_id="test-worker-456",
+    # Set up commis context
+    ctx = CommisContext(
+        commis_id="test-commis-456",
         owner_id=1,
-        run_id="run-789",
+        course_id="run-789",
         job_id=101,
         task="Test tool task",
     )
-    token = set_worker_context(ctx)
+    token = set_commis_context(ctx)
 
     # Set up metrics collector
-    collector = MetricsCollector(ctx.worker_id)
+    collector = MetricsCollector(ctx.commis_id)
     set_metrics_collector(collector)
 
     try:
@@ -122,14 +122,14 @@ def test_tool_call_structured_logging(capture_logs):
             success=True,
         )
 
-        # Emit structured log (simulating what supervisor_react_engine does)
+        # Emit structured log (simulating what concierge_react_engine does)
         logger = logging.getLogger("zerg.test")
         log_extra = {
             "event": "tool_call_complete",
             "tool": "ssh_exec",
             "duration_ms": duration_ms,
             "success": True,
-            "worker_id": ctx.worker_id,
+            "commis_id": ctx.commis_id,
         }
         logger.info("tool_call_complete", extra=log_extra)
 
@@ -147,7 +147,7 @@ def test_tool_call_structured_logging(capture_logs):
         assert log_record.success is True
 
     finally:
-        reset_worker_context(token)
+        reset_commis_context(token)
         reset_metrics_collector()
 
 
@@ -158,7 +158,7 @@ def test_structured_logs_grep_pattern():
     - grep "llm_call_complete" logs/backend.log
     - grep "tool_call_complete" logs/backend.log
     - grep "duration_ms=" logs/backend.log | sort -t= -k4 -n
-    - grep "worker_id=2025-" logs/backend.log
+    - grep "commis_id=2025-" logs/backend.log
     """
     logger = logging.getLogger("zerg.test")
 
@@ -168,7 +168,7 @@ def test_structured_logs_grep_pattern():
         "phase": "synthesis",
         "model": "gpt-5-mini",
         "duration_ms": 1234,
-        "worker_id": "2025-12-15T04-00-00_test",
+        "commis_id": "2025-12-15T04-00-00_test",
         "prompt_tokens": 500,
     }
     logger.info("llm_call_complete", extra=log_extra)
@@ -179,7 +179,7 @@ def test_structured_logs_grep_pattern():
         "tool": "http_request",
         "duration_ms": 567,
         "success": True,
-        "worker_id": "2025-12-15T04-00-00_test",
+        "commis_id": "2025-12-15T04-00-00_test",
     }
     logger.info("tool_call_complete", extra=log_extra)
 
@@ -188,7 +188,7 @@ def test_structured_logs_grep_pattern():
 
 
 def test_structured_logs_fail_safe():
-    """Verify that structured logging failures don't crash the worker.
+    """Verify that structured logging failures don't crash the commis.
 
     The structured logging is best-effort and wrapped in try/except blocks.
     """

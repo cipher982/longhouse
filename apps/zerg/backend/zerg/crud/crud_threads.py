@@ -7,7 +7,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import selectinload
 
-from zerg.models import Agent
+from zerg.models import Fiche
 from zerg.models import Thread
 from zerg.utils.time import utc_now_naive
 
@@ -15,7 +15,7 @@ from zerg.utils.time import utc_now_naive
 def get_threads(
     db: Session,
     owner_id: Optional[int] = None,
-    agent_id: Optional[int] = None,
+    fiche_id: Optional[int] = None,
     thread_type: Optional[str] = None,
     title: Optional[str] = None,
     skip: int = 0,
@@ -23,14 +23,14 @@ def get_threads(
     *,
     include_messages: bool = False,
 ):
-    """Get threads, optionally filtered by agent_id, thread_type, and/or title"""
+    """Get threads, optionally filtered by fiche_id, thread_type, and/or title"""
     query = db.query(Thread)
     if include_messages:
         query = query.options(selectinload(Thread.messages))
     if owner_id is not None:
-        query = query.join(Agent, Agent.id == Thread.agent_id).filter(Agent.owner_id == owner_id)
-    if agent_id is not None:
-        query = query.filter(Thread.agent_id == agent_id)
+        query = query.join(Fiche, Fiche.id == Thread.fiche_id).filter(Fiche.owner_id == owner_id)
+    if fiche_id is not None:
+        query = query.filter(Thread.fiche_id == fiche_id)
     if thread_type is not None:
         query = query.filter(Thread.thread_type == thread_type)
     if title is not None:
@@ -38,9 +38,9 @@ def get_threads(
     return query.order_by(Thread.created_at.desc()).offset(skip).limit(limit).all()
 
 
-def get_active_thread(db: Session, agent_id: int):
-    """Get the active thread for an agent, if it exists"""
-    return db.query(Thread).filter(Thread.agent_id == agent_id, Thread.active).first()
+def get_active_thread(db: Session, fiche_id: int):
+    """Get the active thread for a fiche, if it exists"""
+    return db.query(Thread).filter(Thread.fiche_id == fiche_id, Thread.active).first()
 
 
 def get_thread(db: Session, thread_id: int):
@@ -50,23 +50,23 @@ def get_thread(db: Session, thread_id: int):
 
 def create_thread(
     db: Session,
-    agent_id: int,
+    fiche_id: int,
     title: str,
     active: bool = True,
-    agent_state: Optional[Dict[str, Any]] = None,
+    fiche_state: Optional[Dict[str, Any]] = None,
     memory_strategy: Optional[str] = "buffer",
     thread_type: Optional[str] = "chat",
 ):
-    """Create a new thread for an agent"""
+    """Create a new thread for a fiche"""
     # If this is set as active, deactivate any other active threads
     if active:
-        db.query(Thread).filter(Thread.agent_id == agent_id, Thread.active).update({"active": False})
+        db.query(Thread).filter(Thread.fiche_id == fiche_id, Thread.active).update({"active": False})
 
     db_thread = Thread(
-        agent_id=agent_id,
+        fiche_id=fiche_id,
         title=title,
         active=active,
-        agent_state=agent_state,
+        fiche_state=fiche_state,
         memory_strategy=memory_strategy,
         thread_type=thread_type,
     )
@@ -81,7 +81,7 @@ def update_thread(
     thread_id: int,
     title: Optional[str] = None,
     active: Optional[bool] = None,
-    agent_state: Optional[Dict[str, Any]] = None,
+    fiche_state: Optional[Dict[str, Any]] = None,
     memory_strategy: Optional[str] = None,
     thread_type: Optional[str] = None,
 ):
@@ -95,11 +95,11 @@ def update_thread(
         db_thread.title = title
     if active is not None:
         if active:
-            # Deactivate other threads for this agent
-            db.query(Thread).filter(Thread.agent_id == db_thread.agent_id, Thread.id != thread_id).update({"active": False})
+            # Deactivate other threads for this fiche
+            db.query(Thread).filter(Thread.fiche_id == db_thread.fiche_id, Thread.id != thread_id).update({"active": False})
         db_thread.active = active
-    if agent_state is not None:
-        db_thread.agent_state = agent_state
+    if fiche_state is not None:
+        db_thread.fiche_state = fiche_state
     if memory_strategy is not None:
         db_thread.memory_strategy = memory_strategy
     if thread_type is not None:

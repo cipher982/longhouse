@@ -6,8 +6,8 @@
 ## Executive Summary
 
 The current architecture suffers from **accidental complexity** in three key areas:
-1.  **Dual Streaming Paths:** Redundant mechanisms for SSE (Chat/Supervisor) vs. WebSockets (Dashboard/Runners).
-2.  **Context Leakage:** Heavy reliance on `contextvars` for state transport (`run_id`, `emitter`) causes "leakage" bugs and necessitates complex workarounds (e.g., explicit context clearing).
+1.  **Dual Streaming Paths:** Redundant mechanisms for SSE (Chat/Concierge) vs. WebSockets (Dashboard/Runners).
+2.  **Context Leakage:** Heavy reliance on `contextvars` for state transport (`course_id`, `emitter`) causes "leakage" bugs and necessitates complex workarounds (e.g., explicit context clearing).
 3.  **Hybrid Concurrency:** Mixing `threading.Event` with `asyncio` for tool execution (`RunnerJobDispatcher`) creates unnecessary friction and sync/async bridging.
 
 **Recommendation:** Unify around **Async-First Tooling**, **Explicit Context Passing**, and **Single-Source Events**.
@@ -16,7 +16,7 @@ The current architecture suffers from **accidental complexity** in three key are
 
 ### A. Event Architecture (The "Resumable SSE" Core)
 **Keep `EventStore` as the Single Source of Truth.**
-*   **Write Path:** All system events (Worker, Supervisor, Tool) MUST be persisted to DB via `EventStore.emit_run_event`.
+*   **Write Path:** All system events (Commis, Concierge, Tool) MUST be persisted to DB via `EventStore.emit_course_event`.
 *   **Read Path:** `EventBus` subscribes to these emissions and broadcasts to:
     *   **SSE Router:** For chat clients (resumable via `last-event-id`).
     *   **WebSocket Manager:** For dashboard/runner real-time updates.
@@ -24,13 +24,13 @@ The current architecture suffers from **accidental complexity** in three key are
 
 ### B. State Management
 **Move from Implicit `ContextVars` to Explicit `RunnableConfig`.**
-*   **Deprecated:** `zerg.context.ContextVar` usage for `run_id`, `job_id`, `owner_id`.
+*   **Deprecated:** `zerg.context.ContextVar` usage for `course_id`, `job_id`, `owner_id`.
 *   **Adopt:** LangGraph/LangChain standard `RunnableConfig` to pass runtime state down to tools.
     ```python
     # Tools access state via config, not global context
     @tool
     async def my_tool(arg: str, config: RunnableConfig):
-        run_id = config["configurable"]["run_id"]
+        course_id = config["configurable"]["course_id"]
         ...
     ```
 
@@ -43,8 +43,8 @@ The current architecture suffers from **accidental complexity** in three key are
 ## 2. Invariants
 
 1.  **Async All The Way:** No synchronous tools that perform IO.
-2.  **No Context Leakage:** Do not use `contextvars` to transport request-scoped identifiers (`run_id`, `worker_id`) across async boundaries.
-3.  **Persistence First:** If it's not in `AgentRunEvent` table, it didn't happen.
+2.  **No Context Leakage:** Do not use `contextvars` to transport request-scoped identifiers (`course_id`, `commis_id`) across async boundaries.
+3.  **Persistence First:** If it's not in `CourseEvent` table, it didn't happen.
 
 ## 3. 80/20 Implementation Plan (High Impact, Low Effort)
 
@@ -57,12 +57,12 @@ This plan fixes the most fragile parts without a total rewrite.
 *   **Why:** Removes the fragile sync-to-async bridge and `threading` complexity.
 
 ### Step 2: Unify Event Emission (Reliability)
-*   **Action:** Audit `WorkerRunner` and `SupervisorService`. Ensure *every* event emission goes through `EventStore.emit_run_event`.
+*   **Action:** Audit `CommisRunner` and `ConciergeService`. Ensure *every* event emission goes through `EventStore.emit_course_event`.
 *   **Action:** Remove direct `event_bus.publish` calls for run events.
 
 ### Step 3: Explicit Context (Stability)
-*   **Action:** Update `WorkerRunner` to inject `run_id`, `worker_id`, `owner_id` into the `configurable` dictionary of the agent's `ainvoke` call.
-*   **Action:** Update `WorkerEmitter` to accept these values in `__init__` rather than reading from `ContextVars`.
+*   **Action:** Update `CommisRunner` to inject `course_id`, `commis_id`, `owner_id` into the `configurable` dictionary of the fiche's `ainvoke` call.
+*   **Action:** Update `CommisEmitter` to accept these values in `__init__` rather than reading from `ContextVars`.
 *   **Why:** Prevents "leakage" bugs where resumed tasks inherit stale context.
 
 ## 4. Rewrite Plan (Long Term)

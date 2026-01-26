@@ -199,7 +199,7 @@ class JobRegistry:
                 if job_uses_queue:
                     # Queue mode: enqueue to durable queue
                     async def queue_wrapper(job_id: str = config.id) -> None:
-                        from zerg.jobs.worker import enqueue_scheduled_run
+                        from zerg.jobs.commis import enqueue_scheduled_run
 
                         await enqueue_scheduled_run(job_id)
 

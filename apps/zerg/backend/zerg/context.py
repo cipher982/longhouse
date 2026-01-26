@@ -1,21 +1,21 @@
-"""Worker context for cross-cutting concerns.
+"""Commis context for cross-cutting concerns.
 
-This module provides a contextvar-based mechanism for passing worker context
+This module provides a contextvar-based mechanism for passing commis context
 through the call stack without explicit parameter threading. This is particularly
-useful for emitting events from deep within the agent execution (e.g., tool calls)
+useful for emitting events from deep within the fiche execution (e.g., tool calls)
 without modifying function signatures.
 
 Usage:
-    # In WorkerRunner.run_worker():
-    ctx = WorkerContext(worker_id="...", owner_id=1, run_id="...")
-    token = set_worker_context(ctx)
+    # In CommisRunner.run_commis():
+    ctx = CommisContext(commis_id="...", owner_id=1, course_id="...")
+    token = set_commis_context(ctx)
     try:
-        await agent.run()
+        await fiche.run()
     finally:
-        reset_worker_context(token)
+        reset_commis_context(token)
 
-    # In supervisor_react_engine._call_tool_async():
-    ctx = get_worker_context()
+    # In concierge_react_engine._call_tool_async():
+    ctx = get_commis_context()
     if ctx:
         await emit_tool_started_event(ctx, tool_name, ...)
 """
@@ -46,38 +46,38 @@ class ToolCall:
 
 
 @dataclass
-class WorkerContext:
-    """Context for a running worker, accessible via contextvar.
+class CommisContext:
+    """Context for a running commis, accessible via contextvar.
 
-    This context is set by WorkerRunner at the start of a worker run and
+    This context is set by CommisRunner at the start of a commis run and
     can be accessed from anywhere in the call stack (including inside
     tool execution via asyncio.to_thread).
 
     Attributes
     ----------
-    worker_id
-        Unique identifier for the worker (e.g., "2024-12-05T16-30-00_disk-check")
+    commis_id
+        Unique identifier for the commis (e.g., "2024-12-05T16-30-00_disk-check")
     owner_id
-        User ID that owns this worker's agent
-    run_id
-        Optional run ID for correlating events
+        User ID that owns this commis's fiche
+    course_id
+        Optional concierge course ID for correlating events
     job_id
-        Optional WorkerJob ID for roundabout event correlation
+        Optional CommisJob ID for roundabout event correlation
     trace_id
-        Optional trace ID for end-to-end debugging (inherited from supervisor)
+        Optional trace ID for end-to-end debugging (inherited from concierge)
     task
         Task description (first 100 chars)
     tool_calls
-        List of tool calls made during this worker run (for activity log)
+        List of tool calls made during this commis run (for activity log)
     has_critical_error
         Flag indicating a critical tool error occurred (fail-fast)
     critical_error_message
         Human-readable error message for the critical error
     """
 
-    worker_id: str
+    commis_id: str
     owner_id: int | None = None
-    run_id: str | None = None
+    course_id: int | None = None
     job_id: int | None = None
     trace_id: str | None = None
     task: str = ""
@@ -122,35 +122,35 @@ class WorkerContext:
         self.critical_error_message = error_message
 
 
-# Global contextvar - set by WorkerRunner, read anywhere in the call stack
-_worker_ctx: ContextVar[WorkerContext | None] = ContextVar("worker_ctx", default=None)
+# Global contextvar - set by CommisRunner, read anywhere in the call stack
+_commis_ctx: ContextVar[CommisContext | None] = ContextVar("commis_ctx", default=None)
 
 
-def get_worker_context() -> WorkerContext | None:
-    """Get the current worker context, if running inside a worker.
+def get_commis_context() -> CommisContext | None:
+    """Get the current commis context, if running inside a commis.
 
-    Returns None if not in a worker context (e.g., supervisor or direct agent call).
+    Returns None if not in a commis context (e.g., concierge or direct fiche call).
     """
-    return _worker_ctx.get()
+    return _commis_ctx.get()
 
 
-def set_worker_context(ctx: WorkerContext) -> Token[WorkerContext | None]:
-    """Set the worker context. Returns a token for reset.
+def set_commis_context(ctx: CommisContext) -> Token[CommisContext | None]:
+    """Set the commis context. Returns a token for reset.
 
-    Must be paired with reset_worker_context() in a finally block.
+    Must be paired with reset_commis_context() in a finally block.
     """
-    return _worker_ctx.set(ctx)
+    return _commis_ctx.set(ctx)
 
 
-def reset_worker_context(token: Token[WorkerContext | None]) -> None:
-    """Reset the worker context to its previous value."""
-    _worker_ctx.reset(token)
+def reset_commis_context(token: Token[CommisContext | None]) -> None:
+    """Reset the commis context to its previous value."""
+    _commis_ctx.reset(token)
 
 
 __all__ = [
-    "WorkerContext",
+    "CommisContext",
     "ToolCall",
-    "get_worker_context",
-    "set_worker_context",
-    "reset_worker_context",
+    "get_commis_context",
+    "set_commis_context",
+    "reset_commis_context",
 ]

@@ -1,6 +1,6 @@
 """Jira Cloud REST API tools for issue management.
 
-These tools enable agents to interact with Jira Cloud projects using the REST API v3.
+These tools enable fiches to interact with Jira Cloud projects using the REST API v3.
 All operations require authentication via email and API token.
 
 API Token Generation:
@@ -8,7 +8,7 @@ API Token Generation:
 
 Rate Limits:
     Jira Cloud enforces per-tenant rate limits. This implementation does not include
-    automatic retry logic - agents should handle 429 responses appropriately.
+    automatic retry logic - fiches should handle 429 responses appropriately.
 
 Reference:
     https://developer.atlassian.com/cloud/jira/platform/rest/v3/
@@ -154,7 +154,7 @@ def jira_create_issue(
 ) -> Dict[str, Any]:
     """Create a new issue in a Jira project.
 
-    Credentials are automatically resolved from agent configuration if not provided.
+    Credentials are automatically resolved from fiche configuration if not provided.
 
     Args:
         project_key: Project key (e.g., 'PROJ', 'TEAM')
@@ -183,7 +183,7 @@ def jira_create_issue(
         ...     summary="Implement new feature",
         ...     description="Feature description here",
         ...     priority="High",
-        ...     labels=["automation", "agent"]
+        ...     labels=["automation", "fiche"]
         ... )
         {
             "success": True,
@@ -240,7 +240,7 @@ def jira_create_issue(
             "Authorization": _build_jira_auth_header(email, api_token),
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "User-Agent": "Zerg-Agent/1.0",
+            "User-Fiche": "Zerg-Fiche/1.0",
         }
 
         # Make request
@@ -288,7 +288,7 @@ def jira_list_issues(
 ) -> Dict[str, Any]:
     """List issues in a Jira project using JQL search.
 
-    Credentials are automatically resolved from agent configuration if not provided.
+    Credentials are automatically resolved from fiche configuration if not provided.
 
     Args:
         project_key: Project key to search within
@@ -356,7 +356,7 @@ def jira_list_issues(
         headers = {
             "Authorization": _build_jira_auth_header(email, api_token),
             "Accept": "application/json",
-            "User-Agent": "Zerg-Agent/1.0",
+            "User-Fiche": "Zerg-Fiche/1.0",
         }
 
         # Make request
@@ -369,7 +369,7 @@ def jira_list_issues(
             total = data.get("total", 0)
             raw_issues = data.get("issues", [])
 
-            # Extract key fields for easier agent consumption
+            # Extract key fields for easier fiche consumption
             issues = []
             for issue in raw_issues:
                 fields = issue.get("fields", {})
@@ -417,7 +417,7 @@ def jira_get_issue(
 ) -> Dict[str, Any]:
     """Get detailed information about a specific Jira issue.
 
-    Credentials are automatically resolved from agent configuration if not provided.
+    Credentials are automatically resolved from fiche configuration if not provided.
 
     Args:
         issue_key: Issue key (e.g., 'PROJ-123')
@@ -464,7 +464,7 @@ def jira_get_issue(
         headers = {
             "Authorization": _build_jira_auth_header(email, api_token),
             "Accept": "application/json",
-            "User-Agent": "Zerg-Agent/1.0",
+            "User-Fiche": "Zerg-Fiche/1.0",
         }
 
         # Make request
@@ -534,7 +534,7 @@ def jira_add_comment(
 ) -> Dict[str, Any]:
     """Add a comment to a Jira issue.
 
-    Credentials are automatically resolved from agent configuration if not provided.
+    Credentials are automatically resolved from fiche configuration if not provided.
 
     Args:
         issue_key: Issue key (e.g., 'PROJ-123')
@@ -552,7 +552,7 @@ def jira_add_comment(
     Example:
         >>> jira_add_comment(
         ...     issue_key="PROJ-123",
-        ...     body="Agent completed the task successfully"
+        ...     body="Fiche completed the task successfully"
         ... )
         {"success": True, "comment_id": "10050"}
     """
@@ -580,7 +580,7 @@ def jira_add_comment(
             "Authorization": _build_jira_auth_header(email, api_token),
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "User-Agent": "Zerg-Agent/1.0",
+            "User-Fiche": "Zerg-Fiche/1.0",
         }
 
         # Make request
@@ -618,7 +618,7 @@ def jira_transition_issue(
 ) -> Dict[str, Any]:
     """Transition a Jira issue to a new status.
 
-    Credentials are automatically resolved from agent configuration if not provided.
+    Credentials are automatically resolved from fiche configuration if not provided.
 
     Note: To find available transitions for an issue, use jira_get_issue and check
     the available transitions, or query /rest/api/3/issue/{issueKey}/transitions
@@ -664,7 +664,7 @@ def jira_transition_issue(
             "Authorization": _build_jira_auth_header(email, api_token),
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "User-Agent": "Zerg-Agent/1.0",
+            "User-Fiche": "Zerg-Fiche/1.0",
         }
 
         # Make request
@@ -699,7 +699,7 @@ def jira_update_issue(
 ) -> Dict[str, Any]:
     """Update fields on an existing Jira issue.
 
-    Credentials are automatically resolved from agent configuration if not provided.
+    Credentials are automatically resolved from fiche configuration if not provided.
 
     Args:
         issue_key: Issue key (e.g., 'PROJ-123')
@@ -747,7 +747,7 @@ def jira_update_issue(
             "Authorization": _build_jira_auth_header(email, api_token),
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "User-Agent": "Zerg-Agent/1.0",
+            "User-Fiche": "Zerg-Fiche/1.0",
         }
 
         # Make request
@@ -849,31 +849,31 @@ TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
         func=jira_create_issue,
         name="jira_create_issue",
-        description="Create a new issue in a Jira project with summary, description, priority, labels, and assignee. Credentials are automatically resolved from agent configuration.",
+        description="Create a new issue in a Jira project with summary, description, priority, labels, and assignee. Credentials are automatically resolved from fiche configuration.",
     ),
     StructuredTool.from_function(
         func=jira_list_issues,
         name="jira_list_issues",
-        description="List issues in a Jira project using JQL search. Supports custom queries and result limits. Credentials are automatically resolved from agent configuration.",
+        description="List issues in a Jira project using JQL search. Supports custom queries and result limits. Credentials are automatically resolved from fiche configuration.",
     ),
     StructuredTool.from_function(
         func=jira_get_issue,
         name="jira_get_issue",
-        description="Get detailed information about a specific Jira issue by its key. Credentials are automatically resolved from agent configuration.",
+        description="Get detailed information about a specific Jira issue by its key. Credentials are automatically resolved from fiche configuration.",
     ),
     StructuredTool.from_function(
         func=jira_add_comment,
         name="jira_add_comment",
-        description="Add a comment to an existing Jira issue. Credentials are automatically resolved from agent configuration.",
+        description="Add a comment to an existing Jira issue. Credentials are automatically resolved from fiche configuration.",
     ),
     StructuredTool.from_function(
         func=jira_transition_issue,
         name="jira_transition_issue",
-        description="Transition a Jira issue to a new status using a transition ID. Credentials are automatically resolved from agent configuration.",
+        description="Transition a Jira issue to a new status using a transition ID. Credentials are automatically resolved from fiche configuration.",
     ),
     StructuredTool.from_function(
         func=jira_update_issue,
         name="jira_update_issue",
-        description="Update fields on an existing Jira issue (summary, priority, labels, etc.). Credentials are automatically resolved from agent configuration.",
+        description="Update fields on an existing Jira issue (summary, priority, labels, etc.). Credentials are automatically resolved from fiche configuration.",
     ),
 ]

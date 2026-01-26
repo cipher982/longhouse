@@ -20,7 +20,7 @@ import {
 interface UserPeriodUsage {
   tokens: number;
   cost_usd: number;
-  runs: number;
+  courses: number;
 }
 
 interface AdminUserUsage {
@@ -50,15 +50,15 @@ interface DailyBreakdown {
   date: string;
   tokens: number;
   cost_usd: number;
-  runs: number;
+  courses: number;
 }
 
-interface TopAgentUsage {
-  agent_id: number;
+interface TopFicheUsage {
+  fiche_id: number;
   name: string;
   tokens: number;
   cost_usd: number;
-  runs: number;
+  courses: number;
 }
 
 interface AdminUserDetailResponse {
@@ -66,12 +66,12 @@ interface AdminUserDetailResponse {
   period: string;
   summary: UserPeriodUsage;
   daily_breakdown: DailyBreakdown[];
-  top_agents: TopAgentUsage[];
+  top_fiches: TopFicheUsage[];
 }
 
 // Types for ops data - matching actual backend contract
 interface OpsSummary {
-  runs_today: number;
+  courses_today: number;
   cost_today_usd: number | null;
   budget_user: {
     limit_cents: number;
@@ -84,26 +84,26 @@ interface OpsSummary {
     percent: number | null;
   };
   active_users_24h: number;
-  agents_total: number;
-  agents_scheduled: number;
+  fiches_total: number;
+  fiches_scheduled: number;
   latency_ms: {
     p50: number;
     p95: number;
   };
   errors_last_hour: number;
-  top_agents_today: OpsTopAgent[];
+  top_fiches_today: OpsTopFiche[];
 }
 
-interface OpsTopAgent {
-  agent_id: number;
+interface OpsTopFiche {
+  fiche_id: number;
   name: string;
   owner_email: string;
-  runs: number;
+  courses: number;
   cost_usd: number | null;
   p95_ms: number;
 }
 
-// API functions (top agents are included in summary)
+// API functions (top fiches are included in summary)
 async function fetchOpsSummary(): Promise<OpsSummary> {
   const response = await fetch(`${config.apiBaseUrl}/ops/summary`, {
     credentials: 'include', // Cookie auth
@@ -330,42 +330,44 @@ function ConfirmationModal({
   return createPortal(modalContent, document.body);
 }
 
-// Top agents table component - using real backend contract
-function TopAgentsTable({ agents }: { agents: OpsTopAgent[] }) {
-  if (agents.length === 0) {
+// Top fiches table component - using real backend contract
+function TopFichesTable({ fiches }: { fiches: OpsTopFiche[] }) {
+  if (fiches.length === 0) {
     return (
       <EmptyState
-        title="No agent data available"
-        description="Data will appear once agents start running."
+        title="No fiche data available"
+        description="Data will appear once fiches start running."
       />
     );
   }
 
   return (
-    <Table>
-      <Table.Header>
-        <Table.Cell isHeader>Agent Name</Table.Cell>
-        <Table.Cell isHeader>Owner</Table.Cell>
-        <Table.Cell isHeader>Runs</Table.Cell>
-        <Table.Cell isHeader>Cost (USD)</Table.Cell>
-        <Table.Cell isHeader>P95 Latency</Table.Cell>
-      </Table.Header>
-      <Table.Body>
-        {agents.map((agent) => (
-          <Table.Row key={agent.agent_id}>
-            <Table.Cell className="agent-name">{agent.name}</Table.Cell>
-            <Table.Cell className="owner-email">{agent.owner_email}</Table.Cell>
-            <Table.Cell className="runs-count">{agent.runs}</Table.Cell>
-            <Table.Cell className="cost">
-              {agent.cost_usd !== null ? `$${agent.cost_usd.toFixed(4)}` : 'N/A'}
-            </Table.Cell>
-            <Table.Cell className="latency">
-              {agent.p95_ms}ms
-            </Table.Cell>
-          </Table.Row>
-        ))}
-      </Table.Body>
-    </Table>
+    <div className="top-fiches-table">
+      <Table>
+        <Table.Header>
+          <Table.Cell isHeader>Fiche Name</Table.Cell>
+          <Table.Cell isHeader>Owner</Table.Cell>
+          <Table.Cell isHeader>Courses</Table.Cell>
+          <Table.Cell isHeader>Cost (USD)</Table.Cell>
+          <Table.Cell isHeader>P95 Latency</Table.Cell>
+        </Table.Header>
+        <Table.Body>
+          {fiches.map((fiche) => (
+            <Table.Row key={fiche.fiche_id}>
+              <Table.Cell className="fiche-name">{fiche.name}</Table.Cell>
+              <Table.Cell className="owner-email">{fiche.owner_email}</Table.Cell>
+              <Table.Cell className="courses-count">{fiche.courses}</Table.Cell>
+              <Table.Cell className="cost">
+                {fiche.cost_usd !== null ? `$${fiche.cost_usd.toFixed(4)}` : 'N/A'}
+              </Table.Cell>
+              <Table.Cell className="latency">
+                {fiche.p95_ms}ms
+              </Table.Cell>
+            </Table.Row>
+          ))}
+        </Table.Body>
+      </Table>
+    </div>
   );
 }
 
@@ -525,8 +527,8 @@ function UserDetailModal({
                 <span className="value">{formatCost(detail.summary.cost_usd)}</span>
               </div>
               <div className="usage-summary-card">
-                <span className="label">Runs</span>
-                <span className="value">{detail.summary.runs}</span>
+                <span className="label">Courses</span>
+                <span className="value">{detail.summary.courses}</span>
               </div>
             </div>
 
@@ -540,7 +542,7 @@ function UserDetailModal({
                       <th>Date</th>
                       <th className="numeric">Tokens</th>
                       <th className="numeric">Cost</th>
-                      <th className="numeric">Runs</th>
+                      <th className="numeric">Courses</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -549,7 +551,7 @@ function UserDetailModal({
                         <td>{day.date}</td>
                         <td className="numeric">{day.tokens.toLocaleString()}</td>
                         <td className="numeric">{formatCost(day.cost_usd)}</td>
-                        <td className="numeric">{day.runs}</td>
+                        <td className="numeric">{day.courses}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -557,26 +559,26 @@ function UserDetailModal({
               </div>
             )}
 
-            {/* Top Agents */}
-            {detail.top_agents.length > 0 && (
+            {/* Top Fiches */}
+            {detail.top_fiches.length > 0 && (
               <div className="detail-section">
-                <h5>Top Agents by Cost</h5>
+                <h5>Top Fiches by Cost</h5>
                 <table className="breakdown-table">
                   <thead>
                     <tr>
-                      <th>Agent</th>
+                      <th>Fiche</th>
                       <th className="numeric">Tokens</th>
                       <th className="numeric">Cost</th>
-                      <th className="numeric">Runs</th>
+                      <th className="numeric">Courses</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {detail.top_agents.map((agent) => (
-                      <tr key={agent.agent_id}>
-                        <td>{agent.name}</td>
-                        <td className="numeric">{agent.tokens.toLocaleString()}</td>
-                        <td className="numeric">{formatCost(agent.cost_usd)}</td>
-                        <td className="numeric">{agent.runs}</td>
+                    {detail.top_fiches.map((fiche) => (
+                      <tr key={fiche.fiche_id}>
+                        <td>{fiche.name}</td>
+                        <td className="numeric">{fiche.tokens.toLocaleString()}</td>
+                        <td className="numeric">{formatCost(fiche.cost_usd)}</td>
+                        <td className="numeric">{fiche.courses}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -763,15 +765,15 @@ function AdminPage() {
           {/* Key Metrics - using real backend data */}
           <div className="metrics-grid">
             <MetricCard
-              title="Runs Today"
-              value={summary.runs_today}
+              title="Courses Today"
+              value={summary.courses_today}
               subtitle="Total executions"
               color={metricColors.primary}
             />
             <MetricCard
               title="Errors (1h)"
               value={summary.errors_last_hour}
-              subtitle="Failed runs"
+              subtitle="Failed courses"
               color={metricColors.error}
             />
             <MetricCard
@@ -824,13 +826,13 @@ function AdminPage() {
             />
           </div>
 
-          {/* Top Agents Section - using data from summary */}
+          {/* Top Fiches Section - using data from summary */}
           <Card>
             <Card.Header>
-              <h3 className="admin-section-title ui-section-title">Top Performing Agents (Today)</h3>
+              <h3 className="admin-section-title ui-section-title">Top Performing Fiches (Today)</h3>
             </Card.Header>
             <Card.Body>
-              <TopAgentsTable agents={summary.top_agents_today} />
+              <TopFichesTable fiches={summary.top_fiches_today} />
             </Card.Body>
           </Card>
 
@@ -868,12 +870,12 @@ function AdminPage() {
               <div className="system-info">
                 <div className="info-grid">
                   <div className="info-item">
-                    <span className="info-label">Total Agents:</span>
-                    <span className="info-value">{summary.agents_total}</span>
+                    <span className="info-label">Total Fiches:</span>
+                    <span className="info-value">{summary.fiches_total}</span>
                   </div>
                   <div className="info-item">
-                    <span className="info-label">Scheduled Agents:</span>
-                    <span className="info-value">{summary.agents_scheduled}</span>
+                    <span className="info-label">Scheduled Fiches:</span>
+                    <span className="info-value">{summary.fiches_scheduled}</span>
                   </div>
                   <div className="info-item">
                     <span className="info-label">Active Users (24h):</span>
@@ -920,7 +922,7 @@ function AdminPage() {
                       <span className="admin-devtool-title">Trace Explorer</span>
                     </div>
                     <p className="admin-devtool-desc">
-                      Debug supervisor runs, workers, and LLM calls with unified trace timelines.
+                      Debug concierge courses, commis, and LLM calls with unified trace timelines.
                     </p>
                   </div>
                 </Link>
@@ -956,7 +958,7 @@ function AdminPage() {
                     Clear User Data
                   </Button>
                   <p className="action-description">
-                    Remove all user-generated data (agents, runs, workflows) while preserving user accounts
+                    Remove all user-generated data (fiches, courses, workflows) while preserving user accounts
                   </p>
                 </div>
                 <div className="action-group">
@@ -989,7 +991,7 @@ function AdminPage() {
         }
         message={
           modalState.type === "clear_data"
-            ? "This will remove all user-generated data (agents, runs, workflows) but preserve user accounts. This action cannot be undone."
+            ? "This will remove all user-generated data (fiches, courses, workflows) but preserve user accounts. This action cannot be undone."
             : "This will drop and recreate all database tables. All data will be lost. This action cannot be undone."
         }
         confirmText={resetMutation.isPending ? "Processing..." : "Confirm"}

@@ -1,4 +1,4 @@
-"""Tool Output Store – persistence for large supervisor tool outputs.
+"""Tool Output Store – persistence for large concierge tool outputs.
 
 Stores large tool outputs on disk and returns lightweight markers for LLM context.
 Each artifact is scoped to an owner_id for access control.
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class ToolOutputStore:
-    """Manages filesystem storage for supervisor tool outputs."""
+    """Manages filesystem storage for concierge tool outputs."""
 
     def __init__(self, base_path: str | None = None):
         if base_path:
@@ -46,7 +46,7 @@ class ToolOutputStore:
         owner_id: int,
         tool_name: str,
         content: str,
-        run_id: int | None = None,
+        course_id: int | None = None,
         tool_call_id: str | None = None,
     ) -> str:
         """Persist tool output and return artifact_id."""
@@ -62,7 +62,7 @@ class ToolOutputStore:
             "artifact_id": artifact_id,
             "owner_id": owner_id,
             "tool_name": tool_name,
-            "run_id": run_id,
+            "course_id": course_id,
             "tool_call_id": tool_call_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "size_bytes": len(content.encode("utf-8")),

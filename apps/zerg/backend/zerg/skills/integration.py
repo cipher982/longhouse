@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class SkillContext:
-    """Context for skill execution within an agent run.
+    """Context for skill execution within an course.
 
     Manages skill loading and prompt generation for a specific run,
     supporting workspace-scoped skills.
@@ -184,9 +184,9 @@ def get_skill_tool_names(skill_context: SkillContext) -> List[str]:
 
 
 class SkillIntegration:
-    """High-level skill integration for agent runs.
+    """High-level skill integration for courses.
 
-    Provides a simple interface for integrating skills into agent execution.
+    Provides a simple interface for integrating skills into fiche execution.
 
     Example:
         integration = SkillIntegration(

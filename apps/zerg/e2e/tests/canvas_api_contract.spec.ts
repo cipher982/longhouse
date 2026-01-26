@@ -31,8 +31,8 @@ test.describe('Canvas UI Tests', () => {
     const errorElements = page.locator('.error-message, .error-banner, [data-testid="error"], .alert-danger');
     await expect(errorElements).not.toBeVisible();
 
-    // Agent/Tool shelf should be visible (left panel)
-    const shelf = page.locator('#agent-shelf');
+    // Fiche/Tool shelf should be visible (left panel)
+    const shelf = page.locator('#fiche-shelf');
     await expect(shelf).toBeVisible();
   });
 
