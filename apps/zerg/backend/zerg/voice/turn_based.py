@@ -64,6 +64,7 @@ async def run_voice_turn(
             status="error",
             error=stt_result.error or "STT failed",
             stt_model=stt_result.model,
+            message_id=message_id,
         )
 
     settings = get_settings()
@@ -98,4 +99,5 @@ async def run_voice_turn(
             status="error",
             error=str(exc),
             stt_model=stt_result.model,
+            message_id=message_id,
         )

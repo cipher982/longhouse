@@ -195,7 +195,7 @@ test_voice() {
 
     # Create minimal valid WAV file (44-byte header + 1600 bytes of silence = 100ms at 8kHz 16-bit mono)
     local wav_file
-    wav_file=$(mktemp)
+    wav_file=$(mktemp).wav
     # WAV header (44 bytes) - 8kHz, 16-bit, mono, 1600 samples
     printf 'RIFF' > "$wav_file"
     printf '\x24\x08\x00\x00' >> "$wav_file"  # file size - 8
@@ -218,13 +218,13 @@ test_voice() {
     if [[ -n "$TIMEOUT_CMD" ]]; then
         response=$($TIMEOUT_CMD "$timeout_secs" curl -s -X POST "$API_URL/api/jarvis/voice/turn" \
             -b "$cookie_jar" \
-            -F "audio=@${wav_file};type=audio/wav" \
+            -F "audio=@${wav_file};type=audio/wav;filename=sample.wav" \
             -F "return_audio=false" \
             -F "message_id=$msg_id" 2>/dev/null) || true
     else
         response=$(curl -s -X POST "$API_URL/api/jarvis/voice/turn" \
             -b "$cookie_jar" \
-            -F "audio=@${wav_file};type=audio/wav" \
+            -F "audio=@${wav_file};type=audio/wav;filename=sample.wav" \
             -F "return_audio=false" \
             -F "message_id=$msg_id" 2>/dev/null) || true
     fi
@@ -236,7 +236,7 @@ test_voice() {
         return 1
     fi
 
-    # Check message_id passthrough
+    # Check message_id passthrough (should work even on error)
     local returned_msg_id
     returned_msg_id=$(echo "$response" | jq -r '.message_id // empty' 2>/dev/null)
     if [[ "$returned_msg_id" != "$msg_id" ]]; then
@@ -244,26 +244,26 @@ test_voice() {
         return 1
     fi
 
-    # Check status
+    # Check status - silence may produce "error" status with empty transcription
     local status
     status=$(echo "$response" | jq -r '.status // empty' 2>/dev/null)
-    if [[ "$status" != "success" ]]; then
-        local error
-        error=$(echo "$response" | jq -r '.error // "unknown"' 2>/dev/null)
-        fail "$name (status=$status, error=$error)"
+    local error_msg
+    error_msg=$(echo "$response" | jq -r '.error // empty' 2>/dev/null)
+
+    # Accept either success OR expected STT errors (silence produces empty transcription)
+    if [[ "$status" == "success" ]]; then
+        local transcript
+        transcript=$(echo "$response" | jq -r '.transcript // empty' 2>/dev/null)
+        pass "$name (transcript: \"${transcript:0:30}...\")"
+        return 0
+    elif [[ "$error_msg" == "Empty transcription result" ]] || [[ "$error_msg" == "Audio too short" ]]; then
+        # Expected error with silence - message_id passthrough is the key test
+        pass "$name (message_id passed through on STT error)"
+        return 0
+    else
+        fail "$name (status=$status, error=$error_msg)"
         return 1
     fi
-
-    # Check transcript exists
-    local transcript
-    transcript=$(echo "$response" | jq -r '.transcript // empty' 2>/dev/null)
-    if [[ -z "$transcript" ]]; then
-        fail "$name (empty transcript)"
-        return 1
-    fi
-
-    pass "$name (transcript: \"${transcript:0:30}...\")"
-    return 0
 }
 
 # Test JSON field

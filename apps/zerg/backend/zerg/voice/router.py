@@ -96,10 +96,15 @@ async def voice_turn(
     )
 
     if result.status == "error":
-        detail = result.error or "Voice turn failed"
-        if detail in {"Empty transcription result", "Audio too short"}:
-            raise HTTPException(status_code=422, detail=detail)
-        raise HTTPException(status_code=500, detail=detail)
+        # Return error response with message_id for correlation tracking
+        return VoiceTurnResponse(
+            transcript=result.transcript or "",
+            response_text=None,
+            status="error",
+            error=result.error or "Voice turn failed",
+            stt_model=result.stt_model,
+            message_id=message_id,
+        )
 
     tts_payload: VoiceAudioResponse | None = None
     if return_audio:
