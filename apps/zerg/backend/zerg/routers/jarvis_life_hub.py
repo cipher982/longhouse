@@ -12,6 +12,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from typing import List
+from typing import Literal
 from typing import Optional
 
 from fastapi import APIRouter
@@ -74,6 +75,34 @@ class SessionPreview(BaseModel):
     id: str = Field(..., description="Session UUID")
     messages: List[SessionMessage] = Field(..., description="Recent messages")
     total_messages: int = Field(..., description="Total message count")
+
+
+class ActiveSession(BaseModel):
+    """Active session from the materialized view."""
+
+    id: str = Field(..., description="Session UUID")
+    project: Optional[str] = Field(None, description="Project name")
+    provider: str = Field(..., description="AI provider (claude, codex, gemini)")
+    cwd: Optional[str] = Field(None, description="Working directory")
+    git_branch: Optional[str] = Field(None, description="Git branch")
+    started_at: datetime = Field(..., description="Session start time")
+    ended_at: Optional[datetime] = Field(None, description="Session end time")
+    last_activity_at: datetime = Field(..., description="Last activity timestamp")
+    status: Literal["working", "thinking", "idle", "completed", "active"] = Field(..., description="Session status")
+    attention: Literal["hard", "needs", "soft", "auto"] = Field(..., description="Attention level")
+    duration_minutes: float = Field(..., description="Duration in minutes")
+    last_user_message: Optional[str] = Field(None, description="Last user message")
+    last_assistant_message: Optional[str] = Field(None, description="Last assistant message")
+    message_count: int = Field(..., description="Total message count")
+    tool_calls: int = Field(..., description="Number of tool calls")
+
+
+class ActiveSessionsResponse(BaseModel):
+    """Response for active sessions endpoint."""
+
+    sessions: List[ActiveSession] = Field(..., description="List of active sessions")
+    total: int = Field(..., description="Total count")
+    last_refresh: datetime = Field(..., description="When the view was last refreshed")
 
 
 # ---------------------------------------------------------------------------
@@ -286,4 +315,136 @@ async def preview_session(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to preview session: {e}",
+        )
+
+
+@router.get("/sessions/active", response_model=ActiveSessionsResponse)
+async def get_active_sessions(
+    project: Optional[str] = Query(None, description="Filter by project name"),
+    attention: Optional[str] = Query(None, description="Filter by attention level (hard, needs, soft, auto)"),
+    session_status: Optional[str] = Query(None, alias="status", description="Filter by status"),
+    limit: int = Query(50, ge=1, le=100, description="Max results to return"),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_jarvis_user),
+) -> ActiveSessionsResponse:
+    """Get active sessions from the materialized view.
+
+    Uses agents.session_summary materialized view for fast queries with
+    pre-computed status, attention level, and last messages.
+
+    Used by the Forum UI to display real-time session state.
+    """
+    try:
+        # Build query against materialized view
+        where_clauses = ["1=1"]
+        params: dict = {"limit": limit}
+
+        if project:
+            where_clauses.append("project = :project")
+            params["project"] = project
+
+        if attention:
+            where_clauses.append("attention = :attention")
+            params["attention"] = attention
+
+        if session_status:
+            where_clauses.append("status = :status")
+            params["status"] = session_status
+
+        where_sql = " AND ".join(where_clauses)
+
+        sql = text(f"""
+            SELECT
+                id::text,
+                project,
+                provider,
+                cwd,
+                git_branch,
+                started_at,
+                ended_at,
+                last_activity_at,
+                status,
+                attention,
+                duration_minutes,
+                last_user_message,
+                last_assistant_message,
+                user_messages + assistant_messages as message_count,
+                tool_calls,
+                refreshed_at
+            FROM agents.session_summary
+            WHERE {where_sql}
+            ORDER BY last_activity_at DESC
+            LIMIT :limit
+        """)
+
+        result = db.execute(sql, params)
+        rows = result.fetchall()
+
+        sessions = []
+        last_refresh = None
+        for row in rows:
+            if last_refresh is None:
+                last_refresh = row[15]  # refreshed_at
+            sessions.append(
+                ActiveSession(
+                    id=row[0],
+                    project=row[1],
+                    provider=row[2],
+                    cwd=row[3],
+                    git_branch=row[4],
+                    started_at=row[5],
+                    ended_at=row[6],
+                    last_activity_at=row[7],
+                    status=row[8],
+                    attention=row[9],
+                    duration_minutes=float(row[10]) if row[10] else 0.0,
+                    last_user_message=row[11],
+                    last_assistant_message=row[12],
+                    message_count=row[13] or 0,
+                    tool_calls=row[14] or 0,
+                )
+            )
+
+        # Get total count
+        count_sql = text(f"""
+            SELECT COUNT(*) FROM agents.session_summary WHERE {where_sql}
+        """)
+        count_result = db.execute(count_sql, params)
+        total = count_result.scalar() or 0
+
+        logger.debug(f"Listed {len(sessions)} active sessions for user {current_user.id}")
+
+        return ActiveSessionsResponse(
+            sessions=sessions,
+            total=total,
+            last_refresh=last_refresh or datetime.now(timezone.utc),
+        )
+
+    except Exception as e:
+        logger.exception("Failed to list active sessions")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list active sessions: {e}",
+        )
+
+
+@router.post("/sessions/refresh")
+async def refresh_session_summary(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_jarvis_user),
+) -> dict:
+    """Manually refresh the session summary materialized view.
+
+    Triggers a CONCURRENT refresh which doesn't block reads.
+    """
+    try:
+        db.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY agents.session_summary"))
+        db.commit()
+        logger.info(f"Refreshed session_summary view (requested by user {current_user.id})")
+        return {"status": "refreshed", "timestamp": datetime.now(timezone.utc).isoformat()}
+    except Exception as e:
+        logger.exception("Failed to refresh session summary view")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to refresh: {e}",
         )
