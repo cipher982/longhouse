@@ -49,6 +49,7 @@ class VoiceTurnResponse(BaseModel):
     error: str | None = None
     stt_model: str | None = None
     tts: VoiceAudioResponse | None = None
+    message_id: str | None = None
 
 
 @router.post("/turn", response_model=VoiceTurnResponse)
@@ -61,6 +62,7 @@ async def voice_turn(
     tts_provider: str | None = Form(None, description="Override TTS provider (edge, elevenlabs)"),
     tts_voice_id: str | None = Form(None, description="Override TTS voice ID/name"),
     model: str | None = Form(None, description="Override supervisor model"),
+    message_id: str | None = Form(None, description="Client-generated message ID for correlation"),
     current_user=Depends(get_current_jarvis_user),
 ) -> VoiceTurnResponse:
     """Turn-based voice: audio -> transcript -> supervisor response.
@@ -90,6 +92,7 @@ async def voice_turn(
         stt_language=stt_language,
         stt_model=stt_model,
         model_override=model,
+        message_id=message_id,
     )
 
     if result.status == "error":
@@ -160,4 +163,5 @@ async def voice_turn(
         error=result.error,
         stt_model=result.stt_model,
         tts=tts_payload,
+        message_id=result.message_id,
     )
