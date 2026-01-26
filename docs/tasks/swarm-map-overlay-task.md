@@ -14,6 +14,7 @@ Build a demo-ready, fully playable iso-2D Swarm/RTS overlay that integrates with
    - Status: Done (2026-01-26) - Added `apps/zerg/frontend-web/src/swarm/*` with types, layout transforms, replay generator, hydration, and tests.
 2. **Playable map surface**
    - Success: iso-2D map renders at 60fps on desktop; pan/zoom + selection + hover tooltips work; mobile layout supports drag + pinch.
+   - Status: Done (2026-01-26) - Added Swarm map overlay page, canvas renderer, pan/zoom/selection, and replay-driven playback.
 3. **Decision loop UI**
    - Success: task list -> action -> visible map effect (marker/route/status change); selected entity shows actionable controls.
 4. **Integration hooks**
@@ -47,4 +48,4 @@ Build a demo-ready, fully playable iso-2D Swarm/RTS overlay that integrates with
 - Original repo is `~/git/zerg`; it may contain missing context (e.g., `.env` vars). Avoid editing that repo because main has ongoing work.
 
 ## Next Action
-Build the map surface skeleton that renders from the replay state, with pan/zoom and selection hooks.
+Wire the decision loop UI so tasks and actions affect map entities, and connect live worker/task events.
