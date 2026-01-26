@@ -122,6 +122,9 @@ jobs:
     - name: Install dependencies
       run: bun install --frozen-lockfile
 
+    - name: Install build tools
+      run: sudo apt-get update && sudo apt-get install -y make
+
     - name: Install Playwright browsers
       run: cd apps/zerg/e2e && bunx playwright install chromium
 
