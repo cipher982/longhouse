@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+"""Debug CLI for testing Jarvis chat flow and worker continuations."""
 import asyncio
 import json
 import httpx
