@@ -148,7 +148,9 @@ export async function createNewThread(page: Page): Promise<number> {
  * Wait for a user message to appear in the chat
  */
 export async function waitForUserMessage(page: Page, messageText: string): Promise<void> {
-  const userMessage = page.locator('.message.user').filter({ hasText: messageText });
+  const userMessage = page
+    .locator('.message.user, .message.user-message, [data-role="chat-message-user"]')
+    .filter({ hasText: messageText });
   await expect(userMessage).toBeVisible({ timeout: 10000 });
 }
 
@@ -156,7 +158,7 @@ export async function waitForUserMessage(page: Page, messageText: string): Promi
  * Wait for an assistant message to appear in the chat
  */
 export async function waitForAssistantMessage(page: Page): Promise<void> {
-  const assistantMessage = page.locator('.message.assistant');
+  const assistantMessage = page.locator('.message.assistant, .message.assistant-message, [data-role="chat-message-assistant"]');
   await expect(assistantMessage).toBeVisible({ timeout: 30000 });
 }
 
