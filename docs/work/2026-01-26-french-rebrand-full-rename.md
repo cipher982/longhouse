@@ -27,6 +27,7 @@ Complete full French terminology renaming (no backward compatibility). Rename ta
 - 2026-01-26: Regenerated WS/SSE contracts + OpenAPI types (manual env for OpenAPI export).
 - 2026-01-26: Resumed in worktree, reviewed Phase 4 blocked notes, confirmed full-rename direction (no backward compat) before continuing.
 - 2026-01-26: Fixed MCP server payloads to include `transport` and dashboard websocket course `display_type` default; frontend typecheck + contract validation pass.
+- 2026-01-26: Pre-commit hooks clean (ruff/format, types, lint, WS/SSE, AsyncAPI). Committed full rename: `3f90397`.
 
 ## Checklist
 ### Phase A — Inventory & plan
@@ -53,7 +54,7 @@ Complete full French terminology renaming (no backward compatibility). Rename ta
 ### Phase E — Verification
 - [ ] `make test`
 - [ ] Fix failures
-- [ ] Commit(s)
+- [x] Commit(s)
 
 ## Notes
 - Commit after big sets of changes (backend, migrations, frontend, tests).
