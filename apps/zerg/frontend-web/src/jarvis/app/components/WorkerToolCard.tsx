@@ -294,23 +294,16 @@ export function WorkerToolCard({ tool, isDetached = false, detachedIndex = 0 }: 
         className="worker-tool-card__header"
         onClick={() => setIsExpanded(!isExpanded)}
       >
-        <span className="worker-tool-card__icon">
-          <WorkerStatusIcon status={workerState.status} />
-        </span>
-        <span className="worker-tool-card__name">spawn_worker</span>
+        <div className="worker-tool-card__status-group">
+          <span className="worker-tool-card__icon">
+            <WorkerStatusIcon status={workerState.status} />
+          </span>
+          <span className="worker-tool-card__name">Worker</span>
+        </div>
         <span className="worker-tool-card__task">{taskDisplay}</span>
         <span className="worker-tool-card__spacer" />
-        {hasNestedTools && (
-          <button
-            className="worker-tool-card__compact-toggle"
-            onClick={(e) => { e.stopPropagation(); setIsCompact(!isCompact); }}
-            title={isCompact ? 'Expand rows' : 'Compact rows'}
-          >
-            {isCompact ? '⊞' : '⊟'}
-          </button>
-        )}
         <span className="worker-tool-card__duration">{duration}</span>
-        <span className="worker-tool-card__expand-toggle">
+        <span className="worker-tool-card__expand-indicator">
           {isExpanded ? '▼' : '▶'}
         </span>
       </div>
@@ -318,6 +311,20 @@ export function WorkerToolCard({ tool, isDetached = false, detachedIndex = 0 }: 
       {/* Expanded content - nested tools and summary */}
       {isExpanded && (
         <div className="worker-tool-card__body" onClick={(e) => e.stopPropagation()}>
+          {/* Body Toolbar - secondary controls */}
+          {hasNestedTools && (
+            <div className="worker-tool-card__body-toolbar">
+              <span className="worker-tool-card__activity-label">Activity</span>
+              <button
+                className="worker-tool-card__compact-toggle"
+                onClick={(e) => { e.stopPropagation(); setIsCompact(!isCompact); }}
+                title={isCompact ? 'Show more detail' : 'Compact view'}
+              >
+                {isCompact ? '⊞ Standard' : '⊟ Compact'}
+              </button>
+            </div>
+          )}
+
           {/* Nested tool calls */}
           {hasNestedTools && (
             <div className="worker-tool-card__nested-tools">
