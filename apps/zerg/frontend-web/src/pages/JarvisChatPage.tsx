@@ -48,10 +48,10 @@ export default function JarvisChatPage() {
       if (result.sessionId) {
         // User selected a session - send a message to resume it
         // The supervisor will receive this and spawn a workspace worker with the session
-        console.log('[JarvisChatPage] User selected session:', result.sessionId);
-        // Note: The actual message sending should go through the chat controller
-        // For now, we log the selection. Integration with sendMessage will be added
-        // when testing the full flow.
+        eventBus.emit('text_channel:send', {
+          text: `Resume session ${result.sessionId}`,
+          timestamp: Date.now(),
+        })
       }
     },
     [showSessionPicker]
