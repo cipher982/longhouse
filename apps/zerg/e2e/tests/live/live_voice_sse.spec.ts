@@ -28,17 +28,33 @@ function buildWavBuffer(durationMs = 120, sampleRate = 8000): Buffer {
 // Live prod E2E: Voice transcribe -> SSE chat -> TTS
 
 test.describe('Prod Live Voice SSE', () => {
-  test('voice transcribe + chat SSE uses message_id and returns TTS', async ({ request }) => {
+  test('voice transcribe + chat SSE uses message_id (TTS audio as input)', async ({ request }) => {
     test.setTimeout(120_000);
 
-    const audioBuffer = buildWavBuffer();
     const messageId = `live-voice-${Date.now()}`;
+
+    // Use TTS to generate real speech audio for reliable STT in prod.
+    const ttsResponse = await request.post('/api/jarvis/voice/tts', {
+      data: {
+        text: 'Hello from the live voice test.',
+        message_id: messageId,
+      },
+    });
+
+    expect(ttsResponse.ok()).toBeTruthy();
+    const ttsData = await ttsResponse.json();
+    expect(ttsData.status).toBe('success');
+    expect(ttsData.message_id).toBe(messageId);
+    expect(ttsData.tts?.audio_base64?.length).toBeGreaterThan(0);
+
+    const ttsContentType = ttsData.tts?.content_type || 'audio/mpeg';
+    const audioBuffer = Buffer.from(ttsData.tts.audio_base64, 'base64');
 
     const transcribeResponse = await request.post('/api/jarvis/voice/transcribe', {
       multipart: {
         audio: {
-          name: 'sample.wav',
-          mimeType: 'audio/wav',
+          name: 'sample.mp3',
+          mimeType: ttsContentType,
           buffer: audioBuffer,
         },
         message_id: messageId,
@@ -63,17 +79,6 @@ test.describe('Prod Live Voice SSE', () => {
     expect(sseText).toContain('supervisor_complete');
     expect(sseText).toContain(messageId);
 
-    const ttsResponse = await request.post('/api/jarvis/voice/tts', {
-      data: {
-        text: 'Voice SSE smoke test confirmation.',
-        message_id: messageId,
-      },
-    });
-
-    expect(ttsResponse.ok()).toBeTruthy();
-    const ttsData = await ttsResponse.json();
-    expect(ttsData.status).toBe('success');
-    expect(ttsData.message_id).toBe(messageId);
-    expect(ttsData.tts?.audio_base64?.length).toBeGreaterThan(0);
+    // No extra TTS step needed here; we already validated TTS output above.
   });
 });
