@@ -197,6 +197,7 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-26) [gotcha] Resumable SSE closed on `supervisor_complete` with pending workers, dropping worker output/continuations; keep stream open until workers drain (with a short grace window).
 - (2026-01-26) [gotcha] Timestamp prefixes on assistant messages leaked into model outputs; only prefix user messages for temporal context.
 - (2026-01-26) [gotcha] New SSE event types must be added to `EventType` enum or `append_run_event()` won't publish live (modal won't open until reconnect).
+- (2026-01-26) [pattern] CI debugging: run commands directly, no `&` background, no `|| echo` swallowing. Let it crash, read the first error. Don't add debug steps before reading failure output.
 - (2026-01-26) [gotcha] Skills platform exists under `apps/zerg/backend/zerg/skills/` but isn't wired into supervisor/worker prompts or tool registry (no SkillIntegration usage yet).
 - (2026-01-26) [gotcha] Playwright E2E can time out at webServer startup (0 tests) if the backend fails to boot; ensure repo `.env` (DATABASE_URL) and backend deps are present before running.
 - (2026-01-26) [gotcha] Live SSE stream only forwards subscribed events; `show_session_picker` missing in `apps/zerg/backend/zerg/routers/stream.py` means the session picker modal never opens on live Jarvis streams.
