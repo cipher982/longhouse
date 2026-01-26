@@ -416,3 +416,38 @@ export function getReplayEventsUpTo(scenario: SwarmReplayScenario, timeMs: numbe
     .filter((event) => event.t <= timeMs)
     .sort((a, b) => (a.t === b.t ? a.seq - b.seq : a.t - b.t));
 }
+
+export type SwarmReplayCursor = {
+  scenario: SwarmReplayScenario;
+  state: SwarmMapState;
+  events: SwarmReplayEvent[];
+  index: number;
+  now: number;
+};
+
+export function createSwarmReplayCursor(scenario: SwarmReplayScenario): SwarmReplayCursor {
+  const events = [...scenario.events].sort((a, b) => (a.t === b.t ? a.seq - b.seq : a.t - b.t));
+  const state = createSwarmState({
+    layout: scenario.layout,
+    workspaces: scenario.workspaces,
+    repoGroups: scenario.repoGroups,
+    rooms: scenario.rooms,
+  });
+  let index = 0;
+  while (index < events.length && events[index].t <= 0) {
+    applySwarmEvents(state, [events[index]]);
+    index += 1;
+  }
+  return { scenario, state, events, index, now: 0 };
+}
+
+export function advanceSwarmReplay(cursor: SwarmReplayCursor, targetTime: number): number {
+  let applied = 0;
+  while (cursor.index < cursor.events.length && cursor.events[cursor.index].t <= targetTime) {
+    applySwarmEvents(cursor.state, [cursor.events[cursor.index]]);
+    cursor.index += 1;
+    applied += 1;
+  }
+  cursor.now = Math.max(cursor.now, targetTime);
+  return applied;
+}
