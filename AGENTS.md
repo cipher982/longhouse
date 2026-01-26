@@ -176,6 +176,9 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-25) [gotcha] Legacy continuations may have null `root_run_id`; chain continuations will alias to the wrong run unless you backfill or fall back to `continuation_of_run_id`.
 - (2026-01-26) [pattern] When a continuation is already RUNNING, queue worker updates as internal user messages and trigger a follow-up continuation after it completes (don’t inject mid-run).
 - (2026-01-26) [pattern] Avoid manual browser-hub testing; use scripted prod E2E with `auth/service-login` + Playwright for real flows.
+- (2026-01-26) [test] Prod Playwright reads `SMOKE_TEST_SECRET` from `.env` with quotes; normalize/strip quotes in fixtures to avoid 403 on service-login.
+- (2026-01-26) [test] Live voice STT in prod is unreliable with silent WAV; generate audio via `/voice/tts` and transcribe that in live E2E for stability.
 - (2026-01-26) [gotcha] Turn-based voice `/api/jarvis/voice/turn` bypasses SSE, so worker/tool UI and streaming events never render; full parity requires routing transcripts through `/api/jarvis/chat` (SSE) or emitting equivalent events.
 - (2026-01-26) [gotcha] Resumable SSE closed on `supervisor_complete` with pending workers, dropping worker output/continuations; keep stream open until workers drain (with a short grace window).
 - (2026-01-26) [gotcha] Timestamp prefixes on assistant messages leaked into model outputs; only prefix user messages for temporal context.
+- (2026-01-26) [gotcha] New SSE event types must be added to `EventType` enum or `append_run_event()` won't publish live (modal won't open until reconnect).

@@ -63,6 +63,7 @@ class ToolName(str, Enum):
     READ_WORKER_RESULT = "read_worker_result"
     PEEK_WORKER_OUTPUT = "peek_worker_output"
     REFRESH_CONNECTOR_STATUS = "refresh_connector_status"
+    REQUEST_SESSION_SELECTION = "request_session_selection"
     RUNNER_CREATE_ENROLL_TOKEN = "runner_create_enroll_token"
     RUNNER_EXEC = "runner_exec"
     RUNNER_LIST = "runner_list"
@@ -177,6 +178,7 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.READ_WORKER_RESULT: ServerName.SUPERVISOR,
     ToolName.PEEK_WORKER_OUTPUT: ServerName.SUPERVISOR,
     ToolName.REFRESH_CONNECTOR_STATUS: ServerName.CONNECTOR,
+    ToolName.REQUEST_SESSION_SELECTION: ServerName.SUPERVISOR,
     ToolName.RUNNER_CREATE_ENROLL_TOKEN: ServerName.RUNNER_SETUP,
     ToolName.RUNNER_EXEC: ServerName.RUNNER,
     ToolName.RUNNER_LIST: ServerName.RUNNER_SETUP,

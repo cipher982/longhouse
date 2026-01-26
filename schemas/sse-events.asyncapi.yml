@@ -69,6 +69,8 @@ channels:
         $ref: '#/components/messages/SupervisorToolCompletedEvent'
       SupervisorToolFailedEvent:
         $ref: '#/components/messages/SupervisorToolFailedEvent'
+      ShowSessionPickerEvent:
+        $ref: '#/components/messages/ShowSessionPickerEvent'
 
 # ---------------------------------------------------------------------------
 # Operations - SSE is always server → client (send only)
@@ -247,6 +249,13 @@ components:
         $ref: '#/components/schemas/SupervisorToolFailedPayload'
       x-sse-event-type: supervisor_tool_failed
 
+    ShowSessionPickerEvent:
+      name: show_session_picker
+      summary: Trigger session picker modal in frontend
+      payload:
+        $ref: '#/components/schemas/ShowSessionPickerPayload'
+      x-sse-event-type: show_session_picker
+
   schemas:
     # ---------------------------------------------------------------------------
     # SSE Envelope Structure
@@ -280,6 +289,7 @@ components:
             - supervisor_tool_progress
             - supervisor_tool_completed
             - supervisor_tool_failed
+            - show_session_picker
         id:
           type: integer
           description: Event ID for resumption (maps to `id:` line in SSE protocol)
@@ -887,6 +897,35 @@ components:
           type: string
           format: uuid
           description: End-to-end trace ID for debugging
+
+    # ---------------------------------------------------------------------------
+    # Session Picker Payloads
+    # ---------------------------------------------------------------------------
+    ShowSessionPickerPayload:
+      type: object
+      description: Trigger session picker modal in frontend
+      properties:
+        run_id:
+          type: integer
+          minimum: 1
+          description: Current supervisor run ID
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
+        filters:
+          type: object
+          description: Optional filters to pre-populate the picker
+          properties:
+            project:
+              type: string
+              description: Filter by project name
+            query:
+              type: string
+              description: Search query text
+            provider:
+              type: string
+              description: Filter by provider (claude, codex, gemini)
 
 # ---------------------------------------------------------------------------
 # Extensions for code generation
