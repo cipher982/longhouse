@@ -37,6 +37,10 @@ class AgentRun(Base):
     thread_id = Column(Integer, ForeignKey("agent_threads.id"), nullable=False)
     # Durable runs v2.2: Link continuation runs to original deferred run
     continuation_of_run_id = Column(Integer, ForeignKey("agent_runs.id"), nullable=True)
+    # Root run ID for continuation chains (enables SSE aliasing through chains)
+    # For direct continuations: root_run_id = continuation_of_run_id
+    # For chain continuations: root_run_id = original root (propagated)
+    root_run_id = Column(Integer, ForeignKey("agent_runs.id"), nullable=True)
 
     # Observability ------------------------------------------------------
     # Phase 1: Correlation ID for tracing requests end-to-end (chat-observability-eval)
@@ -101,7 +105,13 @@ class AgentRun(Base):
     agent = relationship("Agent", back_populates="runs")
     thread = relationship("Thread", backref="runs")
     # Durable runs v2.2: Self-referential relationship for continuation chains
-    continued_from = relationship("AgentRun", remote_side=[id], backref="continuations")
+    # foreign_keys specified because there are multiple self-referential FKs (continuation_of_run_id, root_run_id)
+    continued_from = relationship(
+        "AgentRun",
+        remote_side=[id],
+        foreign_keys=[continuation_of_run_id],
+        backref="continuations",
+    )
 
     # Table constraints --------------------------------------------------
     __table_args__ = (

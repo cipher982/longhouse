@@ -900,6 +900,7 @@ Example: "Backup completed 157GB in 17s, no errors found"
                 from zerg.services.worker_resume import check_and_resume_if_all_complete
                 from zerg.services.worker_resume import resume_supervisor_batch
                 from zerg.services.worker_resume import resume_supervisor_with_worker_result
+                from zerg.services.worker_resume import trigger_worker_inbox_run
 
                 # Restore worker_id context for E2E schema routing
                 # (asyncio.create_task with Context() clears all contextvars)
@@ -910,12 +911,22 @@ Example: "Backup completed 157GB in 17s, no errors found"
                 session_factory = get_session_factory()
                 fresh_db = session_factory()
                 try:
-                    # Race-safety: the worker may finish before the supervisor flips the run to WAITING.
-                    # Retry briefly so we don't miss resuming in that window.
-                    max_checks = 10
-                    check_sleep_s = 0.2
+                    # Build summary text early so it's available for inbox trigger
+                    summary_text = result_summary
+                    if not summary_text:
+                        if status == "failed":
+                            summary_text = f"Worker failed: {error or 'Unknown error'}"
+                        else:
+                            summary_text = "(No result summary)"
 
-                    for _ in range(max_checks):
+                    # Race-safety: the worker may finish before the supervisor flips the run to WAITING.
+                    # Retry with exponential backoff so we don't miss resuming in that window.
+                    # Total wait: ~6s (0.1 + 0.2 + 0.4 + 0.8 + 1.0 + 1.0 + 1.0 + 1.0 + 1.0 + 0.5)
+                    max_checks = 10
+                    base_sleep_s = 0.1
+                    max_sleep_s = 1.0
+
+                    for check_num in range(max_checks):
                         run = fresh_db.query(AgentRun).filter(AgentRun.id == run_id).first()
                         if not run:
                             return
@@ -923,26 +934,45 @@ Example: "Backup completed 157GB in 17s, no errors found"
                         if run.status == RunStatus.WAITING:
                             break
 
-                        # Terminal states - nothing to resume
+                        # Terminal states - supervisor already finished, trigger inbox continuation
                         if run.status in (RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED):
+                            logger.info(f"Run {run_id} is {run.status.value}, triggering inbox continuation")
+                            await trigger_worker_inbox_run(
+                                db=fresh_db,
+                                original_run_id=run_id,
+                                worker_job_id=job_id,
+                                worker_result=summary_text,
+                                worker_status=status,
+                                worker_error=error if status == "failed" else None,
+                            )
                             return
 
-                        await asyncio.sleep(check_sleep_s)
+                        # Exponential backoff: 0.1, 0.2, 0.4, 0.8, 1.0, 1.0, ...
+                        sleep_time = min(base_sleep_s * (2**check_num), max_sleep_s)
+                        await asyncio.sleep(sleep_time)
                         # Ensure we don't serve a cached status across retries
                         fresh_db.expire_all()
                     else:
-                        logger.info(
-                            "Supervisor run %s never entered WAITING after worker completion; skipping resume",
-                            run_id,
-                        )
-                        return
-
-                    summary_text = result_summary
-                    if not summary_text:
-                        if status == "failed":
-                            summary_text = f"Worker failed: {error or 'Unknown error'}"
+                        # Supervisor never entered WAITING - may still be RUNNING or already terminal
+                        # Refresh one more time and check final state
+                        fresh_db.expire_all()
+                        run = fresh_db.query(AgentRun).filter(AgentRun.id == run_id).first()
+                        if run and run.status in (RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED):
+                            logger.info(f"Run {run_id} ended as {run.status.value} without WAITING, triggering inbox continuation")
+                            await trigger_worker_inbox_run(
+                                db=fresh_db,
+                                original_run_id=run_id,
+                                worker_job_id=job_id,
+                                worker_result=summary_text,
+                                worker_status=status,
+                                worker_error=error if status == "failed" else None,
+                            )
                         else:
-                            summary_text = "(No result summary)"
+                            logger.info(
+                                "Supervisor run %s never entered WAITING after worker completion; skipping resume",
+                                run_id,
+                            )
+                        return
 
                     # Check if this run uses barrier pattern (parallel workers)
                     barrier = fresh_db.query(WorkerBarrier).filter(WorkerBarrier.run_id == run_id).first()
