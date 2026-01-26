@@ -132,9 +132,40 @@ export function mapWorkerComplete(
   state: ForumMapState,
   payload: EventMap["supervisor:worker_complete"],
 ): ForumReplayEventInput[] {
+  const room = getDefaultRoom(state);
+  if (!room) return [];
+
   const events: ForumReplayEventInput[] = [];
   const workerId = `worker-${payload.jobId}`;
-  if (state.workers.has(workerId)) {
+  const entityId = `worker-entity-${payload.jobId}`;
+  const taskId = `job-${payload.jobId}`;
+
+  // Create worker and entity if missing (handles out-of-order or missed spawn events)
+  if (!state.entities.has(entityId)) {
+    const entity: ForumEntity = {
+      id: entityId,
+      type: "worker",
+      roomId: room.id,
+      position: positionForId(entityId, room.bounds),
+      status: payload.status === "success" ? "idle" : "disabled",
+      label: `Worker ${payload.jobId}`,
+    };
+    events.push({ t: payload.timestamp, type: "entity.add", entity });
+  }
+
+  if (!state.workers.has(workerId)) {
+    events.push({
+      t: payload.timestamp,
+      type: "worker.add",
+      worker: {
+        id: workerId,
+        name: `Worker ${payload.jobId}`,
+        status: payload.status === "success" ? "idle" : "offline",
+        roomId: room.id,
+        entityId,
+      },
+    });
+  } else {
     events.push({
       t: payload.timestamp,
       type: "worker.update",
@@ -143,8 +174,21 @@ export function mapWorkerComplete(
     });
   }
 
-  const taskId = `job-${payload.jobId}`;
-  if (state.tasks.has(taskId)) {
+  // Create task if missing (handles out-of-order or missed spawn events)
+  if (!state.tasks.has(taskId)) {
+    const task: ForumTask = {
+      id: taskId,
+      title: `Worker Job ${payload.jobId}`,
+      status: payload.status === "success" ? "success" : "failed",
+      roomId: room.id,
+      entityId,
+      workerId,
+      progress: 1,
+      createdAt: payload.timestamp,
+      updatedAt: payload.timestamp,
+    };
+    events.push({ t: payload.timestamp, type: "task.add", task });
+  } else {
     events.push({
       t: payload.timestamp,
       type: "task.resolve",
@@ -156,17 +200,14 @@ export function mapWorkerComplete(
   }
 
   if (payload.status !== "success") {
-    const room = getDefaultRoom(state);
-    if (room) {
-      const alert: ForumAlert = {
-        id: `alert-worker-${payload.jobId}-${payload.timestamp}`,
-        level: "L2",
-        message: `Worker ${payload.jobId} failed`,
-        roomId: room.id,
-        createdAt: payload.timestamp,
-      };
-      events.push({ t: payload.timestamp, type: "alert.raise", alert });
-    }
+    const alert: ForumAlert = {
+      id: `alert-worker-${payload.jobId}-${payload.timestamp}`,
+      level: "L2",
+      message: `Worker ${payload.jobId} failed`,
+      roomId: room.id,
+      createdAt: payload.timestamp,
+    };
+    events.push({ t: payload.timestamp, type: "alert.raise", alert });
   }
 
   return events;
@@ -176,19 +217,40 @@ export function mapSupervisorComplete(
   state: ForumMapState,
   payload: EventMap["supervisor:complete"],
 ): ForumReplayEventInput[] {
-  const taskId = `run-${payload.runId}`;
-  if (!state.tasks.has(taskId)) return [];
+  const room = getDefaultRoom(state);
+  if (!room) return [];
 
-  return [
-    {
+  const taskId = `run-${payload.runId}`;
+  const events: ForumReplayEventInput[] = [];
+
+  // Create task if missing (handles out-of-order or missed started events)
+  if (!state.tasks.has(taskId)) {
+    const { entityId, events: entityEvents } = ensureTaskEntity(state, room, taskId);
+    events.push(...entityEvents.map((e) => ({ ...e, t: payload.timestamp })));
+
+    const task: ForumTask = {
+      id: taskId,
+      title: `Run ${payload.runId}`,
+      status: payload.status === "success" ? "success" : "failed",
+      roomId: room.id,
+      entityId,
+      progress: 1,
+      createdAt: payload.timestamp,
+      updatedAt: payload.timestamp,
+    };
+    events.push({ t: payload.timestamp, type: "task.add", task });
+  } else {
+    events.push({
       t: payload.timestamp,
       type: "task.resolve",
       taskId,
       status: payload.status === "success" ? "success" : "failed",
       progress: 1,
       updatedAt: payload.timestamp,
-    },
-  ];
+    });
+  }
+
+  return events;
 }
 
 export function mapWorkerToolFailed(
