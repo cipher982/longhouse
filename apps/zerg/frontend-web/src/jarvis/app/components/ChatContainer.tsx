@@ -194,6 +194,7 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
       <div key={message.id} className="message-group">
         <div
           className={`message ${message.role}${message.skipAnimation ? ' no-animate' : ''}${showTypingDots ? ' typing' : ''}`}
+          data-role={`chat-message-${message.role}`}
         >
           <div className="message-bubble" tabIndex={isAssistant && usageTitle && usageLine ? 0 : undefined}>
             <div className="message-content">
