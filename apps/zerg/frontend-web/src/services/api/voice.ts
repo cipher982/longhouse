@@ -18,6 +18,7 @@ export interface VoiceTurnResponse {
   error?: string | null;
   stt_model?: string | null;
   tts?: VoiceAudioPayload | null;
+  message_id?: string | null;
 }
 
 export async function voiceTurn(formData: FormData): Promise<VoiceTurnResponse> {
