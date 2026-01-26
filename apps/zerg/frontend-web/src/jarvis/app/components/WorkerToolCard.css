@@ -14,17 +14,39 @@
   border-radius: 6px;
   margin: 4px 0;
   transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+  overflow: hidden;
 }
 
-/* Status-based border colors */
+/* Status-based accent bars (pseudo-elements) */
+.worker-tool-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 3px;
+  background: transparent;
+  transition: background 0.15s ease;
+  z-index: 1;
+}
+
+/* Status-based border colors and accents */
+.worker-tool-card--spawned::before {
+  background: var(--color-primary, #3b82f6);
+}
+
 .worker-tool-card--spawned {
-  border-color: var(--color-primary, #3b82f6);
   opacity: 0.8;
 }
 
 .worker-tool-card--running {
   border-color: var(--color-primary, #3b82f6);
   animation: worker-card-pulse 2s ease-in-out infinite;
+}
+
+.worker-tool-card--running::before {
+  background: var(--color-primary, #3b82f6);
 }
 
 @keyframes worker-card-pulse {
@@ -36,12 +58,16 @@
   }
 }
 
-.worker-tool-card--complete {
-  border-color: var(--color-success, #22c55e);
+.worker-tool-card--complete::before {
+  background: var(--color-success, #22c55e);
 }
 
 .worker-tool-card--failed {
   border-color: var(--color-error, #ef4444);
+}
+
+.worker-tool-card--failed::before {
+  background: var(--color-error, #ef4444);
 }
 
 /* Detached mode - lifts to sticky position at top of chat */
