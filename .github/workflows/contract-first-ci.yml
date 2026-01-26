@@ -160,6 +160,7 @@ jobs:
         cd apps/zerg/e2e && VERBOSE=1 bunx playwright test --project=core --list 2>&1 | head -50 || true
       env:
         DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        FERNET_SECRET: ${{ secrets.FERNET_SECRET }}
 
     - name: Test backend startup
       run: |
@@ -168,6 +169,7 @@ jobs:
         timeout 30 uv run python -c "import os; os.environ['TESTING']='1'; os.environ['AUTH_DISABLED']='1'; print('Importing zerg.main...'); from zerg.main import app; print('Backend imports OK'); from zerg.database import default_engine; print('Testing DB...'); conn=default_engine.connect(); conn.execute(__import__('sqlalchemy').text('SELECT 1')); print('DB connection OK'); conn.close()" 2>&1 || echo "❌ Backend startup failed"
       env:
         DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        FERNET_SECRET: ${{ secrets.FERNET_SECRET }}
 
     - name: Test uvicorn startup
       run: |
@@ -183,12 +185,15 @@ jobs:
         ' 2>&1 || echo "❌ Uvicorn startup timed out"
       env:
         DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        FERNET_SECRET: ${{ secrets.FERNET_SECRET }}
 
     - name: Run Core E2E Tests
       run: make test-e2e-core
       env:
         # Database connection for E2E tests
         DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        # Encryption key for credentials
+        FERNET_SECRET: ${{ secrets.FERNET_SECRET }}
         # Life Hub credentials for session continuity tests
         LIFE_HUB_API_KEY: ${{ secrets.LIFE_HUB_API_KEY }}
         LIFE_HUB_URL: https://data.drose.io
