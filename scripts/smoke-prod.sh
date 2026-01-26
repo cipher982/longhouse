@@ -59,6 +59,50 @@ section() {
     echo "--- $1 ---"
 }
 
+# Wait for API health to return "healthy" status
+# Polls /health until status is "healthy" twice consecutively (or timeout)
+wait_for_health() {
+    local url="${1:-$API_URL/health}"
+    local max_attempts="${2:-45}"   # 45 * 2s = 90s max
+    local interval="${3:-2}"
+    local required_consecutive=2
+
+    local attempt=0
+    local consecutive_ok=0
+
+    echo -e "${YELLOW}Waiting for API health...${NC}"
+
+    while [[ $attempt -lt $max_attempts ]]; do
+        attempt=$((attempt + 1))
+
+        local response
+        response=$(curl -s --max-time 5 "$url" 2>/dev/null || echo '{}')
+
+        local status
+        status=$(echo "$response" | jq -r '.status // "unknown"' 2>/dev/null)
+
+        if [[ "$status" == "healthy" || "$status" == "ok" ]]; then
+            consecutive_ok=$((consecutive_ok + 1))
+            if [[ $consecutive_ok -ge $required_consecutive ]]; then
+                echo -e "${GREEN}✓${NC} API healthy after $attempt attempts"
+                return 0
+            fi
+        else
+            consecutive_ok=0
+        fi
+
+        # Show progress every 5 attempts
+        if [[ $((attempt % 5)) -eq 0 ]]; then
+            echo -e "  ${BLUE}...${NC} attempt $attempt/$max_attempts (status: $status)"
+        fi
+
+        sleep "$interval"
+    done
+
+    echo -e "${YELLOW}⚠${NC} Health check timeout after $attempt attempts - proceeding anyway"
+    return 0  # Don't fail - let tests run and report actual failures
+}
+
 # Run a test and keep going even if it fails (so we can report a full summary).
 run_test() {
     "$@" || true
@@ -576,10 +620,9 @@ echo "  API:      $API_URL"
 echo "================================================"
 echo ""
 
-# Wait if requested
+# Wait if requested - polls health instead of static sleep
 if [[ $WAIT -eq 1 ]]; then
-    echo -e "${YELLOW}Waiting ${WAIT_SECS}s for deployment to stabilize...${NC}"
-    sleep "$WAIT_SECS"
+    wait_for_health "$API_URL/health"
     echo ""
 fi
 
