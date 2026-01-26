@@ -28,6 +28,7 @@ export interface EventMap {
   'voice_channel:mic_ready': { stream: MediaStream };
 
   // Text Channel Events
+  'text_channel:send': { text: string; timestamp: number };
   'text_channel:sent': { text: string; timestamp: number };
   'text_channel:error': { error: Error; message: string };
   'text_channel:sending': { text: string };

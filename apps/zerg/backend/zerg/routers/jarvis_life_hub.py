@@ -86,6 +86,7 @@ async def list_sessions(
     query: Optional[str] = Query(None, description="Search query for content"),
     project: Optional[str] = Query(None, description="Filter by project name"),
     provider: Optional[str] = Query(None, description="Filter by provider"),
+    device_id: Optional[str] = Query(None, description="Filter by device ID"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
     limit: int = Query(20, ge=1, le=100, description="Max results to return"),
     db: Session = Depends(get_db),
@@ -114,16 +115,16 @@ async def list_sessions(
             where_clauses.append("s.provider = :provider")
             params["provider"] = provider
 
+        if device_id:
+            where_clauses.append("s.device_id = :device_id")
+            params["device_id"] = device_id
+
         # Query-based content search (searches in events)
-        query_join = ""
         if query:
-            query_join = """
-            JOIN agents.events eq ON eq.session_id = s.id
-                AND eq.content_text ILIKE :query_pattern
-            """
             params["query_pattern"] = f"%{query}%"
-            # Make sessions distinct since content search can match multiple events
-            where_clauses.append("TRUE")  # Placeholder to ensure JOIN is used
+            where_clauses.append(
+                "EXISTS (" "SELECT 1 FROM agents.events eq " "WHERE eq.session_id = s.id AND eq.content_text ILIKE :query_pattern" ")"
+            )
 
         where_sql = " AND ".join(where_clauses)
 
@@ -143,7 +144,7 @@ async def list_sessions(
                 WHERE e.role IN ('user', 'assistant')
                     AND e.content_text IS NOT NULL
             )
-            SELECT DISTINCT ON (s.id)
+            SELECT
                 s.id::text,
                 s.project,
                 s.provider,
@@ -156,7 +157,6 @@ async def list_sessions(
                 last_user.content_preview as last_user_message,
                 last_ai.content_preview as last_ai_message
             FROM agents.sessions s
-            {query_join}
             LEFT JOIN session_messages last_user
                 ON last_user.session_id = s.id
                 AND last_user.role = 'user'
@@ -166,7 +166,7 @@ async def list_sessions(
                 AND last_ai.role = 'assistant'
                 AND last_ai.rn = 1
             WHERE {where_sql}
-            ORDER BY s.id, s.started_at DESC
+            ORDER BY s.started_at DESC
             LIMIT :limit
         """)
 
@@ -193,14 +193,10 @@ async def list_sessions(
                 )
             )
 
-        # Sort by started_at descending (most recent first)
-        sessions.sort(key=lambda s: s.started_at, reverse=True)
-
         # Get total count (for pagination info)
         count_sql = text(f"""
             SELECT COUNT(DISTINCT s.id)
             FROM agents.sessions s
-            {query_join}
             WHERE {where_sql}
         """)
         count_result = db.execute(count_sql, params)

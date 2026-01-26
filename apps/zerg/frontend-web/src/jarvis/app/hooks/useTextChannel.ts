@@ -159,6 +159,14 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
     [dispatch, preferences]
   )
 
+  useEffect(() => {
+    const unsubscribe = eventBus.on('text_channel:send', (data) => {
+      void sendMessage(data.text)
+    })
+
+    return () => unsubscribe()
+  }, [sendMessage])
+
   // Clear all messages
   const clearMessages = useCallback(() => {
     dispatch({ type: 'SET_MESSAGES', messages: [] })
