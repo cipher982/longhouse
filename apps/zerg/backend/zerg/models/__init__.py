@@ -19,6 +19,7 @@ from .models import NodeExecutionState
 from .models import Runner
 from .models import RunnerEnrollToken
 from .models import RunnerJob
+from .models import UserSkill
 from .models import UserTask
 from .models import WorkerJob
 from .models import Workflow
@@ -67,6 +68,7 @@ __all__ = [
     "SyncOperation",
     "TriggerConfig",
     "UserTask",
+    "UserSkill",
     "WorkerJob",
     "Workflow",
     "WorkflowExecution",
