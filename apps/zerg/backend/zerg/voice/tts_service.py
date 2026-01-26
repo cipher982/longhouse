@@ -46,9 +46,9 @@ class TTSConfig:
     # OpenAI settings
     openai_api_key: str | None = None
     openai_model: str = "gpt-4o-mini-tts"
-    openai_voice: str = "alloy"
+    openai_voice: str = "nova"  # Female voice (options: alloy, echo, fable, onyx, nova, shimmer)
     openai_response_format: str = "mp3"
-    openai_speed: float = 1.0
+    openai_speed: float = 1.25  # Faster playback (0.25 - 4.0)
     openai_instructions: str | None = None
 
     # ElevenLabs settings
