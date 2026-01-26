@@ -2,15 +2,15 @@ import React from "react";
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, waitFor, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import SwarmMapPage from "../SwarmMapPage";
+import ForumPage from "../ForumPage";
 import { TestRouter } from "../../test/test-utils";
 import { eventBus } from "../../jarvis/lib/event-bus";
 
-vi.mock("../../swarm/SwarmMapCanvas", () => ({
-  SwarmMapCanvas: () => <div data-testid="swarm-map-canvas" />,
+vi.mock("../../forum/ForumCanvas", () => ({
+  ForumCanvas: () => <div data-testid="forum-canvas" />,
 }));
 
-describe("SwarmMapPage", () => {
+describe("ForumPage", () => {
   afterEach(() => {
     cleanup();
     eventBus.clear();
@@ -20,12 +20,12 @@ describe("SwarmMapPage", () => {
     const user = userEvent.setup();
 
     render(
-      <TestRouter initialEntries={["/swarm"]}>
-        <SwarmMapPage />
+      <TestRouter initialEntries={["/forum"]}>
+        <ForumPage />
       </TestRouter>,
     );
 
-    expect(await screen.findByTestId("swarm-map-canvas")).toBeInTheDocument();
+    expect(await screen.findByTestId("forum-canvas")).toBeInTheDocument();
 
     const modeToggle = await screen.findByRole("button", { name: "Replay Mode" });
     await user.click(modeToggle);

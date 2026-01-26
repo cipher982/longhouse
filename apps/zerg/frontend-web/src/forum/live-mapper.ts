@@ -1,19 +1,19 @@
 import type { EventMap } from "../jarvis/lib/event-bus";
-import type { SwarmMapState } from "./state";
+import type { ForumMapState } from "./state";
 import type {
-  SwarmAlert,
-  SwarmEntity,
-  SwarmReplayEventInput,
-  SwarmRoom,
-  SwarmTask,
+  ForumAlert,
+  ForumEntity,
+  ForumReplayEventInput,
+  ForumRoom,
+  ForumTask,
 } from "./types";
 
-const getDefaultRoom = (state: SwarmMapState): SwarmRoom | null => {
+const getDefaultRoom = (state: ForumMapState): ForumRoom | null => {
   const iterator = state.rooms.values().next();
   return iterator.done ? null : iterator.value;
 };
 
-const positionForId = (id: string, bounds: SwarmRoom["bounds"]) => {
+const positionForId = (id: string, bounds: ForumRoom["bounds"]) => {
   const hash = Array.from(id).reduce((acc, char) => acc + char.charCodeAt(0), 0);
   const spanCol = Math.max(1, bounds.maxCol - bounds.minCol);
   const spanRow = Math.max(1, bounds.maxRow - bounds.minRow);
@@ -24,15 +24,15 @@ const positionForId = (id: string, bounds: SwarmRoom["bounds"]) => {
 };
 
 const ensureTaskEntity = (
-  state: SwarmMapState,
-  room: SwarmRoom,
+  state: ForumMapState,
+  room: ForumRoom,
   taskId: string,
-): { entityId: string; events: SwarmReplayEventInput[] } => {
+): { entityId: string; events: ForumReplayEventInput[] } => {
   const entityId = `task-node-${taskId}`;
   if (state.entities.has(entityId)) {
     return { entityId, events: [] };
   }
-  const entity: SwarmEntity = {
+  const entity: ForumEntity = {
     id: entityId,
     type: "task_node",
     roomId: room.id,
@@ -44,19 +44,19 @@ const ensureTaskEntity = (
 };
 
 export function mapSupervisorStarted(
-  state: SwarmMapState,
+  state: ForumMapState,
   payload: EventMap["supervisor:started"],
-): SwarmReplayEventInput[] {
+): ForumReplayEventInput[] {
   const room = getDefaultRoom(state);
   if (!room) return [];
 
   const taskId = `run-${payload.runId}`;
-  const events: SwarmReplayEventInput[] = [];
+  const events: ForumReplayEventInput[] = [];
   const { entityId, events: entityEvents } = ensureTaskEntity(state, room, taskId);
   events.push(...entityEvents);
 
   if (!state.tasks.has(taskId)) {
-    const task: SwarmTask = {
+    const task: ForumTask = {
       id: taskId,
       title: payload.task,
       status: "running",
@@ -73,18 +73,18 @@ export function mapSupervisorStarted(
 }
 
 export function mapWorkerSpawned(
-  state: SwarmMapState,
+  state: ForumMapState,
   payload: EventMap["supervisor:worker_spawned"],
-): SwarmReplayEventInput[] {
+): ForumReplayEventInput[] {
   const room = getDefaultRoom(state);
   if (!room) return [];
 
   const workerId = `worker-${payload.jobId}`;
   const entityId = `worker-entity-${payload.jobId}`;
-  const events: SwarmReplayEventInput[] = [];
+  const events: ForumReplayEventInput[] = [];
 
   if (!state.entities.has(entityId)) {
-    const entity: SwarmEntity = {
+    const entity: ForumEntity = {
       id: entityId,
       type: "worker",
       roomId: room.id,
@@ -111,7 +111,7 @@ export function mapWorkerSpawned(
 
   const taskId = `job-${payload.jobId}`;
   if (!state.tasks.has(taskId)) {
-    const task: SwarmTask = {
+    const task: ForumTask = {
       id: taskId,
       title: payload.task,
       status: "running",
@@ -129,10 +129,10 @@ export function mapWorkerSpawned(
 }
 
 export function mapWorkerComplete(
-  state: SwarmMapState,
+  state: ForumMapState,
   payload: EventMap["supervisor:worker_complete"],
-): SwarmReplayEventInput[] {
-  const events: SwarmReplayEventInput[] = [];
+): ForumReplayEventInput[] {
+  const events: ForumReplayEventInput[] = [];
   const workerId = `worker-${payload.jobId}`;
   if (state.workers.has(workerId)) {
     events.push({
@@ -158,7 +158,7 @@ export function mapWorkerComplete(
   if (payload.status !== "success") {
     const room = getDefaultRoom(state);
     if (room) {
-      const alert: SwarmAlert = {
+      const alert: ForumAlert = {
         id: `alert-worker-${payload.jobId}-${payload.timestamp}`,
         level: "L2",
         message: `Worker ${payload.jobId} failed`,
@@ -173,9 +173,9 @@ export function mapWorkerComplete(
 }
 
 export function mapSupervisorComplete(
-  state: SwarmMapState,
+  state: ForumMapState,
   payload: EventMap["supervisor:complete"],
-): SwarmReplayEventInput[] {
+): ForumReplayEventInput[] {
   const taskId = `run-${payload.runId}`;
   if (!state.tasks.has(taskId)) return [];
 
@@ -192,13 +192,13 @@ export function mapSupervisorComplete(
 }
 
 export function mapWorkerToolFailed(
-  state: SwarmMapState,
+  state: ForumMapState,
   payload: EventMap["worker:tool_failed"],
-): SwarmReplayEventInput[] {
+): ForumReplayEventInput[] {
   const room = getDefaultRoom(state);
   if (!room) return [];
 
-  const alert: SwarmAlert = {
+  const alert: ForumAlert = {
     id: `alert-tool-${payload.toolCallId}-${payload.timestamp}`,
     level: "L1",
     message: `${payload.toolName} failed`,
