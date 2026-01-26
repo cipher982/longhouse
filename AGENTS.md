@@ -75,7 +75,7 @@ User message → `SupervisorService` → `supervisor_react_engine` → (spawn_wo
 
 ## Deployment
 
-**Product**: Swarmlet | **Server**: zerg (Hetzner)
+**Product**: Swarmlet | **Server**: zerg (Hetzner) | Coolify auto-deploys `main`
 
 | Service | URL |
 |---------|-----|
@@ -83,8 +83,11 @@ User message → `SupervisorService` → `supervisor_react_engine` → (spawn_wo
 | API | https://api.swarmlet.com |
 
 ```bash
-./scripts/smoke-prod.sh           # Validate endpoints
-./scripts/get-coolify-logs.sh 1   # Check deploy status
+# Post-deploy verification (run after push):
+./scripts/smoke-prod.sh --wait        # Health-polls then validates (fast)
+./scripts/smoke-prod.sh --wait --full # + LLM, voice, CRUD tests (~60s)
+make test-e2e-prod                    # Live Playwright (needs SMOKE_TEST_SECRET)
+./scripts/get-coolify-logs.sh 1       # Debug deploy issues
 ```
 
 ## Deep Dives
