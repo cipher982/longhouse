@@ -1,0 +1,70 @@
+name: Debug E2E
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/debug-e2e.yml'
+
+jobs:
+  debug:
+    runs-on: cube
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Setup uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: '1.2.20'
+
+    - name: Install deps
+      run: bun install --frozen-lockfile
+
+    - name: Check env
+      run: |
+        echo "DATABASE_URL length: ${#DATABASE_URL}"
+        echo "PWD: $PWD"
+        ls -la apps/zerg/e2e/
+      env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+    - name: Start backend manually
+      run: |
+        cd apps/zerg/backend
+        echo "Starting uvicorn..."
+        TESTING=1 AUTH_DISABLED=1 DATABASE_URL="${DATABASE_URL}" \
+          uv run python -m uvicorn zerg.main:app --host 127.0.0.1 --port 8001 --workers 1 &
+        sleep 15
+        echo "Checking health..."
+        curl -v http://127.0.0.1:8001/health || echo "FAILED"
+        echo "Checking if port is listening..."
+        ss -tlnp | grep 8001 || echo "Port not listening"
+      env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+    - name: Start frontend manually
+      run: |
+        cd apps/zerg/frontend-web
+        echo "Starting vite..."
+        VITE_PROXY_TARGET=http://127.0.0.1:8001 bunx vite --host 127.0.0.1 --port 8002 &
+        sleep 10
+        curl -v http://127.0.0.1:8002/ || echo "FAILED"
+      env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+    - name: Run single test
+      run: |
+        cd apps/zerg/e2e
+        BACKEND_PORT=8001 FRONTEND_PORT=8002 \
+          bunx playwright test --project=core tests/core/infrastructure-smoke.spec.ts --reporter=list
+      env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
