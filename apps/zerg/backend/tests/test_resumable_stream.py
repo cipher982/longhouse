@@ -438,3 +438,86 @@ async def test_stream_keeps_open_for_pending_workers_and_emits_worker_complete(d
     assert "supervisor_complete" in event_types
     assert "worker_complete" in event_types
     assert event_types.index("supervisor_complete") < event_types.index("worker_complete")
+
+
+@pytest.mark.asyncio
+async def test_stream_delivers_worker_output_after_supervisor_complete(db_session, test_run, test_user, auth_headers):
+    """Stream should deliver worker_output_chunk events after supervisor_complete."""
+    from zerg.models.models import WorkerJob
+
+    # Create a worker job to reference in worker_spawned payload
+    job = WorkerJob(
+        owner_id=test_user.id,
+        task="Streaming task",
+        model="gpt-5-mini",
+        status="queued",
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    async def emit_events():
+        await asyncio.sleep(0.1)
+        await emit_run_event(
+            db_session,
+            test_run.id,
+            "worker_spawned",
+            {
+                "job_id": job.id,
+                "tool_call_id": "tool-456",
+                "task": "Streaming task",
+                "model": "gpt-5-mini",
+                "owner_id": test_user.id,
+            },
+        )
+        await asyncio.sleep(0.1)
+        await emit_run_event(
+            db_session,
+            test_run.id,
+            "supervisor_complete",
+            {"result": "done", "owner_id": test_user.id},
+        )
+        await asyncio.sleep(0.1)
+        await emit_run_event(
+            db_session,
+            test_run.id,
+            "worker_output_chunk",
+            {
+                "job_id": job.id,
+                "worker_id": "worker-abc",
+                "runner_job_id": "runner-job-1",
+                "stream": "stdout",
+                "data": "df -h\nFilesystem ...\n",
+                "owner_id": test_user.id,
+            },
+        )
+        await asyncio.sleep(0.1)
+        await emit_run_event(
+            db_session,
+            test_run.id,
+            "worker_complete",
+            {
+                "job_id": job.id,
+                "worker_id": "worker-abc",
+                "status": "success",
+                "duration_ms": 800,
+                "owner_id": test_user.id,
+            },
+        )
+
+    emitter_task = asyncio.create_task(emit_events())
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test", timeout=5.0) as client:
+        async with client.stream("GET", f"/api/stream/runs/{test_run.id}", headers=auth_headers) as response:
+            assert response.status_code == 200
+            events = await collect_sse_events(response, max_events=10)
+
+    await emitter_task
+
+    event_types = [e.get("event") for e in events if e.get("event") != "heartbeat"]
+    assert "worker_spawned" in event_types
+    assert "supervisor_complete" in event_types
+    assert "worker_output_chunk" in event_types
+    assert "worker_complete" in event_types
+    assert event_types.index("supervisor_complete") < event_types.index("worker_output_chunk")
+    assert event_types.index("worker_output_chunk") < event_types.index("worker_complete")
