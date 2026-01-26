@@ -184,7 +184,7 @@ test_chat() {
     return 0
 }
 
-# Test voice turn (STT + supervisor response)
+# Test voice transcribe + TTS (SSE voice path uses these endpoints)
 test_voice() {
     local name="$1"
     local cookie_jar="$2"
@@ -213,19 +213,17 @@ test_voice() {
     # Silence data (1600 bytes of zeros)
     dd if=/dev/zero bs=1600 count=1 >> "$wav_file" 2>/dev/null
 
-    # Send voice request
+    # Transcribe request
     local response
     if [[ -n "$TIMEOUT_CMD" ]]; then
-        response=$($TIMEOUT_CMD "$timeout_secs" curl -s -X POST "$API_URL/api/jarvis/voice/turn" \
+        response=$($TIMEOUT_CMD "$timeout_secs" curl -s -X POST "$API_URL/api/jarvis/voice/transcribe" \
             -b "$cookie_jar" \
             -F "audio=@${wav_file};type=audio/wav;filename=sample.wav" \
-            -F "return_audio=false" \
             -F "message_id=$msg_id" 2>/dev/null) || true
     else
-        response=$(curl -s -X POST "$API_URL/api/jarvis/voice/turn" \
+        response=$(curl -s -X POST "$API_URL/api/jarvis/voice/transcribe" \
             -b "$cookie_jar" \
             -F "audio=@${wav_file};type=audio/wav;filename=sample.wav" \
-            -F "return_audio=false" \
             -F "message_id=$msg_id" 2>/dev/null) || true
     fi
 
@@ -250,20 +248,57 @@ test_voice() {
     local error_msg
     error_msg=$(echo "$response" | jq -r '.error // empty' 2>/dev/null)
 
-    # Accept either success OR expected STT errors (silence produces empty transcription)
+    local transcript=""
     if [[ "$status" == "success" ]]; then
-        local transcript
         transcript=$(echo "$response" | jq -r '.transcript // empty' 2>/dev/null)
-        pass "$name (transcript: \"${transcript:0:30}...\")"
-        return 0
+        if [[ -z "$transcript" ]]; then
+            fail "$name (empty transcript)"
+            return 1
+        fi
     elif [[ "$error_msg" == "Empty transcription result" ]] || [[ "$error_msg" == "Audio too short" ]]; then
-        # Expected error with silence - message_id passthrough is the key test
-        pass "$name (message_id passed through on STT error)"
-        return 0
+        # Expected error with silence - proceed to TTS test
+        transcript="Hello from smoke test"
     else
-        fail "$name (status=$status, error=$error_msg)"
+        fail "$name (transcribe status=$status, error=$error_msg)"
         return 1
     fi
+
+    # TTS request (independent of transcription success)
+    local tts_payload
+    tts_payload=$(jq -nc --arg text "$transcript" --arg msg_id "$msg_id" '{text:$text, message_id:$msg_id}')
+    local tts_response
+    if [[ -n "$TIMEOUT_CMD" ]]; then
+        tts_response=$($TIMEOUT_CMD "$timeout_secs" curl -s -X POST "$API_URL/api/jarvis/voice/tts" \
+            -b "$cookie_jar" \
+            -H "Content-Type: application/json" \
+            -d "$tts_payload" 2>/dev/null) || true
+    else
+        tts_response=$(curl -s -X POST "$API_URL/api/jarvis/voice/tts" \
+            -b "$cookie_jar" \
+            -H "Content-Type: application/json" \
+            -d "$tts_payload" 2>/dev/null) || true
+    fi
+
+    if [[ -z "$tts_response" ]]; then
+        fail "$name (no TTS response / timeout)"
+        return 1
+    fi
+
+    local tts_status
+    tts_status=$(echo "$tts_response" | jq -r '.status // empty' 2>/dev/null)
+    local tts_audio
+    tts_audio=$(echo "$tts_response" | jq -r '.tts.audio_base64 // empty' 2>/dev/null)
+    if [[ "$tts_status" != "success" ]] || [[ -z "$tts_audio" ]]; then
+        local tts_error
+        tts_error=$(echo "$tts_response" | jq -r '.error // .tts.error // "unknown"' 2>/dev/null)
+        fail "$name (tts status=$tts_status, error=$tts_error)"
+        return 1
+    fi
+
+    local preview="${transcript:0:30}"
+    [[ ${#transcript} -gt 30 ]] && preview="${preview}..."
+    pass "$name (transcribe+tts ok: \"${preview}\")"
+    return 0
 }
 
 # Test JSON field
@@ -599,7 +634,7 @@ if [[ -n "$SMOKE_TEST_SECRET" ]]; then
             section "LLM"
             run_test test_chat "Basic chat (2+2)" "$COOKIE_JAR" "What is 2+2? Reply with just the number." 30 '(^|[^0-9])4($|[^0-9])'
             run_test test_chat "Basic chat (France capital)" "$COOKIE_JAR" "What is the capital of France? Reply with just the city." 30 '(^|[^A-Za-z])Paris($|[^A-Za-z])'
-            run_test test_voice "Voice turn (message_id passthrough)" "$COOKIE_JAR" 45
+            run_test test_voice "Voice transcribe + TTS" "$COOKIE_JAR" 45
         else
             info "LLM test skipped (--no-llm)"
         fi
