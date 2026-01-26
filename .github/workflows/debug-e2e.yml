@@ -37,6 +37,13 @@ jobs:
       env:
         DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
+    - name: Pre-install backend deps
+      run: |
+        cd apps/zerg/backend
+        echo "Installing backend dependencies..."
+        uv sync
+        echo "Done installing deps"
+
     - name: Start backend manually
       run: |
         cd apps/zerg/backend
