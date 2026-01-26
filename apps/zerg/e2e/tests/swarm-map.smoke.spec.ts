@@ -14,6 +14,10 @@ test('Swarm map overlay renders and responds to live events', async ({ page }) =
   await expect(page.locator('.swarm-panel-header .ui-badge', { hasText: 'Live' })).toBeVisible();
 
   await page.waitForFunction(() => Boolean((window as any).__jarvis?.eventBus));
+  await page.waitForFunction(
+    () => (window as any).__jarvis?.eventBus?.listenerCount?.('supervisor:started') > 0,
+  );
+
   await page.evaluate(() => {
     (window as any).__jarvis.eventBus.emit('supervisor:started', {
       runId: 101,
