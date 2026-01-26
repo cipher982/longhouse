@@ -48,6 +48,19 @@ def upgrade() -> None:
         schema=SCHEMA,
     )
 
+    # Backfill: For existing continuations, set root_run_id = continuation_of_run_id
+    # This handles direct continuations. Chain continuations created after this migration
+    # will properly propagate root_run_id through the code.
+    conn = op.get_bind()
+    conn.execute(
+        sa.text(f"""
+            UPDATE {SCHEMA}.agent_runs
+            SET root_run_id = continuation_of_run_id
+            WHERE continuation_of_run_id IS NOT NULL
+              AND root_run_id IS NULL
+        """)
+    )
+
 
 def downgrade() -> None:
     """Remove root_run_id column from agent_runs table."""
