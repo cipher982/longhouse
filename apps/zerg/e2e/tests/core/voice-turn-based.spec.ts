@@ -64,4 +64,61 @@ test.describe('Voice Turn-Based - Core', () => {
     expect(typeof data.tts.audio_base64).toBe('string');
     expect(data.tts.audio_base64.length).toBeGreaterThan(0);
   });
+
+  test('message_id passthrough for history correlation', async ({ request }) => {
+    const audioBuffer = buildWavBuffer();
+    const testMessageId = 'e2e-test-uuid-' + Date.now();
+
+    const response = await request.post('/api/jarvis/voice/turn', {
+      multipart: {
+        audio: {
+          name: 'sample.wav',
+          mimeType: 'audio/wav',
+          buffer: audioBuffer,
+        },
+        return_audio: 'false',
+        message_id: testMessageId,
+      },
+    });
+
+    expect(response.ok()).toBeTruthy();
+
+    const data = await response.json();
+    expect(data.message_id).toBe(testMessageId);
+    expect(data.status).toBe('success');
+  });
+
+  test('transcribe -> chat SSE uses same message_id', async ({ request }) => {
+    const audioBuffer = buildWavBuffer();
+    const testMessageId = 'voice-sse-' + Date.now();
+
+    const transcribeResponse = await request.post('/api/jarvis/voice/transcribe', {
+      multipart: {
+        audio: {
+          name: 'sample.wav',
+          mimeType: 'audio/wav',
+          buffer: audioBuffer,
+        },
+        message_id: testMessageId,
+      },
+    });
+
+    expect(transcribeResponse.ok()).toBeTruthy();
+    const transcribeData = await transcribeResponse.json();
+    expect(transcribeData.status).toBe('success');
+    expect(transcribeData.transcript?.length).toBeGreaterThan(0);
+    expect(transcribeData.message_id).toBe(testMessageId);
+
+    const chatResponse = await request.post('/api/jarvis/chat', {
+      data: {
+        message: transcribeData.transcript,
+        message_id: testMessageId,
+      },
+    });
+
+    expect(chatResponse.ok()).toBeTruthy();
+    const sseText = await chatResponse.text();
+    expect(sseText).toContain('supervisor_complete');
+    expect(sseText).toContain(testMessageId);
+  });
 });

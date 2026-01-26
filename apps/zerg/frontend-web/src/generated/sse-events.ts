@@ -46,7 +46,7 @@ export interface OikosStartedPayload {
   message_id: string;
   /** For continuation runs, the message_id of the original run's message */
   continuation_of_message_id?: string;
-  /** End-to-end trace ID for debugging (copy from UI for fiche debugging) */
+  /** End-to-end trace ID for debugging (copy from UI for agent debugging) */
   trace_id?: string;
 }
 
@@ -78,7 +78,7 @@ export interface OikosCompletePayload {
   duration_ms?: number;
   usage?: UsageData;
   run_id?: number;
-  fiche_id?: number;
+  agent_id?: number;
   thread_id?: number;
   /** URL for debug/inspection */
   debug_url?: string;
@@ -91,12 +91,12 @@ export interface OikosCompletePayload {
 export interface OikosDeferredPayload {
   /** Deferred status message */
   message: string;
-  /** URL to re-attach to the running run execution */
+  /** URL to re-attach to the running execution */
   attach_url?: string;
   /** Timeout that triggered deferral */
   timeout_seconds?: number;
   run_id?: number;
-  fiche_id?: number;
+  agent_id?: number;
   thread_id?: number;
   /** Unique identifier for the assistant message */
   message_id?: string;
@@ -112,7 +112,7 @@ export interface OikosWaitingPayload {
   /** If false, keep SSE stream open while waiting */
   close_stream?: boolean;
   run_id?: number;
-  fiche_id?: number;
+  agent_id?: number;
   thread_id?: number;
   /** Unique identifier for the assistant message */
   message_id?: string;
@@ -122,7 +122,7 @@ export interface OikosWaitingPayload {
 
 export interface OikosResumedPayload {
   run_id?: number;
-  fiche_id?: number;
+  agent_id?: number;
   thread_id: number;
   /** Unique identifier for the assistant message */
   message_id: string;
@@ -226,6 +226,22 @@ export interface CommisToolFailedPayload {
   trace_id?: string;
 }
 
+export interface CommisOutputChunkPayload {
+  /** Commis job ID (spawn_commis job) */
+  job_id?: number;
+  commis_id: string;
+  /** Runner exec job UUID */
+  runner_job_id?: string;
+  /** Output stream for this chunk */
+  stream: "stdout" | "stderr";
+  /** Output chunk (may be truncated) */
+  data: string;
+  /** Required for security (prevents cross-run leakage) */
+  run_id: number;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
+}
+
 export interface OikosToolStartedPayload {
   tool_name: string;
   /** Stable ID linking all events for this tool call */
@@ -281,6 +297,32 @@ export interface OikosToolFailedPayload {
   trace_id?: string;
 }
 
+/** Trigger session picker modal in frontend */
+export interface ShowSessionPickerPayload {
+  /** Current oikos run ID */
+  run_id?: number;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
+  /** Optional filters to pre-populate the picker */
+  filters?: Record<string, any>;
+}
+
+/** Explicit stream lifecycle control - keep_open extends lease, close is terminal end-marker */
+export interface StreamControlPayload {
+  /** keep_open extends stream lease; close is terminal end-marker */
+  action: "keep_open" | "close";
+  /** Why this action (commiss_pending, continuation_start, all_complete, timeout, error) */
+  reason: string;
+  /** Lease time in ms (max 5 min); stream closes if no activity/renewal */
+  ttl_ms?: number;
+  /** Run ID this control applies to */
+  run_id: number;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
+  /** Current pending commis count (for debugging) */
+  pending_commiss?: number;
+}
+
 // All SSE event types as a constant array (use for validation)
 export const SSE_EVENT_TYPES = [
   "connected",
@@ -300,10 +342,13 @@ export const SSE_EVENT_TYPES = [
   "commis_tool_started",
   "commis_tool_completed",
   "commis_tool_failed",
+  "commis_output_chunk",
   "oikos_tool_started",
   "oikos_tool_progress",
   "oikos_tool_completed",
   "oikos_tool_failed",
+  "show_session_picker",
+  "stream_control",
 ] as const;
 
 // SSE event type union (derived from SSE_EVENT_TYPES)
@@ -348,10 +393,13 @@ export type SSEPayloadFor<T extends SSEEventType> =
   T extends "commis_tool_started" ? CommisToolStartedPayload :
   T extends "commis_tool_completed" ? CommisToolCompletedPayload :
   T extends "commis_tool_failed" ? CommisToolFailedPayload :
+  T extends "commis_output_chunk" ? CommisOutputChunkPayload :
   T extends "oikos_tool_started" ? OikosToolStartedPayload :
   T extends "oikos_tool_progress" ? OikosToolProgressPayload :
   T extends "oikos_tool_completed" ? OikosToolCompletedPayload :
   T extends "oikos_tool_failed" ? OikosToolFailedPayload :
+  T extends "show_session_picker" ? ShowSessionPickerPayload :
+  T extends "stream_control" ? StreamControlPayload :
   never;
 
 // Payload type lookup (for direct payload access after unwrapping)

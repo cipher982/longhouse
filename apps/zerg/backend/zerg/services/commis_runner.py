@@ -1,10 +1,10 @@
-"""Commis Runner – execute fiche tasks as disposable commis with artifact persistence.
+"""Commis Runner – execute agent tasks as disposable commiss with artifact persistence.
 
-This service runs a fiche as a "commis" - a disposable execution unit that persists
-all outputs (tool calls, messages, results) to the filesystem. Oikos can later
+This service runs an agent as a "commis" - a disposable execution unit that persists
+all outputs (tool calls, messages, results) to the filesystem. Oikoss can later
 retrieve and analyze commis results.
 
-The CommisRunner is a thin wrapper around FicheRunner that intercepts tool calls
+The CommisRunner is a thin wrapper around Runner that intercepts tool calls
 and messages to persist them via CommisArtifactStore.
 """
 
@@ -30,7 +30,7 @@ from zerg.crud import crud
 from zerg.events import CommisEmitter
 from zerg.events import reset_emitter
 from zerg.events import set_emitter
-from zerg.managers.fiche_runner import FicheRunner
+from zerg.managers.fiche_runner import Runner
 from zerg.models.models import Fiche as FicheModel
 from zerg.models_config import DEFAULT_COMMIS_MODEL_ID
 from zerg.prompts import build_commis_prompt
@@ -52,7 +52,7 @@ class CommisResult:
     status
         Final status: "success", "failed", "timeout"
     result
-        Natural language result from the fiche (full text)
+        Natural language result from the agent (full text)
     summary
         Compressed summary (~150 chars) for context efficiency
     error
@@ -70,7 +70,7 @@ class CommisResult:
 
 
 class CommisRunner:
-    """Execute fiches as disposable commis with automatic artifact persistence."""
+    """Execute agents as disposable commiss with automatic artifact persistence."""
 
     def __init__(self, artifact_store: CommisArtifactStore | None = None):
         """Initialize the commis runner.
@@ -86,18 +86,18 @@ class CommisRunner:
         self,
         db: Session,
         task: str,
-        fiche: FicheModel | None = None,
-        fiche_config: dict[str, Any] | None = None,
+        agent: FicheModel | None = None,
+        agent_config: dict[str, Any] | None = None,
         timeout: int = 300,
         event_context: dict[str, Any] | None = None,
         job_id: int | None = None,
     ) -> CommisResult:
-        """Execute a task as a commis fiche.
+        """Execute a task as a commis agent.
 
         This method:
         1. Creates a commis directory via artifact_store
         2. Creates a fresh thread for this commis
-        3. Runs the fiche with the task
+        3. Runs the agent with the task
         4. Captures all tool calls and persists to files
         5. Captures all messages to thread.jsonl
         6. Extracts final assistant message as result
@@ -110,9 +110,9 @@ class CommisRunner:
             Active SQLAlchemy Session
         task
             Task instructions for the commis
-        fiche
-            Optional FicheModel to use. If None, creates a temporary fiche.
-        fiche_config
+        agent
+            Optional FicheModel to use. If None, creates a temporary agent.
+        agent_config
             Optional config overrides (model, tools, system prompt, etc.)
         timeout
             Maximum execution time in seconds (enforced via asyncio.wait_for)
@@ -125,22 +125,22 @@ class CommisRunner:
         Raises
         ------
         Exception
-            If fiche execution fails
+            If agent execution fails
         """
         start_time = datetime.now(timezone.utc)
         event_ctx = event_context or {}
         trace_id = event_ctx.get("trace_id") if event_ctx else None
         owner_for_events = None
-        if fiche is not None:
-            owner_for_events = getattr(fiche, "owner_id", None)
-        elif fiche_config:
-            owner_for_events = fiche_config.get("owner_id")
+        if agent is not None:
+            owner_for_events = getattr(agent, "owner_id", None)
+        elif agent_config:
+            owner_for_events = agent_config.get("owner_id")
 
         # Create commis directory
-        config = fiche_config or {}
-        if fiche:
-            config.setdefault("fiche_id", fiche.id)
-            config.setdefault("model", fiche.model)
+        config = agent_config or {}
+        if agent:
+            config.setdefault("fiche_id", agent.id)
+            config.setdefault("model", agent.model)
 
         # Create commis - artifact store is optional
         if self.artifact_store:
@@ -154,7 +154,7 @@ class CommisRunner:
 
         # Set up commis context for tool event emission
         # This context is read by oikos_react_engine._call_tool_async to emit
-        # COMMIS_TOOL_STARTED/COMPLETED/FAILED events
+        # WORKER_TOOL_STARTED/COMPLETED/FAILED events
         # job_id is critical for roundabout event correlation
         # trace_id enables end-to-end debugging (inherited from oikos via CommisJob)
         commis_context = CommisContext(
@@ -168,7 +168,7 @@ class CommisRunner:
         context_token = set_commis_context(commis_context)
 
         # Set up injected emitter for event emission (Phase 2 of emitter refactor)
-        # CommisEmitter (aliased as CommisEmitter) always emits commis_tool_* events regardless of contextvar state
+        # CommisEmitter always emits commis_tool_* events regardless of contextvar state
         # Note: Emitter does NOT hold a DB session - event emission opens its own session
         commis_emitter = CommisEmitter(
             commis_id=commis_id,
@@ -187,7 +187,7 @@ class CommisRunner:
         metrics_collector = MetricsCollector(commis_id)
         set_metrics_collector(metrics_collector)
 
-        temp_fiche = False  # Track temporary fiche for cleanup on failure
+        temp_agent = False  # Track temporary agent for cleanup on failure
         try:
             # Start commis (marks as running)
             if self.artifact_store:
@@ -206,19 +206,19 @@ class CommisRunner:
                     },
                 )
 
-            # Create or use existing fiche
-            if fiche is None:
-                # Create temporary fiche for this commis
-                fiche = await self._create_temporary_fiche(db, task, config)
-                temp_fiche = True
+            # Create or use existing agent
+            if agent is None:
+                # Create temporary agent for this commis
+                agent = await self._create_temporary_agent(db, task, config)
+                temp_agent = True
             else:
-                temp_fiche = False
+                temp_agent = False
 
             # Create fresh thread for this commis
             title = f"Commis: {task[:50]}"
             thread = ThreadService.create_thread_with_system_message(
                 db,
-                fiche,
+                agent,
                 title=title,
                 thread_type="manual",  # Use "manual" for commis executions
                 active=False,
@@ -233,10 +233,10 @@ class CommisRunner:
                 processed=False,
             )
 
-            # Run fiche and capture messages (with timeout enforcement)
+            # Run agent and capture messages (with timeout enforcement)
             # Use reasoning_effort from config (inherited from oikos) or default to "none"
             commis_reasoning_effort = config.get("reasoning_effort", "none")
-            runner = FicheRunner(fiche, reasoning_effort=commis_reasoning_effort)
+            runner = Runner(agent, reasoning_effort=commis_reasoning_effort)
             try:
                 created_messages = await asyncio.wait_for(runner.run_thread(db, thread), timeout=timeout)
             except asyncio.TimeoutError:
@@ -246,7 +246,7 @@ class CommisRunner:
             langchain_messages = [_db_to_langchain(msg) for msg in created_messages]
 
             # Persist messages to thread.jsonl (include injected system/context)
-            await self._persist_messages(commis_id, thread.id, db, fiche_id=fiche.id)
+            await self._persist_messages(commis_id, thread.id, db, fiche_id=agent.id)
 
             # Persist tool calls to separate files
             await self._persist_tool_calls(commis_id, langchain_messages)
@@ -369,17 +369,17 @@ class CommisRunner:
                     job_id=job_id,
                 )
 
-            # Clean up temporary fiche if created
-            if temp_fiche:
+            # Clean up temporary agent if created
+            if temp_agent:
                 # Cleanup is best-effort and should not flip a successful commis run into a failure.
                 try:
-                    crud.delete_fiche(db, fiche.id)
-                    temp_fiche = False  # Prevent cleanup in finally
+                    crud.delete_agent(db, agent.id)
+                    temp_agent = False  # Prevent cleanup in finally
                 except Exception:
                     db.rollback()
                     logger.warning(
-                        "Failed to clean up temporary fiche %s after commis success",
-                        getattr(fiche, "id", None),
+                        "Failed to clean up temporary agent %s after commis success",
+                        getattr(agent, "id", None),
                         exc_info=True,
                     )
 
@@ -451,13 +451,13 @@ class CommisRunner:
             reset_commis_context(context_token)
             reset_emitter(emitter_token)
 
-            # Ensure temporary fiches are not left behind on failure paths
-            if temp_fiche and fiche:
+            # Ensure temporary agents are not left behind on failure paths
+            if temp_agent and agent:
                 try:
-                    crud.delete_fiche(db, fiche.id)
+                    crud.delete_agent(db, agent.id)
                 except Exception:
                     db.rollback()
-                    logger.warning("Failed to clean up temporary fiche after failure", exc_info=True)
+                    logger.warning("Failed to clean up temporary agent after failure", exc_info=True)
 
     async def _emit_event(self, db: Session, run_id: int, event_type: str, payload: dict[str, Any]) -> None:
         """Best-effort event emission for commis lifecycle using durable event store."""
@@ -473,10 +473,10 @@ class CommisRunner:
         except Exception:
             logger.warning("Failed to emit commis event %s", event_type, exc_info=True)
 
-    async def _create_temporary_fiche(self, db: Session, task: str, config: dict[str, Any]) -> FicheModel:
-        """Create a temporary fiche for a commis run.
+    async def _create_temporary_agent(self, db: Session, task: str, config: dict[str, Any]) -> FicheModel:
+        """Create a temporary agent for a commis run.
 
-        Commis get access to infrastructure tools (ssh_exec, http_request, etc.)
+        Commiss get access to infrastructure tools (ssh_exec, http_request, etc.)
         following the "shell-first philosophy" - the terminal is the primitive.
 
         Parameters
@@ -491,7 +491,7 @@ class CommisRunner:
         Returns
         -------
         FicheModel
-            Created fiche row
+            Created agent row
         """
         # Get owner_id from config or use first available user
         owner_id = config.get("owner_id")
@@ -505,7 +505,7 @@ class CommisRunner:
             result = db.execute(select(User).limit(1))
             user = result.scalar_one_or_none()
             if user is None:
-                raise ValueError("No users found - cannot create commis fiche")
+                raise ValueError("No users found - cannot create commis agent")
             owner_id = user.id
         else:
             # Fetch user object for context-aware prompt composition
@@ -533,8 +533,8 @@ class CommisRunner:
             ],
         )
 
-        # Create fiche (status is set automatically to "idle")
-        fiche = crud.create_fiche(
+        # Create agent (status is set automatically to "idle")
+        agent = crud.create_agent(
             db=db,
             owner_id=owner_id,
             name=f"Commis: {task[:30]}",
@@ -547,12 +547,12 @@ class CommisRunner:
         )
 
         # Set allowed tools for infrastructure access
-        fiche.allowed_tools = default_commis_tools
+        agent.allowed_tools = default_commis_tools
         db.commit()
-        db.refresh(fiche)
+        db.refresh(agent)
 
-        logger.debug(f"Created temporary fiche {fiche.id} for commis")
-        return fiche
+        logger.debug(f"Created temporary agent {agent.id} for commis")
+        return agent
 
     async def _persist_messages(self, commis_id: str, thread_id: int, db: Session, *, fiche_id: int) -> None:
         """Persist all thread messages to thread.jsonl.
@@ -566,24 +566,24 @@ class CommisRunner:
         db
             SQLAlchemy session
         fiche_id
-            Fiche ID used for runtime system prompt injection
+            Agent ID used for runtime system prompt injection
         """
         # Skip if no artifact store
         if not self.artifact_store:
             return
 
         # Include runtime-injected system/context messages for debugging.
-        # These are NOT stored in the DB (see FicheRunner.run_thread), but they
+        # These are NOT stored in the DB (see Runner.run_thread), but they
         # are critical for understanding commis behavior post-hoc.
         try:
-            from zerg.connectors.status_builder import build_fiche_context
+            from zerg.connectors.status_builder import build_agent_context
             from zerg.crud import crud as _crud
             from zerg.prompts.connector_protocols import get_connector_protocols
 
-            fiche_row = _crud.get_fiche(db, fiche_id)
-            if fiche_row and fiche_row.system_instructions:
+            agent_row = _crud.get_agent(db, fiche_id)
+            if agent_row and agent_row.system_instructions:
                 protocols = get_connector_protocols()
-                system_content = f"{protocols}\n\n{fiche_row.system_instructions}"
+                system_content = f"{protocols}\n\n{agent_row.system_instructions}"
                 self.artifact_store.save_message(
                     commis_id,
                     {
@@ -594,11 +594,11 @@ class CommisRunner:
                 )
 
                 # Connector status context (ephemeral at runtime) – include for debugging.
-                context_text = build_fiche_context(
+                context_text = build_agent_context(
                     db=db,
-                    owner_id=fiche_row.owner_id,
-                    fiche_id=fiche_row.id,
-                    allowed_tools=getattr(fiche_row, "allowed_tools", None),
+                    owner_id=agent_row.owner_id,
+                    fiche_id=agent_row.id,
+                    allowed_tools=getattr(agent_row, "allowed_tools", None),
                     compact_json=True,
                 )
                 self.artifact_store.save_message(
@@ -861,9 +861,9 @@ Example: "Backup completed 157GB in 17s, no errors found"
     ) -> None:
         """Resume interrupted oikos if waiting for commis (NON-BLOCKING).
 
-        Uses barrier pattern for parallel commis:
+        Uses barrier pattern for parallel commiss:
         - Checks if there's a CommisBarrier for this run
-        - If so, updates barrier and triggers batch resume only when ALL commis complete
+        - If so, updates barrier and triggers batch resume only when ALL commiss complete
         - Falls back to single-commis resume for backwards compatibility
 
         This is fire-and-forget to prevent commis "duration" from including oikos synthesis time.
@@ -900,6 +900,7 @@ Example: "Backup completed 157GB in 17s, no errors found"
                 from zerg.services.commis_resume import check_and_resume_if_all_complete
                 from zerg.services.commis_resume import resume_oikos_batch
                 from zerg.services.commis_resume import resume_oikos_with_commis_result
+                from zerg.services.commis_resume import trigger_commis_inbox_run
 
                 # Restore commis_id context for E2E schema routing
                 # (asyncio.create_task with Context() clears all contextvars)
@@ -910,33 +911,7 @@ Example: "Backup completed 157GB in 17s, no errors found"
                 session_factory = get_session_factory()
                 fresh_db = session_factory()
                 try:
-                    # Race-safety: the commis may finish before the oikos flips the run to WAITING.
-                    # Retry briefly so we don't miss resuming in that window.
-                    max_checks = 10
-                    check_sleep_s = 0.2
-
-                    for _ in range(max_checks):
-                        run = fresh_db.query(Run).filter(Run.id == run_id).first()
-                        if not run:
-                            return
-
-                        if run.status == RunStatus.WAITING:
-                            break
-
-                        # Terminal states - nothing to resume
-                        if run.status in (RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED):
-                            return
-
-                        await asyncio.sleep(check_sleep_s)
-                        # Ensure we don't serve a cached status across retries
-                        fresh_db.expire_all()
-                    else:
-                        logger.info(
-                            "Oikos run %s never entered WAITING after commis completion; skipping resume",
-                            run_id,
-                        )
-                        return
-
+                    # Build summary text early so it's available for inbox trigger
                     summary_text = result_summary
                     if not summary_text:
                         if status == "failed":
@@ -944,7 +919,62 @@ Example: "Backup completed 157GB in 17s, no errors found"
                         else:
                             summary_text = "(No result summary)"
 
-                    # Check if this run uses barrier pattern (parallel commis)
+                    # Race-safety: the commis may finish before the oikos flips the run to WAITING.
+                    # Retry with exponential backoff so we don't miss resuming in that window.
+                    # Total wait: ~6s (0.1 + 0.2 + 0.4 + 0.8 + 1.0 + 1.0 + 1.0 + 1.0 + 1.0 + 0.5)
+                    max_checks = 10
+                    base_sleep_s = 0.1
+                    max_sleep_s = 1.0
+
+                    for check_num in range(max_checks):
+                        run = fresh_db.query(Run).filter(Run.id == run_id).first()
+                        if not run:
+                            return
+
+                        if run.status == RunStatus.WAITING:
+                            break
+
+                        # Terminal states - oikos already finished, trigger inbox continuation
+                        if run.status in (RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED):
+                            logger.info(f"Run {run_id} is {run.status.value}, triggering inbox continuation")
+                            await trigger_commis_inbox_run(
+                                db=fresh_db,
+                                original_run_id=run_id,
+                                commis_job_id=job_id,
+                                commis_result=summary_text,
+                                commis_status=status,
+                                commis_error=error if status == "failed" else None,
+                            )
+                            return
+
+                        # Exponential backoff: 0.1, 0.2, 0.4, 0.8, 1.0, 1.0, ...
+                        sleep_time = min(base_sleep_s * (2**check_num), max_sleep_s)
+                        await asyncio.sleep(sleep_time)
+                        # Ensure we don't serve a cached status across retries
+                        fresh_db.expire_all()
+                    else:
+                        # Oikos never entered WAITING - may still be RUNNING or already terminal
+                        # Refresh one more time and check final state
+                        fresh_db.expire_all()
+                        run = fresh_db.query(Run).filter(Run.id == run_id).first()
+                        if run and run.status in (RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED):
+                            logger.info(f"Run {run_id} ended as {run.status.value} without WAITING, triggering inbox continuation")
+                            await trigger_commis_inbox_run(
+                                db=fresh_db,
+                                original_run_id=run_id,
+                                commis_job_id=job_id,
+                                commis_result=summary_text,
+                                commis_status=status,
+                                commis_error=error if status == "failed" else None,
+                            )
+                        else:
+                            logger.info(
+                                "Oikos run %s never entered WAITING after commis completion; skipping resume",
+                                run_id,
+                            )
+                        return
+
+                    # Check if this run uses barrier pattern (parallel commiss)
                     barrier = fresh_db.query(CommisBarrier).filter(CommisBarrier.run_id == run_id).first()
 
                     if barrier and job_id:
@@ -960,7 +990,7 @@ Example: "Backup completed 157GB in 17s, no errors found"
                         )
 
                         # CRITICAL: Commit barrier state changes (check_and_resume uses nested transaction)
-                        # Without this commit, CommisBarrierJob updates and completed_count are rolled back
+                        # Without this commit, BarrierJob updates and completed_count are rolled back
                         fresh_db.commit()
 
                         if barrier_result["status"] == "resume":
@@ -979,7 +1009,7 @@ Example: "Backup completed 157GB in 17s, no errors found"
                         else:
                             logger.debug(f"Barrier check skipped for run {run_id}: {barrier_result.get('reason')}")
                     else:
-                        # SINGLE-COMMIS PATH: Fall back to original resume for backwards compatibility
+                        # SINGLE-WORKER PATH: Fall back to original resume for backwards compatibility
                         logger.debug(f"No barrier for run {run_id}, using single-commis resume")
                         await resume_oikos_with_commis_result(
                             db=fresh_db,
@@ -999,9 +1029,9 @@ Example: "Backup completed 157GB in 17s, no errors found"
             # IMPORTANT: create_task() captures current contextvars.
             #
             # CommisRunner.run_commis() sets CommisContext via contextvars so that commis tool calls
-            # emit COMMIS_TOOL_* events. If we schedule the oikos resume task while that context
+            # emit WORKER_TOOL_* events. If we schedule the oikos resume task while that context
             # is still set, the resume execution inherits it and the oikos's tool calls can be
-            # misclassified/emitted as COMMIS_TOOL_* (e.g., a replayed spawn_commis showing up as a
+            # misclassified/emitted as WORKER_TOOL_* (e.g., a replayed spawn_commis showing up as a
             # nested tool inside the spawn_commis card).
             import contextvars
 

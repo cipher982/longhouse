@@ -10,52 +10,56 @@
 import { expect, type Page, type APIRequestContext } from '@playwright/test';
 
 /**
- * Create an fiche via UI and return its ID.
+ * Create an agent via UI and return its ID.
  *
  * CRITICAL: Gets ID from API response, NOT from DOM query.
  * This prevents race conditions where .first() returns a stale row.
  */
-export async function createFicheViaUI(page: Page): Promise<string> {
+export async function createAgentViaUI(page: Page): Promise<string> {
   await page.goto('/');
 
-  const createBtn = page.locator('[data-testid="create-fiche-btn"]');
+  const createBtn = page.locator('[data-testid="create-agent-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
   await expect(createBtn).toBeEnabled({ timeout: 5000 });
 
-  // Capture API response to get the ACTUAL created fiche ID
+  // Capture API response to get the ACTUAL created agent ID
   const [response] = await Promise.all([
     page.waitForResponse(
-      (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
+      (r) => r.url().includes('/api/agents') && r.request().method() === 'POST' && r.status() === 201,
       { timeout: 10000 }
     ),
     createBtn.click(),
   ]);
 
-  // Parse the fiche ID from the response body
+  // Parse the agent ID from the response body
   const body = await response.json();
-  const ficheId = String(body.id);
+  const agentId = String(body.id);
 
-  if (!ficheId || ficheId === 'undefined') {
-    throw new Error(`Failed to get fiche ID from API response: ${JSON.stringify(body)}`);
+  if (!agentId || agentId === 'undefined') {
+    throw new Error(`Failed to get agent ID from API response: ${JSON.stringify(body)}`);
   }
 
-  // Wait for THIS SPECIFIC fiche's row to appear in DOM (not just any row)
-  const row = page.locator(`tr[data-fiche-id="${ficheId}"]`);
+  // Wait for THIS SPECIFIC agent's row to appear in DOM (not just any row)
+  const row = page.locator(`tr[data-agent-id="${agentId}"]`);
   await expect(row).toBeVisible({ timeout: 10000 });
 
-  return ficheId;
+  return agentId;
 }
 
 /**
- * Create an fiche via API (faster, for tests that don't need UI verification)
+ * Create an agent via API (faster, for tests that don't need UI verification)
  */
-export async function createFicheViaAPI(request: APIRequestContext): Promise<string> {
-  const response = await request.post('/api/fiches', {
-    data: { name: `Test Fiche ${Date.now()}` }
+export async function createAgentViaAPI(request: APIRequestContext): Promise<string> {
+  const response = await request.post('/api/agents', {
+    data: {
+      system_instructions: 'You are a helpful assistant.',
+      task_instructions: 'Answer user questions clearly and briefly.',
+      model: 'gpt-5.2',
+    }
   });
 
   if (response.status() !== 201) {
-    throw new Error(`Failed to create fiche: ${response.status()} ${await response.text()}`);
+    throw new Error(`Failed to create agent: ${response.status()} ${await response.text()}`);
   }
 
   const body = await response.json();
@@ -63,16 +67,16 @@ export async function createFicheViaAPI(request: APIRequestContext): Promise<str
 }
 
 /**
- * Navigate to chat for an fiche.
+ * Navigate to chat for an agent.
  * Waits for URL change and chat UI to be fully ready.
  */
-export async function navigateToChat(page: Page, ficheId: string): Promise<void> {
-  const chatBtn = page.locator(`[data-testid="chat-fiche-${ficheId}"]`);
+export async function navigateToChat(page: Page, agentId: string): Promise<void> {
+  const chatBtn = page.locator(`[data-testid="chat-agent-${agentId}"]`);
   await expect(chatBtn).toBeVisible({ timeout: 10000 });
   await chatBtn.click();
 
-  // Wait for URL to change to the fiche's chat
-  await page.waitForURL((url) => url.pathname.includes(`/fiche/${ficheId}/thread`), { timeout: 10000 });
+  // Wait for URL to change to the agent's chat
+  await page.waitForURL((url) => url.pathname.includes(`/agent/${agentId}/thread`), { timeout: 10000 });
 
   // Wait for chat UI to be fully interactive
   await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
@@ -86,7 +90,7 @@ export async function navigateToDashboard(page: Page): Promise<void> {
   await page.goto('/');
 
   // Wait for dashboard to be fully loaded - the create button is a reliable signal
-  const createBtn = page.locator('[data-testid="create-fiche-btn"]');
+  const createBtn = page.locator('[data-testid="create-agent-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
   await expect(createBtn).toBeEnabled({ timeout: 5000 });
 }
@@ -144,7 +148,9 @@ export async function createNewThread(page: Page): Promise<number> {
  * Wait for a user message to appear in the chat
  */
 export async function waitForUserMessage(page: Page, messageText: string): Promise<void> {
-  const userMessage = page.locator('.message.user').filter({ hasText: messageText });
+  const userMessage = page
+    .locator('.message.user, .message.user-message, [data-role="chat-message-user"]')
+    .filter({ hasText: messageText });
   await expect(userMessage).toBeVisible({ timeout: 10000 });
 }
 
@@ -152,7 +158,7 @@ export async function waitForUserMessage(page: Page, messageText: string): Promi
  * Wait for an assistant message to appear in the chat
  */
 export async function waitForAssistantMessage(page: Page): Promise<void> {
-  const assistantMessage = page.locator('.message.assistant');
+  const assistantMessage = page.locator('.message.assistant, .message.assistant-message, [data-role="chat-message-assistant"]');
   await expect(assistantMessage).toBeVisible({ timeout: 30000 });
 }
 
@@ -160,14 +166,14 @@ export async function waitForAssistantMessage(page: Page): Promise<void> {
  * Reset database to clean state (call in beforeEach).
  * STRICT: Throws on failure to fail fast and avoid dirty state propagation.
  * Includes aggressive retry logic to handle lock contention under high concurrency.
- * Adds initial stagger delay to prevent all commis from hitting reset simultaneously.
+ * Adds initial stagger delay to prevent all commiss from hitting reset simultaneously.
  */
 export async function resetDatabase(request: APIRequestContext): Promise<void> {
   const maxRetries = 5;
   const baseDelay = 200;
   const maxJitter = 300; // Wider spread to reduce concurrent retries
 
-  // Add initial stagger delay (0-500ms) to spread out reset calls across commis
+  // Add initial stagger delay (0-500ms) to spread out reset calls across commiss
   // This prevents all beforeEach hooks from hitting the backend simultaneously
   await new Promise(r => setTimeout(r, Math.random() * 500));
 

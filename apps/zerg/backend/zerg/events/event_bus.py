@@ -14,10 +14,14 @@ logger = logging.getLogger(__name__)
 class EventType(str, Enum):
     """Standardized event types for the system."""
 
-    # Fiche events
+    # Fiche events (formerly Agent events)
     FICHE_CREATED = "fiche_created"
     FICHE_UPDATED = "fiche_updated"
     FICHE_DELETED = "fiche_deleted"
+    # Backwards compatibility aliases
+    AGENT_CREATED = "fiche_created"
+    AGENT_UPDATED = "fiche_updated"
+    AGENT_DELETED = "fiche_deleted"
 
     # Thread events
     THREAD_CREATED = "thread_created"
@@ -25,7 +29,7 @@ class EventType(str, Enum):
     THREAD_DELETED = "thread_deleted"
     THREAD_MESSAGE_CREATED = "thread_message_created"
 
-    # Run events (run history feature)
+    # Run events (new run history feature)
     RUN_CREATED = "run_created"
     RUN_UPDATED = "run_updated"
 
@@ -50,32 +54,37 @@ class EventType(str, Enum):
     BUDGET_DENIED = "budget_denied"
 
     # Oikos/Commis events (Super Siri architecture)
-    OIKOS_STARTED = "oikos_started"
-    OIKOS_THINKING = "oikos_thinking"
-    OIKOS_TOKEN = "oikos_token"  # Real-time LLM token streaming
-    OIKOS_COMPLETE = "oikos_complete"
-    OIKOS_DEFERRED = "oikos_deferred"  # Timeout migration: still running, caller stopped waiting
-    OIKOS_WAITING = "oikos_waiting"  # Interrupted waiting for commis (oikos resume)
-    OIKOS_RESUMED = "oikos_resumed"  # Resumed from interrupt after commis completed
-    COMMIS_SPAWNED = "commis_spawned"
-    COMMIS_STARTED = "commis_started"
-    COMMIS_COMPLETE = "commis_complete"
-    COMMIS_SUMMARY_READY = "commis_summary_ready"
+    SUPERVISOR_STARTED = "oikos_started"
+    SUPERVISOR_THINKING = "oikos_thinking"
+    SUPERVISOR_TOKEN = "oikos_token"  # Real-time LLM token streaming
+    SUPERVISOR_COMPLETE = "oikos_complete"
+    SUPERVISOR_DEFERRED = "oikos_deferred"  # Timeout migration: still running, caller stopped waiting
+    SUPERVISOR_WAITING = "oikos_waiting"  # Interrupted waiting for commis (oikos resume)
+    SUPERVISOR_RESUMED = "oikos_resumed"  # Resumed from interrupt after commis completed
+    WORKER_SPAWNED = "commis_spawned"
+    WORKER_STARTED = "commis_started"
+    WORKER_COMPLETE = "commis_complete"
+    WORKER_SUMMARY_READY = "commis_summary_ready"
 
     # Commis tool events (roundabout monitoring)
-    COMMIS_TOOL_STARTED = "commis_tool_started"
-    COMMIS_TOOL_COMPLETED = "commis_tool_completed"
-    COMMIS_TOOL_FAILED = "commis_tool_failed"
+    WORKER_TOOL_STARTED = "commis_tool_started"
+    WORKER_TOOL_COMPLETED = "commis_tool_completed"
+    WORKER_TOOL_FAILED = "commis_tool_failed"
+    WORKER_OUTPUT_CHUNK = "commis_output_chunk"
 
     # Oikos tool events (inline display in conversation)
-    OIKOS_TOOL_STARTED = "oikos_tool_started"
-    OIKOS_TOOL_PROGRESS = "oikos_tool_progress"
-    OIKOS_TOOL_COMPLETED = "oikos_tool_completed"
-    OIKOS_TOOL_FAILED = "oikos_tool_failed"
+    SUPERVISOR_TOOL_STARTED = "oikos_tool_started"
+    SUPERVISOR_TOOL_PROGRESS = "oikos_tool_progress"
+    SUPERVISOR_TOOL_COMPLETED = "oikos_tool_completed"
+    SUPERVISOR_TOOL_FAILED = "oikos_tool_failed"
+    SHOW_SESSION_PICKER = "show_session_picker"
 
     # Heartbeat events (Phase 6: prevent false "no progress" warnings during LLM reasoning)
-    OIKOS_HEARTBEAT = "oikos_heartbeat"
-    COMMIS_HEARTBEAT = "commis_heartbeat"
+    SUPERVISOR_HEARTBEAT = "oikos_heartbeat"
+    WORKER_HEARTBEAT = "commis_heartbeat"
+
+    # Stream lifecycle control (explicit keep_open/close signals)
+    STREAM_CONTROL = "stream_control"
 
     SESSION_ENDED = "session_ended"  # External session (Claude Code, Codex, etc.) ended
 
@@ -99,8 +108,8 @@ class EventBus:
             logger.debug("No subscribers for %s", event_type)
             return
 
-        # OIKOS_TOKEN is emitted per-token and can spam logs when DEBUG is enabled.
-        if event_type != EventType.OIKOS_TOKEN:
+        # SUPERVISOR_TOKEN is emitted per-token and can spam logs when DEBUG is enabled.
+        if event_type != EventType.SUPERVISOR_TOKEN:
             logger.debug("Publishing event %s to %s subscriber(s)", event_type, subscriber_count)
 
         # ------------------------------------------------------------------

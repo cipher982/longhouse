@@ -59,6 +59,50 @@ section() {
     echo "--- $1 ---"
 }
 
+# Wait for API health to return "healthy" status
+# Polls /health until status is "healthy" twice consecutively (or timeout)
+wait_for_health() {
+    local url="${1:-$API_URL/health}"
+    local max_attempts="${2:-45}"   # 45 * 2s = 90s max
+    local interval="${3:-2}"
+    local required_consecutive=2
+
+    local attempt=0
+    local consecutive_ok=0
+
+    echo -e "${YELLOW}Waiting for API health...${NC}"
+
+    while [[ $attempt -lt $max_attempts ]]; do
+        attempt=$((attempt + 1))
+
+        local response
+        response=$(curl -s --max-time 5 "$url" 2>/dev/null || echo '{}')
+
+        local status
+        status=$(echo "$response" | jq -r '.status // "unknown"' 2>/dev/null)
+
+        if [[ "$status" == "healthy" || "$status" == "ok" ]]; then
+            consecutive_ok=$((consecutive_ok + 1))
+            if [[ $consecutive_ok -ge $required_consecutive ]]; then
+                echo -e "${GREEN}✓${NC} API healthy after $attempt attempts"
+                return 0
+            fi
+        else
+            consecutive_ok=0
+        fi
+
+        # Show progress every 5 attempts
+        if [[ $((attempt % 5)) -eq 0 ]]; then
+            echo -e "  ${BLUE}...${NC} attempt $attempt/$max_attempts (status: $status)"
+        fi
+
+        sleep "$interval"
+    done
+
+    echo -e "${YELLOW}⚠${NC} Health check timeout after $attempt attempts - proceeding anyway"
+    return 0  # Don't fail - let tests run and report actual failures
+}
+
 # Run a test and keep going even if it fails (so we can report a full summary).
 run_test() {
     "$@" || true
@@ -181,6 +225,123 @@ test_chat() {
     local preview="${result:0:50}"
     [[ ${#result} -gt 50 ]] && preview="${preview}..."
     pass "$name (\"$preview\")"
+    return 0
+}
+
+# Test voice transcribe + TTS (SSE voice path uses these endpoints)
+test_voice() {
+    local name="$1"
+    local cookie_jar="$2"
+    local timeout_secs="${3:-30}"
+
+    local msg_id
+    msg_id=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "smoke-voice-$(date +%s)")
+
+    # Create minimal valid WAV file (44-byte header + 1600 bytes of silence = 100ms at 8kHz 16-bit mono)
+    local wav_file
+    wav_file=$(mktemp).wav
+    # WAV header (44 bytes) - 8kHz, 16-bit, mono, 1600 samples
+    printf 'RIFF' > "$wav_file"
+    printf '\x24\x08\x00\x00' >> "$wav_file"  # file size - 8
+    printf 'WAVE' >> "$wav_file"
+    printf 'fmt ' >> "$wav_file"
+    printf '\x10\x00\x00\x00' >> "$wav_file"  # fmt chunk size (16)
+    printf '\x01\x00' >> "$wav_file"          # PCM format
+    printf '\x01\x00' >> "$wav_file"          # 1 channel
+    printf '\x40\x1f\x00\x00' >> "$wav_file"  # 8000 Hz sample rate
+    printf '\x80\x3e\x00\x00' >> "$wav_file"  # byte rate (8000 * 2)
+    printf '\x02\x00' >> "$wav_file"          # block align
+    printf '\x10\x00' >> "$wav_file"          # 16 bits per sample
+    printf 'data' >> "$wav_file"
+    printf '\x40\x06\x00\x00' >> "$wav_file"  # data size (1600)
+    # Silence data (1600 bytes of zeros)
+    dd if=/dev/zero bs=1600 count=1 >> "$wav_file" 2>/dev/null
+
+    # Transcribe request
+    local response
+    if [[ -n "$TIMEOUT_CMD" ]]; then
+        response=$($TIMEOUT_CMD "$timeout_secs" curl -s -X POST "$API_URL/api/jarvis/voice/transcribe" \
+            -b "$cookie_jar" \
+            -F "audio=@${wav_file};type=audio/wav;filename=sample.wav" \
+            -F "message_id=$msg_id" 2>/dev/null) || true
+    else
+        response=$(curl -s -X POST "$API_URL/api/jarvis/voice/transcribe" \
+            -b "$cookie_jar" \
+            -F "audio=@${wav_file};type=audio/wav;filename=sample.wav" \
+            -F "message_id=$msg_id" 2>/dev/null) || true
+    fi
+
+    rm -f "$wav_file"
+
+    if [[ -z "$response" ]]; then
+        fail "$name (no response / timeout)"
+        return 1
+    fi
+
+    # Check message_id passthrough (should work even on error)
+    local returned_msg_id
+    returned_msg_id=$(echo "$response" | jq -r '.message_id // empty' 2>/dev/null)
+    if [[ "$returned_msg_id" != "$msg_id" ]]; then
+        fail "$name (message_id mismatch: expected $msg_id, got $returned_msg_id)"
+        return 1
+    fi
+
+    # Check status - silence may produce "error" status with empty transcription
+    local status
+    status=$(echo "$response" | jq -r '.status // empty' 2>/dev/null)
+    local error_msg
+    error_msg=$(echo "$response" | jq -r '.error // empty' 2>/dev/null)
+
+    local transcript=""
+    if [[ "$status" == "success" ]]; then
+        transcript=$(echo "$response" | jq -r '.transcript // empty' 2>/dev/null)
+        if [[ -z "$transcript" ]]; then
+            fail "$name (empty transcript)"
+            return 1
+        fi
+    elif [[ "$error_msg" == "Empty transcription result" ]] || [[ "$error_msg" == "Audio too short" ]]; then
+        # Expected error with silence - proceed to TTS test
+        transcript="Hello from smoke test"
+    else
+        fail "$name (transcribe status=$status, error=$error_msg)"
+        return 1
+    fi
+
+    # TTS request (independent of transcription success)
+    local tts_payload
+    tts_payload=$(jq -nc --arg text "$transcript" --arg msg_id "$msg_id" '{text:$text, message_id:$msg_id}')
+    local tts_response
+    if [[ -n "$TIMEOUT_CMD" ]]; then
+        tts_response=$($TIMEOUT_CMD "$timeout_secs" curl -s -X POST "$API_URL/api/jarvis/voice/tts" \
+            -b "$cookie_jar" \
+            -H "Content-Type: application/json" \
+            -d "$tts_payload" 2>/dev/null) || true
+    else
+        tts_response=$(curl -s -X POST "$API_URL/api/jarvis/voice/tts" \
+            -b "$cookie_jar" \
+            -H "Content-Type: application/json" \
+            -d "$tts_payload" 2>/dev/null) || true
+    fi
+
+    if [[ -z "$tts_response" ]]; then
+        fail "$name (no TTS response / timeout)"
+        return 1
+    fi
+
+    local tts_status
+    tts_status=$(echo "$tts_response" | jq -r '.status // empty' 2>/dev/null)
+    local tts_audio
+    tts_audio=$(echo "$tts_response" | jq -r '.tts.audio_base64 // empty' 2>/dev/null)
+    if [[ "$tts_status" != "success" ]] || [[ -z "$tts_audio" ]]; then
+        local tts_error
+        tts_error=$(echo "$tts_response" | jq -r '.error // .tts.error // "unknown"' 2>/dev/null)
+        fail "$name (tts status=$tts_status, error=$tts_error)"
+        return 1
+    fi
+
+    local preview="${transcript:0:30}"
+    [[ ${#transcript} -gt 30 ]] && preview="${preview}..."
+    pass "$name (transcribe+tts ok: \"${preview}\")"
     return 0
 }
 
@@ -429,10 +590,9 @@ echo "  API:      $API_URL"
 echo "================================================"
 echo ""
 
-# Wait if requested
+# Wait if requested - polls health instead of static sleep
 if [[ $WAIT -eq 1 ]]; then
-    echo -e "${YELLOW}Waiting ${WAIT_SECS}s for deployment to stabilize...${NC}"
-    sleep "$WAIT_SECS"
+    wait_for_health "$API_URL/health"
     echo ""
 fi
 
@@ -487,6 +647,7 @@ if [[ -n "$SMOKE_TEST_SECRET" ]]; then
             section "LLM"
             run_test test_chat "Basic chat (2+2)" "$COOKIE_JAR" "What is 2+2? Reply with just the number." 30 '(^|[^0-9])4($|[^0-9])'
             run_test test_chat "Basic chat (France capital)" "$COOKIE_JAR" "What is the capital of France? Reply with just the city." 30 '(^|[^A-Za-z])Paris($|[^A-Za-z])'
+            run_test test_voice "Voice transcribe + TTS" "$COOKIE_JAR" 45
         else
             info "LLM test skipped (--no-llm)"
         fi

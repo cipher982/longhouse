@@ -1,17 +1,16 @@
-"""Oikos tools for spawning and managing commis fiches.
+"""Oikos tools for spawning and managing commis agents.
 
-This module provides tools that allow oikos fiches to delegate tasks to
-disposable commis fiches, retrieve their results, and drill into their artifacts.
+This module provides tools that allow oikos agents to delegate tasks to
+disposable commis agents, retrieve their results, and drill into their artifacts.
 
 The oikos/commis pattern enables complex delegation scenarios where a oikos
-can spawn multiple commis for parallel execution or break down complex tasks.
+can spawn multiple commiss for parallel execution or break down complex tasks.
 
-Commis execution flow:
-- spawn_commis() creates CommisJob and returns job info
-- Caller (oikos_react_engine) raises RunInterrupted to pause
+Commis execution flow (async inbox model):
+- spawn_commis() creates CommisJob and returns immediately (non-blocking)
 - Commis runs in background via CommisJobProcessor
-- Commis completion triggers resume via commis_resume.py
-- Oikos resumes with commis result injected as tool response
+- Results surface in the oikos inbox on the next turn
+- wait_for_commis() is the explicit opt-in blocking path (raises FicheInterrupted)
 """
 
 import logging
@@ -39,10 +38,10 @@ async def spawn_commis_async(
     resume_session_id: str | None = None,
     *,
     _tool_call_id: str | None = None,  # Internal: passed by _call_tool_async for idempotency
-    _skip_interrupt: bool = False,  # Internal: caller handles interrupt
+    _skip_interrupt: bool = False,  # Internal: legacy param, now ignored
     _return_structured: bool = False,  # Internal: return dict instead of string for oikos_react_engine
 ) -> str | dict:
-    """Spawn a commis fiche to execute a task and wait for completion.
+    """Spawn a commis agent to execute a task and wait for completion.
 
     The commis runs in the background. Creates a CommisJob and returns job info
     for the caller to handle interruption and resumption.
@@ -51,9 +50,10 @@ async def spawn_commis_async(
         task: Natural language description of what the commis should do
         model: LLM model for the commis (default: gpt-5-mini)
         execution_mode: "standard" (default) runs via WebSocket runner, "workspace"
-            runs headless on the server in a git workspace.
+            runs headless on the server in a git workspace. Accepts "local" and
+            "cloud" for backward compatibility.
         git_repo: Git repository URL (required if execution_mode="workspace").
-            The repo is cloned, fiche makes changes, and diff is captured.
+            The repo is cloned, agent makes changes, and diff is captured.
         resume_session_id: Life Hub session UUID to resume (workspace mode only).
             Enables cross-environment session continuity.
 
@@ -69,12 +69,13 @@ async def spawn_commis_async(
     from zerg.models.models import CommisJob
 
     # Validate execution_mode and git_repo combination
-    valid_modes = {"standard", "workspace"}
+    # Accept both old names (local, cloud) and new names (standard, workspace) for backward compat
+    valid_modes = {"local", "cloud", "standard", "workspace"}
     if execution_mode not in valid_modes:
         return f"Error: execution_mode must be 'standard' or 'workspace', got '{execution_mode}'"
 
-    # Workspace mode requires git_repo
-    if execution_mode == "workspace" and not git_repo:
+    # Workspace mode (cloud is alias) requires git_repo
+    if execution_mode in ("cloud", "workspace") and not git_repo:
         return "Error: git_repo is required when execution_mode='workspace'"
 
     # Get database session from credential resolver context
@@ -95,23 +96,23 @@ async def spawn_commis_async(
     commis_model = model or (ctx.model if ctx else None) or DEFAULT_COMMIS_MODEL_ID
     commis_reasoning_effort = (ctx.reasoning_effort if ctx else None) or "none"
 
-    # Build execution config for workspace mode
+    # Build execution config for workspace mode (cloud is alias for backward compat)
     job_config = None
-    if execution_mode == "workspace":
+    if execution_mode in ("cloud", "workspace"):
         job_config = {
-            "execution_mode": "workspace",
+            "execution_mode": "workspace",  # Normalize to new name
             "git_repo": git_repo,
         }
         if resume_session_id:
             job_config["resume_session_id"] = resume_session_id
 
     try:
-        # IDEMPOTENCY: Prevent duplicate commis on retry/resume.
+        # IDEMPOTENCY: Prevent duplicate commiss on retry/resume.
         #
         # Primary strategy: Use tool_call_id (unique per LLM response) for exact idempotency.
         # Fallback strategy: Prefix matching on task string (handles cases without tool_call_id).
         #
-        # This prevents duplicate commis while allowing legitimate multi-commis scenarios.
+        # This prevents duplicate commiss while allowing legitimate multi-commis scenarios.
 
         commis_job = None
         existing_job = None
@@ -129,7 +130,7 @@ async def spawn_commis_async(
             if existing_job:
                 logger.info(f"[IDEMPOTENT] Found existing job {existing_job.id} for tool_call_id={_tool_call_id}")
 
-        # FALLBACK: Check for completed/in-progress commis using task matching
+        # FALLBACK: Check for completed/in-progress commiss using task matching
         # (only if tool_call_id lookup didn't find anything)
         if existing_job is None:
             completed_jobs = (
@@ -168,7 +169,7 @@ async def spawn_commis_async(
         if existing_job:
             if existing_job.status == "success":
                 # Already completed - return cached result immediately
-                # This prevents duplicate commis on retry
+                # This prevents duplicate commiss on retry
                 logger.debug(f"Existing job {existing_job.id} already succeeded, returning cached result")
                 if existing_job.commis_id:
                     try:
@@ -212,7 +213,7 @@ async def spawn_commis_async(
             db.refresh(commis_job)
             logger.info(f"[SPAWN] Created commis job {commis_job.id} with tool_call_id={_tool_call_id}")
 
-            # Emit COMMIS_SPAWNED event durably (replays on reconnect)
+            # Emit WORKER_SPAWNED event durably (replays on reconnect)
             # Only persist if we have a oikos run_id (test mocks may not have one)
             if oikos_run_id is not None:
                 from zerg.services.event_store import append_run_event
@@ -231,7 +232,7 @@ async def spawn_commis_async(
                 )
 
         # Return job info for caller to handle interruption.
-        # oikos_react_engine raises RunInterrupted
+        # oikos_react_engine raises FicheInterrupted
         # to pause execution until commis completes.
         logger.debug(f"spawn_commis returning queued response for job {commis_job.id}")
         if _return_structured:
@@ -296,7 +297,7 @@ async def spawn_workspace_commis_async(
 ) -> str | dict:
     """Spawn a commis to execute a task in a git repository workspace.
 
-    The repository is cloned to an isolated workspace, the runs
+    The repository is cloned to an isolated workspace, the agent runs
     headlessly, and any changes are captured as a diff.
 
     Args:
@@ -346,7 +347,7 @@ def spawn_workspace_commis(
     return run_async_safely(spawn_workspace_commis_async(task, git_repo, model, resume_session_id))
 
 
-async def list_commis_async(
+async def list_commiss_async(
     limit: int = 20,
     status: str | None = None,
     since_hours: int | None = None,
@@ -356,7 +357,7 @@ async def list_commis_async(
     Returns compressed summaries for scanning. To get full details,
     call read_commis_result(job_id).
 
-    This prevents context overflow when scanning 50+ commis.
+    This prevents context overflow when scanning 50+ commiss.
 
     Args:
         limit: Maximum number of jobs to return (default: 20)
@@ -371,7 +372,7 @@ async def list_commis_async(
     # Get owner_id from context for security filtering
     resolver = get_credential_resolver()
     if not resolver:
-        return "Error: Cannot list commis - no credential context available"
+        return "Error: Cannot list commiss - no credential context available"
 
     db = resolver.db
 
@@ -395,7 +396,7 @@ async def list_commis_async(
         artifact_store = CommisArtifactStore()
 
         # Format output - compact with summaries
-        lines = [f"Recent commis (showing {len(jobs)}):\n"]
+        lines = [f"Recent commiss (showing {len(jobs)}):\n"]
         for job in jobs:
             job_id = job.id
             job_status = job.status
@@ -425,15 +426,15 @@ async def list_commis_async(
         return f"Error listing commis jobs: {e}"
 
 
-def list_commis(
+def list_commiss(
     limit: int = 20,
     status: str | None = None,
     since_hours: int | None = None,
 ) -> str:
-    """Sync wrapper for list_commis_async. Used for CLI/tests."""
+    """Sync wrapper for list_commiss_async. Used for CLI/tests."""
     from zerg.utils.async_utils import run_async_safely
 
-    return run_async_safely(list_commis_async(limit, status, since_hours))
+    return run_async_safely(list_commiss_async(limit, status, since_hours))
 
 
 def format_duration(duration_ms: int) -> str:
@@ -457,13 +458,13 @@ def format_duration(duration_ms: int) -> str:
 
 
 async def check_commis_status_async(job_id: str | None = None) -> str:
-    """Check the status of a specific commis or list all active commis.
+    """Check the status of a specific commis or list all active commiss.
 
     Args:
-        job_id: Optional commis job ID. If None, lists all active (queued/running) commis.
+        job_id: Optional commis job ID. If None, lists all active (queued/running) commiss.
 
     Returns:
-        Status information about the specified commis or list of active commis.
+        Status information about the specified commis or list of active commiss.
     """
     from zerg.crud import crud
 
@@ -527,7 +528,7 @@ async def check_commis_status_async(job_id: str | None = None) -> str:
 
             return "\n".join(lines)
         else:
-            # List all active commis
+            # List all active commiss
             active_jobs = (
                 db.query(crud.CommisJob)
                 .filter(
@@ -540,9 +541,9 @@ async def check_commis_status_async(job_id: str | None = None) -> str:
             )
 
             if not active_jobs:
-                return "No active commis. All commis have completed or there are none running."
+                return "No active commiss. All commiss have completed or there are none running."
 
-            lines = [f"Active Commis ({len(active_jobs)}):\n"]
+            lines = [f"Active Commiss ({len(active_jobs)}):\n"]
             for job in active_jobs:
                 status_icon = "⏳" if job.status == "queued" else "⋯"
                 task_preview = job.task[:60] + "..." if len(job.task) > 60 else job.task
@@ -640,17 +641,17 @@ async def wait_for_commis_async(
     This is an explicit opt-in to block execution until the commis completes.
     Use sparingly - the async inbox model is preferred for most cases.
 
-    If the commis is still running, this raises RunInterrupted to pause
+    If the commis is still running, this raises FicheInterrupted to pause
     the oikos until the commis completes.
 
     Args:
         job_id: The commis job ID to wait for
 
     Returns:
-        The commis's result if already complete, or raises RunInterrupted
+        The commis's result if already complete, or raises FicheInterrupted
     """
     from zerg.crud import crud
-    from zerg.managers.fiche_runner import RunInterrupted
+    from zerg.managers.fiche_runner import FicheInterrupted
 
     # Get owner_id from context for security filtering
     resolver = get_credential_resolver()
@@ -675,14 +676,28 @@ async def wait_for_commis_async(
         if not job:
             return f"Error: Commis job {job_id} not found"
 
+        def _acknowledge_completed_job() -> None:
+            """Mark a completed job as acknowledged (best-effort)."""
+            if job.acknowledged:
+                return
+            job.acknowledged = True
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+                logger.warning(f"Failed to acknowledge commis job {job.id}", exc_info=True)
+
         if job.status == "cancelled":
+            _acknowledge_completed_job()
             return f"Commis job {job_id} was cancelled."
 
         if job.status == "failed":
+            _acknowledge_completed_job()
             return f"Commis job {job_id} failed: {job.error or 'Unknown error'}"
 
         if job.status == "success":
             # Already complete - return result immediately
+            _acknowledge_completed_job()
             if job.commis_id:
                 try:
                     artifact_store = CommisArtifactStore()
@@ -697,10 +712,10 @@ async def wait_for_commis_async(
             return f"Commis job {job_id} completed."
 
         # Job is still queued or running - raise interrupt to wait
-        logger.info(f"[WAIT-FOR-COMMIS] Blocking for job {job_id} (status: {job.status})")
+        logger.info(f"[WAIT-FOR-WORKER] Blocking for job {job_id} (status: {job.status})")
 
-        # Raise RunInterrupted to pause oikos
-        raise RunInterrupted(
+        # Raise FicheInterrupted to pause oikos
+        raise FicheInterrupted(
             {
                 "type": "wait_for_commis",
                 "job_id": job_id_int,
@@ -710,7 +725,7 @@ async def wait_for_commis_async(
             }
         )
 
-    except RunInterrupted:
+    except FicheInterrupted:
         # Re-raise interrupt
         raise
     except ValueError:
@@ -1027,6 +1042,88 @@ async def read_commis_file_async(job_id: str, file_path: str) -> str:
         return f"Error reading commis file: {e}"
 
 
+async def peek_commis_output_async(job_id: str, max_bytes: int = 4000) -> str:
+    """Peek live output for a running commis job (tail buffer).
+
+    Args:
+        job_id: Commis job ID
+        max_bytes: Max bytes to return from the tail (0 = full buffer)
+
+    Returns:
+        Live output tail or a helpful status message.
+    """
+    from zerg.crud import crud
+
+    resolver = get_credential_resolver()
+    if not resolver:
+        return "Error: Cannot peek commis output - no credential context available"
+
+    db = resolver.db
+
+    try:
+        job_id_int = int(job_id)
+        job = (
+            db.query(crud.CommisJob)
+            .filter(
+                crud.CommisJob.id == job_id_int,
+                crud.CommisJob.owner_id == resolver.owner_id,
+            )
+            .first()
+        )
+
+        if not job:
+            return f"Error: Commis job {job_id} not found"
+
+        if not job.commis_id:
+            return f"Commis job {job_id} has not started execution yet"
+
+        execution_mode = (job.config or {}).get("execution_mode")
+        if execution_mode == "workspace":
+            return (
+                f"Commis job {job_id} is a workspace commis and does not stream live output. "
+                f"Use check_commis_status({job_id}) or read_commis_result({job_id}) after completion."
+            )
+
+        from zerg.models.models import RunnerJob
+        from zerg.services.commis_output_buffer import get_commis_output_buffer
+
+        output_buffer = get_commis_output_buffer()
+        live = output_buffer.get_tail(job.commis_id, max_bytes=max_bytes)
+        if live:
+            return f"Live commis output (tail):\n\n{live}"
+
+        # Fallback: last known runner job output (not live if buffer empty)
+        runner_job = (
+            db.query(RunnerJob)
+            .filter(
+                RunnerJob.commis_id == job.commis_id,
+                RunnerJob.owner_id == resolver.owner_id,
+            )
+            .order_by(RunnerJob.created_at.desc())
+            .first()
+        )
+        if runner_job and (runner_job.stdout_trunc or runner_job.stderr_trunc):
+            combined = runner_job.stdout_trunc or ""
+            if runner_job.stderr_trunc:
+                combined = f"{combined}\n[stderr]\n{runner_job.stderr_trunc}" if combined else f"[stderr]\n{runner_job.stderr_trunc}"
+            if max_bytes and max_bytes > 0 and len(combined) > max_bytes:
+                combined = combined[-max_bytes:]
+            return f"Recent runner output (tail):\n\n{combined}"
+
+        if job.status in ["success", "failed", "cancelled"]:
+            return (
+                f"Commis job {job_id} finished with status {job.status.upper()}. "
+                f"Use read_commis_result({job_id}) for the final summary."
+            )
+
+        return "No live output yet. Try again soon."
+    except ValueError:
+        return f"Error: Invalid job ID format: {job_id}"
+    except Exception as e:
+        logger.exception(f"Failed to peek commis output: {job_id}")
+        return f"Error peeking commis output: {e}"
+
+
 def read_commis_file(job_id: str, file_path: str) -> str:
     """Sync wrapper for read_commis_file_async. Used for CLI/tests."""
     from zerg.utils.async_utils import run_async_safely
@@ -1034,7 +1131,14 @@ def read_commis_file(job_id: str, file_path: str) -> str:
     return run_async_safely(read_commis_file_async(job_id, file_path))
 
 
-async def grep_commis_async(pattern: str, since_hours: int = 24) -> str:
+def peek_commis_output(job_id: str, max_bytes: int = 4000) -> str:
+    """Sync wrapper for peek_commis_output_async. Used for CLI/tests."""
+    from zerg.utils.async_utils import run_async_safely
+
+    return run_async_safely(peek_commis_output_async(job_id, max_bytes))
+
+
+async def grep_commiss_async(pattern: str, since_hours: int = 24) -> str:
     """Search across commis job artifacts for a pattern.
 
     Args:
@@ -1049,7 +1153,7 @@ async def grep_commis_async(pattern: str, since_hours: int = 24) -> str:
     # Get owner_id from context for security filtering
     resolver = get_credential_resolver()
     if not resolver:
-        return "Error: Cannot grep commis - no credential context available"
+        return "Error: Cannot grep commiss - no credential context available"
 
     db = resolver.db
     artifact_store = CommisArtifactStore()
@@ -1077,7 +1181,7 @@ async def grep_commis_async(pattern: str, since_hours: int = 24) -> str:
         all_matches = []
         for job in jobs:
             try:
-                matches = artifact_store.search_commis(
+                matches = artifact_store.search_commiss(
                     pattern=case_insensitive_pattern,
                     file_glob="**/*.txt",
                     commis_ids=[job.commis_id],  # Only search this commis
@@ -1110,15 +1214,15 @@ async def grep_commis_async(pattern: str, since_hours: int = 24) -> str:
         return "\n".join(lines)
 
     except Exception as e:
-        logger.exception(f"Failed to grep commis: {pattern}")
-        return f"Error searching commis: {e}"
+        logger.exception(f"Failed to grep commiss: {pattern}")
+        return f"Error searching commiss: {e}"
 
 
-def grep_commis(pattern: str, since_hours: int = 24) -> str:
-    """Sync wrapper for grep_commis_async. Used for CLI/tests."""
+def grep_commiss(pattern: str, since_hours: int = 24) -> str:
+    """Sync wrapper for grep_commiss_async. Used for CLI/tests."""
     from zerg.utils.async_utils import run_async_safely
 
-    return run_async_safely(grep_commis_async(pattern, since_hours))
+    return run_async_safely(grep_commiss_async(pattern, since_hours))
 
 
 async def get_commis_metadata_async(job_id: str) -> str:
@@ -1198,6 +1302,69 @@ def get_commis_metadata(job_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Session Selection Tool
+# ---------------------------------------------------------------------------
+
+
+async def request_session_selection_async(
+    query: str | None = None,
+    project: str | None = None,
+) -> str:
+    """Request user to select a session from Life Hub history.
+
+    Use this when the user wants to resume a past session but hasn't
+    provided a specific session ID. This opens a modal for them to
+    browse and select a session.
+
+    Args:
+        query: Optional search query to pre-filter sessions
+        project: Optional project name to pre-filter sessions
+
+    Returns:
+        Confirmation that the session picker was opened
+    """
+    # Get oikos context for run_id and trace_id
+    ctx = get_oikos_context()
+    if not ctx:
+        return "Error: Cannot request session selection - no oikos context available"
+
+    # Build filters
+    filters = {}
+    if query:
+        filters["query"] = query
+    if project:
+        filters["project"] = project
+
+    # Emit SSE event to trigger frontend modal
+    from zerg.services.event_store import append_run_event
+
+    if ctx.run_id is not None:
+        await append_run_event(
+            run_id=ctx.run_id,
+            event_type="show_session_picker",
+            payload={
+                "filters": filters if filters else None,
+                "trace_id": ctx.trace_id,
+            },
+        )
+
+    return (
+        "Session picker opened. Waiting for user to select a session. "
+        "Once they select one, they'll send a follow-up message with the session ID."
+    )
+
+
+def request_session_selection(
+    query: str | None = None,
+    project: str | None = None,
+) -> str:
+    """Sync wrapper for request_session_selection_async."""
+    from zerg.utils.async_utils import run_async_safely
+
+    return run_async_safely(request_session_selection_async(query, project))
+
+
+# ---------------------------------------------------------------------------
 # Tool registration and exports
 # ---------------------------------------------------------------------------
 
@@ -1209,7 +1376,7 @@ TOOLS: List[StructuredTool] = [
         coroutine=spawn_standard_commis_async,
         name="spawn_commis",
         description="Spawn a commis for server tasks, research, or investigations. "
-        "Commis can run commands on servers via runner_exec. "
+        "Commiss can run commands on servers via runner_exec. "
         "For repository/code tasks, use spawn_workspace_commis instead.",
     ),
     StructuredTool.from_function(
@@ -1217,17 +1384,17 @@ TOOLS: List[StructuredTool] = [
         coroutine=spawn_workspace_commis_async,
         name="spawn_workspace_commis",
         description="Spawn a commis to work in a git repository. "
-        "Clones the repo, runs the fiche in an isolated workspace, and captures any changes. "
+        "Clones the repo, runs the agent in an isolated workspace, and captures any changes. "
         "Use this for: reading code, analyzing dependencies, making changes, running tests.",
     ),
     StructuredTool.from_function(
-        func=list_commis,
-        coroutine=list_commis_async,
-        name="list_commis",
+        func=list_commiss,
+        coroutine=list_commiss_async,
+        name="list_commiss",
         description="List recent commis jobs with SUMMARIES ONLY. "
         "Returns compressed summaries for quick scanning. "
         "Use read_commis_result(job_id) to get full details. "
-        "This prevents context overflow when scanning 50+ commis.",
+        "This prevents context overflow when scanning 50+ commiss.",
     ),
     StructuredTool.from_function(
         func=read_commis_result,
@@ -1260,9 +1427,17 @@ TOOLS: List[StructuredTool] = [
         "tool outputs (tool_calls/*.txt), conversation history (thread.jsonl), or metadata (metadata.json).",
     ),
     StructuredTool.from_function(
-        func=grep_commis,
-        coroutine=grep_commis_async,
-        name="grep_commis",
+        func=peek_commis_output,
+        coroutine=peek_commis_output_async,
+        name="peek_commis_output",
+        description="Peek live output for a running commis (tail buffer). "
+        "Provide the commis job ID and optional max_bytes. "
+        "Best for seeing live runner_exec output without waiting for completion.",
+    ),
+    StructuredTool.from_function(
+        func=grep_commiss,
+        coroutine=grep_commiss_async,
+        name="grep_commiss",
         description="Search across completed commis job artifacts for a text pattern. "
         "Performs case-insensitive search and returns matches with job IDs and context. "
         "Useful for finding jobs that encountered specific errors or outputs.",
@@ -1280,9 +1455,9 @@ TOOLS: List[StructuredTool] = [
         func=check_commis_status,
         coroutine=check_commis_status_async,
         name="check_commis_status",
-        description="Check the status of a specific commis or list all active commis. "
-        "Pass job_id for a specific commis, or call without arguments to see all active commis. "
-        "Use this to monitor background commis without blocking.",
+        description="Check the status of a specific commis or list all active commiss. "
+        "Pass job_id for a specific commis, or call without arguments to see all active commiss. "
+        "Use this to monitor background commiss without blocking.",
     ),
     StructuredTool.from_function(
         func=cancel_commis,
@@ -1300,6 +1475,15 @@ TOOLS: List[StructuredTool] = [
         "Use sparingly - the async model is preferred. "
         "Only use when you need the result before proceeding.",
     ),
+    # Session selection tool
+    StructuredTool.from_function(
+        func=request_session_selection,
+        coroutine=request_session_selection_async,
+        name="request_session_selection",
+        description="Open a session picker modal for the user to select a past AI session. "
+        "Use this when the user wants to resume a session but hasn't provided a specific ID. "
+        "Optionally pre-filter by query text or project name.",
+    ),
 ]
 
 # ---------------------------------------------------------------------------
@@ -1307,12 +1491,12 @@ TOOLS: List[StructuredTool] = [
 # ---------------------------------------------------------------------------
 
 # Tool names derived from TOOLS list - this is the canonical source
-OIKOS_TOOL_NAMES: frozenset[str] = frozenset(t.name for t in TOOLS)
+SUPERVISOR_TOOL_NAMES: frozenset[str] = frozenset(t.name for t in TOOLS)
 
-# Additional utility tools that oikos operators need access to.
-# These are NOT oikos-specific but are commonly used by the oikos fiche.
+# Additional utility tools that oikoss need access to.
+# These are NOT oikos-specific but are commonly used by the oikos agent.
 # Organized by category for clarity.
-OIKOS_UTILITY_TOOLS: frozenset[str] = frozenset(
+SUPERVISOR_UTILITY_TOOLS: frozenset[str] = frozenset(
     [
         # Time/scheduling
         "get_current_time",
@@ -1335,13 +1519,18 @@ OIKOS_UTILITY_TOOLS: frozenset[str] = frozenset(
 )
 
 
+# Terminology aliases (Supervisor → Oikos)
+OIKOS_TOOL_NAMES = SUPERVISOR_TOOL_NAMES
+OIKOS_UTILITY_TOOLS = SUPERVISOR_UTILITY_TOOLS
+
+
 def get_oikos_allowed_tools() -> list[str]:
-    """Get the complete list of tools a oikos fiche should have access to.
+    """Get the complete list of tools a oikos agent should have access to.
 
     This is the SINGLE SOURCE OF TRUTH for oikos tool allowlists.
-    Used by oikos_service.py when creating/updating oikos fiches.
+    Used by oikos_service.py when creating/updating oikos agents.
 
     Returns:
         Sorted list of tool names (oikos tools + utility tools)
     """
-    return sorted(OIKOS_TOOL_NAMES | OIKOS_UTILITY_TOOLS)
+    return sorted(SUPERVISOR_TOOL_NAMES | SUPERVISOR_UTILITY_TOOLS)

@@ -472,25 +472,25 @@
     color: var(--color-text-muted);
   }
 
-  /* Top Fiches Table */
-  .top-fiches-table {
+  /* Top Agents Table */
+  .top-agents-table {
     max-height: 400px;
     overflow: auto;
   }
 
-  .top-fiches-table table {
+  .top-agents-table table {
     width: 100%;
     border-collapse: collapse;
   }
 
-  .top-fiches-table th,
-  .top-fiches-table td {
+  .top-agents-table th,
+  .top-agents-table td {
     padding: 12px 16px;
     text-align: left;
     border-bottom: 1px solid var(--border-color);
   }
 
-  .top-fiches-table th {
+  .top-agents-table th {
     position: sticky;
     top: 0;
     background: var(--dark-lighter);
@@ -502,12 +502,12 @@
     z-index: 1;
   }
 
-  .top-fiches-table td {
+  .top-agents-table td {
     color: var(--text);
     font-size: 14px;
   }
 
-  .fiche-name {
+  .agent-name {
     font-weight: 500;
     color: var(--primary);
   }
@@ -621,7 +621,7 @@
     color: var(--primary);
   }
 
-  .top-fiches-table tr:hover {
+  .top-agents-table tr:hover {
     background: rgb(255 255 255 / 5%);
   }
 
@@ -645,6 +645,136 @@
     font-size: 13px;
     margin: 0;
     line-height: 1.4;
+  }
+
+  .admin-demo-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .admin-demo-input {
+    min-width: 220px;
+    flex: 1;
+  }
+
+  .admin-demo-seed {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 16px;
+  }
+
+  .admin-demo-select {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 16px;
+  }
+
+  .admin-demo-select-input {
+    min-width: 240px;
+  }
+
+  .admin-demo-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .user-demo-badge {
+    align-self: flex-start;
+    margin-top: 6px;
+  }
+
+  /* Simplified Demo Mode Section */
+  .demo-empty-state {
+    text-align: center;
+    padding: 48px 24px;
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(139, 92, 246, 0.05) 100%);
+    border-radius: 12px;
+    border: 1px dashed rgba(99, 102, 241, 0.3);
+  }
+
+  .demo-empty-state p {
+    color: var(--color-text-muted);
+    margin-bottom: 20px;
+    font-size: 15px;
+  }
+
+  .demo-accounts-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .demo-account-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px 24px;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0.01) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    transition: all 0.2s ease;
+  }
+
+  .demo-account-card:hover {
+    border-color: rgba(99, 102, 241, 0.4);
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.08) 0%, rgba(139, 92, 246, 0.04) 100%);
+  }
+
+  .demo-account-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .demo-account-name {
+    font-weight: 600;
+    font-size: 16px;
+    color: #fff;
+    display: block;
+  }
+
+  .demo-account-email {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.5);
+    display: block;
+    font-family: var(--font-mono, monospace);
+  }
+
+  .demo-account-actions {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+  }
+
+  .demo-add-button {
+    width: 100%;
+    background: transparent;
+    border: 2px dashed rgba(255, 255, 255, 0.15);
+    border-radius: 12px;
+    padding: 16px;
+    color: rgba(255, 255, 255, 0.4);
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.2s ease;
+  }
+
+  .demo-add-button:hover:not(:disabled) {
+    border-color: rgba(99, 102, 241, 0.5);
+    color: rgba(99, 102, 241, 0.9);
+    background: rgba(99, 102, 241, 0.05);
+  }
+
+  .demo-add-button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
   /* .btn-danger now inherits from buttons.css - no need for duplicate definition */

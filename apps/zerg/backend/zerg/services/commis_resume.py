@@ -11,7 +11,10 @@ Key requirements:
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import logging
+import time
 import uuid
 from datetime import datetime
 from datetime import timedelta
@@ -19,6 +22,7 @@ from datetime import timezone
 from typing import Any
 
 from sqlalchemy import func as sa_func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from zerg.models.commis_barrier import CommisBarrier
@@ -29,6 +33,129 @@ from zerg.models.models import Run
 from zerg.services.oikos_context import reset_seq
 
 logger = logging.getLogger(__name__)
+
+# Sentinel used when follow-up continuations should read queued commis updates from thread.
+INBOX_QUEUED_RESULT = "(Queued commis updates available in thread)"
+
+# Follow-up wait tuning (best-effort, avoids infinite background tasks)
+INBOX_FOLLOWUP_TIMEOUT_S = 300
+INBOX_FOLLOWUP_SLEEP_S = 0.5
+INBOX_FOLLOWUP_MAX_SLEEP_S = 2.0
+
+
+def _build_commis_update_content(
+    *,
+    commis_job_id: int,
+    commis_task: str,
+    commis_status: str,
+    commis_result: str,
+    commis_error: str | None,
+) -> str:
+    if commis_status == "failed":
+        summary = f"Error: {commis_error or 'Unknown error'}"
+    else:
+        summary = f"Result: {commis_result[:500]}"
+    return (
+        "[Commis update]\n"
+        f"Job ID: {commis_job_id}\n"
+        f"Status: {commis_status}\n"
+        f"Task: {commis_task[:200]}\n"
+        f"{summary}\n\n"
+        "If you need full details, call get_commis_evidence(job_id=...)."
+    )
+
+
+def _queue_commis_update(
+    *,
+    db: Session,
+    thread_id: int,
+    commis_job_id: int,
+    commis_task: str,
+    commis_status: str,
+    commis_result: str,
+    commis_error: str | None,
+) -> None:
+    from zerg.crud import crud
+
+    context_content = _build_commis_update_content(
+        commis_job_id=commis_job_id,
+        commis_task=commis_task,
+        commis_status=commis_status,
+        commis_result=commis_result,
+        commis_error=commis_error,
+    )
+
+    crud.create_thread_message(
+        db=db,
+        thread_id=thread_id,
+        role="user",  # Use "user" role so Runner includes it
+        content=context_content,
+        processed=False,  # Unprocessed so it gets picked up
+        internal=True,  # Internal flag for UI filtering
+    )
+
+
+async def run_inbox_followup_after_run(
+    *,
+    run_id: int,
+    commis_job_id: int,
+    commis_status: str,
+    commis_error: str | None,
+    timeout_s: int = INBOX_FOLLOWUP_TIMEOUT_S,
+) -> dict[str, Any] | None:
+    """Wait for a run to finish, then trigger a continuation for queued commis updates."""
+    from zerg.database import get_session_factory
+
+    start = time.monotonic()
+    sleep_s = INBOX_FOLLOWUP_SLEEP_S
+    session_factory = get_session_factory()
+    db = session_factory()
+    try:
+        while True:
+            run = db.query(Run).filter(Run.id == run_id).first()
+            if not run:
+                return None
+            if run.status in (RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED):
+                break
+            if (time.monotonic() - start) >= timeout_s:
+                logger.info("Inbox follow-up timed out waiting for run %s to finish", run_id)
+                return None
+            await asyncio.sleep(sleep_s)
+            sleep_s = min(sleep_s * 1.5, INBOX_FOLLOWUP_MAX_SLEEP_S)
+            db.expire_all()
+
+        # Trigger continuation using queued updates already in the thread.
+        return await trigger_commis_inbox_run(
+            db=db,
+            original_run_id=run_id,
+            commis_job_id=commis_job_id,
+            commis_result=INBOX_QUEUED_RESULT,
+            commis_status=commis_status,
+            commis_error=commis_error,
+        )
+    finally:
+        db.close()
+
+
+def _schedule_inbox_followup_after_run(
+    *,
+    run_id: int,
+    commis_job_id: int,
+    commis_status: str,
+    commis_error: str | None,
+) -> None:
+    """Fire-and-forget scheduling for follow-up continuations."""
+    coro = run_inbox_followup_after_run(
+        run_id=run_id,
+        commis_job_id=commis_job_id,
+        commis_status=commis_status,
+        commis_error=commis_error,
+    )
+    try:
+        asyncio.create_task(coro, context=contextvars.Context())
+    except Exception:
+        coro.close()
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +444,22 @@ async def resume_oikos_batch(
             },
         )
 
+        # Emit stream_control based on pending commiss
+        from zerg.services.oikos_service import emit_stream_control
+
+        pending_commiss_count = (
+            db.query(CommisJob)
+            .filter(
+                CommisJob.oikos_run_id == run.id,
+                CommisJob.status.in_(["queued", "running"]),
+            )
+            .count()
+        )
+        if pending_commiss_count > 0:
+            await emit_stream_control(db, run, "keep_open", "commiss_pending", owner_id, ttl_ms=120_000)
+        else:
+            await emit_stream_control(db, run, "close", "all_complete", owner_id)
+
         await emit_run_event(
             db=db,
             run_id=run.id,
@@ -535,6 +678,11 @@ async def resume_oikos_batch(
             },
         )
 
+        # Emit stream_control:close for errors
+        from zerg.services.oikos_service import emit_stream_control
+
+        await emit_stream_control(db, run, "close", "error", owner_id)
+
         await emit_run_event(
             db=db,
             run_id=run.id,
@@ -688,6 +836,11 @@ async def _continue_oikos_langgraph_free(
             },
         )
 
+        # Emit stream_control:close for errors
+        from zerg.services.oikos_service import emit_stream_control
+
+        await emit_stream_control(db, run, "close", "error", owner_id)
+
         await emit_run_event(
             db=db,
             run_id=run.id,
@@ -809,6 +962,22 @@ async def _continue_oikos_langgraph_free(
             },
         )
 
+        # Emit stream_control based on pending commiss
+        from zerg.services.oikos_service import emit_stream_control
+
+        pending_commiss_count = (
+            db.query(CommisJob)
+            .filter(
+                CommisJob.oikos_run_id == run.id,
+                CommisJob.status.in_(["queued", "running"]),
+            )
+            .count()
+        )
+        if pending_commiss_count > 0:
+            await emit_stream_control(db, run, "keep_open", "commiss_pending", owner_id, ttl_ms=120_000)
+        else:
+            await emit_stream_control(db, run, "close", "all_complete", owner_id)
+
         await emit_run_event(
             db=db,
             run_id=run.id,
@@ -924,6 +1093,11 @@ async def _continue_oikos_langgraph_free(
             },
         )
 
+        # Emit stream_control:close for errors
+        from zerg.services.oikos_service import emit_stream_control
+
+        await emit_stream_control(db, run, "close", "error", owner_id)
+
         await emit_run_event(
             db=db,
             run_id=run.id,
@@ -985,6 +1159,250 @@ def _compute_duration_ms(started_at, *, end_time: datetime | None = None) -> int
 # ---------------------------------------------------------------------------
 # Timeout Reaper (Background Task)
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Inbox Continuation (Commis completes after oikos SUCCESS)
+# ---------------------------------------------------------------------------
+
+
+async def trigger_commis_inbox_run(
+    db: Session,
+    original_run_id: int,
+    commis_job_id: int,
+    commis_result: str,
+    commis_status: str,  # "success" | "failed"
+    commis_error: str | None = None,
+) -> dict[str, Any]:
+    """Trigger a continuation oikos run when commis completes and original run is terminal.
+
+    This implements the "Human PA" model where commiss report back automatically
+    without requiring a user prompt. When a commis completes and the original
+    oikos run has already finished (SUCCESS/FAILED/CANCELLED), this function
+    creates a new continuation run to synthesize the commis's findings.
+
+    Args:
+        db: Database session.
+        original_run_id: The oikos run that spawned the commis.
+        commis_job_id: The CommisJob that just completed.
+        commis_result: Commis's result string.
+        commis_status: "success" or "failed".
+        commis_error: Error message if commis failed.
+
+    Returns:
+        Dict with status and details:
+        - {"status": "triggered", "continuation_run_id": N} if continuation created
+        - {"status": "queued", "continuation_run_id": N} if update queued until current continuation finishes
+        - {"status": "skipped", "reason": "..."} if continuation not needed
+        - {"status": "error", "error": "..."} if something went wrong
+    """
+    from zerg.models.enums import RunTrigger
+    from zerg.models.models import CommisJob
+    from zerg.services.oikos_service import OikosService
+
+    try:
+        # Load original run
+        original_run = db.query(Run).filter(Run.id == original_run_id).first()
+        if not original_run:
+            logger.warning(f"Cannot trigger inbox: original run {original_run_id} not found")
+            return {"status": "skipped", "reason": "original run not found"}
+
+        # Verify original run is in terminal state
+        if original_run.status not in (RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED):
+            logger.info(f"Skipping inbox trigger: original run {original_run_id} is {original_run.status.value}, not terminal")
+            return {"status": "skipped", "reason": f"original run is {original_run.status.value}"}
+
+        # Load commis job for context
+        commis_job = db.query(CommisJob).filter(CommisJob.id == commis_job_id).first()
+        commis_task = commis_job.task if commis_job else "unknown task"
+
+        # Get original run's context
+        thread = original_run.thread
+        agent = original_run.agent
+        owner_id = agent.owner_id
+
+        # Determine root_run_id for SSE aliasing through continuation chains
+        # If original_run already has a root_run_id, propagate it; otherwise use original_run_id
+        root_run_id = getattr(original_run, "root_run_id", None) or original_run_id
+
+        # Check for existing continuation run
+        existing_continuation = db.query(Run).filter(Run.continuation_of_run_id == original_run_id).first()
+
+        if existing_continuation:
+            # Existing continuation - handle based on its status
+            if existing_continuation.status == RunStatus.RUNNING:
+                # Continuation is running; queue update and trigger follow-up after it finishes.
+                logger.info(
+                    "Queueing commis %s update while continuation %s is running",
+                    commis_job_id,
+                    existing_continuation.id,
+                )
+                _queue_commis_update(
+                    db=db,
+                    thread_id=thread.id,
+                    commis_job_id=commis_job_id,
+                    commis_task=commis_task,
+                    commis_status=commis_status,
+                    commis_result=commis_result,
+                    commis_error=commis_error,
+                )
+                _schedule_inbox_followup_after_run(
+                    run_id=existing_continuation.id,
+                    commis_job_id=commis_job_id,
+                    commis_status=commis_status,
+                    commis_error=commis_error,
+                )
+                return {
+                    "status": "queued",
+                    "continuation_run_id": existing_continuation.id,
+                    "message": "Queued commis update; follow-up will run after current continuation completes",
+                }
+
+            elif existing_continuation.status in (RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED):
+                # Continuation already finished - create a chain (continuation of continuation)
+                logger.info(
+                    f"Existing continuation {existing_continuation.id} is {existing_continuation.status.value}, "
+                    f"creating chain continuation"
+                )
+                # Use the existing continuation as the parent for the new one
+                original_run = existing_continuation
+                original_run_id = existing_continuation.id
+            else:
+                # WAITING or QUEUED - let normal resume handle it
+                logger.info(
+                    f"Existing continuation {existing_continuation.id} is {existing_continuation.status.value}, " f"skipping inbox trigger"
+                )
+                return {
+                    "status": "skipped",
+                    "reason": f"existing continuation is {existing_continuation.status.value}",
+                }
+
+        # Create new continuation run
+        start_time = datetime.now(timezone.utc)
+        started_at_naive = start_time.replace(tzinfo=None)
+
+        # Generate new trace_id but inherit model/reasoning_effort
+        new_trace_id = uuid.uuid4()
+        new_message_id = str(uuid.uuid4())
+
+        continuation_run = Run(
+            fiche_id=agent.id,
+            thread_id=thread.id,
+            continuation_of_run_id=original_run_id,
+            root_run_id=root_run_id,  # For SSE aliasing through chains
+            status=RunStatus.RUNNING,
+            trigger=RunTrigger.CONTINUATION,
+            started_at=started_at_naive,
+            model=original_run.model,
+            reasoning_effort=original_run.reasoning_effort,
+            trace_id=new_trace_id,
+            assistant_message_id=new_message_id,
+        )
+        db.add(continuation_run)
+
+        try:
+            db.commit()
+            db.refresh(continuation_run)
+        except IntegrityError as e:
+            # Unique constraint violation - another process created continuation
+            db.rollback()
+            logger.info(f"Continuation already exists for run {original_run_id} (race condition): {e}")
+            # Re-query and try to merge into the existing continuation
+            existing = db.query(Run).filter(Run.continuation_of_run_id == original_run_id).first()
+            if existing:
+                if existing.status == RunStatus.RUNNING:
+                    _queue_commis_update(
+                        db=db,
+                        thread_id=thread.id,
+                        commis_job_id=commis_job_id,
+                        commis_task=commis_task,
+                        commis_status=commis_status,
+                        commis_result=commis_result,
+                        commis_error=commis_error,
+                    )
+                    _schedule_inbox_followup_after_run(
+                        run_id=existing.id,
+                        commis_job_id=commis_job_id,
+                        commis_status=commis_status,
+                        commis_error=commis_error,
+                    )
+                    return {
+                        "status": "queued",
+                        "continuation_run_id": existing.id,
+                        "message": "Race recovery: queued commis update; follow-up will run after current continuation completes",
+                    }
+                elif existing.status in (RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED):
+                    # Existing continuation already finished - recurse to create chain
+                    logger.info(
+                        "Race recovery: existing continuation %s is %s, recursing to create chain",
+                        existing.id,
+                        existing.status.value,
+                    )
+                    return await trigger_commis_inbox_run(
+                        db=db,
+                        original_run_id=existing.id,  # Chain off the existing continuation
+                        commis_job_id=commis_job_id,
+                        commis_result=commis_result,
+                        commis_status=commis_status,
+                        commis_error=commis_error,
+                    )
+            return {"status": "skipped", "reason": "continuation already exists (race)"}
+
+        logger.info(
+            f"Created inbox continuation run {continuation_run.id} for original run {original_run_id} "
+            f"(commis {commis_job_id} completed)"
+        )
+
+        # Emit stream_control:keep_open for continuation start
+        from zerg.services.oikos_service import emit_stream_control
+
+        await emit_stream_control(db, original_run, "keep_open", "continuation_start", owner_id, ttl_ms=180_000)
+
+        # Build synthetic task for oikos
+        if commis_result == INBOX_QUEUED_RESULT:
+            synthetic_task = (
+                "[Commis inbox] One or more background commiss completed while another response was running.\n\n"
+                "Please review the latest internal commis updates in the thread and summarize them clearly for the user."
+            )
+        elif commis_status == "failed":
+            synthetic_task = (
+                f"[Commis inbox] A background commis failed.\n\n"
+                f"Original task: {commis_task[:200]}\n\n"
+                f"Error: {commis_error or 'Unknown error'}\n\n"
+                f"Please acknowledge the failure and explain what happened to the user."
+            )
+        else:
+            synthetic_task = (
+                f"[Commis inbox] A background commis has completed and returned results.\n\n"
+                f"Original task: {commis_task[:200]}\n\n"
+                f"Commis result:\n{commis_result}\n\n"
+                f"Please synthesize these findings and present them clearly to the user."
+            )
+
+        # Run oikos with the synthetic task
+        oikos_service = OikosService(db)
+        result = await oikos_service.run_oikos(
+            owner_id=owner_id,
+            task=synthetic_task,
+            run_id=continuation_run.id,
+            message_id=new_message_id,
+            trace_id=str(new_trace_id),
+            model_override=original_run.model,
+            reasoning_effort=original_run.reasoning_effort,
+            timeout=120,  # Give continuation plenty of time
+        )
+
+        logger.info(f"Inbox continuation run {continuation_run.id} completed with status {result.status}")
+
+        return {
+            "status": "triggered",
+            "continuation_run_id": continuation_run.id,
+            "result_status": result.status,
+        }
+
+    except Exception as e:
+        logger.exception(f"Error triggering inbox run for original run {original_run_id}: {e}")
+        return {"status": "error", "error": str(e)}
 
 
 async def reap_expired_barriers(db: Session) -> dict[str, Any]:

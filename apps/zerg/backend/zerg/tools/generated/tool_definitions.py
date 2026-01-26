@@ -9,10 +9,10 @@ from typing import Optional
 class ToolName(str, Enum):
     """Built-in tool names available in the registry."""
 
-    FICHE_MEMORY_DELETE = "fiche_memory_delete"
-    FICHE_MEMORY_EXPORT = "fiche_memory_export"
-    FICHE_MEMORY_GET = "fiche_memory_get"
-    FICHE_MEMORY_SET = "fiche_memory_set"
+    AGENT_MEMORY_DELETE = "agent_memory_delete"
+    AGENT_MEMORY_EXPORT = "agent_memory_export"
+    AGENT_MEMORY_GET = "agent_memory_get"
+    AGENT_MEMORY_SET = "agent_memory_set"
     CONTACT_USER = "contact_user"
     CONTAINER_EXEC = "container_exec"
     DATETIME_DIFF = "datetime_diff"
@@ -20,9 +20,9 @@ class ToolName(str, Enum):
     GET_CURRENT_LOCATION = "get_current_location"
     GET_CURRENT_TIME = "get_current_time"
     GET_WHOOP_DATA = "get_whoop_data"
-    GET_COMMIS_EVIDENCE = "get_commis_evidence"
+    GET_WORKER_EVIDENCE = "get_worker_evidence"
     GET_TOOL_OUTPUT = "get_tool_output"
-    GET_COMMIS_METADATA = "get_commis_metadata"
+    GET_WORKER_METADATA = "get_worker_metadata"
     GITHUB_ADD_COMMENT = "github_add_comment"
     GITHUB_CREATE_ISSUE = "github_create_issue"
     GITHUB_GET_ISSUE = "github_get_issue"
@@ -30,7 +30,7 @@ class ToolName(str, Enum):
     GITHUB_LIST_ISSUES = "github_list_issues"
     GITHUB_LIST_PULL_REQUESTS = "github_list_pull_requests"
     GITHUB_LIST_REPOSITORIES = "github_list_repositories"
-    GREP_COMMIS = "grep_commis"
+    GREP_WORKERS = "grep_workers"
     HTTP_REQUEST = "http_request"
     JIRA_ADD_COMMENT = "jira_add_comment"
     JIRA_CREATE_ISSUE = "jira_create_issue"
@@ -46,7 +46,7 @@ class ToolName(str, Enum):
     LINEAR_LIST_TEAMS = "linear_list_teams"
     LINEAR_UPDATE_ISSUE = "linear_update_issue"
     LIST_IMESSAGE_MESSAGES = "list_imessage_messages"
-    LIST_COMMIS = "list_commis"
+    LIST_WORKERS = "list_workers"
     MATH_EVAL = "math_eval"
     MEMORY_DELETE = "memory_delete"
     MEMORY_LS = "memory_ls"
@@ -59,9 +59,11 @@ class ToolName(str, Enum):
     NOTION_QUERY_DATABASE = "notion_query_database"
     NOTION_SEARCH = "notion_search"
     NOTION_UPDATE_PAGE = "notion_update_page"
-    READ_COMMIS_FILE = "read_commis_file"
-    READ_COMMIS_RESULT = "read_commis_result"
+    READ_WORKER_FILE = "read_worker_file"
+    READ_WORKER_RESULT = "read_worker_result"
+    PEEK_WORKER_OUTPUT = "peek_worker_output"
     REFRESH_CONNECTOR_STATUS = "refresh_connector_status"
+    REQUEST_SESSION_SELECTION = "request_session_selection"
     RUNNER_CREATE_ENROLL_TOKEN = "runner_create_enroll_token"
     RUNNER_EXEC = "runner_exec"
     RUNNER_LIST = "runner_list"
@@ -71,11 +73,11 @@ class ToolName(str, Enum):
     SEND_IMESSAGE = "send_imessage"
     SEND_SLACK_WEBHOOK = "send_slack_webhook"
     SEND_SMS = "send_sms"
-    CANCEL_COMMIS = "cancel_commis"
-    CHECK_COMMIS_STATUS = "check_commis_status"
-    SPAWN_COMMIS = "spawn_commis"
-    SPAWN_WORKSPACE_COMMIS = "spawn_workspace_commis"
-    WAIT_FOR_COMMIS = "wait_for_commis"
+    CANCEL_WORKER = "cancel_worker"
+    CHECK_WORKER_STATUS = "check_worker_status"
+    SPAWN_WORKER = "spawn_worker"
+    SPAWN_WORKSPACE_WORKER = "spawn_workspace_worker"
+    WAIT_FOR_WORKER = "wait_for_worker"
     SSH_EXEC = "ssh_exec"
     TASK_CREATE = "task_create"
     TASK_DELETE = "task_delete"
@@ -90,7 +92,7 @@ class ToolName(str, Enum):
 class ServerName(str, Enum):
     """Server/module names for tools."""
 
-    FICHE_MEMORY = "fiche_memory"
+    AGENT_MEMORY = "agent_memory"
     CONNECTOR = "connector"
     CONTACT_USER = "contact_user"
     CONTAINER = "container"
@@ -122,10 +124,10 @@ class ServerName(str, Enum):
 
 # Tool to server mapping for validation
 TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
-    ToolName.FICHE_MEMORY_DELETE: ServerName.FICHE_MEMORY,
-    ToolName.FICHE_MEMORY_EXPORT: ServerName.FICHE_MEMORY,
-    ToolName.FICHE_MEMORY_GET: ServerName.FICHE_MEMORY,
-    ToolName.FICHE_MEMORY_SET: ServerName.FICHE_MEMORY,
+    ToolName.AGENT_MEMORY_DELETE: ServerName.AGENT_MEMORY,
+    ToolName.AGENT_MEMORY_EXPORT: ServerName.AGENT_MEMORY,
+    ToolName.AGENT_MEMORY_GET: ServerName.AGENT_MEMORY,
+    ToolName.AGENT_MEMORY_SET: ServerName.AGENT_MEMORY,
     ToolName.CONTACT_USER: ServerName.CONTACT_USER,
     ToolName.CONTAINER_EXEC: ServerName.CONTAINER,
     ToolName.DATETIME_DIFF: ServerName.DATETIME,
@@ -133,9 +135,9 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.GET_CURRENT_LOCATION: ServerName.PERSONAL,
     ToolName.GET_CURRENT_TIME: ServerName.DATETIME,
     ToolName.GET_WHOOP_DATA: ServerName.PERSONAL,
-    ToolName.GET_COMMIS_EVIDENCE: ServerName.SUPERVISOR,
+    ToolName.GET_WORKER_EVIDENCE: ServerName.SUPERVISOR,
     ToolName.GET_TOOL_OUTPUT: ServerName.SUPERVISOR,
-    ToolName.GET_COMMIS_METADATA: ServerName.SUPERVISOR,
+    ToolName.GET_WORKER_METADATA: ServerName.SUPERVISOR,
     ToolName.GITHUB_ADD_COMMENT: ServerName.GITHUB,
     ToolName.GITHUB_CREATE_ISSUE: ServerName.GITHUB,
     ToolName.GITHUB_GET_ISSUE: ServerName.GITHUB,
@@ -143,7 +145,7 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.GITHUB_LIST_ISSUES: ServerName.GITHUB,
     ToolName.GITHUB_LIST_PULL_REQUESTS: ServerName.GITHUB,
     ToolName.GITHUB_LIST_REPOSITORIES: ServerName.GITHUB,
-    ToolName.GREP_COMMIS: ServerName.SUPERVISOR,
+    ToolName.GREP_WORKERS: ServerName.SUPERVISOR,
     ToolName.HTTP_REQUEST: ServerName.HTTP,
     ToolName.JIRA_ADD_COMMENT: ServerName.JIRA,
     ToolName.JIRA_CREATE_ISSUE: ServerName.JIRA,
@@ -159,7 +161,7 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.LINEAR_LIST_TEAMS: ServerName.LINEAR,
     ToolName.LINEAR_UPDATE_ISSUE: ServerName.LINEAR,
     ToolName.LIST_IMESSAGE_MESSAGES: ServerName.IMESSAGE,
-    ToolName.LIST_COMMIS: ServerName.SUPERVISOR,
+    ToolName.LIST_WORKERS: ServerName.SUPERVISOR,
     ToolName.MATH_EVAL: ServerName.MATH,
     ToolName.MEMORY_DELETE: ServerName.MEMORY,
     ToolName.MEMORY_LS: ServerName.MEMORY,
@@ -172,9 +174,11 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.NOTION_QUERY_DATABASE: ServerName.NOTION,
     ToolName.NOTION_SEARCH: ServerName.NOTION,
     ToolName.NOTION_UPDATE_PAGE: ServerName.NOTION,
-    ToolName.READ_COMMIS_FILE: ServerName.SUPERVISOR,
-    ToolName.READ_COMMIS_RESULT: ServerName.SUPERVISOR,
+    ToolName.READ_WORKER_FILE: ServerName.SUPERVISOR,
+    ToolName.READ_WORKER_RESULT: ServerName.SUPERVISOR,
+    ToolName.PEEK_WORKER_OUTPUT: ServerName.SUPERVISOR,
     ToolName.REFRESH_CONNECTOR_STATUS: ServerName.CONNECTOR,
+    ToolName.REQUEST_SESSION_SELECTION: ServerName.SUPERVISOR,
     ToolName.RUNNER_CREATE_ENROLL_TOKEN: ServerName.RUNNER_SETUP,
     ToolName.RUNNER_EXEC: ServerName.RUNNER,
     ToolName.RUNNER_LIST: ServerName.RUNNER_SETUP,
@@ -184,11 +188,11 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.SEND_IMESSAGE: ServerName.IMESSAGE,
     ToolName.SEND_SLACK_WEBHOOK: ServerName.SLACK,
     ToolName.SEND_SMS: ServerName.SMS,
-    ToolName.CANCEL_COMMIS: ServerName.SUPERVISOR,
-    ToolName.CHECK_COMMIS_STATUS: ServerName.SUPERVISOR,
-    ToolName.SPAWN_COMMIS: ServerName.SUPERVISOR,
-    ToolName.SPAWN_WORKSPACE_COMMIS: ServerName.SUPERVISOR,
-    ToolName.WAIT_FOR_COMMIS: ServerName.SUPERVISOR,
+    ToolName.CANCEL_WORKER: ServerName.SUPERVISOR,
+    ToolName.CHECK_WORKER_STATUS: ServerName.SUPERVISOR,
+    ToolName.SPAWN_WORKER: ServerName.SUPERVISOR,
+    ToolName.SPAWN_WORKSPACE_WORKER: ServerName.SUPERVISOR,
+    ToolName.WAIT_FOR_WORKER: ServerName.SUPERVISOR,
     ToolName.SSH_EXEC: ServerName.SSH,
     ToolName.TASK_CREATE: ServerName.TASK,
     ToolName.TASK_DELETE: ServerName.TASK,

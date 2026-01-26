@@ -5,14 +5,15 @@ import tempfile
 import pytest
 
 from tests.conftest import TEST_MODEL
-from tests.conftest import TEST_COMMIS_MODEL
+from tests.conftest import TEST_WORKER_MODEL
 from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
 from zerg.tools.builtin.oikos_tools import get_commis_metadata
 from zerg.tools.builtin.oikos_tools import get_commis_evidence
 from zerg.tools.builtin.oikos_tools import get_tool_output
-from zerg.tools.builtin.oikos_tools import grep_commis
-from zerg.tools.builtin.oikos_tools import list_commis
+from zerg.tools.builtin.oikos_tools import grep_commiss
+from zerg.tools.builtin.oikos_tools import list_commiss
+from zerg.tools.builtin.oikos_tools import peek_commis_output
 from zerg.tools.builtin.oikos_tools import read_commis_file
 from zerg.tools.builtin.oikos_tools import read_commis_result
 from zerg.tools.builtin.oikos_tools import spawn_commis
@@ -44,7 +45,7 @@ def _count_commis_jobs(db_session) -> int:
 
 def test_spawn_commis_success(credential_context, temp_artifact_path, db_session):
     """Test spawning a commis job that gets queued."""
-    result = spawn_commis(task="What is 2+2?", model=TEST_COMMIS_MODEL)
+    result = spawn_commis(task="What is 2+2?", model=TEST_WORKER_MODEL)
 
     # Verify result format - now queued instead of executed synchronously
     # With interrupt/resume pattern, when called outside runnable context:
@@ -83,7 +84,7 @@ def test_spawn_workspace_commis_success(credential_context, temp_artifact_path, 
     result = spawn_workspace_commis(
         task="List dependencies from pyproject.toml",
         git_repo="https://github.com/langchain-ai/langchain.git",
-        model=TEST_COMMIS_MODEL,
+        model=TEST_WORKER_MODEL,
     )
 
     # Verify result format - job queued
@@ -123,7 +124,7 @@ def test_spawn_workspace_commis_no_context():
 
 def test_spawn_commis_has_no_config(credential_context, temp_artifact_path, db_session):
     """Test that standard spawn_commis creates job WITHOUT execution config."""
-    result = spawn_commis(task="Check disk space", model=TEST_COMMIS_MODEL)
+    result = spawn_commis(task="Check disk space", model=TEST_WORKER_MODEL)
 
     # Verify result format
     assert "Commis job" in result
@@ -149,7 +150,7 @@ def test_spawn_workspace_commis_ssh_url(credential_context, temp_artifact_path, 
     result = spawn_workspace_commis(
         task="Fix typo in README.md",
         git_repo="git@github.com:cipher982/zerg.git",
-        model=TEST_COMMIS_MODEL,
+        model=TEST_WORKER_MODEL,
     )
 
     assert "Commis job" in result
@@ -212,7 +213,7 @@ def test_spawn_workspace_commis_ssh_scheme_url(credential_context, temp_artifact
     result = spawn_workspace_commis(
         task="Audit README via ssh scheme",
         git_repo="ssh://git@github.com/cipher982/zerg.git",
-        model=TEST_COMMIS_MODEL,
+        model=TEST_WORKER_MODEL,
     )
 
     assert "Commis job" in result
@@ -248,7 +249,7 @@ def test_spawn_workspace_commis_rejects_ssh_option_injection(
 def test_spawn_workspace_commis_security_filtering(
     credential_context, temp_artifact_path, db_session, test_user
 ):
-    """Test that workspace commis respect owner isolation."""
+    """Test that workspace commiss respect owner isolation."""
     from zerg.connectors.resolver import CredentialResolver
     from zerg.crud import crud
 
@@ -256,11 +257,11 @@ def test_spawn_workspace_commis_security_filtering(
     spawn_workspace_commis(
         task="User A repo task",
         git_repo="https://github.com/user-a/repo.git",
-        model=TEST_COMMIS_MODEL,
+        model=TEST_WORKER_MODEL,
     )
 
     # Verify User A can see it
-    result_a = list_commis()
+    result_a = list_commiss()
     assert "User A repo task" in result_a
 
     # 2. Create User B
@@ -271,17 +272,17 @@ def test_spawn_workspace_commis_security_filtering(
     set_credential_resolver(resolver_b)
 
     # User B CANNOT see User A's workspace commis
-    result_b = list_commis()
+    result_b = list_commiss()
     assert "User A repo task" not in result_b
 
     # 3. User B creates their own workspace commis
     spawn_workspace_commis(
         task="User B repo task",
         git_repo="https://github.com/user-b/repo.git",
-        model=TEST_COMMIS_MODEL,
+        model=TEST_WORKER_MODEL,
     )
 
-    result_b_2 = list_commis()
+    result_b_2 = list_commiss()
     assert "User B repo task" in result_b_2
     assert "User A repo task" not in result_b_2
 
@@ -289,43 +290,43 @@ def test_spawn_workspace_commis_security_filtering(
     set_credential_resolver(credential_context)
 
 
-def test_list_commis_empty(temp_artifact_path):
-    """Test listing commis when none exist."""
+def test_list_commiss_empty(temp_artifact_path):
+    """Test listing commiss when none exist."""
     # We expect a "no credential context" error because we didn't set up context
-    result = list_commis()
+    result = list_commiss()
 
     assert "Error" in result
     assert "no credential context" in result
 
 
-def test_list_commis_with_data(credential_context, temp_artifact_path, db_session):
-    """Test listing commis after spawning some."""
-    # Spawn a couple of commis (they get queued, not executed synchronously)
-    spawn_commis(task="Task 1", model=TEST_COMMIS_MODEL)
-    spawn_commis(task="Task 2", model=TEST_COMMIS_MODEL)
+def test_list_commiss_with_data(credential_context, temp_artifact_path, db_session):
+    """Test listing commiss after spawning some."""
+    # Spawn a couple of commiss (they get queued, not executed synchronously)
+    spawn_commis(task="Task 1", model=TEST_WORKER_MODEL)
+    spawn_commis(task="Task 2", model=TEST_WORKER_MODEL)
 
-    # List commis
-    result = list_commis(limit=10)
+    # List commiss
+    result = list_commiss(limit=10)
 
-    # Check we got results (format: "Recent commis (showing N)")
+    # Check we got results (format: "Recent commiss (showing N)")
     assert "showing 2" in result or "Job 1" in result or "Job 2" in result
     # Check task content is visible (either directly or as summary)
     assert "Task 1" in result
     assert "Task 2" in result
-    # Commis are queued, not completed synchronously
+    # Commiss are queued, not completed synchronously
     assert "QUEUED" in result
 
 
 def test_security_filtering(credential_context, temp_artifact_path, db_session, test_user):
-    """Test that users can only see their own commis."""
+    """Test that users can only see their own commiss."""
     from zerg.connectors.resolver import CredentialResolver
     from zerg.crud import crud
 
     # 1. Create a commis as User A (test_user)
-    spawn_commis(task="User A Task", model=TEST_COMMIS_MODEL)
+    spawn_commis(task="User A Task", model=TEST_WORKER_MODEL)
 
     # Verify User A can see it
-    result_a = list_commis()
+    result_a = list_commiss()
     assert "User A Task" in result_a
 
     # 2. Create User B in database (required for foreign key)
@@ -339,31 +340,31 @@ def test_security_filtering(credential_context, temp_artifact_path, db_session, 
     set_credential_resolver(resolver_b)
 
     # Verify User B CANNOT see User A's commis
-    result_b = list_commis()
+    result_b = list_commiss()
     assert "User A Task" not in result_b
     assert "showing 0" in result_b or "No commis" in result_b
 
     # 3. Create commis as User B
-    spawn_commis(task="User B Task", model=TEST_COMMIS_MODEL)
+    spawn_commis(task="User B Task", model=TEST_WORKER_MODEL)
 
     # Verify User B sees their task
-    result_b_2 = list_commis()
+    result_b_2 = list_commiss()
     assert "User B Task" in result_b_2
     assert "User A Task" not in result_b_2
 
     # 4. Switch back to User A
     set_credential_resolver(credential_context)
-    result_a_2 = list_commis()
+    result_a_2 = list_commiss()
     assert "User A Task" in result_a_2
     assert "User B Task" not in result_a_2
 
 
 def test_security_read_access(credential_context, temp_artifact_path, db_session, test_user):
-    """Test that users cannot read artifacts of other users' commis."""
+    """Test that users cannot read artifacts of other users' commiss."""
     from zerg.connectors.resolver import CredentialResolver
 
     # 1. Create commis as User A
-    res_spawn = spawn_commis(task="Secret Task", model=TEST_COMMIS_MODEL)
+    res_spawn = spawn_commis(task="Secret Task", model=TEST_WORKER_MODEL)
     lines = res_spawn.split("\n")
     commis_line = [line for line in lines if "Commis" in line][0]
     commis_id = commis_line.split()[1]
@@ -386,35 +387,35 @@ def test_security_read_access(credential_context, temp_artifact_path, db_session
     assert "Access denied" in res_meta or "Error" in res_meta
 
     # 6. Attempt to grep
-    res_grep = grep_commis("Secret")
+    res_grep = grep_commiss("Secret")
     assert "No matches found" in res_grep
 
 
-def test_list_commis_with_status_filter(credential_context, temp_artifact_path, db_session):
-    """Test listing commis with status filter."""
-    # Spawn commis (gets queued)
-    spawn_commis(task="Queued task", model=TEST_COMMIS_MODEL)
+def test_list_commiss_with_status_filter(credential_context, temp_artifact_path, db_session):
+    """Test listing commiss with status filter."""
+    # Spawn commiss (gets queued)
+    spawn_commis(task="Queued task", model=TEST_WORKER_MODEL)
 
-    # List only queued commis (they don't run synchronously anymore)
-    result = list_commis(status="queued", limit=10)
+    # List only queued commiss (they don't run synchronously anymore)
+    result = list_commiss(status="queued", limit=10)
 
     assert "showing" in result or "Job" in result
     assert "QUEUED" in result
 
 
-def test_list_commis_with_time_filter(credential_context, temp_artifact_path, db_session):
-    """Test listing commis with time filter."""
+def test_list_commiss_with_time_filter(credential_context, temp_artifact_path, db_session):
+    """Test listing commiss with time filter."""
     # Spawn a commis
-    spawn_commis(task="Recent task", model=TEST_COMMIS_MODEL)
+    spawn_commis(task="Recent task", model=TEST_WORKER_MODEL)
 
-    # List commis from last hour
-    result = list_commis(since_hours=1)
+    # List commiss from last hour
+    result = list_commiss(since_hours=1)
 
     assert "showing" in result or "Job" in result
     assert "Recent task" in result
 
-    # List commis from last 0 hours (should be empty or close to it)
-    result = list_commis(since_hours=0)
+    # List commiss from last 0 hours (should be empty or close to it)
+    result = list_commiss(since_hours=0)
     # May or may not find it depending on timing, just check no error
 
 
@@ -469,7 +470,7 @@ def test_read_commis_result_success(credential_context, temp_artifact_path, db_s
     import re
 
     # Spawn a commis (gets queued, not executed)
-    spawn_result = spawn_commis(task="What is 1+1?", model=TEST_COMMIS_MODEL)
+    spawn_result = spawn_commis(task="What is 1+1?", model=TEST_WORKER_MODEL)
 
     # Extract job_id
     job_id_match = re.search(r"Commis job (\d+)", spawn_result)
@@ -504,7 +505,7 @@ def test_read_commis_file_metadata(credential_context, temp_artifact_path, db_se
     import re
 
     # Spawn a commis (gets queued)
-    spawn_result = spawn_commis(task="Test task", model=TEST_COMMIS_MODEL)
+    spawn_result = spawn_commis(task="Test task", model=TEST_WORKER_MODEL)
 
     # Extract job_id
     job_id_match = re.search(r"Commis job (\d+)", spawn_result)
@@ -523,7 +524,7 @@ def test_read_commis_file_result(credential_context, temp_artifact_path, db_sess
     import re
 
     # Spawn a commis (gets queued)
-    spawn_result = spawn_commis(task="Say hello", model=TEST_COMMIS_MODEL)
+    spawn_result = spawn_commis(task="Say hello", model=TEST_WORKER_MODEL)
 
     # Extract job_id
     job_id_match = re.search(r"Commis job (\d+)", spawn_result)
@@ -542,7 +543,7 @@ def test_read_commis_file_not_found(credential_context, temp_artifact_path, db_s
     import re
 
     # Spawn a commis (gets queued)
-    spawn_result = spawn_commis(task="Test", model=TEST_COMMIS_MODEL)
+    spawn_result = spawn_commis(task="Test", model=TEST_WORKER_MODEL)
     job_id_match = re.search(r"Commis job (\d+)", spawn_result)
     assert job_id_match
     job_id = job_id_match.group(1)
@@ -558,7 +559,7 @@ def test_read_commis_file_path_traversal(credential_context, temp_artifact_path,
     import re
 
     # Spawn a commis (gets queued)
-    spawn_result = spawn_commis(task="Test", model=TEST_COMMIS_MODEL)
+    spawn_result = spawn_commis(task="Test", model=TEST_WORKER_MODEL)
     job_id_match = re.search(r"Commis job (\d+)", spawn_result)
     assert job_id_match
     job_id = job_id_match.group(1)
@@ -569,12 +570,45 @@ def test_read_commis_file_path_traversal(credential_context, temp_artifact_path,
     assert "Error" in result
 
 
+def test_peek_commis_output_live(credential_context, temp_artifact_path, db_session, test_user):
+    """Peek live output for a running commis job."""
+    from zerg.models.models import CommisJob
+    from zerg.services.commis_output_buffer import get_commis_output_buffer
+
+    commis_id = "commis-test-live-output"
+    job = CommisJob(
+        owner_id=test_user.id,
+        oikos_run_id=None,
+        task="Live output test",
+        model=TEST_WORKER_MODEL,
+        status="running",
+        commis_id=commis_id,
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    buffer = get_commis_output_buffer()
+    buffer.append_output(
+        commis_id=commis_id,
+        stream="stdout",
+        data="hello from commis\n",
+        runner_job_id="runner-job-1",
+        job_id=job.id,
+        run_id=123,
+    )
+
+    result = peek_commis_output(str(job.id), max_bytes=2000)
+
+    assert "Live commis output" in result
+    assert "hello from commis" in result
+
+
 def test_get_commis_metadata_success(credential_context, temp_artifact_path, db_session):
     """Test getting commis metadata (queued job)."""
     import re
 
     # Spawn a commis (gets queued)
-    spawn_result = spawn_commis(task="Metadata test task", model=TEST_COMMIS_MODEL)
+    spawn_result = spawn_commis(task="Metadata test task", model=TEST_WORKER_MODEL)
 
     # Extract job_id
     job_id_match = re.search(r"Commis job (\d+)", spawn_result)
@@ -598,33 +632,33 @@ def test_get_commis_metadata_not_found(temp_artifact_path):
     assert "no credential context" in result
 
 
-def test_grep_commis_no_matches(temp_artifact_path):
-    """Test grepping commis without context."""
-    result = grep_commis("nonexistent-pattern-xyz")
+def test_grep_commiss_no_matches(temp_artifact_path):
+    """Test grepping commiss without context."""
+    result = grep_commiss("nonexistent-pattern-xyz")
 
     assert "Error" in result
     assert "no credential context" in result
 
 
-def test_grep_commis_with_matches(credential_context, temp_artifact_path, db_session):
-    """Test grepping commis for a pattern."""
+def test_grep_commiss_with_matches(credential_context, temp_artifact_path, db_session):
+    """Test grepping commiss for a pattern."""
     # Spawn a commis with distinctive text
-    spawn_commis(task="Find the word UNICORN in this task", model=TEST_COMMIS_MODEL)
+    spawn_commis(task="Find the word UNICORN in this task", model=TEST_WORKER_MODEL)
 
     # Search for the pattern
-    result = grep_commis("UNICORN", since_hours=1)
+    result = grep_commiss("UNICORN", since_hours=1)
 
     # Should find the match
     assert "match" in result.lower() or "found" in result.lower()
 
 
-def test_grep_commis_case_insensitive(credential_context, temp_artifact_path, db_session):
+def test_grep_commiss_case_insensitive(credential_context, temp_artifact_path, db_session):
     """Test that grep is case-insensitive."""
     # Spawn a commis
-    spawn_commis(task="This task has UPPERCASE text", model=TEST_COMMIS_MODEL)
+    spawn_commis(task="This task has UPPERCASE text", model=TEST_WORKER_MODEL)
 
     # Search with lowercase
-    result = grep_commis("uppercase", since_hours=1)
+    result = grep_commiss("uppercase", since_hours=1)
 
     # Should find the match despite case difference
     assert "match" in result.lower() or "found" in result.lower()
@@ -657,15 +691,15 @@ def test_get_tool_output_success(credential_context, tmp_path, monkeypatch):
     assert "output payload" in result
 
 
-def test_multiple_commis_workflow(credential_context, temp_artifact_path, db_session):
-    """Test complete workflow with multiple commis."""
-    # Spawn multiple commis (get queued)
-    spawn_commis(task="First commis task", model=TEST_COMMIS_MODEL)
-    spawn_commis(task="Second commis task", model=TEST_COMMIS_MODEL)
-    spawn_commis(task="Third commis task", model=TEST_COMMIS_MODEL)
+def test_multiple_commiss_workflow(credential_context, temp_artifact_path, db_session):
+    """Test complete workflow with multiple commiss."""
+    # Spawn multiple commiss (get queued)
+    spawn_commis(task="First commis task", model=TEST_WORKER_MODEL)
+    spawn_commis(task="Second commis task", model=TEST_WORKER_MODEL)
+    spawn_commis(task="Third commis task", model=TEST_WORKER_MODEL)
 
-    # List all commis
-    list_result = list_commis(limit=10)
+    # List all commiss
+    list_result = list_commiss(limit=10)
     assert "showing 3" in list_result or "Job" in list_result
 
     # Verify tasks are visible
@@ -673,16 +707,16 @@ def test_multiple_commis_workflow(credential_context, temp_artifact_path, db_ses
     assert "Second commis task" in list_result
     assert "Third commis task" in list_result
 
-    # Search for a pattern - won't match artifacts since commis haven't executed
-    grep_result = grep_commis("commis task", since_hours=1)
-    # Queued commis have no artifacts yet, so no matches expected
+    # Search for a pattern - won't match artifacts since commiss haven't executed
+    grep_result = grep_commiss("commis task", since_hours=1)
+    # Queued commiss have no artifacts yet, so no matches expected
     assert "No matches" in grep_result or "match" in grep_result.lower()
 
 
 def test_spawn_commis_with_different_models(credential_context, temp_artifact_path, db_session):
-    """Test spawning commis with different models."""
+    """Test spawning commiss with different models."""
     # Test with commis model (gpt-5-mini)
-    result1 = spawn_commis(task="Test with mini", model=TEST_COMMIS_MODEL)
+    result1 = spawn_commis(task="Test with mini", model=TEST_WORKER_MODEL)
     assert "queued successfully" in result1
 
     # Test with default model (gpt-5.2)
@@ -690,14 +724,14 @@ def test_spawn_commis_with_different_models(credential_context, temp_artifact_pa
     assert "queued successfully" in result2 or "Commis job" in result2
 
 
-def test_list_commis_limit(credential_context, temp_artifact_path, db_session):
-    """Test that list_commis respects limit parameter."""
-    # Spawn several commis
+def test_list_commiss_limit(credential_context, temp_artifact_path, db_session):
+    """Test that list_commiss respects limit parameter."""
+    # Spawn several commiss
     for i in range(5):
-        spawn_commis(task=f"Commis {i}", model=TEST_COMMIS_MODEL)
+        spawn_commis(task=f"Commis {i}", model=TEST_WORKER_MODEL)
 
     # List with limit of 3
-    result = list_commis(limit=3)
+    result = list_commiss(limit=3)
 
-    # Should only show 3 commis
+    # Should only show 3 commiss
     assert "showing 3" in result or result.count("Job") == 3

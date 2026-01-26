@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { useAuth } from "../lib/auth";
 import config from "../lib/config";
@@ -36,6 +36,7 @@ interface AdminUserRow {
   role: string;
   is_active: boolean;
   created_at: string | null;
+  is_demo?: boolean;
   usage: AdminUserUsage;
 }
 
@@ -53,7 +54,7 @@ interface DailyBreakdown {
   runs: number;
 }
 
-interface TopFicheUsage {
+interface TopAgentUsage {
   fiche_id: number;
   name: string;
   tokens: number;
@@ -66,7 +67,7 @@ interface AdminUserDetailResponse {
   period: string;
   summary: UserPeriodUsage;
   daily_breakdown: DailyBreakdown[];
-  top_fiches: TopFicheUsage[];
+  top_agents: TopAgentUsage[];
 }
 
 // Types for ops data - matching actual backend contract
@@ -84,17 +85,17 @@ interface OpsSummary {
     percent: number | null;
   };
   active_users_24h: number;
-  fiches_total: number;
-  fiches_scheduled: number;
+  agents_total: number;
+  agents_scheduled: number;
   latency_ms: {
     p50: number;
     p95: number;
   };
   errors_last_hour: number;
-  top_fiches_today: OpsTopFiche[];
+  top_agents_today: OpsTopAgent[];
 }
 
-interface OpsTopFiche {
+interface OpsTopAgent {
   fiche_id: number;
   name: string;
   owner_email: string;
@@ -103,7 +104,7 @@ interface OpsTopFiche {
   p95_ms: number;
 }
 
-// API functions (top fiches are included in summary)
+// API functions (top agents are included in summary)
 async function fetchOpsSummary(): Promise<OpsSummary> {
   const response = await fetch(`${config.apiBaseUrl}/ops/summary`, {
     credentials: 'include', // Cookie auth
@@ -191,6 +192,82 @@ async function fetchUserDetail(
   }
 
   return response.json();
+}
+
+interface DemoUserCreateRequest {
+  email?: string;
+  display_name?: string;
+}
+
+interface DemoUserResponse {
+  id: number;
+  email: string;
+  display_name: string | null;
+  is_demo: boolean;
+}
+
+async function createDemoUser(request: DemoUserCreateRequest): Promise<DemoUserResponse> {
+  const response = await fetch(`${config.apiBaseUrl}/admin/demo-users`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || "Failed to create demo user");
+  }
+
+  return response.json();
+}
+
+async function seedScenarioForUser(request: { name: string; owner_email: string; clean: boolean }): Promise<void> {
+  const response = await fetch(`${config.apiBaseUrl}/admin/seed-scenario`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || "Failed to seed scenario");
+  }
+}
+
+interface DemoResetResponse {
+  user_id: number;
+  email: string;
+  cleared: Record<string, number>;
+}
+
+async function resetDemoUser(userId: number): Promise<DemoResetResponse> {
+  const response = await fetch(`${config.apiBaseUrl}/admin/demo-users/${userId}/reset`, {
+    method: "POST",
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || "Failed to reset demo account");
+  }
+
+  return response.json();
+}
+
+async function impersonateUser(request: { user_id: number }): Promise<void> {
+  const response = await fetch(`${config.apiBaseUrl}/auth/impersonate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || "Failed to impersonate user");
+  }
 }
 
 // Metric card component
@@ -330,44 +407,42 @@ function ConfirmationModal({
   return createPortal(modalContent, document.body);
 }
 
-// Top fiches table component - using real backend contract
-function TopFichesTable({ fiches }: { fiches: OpsTopFiche[] }) {
-  if (fiches.length === 0) {
+// Top agents table component - using real backend contract
+function TopAgentsTable({ agents }: { agents: OpsTopAgent[] }) {
+  if (agents.length === 0) {
     return (
       <EmptyState
-        title="No fiche data available"
-        description="Data will appear once fiches start running."
+        title="No agent data available"
+        description="Data will appear once agents start running."
       />
     );
   }
 
   return (
-    <div className="top-fiches-table">
-      <Table>
-        <Table.Header>
-          <Table.Cell isHeader>Fiche Name</Table.Cell>
-          <Table.Cell isHeader>Owner</Table.Cell>
-          <Table.Cell isHeader>Runs</Table.Cell>
-          <Table.Cell isHeader>Cost (USD)</Table.Cell>
-          <Table.Cell isHeader>P95 Latency</Table.Cell>
-        </Table.Header>
-        <Table.Body>
-          {fiches.map((fiche) => (
-            <Table.Row key={fiche.fiche_id}>
-              <Table.Cell className="fiche-name">{fiche.name}</Table.Cell>
-              <Table.Cell className="owner-email">{fiche.owner_email}</Table.Cell>
-              <Table.Cell className="runs-count">{fiche.runs}</Table.Cell>
-              <Table.Cell className="cost">
-                {fiche.cost_usd !== null ? `$${fiche.cost_usd.toFixed(4)}` : 'N/A'}
-              </Table.Cell>
-              <Table.Cell className="latency">
-                {fiche.p95_ms}ms
-              </Table.Cell>
-            </Table.Row>
-          ))}
-        </Table.Body>
-      </Table>
-    </div>
+    <Table>
+      <Table.Header>
+        <Table.Cell isHeader>Agent Name</Table.Cell>
+        <Table.Cell isHeader>Owner</Table.Cell>
+        <Table.Cell isHeader>Runs</Table.Cell>
+        <Table.Cell isHeader>Cost (USD)</Table.Cell>
+        <Table.Cell isHeader>P95 Latency</Table.Cell>
+      </Table.Header>
+      <Table.Body>
+        {agents.map((agent) => (
+          <Table.Row key={agent.fiche_id}>
+            <Table.Cell className="agent-name">{agent.name}</Table.Cell>
+            <Table.Cell className="owner-email">{agent.owner_email}</Table.Cell>
+            <Table.Cell className="runs-count">{agent.runs}</Table.Cell>
+            <Table.Cell className="cost">
+              {agent.cost_usd !== null ? `$${agent.cost_usd.toFixed(4)}` : 'N/A'}
+            </Table.Cell>
+            <Table.Cell className="latency">
+              {agent.p95_ms}ms
+            </Table.Cell>
+          </Table.Row>
+        ))}
+      </Table.Body>
+    </Table>
   );
 }
 
@@ -438,6 +513,9 @@ function UsersTable({
                 <span className="user-email">{user.email}</span>
                 {user.display_name && (
                   <span className="user-display-name">{user.display_name}</span>
+                )}
+                {user.is_demo && (
+                  <Badge variant="warning" className="user-demo-badge">Demo</Badge>
                 )}
               </div>
             </Table.Cell>
@@ -559,26 +637,26 @@ function UserDetailModal({
               </div>
             )}
 
-            {/* Top Fiches */}
-            {detail.top_fiches.length > 0 && (
+            {/* Top Agents */}
+            {detail.top_agents.length > 0 && (
               <div className="detail-section">
-                <h5>Top Fiches by Cost</h5>
+                <h5>Top Agents by Cost</h5>
                 <table className="breakdown-table">
                   <thead>
                     <tr>
-                      <th>Fiche</th>
+                      <th>Agent</th>
                       <th className="numeric">Tokens</th>
                       <th className="numeric">Cost</th>
                       <th className="numeric">Runs</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {detail.top_fiches.map((fiche) => (
-                      <tr key={fiche.fiche_id}>
-                        <td>{fiche.name}</td>
-                        <td className="numeric">{fiche.tokens.toLocaleString()}</td>
-                        <td className="numeric">{formatCost(fiche.cost_usd)}</td>
-                        <td className="numeric">{fiche.runs}</td>
+                    {detail.top_agents.map((agent) => (
+                      <tr key={agent.fiche_id}>
+                        <td>{agent.name}</td>
+                        <td className="numeric">{agent.tokens.toLocaleString()}</td>
+                        <td className="numeric">{formatCost(agent.cost_usd)}</td>
+                        <td className="numeric">{agent.runs}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -596,6 +674,7 @@ function UserDetailModal({
 
 function AdminPage() {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const metricColors = {
     success: "var(--color-intent-success)",
     warning: "var(--color-intent-warning)",
@@ -620,6 +699,17 @@ function AdminPage() {
   const [usersSortOrder, setUsersSortOrder] = useState("desc");
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
   const [userDetailOpen, setUserDetailOpen] = useState(false);
+  const [demoEmail, setDemoEmail] = useState("");
+  const [demoDisplayName, setDemoDisplayName] = useState("");
+  const [demoScenario, setDemoScenario] = useState("swarm-mvp");
+  const [selectedDemoUserId, setSelectedDemoUserId] = useState<number | null>(null);
+  const [demoResetState, setDemoResetState] = useState<{
+    isOpen: boolean;
+    target: AdminUserRow | null;
+  }>({
+    isOpen: false,
+    target: null,
+  });
 
   // Ops summary query - FIXED: Move ALL hooks before any conditional logic
   const { data: summary, isLoading: summaryLoading, error: summaryError } = useQuery({
@@ -643,6 +733,16 @@ function AdminPage() {
     enabled: !!user,
     refetchInterval: 60000, // Refresh every minute
   });
+
+  const demoUsers = useMemo(() => {
+    return (usersData?.users ?? []).filter((demoUser) => demoUser.is_demo);
+  }, [usersData]);
+
+  useEffect(() => {
+    if (!selectedDemoUserId && demoUsers.length > 0) {
+      setSelectedDemoUserId(demoUsers[0].id);
+    }
+  }, [demoUsers, selectedDemoUserId]);
 
   useEffect(() => {
     if (summaryLoading || usersLoading) {
@@ -669,6 +769,52 @@ function AdminPage() {
     },
   });
 
+  const createDemoMutation = useMutation({
+    mutationFn: createDemoUser,
+    onSuccess: () => {
+      toast.success("Demo account ready");
+      setDemoEmail("");
+      setDemoDisplayName("");
+      queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to create demo account");
+    },
+  });
+
+  const seedScenarioMutation = useMutation({
+    mutationFn: seedScenarioForUser,
+    onSuccess: () => {
+      toast.success("Demo scenario seeded");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to seed scenario");
+    },
+  });
+
+  const impersonateMutation = useMutation({
+    mutationFn: impersonateUser,
+    onSuccess: () => {
+      toast.success("Switched to demo account");
+      window.location.assign("/dashboard");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to switch accounts");
+    },
+  });
+
+  const resetDemoMutation = useMutation({
+    mutationFn: (userId: number) => resetDemoUser(userId),
+    onSuccess: (data) => {
+      toast.success(`Demo reset for ${data.email}`);
+      setDemoResetState({ isOpen: false, target: null });
+      queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to reset demo account");
+    },
+  });
+
   // Handle permission errors - FIXED: Move ALL hooks before conditional logic
   React.useEffect(() => {
     if (summaryError instanceof Error && summaryError.message.includes("Admin access required")) {
@@ -690,6 +836,89 @@ function AdminPage() {
   const handleUserClick = (userId: number) => {
     setSelectedUserId(userId);
     setUserDetailOpen(true);
+  };
+
+  const handleCreateDemo = () => {
+    createDemoMutation.mutate({
+      email: demoEmail.trim() || undefined,
+      display_name: demoDisplayName.trim() || undefined,
+    });
+  };
+
+  const handleSeedDemo = (userId?: number | null) => {
+    const targetId = userId ?? selectedDemoUserId;
+    if (!targetId) {
+      toast.error("Select a demo account first");
+      return;
+    }
+    const demoUser = demoUsers.find((item) => item.id === targetId);
+    if (!demoUser) {
+      toast.error("Demo account not found");
+      return;
+    }
+    const scenarioName = demoScenario.trim();
+    if (!scenarioName) {
+      toast.error("Enter a scenario name to seed");
+      return;
+    }
+    seedScenarioMutation.mutate({
+      name: scenarioName,
+      owner_email: demoUser.email,
+      clean: true,
+    });
+  };
+
+  const handleImpersonate = (userId?: number | null) => {
+    const targetId = userId ?? selectedDemoUserId;
+    if (!targetId) {
+      toast.error("Select a demo account first");
+      return;
+    }
+    impersonateMutation.mutate({ user_id: targetId });
+  };
+
+  // One-click: seed sample data then impersonate
+  const handleStartDemo = async (userId: number) => {
+    const demoUser = demoUsers.find((item) => item.id === userId);
+    if (!demoUser) {
+      toast.error("Demo account not found");
+      return;
+    }
+
+    try {
+      // First seed the scenario
+      await seedScenarioForUser({
+        name: "swarm-mvp",
+        owner_email: demoUser.email,
+        clean: true,
+      });
+
+      // Then impersonate
+      await impersonateUser({ user_id: userId });
+      toast.success("Demo ready!");
+      window.location.assign("/dashboard");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to start demo");
+    }
+  };
+
+  const handleOpenDemoReset = (userId?: number | null) => {
+    const targetId = userId ?? selectedDemoUserId;
+    if (!targetId) {
+      toast.error("Select a demo account first");
+      return;
+    }
+    const demoUser = demoUsers.find((item) => item.id === targetId);
+    if (!demoUser) {
+      toast.error("Demo account not found");
+      return;
+    }
+    setDemoResetState({ isOpen: true, target: demoUser });
+  };
+
+  const handleConfirmDemoReset = () => {
+    if (!demoResetState.target) return;
+    resetDemoMutation.mutate(demoResetState.target.id);
   };
 
   // Check if user is admin (this should be checked by the router, but let's be safe)
@@ -826,13 +1055,13 @@ function AdminPage() {
             />
           </div>
 
-          {/* Top Fiches Section - using data from summary */}
+          {/* Top Agents Section - using data from summary */}
           <Card>
             <Card.Header>
-              <h3 className="admin-section-title ui-section-title">Top Performing Fiches (Today)</h3>
+              <h3 className="admin-section-title ui-section-title">Top Performing Agents (Today)</h3>
             </Card.Header>
             <Card.Body>
-              <TopFichesTable fiches={summary.top_fiches_today} />
+              <TopAgentsTable agents={summary.top_agents_today} />
             </Card.Body>
           </Card>
 
@@ -861,6 +1090,93 @@ function AdminPage() {
             </Card.Body>
           </Card>
 
+          {/* Demo Mode */}
+          <Card>
+            <Card.Header>
+              <h3 className="admin-section-title ui-section-title">Demo Mode</h3>
+            </Card.Header>
+            <Card.Body>
+              <p className="section-description admin-section-description">
+                One-click demo with sample data. Perfect for showing off Swarmlet.
+              </p>
+
+              {demoUsers.length === 0 ? (
+                <div className="demo-empty-state">
+                  <p>Create a demo account to show off Swarmlet with sample data.</p>
+                  <Button
+                    variant="primary"
+                    size="lg"
+                    onClick={handleCreateDemo}
+                    disabled={createDemoMutation.isPending}
+                  >
+                    {createDemoMutation.isPending ? "Creating..." : "Create Demo Account"}
+                  </Button>
+                </div>
+              ) : (
+                <div className="demo-accounts-grid">
+                  {demoUsers.map((demoUser) => {
+                    // Extract just the unique part from email for cleaner display
+                    const emailId = demoUser.email.split('@')[0].replace('demo+', '');
+                    return (
+                      <div key={demoUser.id} className="demo-account-card" style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '20px 24px',
+                        background: 'linear-gradient(135deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%)',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        borderRadius: '12px',
+                      }}>
+                        <div className="demo-account-info" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          <span className="demo-account-name" style={{ fontWeight: 600, fontSize: '16px', color: '#fff' }}>
+                            {demoUser.display_name || "Demo Account"}
+                          </span>
+                          <span className="demo-account-email" style={{ fontSize: '13px', color: 'rgba(255,255,255,0.5)', fontFamily: 'monospace' }}>{emailId}</span>
+                        </div>
+                        <div className="demo-account-actions" style={{ display: 'flex', gap: '12px' }}>
+                          <Button
+                            variant="primary"
+                            onClick={() => handleStartDemo(demoUser.id)}
+                            disabled={seedScenarioMutation.isPending || impersonateMutation.isPending}
+                          >
+                            {(seedScenarioMutation.isPending || impersonateMutation.isPending)
+                              ? "Starting..."
+                              : "▶ Start Demo"}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            onClick={() => handleOpenDemoReset(demoUser.id)}
+                            disabled={resetDemoMutation.isPending}
+                          >
+                            Clear
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <button
+                    className="demo-add-button"
+                    onClick={handleCreateDemo}
+                    disabled={createDemoMutation.isPending}
+                    style={{
+                      width: '100%',
+                      background: 'transparent',
+                      border: '2px dashed rgba(255,255,255,0.15)',
+                      borderRadius: '12px',
+                      padding: '16px',
+                      color: 'rgba(255,255,255,0.4)',
+                      cursor: 'pointer',
+                      fontSize: '14px',
+                      fontWeight: 500,
+                    }}
+                  >
+                    + New demo account
+                  </button>
+                </div>
+              )}
+            </Card.Body>
+          </Card>
+
           {/* System Information - using real backend data */}
           <Card>
             <Card.Header>
@@ -870,12 +1186,12 @@ function AdminPage() {
               <div className="system-info">
                 <div className="info-grid">
                   <div className="info-item">
-                    <span className="info-label">Total Fiches:</span>
-                    <span className="info-value">{summary.fiches_total}</span>
+                    <span className="info-label">Total Agents:</span>
+                    <span className="info-value">{summary.agents_total}</span>
                   </div>
                   <div className="info-item">
-                    <span className="info-label">Scheduled Fiches:</span>
-                    <span className="info-value">{summary.fiches_scheduled}</span>
+                    <span className="info-label">Scheduled Agents:</span>
+                    <span className="info-value">{summary.agents_scheduled}</span>
                   </div>
                   <div className="info-item">
                     <span className="info-label">Active Users (24h):</span>
@@ -922,7 +1238,7 @@ function AdminPage() {
                       <span className="admin-devtool-title">Trace Explorer</span>
                     </div>
                     <p className="admin-devtool-desc">
-                      Debug oikos runs, commis, and LLM calls with unified trace timelines.
+                      Debug oikos runs, commiss, and LLM calls with unified trace timelines.
                     </p>
                   </div>
                 </Link>
@@ -958,7 +1274,7 @@ function AdminPage() {
                     Clear User Data
                   </Button>
                   <p className="action-description">
-                    Remove all user-generated data (fiches, runs, workflows) while preserving user accounts
+                    Remove all user-generated data (agents, runs, workflows) while preserving user accounts
                   </p>
                 </div>
                 <div className="action-group">
@@ -991,12 +1307,26 @@ function AdminPage() {
         }
         message={
           modalState.type === "clear_data"
-            ? "This will remove all user-generated data (fiches, runs, workflows) but preserve user accounts. This action cannot be undone."
+            ? "This will remove all user-generated data (agents, runs, workflows) but preserve user accounts. This action cannot be undone."
             : "This will drop and recreate all database tables. All data will be lost. This action cannot be undone."
         }
         confirmText={resetMutation.isPending ? "Processing..." : "Confirm"}
         isDangerous={true}
         requirePassword={modalState.requirePassword}
+      />
+
+      <ConfirmationModal
+        isOpen={demoResetState.isOpen}
+        onClose={() => setDemoResetState({ isOpen: false, target: null })}
+        onConfirm={handleConfirmDemoReset}
+        title="Reset demo account"
+        message={
+          demoResetState.target
+            ? `This will erase all data for ${demoResetState.target.email}. You can re-seed the baseline scenario afterwards.`
+            : "This will erase all data for the selected demo account."
+        }
+        confirmText={resetDemoMutation.isPending ? "Resetting..." : "Reset demo"}
+        isDangerous={true}
       />
 
       {/* User Detail Modal */}

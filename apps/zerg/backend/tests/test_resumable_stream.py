@@ -12,6 +12,7 @@ which is compatible with pytest-xdist parallel execution.
 """
 
 import json
+import asyncio
 from typing import List
 
 import httpx
@@ -28,22 +29,22 @@ from zerg.services.event_store import emit_run_event
 
 @pytest.fixture
 def test_run(db_session, test_user):
-    """Create a test fiche and run for streaming tests."""
-    # Create fiche
-    fiche = Fiche(
-        name="Test Fiche",
+    """Create a test agent and run for streaming tests."""
+    # Create agent
+    agent = Agent(
+        name="Test Agent",
         owner_id=test_user.id,
         system_instructions="You are a helpful assistant.",
         task_instructions="Complete the given task.",
         model="gpt-4o-mini",
     )
-    db_session.add(fiche)
+    db_session.add(agent)
     db_session.commit()
-    db_session.refresh(fiche)
+    db_session.refresh(agent)
 
     # Create thread
     thread = Thread(
-        fiche_id=fiche.id,
+        fiche_id=agent.id,
         title="Test Thread",
         active=True,
     )
@@ -53,7 +54,7 @@ def test_run(db_session, test_user):
 
     # Create run
     run = Run(
-        fiche_id=fiche.id,
+        fiche_id=agent.id,
         thread_id=thread.id,
         status=RunStatus.RUNNING,
     )
@@ -369,3 +370,154 @@ async def test_stream_resumption_after_reconnect(db_session, test_run, test_user
     assert len(resumed_event_types) == 2
     assert resumed_event_types[0] == "oikos_thinking"
     assert resumed_event_types[1] == "oikos_complete"
+
+
+@pytest.mark.asyncio
+async def test_stream_keeps_open_for_pending_commiss_and_emits_commis_complete(db_session, test_run, test_user, auth_headers):
+    """Stream should continue after oikos_complete when commiss are pending."""
+    from zerg.models.models import CommisJob
+
+    # Create a commis job to reference in commis_spawned payload
+    job = CommisJob(
+        owner_id=test_user.id,
+        task="Long task",
+        model="gpt-5-mini",
+        status="queued",
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    async def emit_events():
+        # Let the stream start listening before emitting
+        await asyncio.sleep(0.1)
+        await emit_run_event(
+            db_session,
+            test_run.id,
+            "commis_spawned",
+            {
+                "job_id": job.id,
+                "tool_call_id": "tool-123",
+                "task": "Long task",
+                "model": "gpt-5-mini",
+                "owner_id": test_user.id,
+            },
+        )
+        await asyncio.sleep(0.1)
+        await emit_run_event(
+            db_session,
+            test_run.id,
+            "oikos_complete",
+            {"result": "done", "owner_id": test_user.id},
+        )
+        await asyncio.sleep(0.1)
+        await emit_run_event(
+            db_session,
+            test_run.id,
+            "commis_complete",
+            {
+                "job_id": job.id,
+                "commis_id": "commis-xyz",
+                "status": "success",
+                "duration_ms": 1200,
+                "owner_id": test_user.id,
+            },
+        )
+
+    emitter_task = asyncio.create_task(emit_events())
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test", timeout=5.0) as client:
+        async with client.stream("GET", f"/api/stream/runs/{test_run.id}", headers=auth_headers) as response:
+            assert response.status_code == 200
+            events = await collect_sse_events(response, max_events=10)
+
+    await emitter_task
+
+    event_types = [e.get("event") for e in events if e.get("event") != "heartbeat"]
+    assert "commis_spawned" in event_types
+    assert "oikos_complete" in event_types
+    assert "commis_complete" in event_types
+    assert event_types.index("oikos_complete") < event_types.index("commis_complete")
+
+
+@pytest.mark.asyncio
+async def test_stream_delivers_commis_output_after_oikos_complete(db_session, test_run, test_user, auth_headers):
+    """Stream should deliver commis_output_chunk events after oikos_complete."""
+    from zerg.models.models import CommisJob
+
+    # Create a commis job to reference in commis_spawned payload
+    job = CommisJob(
+        owner_id=test_user.id,
+        task="Streaming task",
+        model="gpt-5-mini",
+        status="queued",
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    async def emit_events():
+        await asyncio.sleep(0.1)
+        await emit_run_event(
+            db_session,
+            test_run.id,
+            "commis_spawned",
+            {
+                "job_id": job.id,
+                "tool_call_id": "tool-456",
+                "task": "Streaming task",
+                "model": "gpt-5-mini",
+                "owner_id": test_user.id,
+            },
+        )
+        await asyncio.sleep(0.1)
+        await emit_run_event(
+            db_session,
+            test_run.id,
+            "oikos_complete",
+            {"result": "done", "owner_id": test_user.id},
+        )
+        await asyncio.sleep(0.1)
+        await emit_run_event(
+            db_session,
+            test_run.id,
+            "commis_output_chunk",
+            {
+                "job_id": job.id,
+                "commis_id": "commis-abc",
+                "runner_job_id": "runner-job-1",
+                "stream": "stdout",
+                "data": "df -h\nFilesystem ...\n",
+                "owner_id": test_user.id,
+            },
+        )
+        await asyncio.sleep(0.1)
+        await emit_run_event(
+            db_session,
+            test_run.id,
+            "commis_complete",
+            {
+                "job_id": job.id,
+                "commis_id": "commis-abc",
+                "status": "success",
+                "duration_ms": 800,
+                "owner_id": test_user.id,
+            },
+        )
+
+    emitter_task = asyncio.create_task(emit_events())
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test", timeout=5.0) as client:
+        async with client.stream("GET", f"/api/stream/runs/{test_run.id}", headers=auth_headers) as response:
+            assert response.status_code == 200
+            events = await collect_sse_events(response, max_events=10)
+
+    await emitter_task
+
+    event_types = [e.get("event") for e in events if e.get("event") != "heartbeat"]
+    assert "commis_spawned" in event_types
+    assert "oikos_complete" in event_types
+    assert "commis_output_chunk" in event_types
+    assert "commis_complete" in event_types
+    assert event_types.index("oikos_complete") < event_types.index("commis_output_chunk")
+    assert event_types.index("commis_output_chunk") < event_types.index("commis_complete")

@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from zerg.skills.parser import parse_frontmatter
+from zerg.skills.parser import parse_skill_content
 from zerg.skills.parser import parse_skill_file
 from zerg.skills.parser import validate_manifest
 
@@ -118,6 +119,26 @@ description: No name field
         frontmatter, _ = parse_skill_file(skill_file)
 
         assert frontmatter["name"] == "my-skill"
+
+
+class TestParseSkillContent:
+    """Tests for parse_skill_content function."""
+
+    def test_parse_skill_content_with_frontmatter(self) -> None:
+        """Parse SKILL.md content from string."""
+        content = """---\nname: test-skill\ndescription: Test\n---\n\n# Body\n"""
+        frontmatter, body = parse_skill_content(content)
+
+        assert frontmatter["name"] == "test-skill"
+        assert "Test" in frontmatter["description"]
+        assert "# Body" in body
+
+    def test_parse_skill_content_with_fallback_name(self) -> None:
+        """Fallback name applies when frontmatter lacks name."""
+        content = """---\ndescription: Test\n---\n\n# Body\n"""
+        frontmatter, _ = parse_skill_content(content, fallback_name="fallback-skill")
+
+        assert frontmatter["name"] == "fallback-skill"
 
 
 class TestValidateManifest:

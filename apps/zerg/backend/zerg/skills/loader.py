@@ -16,10 +16,13 @@ from typing import List
 from typing import Optional
 from typing import Set
 
+from sqlalchemy.orm import Session
+
 from zerg.skills.models import Skill
 from zerg.skills.models import SkillEntry
 from zerg.skills.models import SkillManifest
 from zerg.skills.models import SkillSource
+from zerg.skills.parser import parse_skill_content
 from zerg.skills.parser import parse_skill_file
 from zerg.skills.parser import validate_manifest
 
@@ -148,6 +151,46 @@ class SkillLoader:
             source=source,
         )
 
+    def _load_skill_from_content(
+        self,
+        content: str,
+        source: SkillSource,
+        *,
+        base_dir: Path,
+        fallback_name: Optional[str] = None,
+    ) -> Optional[Skill]:
+        """Load a skill from raw SKILL.md content.
+
+        Args:
+            content: Raw SKILL.md content (with optional frontmatter)
+            source: Source type for the skill
+            base_dir: Pseudo-path for provenance
+            fallback_name: Optional name to apply if frontmatter missing
+
+        Returns:
+            Loaded Skill or None if invalid
+        """
+        try:
+            frontmatter, body = parse_skill_content(content, fallback_name=fallback_name)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Failed to parse skill content: %s", e)
+            return None
+
+        error = validate_manifest(frontmatter)
+        if error:
+            logger.warning("Invalid skill manifest (content): %s", error)
+            return None
+
+        manifest = SkillManifest.from_frontmatter(frontmatter)
+
+        return Skill(
+            manifest=manifest,
+            content=body,
+            base_dir=base_dir,
+            file_path=base_dir / "SKILL.md",
+            source=source,
+        )
+
     def load_bundled_skills(self) -> List[Skill]:
         """Load bundled skills shipped with Zerg."""
         return self.load_from_directory(self.bundled_dir, SkillSource.BUNDLED)
@@ -155,6 +198,28 @@ class SkillLoader:
     def load_user_skills(self) -> List[Skill]:
         """Load user-managed skills from ~/.zerg/skills."""
         return self.load_from_directory(self.user_dir, SkillSource.USER)
+
+    def load_user_skills_db(
+        self,
+        db: Session,
+        owner_id: int,
+    ) -> List[Skill]:
+        """Load user-managed skills from the database."""
+        from zerg.crud import list_user_skills
+
+        skills = []
+        rows = list_user_skills(db, owner_id=owner_id, include_inactive=False)
+        for row in rows:
+            base_dir = Path(f"/db/user/{owner_id}/skills/{row.name}")
+            skill = self._load_skill_from_content(
+                row.content,
+                SkillSource.USER,
+                base_dir=base_dir,
+                fallback_name=row.name,
+            )
+            if skill:
+                skills.append(skill)
+        return skills
 
     def load_workspace_skills(self, workspace_path: Path) -> List[Skill]:
         """Load skills from a workspace's skills/ directory."""
@@ -166,6 +231,8 @@ class SkillLoader:
         workspace_path: Optional[Path] = None,
         include_bundled: bool = True,
         include_user: bool = True,
+        db: Optional[Session] = None,
+        owner_id: Optional[int] = None,
     ) -> Dict[str, Skill]:
         """Load all skills with precedence merging.
 
@@ -193,8 +260,12 @@ class SkillLoader:
                 merged[skill.name] = skill
 
         if include_user:
-            for skill in self.load_user_skills():
-                merged[skill.name] = skill
+            if db is not None and owner_id is not None:
+                for skill in self.load_user_skills_db(db, owner_id):
+                    merged[skill.name] = skill
+            else:
+                for skill in self.load_user_skills():
+                    merged[skill.name] = skill
 
         if workspace_path:
             for skill in self.load_workspace_skills(workspace_path):
@@ -260,6 +331,9 @@ class SkillLoader:
         workspace_path: Optional[Path] = None,
         available_config: Optional[Set[str]] = None,
         filter_eligible: bool = False,
+        db: Optional[Session] = None,
+        owner_id: Optional[int] = None,
+        include_user: bool = True,
     ) -> List[SkillEntry]:
         """Load skills with eligibility information.
 
@@ -271,7 +345,12 @@ class SkillLoader:
         Returns:
             List of SkillEntry with eligibility computed
         """
-        skills = self.load_all_skills(workspace_path)
+        skills = self.load_all_skills(
+            workspace_path,
+            include_user=include_user,
+            db=db,
+            owner_id=owner_id,
+        )
         entries = [self.compute_eligibility(skill, available_config) for skill in skills.values()]
 
         if filter_eligible:

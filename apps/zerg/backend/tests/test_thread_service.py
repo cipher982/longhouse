@@ -6,7 +6,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 from langchain_core.messages import ToolMessage
 
-from tests.conftest import TEST_COMMIS_MODEL
+from tests.conftest import TEST_WORKER_MODEL
 from zerg.crud import crud as _crud
 from zerg.models.models import Fiche
 from zerg.services.thread_service import ThreadService
@@ -20,24 +20,24 @@ def _create_test_agent(db_session):
         db_session, email="dev@local", provider=None, role="ADMIN"
     )
 
-    return Fiche(
+    return Agent(
         owner_id=owner.id,
         name="TestAgent",
         system_instructions="You are helpful.",
         task_instructions="",
-        model=TEST_COMMIS_MODEL,
+        model=TEST_WORKER_MODEL,
     )
 
 
 def test_create_thread_with_system_message(db_session):
-    # Arrange: store fiche in DB
-    fiche = _create_test_agent(db_session)
-    db_session.add(fiche)
+    # Arrange: store agent in DB
+    agent = _create_test_agent(db_session)
+    db_session.add(agent)
     db_session.commit()
-    db_session.refresh(fiche)
+    db_session.refresh(agent)
 
     # Act
-    thread = ThreadService.create_thread_with_system_message(db_session, fiche, title="Hello")
+    thread = ThreadService.create_thread_with_system_message(db_session, agent, title="Hello")
 
     # Assert – thread exists and first message is system prompt
     assert thread.id is not None
@@ -47,13 +47,13 @@ def test_create_thread_with_system_message(db_session):
 
 
 def test_save_and_retrieve_messages(db_session):
-    # Prepare fiche + thread
-    fiche = _create_test_agent(db_session)
-    db_session.add(fiche)
+    # Prepare agent + thread
+    agent = _create_test_agent(db_session)
+    db_session.add(agent)
     db_session.commit()
-    db_session.refresh(fiche)
+    db_session.refresh(agent)
 
-    thread = ThreadService.create_thread_with_system_message(db_session, fiche, title="Conversation")
+    thread = ThreadService.create_thread_with_system_message(db_session, agent, title="Conversation")
 
     # Save additional messages
     new_msgs = [
@@ -74,12 +74,10 @@ def test_save_and_retrieve_messages(db_session):
     assert re.match(TIMESTAMP_PATTERN, history[0].content), "User message should have timestamp prefix"
     assert history[0].content.endswith("] Hi"), f"Expected content to end with '] Hi', got: {history[0].content}"
 
-    # Verify assistant message has timestamp prefix
+    # Verify assistant message does NOT have timestamp prefix
     assert isinstance(history[1], AIMessage)
-    assert re.match(TIMESTAMP_PATTERN, history[1].content), "Assistant message should have timestamp prefix"
-    assert history[1].content.endswith(
-        "] Hello!"
-    ), f"Expected content to end with '] Hello!', got: {history[1].content}"
+    assert not re.match(TIMESTAMP_PATTERN, history[1].content), "Assistant message should not have timestamp prefix"
+    assert history[1].content == "Hello!"
 
     # Verify tool message does NOT have timestamp prefix
     assert isinstance(history[2], ToolMessage)
@@ -88,14 +86,14 @@ def test_save_and_retrieve_messages(db_session):
 
 
 def test_timestamp_format_in_messages(db_session):
-    """Verify that user and assistant messages have ISO 8601 timestamp prefix."""
-    # Prepare fiche + thread
-    fiche = _create_test_agent(db_session)
-    db_session.add(fiche)
+    """Verify that user messages have ISO 8601 timestamp prefix."""
+    # Prepare agent + thread
+    agent = _create_test_agent(db_session)
+    db_session.add(agent)
     db_session.commit()
-    db_session.refresh(fiche)
+    db_session.refresh(agent)
 
-    thread = ThreadService.create_thread_with_system_message(db_session, fiche, title="Timestamp Test")
+    thread = ThreadService.create_thread_with_system_message(db_session, agent, title="Timestamp Test")
 
     # Save messages
     new_msgs = [
@@ -117,11 +115,7 @@ def test_timestamp_format_in_messages(db_session):
     year, month, day, hour, minute, second, content = match.groups()
     assert content == "Test message"
 
-    # Verify assistant message also has timestamp
+    # Assistant message should remain unprefixed
     assistant_msg = history[1]
     assert isinstance(assistant_msg, AIMessage)
-    match = re.match(r"^\[(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z\] (.+)$", assistant_msg.content)
-    assert match is not None, f"Assistant message should have ISO 8601 timestamp prefix, got: {assistant_msg.content}"
-
-    _, _, _, _, _, _, content = match.groups()
-    assert content == "Response message"
+    assert assistant_msg.content == "Response message"

@@ -28,6 +28,7 @@ export interface EventMap {
   'voice_channel:mic_ready': { stream: MediaStream };
 
   // Text Channel Events
+  'text_channel:send': { text: string; timestamp: number };
   'text_channel:sent': { text: string; timestamp: number };
   'text_channel:error': { error: Error; message: string };
   'text_channel:sending': { text: string };
@@ -99,6 +100,14 @@ export interface EventMap {
     runId?: number;
     timestamp: number;
   };
+  'commis:output_chunk': {
+    commisId: string;
+    jobId?: number;
+    runnerJobId?: string;
+    stream: 'stdout' | 'stderr';
+    data: string;
+    timestamp: number;
+  };
 
   // Oikos Tool Events (uniform treatment with commis tools)
   'oikos:tool_started': {
@@ -134,6 +143,18 @@ export interface EventMap {
     durationMs: number;
     error: string;
     errorDetails?: Record<string, unknown>;
+    timestamp: number;
+  };
+
+  // Session Picker Events
+  'oikos:show_session_picker': {
+    runId: number;
+    filters?: {
+      project?: string;
+      query?: string;
+      provider?: string;
+    };
+    traceId?: string;
     timestamp: number;
   };
 

@@ -1,17 +1,17 @@
 /**
  * Commis Progress Component
  *
- * Shows live progress when the Oikos delegates tasks to commis.
- * Only displays when commis are actively running - does NOT show a
+ * Shows live progress when the Oikos delegates tasks to commiss.
+ * Only displays when commiss are actively running - does NOT show a
  * "thinking" indicator (that's handled by the assistant message bubble).
  *
  * Shows:
  * - Commis spawn/start/complete status
- * - Live tool call activity within commis
+ * - Live tool call activity within commiss
  * - Commis summaries when complete
  */
 
-import { useSyncExternalStore } from 'react';
+import { useSyncExternalStore, useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { commisProgressStore, type CommisState, type ToolCall } from '../../lib/commis-progress-store';
 import { extractCommandPreview } from '../../lib/tool-display';
@@ -23,6 +23,23 @@ import {
   LoaderIcon,
   PlayIcon,
 } from '../../../components/icons';
+
+/**
+ * Hook to force a re-render at a fixed interval
+ */
+function useTimer(isActive: boolean, intervalMs = 1000) {
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!isActive) return;
+
+    const timer = setInterval(() => {
+      setTick(t => t + 1);
+    }, intervalMs);
+
+    return () => clearInterval(timer);
+  }, [isActive, intervalMs]);
+}
 
 /**
  * Display mode for commis progress UI
@@ -37,20 +54,20 @@ interface CommisProgressProps {
  * Get elapsed time since start (only for running tools)
  */
 function getElapsedTime(startedAt: number, status: string, durationMs?: number): string {
-  // Use captured duration for completed/failed tools to avoid "ticking" on re-render
-  let elapsed: number;
-  if (durationMs !== undefined) {
-    elapsed = durationMs;
-  } else if (status === 'running') {
-    elapsed = Date.now() - startedAt;
-  } else {
-    return '—';
+  // If active, show live ticking
+  if (status === 'running' || status === 'spawned') {
+    const elapsed = Date.now() - startedAt;
+    if (elapsed < 1000) return `${elapsed}ms`;
+    return `${(elapsed / 1000).toFixed(1)}s`;
   }
 
-  if (elapsed < 1000) {
-    return `${elapsed}ms`;
+  // If done, use recorded duration
+  if (durationMs != null) {
+    if (durationMs < 1000) return `${durationMs}ms`;
+    return `${(durationMs / 1000).toFixed(1)}s`;
   }
-  return `${(elapsed / 1000).toFixed(1)}s`;
+
+  return '—';
 }
 
 /**
@@ -169,12 +186,15 @@ export function CommisProgress({ mode = 'sticky' }: CommisProgressProps) {
     () => commisProgressStore.getState()
   );
 
+  const commissArray = Array.from(state.commis.values());
+  const runningCommiss = commissArray.filter(w => w.status === 'running' || w.status === 'spawned');
+
+  // Force re-renders for active timers
+  useTimer(runningCommiss.length > 0 || state.reconnecting);
+
   if (!state.isActive) {
     return null;
   }
-
-  const commisArray = Array.from(state.commis.values());
-  const runningCommis = commisArray.filter(w => w.status === 'running' || w.status === 'spawned');
 
   const modeClass = mode === 'floating' ? 'commis-progress--floating' : mode === 'sticky' ? 'commis-progress--sticky' : '';
 
@@ -190,16 +210,16 @@ export function CommisProgress({ mode = 'sticky' }: CommisProgressProps) {
           <div className="oikos-spinner"></div>
           <span className="oikos-label">{statusLabel}</span>
         </div>
-        {commisArray.length > 0 && (
-          <div className="oikos-commis">
-            {commisArray.map(commis => (
+        {commissArray.length > 0 && (
+          <div className="oikos-commiss">
+            {commissArray.map(commis => (
               <CommisItem key={commis.jobId} commis={commis} />
             ))}
           </div>
         )}
-        {runningCommis.length > 0 && (
+        {runningCommiss.length > 0 && (
           <div className="oikos-active-count">
-            {runningCommis.length} commis running...
+            {runningCommiss.length} commis{runningCommiss.length > 1 ? 's' : ''} running...
           </div>
         )}
       </div>

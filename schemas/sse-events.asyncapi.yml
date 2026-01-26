@@ -58,6 +58,8 @@ channels:
         $ref: '#/components/messages/CommisToolCompletedEvent'
       CommisToolFailedEvent:
         $ref: '#/components/messages/CommisToolFailedEvent'
+      CommisOutputChunkEvent:
+        $ref: '#/components/messages/CommisOutputChunkEvent'
       # Oikos tool monitoring (same treatment as commis tools)
       OikosToolStartedEvent:
         $ref: '#/components/messages/OikosToolStartedEvent'
@@ -67,6 +69,10 @@ channels:
         $ref: '#/components/messages/OikosToolCompletedEvent'
       OikosToolFailedEvent:
         $ref: '#/components/messages/OikosToolFailedEvent'
+      ShowSessionPickerEvent:
+        $ref: '#/components/messages/ShowSessionPickerEvent'
+      StreamControlEvent:
+        $ref: '#/components/messages/StreamControlEvent'
 
 # ---------------------------------------------------------------------------
 # Operations - SSE is always server → client (send only)
@@ -209,6 +215,13 @@ components:
         $ref: '#/components/schemas/CommisToolFailedPayload'
       x-sse-event-type: commis_tool_failed
 
+    CommisOutputChunkEvent:
+      name: commis_output_chunk
+      summary: Live commis output chunk (ephemeral)
+      payload:
+        $ref: '#/components/schemas/CommisOutputChunkPayload'
+      x-sse-event-type: commis_output_chunk
+
     # Oikos tool monitoring (uniform treatment with commis tools)
     OikosToolStartedEvent:
       name: oikos_tool_started
@@ -238,6 +251,20 @@ components:
         $ref: '#/components/schemas/OikosToolFailedPayload'
       x-sse-event-type: oikos_tool_failed
 
+    ShowSessionPickerEvent:
+      name: show_session_picker
+      summary: Trigger session picker modal in frontend
+      payload:
+        $ref: '#/components/schemas/ShowSessionPickerPayload'
+      x-sse-event-type: show_session_picker
+
+    StreamControlEvent:
+      name: stream_control
+      summary: Explicit stream lifecycle control - keep_open extends lease, close is terminal
+      payload:
+        $ref: '#/components/schemas/StreamControlPayload'
+      x-sse-event-type: stream_control
+
   schemas:
     # ---------------------------------------------------------------------------
     # SSE Envelope Structure
@@ -266,10 +293,13 @@ components:
             - commis_tool_started
             - commis_tool_completed
             - commis_tool_failed
+            - commis_output_chunk
             - oikos_tool_started
             - oikos_tool_progress
             - oikos_tool_completed
             - oikos_tool_failed
+            - show_session_picker
+            - stream_control
         id:
           type: integer
           description: Event ID for resumption (maps to `id:` line in SSE protocol)
@@ -363,7 +393,7 @@ components:
         trace_id:
           type: string
           format: uuid
-          description: End-to-end trace ID for debugging (copy from UI for fiche debugging)
+          description: End-to-end trace ID for debugging (copy from UI for agent debugging)
 
     OikosThinkingPayload:
       type: object
@@ -423,7 +453,7 @@ components:
         run_id:
           type: integer
           minimum: 1
-        fiche_id:
+        agent_id:
           type: integer
           minimum: 1
         thread_id:
@@ -451,7 +481,7 @@ components:
           description: Deferred status message
         attach_url:
           type: string
-          description: URL to re-attach to the running run execution
+          description: URL to re-attach to the running execution
         timeout_seconds:
           type: number
           minimum: 0
@@ -459,7 +489,7 @@ components:
         run_id:
           type: integer
           minimum: 1
-        fiche_id:
+        agent_id:
           type: integer
           minimum: 1
         thread_id:
@@ -492,7 +522,7 @@ components:
         run_id:
           type: integer
           minimum: 1
-        fiche_id:
+        agent_id:
           type: integer
           minimum: 1
         thread_id:
@@ -514,7 +544,7 @@ components:
         run_id:
           type: integer
           minimum: 1
-        fiche_id:
+        agent_id:
           type: integer
           minimum: 1
         thread_id:
@@ -732,6 +762,38 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
+    CommisOutputChunkPayload:
+      type: object
+      required: [commis_id, stream, data, run_id]
+      properties:
+        job_id:
+          type: integer
+          minimum: 1
+          description: Commis job ID (spawn_commis job)
+        commis_id:
+          type: string
+          minLength: 1
+        runner_job_id:
+          type: string
+          minLength: 1
+          description: Runner exec job UUID
+        stream:
+          type: string
+          enum: [stdout, stderr]
+          description: Output stream for this chunk
+        data:
+          type: string
+          minLength: 1
+          description: Output chunk (may be truncated)
+        run_id:
+          type: integer
+          minimum: 1
+          description: Required for security (prevents cross-run leakage)
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
+
     # ---------------------------------------------------------------------------
     # Oikos Tool Monitoring Payloads
     # ---------------------------------------------------------------------------
@@ -845,6 +907,68 @@ components:
           type: string
           format: uuid
           description: End-to-end trace ID for debugging
+
+    # ---------------------------------------------------------------------------
+    # Session Picker Payloads
+    # ---------------------------------------------------------------------------
+    ShowSessionPickerPayload:
+      type: object
+      description: Trigger session picker modal in frontend
+      properties:
+        run_id:
+          type: integer
+          minimum: 1
+          description: Current oikos run ID
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
+        filters:
+          type: object
+          description: Optional filters to pre-populate the picker
+          properties:
+            project:
+              type: string
+              description: Filter by project name
+            query:
+              type: string
+              description: Search query text
+            provider:
+              type: string
+              description: Filter by provider (claude, codex, gemini)
+
+    # ---------------------------------------------------------------------------
+    # Stream Control Payloads
+    # ---------------------------------------------------------------------------
+    StreamControlPayload:
+      type: object
+      required: [action, reason, run_id]
+      description: Explicit stream lifecycle control - keep_open extends lease, close is terminal end-marker
+      properties:
+        action:
+          type: string
+          enum: [keep_open, close]
+          description: keep_open extends stream lease; close is terminal end-marker
+        reason:
+          type: string
+          description: Why this action (commiss_pending, continuation_start, all_complete, timeout, error)
+        ttl_ms:
+          type: integer
+          minimum: 0
+          maximum: 300000
+          description: Lease time in ms (max 5 min); stream closes if no activity/renewal
+        run_id:
+          type: integer
+          minimum: 1
+          description: Run ID this control applies to
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
+        pending_commiss:
+          type: integer
+          minimum: 0
+          description: Current pending commis count (for debugging)
 
 # ---------------------------------------------------------------------------
 # Extensions for code generation

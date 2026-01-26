@@ -117,6 +117,7 @@ TIER_3: str = _TIERS["TIER_3"]  # Basic, cheapest (gpt-5-nano)
 
 DEFAULT_MODEL_ID: str = _TIERS[_DEFAULTS["fiche"]]
 DEFAULT_COMMIS_MODEL_ID: str = _TIERS[_DEFAULTS["commis"]]
+DEFAULT_WORKER_MODEL_ID: str = DEFAULT_COMMIS_MODEL_ID  # Backwards compat alias
 TEST_MODEL_ID: str = _TIERS[_DEFAULTS["test"]]
 
 AVAILABLE_MODELS: List[ModelConfig] = []

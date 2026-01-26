@@ -43,6 +43,8 @@ export interface SpawnCommisResult {
   commisStatus: 'spawned' | 'running' | 'complete' | 'failed';
   commisSummary?: string;
   nestedTools: NestedToolCall[];
+  liveOutput?: string;
+  liveOutputUpdatedAt?: number;
   rawResult?: unknown;
 }
 
@@ -86,6 +88,7 @@ type Listener = () => void;
  * Oikos tool store for React integration via useSyncExternalStore
  */
 class OikosToolStore {
+  private static readonly MAX_LIVE_OUTPUT_CHARS = 50_000;
   private state: OikosToolState = {
     isActive: false,
     currentRunId: null,
@@ -131,7 +134,7 @@ class OikosToolStore {
   }
 
   /**
-   * Check if a run has been deferred (commis continuing in background)
+   * Check if a run has been deferred (commiss continuing in background)
    */
   isDeferred(runId: number | null): boolean {
     return runId !== null && this.state.deferredRuns.has(runId);
@@ -213,8 +216,8 @@ class OikosToolStore {
       this.setState({
         isActive: true,
         currentRunId: data.runId,
-      // Don't clear tools - they persist across runs for conversation display
-    });
+        // Don't clear tools - they persist across runs for conversation display
+      });
       logger.debug('[OikosToolStore] Oikos started, run:', data.runId);
     });
 
@@ -356,7 +359,7 @@ class OikosToolStore {
       logger.debug('[OikosToolStore] Oikos complete');
     });
 
-    // Oikos deferred - mark run as deferred (commis continue in background)
+    // Oikos deferred - mark run as deferred (commiss continue in background)
     eventBus.on('oikos:deferred', (data) => {
       const newDeferredRuns = new Set(this.state.deferredRuns);
       newDeferredRuns.add(data.runId);
@@ -476,10 +479,24 @@ class OikosToolStore {
         logger.debug(`[OikosToolStore] Nested tool failed: ${data.toolName}`);
       }
     });
+
+    eventBus.on('commis:output_chunk', (data) => {
+      const toolCallId = data.commisId
+        ? this.commisIdToToolCallId.get(data.commisId)
+        : data.jobId
+          ? this.commisJobToToolCallId.get(data.jobId)
+          : undefined;
+
+      if (toolCallId) {
+        this.appendCommisLiveOutput(toolCallId, data.stream, data.data);
+      } else {
+        logger.warn('[OikosToolStore] Could not route commis output chunk (missing mapping)');
+      }
+    });
   }
 
   /**
-   * Check if there's any active work (running tools, active commis, or nested tools)
+   * Check if there's any active work (running tools, active commiss, or nested tools)
    */
   private hasActiveWork(): boolean {
     return Array.from(this.state.tools.values()).some(tool => {
@@ -583,6 +600,34 @@ class OikosToolStore {
         result: {
           ...existingResult,
           ...metadata,
+        },
+      };
+      newTools.set(toolCallId, updatedTool);
+      this.setState({ tools: newTools });
+    }
+  }
+
+  private appendCommisLiveOutput(toolCallId: string, stream: 'stdout' | 'stderr', data: string): void {
+    if (!data) return;
+
+    const newTools = new Map(this.state.tools);
+    const tool = newTools.get(toolCallId);
+
+    if (tool && tool.toolName === 'spawn_commis') {
+      const existingResult = this.getSpawnCommisResult(tool);
+      const prefix = stream === 'stderr' ? '[stderr] ' : '';
+      let liveOutput = `${existingResult.liveOutput ?? ''}${prefix}${data}`;
+
+      if (liveOutput.length > OikosToolStore.MAX_LIVE_OUTPUT_CHARS) {
+        liveOutput = liveOutput.slice(-OikosToolStore.MAX_LIVE_OUTPUT_CHARS);
+      }
+
+      const updatedTool: OikosToolCall = {
+        ...tool,
+        result: {
+          ...existingResult,
+          liveOutput,
+          liveOutputUpdatedAt: Date.now(),
         },
       };
       newTools.set(toolCallId, updatedTool);

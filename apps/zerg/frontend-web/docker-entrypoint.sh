@@ -115,7 +115,7 @@ fi
 
 # Always create CSP file (even if empty API) to prevent nginx include failure
 cat > "$CSP_FILE" << EOF
-add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; frame-ancestors 'self'; object-src 'none'; connect-src $CONNECT_SRC; script-src 'self' https://accounts.google.com https://analytics.drose.io; style-src 'self' 'unsafe-inline' https://accounts.google.com https://fonts.googleapis.com https://api.fontshare.com; font-src 'self' https://fonts.gstatic.com https://cdn.fontshare.com; img-src 'self' data: https:; frame-src https://accounts.google.com;" always;
+add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; frame-ancestors 'self'; object-src 'none'; connect-src $CONNECT_SRC; script-src 'self' https://accounts.google.com https://analytics.drose.io; style-src 'self' 'unsafe-inline' https://accounts.google.com https://fonts.googleapis.com https://api.fontshare.com; font-src 'self' https://fonts.gstatic.com https://cdn.fontshare.com; img-src 'self' data: https:; media-src 'self' blob: data:; frame-src https://accounts.google.com;" always;
 EOF
 
 echo "Generated CSP config with connect-src: $CONNECT_SRC"

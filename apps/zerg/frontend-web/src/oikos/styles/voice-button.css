@@ -29,7 +29,48 @@
   justify-content: center;
   width: 120px;
   height: 120px;
+  --mic-level: 0;
 }
+
+/* Compact variant for inline mic button */
+.oikos-container .voice-button-wrapper.compact {
+  width: 72px;
+  height: 72px;
+}
+
+/* Compact button sizing */
+.oikos-container .voice-button-wrapper.compact .voice-button {
+  width: 40px;
+  height: 40px;
+}
+
+.oikos-container .voice-button-wrapper.compact .voice-icon {
+  width: 16px;
+  height: 16px;
+}
+
+/* Compact button: neutral idle/ready state (no motion) */
+.oikos-container .voice-button-wrapper.compact .voice-button.idle,
+.oikos-container .voice-button-wrapper.compact .voice-button.ready {
+  animation: none;
+  border-color: rgb(148 163 184 / 40%);
+  box-shadow:
+    inset 0 0 18px rgb(0 0 0 / 55%),
+    0 6px 20px rgb(0 0 0 / 45%),
+    0 0 0 1px rgb(148 163 184 / 10%);
+}
+
+.oikos-container .voice-button-wrapper.compact .voice-button.idle .voice-icon,
+.oikos-container .voice-button-wrapper.compact .voice-button.ready .voice-icon {
+  color: rgb(148 163 184 / 70%);
+  filter: none;
+}
+
+/* Compact button: only animate while listening */
+.oikos-container .voice-button-wrapper.compact .voice-button.listening {
+  animation: none;
+}
+
 
 /* ============================
    Reactor Rings
@@ -319,18 +360,18 @@
 
 /* Ready */
 .oikos-container .voice-button.ready {
-  border-color: rgb(34 197 94 / 40%);
+  border-color: rgb(148 163 184 / 45%);
   box-shadow:
     inset 0 0 30px rgb(0 0 0 / 60%),
     0 8px 30px rgb(0 0 0 / 50%),
-    0 0 0 1px rgb(34 197 94 / 20%),
-    0 0 40px rgb(34 197 94 / 15%);
-  animation: button-ready-breathe 3s ease-in-out infinite;
+    0 0 0 1px rgb(148 163 184 / 18%),
+    0 0 30px rgb(148 163 184 / 12%);
+  animation: none;
 }
 
 .oikos-container .voice-button.ready .voice-icon {
-  color: #22c55e;
-  filter: drop-shadow(0 0 6px rgb(34 197 94 / 50%));
+  color: rgb(148 163 184 / 80%);
+  filter: none;
 }
 
 /* Listening */
@@ -459,23 +500,6 @@
   }
 }
 
-@keyframes button-ready-breathe {
-  0%,
-  100% {
-    box-shadow:
-      inset 0 0 30px rgb(0 0 0 / 60%),
-      0 8px 30px rgb(0 0 0 / 50%),
-      0 0 0 1px rgb(34 197 94 / 20%),
-      0 0 40px rgb(34 197 94 / 15%);
-  }
-  50% {
-    box-shadow:
-      inset 0 0 30px rgb(0 0 0 / 60%),
-      0 8px 30px rgb(0 0 0 / 50%),
-      0 0 0 3px rgb(34 197 94 / 30%),
-      0 0 60px rgb(34 197 94 / 25%);
-  }
-}
 
 @keyframes button-listening {
   0%,

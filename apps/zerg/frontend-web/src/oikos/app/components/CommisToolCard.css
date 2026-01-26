@@ -14,17 +14,39 @@
   border-radius: 6px;
   margin: 4px 0;
   transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+  overflow: hidden;
 }
 
-/* Status-based border colors */
+/* Status-based accent bars (pseudo-elements) */
+.commis-tool-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 3px;
+  background: transparent;
+  transition: background 0.15s ease;
+  z-index: 1;
+}
+
+/* Status-based border colors and accents */
+.commis-tool-card--spawned::before {
+  background: var(--color-primary, #3b82f6);
+}
+
 .commis-tool-card--spawned {
-  border-color: var(--color-primary, #3b82f6);
   opacity: 0.8;
 }
 
 .commis-tool-card--running {
   border-color: var(--color-primary, #3b82f6);
   animation: commis-card-pulse 2s ease-in-out infinite;
+}
+
+.commis-tool-card--running::before {
+  background: var(--color-primary, #3b82f6);
 }
 
 @keyframes commis-card-pulse {
@@ -36,12 +58,16 @@
   }
 }
 
-.commis-tool-card--complete {
-  border-color: var(--color-success, #22c55e);
+.commis-tool-card--complete::before {
+  background: var(--color-success, #22c55e);
 }
 
 .commis-tool-card--failed {
   border-color: var(--color-error, #ef4444);
+}
+
+.commis-tool-card--failed::before {
+  background: var(--color-error, #ef4444);
 }
 
 /* Detached mode - lifts to sticky position at top of chat */
@@ -76,28 +102,37 @@
 .commis-tool-card__header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 12px;
+  padding: 10px 14px;
   cursor: pointer;
   user-select: none;
+  transition: background 0.1s ease;
 }
 
 .commis-tool-card__header:hover {
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.commis-tool-card__status-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .commis-tool-card__icon {
   font-size: 1rem;
-  flex-shrink: 0;
+  display: flex;
+  align-items: center;
 }
 
 .commis-tool-card__name {
-  font-weight: 600;
+  font-weight: 700;
   color: var(--color-primary, #3b82f6);
-  white-space: nowrap;
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.08em;
+  opacity: 0.9;
 }
 
 .commis-tool-card__task {
@@ -107,40 +142,78 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.commis-tool-card__spacer {
-  flex: 0;
+  font-size: 0.8125rem;
 }
 
 .commis-tool-card__duration {
-  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+  color: var(--text-secondary, rgba(255, 255, 255, 0.5));
   font-size: 0.75rem;
-  min-width: 50px;
-  text-align: right;
+  font-variant-numeric: tabular-nums;
+  margin-right: 4px;
 }
 
-.commis-tool-card__expand-toggle {
-  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+.commis-tool-card__expand-indicator {
+  color: var(--text-secondary, rgba(255, 255, 255, 0.4));
   font-size: 0.625rem;
-  flex-shrink: 0;
-  margin-left: 4px;
+  transition: color 0.1s ease;
+  width: 12px;
+  text-align: center;
+}
+
+.commis-tool-card__header:hover .commis-tool-card__expand-indicator {
+  color: var(--text-secondary, rgba(255, 255, 255, 0.7));
 }
 
 /* Body - expanded content */
 .commis-tool-card__body {
-  padding: 0 12px 12px;
+  padding: 0 14px 14px;
   border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.05));
+  background: rgba(0, 0, 0, 0.1);
+}
+
+/* Body Toolbar - secondary controls */
+.commis-tool-card__body-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 12px;
+  margin-bottom: 4px;
+}
+
+.commis-tool-card__activity-label {
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.4));
+}
+
+.commis-tool-card__compact-toggle {
+  background: var(--surface-tertiary, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 4px;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+  font-size: 0.6875rem;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+
+.commis-tool-card__compact-toggle:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--color-primary, #3b82f6);
+  color: var(--text-primary, #fff);
 }
 
 /* Nested tools list */
 .commis-tool-card__nested-tools {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  margin-top: 8px;
-  padding-left: 20px;
-  border-left: 2px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  gap: 1px;
+  margin-top: 4px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
 }
 
 /* Individual nested tool - scoped under commis-tool-card */
@@ -277,6 +350,37 @@
   color: var(--text-primary, #fff);
   font-style: italic;
   line-height: 1.5;
+}
+
+/* Live output */
+.commis-tool-card__live-output {
+  margin-top: 12px;
+  padding: 8px;
+  background: var(--surface-tertiary, rgba(0, 0, 0, 0.2));
+  border-radius: 4px;
+  font-size: 0.8125rem;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.commis-tool-card__live-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+}
+
+.commis-tool-card__live-text {
+  margin: 0;
+  font-family: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow: auto;
+  color: var(--text-primary, #fff);
 }
 
 /* Error display */

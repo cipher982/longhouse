@@ -33,6 +33,13 @@ from .crud_runs import mark_run_failed
 from .crud_runs import mark_run_finished
 from .crud_runs import mark_run_running
 
+# User skill operations
+from .crud_skills import create_user_skill
+from .crud_skills import delete_user_skill
+from .crud_skills import get_user_skill_by_name
+from .crud_skills import list_user_skills
+from .crud_skills import update_user_skill
+
 # Thread operations
 from .crud_threads import create_thread
 from .crud_threads import delete_thread
@@ -122,6 +129,12 @@ __all__ = [
     "get_user",
     "get_user_by_email",
     "update_user",
+    # User Skills
+    "create_user_skill",
+    "delete_user_skill",
+    "get_user_skill_by_name",
+    "list_user_skills",
+    "update_user_skill",
     # Workflows
     "create_workflow",
     "create_workflow_execution",

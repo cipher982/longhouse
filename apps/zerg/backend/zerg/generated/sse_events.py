@@ -48,7 +48,7 @@ class OikosStartedPayload(BaseModel):
     task: str = Field(min_length=1, description='User\'s task/question')
     message_id: str = Field(description='Unique identifier for the assistant message (stable across tokens/completion)')
     continuation_of_message_id: Optional[str] = Field(default=None, description='For continuation runs, the message_id of the original run\'s message')
-    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging (copy from UI for fiche debugging)')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging (copy from UI for agent debugging)')
 
 class OikosThinkingPayload(BaseModel):
     """Payload for OikosThinkingPayload"""
@@ -74,7 +74,7 @@ class OikosCompletePayload(BaseModel):
     duration_ms: Optional[int] = Field(default=None, ge=0, description='Execution duration in milliseconds')
     usage: Optional[UsageData] = Field(default=None)
     run_id: Optional[int] = Field(default=None, ge=1, description='')
-    fiche_id: Optional[int] = Field(default=None, ge=1, description='')
+    agent_id: Optional[int] = Field(default=None, ge=1, description='')
     thread_id: Optional[int] = Field(default=None, ge=1, description='')
     debug_url: Optional[str] = Field(default=None, description='URL for debug/inspection')
     message_id: Optional[str] = Field(default=None, description='Unique identifier for the assistant message')
@@ -84,10 +84,10 @@ class OikosDeferredPayload(BaseModel):
     """Payload for OikosDeferredPayload"""
 
     message: str = Field(min_length=1, description='Deferred status message')
-    attach_url: Optional[str] = Field(default=None, description='URL to re-attach to the running run execution')
+    attach_url: Optional[str] = Field(default=None, description='URL to re-attach to the running execution')
     timeout_seconds: Optional[float] = Field(default=None, ge=0, description='Timeout that triggered deferral')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
-    fiche_id: Optional[int] = Field(default=None, ge=1, description='')
+    agent_id: Optional[int] = Field(default=None, ge=1, description='')
     thread_id: Optional[int] = Field(default=None, ge=1, description='')
     message_id: Optional[str] = Field(default=None, description='Unique identifier for the assistant message')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
@@ -99,7 +99,7 @@ class OikosWaitingPayload(BaseModel):
     job_id: Optional[int] = Field(default=None, ge=1, description='Commis job ID (if applicable)')
     close_stream: Optional[bool] = Field(default=None, description='If false, keep SSE stream open while waiting')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
-    fiche_id: Optional[int] = Field(default=None, ge=1, description='')
+    agent_id: Optional[int] = Field(default=None, ge=1, description='')
     thread_id: Optional[int] = Field(default=None, ge=1, description='')
     message_id: Optional[str] = Field(default=None, description='Unique identifier for the assistant message')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
@@ -108,7 +108,7 @@ class OikosResumedPayload(BaseModel):
     """Payload for OikosResumedPayload"""
 
     run_id: Optional[int] = Field(default=None, ge=1, description='')
-    fiche_id: Optional[int] = Field(default=None, ge=1, description='')
+    agent_id: Optional[int] = Field(default=None, ge=1, description='')
     thread_id: int = Field(ge=1, description='')
     message_id: str = Field(description='Unique identifier for the assistant message')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
@@ -192,6 +192,17 @@ class CommisToolFailedPayload(BaseModel):
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
+class CommisOutputChunkPayload(BaseModel):
+    """Payload for CommisOutputChunkPayload"""
+
+    job_id: Optional[int] = Field(default=None, ge=1, description='Commis job ID (spawn_commis job)')
+    commis_id: str = Field(min_length=1, description='')
+    runner_job_id: Optional[str] = Field(default=None, min_length=1, description='Runner exec job UUID')
+    stream: Literal['stdout', 'stderr'] = Field(description='Output stream for this chunk')
+    data: str = Field(min_length=1, description='Output chunk (may be truncated)')
+    run_id: int = Field(ge=1, description='Required for security (prevents cross-run leakage)')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
+
 class OikosToolStartedPayload(BaseModel):
     """Payload for OikosToolStartedPayload"""
 
@@ -235,6 +246,23 @@ class OikosToolFailedPayload(BaseModel):
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
+class ShowSessionPickerPayload(BaseModel):
+    """Trigger session picker modal in frontend"""
+
+    run_id: Optional[int] = Field(default=None, ge=1, description='Current oikos run ID')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
+    filters: Optional[Dict[str, Any]] = Field(default=None, description='Optional filters to pre-populate the picker')
+
+class StreamControlPayload(BaseModel):
+    """Explicit stream lifecycle control - keep_open extends lease, close is terminal end-marker"""
+
+    action: Literal['keep_open', 'close'] = Field(description='keep_open extends stream lease; close is terminal end-marker')
+    reason: str = Field(description='Why this action (commiss_pending, continuation_start, all_complete, timeout, error)')
+    ttl_ms: Optional[int] = Field(default=None, ge=0, le=300000, description='Lease time in ms (max 5 min); stream closes if no activity/renewal')
+    run_id: int = Field(ge=1, description='Run ID this control applies to')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
+    pending_commiss: Optional[int] = Field(default=None, ge=0, description='Current pending commis count (for debugging)')
+
 class SSEEventType(str, Enum):
     """Enumeration of all SSE event types."""
 
@@ -255,10 +283,13 @@ class SSEEventType(str, Enum):
     COMMIS_TOOL_STARTED = "commis_tool_started"
     COMMIS_TOOL_COMPLETED = "commis_tool_completed"
     COMMIS_TOOL_FAILED = "commis_tool_failed"
+    COMMIS_OUTPUT_CHUNK = "commis_output_chunk"
     OIKOS_TOOL_STARTED = "oikos_tool_started"
     OIKOS_TOOL_PROGRESS = "oikos_tool_progress"
     OIKOS_TOOL_COMPLETED = "oikos_tool_completed"
     OIKOS_TOOL_FAILED = "oikos_tool_failed"
+    SHOW_SESSION_PICKER = "show_session_picker"
+    STREAM_CONTROL = "stream_control"
 
 
 # Typed emitter for SSE events

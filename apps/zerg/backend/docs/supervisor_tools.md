@@ -2,22 +2,23 @@
 
 ## Overview
 
-The oikos tools layer enables Zerg's oikos/commis architecture by providing tools that allow oikos fiches to spawn, manage, and query commis fiches. This implements Milestone 2 of the commis system architecture.
+The oikos tools layer enables Zerg's oikos/commis architecture by providing tools that allow oikos agents to spawn, manage, and query commis agents. This implements Milestone 2 of the commis system architecture.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     Oikos Fiche                         │
+│                     Oikos Agent                         │
 │  (can delegate tasks, query results, drill into artifacts)  │
 └──────────────────────┬──────────────────────────────────────┘
                        │ uses oikos tools
                        ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                   Oikos Tools                           │
-│  - spawn_commis()        - list_commis()                    │
+│  - spawn_commis()        - list_commiss()                    │
 │  - read_commis_result()  - read_commis_file()                │
-│  - grep_commis()        - get_commis_metadata()             │
+│  - peek_commis_output()                                      │
+│  - grep_commiss()        - get_commis_metadata()             │
 └──────────────────────┬──────────────────────────────────────┘
                        │ wraps
                        ↓
@@ -31,7 +32,7 @@ The oikos tools layer enables Zerg's oikos/commis architecture by providing tool
 
 ### spawn_commis(task: str, model: str | None = None) -> str
 
-Spawns a disposable commis fiche to execute a task independently.
+Spawns a disposable commis agent to execute a task independently.
 
 **Use cases:**
 
@@ -57,24 +58,24 @@ Roundabout-style waiting exists in the underlying implementation but is not expo
 
 ---
 
-### list_commis(limit: int = 20, status: str = None, since_hours: int = None) -> str
+### list_commiss(limit: int = 20, status: str = None, since_hours: int = None) -> str
 
 Lists recent commis executions with optional filters.
 
 **Parameters:**
 
-- `limit`: Maximum commis to return (default: 20)
+- `limit`: Maximum commiss to return (default: 20)
 - `status`: Filter by "queued", "running", "success", "failed", or None for all
-- `since_hours`: Only show commis from last N hours
+- `since_hours`: Only show commiss from last N hours
 
 **Example:**
 
 ```python
-# List all recent commis
-list_commis(limit=10)
+# List all recent commiss
+list_commiss(limit=10)
 
-# List only failed commis from last 24 hours
-list_commis(status="failed", since_hours=24)
+# List only failed commiss from last 24 hours
+list_commiss(status="failed", since_hours=24)
 ```
 
 **Returns:** Formatted list with commis IDs, tasks, status, timestamps
@@ -125,7 +126,29 @@ output = read_commis_file(
 
 ---
 
-### grep_commis(pattern: str, since_hours: int = 24) -> str
+### peek_commis_output(job_id: str, max_bytes: int = 4000) -> str
+
+Peeks at live output for a running commis (tail buffer).
+
+**Use cases:**
+
+- Streaming runner_exec output while a commis is still running
+- Quick progress checks without waiting for completion
+
+**Example:**
+
+```python
+output = peek_commis_output("123", max_bytes=2000)
+```
+
+**Notes:**
+
+- Returns the most recent output for active commiss (best-effort).
+- Workspace commiss do not stream live output.
+
+---
+
+### grep_commiss(pattern: str, since_hours: int = 24) -> str
 
 Searches across commis artifacts for a text pattern.
 
@@ -138,11 +161,11 @@ Searches across commis artifacts for a text pattern.
 **Example:**
 
 ```python
-# Find all commis that encountered "timeout" errors
-matches = grep_commis("timeout", since_hours=48)
+# Find all commiss that encountered "timeout" errors
+matches = grep_commiss("timeout", since_hours=48)
 
 # Search for specific output patterns
-matches = grep_commis("disk usage", since_hours=24)
+matches = grep_commiss("disk usage", since_hours=24)
 ```
 
 ---
@@ -200,8 +223,8 @@ This is necessary because LangChain tools must be synchronous functions.
 To avoid circular imports between:
 
 - `oikos_tools.py` → `CommisRunner`
-- `CommisRunner` → `AgentRunner`
-- `AgentRunner` → `tools.builtin`
+- `CommisRunner` → `Runner`
+- `Runner` → `tools.builtin`
 
 We use **lazy imports** - `CommisRunner` is imported inside the `spawn_commis` function rather than at module level.
 
@@ -229,14 +252,14 @@ We use **lazy imports** - `CommisRunner` is imported inside the `spawn_commis` f
 **Tests:**
 
 - Tool registration in BUILTIN_TOOLS
-- End-to-end fiche usage (requires tool allowlist configuration)
+- End-to-end agent usage (requires tool allowlist configuration)
 
 ## Usage Example
 
 ```python
 from zerg.tools.builtin.oikos_tools import (
     spawn_commis,
-    list_commis,
+    list_commiss,
     read_commis_result,
 )
 
@@ -246,8 +269,8 @@ result = spawn_commis(
     model="gpt-4o"
 )
 
-# List recent commis
-commis = list_commis(limit=5, status="success")
+# List recent commiss
+commiss = list_commiss(limit=5, status="success")
 
 # Read a specific result
 commis_result = read_commis_result("2024-12-03T14-32-00_analyze-logs")
@@ -278,12 +301,12 @@ uv run python examples/oikos_tools_demo.py
 
 ## Next Steps
 
-### Milestone 3: Fiche API Integration
+### Milestone 3: Agent API Integration
 
-To expose oikos tools to fiches via the API:
+To expose oikos tools to agents via the API:
 
-1. **Update fiche configuration** to include oikos tools in allowlist
-2. **Frontend integration** - UI to enable oikos mode for fiches
+1. **Update agent configuration** to include oikos tools in allowlist
+2. **Frontend integration** - UI to enable oikos mode for agents
 3. **Tool group creation** - Add "oikos" tool group to `constants/toolGroups.ts`
 4. **Documentation** - User-facing docs on oikos/commis patterns
 
@@ -291,6 +314,6 @@ To expose oikos tools to fiches via the API:
 
 1. **Commis cancellation** - Add `cancel_commis(job_id)` tool
 2. **Commis streaming** - Stream commis output in real-time
-3. **Commis pools** - Spawn multiple commis in parallel with `spawn_commis_pool()`
-4. **Result aggregation** - Tool to aggregate results from multiple commis
-5. **Commis retry** - Automatically retry failed commis
+3. **Commis pools** - Spawn multiple commiss in parallel with `spawn_commis_pool()`
+4. **Result aggregation** - Tool to aggregate results from multiple commiss
+5. **Commis retry** - Automatically retry failed commiss

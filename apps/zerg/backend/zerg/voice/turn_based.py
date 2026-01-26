@@ -25,6 +25,7 @@ class VoiceTurnResult:
     thread_id: int | None = None
     error: str | None = None
     stt_model: str | None = None
+    message_id: str | None = None
 
 
 async def run_voice_turn(
@@ -37,6 +38,7 @@ async def run_voice_turn(
     stt_language: str | None = None,
     stt_model: str | None = None,
     model_override: str | None = None,
+    message_id: str | None = None,
 ) -> VoiceTurnResult:
     """Execute a single voice turn.
 
@@ -62,6 +64,7 @@ async def run_voice_turn(
             status="error",
             error=stt_result.error or "STT failed",
             stt_model=stt_result.model,
+            message_id=message_id,
         )
 
     settings = get_settings()
@@ -76,6 +79,7 @@ async def run_voice_turn(
                 owner_id=owner_id,
                 task=stt_result.text,
                 model_override=effective_model,
+                message_id=message_id,
             )
 
         return VoiceTurnResult(
@@ -85,6 +89,7 @@ async def run_voice_turn(
             run_id=result.run_id,
             thread_id=result.thread_id,
             stt_model=stt_result.model,
+            message_id=message_id,
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Voice turn failed")
@@ -94,4 +99,5 @@ async def run_voice_turn(
             status="error",
             error=str(exc),
             stt_model=stt_result.model,
+            message_id=message_id,
         )

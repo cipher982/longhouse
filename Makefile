@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-integration test-unit test-e2e test-e2e-core test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-runner-unit test-install-runner test-prompts eval eval-live eval-compare eval-critical eval-fast eval-all eval-tool-selection generate-sdk seed-fiches seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod smoke-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage
+.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-integration test-unit test-e2e test-e2e-core test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-runner-unit test-install-runner test-prompts test-ci eval eval-live eval-compare eval-critical eval-fast eval-all eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +104,7 @@ dev-clean: ## Stop/remove dev containers (keeps DB volume)
 dev-reset-db: ## Destroy dev DB volume (data loss)
 	@echo "⚠️  Resetting dev database (THIS DELETES LOCAL DB DATA)..."
 	@$(COMPOSE_DEV) --profile dev down -v --remove-orphans 2>/dev/null || true
-	@echo "✅ DB reset. Start with 'make dev' and then run 'make seed-fiches' if needed."
+	@echo "✅ DB reset. Start with 'make dev' and then run 'make seed-agents' if needed."
 
 logs: ## View logs from running services
 	@if $(COMPOSE_DEV) ps -q 2>/dev/null | grep -q .; then \
@@ -161,7 +161,7 @@ reset: ## Reset database (destroys all data)
 	@echo "⚠️  Resetting database..."
 	@$(COMPOSE_DEV) down -v 2>/dev/null || true
 	@$(COMPOSE_DEV) --profile dev up -d
-	@echo "✅ Database reset. Run 'make seed-fiches' to populate."
+	@echo "✅ Database reset. Run 'make seed-agents' to populate."
 
 # ---------------------------------------------------------------------------
 # Testing targets
@@ -367,15 +367,15 @@ generate-sdk: ## Generate OpenAPI types from backend schema
 	@cd apps/zerg/frontend-web && bun run generate:api
 	@echo "✅ SDK generation complete"
 
-seed-fiches: ## Seed baseline Zerg fiches for Oikos
-	@echo "🌱 Seeding fiches..."
+seed-agents: ## Seed baseline Zerg agents for Oikos
+	@echo "🌱 Seeding agents..."
 	@BACKEND=$$(docker ps --format "{{.Names}}" | grep "backend" | head -1); \
 	if [ -z "$$BACKEND" ]; then \
 		echo "❌ Backend not running. Start with 'make dev'"; \
 		exit 1; \
 	fi
-	@docker exec $$BACKEND uv run python scripts/seed_oikos_fiches.py
-	@echo "✅ Fiches seeded"
+	@docker exec $$BACKEND uv run python scripts/seed_oikos_agents.py
+	@echo "✅ Agents seeded"
 
 seed-credentials: ## Seed personal tool credentials (Traccar, WHOOP, Obsidian)
 	@echo "🔑 Seeding personal credentials..."
@@ -555,10 +555,17 @@ validate-makefile: ## Verify .PHONY targets match documented targets
 	exit $$failed
 
 # ---------------------------------------------------------------------------
-# Production Smoke Tests
+# Production Verification
 # ---------------------------------------------------------------------------
-smoke-prod: ## Run production smoke tests (validates deployed instance)
-	@./scripts/smoke-prod.sh
+verify-prod: ## Full prod validation: API + browser tests (~80s, requires SMOKE_TEST_SECRET)
+	@echo "🔍 Verifying production..."
+	@./scripts/smoke-prod.sh --wait --full
+	@echo ""
+	@./scripts/run-prod-e2e.sh
+	@echo "✅ Production verified"
+
+test-ci: ## CI-ready tests (unit + build + contracts)
+	@./scripts/run-ci-tests.sh
 
 # ---------------------------------------------------------------------------
 # Performance Profiling

@@ -11,6 +11,7 @@ interface TextInputProps {
   placeholder?: string
   // Voice control props
   micStatus?: VoiceStatus
+  micLevel?: number
   onMicConnect?: () => void
   onMicPressStart?: () => void
   onMicPressEnd?: () => void
@@ -21,11 +22,33 @@ export function TextInput({
   disabled = false,
   placeholder = 'Type a message...',
   micStatus = 'idle',
+  micLevel = 0,
   onMicConnect,
   onMicPressStart,
   onMicPressEnd,
 }: TextInputProps) {
   const [value, setValue] = useState('')
+
+  const getVoiceHint = useCallback(() => {
+    switch (micStatus) {
+      case 'idle':
+        return 'Tap mic to enable voice'
+      case 'connecting':
+        return 'Connecting...'
+      case 'ready':
+        return 'Hold to talk'
+      case 'listening':
+        return 'Release to send'
+      case 'processing':
+        return 'Processing...'
+      case 'speaking':
+        return 'Speaking...'
+      case 'error':
+        return 'Tap to retry'
+      default:
+        return ''
+    }
+  }, [micStatus])
 
   const handleSend = useCallback(() => {
     const trimmed = value.trim()
@@ -48,13 +71,19 @@ export function TextInput({
   return (
     <div className="text-input-container">
       {onMicConnect && (
-        <MicButton
-          status={micStatus}
-          disabled={disabled}
-          onConnect={onMicConnect}
-          onPressStart={onMicPressStart || (() => {})}
-          onPressEnd={onMicPressEnd || (() => {})}
-        />
+        <div className="mic-button-stack">
+          <MicButton
+            status={micStatus}
+            level={micLevel}
+            disabled={disabled}
+            onConnect={onMicConnect}
+            onPressStart={onMicPressStart || (() => {})}
+            onPressEnd={onMicPressEnd || (() => {})}
+          />
+          <span className="mic-button-hint" aria-live="polite">
+            {getVoiceHint()}
+          </span>
+        </div>
       )}
       <input
         type="text"

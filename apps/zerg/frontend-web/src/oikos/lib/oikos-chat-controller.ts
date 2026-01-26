@@ -39,10 +39,12 @@ import {
   type CommisToolStartedPayload,
   type CommisToolCompletedPayload,
   type CommisToolFailedPayload,
+  type CommisOutputChunkPayload,
   type OikosToolStartedPayload,
   type OikosToolProgressPayload,
   type OikosToolCompletedPayload,
   type OikosToolFailedPayload,
+  type ShowSessionPickerPayload,
 } from '../../generated/sse-events';
 
 export interface CommisToolInfo {
@@ -700,7 +702,6 @@ export class OikosChatController {
             message: errorMsg,
             timestamp: Date.now(),
             traceId: payload.trace_id,
-            runId: payload.run_id ?? this.currentRunId,
           });
         }
 
@@ -718,7 +719,6 @@ export class OikosChatController {
           toolCallId: payload.tool_call_id,
           task: payload.task,
           timestamp: Date.now(),
-          runId: payload.run_id ?? this.currentRunId ?? undefined,
         });
         break;
       }
@@ -731,7 +731,6 @@ export class OikosChatController {
           jobId: payload.job_id,
           commisId: payload.commis_id,
           timestamp: Date.now(),
-          runId: payload.run_id ?? this.currentRunId ?? undefined,
         });
         break;
       }
@@ -746,7 +745,6 @@ export class OikosChatController {
           status: payload.status,
           durationMs: payload.duration_ms,
           timestamp: Date.now(),
-          runId: payload.run_id ?? this.currentRunId ?? undefined,
         });
         break;
       }
@@ -760,7 +758,6 @@ export class OikosChatController {
           commisId: payload.commis_id,
           summary: payload.summary,
           timestamp: Date.now(),
-          runId: payload.run_id ?? this.currentRunId ?? undefined,
         });
         break;
       }
@@ -776,7 +773,6 @@ export class OikosChatController {
           toolCallId: payload.tool_call_id,
           argsPreview: payload.tool_args_preview,
           timestamp: Date.now(),
-          runId: payload.run_id ?? this.currentRunId ?? undefined,
         });
         break;
       }
@@ -792,7 +788,6 @@ export class OikosChatController {
           durationMs: payload.duration_ms,
           resultPreview: payload.result_preview,
           timestamp: Date.now(),
-          runId: payload.run_id ?? this.currentRunId ?? undefined,
         });
         break;
       }
@@ -808,7 +803,20 @@ export class OikosChatController {
           durationMs: payload.duration_ms,
           error: payload.error,
           timestamp: Date.now(),
-          runId: payload.run_id ?? this.currentRunId ?? undefined,
+        });
+        break;
+      }
+
+      case 'commis_output_chunk': {
+        const payload = wrapper.payload as CommisOutputChunkPayload;
+        this.petWatchdog();
+        eventBus.emit('commis:output_chunk', {
+          commisId: payload.commis_id,
+          jobId: payload.job_id,
+          runnerJobId: payload.runner_job_id,
+          stream: payload.stream,
+          data: payload.data,
+          timestamp: Date.now(),
         });
         break;
       }
@@ -872,6 +880,21 @@ export class OikosChatController {
           durationMs: payload.duration_ms,
           error: payload.error,
           errorDetails: payload.error_details,
+          timestamp: Date.now(),
+        });
+        break;
+      }
+
+      case 'show_session_picker': {
+        const payload = wrapper.payload as ShowSessionPickerPayload;
+        this.petWatchdog();
+        logger.debug('[OikosChat] Session picker requested', payload.filters);
+        // Emit event for UI to handle - the Oikos chat component will listen and
+        // use the SessionPickerProvider to show the modal
+        eventBus.emit('oikos:show_session_picker', {
+          runId: payload.run_id ?? this.currentRunId ?? 0,
+          filters: payload.filters,
+          traceId: payload.trace_id,
           timestamp: Date.now(),
         });
         break;

@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+"""Update file paths in archived docs after directory restructuring."""
 import os
 import glob
 import re

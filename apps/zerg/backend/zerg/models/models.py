@@ -28,9 +28,11 @@ from zerg.models_config import DEFAULT_COMMIS_MODEL_ID
 
 from .connector import Connector  # noqa: F401
 
-# Re-export models that have been split into separate files
+# Re-export models that have been split into separate files for backwards compatibility
 from .fiche import Fiche  # noqa: F401
+from .fiche import Fiche as Agent  # noqa: F401 - backwards compat
 from .fiche import FicheMessage  # noqa: F401
+from .fiche import FicheMessage as AgentMessage  # noqa: F401 - backwards compat
 from .llm_audit import LLMAuditLog  # noqa: F401
 from .run import Run  # noqa: F401
 from .thread import Thread  # noqa: F401
@@ -231,7 +233,7 @@ class NodeExecutionState(Base):
 class ConnectorCredential(Base):
     """Encrypted credential for a built-in connector tool.
 
-    Scoped to a single fiche. Each fiche can have at most one credential
+    Scoped to a single agent. Each agent can have at most one credential
     per connector type (e.g., one Slack webhook, one GitHub token).
 
     Credentials are stored encrypted using Fernet (AES-GCM) via the
@@ -241,17 +243,17 @@ class ConnectorCredential(Base):
 
     __tablename__ = "connector_credentials"
     __table_args__ = (
-        # One credential per connector type per fiche
-        UniqueConstraint("fiche_id", "connector_type", name="uix_fiche_connector"),
+        # One credential per connector type per agent
+        UniqueConstraint("fiche_id", "connector_type", name="uix_agent_connector"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
 
-    # Foreign key to fiche with CASCADE delete – when a fiche is deleted,
+    # Foreign key to agent with CASCADE delete – when an agent is deleted,
     # all its credentials are automatically removed.
     fiche_id = Column(
         Integer,
-        ForeignKey("fiches.id", ondelete="CASCADE"),
+        ForeignKey("agents.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -284,7 +286,7 @@ class ConnectorCredential(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     # Relationships
-    fiche = relationship("Fiche", backref="connector_credentials")
+    agent = relationship("Agent", backref="connector_credentials")
 
 
 # ---------------------------------------------------------------------------
@@ -295,18 +297,18 @@ class ConnectorCredential(Base):
 class AccountConnectorCredential(Base):
     """Account-level encrypted credential for built-in connector tools.
 
-    These credentials are shared across all fiches owned by the user.
-    Fiches can optionally override with per-fiche credentials in
-    ConnectorCredential (fiche-level overrides).
+    These credentials are shared across all agents owned by the user.
+    Agents can optionally override with per-agent credentials in
+    ConnectorCredential (agent-level overrides).
 
     Resolution order in CredentialResolver:
-    1. Fiche-level override (ConnectorCredential)
+    1. Agent-level override (ConnectorCredential)
     2. Account-level credential (this table)
     3. None if neither exists
 
     The organization_id column is nullable and reserved for future
     multi-tenant support. When populated, credentials can be shared
-    across an organization and fiches reference organization_id for
+    across an organization and agents reference organization_id for
     credential resolution.
     """
 
@@ -358,15 +360,15 @@ class AccountConnectorCredential(Base):
 
 
 # ---------------------------------------------------------------------------
-# Commis Jobs – Background task execution for oikos fiches
+# Commis Jobs – Background task execution for oikos agents
 # ---------------------------------------------------------------------------
 
 
 class CommisJob(Base):
-    """Background job for executing commis tasks.
+    """Background job for executing commis agent tasks.
 
-    Commis jobs allow oikos fiches to delegate long-running tasks
-    to background commis without blocking the oikos's execution flow.
+    Commis jobs allow oikos agents to delegate long-running tasks
+    to background commiss without blocking the oikos's execution flow.
     """
 
     __tablename__ = "commis_jobs"
@@ -380,7 +382,7 @@ class CommisJob(Base):
     # ON DELETE SET NULL: if oikos run is deleted, commis job remains but loses correlation
     oikos_run_id = Column(Integer, ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True)
 
-    # Tool call idempotency - prevents duplicate commis from oikos resume replay
+    # Tool call idempotency - prevents duplicate commiss from oikos resume replay
     # The tool_call_id comes from LangChain's ToolCall structure and is unique per LLM response
     tool_call_id = Column(String(64), nullable=True, index=True)
 
@@ -392,8 +394,8 @@ class CommisJob(Base):
     model = Column(String(100), nullable=False, default=DEFAULT_COMMIS_MODEL_ID)
     reasoning_effort = Column(String(20), nullable=True, default="none")  # none, low, medium, high
 
-    # Flexible execution configuration (workspace execution, git repo, etc.)
-    # Keys: execution_mode ("standard" | "workspace"), git_repo (url), base_branch, etc.
+    # Flexible execution configuration (cloud execution, git repo, etc.)
+    # Keys: execution_mode ("local" | "cloud"), git_repo (url), base_branch, etc.
     config = Column(JSON, nullable=True)
 
     # Execution state
@@ -415,7 +417,7 @@ class CommisJob(Base):
     # Relationships
     owner = relationship("User", backref="commis_jobs")
 
-    # Unique constraint for idempotency - prevents duplicate commis from replay
+    # Unique constraint for idempotency - prevents duplicate commiss from replay
     # Uses partial index: only enforce when both fields are non-null
     __table_args__ = (
         Index(
@@ -437,7 +439,7 @@ class Runner(Base):
     """User-owned runner daemon for executing commands.
 
     Runners connect outbound to the Swarmlet platform and execute jobs
-    on behalf of commis. This enables secure execution without backend
+    on behalf of commiss. This enables secure execution without backend
     access to user SSH keys.
     """
 
@@ -640,14 +642,14 @@ class KnowledgeDocument(Base):
 
 
 # ---------------------------------------------------------------------------
-# User Tasks – Fiche-created tasks for users
+# User Tasks – Agent-created tasks for users
 # ---------------------------------------------------------------------------
 
 
 class UserTask(Base):
-    """A task created by a fiche for a user.
+    """A task created by an agent for a user.
 
-    Fiches can use task management tools to create, update, and track
+    Agents can use task management tools to create, update, and track
     tasks for their users. This provides a lightweight task management
     system without external dependencies.
     """
@@ -678,19 +680,60 @@ class UserTask(Base):
 
 
 # ---------------------------------------------------------------------------
-# Fiche Memory – Persistent key-value storage for fiches
+# User Skills – DB-backed SKILL.md content per user
 # ---------------------------------------------------------------------------
 
 
-class FicheMemoryKV(Base):
-    """Persistent key-value memory storage for fiches.
+class UserSkill(Base):
+    """User-managed skill stored in the database.
 
-    Allows fiches to store and retrieve arbitrary data across conversations.
+    Content is the full SKILL.md text (YAML frontmatter + markdown body).
+    Name is stored separately for indexing and uniqueness per user.
+    """
+
+    __tablename__ = "user_skills"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Ownership
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Skill identity (unique per user)
+    name = Column(String(128), nullable=False)
+
+    # Canonical SKILL.md content
+    content = Column(Text, nullable=False)
+
+    # Soft toggle for eligibility/visibility
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    # Timestamps
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    owner = relationship("User", backref="user_skills")
+
+    __table_args__ = (
+        UniqueConstraint("owner_id", "name", name="uq_user_skills_owner_name"),
+        Index("ix_user_skills_owner_name", "owner_id", "name"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Agent Memory – Persistent key-value storage for agents
+# ---------------------------------------------------------------------------
+
+
+class AgentMemoryKV(Base):
+    """Persistent key-value memory storage for agents.
+
+    Allows agents to store and retrieve arbitrary data across conversations.
     Each entry is scoped to a user and can be tagged for easy retrieval.
     Optional expiration allows for automatic cleanup of temporary data.
     """
 
-    __tablename__ = "fiche_memory_kv"
+    __tablename__ = "agent_memory_kv"
 
     # Composite primary key (user_id, key)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, primary_key=True)
@@ -711,11 +754,15 @@ class FicheMemoryKV(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     # Relationships
-    user = relationship("User", backref="fiche_memory")
+    user = relationship("User", backref="agent_memory")
+
+
+# Terminology alias for AgentMemoryKV → FicheMemoryKV
+FicheMemoryKV = AgentMemoryKV
 
 
 # ---------------------------------------------------------------------------
-# Memory Files – Virtual filesystem for long-term fiche memory
+# Memory Files – Virtual filesystem for long-term agent memory
 # ---------------------------------------------------------------------------
 
 
@@ -785,7 +832,7 @@ class MemoryEmbedding(Base):
 class UserEmailContact(Base):
     """Approved email contact for a user.
 
-    Users maintain a list of approved contacts that fiches can send emails to.
+    Users maintain a list of approved contacts that agents can send emails to.
     This prevents abuse (spam, phishing) while keeping the platform usable.
     """
 
@@ -823,7 +870,7 @@ class UserEmailContact(Base):
 class UserPhoneContact(Base):
     """Approved phone contact for a user.
 
-    Users maintain a list of approved contacts that fiches can send SMS to.
+    Users maintain a list of approved contacts that agents can send SMS to.
     Phone numbers are stored in E.164 format (+1234567890) for matching.
     """
 

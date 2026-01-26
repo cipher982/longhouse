@@ -5,12 +5,13 @@ focused sub-routers and providing remaining endpoints (events, history, config, 
 
 Sub-routers:
 - oikos_auth: Authentication helpers
-- oikos_fiches: Fiche listing
+- oikos_agents: Agent listing
 - oikos_runs: Run history
-- oikos_dispatch: Manual fiche dispatch
-- oikos_run_dispatch: Oikos run dispatch + cancel
+- oikos_dispatch: Manual agent dispatch
+- oikos_oikos: Oikos dispatch, events, cancel
 - oikos_chat: Text chat with streaming
 - oikos_tts: Text-to-speech for voice responses
+- oikos_life_hub: Life Hub session listing and preview
 
 Endpoints in this file:
 - /events: General SSE events stream
@@ -46,12 +47,13 @@ from zerg.database import get_db
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
 from zerg.models.models import ThreadMessage
+from zerg.routers import jarvis_life_hub as oikos_life_hub  # Legacy name
 from zerg.routers import oikos_chat
 from zerg.routers import oikos_dispatch
 
 # Import sub-routers
-from zerg.routers import oikos_fiches
-from zerg.routers import oikos_run_dispatch
+from zerg.routers import oikos_fiches as oikos_agents  # Renamed from agents → fiches
+from zerg.routers import oikos_internal as oikos_oikos  # Was oikos_oikos, renamed
 from zerg.routers import oikos_runs
 from zerg.routers import oikos_tts
 from zerg.routers.oikos_auth import _is_tool_enabled
@@ -64,13 +66,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/oikos", tags=["oikos"])
 
 # Include sub-routers (they all have /api/oikos prefix already, so we strip it here)
-router.include_router(oikos_fiches.router, prefix="", tags=["oikos"])
+router.include_router(oikos_agents.router, prefix="", tags=["oikos"])
 router.include_router(oikos_runs.router, prefix="", tags=["oikos"])
 router.include_router(oikos_dispatch.router, prefix="", tags=["oikos"])
-router.include_router(oikos_run_dispatch.router, prefix="", tags=["oikos"])
+router.include_router(oikos_oikos.router, prefix="", tags=["oikos"])
 router.include_router(oikos_chat.router, prefix="", tags=["oikos"])
 router.include_router(oikos_tts.router, prefix="", tags=["oikos-tts"])
 router.include_router(oikos_voice.router, prefix="", tags=["oikos-voice"])
+router.include_router(oikos_life_hub.router, prefix="", tags=["life-hub"])
 
 # ---------------------------------------------------------------------------
 # Deprecated Authentication Endpoint
@@ -115,7 +118,7 @@ def oikos_auth(
 async def _oikos_event_generator(_current_user):
     """Generate SSE events for Oikos.
 
-    Subscribes to the event bus and yields fiche/run update events.
+    Subscribes to the event bus and yields agent/run update events.
     Runs until the client disconnects.
     """
     # Create asyncio queue for this connection
@@ -126,8 +129,8 @@ async def _oikos_event_generator(_current_user):
         """Handle event and put into queue."""
         await queue.put(event)
 
-    # Subscribe to fiche and run events
-    event_bus.subscribe(EventType.FICHE_UPDATED, event_handler)
+    # Subscribe to agent and run events
+    event_bus.subscribe(EventType.AGENT_UPDATED, event_handler)
     event_bus.subscribe(EventType.RUN_CREATED, event_handler)
     event_bus.subscribe(EventType.RUN_UPDATED, event_handler)
 
@@ -171,7 +174,7 @@ async def _oikos_event_generator(_current_user):
         logger.info("Oikos SSE stream disconnected")
     finally:
         # Unsubscribe from events
-        event_bus.unsubscribe(EventType.FICHE_UPDATED, event_handler)
+        event_bus.unsubscribe(EventType.AGENT_UPDATED, event_handler)
         event_bus.unsubscribe(EventType.RUN_CREATED, event_handler)
         event_bus.unsubscribe(EventType.RUN_UPDATED, event_handler)
 
@@ -182,7 +185,7 @@ async def oikos_events(
 ) -> EventSourceResponse:
     """Server-Sent Events stream for Oikos.
 
-    Provides real-time updates for fiche and run events. Oikos listens to this
+    Provides real-time updates for agent and run events. Oikos listens to this
     stream to update the Task Inbox UI without polling.
 
     Authentication:
@@ -193,9 +196,9 @@ async def oikos_events(
     Event types:
     - connected: Initial connection confirmation
     - heartbeat: Keep-alive ping every 30 seconds
-    - fiche_updated: Fiche status or configuration changed
-    - run_created: New fiche run started
-    - run_updated: Fiche run status changed (running → success/failed)
+    - agent_updated: Agent status or configuration changed
+    - run_created: New agent run started
+    - run_updated: Agent run status changed (running → success/failed)
 
     Args:
         current_user: Authenticated user (Oikos service account)
@@ -271,7 +274,7 @@ def _fetch_commis_activity(db: Session, fiche_id: int, tool_call_ids: list[str])
 
     Args:
         db: Database session
-        fiche_id: Oikos fiche ID (to filter runs)
+        fiche_id: Oikos agent ID (to filter runs)
         tool_call_ids: List of spawn_commis tool_call_ids to look up
 
     Returns:
@@ -284,8 +287,8 @@ def _fetch_commis_activity(db: Session, fiche_id: int, tool_call_ids: list[str])
     if not tool_call_ids:
         return {}
 
-    # Get runs for this fiche
-    run_ids = [row.id for row in db.query(Run.id).filter(Run.fiche_id == fiche_id).all()]
+    # Get runs for this agent
+    run_ids = [r.id for r in db.query(Run.id).filter(Run.fiche_id == fiche_id).all()]
     if not run_ids:
         return {}
 
@@ -361,7 +364,7 @@ def _fetch_commis_activity(db: Session, fiche_id: int, tool_call_ids: list[str])
         elif e.event_type == "commis_summary_ready" and job_id and job_id in job_activity:
             job_activity[job_id]["summary"] = payload.get("summary")
 
-    # Fallback mapping for events without commis_spawned.tool_call_id
+    # Fallback mapping for legacy events without commis_spawned.tool_call_id
     # Use oikos_tool_started -> commis_spawned correlation only when tool_call_id is missing.
     from collections import deque
 
@@ -417,8 +420,8 @@ def oikos_history(
     oikos_service = OikosService(db)
 
     # Get oikos thread (creates if doesn't exist)
-    fiche = oikos_service.get_or_create_oikos_fiche(current_user.id)
-    thread = oikos_service.get_or_create_oikos_thread(current_user.id, fiche)
+    agent = oikos_service.get_or_create_oikos_agent(current_user.id)
+    thread = oikos_service.get_or_create_oikos_thread(current_user.id, agent)
 
     # Query messages from thread (user and assistant only, excluding internal orchestration messages)
     # Internal messages (continuation prompts, system notifications) are stored for LLM context
@@ -450,7 +453,7 @@ def oikos_history(
     # Batch fetch commis activity for all spawn_commis tool calls
     commis_activity_map: dict[str, dict] = {}
     if spawn_commis_tool_call_ids:
-        commis_activity_map = _fetch_commis_activity(db, fiche.id, spawn_commis_tool_call_ids)
+        commis_activity_map = _fetch_commis_activity(db, agent.id, spawn_commis_tool_call_ids)
 
     # Also need to find tool results from ToolMessages
     # Get all ToolMessages for this thread to map tool_call_id -> result
@@ -524,7 +527,7 @@ def oikos_history(
     logger.debug(
         f"Oikos history: returned {len(chat_messages)} messages "
         f"(offset={offset}, limit={limit}, total={total}) for user {current_user.id}",
-        extra={"tag": "OIKOS"},
+        extra={"tag": "JARVIS"},
     )
 
     return OikosHistoryResponse(
@@ -541,10 +544,10 @@ def oikos_clear_history(
     """Clear conversation history by deleting all messages from Oikos thread.
 
     This clears all conversation messages from the user's Oikos thread.
-    The thread itself and the fiche's system instructions are preserved.
+    The thread itself and the agent's system instructions are preserved.
 
-    System prompts are injected fresh on every run from fiche.system_instructions,
-    so clearing history doesn't affect the fiche's behavior.
+    System prompts are injected fresh on every run from agent.system_instructions,
+    so clearing history doesn't affect the agent's behavior.
 
     Args:
         db: Database session
@@ -553,13 +556,13 @@ def oikos_clear_history(
     from zerg.crud import crud
     from zerg.models.enums import ThreadType
 
-    fiches = crud.get_fiches(db, owner_id=current_user.id)
-    fiche = next((f for f in fiches if (f.config or {}).get("is_oikos")), None)
-    if fiche is None:
-        logger.info(f"Oikos history cleared: no oikos fiche found for user {current_user.id} (noop)")
+    agents = crud.get_agents(db, owner_id=current_user.id)
+    agent = next((a for a in agents if (a.config or {}).get("is_oikos")), None)
+    if agent is None:
+        logger.info(f"Oikos history cleared: no oikos agent found for user {current_user.id} (noop)")
         return
 
-    threads = crud.get_threads(db, fiche_id=fiche.id)
+    threads = crud.get_threads(db, fiche_id=agent.id)
     old_thread = next((t for t in threads if t.thread_type == ThreadType.SUPER), None)
     if old_thread is None:
         logger.info(f"Oikos history cleared: no oikos thread found for user {current_user.id} (noop)")
@@ -578,7 +581,7 @@ def oikos_clear_history(
 
     logger.info(
         f"Oikos history cleared: deleted {deleted_count} messages from thread {old_thread.id} " f"for user {current_user.id}",
-        extra={"tag": "OIKOS"},
+        extra={"tag": "JARVIS"},
     )
 
 
@@ -625,7 +628,7 @@ def oikos_bootstrap(
     This is the single source of truth for Oikos configuration.
     """
     from zerg.models_config import get_all_models
-    from zerg.models_config import get_default_model_id
+    from zerg.models_config import get_default_model_id_str
     from zerg.prompts.composer import build_oikos_prompt
 
     # Define all available personal tools (Phase 4 v2.1)
@@ -674,7 +677,7 @@ def oikos_bootstrap(
     ]
 
     available_model_ids = {m.id for m in available_models}
-    default_model_id = get_default_model_id()
+    default_model_id = get_default_model_id_str()
 
     # Get user preferences (with defaults + validation)
     prefs = ctx.get("preferences", {}) or {}
@@ -709,7 +712,7 @@ class OikosThreadInfo(BaseModel):
     message_count: int = Field(..., description="Number of messages in thread")
 
 
-@router.get("/thread", response_model=OikosThreadInfo)
+@router.get("/oikos/thread", response_model=OikosThreadInfo)
 def get_oikos_thread(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_oikos_user),
@@ -721,8 +724,8 @@ def get_oikos_thread(
     from zerg.services.oikos_service import OikosService
 
     service = OikosService(db)
-    fiche = service.get_or_create_oikos_fiche(current_user.id)
-    thread = service.get_or_create_oikos_thread(current_user.id, fiche)
+    agent = service.get_or_create_oikos_agent(current_user.id)
+    thread = service.get_or_create_oikos_thread(current_user.id, agent)
 
     # Count messages using proper count query (not limited to 100)
     # Exclude internal orchestration messages from the count shown to users
@@ -766,7 +769,7 @@ def oikos_update_preferences(
     Saves preferences to the user's context in the database.
     Only provided fields are updated; others remain unchanged.
     """
-    from zerg.models_config import get_default_model_id
+    from zerg.models_config import get_default_model_id_str
     from zerg.models_config import get_model_by_id
 
     ctx = current_user.context or {}
@@ -800,7 +803,7 @@ def oikos_update_preferences(
     db.commit()
 
     # Return preferences with sensible defaults
-    chat_model = prefs.get("chat_model") or get_default_model_id()
+    chat_model = prefs.get("chat_model") or get_default_model_id_str()
     reasoning = (prefs.get("reasoning_effort") or "none").lower()
     if reasoning not in {"none", "low", "medium", "high"}:
         reasoning = "none"

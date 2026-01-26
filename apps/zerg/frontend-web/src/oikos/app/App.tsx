@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useAppState, useAppDispatch } from './context'
-import { useTextChannel } from './hooks'
+import { useTextChannel, useTurnBasedVoice } from './hooks'
 import { useOikosApp } from './hooks/useOikosApp'
 import { DebugPanel, Header, ChatContainer, TextInput, OfflineBanner, ModelSelector, RunStatusIndicator, TraceIdDisplay } from './components'
 import './components/TraceIdDisplay.css'
@@ -68,6 +68,11 @@ export default function App({ embedded = false }: AppProps) {
     onError: (error) => console.error('[App] Text channel error:', error),
   })
 
+  const turnBasedVoice = useTurnBasedVoice({
+    onError: (error) => console.error('[App] Voice error:', error),
+    sendText: oikosApp.sendText,
+  })
+
   // Debug panel toggle
   const handleToggleDebugPanel = useCallback(() => {
     dispatch({ type: 'SET_SIDEBAR_OPEN', open: !state.sidebarOpen })
@@ -92,19 +97,6 @@ export default function App({ embedded = false }: AppProps) {
   const handleSync = useCallback(() => {
     console.log('[App] Sync conversations')
   }, [])
-
-  // Voice handlers for mic button
-  const handleMicConnect = useCallback(() => {
-    oikosApp.reconnect()
-  }, [oikosApp])
-
-  const handleMicPressStart = useCallback(() => {
-    oikosApp.handlePTTPress()
-  }, [oikosApp])
-
-  const handleMicPressEnd = useCallback(() => {
-    oikosApp.handlePTTRelease()
-  }, [oikosApp])
 
   // Map voice status for mic button
   const micStatus = state.voiceStatus as 'idle' | 'connecting' | 'ready' | 'listening' | 'processing' | 'speaking' | 'error'
@@ -189,9 +181,10 @@ export default function App({ embedded = false }: AppProps) {
             onSend={textChannel.sendMessage}
             disabled={textChannel.isSending}
             micStatus={micStatus}
-            onMicConnect={handleMicConnect}
-            onMicPressStart={handleMicPressStart}
-            onMicPressEnd={handleMicPressEnd}
+            micLevel={turnBasedVoice.micLevel}
+            onMicConnect={turnBasedVoice.resetVoice}
+            onMicPressStart={turnBasedVoice.startRecording}
+            onMicPressEnd={turnBasedVoice.stopRecording}
           />
         </div>
       </div>

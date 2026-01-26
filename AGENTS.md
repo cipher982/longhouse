@@ -6,7 +6,7 @@ AI agent orchestration platform. Oikos = voice/text UI. Swarmlet = product name.
 
 ## Philosophy
 
-**"Trust the AI"** — Modern LLMs are smart enough to figure things out. Give them context and autonomy, not rigid decision trees. No keyword routing, no specialized workers. Full spec: `docs/specs/durable-runs-v2.2.md`
+**"Trust the AI"** — Modern LLMs are smart enough to figure things out. Give them context and autonomy, not rigid decision trees. No keyword routing, no specialized commiss. Full spec: `docs/specs/durable-runs-v2.2.md`
 
 ## Quick Reference
 
@@ -41,16 +41,16 @@ User → nginx:30080 → FastAPI backend (47300) + React frontend (47200)
 
 **Database:** Zerg DB is a schema inside Life Hub's Postgres (same server). No separate sync needed for structured data.
 
-**Supervisor/Worker Flow:**
-User message → `SupervisorService` → `supervisor_react_engine` → (spawn_worker) → `AgentInterrupted` → WAITING → worker runs → `worker_resume` → response
+**Oikos/Commis Flow:**
+User message → `OikosService` → `oikos_react_engine` → (spawn_commis) → `AgentInterrupted` → WAITING → commis runs → `commis_resume` → response
 
 **Key Files:**
 | File | Purpose |
 |------|---------|
-| `services/supervisor_react_engine.py` | Core ReAct loop |
-| `managers/agent_runner.py` | `run_thread()` entry point |
-| `services/worker_runner.py` | Executes worker jobs |
-| `tools/builtin/supervisor_tools.py` | `spawn_worker`, `get_worker_evidence` |
+| `services/oikos_react_engine.py` | Core ReAct loop |
+| `managers/fiche_runner.py` | `run_thread()` entry point |
+| `services/commis_runner.py` | Executes commis jobs |
+| `tools/builtin/oikos_tools.py` | `spawn_commis`, `get_commis_evidence` |
 | `tools/tool_search.py` | Semantic tool search |
 
 **Lazy Tool Loading:** 65+ tools available, ~12 core tools pre-bound. Others discovered via `search_tools()`.
@@ -73,20 +73,34 @@ User message → `SupervisorService` → `supervisor_react_engine` → (spawn_wo
 6. **Coolify env var changes need redeploy** — restart doesn't pick up new vars.
 7. **AGENTS.md is canonical** — `CLAUDE.md` is a symlink, edit AGENTS.md only.
 
-## Deployment
+## Pushing Changes
 
-**Product**: Swarmlet | **Server**: zerg (Hetzner)
+**Prod URLs**: https://swarmlet.com (frontend) | https://api.swarmlet.com (API)
 
-| Service | URL |
-|---------|-----|
-| Frontend | https://swarmlet.com |
-| API | https://api.swarmlet.com |
-
+### Before Push
 ```bash
-git push origin onboard-sauron    # Triggers auto-deploy
-./scripts/smoke-prod.sh           # Validate endpoints
-./scripts/get-coolify-logs.sh 1   # Check deploy status
+make test              # Unit tests (required)
+make test-e2e-core     # Core E2E - must pass 100%
 ```
+
+### After Push
+Coolify auto-deploys `main`. **Always verify your deploy:**
+```bash
+make verify-prod       # Full validation: API + browser (~80s)
+```
+This waits for health, runs API checks (auth, LLM, voice, CRUD), then browser tests.
+
+### If Something Breaks
+```bash
+./scripts/get-coolify-logs.sh 1   # Check deploy logs
+```
+
+### Checklist for Agents
+1. ✅ `make test` passes locally
+2. ✅ `make test-e2e-core` passes locally
+3. ✅ Push to main
+4. ✅ Run `make verify-prod` (~80s)
+5. ✅ Report result to user
 
 ## Deep Dives
 
@@ -143,29 +157,45 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-22) [pattern] Personal tooling MVP: prioritize delegation flow and async completion over enterprise resiliency concerns.
 - (2026-01-22) [pattern] QA agent job at `jobs/qa/`: hybrid determinism pattern - bash collects data, Claude CLI analyzes. State persists in ops.runs.metadata. Always preserve previous state on agent failure.
 - (2026-01-22) [gotcha] Claude Code CLI with z.ai DOES work, but needs: 1) ANTHROPIC_AUTH_TOKEN not ANTHROPIC_API_KEY, 2) unset CLAUDE_CODE_USE_BEDROCK, 3) HOME=/tmp in read-only containers (CLI writes .claude.json config).
-- (2026-01-23) [gotcha] Cloud worker completion emits/resume happen inside main try; if emit/resume raises, job flips to failed after a successful run. Make SSE/resume best-effort.
+- (2026-01-23) [gotcha] Cloud commis completion emits/resume happen inside main try; if emit/resume raises, job flips to failed after a successful run. Make SSE/resume best-effort.
 - (2026-01-23) [gotcha] Sauron migration is partial: Zerg jobs only include backup_sentinel/disk_health/qa; email-commands + several scheduled jobs still live in sauron.
-- (2026-01-23) [tool] `zerg/libs/agent_runner/` superseded by standalone `~/git/hatch/` package. Use `uv tool install -e ~/git/hatch` for global `hatch` CLI. Zerg's copy kept for in-process use but new features go to standalone.
+- (2026-01-23) [tool] `zerg/libs/fiche_runner/` superseded by standalone `~/git/hatch/` package. Use `uv tool install -e ~/git/hatch` for global `hatch` CLI. Zerg's copy kept for in-process use but new features go to standalone.
 - (2026-01-23) [tool] Codex CLI non-interactive mode: `codex exec -` reads prompt from stdin; `--full-auto` enables automatic execution.
-- (2026-01-23) [gotcha] `execution_mode=workspace` runs `hatch` in a git workspace (requires `git_repo`); `standard` runs WorkerRunner in-process. Old names `cloud`/`local` still work for backward compat.
-- (2026-01-23) [gotcha] Workspace workers bypass WorkerRunner (no worker_started/tool events); only worker_complete is emitted and diffs live in artifacts, not the supervisor summary.
+- (2026-01-23) [gotcha] `execution_mode=workspace` runs `hatch` in a git workspace (requires `git_repo`); `standard` runs CommisRunner in-process. Old names `cloud`/`local` still work for backward compat.
+- (2026-01-23) [gotcha] Workspace commiss bypass CommisRunner (no commis_started/tool events); only commis_complete is emitted and diffs live in artifacts, not the oikos summary.
 - (2026-01-23) [pattern] Repo tasks should be routed by tool/interface (separate tool or auto-routing); prompt-only enforcement leads to runner_exec misuse.
 - (2026-01-24) [gotcha] Tool contracts live in `schemas/tools.yml`; regenerate `apps/zerg/backend/zerg/tools/generated/tool_definitions.py` via `scripts/generate_tool_types.py` instead of editing the generated file.
+- (2026-01-24) [gotcha] Oikos tool registration is centralized: add tools in `oikos_tools.py`; `CORE_TOOLS` pulls `SUPERVISOR_TOOL_NAMES`; `oikos_service.py` uses `get_oikos_allowed_tools()`. Tests in `test_core_tools.py` catch drift.
 - (2026-01-24) [pattern] External jobs loader simplified: `zerg/jobs/loader.py` uses `runpy.run_path()` on `manifest.py` from git repo. Duplicates skip (not fatal), sys.path cleaned after load, git SHA tracked in metadata. Updates require restart.
 - (2026-01-24) [pattern] UX needs multi-level alerting: auto-ack obvious “continue?” prompts, hard-stop attention for risky/ambiguous states; keep “fun” vibe without sacrificing triage speed.
 - (2026-01-24) [gotcha] Oikos is no longer a separate app; it’s just the chat page, so unify its styles with the main frontend when refactoring.
 - (2026-01-24) [gotcha] Repo policy: work only on main, no worktrees; confirm `git -C /Users/davidrose/git/zerg status -sb` before changes; no stashing unless explicitly requested.
 - (2026-01-24) [tool] Claude Code sessions are stored at `~/.claude/projects/{encoded-cwd}/{sessionId}.jsonl`; `--resume` requires the file locally.
 - (2026-01-24) [tool] `CLAUDE_CONFIG_DIR` overrides the entire `~/.claude/` location, enabling shared config/cache paths across machines.
-- (2026-01-24) [gotcha] `spawn_workspace_worker` is a normal tool (no AgentInterrupted/WAITING), but `worker_spawned` still increments SSE pending_workers, so chat streams can stay open (input disabled) until `worker_complete` even after supervisor_complete.
-- (2026-01-24) [pattern] Oikos UX: "Human PA" model — kick off tasks, move on, don't block. Workers report back async. Input should re-enable on `supervisor_complete`, not wait for workers. See `AI-Sessions/2026-01-24-oikos-worker-ux-design.md`.
-- (2026-01-25) [gotcha] `zerg/main.py` load_dotenv(override=True) clobbered E2E env (ENVIRONMENT=test:e2e), preventing WorkerJobProcessor startup; use override=False in test/e2e.
+- (2026-01-24) [gotcha] `spawn_workspace_commis` is a normal tool (no AgentInterrupted/WAITING), but `commis_spawned` still increments SSE pending_commiss, so chat streams can stay open (input disabled) until `commis_complete` even after oikos_complete.
+- (2026-01-24) [pattern] Oikos UX: "Human PA" model — kick off tasks, move on, don't block. Commiss report back async. Input should re-enable on `oikos_complete`, not wait for commiss. See `AI-Sessions/2026-01-24-oikos-commis-ux-design.md`.
+- (2026-01-25) [gotcha] `zerg/main.py` load_dotenv(override=True) clobbered E2E env (ENVIRONMENT=test:e2e), preventing CommisJobProcessor startup; use override=False in test/e2e.
+- (2026-01-25) [gotcha] Voice TTS playback uses blob URLs; CSP must include `media-src 'self' blob: data:` or audio playback fails in prod.
 - (2026-01-25) [gotcha] Telegram channel `webhook_url` only sets the remote webhook; no local webhook handler is wired yet, so inbound delivery still requires polling.
 - (2026-01-25) [gotcha] Tests patch `zerg.services.openai_realtime.httpx.AsyncClient`; keep `httpx` imported in the compatibility wrapper after moving realtime helpers.
-- (2026-01-25) [pattern] SupervisorService enforces a single ThreadType.SUPER thread per user (“one brain”); each Oikos message creates an AgentRun tied to that thread.
+- (2026-01-25) [pattern] OikosService enforces a single ThreadType.SUPER thread per user (“one brain”); each Oikos message creates an Run tied to that thread.
 - (2026-01-25) [gotcha] Skills loader/registry must use `skill.name` (SkillEntry has no `.name`); `e.name` raises AttributeError during load/sort.
-- (2026-01-25) [gotcha] Phase 4 renames: `models/models.py` also has `Agent` relationships (e.g., ConnectorCredential); not just agent/run/worker files.
-- (2026-01-26) [gotcha] Rebrand work happens in worktree `~/git/zerg-rebrand` on branch `rebrand/french-terminology`; avoid touching main repo for this effort.
-- (2026-01-26) [gotcha] Bulk renames can create duplicate table prefixes (e.g., `commis_commis_barrier_jobs`); normalize to `commis_barrier_jobs` to match migrations.
-- (2026-01-26) [gotcha] Oikos is a singular orchestrator name (Oikos-equivalent); avoid pluralizing—use generic “operators” or “Oikos instance” when needed.
-- (2026-01-26) [gotcha] Bulk rename passes can collapse distinct symbols (e.g., Jarvis + Concierge → Oikos); check for duplicate class/function names and imports after replacement.
+- (2026-01-25) [gotcha] Frontend CSP `connect-src` must include `api.openai.com` for OpenAI Realtime; otherwise voice connect fails with CSP-blocked fetch.
+- (2026-01-25) [gotcha] Commis artifacts (thread.jsonl, tool_calls/*.txt, result.txt) are written after completion; live tail is via `peek_commis_output` and `commis_output_chunk` SSE (buffered from runner exec_chunk).
+- (2026-01-25) [gotcha] Voice uploads may send content-type params (e.g., `audio/webm;codecs=opus`); normalize before validation or browser uploads will 400.
+- (2026-01-25) [gotcha] Empty or too-short audio yields no transcription; return 422 and show a friendly “try speaking longer” prompt instead of 500.
+- (2026-01-25) [gotcha] Client-side min audio size gate prevents tiny blobs from hitting STT and returning empty transcription.
+- (2026-01-26) [gotcha] `spawn_commis` in `oikos_react_engine` parallel path does not raise `AgentInterrupted`, so runs finish SUCCESS and commis results only surface on a later user turn unless WAITING is triggered.
+- (2026-01-25) [pattern] Commis inbox continuation: `trigger_commis_inbox_run()` in commis_resume.py handles commiss completing after oikos SUCCESS. Creates continuation run with `RunTrigger.CONTINUATION`, SSE events alias back via `continuation_of_run_id`. Multiple commiss: first creates continuation, subsequent merge or chain.
+- (2026-01-25) [gotcha] FicheRunner filters out DB-stored system messages; injected `role="system"` thread messages are ignored by LLM context unless you change the filtering.
+- (2026-01-25) [gotcha] Legacy continuations may have null `root_run_id`; chain continuations will alias to the wrong run unless you backfill or fall back to `continuation_of_run_id`.
+- (2026-01-26) [pattern] When a continuation is already RUNNING, queue commis updates as internal user messages and trigger a follow-up continuation after it completes (don’t inject mid-run).
+- (2026-01-26) [pattern] Avoid manual browser-hub testing; use scripted prod E2E with `auth/service-login` + Playwright for real flows.
+- (2026-01-26) [test] Prod Playwright reads `SMOKE_TEST_SECRET` from `.env` with quotes; normalize/strip quotes in fixtures to avoid 403 on service-login.
+- (2026-01-26) [test] Live voice STT in prod is unreliable with silent WAV; generate audio via `/voice/tts` and transcribe that in live E2E for stability.
+- (2026-01-26) [gotcha] Turn-based voice `/api/oikos/voice/turn` bypasses SSE, so commis/tool UI and streaming events never render; full parity requires routing transcripts through `/api/oikos/chat` (SSE) or emitting equivalent events.
+- (2026-01-26) [gotcha] Resumable SSE closed on `oikos_complete` with pending commiss, dropping commis output/continuations; keep stream open until commiss drain (with a short grace window).
+- (2026-01-26) [gotcha] Timestamp prefixes on assistant messages leaked into model outputs; only prefix user messages for temporal context.
+- (2026-01-26) [gotcha] New SSE event types must be added to `EventType` enum or `append_run_event()` won't publish live (modal won't open until reconnect).
+- (2026-01-26) [gotcha] Skills platform exists under `apps/zerg/backend/zerg/skills/` but isn't wired into oikos/commis prompts or tool registry (no SkillIntegration usage yet).
+- (2026-01-26) [gotcha] Playwright E2E can time out at webServer startup (0 tests) if the backend fails to boot; ensure repo `.env` (DATABASE_URL) and backend deps are present before running.

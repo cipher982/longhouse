@@ -13,7 +13,7 @@
  * - Sticky: Lifts to top of chat when commis becomes "detached" (after DEFERRED)
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import type { OikosToolCall } from '../../lib/oikos-tool-store';
 import {
   CheckCircleIcon,
@@ -24,10 +24,27 @@ import {
 import { extractCommandPreview, extractExecTarget, extractExitCode, extractExecSource, extractOfflineReason } from '../../lib/tool-display';
 import './CommisToolCard.css';
 
+/**
+ * Hook to force a re-render at a fixed interval
+ */
+function useTimer(isActive: boolean, intervalMs = 1000) {
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!isActive) return;
+
+    const timer = setInterval(() => {
+      setTick(t => t + 1);
+    }, intervalMs);
+
+    return () => clearInterval(timer);
+  }, [isActive, intervalMs]);
+}
+
 interface CommisToolCardProps {
   tool: OikosToolCall;
   isDetached?: boolean; // True when commis continues after DEFERRED
-  detachedIndex?: number; // Index among detached commis for stacking offset
+  detachedIndex?: number; // Index among detached commiss for stacking offset
 }
 
 interface NestedToolCall {
@@ -45,41 +62,42 @@ interface CommisState {
   status: 'spawned' | 'running' | 'complete' | 'failed';
   summary?: string;
   nestedTools: NestedToolCall[];
+  liveOutput?: string;
+  liveOutputUpdatedAt?: number;
 }
 
 function formatDuration(ms: number | undefined, startedAt: number, status: string): string {
-  // Only use live calculation (Date.now()) for running tools
-  // Completed/failed tools should have durationMs set; if not, show "—" to avoid ticking
-  let duration: number;
-  if (ms != null) {
-    duration = ms;
-  } else if (status === 'running' || status === 'spawned') {
-    duration = Date.now() - startedAt;
-  } else {
-    return '—';
+  // If status is active, always calculate live elapsed time
+  if (status === 'running' || status === 'spawned') {
+    const elapsed = Date.now() - startedAt;
+    if (elapsed < 1000) return `${elapsed}ms`;
+    return `${(elapsed / 1000).toFixed(1)}s`;
   }
 
-  if (duration < 1000) {
-    return `${duration}ms`;
+  // If status is complete/failed, use the recorded duration
+  if (ms != null) {
+    if (ms < 1000) return `${ms}ms`;
+    return `${(ms / 1000).toFixed(1)}s`;
   }
-  return `${(duration / 1000).toFixed(1)}s`;
+
+  return '—';
 }
 
 function getElapsedTime(startedAt: number, status: string, durationMs?: number): string {
-  // Only use live calculation for running tools
-  let elapsed: number;
-  if (durationMs != null) {
-    elapsed = durationMs;
-  } else if (status === 'running') {
-    elapsed = Date.now() - startedAt;
-  } else {
-    return '—';
+  // If active, show live ticking
+  if (status === 'running') {
+    const elapsed = Date.now() - startedAt;
+    if (elapsed < 1000) return `${elapsed}ms`;
+    return `${(elapsed / 1000).toFixed(1)}s`;
   }
 
-  if (elapsed < 1000) {
-    return `${elapsed}ms`;
+  // If done, use recorded duration
+  if (durationMs != null) {
+    if (durationMs < 1000) return `${durationMs}ms`;
+    return `${(durationMs / 1000).toFixed(1)}s`;
   }
-  return `${(elapsed / 1000).toFixed(1)}s`;
+
+  return '—';
 }
 
 function truncatePreview(text: string, maxLen: number): string {
@@ -239,6 +257,29 @@ export function CommisToolCard({ tool, isDetached = false, detachedIndex = 0 }: 
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [isCompact, setIsCompact] = useState(false);
 
+  // Extract commis state from tool metadata
+  const commisState = useMemo<CommisState>(() => {
+    // Commis state is stored in tool.result as metadata
+    const metadata = tool.result as any;
+    return {
+      status: metadata?.commisStatus || (tool.status === 'running' ? 'running' : tool.status === 'failed' ? 'failed' : 'complete'),
+      summary: metadata?.commisSummary,
+      nestedTools: metadata?.nestedTools || [],
+      liveOutput: metadata?.liveOutput,
+      liveOutputUpdatedAt: metadata?.liveOutputUpdatedAt,
+    };
+  }, [tool]);
+
+  // Enable live ticking for the card if commis is active
+  const isCommisActive = commisState.status === 'running' || commisState.status === 'spawned';
+  useTimer(isCommisActive);
+
+  // Enable live ticking for any active nested tools
+  const hasActiveNestedTools = useMemo(() =>
+    commisState.nestedTools.some(nt => nt.status === 'running'),
+  [commisState.nestedTools]);
+  useTimer(hasActiveNestedTools, 100); // Higher frequency for sub-tools if needed
+
   const toggleToolExpand = (toolCallId: string) => {
     setExpandedTools(prev => {
       const next = new Set(prev);
@@ -251,17 +292,6 @@ export function CommisToolCard({ tool, isDetached = false, detachedIndex = 0 }: 
     });
   };
 
-  // Extract commis state from tool metadata
-  const commisState = useMemo<CommisState>(() => {
-    // Commis state is stored in tool.result as metadata
-    const metadata = tool.result as any;
-    return {
-      status: metadata?.commisStatus || (tool.status === 'running' ? 'running' : tool.status === 'failed' ? 'failed' : 'complete'),
-      summary: metadata?.commisSummary,
-      nestedTools: metadata?.nestedTools || [],
-    };
-  }, [tool]);
-
   const taskDisplay = useMemo(() => {
     // Extract task from args
     const task = (tool.args as any)?.task || 'Commis task';
@@ -273,7 +303,7 @@ export function CommisToolCard({ tool, isDetached = false, detachedIndex = 0 }: 
 
   const containerClass = `commis-tool-card commis-tool-card--${commisState.status} ${isDetached ? 'commis-tool-card--detached' : ''} ${isCompact ? 'commis-tool-card--compact' : ''}`;
 
-  // Compute stacking offset for detached commis
+  // Compute stacking offset for detached commiss
   const detachedStyle = isDetached && detachedIndex > 0 ? {
     top: `${detachedIndex * 8}px`, // Stack with 8px vertical offset
   } : undefined;
@@ -290,23 +320,16 @@ export function CommisToolCard({ tool, isDetached = false, detachedIndex = 0 }: 
         className="commis-tool-card__header"
         onClick={() => setIsExpanded(!isExpanded)}
       >
-        <span className="commis-tool-card__icon">
-          <CommisStatusIcon status={commisState.status} />
-        </span>
-        <span className="commis-tool-card__name">spawn_commis</span>
+        <div className="commis-tool-card__status-group">
+          <span className="commis-tool-card__icon">
+            <CommisStatusIcon status={commisState.status} />
+          </span>
+          <span className="commis-tool-card__name">Commis</span>
+        </div>
         <span className="commis-tool-card__task">{taskDisplay}</span>
         <span className="commis-tool-card__spacer" />
-        {hasNestedTools && (
-          <button
-            className="commis-tool-card__compact-toggle"
-            onClick={(e) => { e.stopPropagation(); setIsCompact(!isCompact); }}
-            title={isCompact ? 'Expand rows' : 'Compact rows'}
-          >
-            {isCompact ? '⊞' : '⊟'}
-          </button>
-        )}
         <span className="commis-tool-card__duration">{duration}</span>
-        <span className="commis-tool-card__expand-toggle">
+        <span className="commis-tool-card__expand-indicator">
           {isExpanded ? '▼' : '▶'}
         </span>
       </div>
@@ -314,6 +337,20 @@ export function CommisToolCard({ tool, isDetached = false, detachedIndex = 0 }: 
       {/* Expanded content - nested tools and summary */}
       {isExpanded && (
         <div className="commis-tool-card__body" onClick={(e) => e.stopPropagation()}>
+          {/* Body Toolbar - secondary controls */}
+          {hasNestedTools && (
+            <div className="commis-tool-card__body-toolbar">
+              <span className="commis-tool-card__activity-label">Activity</span>
+              <button
+                className="commis-tool-card__compact-toggle"
+                onClick={(e) => { e.stopPropagation(); setIsCompact(!isCompact); }}
+                title={isCompact ? 'Show more detail' : 'Compact view'}
+              >
+                {isCompact ? '⊞ Standard' : '⊟ Compact'}
+              </button>
+            </div>
+          )}
+
           {/* Nested tool calls */}
           {hasNestedTools && (
             <div className="commis-tool-card__nested-tools">
@@ -334,6 +371,14 @@ export function CommisToolCard({ tool, isDetached = false, detachedIndex = 0 }: 
             <div className="commis-tool-card__summary">
               <span className="commis-tool-card__summary-label">Summary:</span>
               <span className="commis-tool-card__summary-text">{commisState.summary}</span>
+            </div>
+          )}
+
+          {/* Live output */}
+          {commisState.liveOutput && (
+            <div className="commis-tool-card__live-output">
+              <span className="commis-tool-card__live-label">Live output:</span>
+              <pre className="commis-tool-card__live-text">{commisState.liveOutput}</pre>
             </div>
           )}
 
