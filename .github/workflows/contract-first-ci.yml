@@ -7,10 +7,10 @@ on:
     branches: [ main, develop ]
   workflow_dispatch: {}
 
-# Cancel previous runs for the same PR
-# Only cancel PR runs, not main branch - allow parallel runs on main
+# Concurrency: Cancel previous PR runs, but let main/develop runs execute fully
+# Using SHA for push events ensures each commit gets its own run
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
