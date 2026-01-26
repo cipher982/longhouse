@@ -33,8 +33,8 @@ class Run(Base):
     id = Column(Integer, primary_key=True, index=True)
 
     # Foreign keys -------------------------------------------------------
-    fiche_id = Column(Integer, ForeignKey("agents.id"), nullable=False)
-    thread_id = Column(Integer, ForeignKey("agent_threads.id"), nullable=False)
+    fiche_id = Column(Integer, ForeignKey("fiches.id"), nullable=False)
+    thread_id = Column(Integer, ForeignKey("threads.id"), nullable=False)
     # Durable runs v2.2: Link continuation runs to original deferred run
     continuation_of_run_id = Column(Integer, ForeignKey("runs.id"), nullable=True)
     # Root run ID for continuation chains (enables SSE aliasing through chains)
@@ -102,7 +102,7 @@ class Run(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=True)
 
     # Relationships ------------------------------------------------------
-    agent = relationship("Agent", back_populates="runs")
+    fiche = relationship("Fiche", back_populates="runs")
     thread = relationship("Thread", backref="runs")
     # Durable runs v2.2: Self-referential relationship for continuation chains
     # foreign_keys specified because there are multiple self-referential FKs (continuation_of_run_id, root_run_id)

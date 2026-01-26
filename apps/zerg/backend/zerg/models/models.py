@@ -253,7 +253,7 @@ class ConnectorCredential(Base):
     # all its credentials are automatically removed.
     fiche_id = Column(
         Integer,
-        ForeignKey("agents.id", ondelete="CASCADE"),
+        ForeignKey("fiches.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -286,7 +286,7 @@ class ConnectorCredential(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     # Relationships
-    agent = relationship("Agent", backref="connector_credentials")
+    fiche = relationship("Fiche", backref="connector_credentials")
 
 
 # ---------------------------------------------------------------------------
