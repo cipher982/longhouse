@@ -78,8 +78,9 @@ async def test_stt_service_calls_openai(monkeypatch):
     monkeypatch.setattr(stt_module, "AsyncOpenAI", lambda api_key=None: mock_client)
 
     service = STTService()
+    # Use audio larger than MIN_AUDIO_BYTES (1024)
     result = await service.transcribe_bytes(
-        b"audio-bytes",
+        b"x" * 2048,  # 2KB of audio data
         filename="audio.wav",
         content_type="audio/wav",
     )
@@ -207,8 +208,8 @@ def test_voice_turn_accepts_webm_with_codecs(monkeypatch):
     assert response.status_code == 200
 
 
-def test_voice_turn_empty_transcription_returns_422(monkeypatch):
-    """Empty transcription should return 422 instead of 500."""
+def test_voice_turn_empty_transcription_returns_error_with_message_id(monkeypatch):
+    """Empty transcription should return 200 with status=error and message_id for correlation."""
     import zerg.voice.router as voice_router
     from zerg.main import app
     from zerg.routers.jarvis_auth import get_current_jarvis_user
@@ -234,12 +235,16 @@ def test_voice_turn_empty_transcription_returns_422(monkeypatch):
             "/api/jarvis/voice/turn",
             headers={"Authorization": "Bearer test-token"},
             files={"audio": ("sample.webm", b"audio", "audio/webm;codecs=opus")},
-            data={"return_audio": "true"},
+            data={"return_audio": "true", "message_id": "test-correlation-id"},
         )
     finally:
         app.dependency_overrides.pop(get_current_jarvis_user, None)
 
-    assert response.status_code == 422
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "error"
+    assert data["error"] == "Empty transcription result"
+    assert data["message_id"] == "test-correlation-id"
 
 
 @pytest.mark.asyncio
