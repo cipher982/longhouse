@@ -17,7 +17,7 @@ test.describe('Prod Live Chat Smoke', () => {
     await waitForUserMessage(page, message);
     await waitForAssistantMessage(page);
 
-    const assistant = page.locator('.message.assistant').last();
+    const assistant = page.locator('.message.assistant, .message.assistant-message, [data-role="chat-message-assistant"]').last();
     const text = (await assistant.textContent()) ?? '';
     expect(text.trim().length).toBeGreaterThan(0);
   });
