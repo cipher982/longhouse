@@ -34,7 +34,7 @@ class TestTTSConfig:
         assert config.max_text_length == 4096
         assert config.timeout_ms == 30000
         assert config.openai_model == "gpt-4o-mini-tts"
-        assert config.openai_voice == "alloy"
+        assert config.openai_voice == "nova"
         assert config.elevenlabs_voice_id == "pMsXgVXv3BLzUgSXRplE"
         assert config.edge_voice == "en-US-GuyNeural"
 
