@@ -74,12 +74,10 @@ def test_save_and_retrieve_messages(db_session):
     assert re.match(TIMESTAMP_PATTERN, history[0].content), "User message should have timestamp prefix"
     assert history[0].content.endswith("] Hi"), f"Expected content to end with '] Hi', got: {history[0].content}"
 
-    # Verify assistant message has timestamp prefix
+    # Verify assistant message does NOT have timestamp prefix
     assert isinstance(history[1], AIMessage)
-    assert re.match(TIMESTAMP_PATTERN, history[1].content), "Assistant message should have timestamp prefix"
-    assert history[1].content.endswith(
-        "] Hello!"
-    ), f"Expected content to end with '] Hello!', got: {history[1].content}"
+    assert not re.match(TIMESTAMP_PATTERN, history[1].content), "Assistant message should not have timestamp prefix"
+    assert history[1].content == "Hello!"
 
     # Verify tool message does NOT have timestamp prefix
     assert isinstance(history[2], ToolMessage)
@@ -88,7 +86,7 @@ def test_save_and_retrieve_messages(db_session):
 
 
 def test_timestamp_format_in_messages(db_session):
-    """Verify that user and assistant messages have ISO 8601 timestamp prefix."""
+    """Verify that user messages have ISO 8601 timestamp prefix."""
     # Prepare agent + thread
     agent = _create_test_agent(db_session)
     db_session.add(agent)
@@ -117,11 +115,7 @@ def test_timestamp_format_in_messages(db_session):
     year, month, day, hour, minute, second, content = match.groups()
     assert content == "Test message"
 
-    # Verify assistant message also has timestamp
+    # Assistant message should remain unprefixed
     assistant_msg = history[1]
     assert isinstance(assistant_msg, AIMessage)
-    match = re.match(r"^\[(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z\] (.+)$", assistant_msg.content)
-    assert match is not None, f"Assistant message should have ISO 8601 timestamp prefix, got: {assistant_msg.content}"
-
-    _, _, _, _, _, _, content = match.groups()
-    assert content == "Response message"
+    assert assistant_msg.content == "Response message"
