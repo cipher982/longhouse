@@ -151,11 +151,14 @@ async def _replay_and_stream(
     overflow_event = asyncio.Event()  # Signal overflow without queue sentinel
     continuation_cache: dict[int, bool] = {}  # Cache for continuation run lookups
 
-    def _is_direct_continuation(candidate_run_id: int) -> bool:
-        """Return True if candidate_run_id is a continuation of run_id.
+    def _is_continuation_of_run(candidate_run_id: int) -> bool:
+        """Return True if candidate_run_id is a continuation of run_id (including chains).
 
         This allows a single client SSE stream to receive the follow-up supervisor
         synthesis that happens in a new run (durable runs v2.2).
+
+        Uses root_run_id for chain traversal - a continuation-of-continuation will
+        have root_run_id pointing to the original run, enabling deep chain aliasing.
         """
         if candidate_run_id in continuation_cache:
             return continuation_cache[candidate_run_id]
@@ -166,7 +169,11 @@ async def _replay_and_stream(
 
             with db_session() as db:
                 candidate = db.query(AgentRun).filter(AgentRun.id == candidate_run_id).first()
-                is_cont = bool(candidate and candidate.continuation_of_run_id == run_id)
+                if not candidate:
+                    continuation_cache[candidate_run_id] = False
+                    return False
+                # Check root_run_id first (handles chains), fall back to continuation_of_run_id
+                is_cont = bool(candidate.root_run_id == run_id or candidate.continuation_of_run_id == run_id)
                 continuation_cache[candidate_run_id] = is_cont
                 return is_cont
         except Exception:
@@ -187,7 +194,7 @@ async def _replay_and_stream(
         if "run_id" in event and event.get("run_id") != run_id:
             if allow_continuation_runs:
                 candidate_run_id = event.get("run_id")
-                if isinstance(candidate_run_id, int) and _is_direct_continuation(candidate_run_id):
+                if isinstance(candidate_run_id, int) and _is_continuation_of_run(candidate_run_id):
                     # Alias continuation run_id back to the original for UI stability
                     event = dict(event)
                     event["run_id"] = run_id

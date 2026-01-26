@@ -19,6 +19,7 @@ from datetime import timezone
 from typing import Any
 
 from sqlalchemy import func as sa_func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from zerg.models.enums import RunStatus
@@ -987,6 +988,234 @@ def _compute_duration_ms(started_at, *, end_time: datetime | None = None) -> int
 # ---------------------------------------------------------------------------
 # Timeout Reaper (Background Task)
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Inbox Continuation (Worker completes after supervisor SUCCESS)
+# ---------------------------------------------------------------------------
+
+
+async def trigger_worker_inbox_run(
+    db: Session,
+    original_run_id: int,
+    worker_job_id: int,
+    worker_result: str,
+    worker_status: str,  # "success" | "failed"
+    worker_error: str | None = None,
+) -> dict[str, Any]:
+    """Trigger a continuation supervisor run when worker completes and original run is terminal.
+
+    This implements the "Human PA" model where workers report back automatically
+    without requiring a user prompt. When a worker completes and the original
+    supervisor run has already finished (SUCCESS/FAILED/CANCELLED), this function
+    creates a new continuation run to synthesize the worker's findings.
+
+    Args:
+        db: Database session.
+        original_run_id: The supervisor run that spawned the worker.
+        worker_job_id: The WorkerJob that just completed.
+        worker_result: Worker's result string.
+        worker_status: "success" or "failed".
+        worker_error: Error message if worker failed.
+
+    Returns:
+        Dict with status and details:
+        - {"status": "triggered", "continuation_run_id": N} if continuation created
+        - {"status": "merged", "continuation_run_id": N} if merged into existing continuation
+        - {"status": "skipped", "reason": "..."} if continuation not needed
+        - {"status": "error", "error": "..."} if something went wrong
+    """
+    from zerg.models.enums import RunTrigger
+    from zerg.models.models import WorkerJob
+    from zerg.services.supervisor_service import SupervisorService
+
+    try:
+        # Load original run
+        original_run = db.query(AgentRun).filter(AgentRun.id == original_run_id).first()
+        if not original_run:
+            logger.warning(f"Cannot trigger inbox: original run {original_run_id} not found")
+            return {"status": "skipped", "reason": "original run not found"}
+
+        # Verify original run is in terminal state
+        if original_run.status not in (RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED):
+            logger.info(f"Skipping inbox trigger: original run {original_run_id} is {original_run.status.value}, not terminal")
+            return {"status": "skipped", "reason": f"original run is {original_run.status.value}"}
+
+        # Load worker job for context
+        worker_job = db.query(WorkerJob).filter(WorkerJob.id == worker_job_id).first()
+        worker_task = worker_job.task if worker_job else "unknown task"
+
+        # Get original run's context
+        thread = original_run.thread
+        agent = original_run.agent
+        owner_id = agent.owner_id
+
+        # Determine root_run_id for SSE aliasing through continuation chains
+        # If original_run already has a root_run_id, propagate it; otherwise use original_run_id
+        root_run_id = getattr(original_run, "root_run_id", None) or original_run_id
+
+        # Check for existing continuation run
+        existing_continuation = db.query(AgentRun).filter(AgentRun.continuation_of_run_id == original_run_id).first()
+
+        if existing_continuation:
+            # Existing continuation - merge result based on its status
+            if existing_continuation.status == RunStatus.RUNNING:
+                # Continuation is currently running - inject result as additional context
+                logger.info(f"Merging worker {worker_job_id} result into running continuation {existing_continuation.id}")
+
+                # Build context message
+                if worker_status == "failed":
+                    context_content = (
+                        f"[Worker update] Worker failed on task: {worker_task[:100]}\nError: {worker_error or 'Unknown error'}"
+                    )
+                else:
+                    context_content = (
+                        f"[Worker update] Additional worker completed task: {worker_task[:100]}\nResult: {worker_result[:500]}"
+                    )
+
+                # Inject as internal user message (NOT system - AgentRunner filters those)
+                from zerg.crud import crud
+
+                crud.create_thread_message(
+                    db=db,
+                    thread_id=thread.id,
+                    role="user",  # Use "user" role so AgentRunner includes it
+                    content=context_content,
+                    processed=False,  # Unprocessed so it gets picked up
+                    internal=True,  # Internal flag for UI filtering
+                )
+                db.commit()
+
+                return {
+                    "status": "merged",
+                    "continuation_run_id": existing_continuation.id,
+                    "message": "Injected result into running continuation",
+                }
+
+            elif existing_continuation.status in (RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED):
+                # Continuation already finished - create a chain (continuation of continuation)
+                logger.info(
+                    f"Existing continuation {existing_continuation.id} is {existing_continuation.status.value}, "
+                    f"creating chain continuation"
+                )
+                # Use the existing continuation as the parent for the new one
+                original_run = existing_continuation
+                original_run_id = existing_continuation.id
+            else:
+                # WAITING or QUEUED - let normal resume handle it
+                logger.info(
+                    f"Existing continuation {existing_continuation.id} is {existing_continuation.status.value}, " f"skipping inbox trigger"
+                )
+                return {
+                    "status": "skipped",
+                    "reason": f"existing continuation is {existing_continuation.status.value}",
+                }
+
+        # Create new continuation run
+        start_time = datetime.now(timezone.utc)
+        started_at_naive = start_time.replace(tzinfo=None)
+
+        # Generate new trace_id but inherit model/reasoning_effort
+        new_trace_id = uuid.uuid4()
+        new_message_id = str(uuid.uuid4())
+
+        continuation_run = AgentRun(
+            agent_id=agent.id,
+            thread_id=thread.id,
+            continuation_of_run_id=original_run_id,
+            root_run_id=root_run_id,  # For SSE aliasing through chains
+            status=RunStatus.RUNNING,
+            trigger=RunTrigger.CONTINUATION,
+            started_at=started_at_naive,
+            model=original_run.model,
+            reasoning_effort=original_run.reasoning_effort,
+            trace_id=new_trace_id,
+            assistant_message_id=new_message_id,
+        )
+        db.add(continuation_run)
+
+        try:
+            db.commit()
+            db.refresh(continuation_run)
+        except IntegrityError as e:
+            # Unique constraint violation - another process created continuation
+            db.rollback()
+            logger.info(f"Continuation already exists for run {original_run_id} (race condition): {e}")
+            # Re-query and try to merge into the existing continuation
+            existing = db.query(AgentRun).filter(AgentRun.continuation_of_run_id == original_run_id).first()
+            if existing and existing.status == RunStatus.RUNNING:
+                # Inject result into running continuation
+                from zerg.crud import crud
+
+                if worker_status == "failed":
+                    context_content = (
+                        f"[Worker update] Worker failed on task: {worker_task[:100]}\nError: {worker_error or 'Unknown error'}"
+                    )
+                else:
+                    context_content = (
+                        f"[Worker update] Additional worker completed task: {worker_task[:100]}\nResult: {worker_result[:500]}"
+                    )
+                crud.create_thread_message(
+                    db=db,
+                    thread_id=thread.id,
+                    role="user",
+                    content=context_content,
+                    processed=False,
+                    internal=True,
+                )
+                db.commit()
+                return {
+                    "status": "merged",
+                    "continuation_run_id": existing.id,
+                    "message": "Race recovery: merged into existing continuation",
+                }
+            return {"status": "skipped", "reason": "continuation already exists (race)"}
+
+        logger.info(
+            f"Created inbox continuation run {continuation_run.id} for original run {original_run_id} "
+            f"(worker {worker_job_id} completed)"
+        )
+
+        # Build synthetic task for supervisor
+        if worker_status == "failed":
+            synthetic_task = (
+                f"[Worker inbox] A background worker failed.\n\n"
+                f"Original task: {worker_task[:200]}\n\n"
+                f"Error: {worker_error or 'Unknown error'}\n\n"
+                f"Please acknowledge the failure and explain what happened to the user."
+            )
+        else:
+            synthetic_task = (
+                f"[Worker inbox] A background worker has completed and returned results.\n\n"
+                f"Original task: {worker_task[:200]}\n\n"
+                f"Worker result:\n{worker_result}\n\n"
+                f"Please synthesize these findings and present them clearly to the user."
+            )
+
+        # Run supervisor with the synthetic task
+        supervisor_service = SupervisorService(db)
+        result = await supervisor_service.run_supervisor(
+            owner_id=owner_id,
+            task=synthetic_task,
+            run_id=continuation_run.id,
+            message_id=new_message_id,
+            trace_id=str(new_trace_id),
+            model_override=original_run.model,
+            reasoning_effort=original_run.reasoning_effort,
+            timeout=120,  # Give continuation plenty of time
+        )
+
+        logger.info(f"Inbox continuation run {continuation_run.id} completed with status {result.status}")
+
+        return {
+            "status": "triggered",
+            "continuation_run_id": continuation_run.id,
+            "result_status": result.status,
+        }
+
+    except Exception as e:
+        logger.exception(f"Error triggering inbox run for original run {original_run_id}: {e}")
+        return {"status": "error", "error": str(e)}
 
 
 async def reap_expired_barriers(db: Session) -> dict[str, Any]:

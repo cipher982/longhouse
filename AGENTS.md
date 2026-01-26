@@ -170,3 +170,7 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-25) [gotcha] Voice uploads may send content-type params (e.g., `audio/webm;codecs=opus`); normalize before validation or browser uploads will 400.
 - (2026-01-25) [gotcha] Empty or too-short audio yields no transcription; return 422 and show a friendly “try speaking longer” prompt instead of 500.
 - (2026-01-25) [gotcha] Client-side min audio size gate prevents tiny blobs from hitting STT and returning empty transcription.
+- (2026-01-26) [gotcha] `spawn_worker` in `supervisor_react_engine` parallel path does not raise `AgentInterrupted`, so runs finish SUCCESS and worker results only surface on a later user turn unless WAITING is triggered.
+- (2026-01-25) [pattern] Worker inbox continuation: `trigger_worker_inbox_run()` in worker_resume.py handles workers completing after supervisor SUCCESS. Creates continuation run with `RunTrigger.CONTINUATION`, SSE events alias back via `continuation_of_run_id`. Multiple workers: first creates continuation, subsequent merge or chain.
+- (2026-01-25) [gotcha] AgentRunner filters out DB-stored system messages; injected `role="system"` thread messages are ignored by LLM context unless you change the filtering.
+- (2026-01-25) [gotcha] Legacy continuations may have null `root_run_id`; chain continuations will alias to the wrong run unless you backfill or fall back to `continuation_of_run_id`.
