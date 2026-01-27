@@ -177,6 +177,7 @@ logs/
 # Local dev scratch space
 scratch/
 /data/
+docs-archive/
 
 # UV cache
 .uv_cache/
