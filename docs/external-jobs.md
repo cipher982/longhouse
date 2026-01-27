@@ -175,7 +175,7 @@ Every job run records:
   "ended_at": "2026-01-24T08:00:05Z",
   "duration_ms": 5000,
   "metadata": {
-    "script_source": "manifest",
+    "script_source": "git",
     "git_sha": "abc123def456...",
     "loaded_at": "2026-01-24T07:00:00Z"
   }
