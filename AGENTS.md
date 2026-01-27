@@ -236,3 +236,4 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-26) [gotcha] CI runner "cube" pods lack a Docker daemon; testcontainers-backed tests fail unless using an external Postgres or non-Docker DB setup.
 - (2026-01-27) [pattern] CI backend tests use `--db-mode=external` with per-xdist-worker schemas (`CI_TEST_SCHEMA + _gw0`). SQLAlchemy `schema_translate_map` redirects ORM `zerg.table` references to worker schemas. Dedicated CI Postgres runs in k3s `ci` namespace.
 - (2026-01-27) [pattern] Rebrand work: remove backward-compat shims; use only Oikos/Commis/Fiche names (no supervisor/worker/agent aliases).
+- (2026-01-27) [gotcha] Life Hub agent log API still uses /ingest/agents/events and /query/agents/sessions; session continuity must target those endpoints.
