@@ -49,8 +49,8 @@ test.describe('Fiche scheduling UI', () => {
     await freq.selectOption('daily');
     await page.locator('#save-fiche').click();
 
-    // Wait for WebSocket update then check for scheduled indicator
-    await page.waitForTimeout(1000);
+    // Wait for modal to close (indicates save completed)
+    await expect(page.locator('[data-testid="fiche-debug-modal"]')).not.toBeVisible({ timeout: 5000 });
 
     // Look for scheduled status in the status column
     const scheduledStatus = page.locator('tr[data-fiche-id] .status-indicator', { hasText: 'Scheduled' });
@@ -101,9 +101,13 @@ test.describe('Fiche scheduling UI', () => {
     // Don't fill required hour/minute fields to create invalid state
     await page.locator('#save-fiche').click();
 
-    // Check if validation is implemented
-    await page.waitForTimeout(500);
+    // Check if validation is implemented - wait for either error or modal close
     const errorElements = page.locator('.validation-error, .error-msg');
+    await expect.poll(async () => {
+      const errorCount = await errorElements.count();
+      const modalVisible = await page.locator('[data-testid="fiche-debug-modal"]').isVisible();
+      return errorCount > 0 || !modalVisible;
+    }, { timeout: 3000 }).toBeTruthy();
     const modalStillVisible = await page.locator('[data-testid="fiche-debug-modal"]').isVisible();
 
     if (await errorElements.count() === 0 && !modalStillVisible) {

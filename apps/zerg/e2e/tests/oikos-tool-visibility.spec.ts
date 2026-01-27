@@ -265,8 +265,7 @@ test.describe('Oikos Tool Visibility', () => {
     await emitToolCompleted(page, 'test_tool', 'call-6', runId, 1000);
 
     // Active class should be removed (may take a moment due to state update)
-    await page.waitForTimeout(600); // Wait for state update
-    await expect(activityStream).not.toHaveClass(/activity-stream--active/);
+    await expect(activityStream).not.toHaveClass(/activity-stream--active/, { timeout: 2000 });
   });
 
   test('tool cards display correct icons for different tools', async ({ page }) => {
@@ -334,7 +333,6 @@ test.describe('Oikos Tool Visibility', () => {
 
     // Scroll page (interaction)
     await page.evaluate(() => window.scrollTo(0, 100));
-    await page.waitForTimeout(100);
 
     // Tool card should still be visible
     await expect(toolCard).toContainText('persistent_tool');
@@ -350,8 +348,6 @@ test.describe('Oikos Tool Visibility', () => {
     const toolCount = 5;
     for (let i = 0; i < toolCount; i++) {
       await emitToolStarted(page, `rapid_tool_${i}`, `call-rapid-${i}`, runId);
-      // Small delay to ensure events process
-      await page.waitForTimeout(50);
     }
 
     // Verify all tools appear
