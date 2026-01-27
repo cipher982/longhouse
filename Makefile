@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-integration test-unit test-e2e test-e2e-core test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-runner-unit test-install-runner test-prompts test-ci eval eval-live eval-compare eval-critical eval-fast eval-all eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage
+.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-integration test-unit test-e2e test-e2e-core test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-runner-unit test-install-runner test-prompts test-ci test-backend-docker test-backend-ci eval eval-live eval-compare eval-critical eval-fast eval-all eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +277,27 @@ test-zerg-unit: ## Run Zerg unit tests (backend + frontend)
 		(cd apps/zerg/backend && ./run_backend_tests.sh) && \
 		(cd apps/zerg/frontend-web && bun run test); \
 	fi
+
+test-backend-docker: ## Backend tests with Docker/testcontainers (local dev)
+	@echo "🐳 Running backend tests with testcontainers (Docker mode)..."
+	cd apps/zerg/backend && ./run_backend_tests.sh --db-mode=docker
+
+test-backend-ci: ## Backend tests with external Postgres (CI mode)
+	@if [ -z "$(CI_TEST_SCHEMA)" ]; then \
+		echo "❌ CI_TEST_SCHEMA required for CI mode"; \
+		echo "   Usage: CI_TEST_SCHEMA=zerg_ci_123 DATABASE_URL=... make test-backend-ci"; \
+		exit 1; \
+	fi
+	@if [ -z "$(DATABASE_URL)" ] && [ -z "$(CI_DATABASE_URL)" ]; then \
+		echo "❌ DATABASE_URL or CI_DATABASE_URL required for CI mode"; \
+		exit 1; \
+	fi
+	@echo "🔧 Running backend tests with external Postgres (CI mode)..."
+	@echo "   Schema: $(CI_TEST_SCHEMA)"
+	cd apps/zerg/backend && \
+		CI_TEST_SCHEMA="$(CI_TEST_SCHEMA)" \
+		DATABASE_URL="$${CI_DATABASE_URL:-$(DATABASE_URL)}" \
+		./run_backend_tests.sh --db-mode=external
 
 test-frontend-unit: ## Run frontend unit tests only
 	@if [ "$(MINIMAL)" = "1" ]; then \

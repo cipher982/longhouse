@@ -50,11 +50,16 @@ async function globalTeardown(config) {
 
     // Call Python cleanup script to remove all test databases/schemas
     // Use a short timeout - if it hangs, globalSetup will clean up next run
+    //
+    // E2E_SCHEMA_PREFIX controls which schemas to drop (must match setup)
+    const schemaPrefix = process.env.E2E_SCHEMA_PREFIX || 'e2e_worker_';
+
     const cleanup = spawn('uv', ['run', 'python', '-c', `
 import os
 import sys
 os.environ['TESTING'] = '1'
 os.environ['E2E_USE_POSTGRES_SCHEMAS'] = '1'
+os.environ['E2E_SCHEMA_PREFIX'] = '${schemaPrefix}'
 
 try:
     from zerg.e2e_schema_manager import drop_all_e2e_schemas
@@ -68,7 +73,7 @@ except Exception as e:
     `], {
       cwd: backendDir,
       stdio: 'pipe',  // Suppress output
-      env: { ...process.env, E2E_USE_POSTGRES_SCHEMAS: '1', TESTING: '1' }
+      env: { ...process.env, E2E_USE_POSTGRES_SCHEMAS: '1', TESTING: '1', E2E_SCHEMA_PREFIX: schemaPrefix }
     });
 
     // Timeout after 30s - don't let cleanup hang indefinitely
