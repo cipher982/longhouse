@@ -1,9 +1,11 @@
 #!/bin/bash
 set -e
 
+# Always create .ssh directory
+mkdir -p ~/.ssh
+
 # Decode SSH key from environment variable (avoids unreliable Coolify mounts)
 if [ -n "$SSH_PRIVATE_KEY_B64" ]; then
-    mkdir -p ~/.ssh
     echo "$SSH_PRIVATE_KEY_B64" | base64 -d > ~/.ssh/id_rsa
     chmod 600 ~/.ssh/id_rsa
     echo "SSH key installed from environment variable"
