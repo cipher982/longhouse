@@ -14,10 +14,10 @@ on:
         default: 'false'
         type: boolean
 
-# Only one smoke test at a time
+# Never cancel runs
 concurrency:
-  group: smoke-test
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   smoke:

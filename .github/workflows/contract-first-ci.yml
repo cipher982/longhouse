@@ -7,11 +7,10 @@ on:
     branches: [ main, develop ]
   workflow_dispatch: {}
 
-# Concurrency: Cancel previous PR runs, but let main/develop runs execute fully
-# Using SHA for push events ensures each commit gets its own run
+# Never cancel runs
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: false
 
 env:
   # Self-hosted runners can have global pip config pointing at private indexes.
