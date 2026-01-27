@@ -143,6 +143,13 @@ JOB_QUEUE_ENABLED=1                # Required for external jobs
 4. **Queue Worker** executes with retries, timeout, heartbeat
 5. **ops.runs** records every execution with git SHA
 
+### Manifest Loader Behavior
+
+- Runs `manifest.py` via `runpy.run_path()` with the repo root temporarily on `sys.path`
+- Detects new jobs by diffing the registry before/after load
+- Tags manifest jobs with metadata: `script_source=git`, `git_sha`, `loaded_at`, `manifest_path`
+- Duplicate job IDs are skipped (non-fatal) and `sys.path` is cleaned after load
+
 ## Job Execution Features
 
 ### Durable Queue

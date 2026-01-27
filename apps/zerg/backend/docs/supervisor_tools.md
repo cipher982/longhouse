@@ -144,6 +144,7 @@ output = peek_commis_output("123", max_bytes=2000)
 **Notes:**
 
 - Returns the most recent output for active commiss (best-effort).
+- Full artifacts (`thread.jsonl`, `tool_calls/*.txt`, `result.txt`) are written after completion; live tail uses `peek_commis_output` / `commis_output_chunk` SSE.
 - Workspace commiss do not stream live output.
 
 ---

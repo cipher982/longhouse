@@ -57,6 +57,11 @@ On failure:
 - Artifacts in `apps/zerg/e2e/test-results/` and `playwright-report/`
 - Override: `PLAYWRIGHT_WORKERS=N make test-e2e`
 
+## CI Notes
+
+- CI runners on **cube** do not have a Docker daemon; testcontainers-based tests will fail. Use external Postgres (`--db-mode=external`).
+- Backend CI uses per-xdist-worker schemas (`CI_TEST_SCHEMA` + `_gw0`) via SQLAlchemy `schema_translate_map` (see `apps/zerg/backend/tests/conftest.py`).
+
 ## E2E Gotchas
 
 - **E2E runs on insecure origin**: Use `src/oikos/lib/uuid.ts` not `crypto.randomUUID()`

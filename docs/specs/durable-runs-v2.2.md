@@ -216,6 +216,10 @@ Thread 1 (conversation)
 - `run_id` = single durable execution attempt (persists through interrupts)
 - **Traceability**: All events and messages from the same attempt share the same `run_id`.
 
+**Commis inbox continuation (edge cases):**
+- If commis completes after the run already hit a terminal state (SUCCESS/FAILED), `trigger_commis_inbox_run()` creates a continuation run with `RunTrigger.CONTINUATION` and SSE events alias back to the original run.
+- If a continuation is already RUNNING, queue commis updates as internal user messages and trigger a follow-up continuation after it completes (do not inject mid-run).
+
 ### SSE Re-attach
 
 Streams are **views** of durable runs, not the runs themselves.

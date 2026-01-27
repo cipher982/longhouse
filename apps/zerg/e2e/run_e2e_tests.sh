@@ -46,7 +46,7 @@ while [[ $# -gt 0 ]]; do
             MODE="${1#*=}"
             shift
             ;;
-        --commis=*)
+        --workers=*)
             WORKERS_OVERRIDE="${1#*=}"
             shift
             ;;
@@ -63,7 +63,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --mode=MODE           Test mode: full, basic"
-            echo "  --commis=N           Override Playwright commis (default: use playwright.config.js)"
+            echo "  --workers=N          Override Playwright workers (default: use playwright.config.js)"
             echo "  --verbose, -v         Verbose output"
             echo "  --no-parallel         Disable parallel execution"
             echo "  --help, -h           Show this help"
@@ -189,11 +189,11 @@ esac
 # Add parallel execution unless disabled
 if [[ "$PARALLEL" == "true" ]]; then
     if [[ -n "$WORKERS_OVERRIDE" ]]; then
-        PLAYWRIGHT_CMD="$PLAYWRIGHT_CMD --commis=$WORKERS_OVERRIDE"
+        PLAYWRIGHT_CMD="$PLAYWRIGHT_CMD --workers=$WORKERS_OVERRIDE"
     fi
 else
     # Explicitly force serial mode (useful for debugging). Otherwise defer to playwright.config.js.
-    PLAYWRIGHT_CMD="$PLAYWRIGHT_CMD --commis=1"
+    PLAYWRIGHT_CMD="$PLAYWRIGHT_CMD --workers=1"
 fi
 
 # Add verbose output if requested

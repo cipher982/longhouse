@@ -35,6 +35,10 @@ This doesn't scale. You want your time back.
 
 Not "where should I cd" but "do this thing" and walk away.
 
+## MVP Focus
+
+- Prioritize delegation flow + async completion over enterprise resiliency until the core loop feels effortless.
+
 ---
 
 ## What Already Exists
@@ -51,6 +55,9 @@ Not "where should I cd" but "do this thing" and walk away.
 | Async job execution | ❌ Missing | Runner blocks, 30s default timeout |
 | CLI agent spawning | ❌ Missing | No `run_cli_agent` tool |
 | Unified work view | ❌ Missing | Data exists, no joined UI |
+
+**Known gaps:**
+- Life Hub still posts `/api/hindsight/session-ended`; Zerg has no handler yet (integration gap).
 
 ---
 
