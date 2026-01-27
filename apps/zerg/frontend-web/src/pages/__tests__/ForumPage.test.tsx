@@ -4,7 +4,7 @@ import { render, screen, waitFor, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ForumPage from "../ForumPage";
 import { TestRouter } from "../../test/test-utils";
-import { eventBus } from "../../jarvis/lib/event-bus";
+import { eventBus } from "../../oikos/lib/event-bus";
 
 vi.mock("../../forum/ForumCanvas", () => ({
   ForumCanvas: () => <div data-testid="forum-canvas" />,
@@ -35,7 +35,7 @@ describe("ForumPage", () => {
       expect(screen.getByText(/No tasks yet/i)).toBeInTheDocument();
     });
 
-    eventBus.emit("supervisor:started", {
+    eventBus.emit("oikos:started", {
       runId: 1,
       task: "Ship logs",
       timestamp: 1000,
@@ -45,7 +45,7 @@ describe("ForumPage", () => {
       expect(screen.getByText("Ship logs")).toBeInTheDocument();
     });
 
-    eventBus.emit("supervisor:worker_spawned", {
+    eventBus.emit("oikos:commis_spawned", {
       jobId: 7,
       task: "Lint repo",
       timestamp: 1100,

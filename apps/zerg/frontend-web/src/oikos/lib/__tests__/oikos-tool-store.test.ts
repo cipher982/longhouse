@@ -140,39 +140,39 @@ describe('OikosToolStore', () => {
       expect(tool?.logs[1].data).toEqual({ count: 3 });
     });
 
-    it('appends live worker output chunks', () => {
+    it('appends live commis output chunks', () => {
       const now = Date.now();
 
-      eventBus.emit('supervisor:tool_started', {
+      eventBus.emit('oikos:tool_started', {
         runId: 1,
-        toolName: 'spawn_worker',
+        toolName: 'spawn_commis',
         toolCallId: 'call-live',
         argsPreview: 'task: "check logs"',
         args: { task: 'check logs' },
         timestamp: now,
       });
 
-      eventBus.emit('supervisor:worker_spawned', {
+      eventBus.emit('oikos:commis_spawned', {
         jobId: 42,
         task: 'check logs',
         toolCallId: 'call-live',
         timestamp: now + 5,
       });
 
-      eventBus.emit('supervisor:worker_started', {
+      eventBus.emit('oikos:commis_started', {
         jobId: 42,
-        workerId: 'worker-xyz',
+        commisId: 'commis-xyz',
         timestamp: now + 10,
       });
 
-      eventBus.emit('worker:output_chunk', {
-        workerId: 'worker-xyz',
+      eventBus.emit('commis:output_chunk', {
+        commisId: 'commis-xyz',
         stream: 'stdout',
         data: 'hello world\n',
         timestamp: now + 20,
       });
 
-      const state = supervisorToolStore.getState();
+      const state = oikosToolStore.getState();
       const tool = state.tools.get('call-live');
       const result = tool?.result as { liveOutput?: string };
 

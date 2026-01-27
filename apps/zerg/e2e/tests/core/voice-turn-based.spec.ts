@@ -69,7 +69,7 @@ test.describe('Voice Turn-Based - Core', () => {
     const audioBuffer = buildWavBuffer();
     const testMessageId = 'e2e-test-uuid-' + Date.now();
 
-    const response = await request.post('/api/jarvis/voice/turn', {
+    const response = await request.post('/api/oikos/voice/turn', {
       multipart: {
         audio: {
           name: 'sample.wav',
@@ -92,7 +92,7 @@ test.describe('Voice Turn-Based - Core', () => {
     const audioBuffer = buildWavBuffer();
     const testMessageId = 'voice-sse-' + Date.now();
 
-    const transcribeResponse = await request.post('/api/jarvis/voice/transcribe', {
+    const transcribeResponse = await request.post('/api/oikos/voice/transcribe', {
       multipart: {
         audio: {
           name: 'sample.wav',
@@ -109,7 +109,7 @@ test.describe('Voice Turn-Based - Core', () => {
     expect(transcribeData.transcript?.length).toBeGreaterThan(0);
     expect(transcribeData.message_id).toBe(testMessageId);
 
-    const chatResponse = await request.post('/api/jarvis/chat', {
+    const chatResponse = await request.post('/api/oikos/chat', {
       data: {
         message: transcribeData.transcript,
         message_id: testMessageId,
@@ -118,7 +118,7 @@ test.describe('Voice Turn-Based - Core', () => {
 
     expect(chatResponse.ok()).toBeTruthy();
     const sseText = await chatResponse.text();
-    expect(sseText).toContain('supervisor_complete');
+    expect(sseText).toContain('oikos_complete');
     expect(sseText).toContain(testMessageId);
   });
 });

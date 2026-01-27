@@ -12,11 +12,11 @@ import type {
   ForumTask,
 } from "../forum/types";
 import {
-  mapSupervisorComplete,
-  mapSupervisorStarted,
-  mapWorkerComplete,
-  mapWorkerSpawned,
-  mapWorkerToolFailed,
+  mapOikosComplete,
+  mapOikosStarted,
+  mapCommisComplete,
+  mapCommisSpawned,
+  mapCommisToolFailed,
 } from "../forum/live-mapper";
 import "../styles/forum.css";
 
@@ -43,7 +43,7 @@ export default function ForumPage() {
         roomCount: 4,
         unitsPerRoom: 6,
         tasksPerRoom: 4,
-        workersPerRoom: 2,
+        commissPerRoom: 2,
         workspaceCount: 1,
         repoGroupsPerWorkspace: 2,
       }),
@@ -59,7 +59,7 @@ export default function ForumPage() {
         roomCount: 2,
         unitsPerRoom: 0,
         tasksPerRoom: 0,
-        workersPerRoom: 0,
+        commissPerRoom: 0,
         workspaceCount: 1,
         repoGroupsPerWorkspace: 1,
       }),
@@ -190,7 +190,7 @@ export default function ForumPage() {
 
     unsubscribers.push(
       eventBus.on("oikos:started", (data) => {
-        const events = mapSupervisorStarted(stateRef.current, data).map(makeLocalEvent);
+        const events = mapOikosStarted(stateRef.current, data).map(makeLocalEvent);
         if (events.length) {
           dispatchEvents(events);
         }
@@ -199,7 +199,7 @@ export default function ForumPage() {
 
     unsubscribers.push(
       eventBus.on("oikos:commis_spawned", (data) => {
-        const events = mapWorkerSpawned(stateRef.current, data).map(makeLocalEvent);
+        const events = mapCommisSpawned(stateRef.current, data).map(makeLocalEvent);
         if (events.length) {
           dispatchEvents(events);
         }
@@ -208,7 +208,7 @@ export default function ForumPage() {
 
     unsubscribers.push(
       eventBus.on("oikos:commis_complete", (data) => {
-        const events = mapWorkerComplete(stateRef.current, data).map(makeLocalEvent);
+        const events = mapCommisComplete(stateRef.current, data).map(makeLocalEvent);
         if (events.length) {
           dispatchEvents(events);
         }
@@ -217,7 +217,7 @@ export default function ForumPage() {
 
     unsubscribers.push(
       eventBus.on("oikos:complete", (data) => {
-        const events = mapSupervisorComplete(stateRef.current, data).map(makeLocalEvent);
+        const events = mapOikosComplete(stateRef.current, data).map(makeLocalEvent);
         if (events.length) {
           dispatchEvents(events);
         }
@@ -226,7 +226,7 @@ export default function ForumPage() {
 
     unsubscribers.push(
       eventBus.on("commis:tool_failed", (data) => {
-        const events = mapWorkerToolFailed(stateRef.current, data).map(makeLocalEvent);
+        const events = mapCommisToolFailed(stateRef.current, data).map(makeLocalEvent);
         if (events.length) {
           dispatchEvents(events);
         }
@@ -357,8 +357,8 @@ export default function ForumPage() {
                 Structure
               </div>
               <div className="forum-legend-item">
-                <span className="forum-legend-swatch forum-legend-swatch--worker" />
-                Worker
+                <span className="forum-legend-swatch forum-legend-swatch--commis" />
+                Commis
               </div>
               <div className="forum-legend-item">
                 <span className="forum-legend-swatch forum-legend-swatch--task" />

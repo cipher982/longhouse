@@ -407,13 +407,13 @@ function ConfirmationModal({
   return createPortal(modalContent, document.body);
 }
 
-// Top agents table component - using real backend contract
+// Top fiches table component - using real backend contract
 function TopAgentsTable({ agents }: { agents: OpsTopAgent[] }) {
   if (agents.length === 0) {
     return (
       <EmptyState
-        title="No agent data available"
-        description="Data will appear once agents start running."
+        title="No fiche data available"
+        description="Data will appear once fiches start running."
       />
     );
   }
@@ -421,7 +421,7 @@ function TopAgentsTable({ agents }: { agents: OpsTopAgent[] }) {
   return (
     <Table>
       <Table.Header>
-        <Table.Cell isHeader>Agent Name</Table.Cell>
+        <Table.Cell isHeader>Fiche Name</Table.Cell>
         <Table.Cell isHeader>Owner</Table.Cell>
         <Table.Cell isHeader>Runs</Table.Cell>
         <Table.Cell isHeader>Cost (USD)</Table.Cell>
@@ -637,14 +637,14 @@ function UserDetailModal({
               </div>
             )}
 
-            {/* Top Agents */}
+            {/* Top Fiches */}
             {detail.top_agents.length > 0 && (
               <div className="detail-section">
-                <h5>Top Agents by Cost</h5>
+                <h5>Top Fiches by Cost</h5>
                 <table className="breakdown-table">
                   <thead>
                     <tr>
-                      <th>Agent</th>
+                      <th>Fiche</th>
                       <th className="numeric">Tokens</th>
                       <th className="numeric">Cost</th>
                       <th className="numeric">Runs</th>
@@ -1055,10 +1055,10 @@ function AdminPage() {
             />
           </div>
 
-          {/* Top Agents Section - using data from summary */}
+          {/* Top Fiches Section - using data from summary */}
           <Card>
             <Card.Header>
-              <h3 className="admin-section-title ui-section-title">Top Performing Agents (Today)</h3>
+              <h3 className="admin-section-title ui-section-title">Top Performing Fiches (Today)</h3>
             </Card.Header>
             <Card.Body>
               <TopAgentsTable agents={summary.top_agents_today} />
@@ -1186,11 +1186,11 @@ function AdminPage() {
               <div className="system-info">
                 <div className="info-grid">
                   <div className="info-item">
-                    <span className="info-label">Total Agents:</span>
+                    <span className="info-label">Total Fiches:</span>
                     <span className="info-value">{summary.agents_total}</span>
                   </div>
                   <div className="info-item">
-                    <span className="info-label">Scheduled Agents:</span>
+                    <span className="info-label">Scheduled Fiches:</span>
                     <span className="info-value">{summary.agents_scheduled}</span>
                   </div>
                   <div className="info-item">

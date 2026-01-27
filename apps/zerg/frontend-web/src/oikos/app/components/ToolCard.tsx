@@ -29,7 +29,7 @@ const TOOL_ICONS: Record<string, string> = {
   web_fetch: '🔗',
   http_request: '📡',
   spawn_commis: '🤖',
-  list_commis: '📋',
+  list_commiss: '📋',
   read_commis_result: '📖',
   get_current_time: '⏰',
   send_email: '📧',
