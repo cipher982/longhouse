@@ -54,7 +54,7 @@ interface DailyBreakdown {
   runs: number;
 }
 
-interface TopAgentUsage {
+interface TopFicheUsage {
   fiche_id: number;
   name: string;
   tokens: number;
@@ -67,7 +67,7 @@ interface AdminUserDetailResponse {
   period: string;
   summary: UserPeriodUsage;
   daily_breakdown: DailyBreakdown[];
-  top_agents: TopAgentUsage[];
+  top_fiches: TopFicheUsage[];
 }
 
 // Types for ops data - matching actual backend contract
@@ -85,17 +85,17 @@ interface OpsSummary {
     percent: number | null;
   };
   active_users_24h: number;
-  agents_total: number;
-  agents_scheduled: number;
+  fiches_total: number;
+  fiches_scheduled: number;
   latency_ms: {
     p50: number;
     p95: number;
   };
   errors_last_hour: number;
-  top_agents_today: OpsTopAgent[];
+  top_fiches_today: OpsTopFiche[];
 }
 
-interface OpsTopAgent {
+interface OpsTopFiche {
   fiche_id: number;
   name: string;
   owner_email: string;
@@ -408,8 +408,8 @@ function ConfirmationModal({
 }
 
 // Top fiches table component - using real backend contract
-function TopAgentsTable({ agents }: { agents: OpsTopAgent[] }) {
-  if (agents.length === 0) {
+function TopFichesTable({ fiches = [] }: { fiches?: OpsTopFiche[] }) {
+  if (fiches.length === 0) {
     return (
       <EmptyState
         title="No fiche data available"
@@ -428,16 +428,16 @@ function TopAgentsTable({ agents }: { agents: OpsTopAgent[] }) {
         <Table.Cell isHeader>P95 Latency</Table.Cell>
       </Table.Header>
       <Table.Body>
-        {agents.map((agent) => (
-          <Table.Row key={agent.fiche_id}>
-            <Table.Cell className="agent-name">{agent.name}</Table.Cell>
-            <Table.Cell className="owner-email">{agent.owner_email}</Table.Cell>
-            <Table.Cell className="runs-count">{agent.runs}</Table.Cell>
+        {fiches.map((fiche) => (
+          <Table.Row key={fiche.fiche_id}>
+            <Table.Cell className="agent-name">{fiche.name}</Table.Cell>
+            <Table.Cell className="owner-email">{fiche.owner_email}</Table.Cell>
+            <Table.Cell className="runs-count">{fiche.runs}</Table.Cell>
             <Table.Cell className="cost">
-              {agent.cost_usd !== null ? `$${agent.cost_usd.toFixed(4)}` : 'N/A'}
+              {fiche.cost_usd !== null ? `$${fiche.cost_usd.toFixed(4)}` : 'N/A'}
             </Table.Cell>
             <Table.Cell className="latency">
-              {agent.p95_ms}ms
+              {fiche.p95_ms}ms
             </Table.Cell>
           </Table.Row>
         ))}
@@ -638,7 +638,7 @@ function UserDetailModal({
             )}
 
             {/* Top Fiches */}
-            {detail.top_agents.length > 0 && (
+            {detail.top_fiches.length > 0 && (
               <div className="detail-section">
                 <h5>Top Fiches by Cost</h5>
                 <table className="breakdown-table">
@@ -651,12 +651,12 @@ function UserDetailModal({
                     </tr>
                   </thead>
                   <tbody>
-                    {detail.top_agents.map((agent) => (
-                      <tr key={agent.fiche_id}>
-                        <td>{agent.name}</td>
-                        <td className="numeric">{agent.tokens.toLocaleString()}</td>
-                        <td className="numeric">{formatCost(agent.cost_usd)}</td>
-                        <td className="numeric">{agent.runs}</td>
+                    {detail.top_fiches.map((fiche) => (
+                      <tr key={fiche.fiche_id}>
+                        <td>{fiche.name}</td>
+                        <td className="numeric">{fiche.tokens.toLocaleString()}</td>
+                        <td className="numeric">{formatCost(fiche.cost_usd)}</td>
+                        <td className="numeric">{fiche.runs}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1061,7 +1061,7 @@ function AdminPage() {
               <h3 className="admin-section-title ui-section-title">Top Performing Fiches (Today)</h3>
             </Card.Header>
             <Card.Body>
-              <TopAgentsTable agents={summary.top_agents_today} />
+              <TopFichesTable fiches={summary.top_fiches_today} />
             </Card.Body>
           </Card>
 
@@ -1187,11 +1187,11 @@ function AdminPage() {
                 <div className="info-grid">
                   <div className="info-item">
                     <span className="info-label">Total Fiches:</span>
-                    <span className="info-value">{summary.agents_total}</span>
+                    <span className="info-value">{summary.fiches_total}</span>
                   </div>
                   <div className="info-item">
                     <span className="info-label">Scheduled Fiches:</span>
-                    <span className="info-value">{summary.agents_scheduled}</span>
+                    <span className="info-value">{summary.fiches_scheduled}</span>
                   </div>
                   <div className="info-item">
                     <span className="info-label">Active Users (24h):</span>
