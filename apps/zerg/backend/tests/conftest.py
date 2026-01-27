@@ -262,22 +262,29 @@ elif _DB_MODE == "external":
             f"Set {_db_url_env}=postgresql://... to connect to the CI database."
         )
 
-    # Apply the CI schema to the connection URL
+    # Apply the CI schema to the connection URL for search_path
     SQLALCHEMY_DATABASE_URL = _apply_search_path(SQLALCHEMY_DATABASE_URL, _CI_TEST_SCHEMA)
 
     from sqlalchemy.pool import NullPool
     from sqlalchemy import text
 
-    test_engine = make_engine(
+    # Create base engine first (without schema translation) to create the schema
+    _base_engine = make_engine(
         SQLALCHEMY_DATABASE_URL,
         pool_pre_ping=True,
         poolclass=NullPool,
     )
 
     # Create the schema if it doesn't exist
-    with test_engine.connect() as conn:
+    with _base_engine.connect() as conn:
         conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {_CI_TEST_SCHEMA}"))
         conn.commit()
+
+    # Now create the actual test engine with schema_translate_map
+    # This translates "zerg" schema references in ORM models to our per-worker schema
+    test_engine = _base_engine.execution_options(
+        schema_translate_map={DB_SCHEMA: _CI_TEST_SCHEMA}
+    )
 
     TestingSessionLocal = make_sessionmaker(test_engine)
 
