@@ -4,6 +4,14 @@ set -e
 # Always create .ssh directory
 mkdir -p ~/.ssh
 
+# Normalize DB URL env vars (jobs expect LIFE_HUB_DB_URL, core expects DATABASE_URL)
+if [ -z "$DATABASE_URL" ] && [ -n "$LIFE_HUB_DB_URL" ]; then
+    export DATABASE_URL="$LIFE_HUB_DB_URL"
+fi
+if [ -z "$LIFE_HUB_DB_URL" ] && [ -n "$DATABASE_URL" ]; then
+    export LIFE_HUB_DB_URL="$DATABASE_URL"
+fi
+
 # Decode SSH key from environment variable (avoids unreliable Coolify mounts)
 if [ -n "$SSH_PRIVATE_KEY_B64" ]; then
     echo "$SSH_PRIVATE_KEY_B64" | base64 -d > ~/.ssh/id_rsa
