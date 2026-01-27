@@ -99,6 +99,14 @@ async def run_scheduler() -> None:
     scheduled_count = await register_all_jobs(scheduler=scheduler, use_queue=True)
     logger.info(f"Registered {scheduled_count} jobs")
 
+    # Publish job definitions to Life-Hub for ops dashboard
+    try:
+        from sauron.job_definitions import publish_job_definitions
+
+        await asyncio.to_thread(publish_job_definitions)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Failed to publish job definitions: {e}")
+
     # Backfill any missed runs
     logger.info("Checking for missed runs...")
     await enqueue_missed_runs()
