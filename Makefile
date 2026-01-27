@@ -19,7 +19,7 @@ help: ## Show this help message
 	@echo "\n🌐 Swarm Platform (Oikos + Zerg)"
 	@echo "=================================="
 	@echo ""
-	@grep -B0 '## ' Makefile | grep -E '^[a-zA-Z_-]+:' | sed 's/:.*## /: /' | column -t -s ':' | awk '{printf "  %-24s %s\n", $$1":", substr($$0, index($$0,$$2))}' | sort
+	@grep -B0 '## ' Makefile | grep -E '^[a-zA-Z0-9_-]+:' | sed 's/:.*## /: /' | column -t -s ':' | awk '{printf "  %-24s %s\n", $$1":", substr($$0, index($$0,$$2))}' | sort
 	@echo ""
 
 # ---------------------------------------------------------------------------
