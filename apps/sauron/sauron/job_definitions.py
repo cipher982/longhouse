@@ -27,7 +27,9 @@ def _build_definition(job: Any, scheduler_name: str) -> dict[str, Any]:
         metadata.update(meta)
 
     entrypoint = f"{job.func.__module__}.{job.func.__name__}"
-    script_source = meta.get("script_source", "git") if meta else "builtin"
+    # Valid values: builtin, git, http (check constraint on ops.jobs)
+    raw_source = meta.get("script_source", "git") if meta else "builtin"
+    script_source = raw_source if raw_source in ("builtin", "git", "http") else "git"
 
     payload: dict[str, Any] = {
         "job_key": f"{scheduler_name}:{job.id}",
