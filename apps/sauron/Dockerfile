@@ -31,8 +31,8 @@ RUN pip install --no-cache-dir uv
 # The zerg package includes jobs/, config/, and other required modules
 COPY apps/zerg/backend/zerg /app/zerg_pkg/zerg
 
-# Create pyproject.toml for zerg package with minimal deps for scheduler
-# Note: zerg.config uses dotenv, zerg.jobs uses apscheduler/asyncpg
+# Create pyproject.toml for zerg package with deps for scheduler + builtin jobs
+# Builtin jobs need: openai (backup_sentinel), pydantic, boto3 (email)
 RUN cat > /app/zerg_pkg/pyproject.toml << 'EOF'
 [project]
 name = "zerg"
@@ -43,6 +43,9 @@ dependencies = [
     "asyncpg>=0.30.0",
     "httpx>=0.28.0",
     "python-dotenv>=1.0.0",
+    "openai>=1.0.0",
+    "pydantic>=2.0.0",
+    "boto3>=1.34.0",
 ]
 
 [build-system]
@@ -61,10 +64,11 @@ COPY apps/sauron/sauron ./sauron/
 RUN uv pip install --system /app/zerg_pkg && \
     uv pip install --system .
 
-# Create non-root user
+# Create non-root user with writable home for jobs repo
+# Jobs dir is in user home to avoid /opt permission issues with lock files
 RUN useradd -m -u 1000 sauron && \
-    mkdir -p /opt/sauron-jobs /data && \
-    chown -R sauron:sauron /app /opt/sauron-jobs /data
+    mkdir -p /home/sauron/jobs /data && \
+    chown -R sauron:sauron /app /home/sauron /data
 
 # Entrypoint script (decodes SSH key from env var)
 COPY apps/sauron/entrypoint.sh /entrypoint.sh
