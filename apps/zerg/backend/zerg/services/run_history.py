@@ -1,5 +1,5 @@
 """
-Run History Service: Consolidates AgentRun lifecycle logic for thread-based runs.
+Run History Service: Consolidates Run lifecycle logic for thread-based runs.
 """
 
 from datetime import datetime
@@ -11,28 +11,28 @@ from sqlalchemy.orm import Session
 from zerg.crud import crud
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
-from zerg.managers.agent_runner import AgentRunner
-from zerg.models.models import Agent as AgentModel
+from zerg.managers.fiche_runner import FicheRunner
+from zerg.models.models import Fiche as FicheModel
 from zerg.models.models import Thread as ThreadModel
 
 
 async def execute_thread_run_with_history(
     db: Session,
-    agent: AgentModel,
+    fiche: FicheModel,
     thread: ThreadModel,
-    runner: AgentRunner,
+    runner: FicheRunner,
     trigger: str = "api",
 ) -> Sequence:
     """
-    Execute a single run of the agent on the given thread,
-    recording AgentRun rows and publishing RUN events.
+    Execute a single run of the fiche on the given thread,
+    recording Run rows and publishing run events.
 
-    Returns the sequence of created message rows from AgentRunner.run_thread().
+    Returns the sequence of created message rows from FicheRunner.run_thread().
     """
-    # Create the AgentRun (queued)
+    # Create the Run (queued)
     run_row = crud.create_run(
         db,
-        agent_id=agent.id,
+        fiche_id=fiche.id,
         thread_id=thread.id,
         trigger=trigger,
         status="queued",
@@ -42,7 +42,7 @@ async def execute_thread_run_with_history(
         EventType.RUN_CREATED,
         {
             "event_type": "run_created",
-            "agent_id": agent.id,
+            "fiche_id": fiche.id,
             "run_id": run_row.id,
             "status": run_row.status,
             "thread_id": thread.id,
@@ -51,12 +51,12 @@ async def execute_thread_run_with_history(
 
     # Mark running
     start_ts = datetime.now(timezone.utc)
-    crud.mark_running(db, run_row.id, started_at=start_ts)
+    crud.mark_run_running(db, run_row.id, started_at=start_ts)
     await event_bus.publish(
         EventType.RUN_UPDATED,
         {
             "event_type": "run_updated",
-            "agent_id": agent.id,
+            "fiche_id": fiche.id,
             "run_id": run_row.id,
             "status": "running",
             "started_at": start_ts.isoformat(),
@@ -64,19 +64,19 @@ async def execute_thread_run_with_history(
         },
     )
 
-    # Execute the agent turn
+    # Execute the fiche turn
     try:
         created_rows = await runner.run_thread(db, thread)
     except Exception as exc:
         # Failure path
         end_ts = datetime.now(timezone.utc)
         duration_ms = int((end_ts - start_ts).total_seconds() * 1000)
-        crud.mark_failed(db, run_row.id, finished_at=end_ts, duration_ms=duration_ms, error=str(exc))
+        crud.mark_run_failed(db, run_row.id, finished_at=end_ts, duration_ms=duration_ms, error=str(exc))
         await event_bus.publish(
             EventType.RUN_UPDATED,
             {
                 "event_type": "run_updated",
-                "agent_id": agent.id,
+                "fiche_id": fiche.id,
                 "run_id": run_row.id,
                 "status": "failed",
                 "finished_at": end_ts.isoformat(),
@@ -96,13 +96,13 @@ async def execute_thread_run_with_history(
     if getattr(runner, "usage_prompt_tokens", None) is not None and getattr(runner, "usage_completion_tokens", None) is not None:
         from zerg.pricing import get_usd_prices_per_1k
 
-        prices = get_usd_prices_per_1k(agent.model)
+        prices = get_usd_prices_per_1k(fiche.model)
         if prices is not None:
             in_price, out_price = prices
             total_cost_usd = ((runner.usage_prompt_tokens * in_price) + (runner.usage_completion_tokens * out_price)) / 1000.0
 
     # Mark run as finished (summary auto-extracted)
-    finished_run = crud.mark_finished(
+    finished_run = crud.mark_run_finished(
         db,
         run_row.id,
         finished_at=end_ts,
@@ -119,7 +119,7 @@ async def execute_thread_run_with_history(
         EventType.RUN_UPDATED,
         {
             "event_type": "run_updated",
-            "agent_id": agent.id,
+            "fiche_id": fiche.id,
             "run_id": run_row.id,
             "status": "success",
             "finished_at": end_ts.isoformat(),
@@ -147,7 +147,7 @@ async def execute_thread_run_with_history(
             break
 
     schedule_run_summary(
-        owner_id=agent.owner_id,
+        owner_id=fiche.owner_id,
         thread_id=thread.id,
         run_id=run_row.id,
         task=task or "",

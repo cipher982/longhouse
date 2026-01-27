@@ -1,4 +1,4 @@
-"""Test workflow execution with agent connections created via frontend."""
+"""Test workflow execution with fiche connections created via frontend."""
 
 from unittest.mock import patch
 
@@ -6,67 +6,67 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 
-@patch("zerg.managers.agent_runner.AgentRunner.run_thread")
-def test_agent_connection_workflow_execution(
+@patch("zerg.managers.fiche_runner.FicheRunner.run_thread")
+def test_fiche_connection_workflow_execution(
     mock_run_thread,
     client: TestClient,
     db: Session,
     auth_headers: dict,
     test_user,
 ):
-    """Test that workflows with agent connections execute correctly."""
+    """Test that workflows with fiche connections execute correctly."""
 
     from zerg.crud import crud as crud_mod
     from zerg.models.models import ThreadMessage
 
-    # Mock AgentRunner to return fake assistant messages
-    async def mock_agent_runner_run_thread(db, thread):
+    # Mock FicheRunner to return fake assistant messages
+    async def mock_fiche_runner_run_thread(db, thread):
         mock_assistant_message = ThreadMessage(
-            thread_id=thread.id, role="assistant", content="This is a mock response from the agent", processed=True
+            thread_id=thread.id, role="assistant", content="This is a mock response from the fiche", processed=True
         )
         return [mock_assistant_message]
 
-    mock_run_thread.side_effect = mock_agent_runner_run_thread
+    mock_run_thread.side_effect = mock_fiche_runner_run_thread
 
-    # Create two test agents
-    agent1 = crud_mod.create_agent(
+    # Create two test fiches
+    fiche1 = crud_mod.create_fiche(
         db=db,
         owner_id=test_user.id,
-        name="Test Agent A",
-        system_instructions="You are Test Agent A",
-        task_instructions="Respond with 'Hello from Agent A'",
+        name="Test Fiche A",
+        system_instructions="You are Test Fiche A",
+        task_instructions="Respond with 'Hello from Fiche A'",
         model="gpt-mock",
     )
 
-    agent2 = crud_mod.create_agent(
+    fiche2 = crud_mod.create_fiche(
         db=db,
         owner_id=test_user.id,
-        name="Test Agent B",
-        system_instructions="You are Test Agent B",
-        task_instructions="Respond with 'Hello from Agent B'",
+        name="Test Fiche B",
+        system_instructions="You are Test Fiche B",
+        task_instructions="Respond with 'Hello from Fiche B'",
         model="gpt-mock",
     )
 
-    # Create workflow with connected agents using WorkflowData format
+    # Create workflow with connected fiches using WorkflowData format
     canvas = {
         "nodes": [
             {
-                "id": f"agent_node_{agent1.id}",
-                "type": "agent",
+                "id": f"fiche_node_{fiche1.id}",
+                "type": "fiche",
                 "position": {"x": 100, "y": 100},
-                "config": {"agent_id": agent1.id, "name": agent1.name},
+                "config": {"fiche_id": fiche1.id, "name": fiche1.name},
             },
             {
-                "id": f"agent_node_{agent2.id}",
-                "type": "agent",
+                "id": f"fiche_node_{fiche2.id}",
+                "type": "fiche",
                 "position": {"x": 300, "y": 100},
-                "config": {"agent_id": agent2.id, "name": agent2.name},
+                "config": {"fiche_id": fiche2.id, "name": fiche2.name},
             },
         ],
         "edges": [
             {
-                "from_node_id": f"agent_node_{agent1.id}",
-                "to_node_id": f"agent_node_{agent2.id}",
+                "from_node_id": f"fiche_node_{fiche1.id}",
+                "to_node_id": f"fiche_node_{fiche2.id}",
                 "config": {"label": None},
             }
         ],
@@ -76,7 +76,7 @@ def test_agent_connection_workflow_execution(
         db=db,
         owner_id=test_user.id,
         name="Connection Test Workflow",
-        description="Test workflow with agent connections",
+        description="Test workflow with fiche connections",
         canvas=canvas,
     )
 
@@ -91,7 +91,7 @@ def test_agent_connection_workflow_execution(
     # Wait for completion (since it runs in background)
     client.post(f"/api/workflow-executions/{execution_id}/await", headers=auth_headers)
 
-    # Check execution status immediately since we're using mocked agents
+    # Check execution status immediately since we're using mocked fiches
 
     # Check execution status
     status_resp = client.get(f"/api/workflow-executions/{execution_id}/status", headers=auth_headers)
@@ -105,13 +105,13 @@ def test_agent_connection_workflow_execution(
     if status_data["phase"] == "finished":
         assert status_data["result"] in ["success", "failure"]
 
-    # Check that node states were created for both connected agents
+    # Check that node states were created for both connected fiches
     from zerg.models.models import NodeExecutionState
 
     node_states = db.query(NodeExecutionState).filter(NodeExecutionState.workflow_execution_id == execution_id).all()
 
     node_ids = {state.node_id for state in node_states}
-    expected_node_ids = {f"agent_node_{agent1.id}", f"agent_node_{agent2.id}"}
+    expected_node_ids = {f"fiche_node_{fiche1.id}", f"fiche_node_{fiche2.id}"}
 
     print(f"Node states created: {node_ids}")
     print(f"Expected node IDs: {expected_node_ids}")

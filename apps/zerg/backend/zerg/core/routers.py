@@ -19,16 +19,16 @@ from fastapi import Query
 from fastapi import Request
 from fastapi import status
 
-from zerg.core.factory import get_agent_service
 from zerg.core.factory import get_auth_provider
+from zerg.core.factory import get_fiche_service
 from zerg.core.factory import get_thread_service
 from zerg.core.interfaces import AuthProvider
-from zerg.core.services import AgentService
+from zerg.core.services import FicheService
 from zerg.core.services import ThreadService
 from zerg.models.models import User
-from zerg.schemas.schemas import Agent
-from zerg.schemas.schemas import AgentCreate
-from zerg.schemas.schemas import AgentUpdate
+from zerg.schemas.schemas import Fiche
+from zerg.schemas.schemas import FicheCreate
+from zerg.schemas.schemas import FicheUpdate
 from zerg.schemas.schemas import MessageCreate
 from zerg.schemas.schemas import MessageResponse
 from zerg.schemas.schemas import Thread
@@ -42,133 +42,133 @@ def get_current_user(
     return auth_provider.get_current_user(request)
 
 
-# Agent Router
-agent_router = APIRouter()
+# Fiche Router
+fiche_router = APIRouter()
 
 
-@agent_router.get("/", response_model=List[Agent])
-@agent_router.get("", response_model=List[Agent])
-def list_agents(
+@fiche_router.get("/", response_model=List[Fiche])
+@fiche_router.get("", response_model=List[Fiche])
+def list_fiches(
     scope: str = Query("my", pattern="^(my|all)$"),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
     current_user: User = Depends(get_current_user),
-    agent_service: AgentService = Depends(get_agent_service),
-) -> List[Agent]:
-    """List agents for the current user."""
+    fiche_service: FicheService = Depends(get_fiche_service),
+) -> List[Fiche]:
+    """List fiches for the current user."""
     try:
-        return agent_service.list_agents(current_user, scope)
+        return fiche_service.list_fiches(current_user, scope)
     except PermissionError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 
 
-@agent_router.get("/{agent_id}", response_model=Agent)
-def get_agent(
-    agent_id: int,
+@fiche_router.get("/{fiche_id}", response_model=Fiche)
+def get_fiche(
+    fiche_id: int,
     current_user: User = Depends(get_current_user),
-    agent_service: AgentService = Depends(get_agent_service),
-) -> Agent:
-    """Get agent by ID."""
+    fiche_service: FicheService = Depends(get_fiche_service),
+) -> Fiche:
+    """Get fiche by ID."""
     try:
-        agent = agent_service.get_agent(agent_id, current_user)
-        if not agent:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
-        return agent
+        fiche = fiche_service.get_fiche(fiche_id, current_user)
+        if not fiche:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
+        return fiche
     except PermissionError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 
 
-@agent_router.post("/", response_model=Agent, status_code=status.HTTP_201_CREATED)
-@agent_router.post("", response_model=Agent, status_code=status.HTTP_201_CREATED)
-async def create_agent(
-    agent: AgentCreate = Body(...),
+@fiche_router.post("/", response_model=Fiche, status_code=status.HTTP_201_CREATED)
+@fiche_router.post("", response_model=Fiche, status_code=status.HTTP_201_CREATED)
+async def create_fiche(
+    fiche: FicheCreate = Body(...),
     current_user: User = Depends(get_current_user),
-    agent_service: AgentService = Depends(get_agent_service),
-) -> Agent:
-    """Create new agent."""
+    fiche_service: FicheService = Depends(get_fiche_service),
+) -> Fiche:
+    """Create new fiche."""
     try:
-        return await agent_service.create_agent(
+        return await fiche_service.create_fiche(
             user=current_user,
-            name=agent.name,
-            system_instructions=agent.system_instructions,
-            task_instructions=agent.task_instructions,
-            model=agent.model,
-            schedule=agent.schedule,
-            config=agent.config,
+            name=fiche.name,
+            system_instructions=fiche.system_instructions,
+            task_instructions=fiche.task_instructions,
+            model=fiche.model,
+            schedule=fiche.schedule,
+            config=fiche.config,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
 
 
-@agent_router.put("/{agent_id}", response_model=Agent)
-async def update_agent(
-    agent_id: int,
-    agent: AgentUpdate,
+@fiche_router.put("/{fiche_id}", response_model=Fiche)
+async def update_fiche(
+    fiche_id: int,
+    fiche: FicheUpdate,
     current_user: User = Depends(get_current_user),
-    agent_service: AgentService = Depends(get_agent_service),
-) -> Agent:
-    """Update agent."""
+    fiche_service: FicheService = Depends(get_fiche_service),
+) -> Fiche:
+    """Update fiche."""
     try:
-        updated_agent = await agent_service.update_agent(
-            agent_id=agent_id,
+        updated_fiche = await fiche_service.update_fiche(
+            fiche_id=fiche_id,
             user=current_user,
-            name=agent.name,
-            system_instructions=agent.system_instructions,
-            task_instructions=agent.task_instructions,
-            model=agent.model,
-            status=agent.status.value if agent.status else None,
-            schedule=agent.schedule,
-            config=agent.config,
+            name=fiche.name,
+            system_instructions=fiche.system_instructions,
+            task_instructions=fiche.task_instructions,
+            model=fiche.model,
+            status=fiche.status.value if fiche.status else None,
+            schedule=fiche.schedule,
+            config=fiche.config,
         )
-        if not updated_agent:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
-        return updated_agent
+        if not updated_fiche:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
+        return updated_fiche
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
     except PermissionError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 
 
-@agent_router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_agent(
-    agent_id: int,
+@fiche_router.delete("/{fiche_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_fiche(
+    fiche_id: int,
     current_user: User = Depends(get_current_user),
-    agent_service: AgentService = Depends(get_agent_service),
+    fiche_service: FicheService = Depends(get_fiche_service),
 ):
-    """Delete agent."""
+    """Delete fiche."""
     try:
-        success = await agent_service.delete_agent(agent_id, current_user)
+        success = await fiche_service.delete_fiche(fiche_id, current_user)
         if not success:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
     except PermissionError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 
 
-@agent_router.get("/{agent_id}/messages", response_model=List[MessageResponse])
-def get_agent_messages(
-    agent_id: int,
+@fiche_router.get("/{fiche_id}/messages", response_model=List[MessageResponse])
+def get_fiche_messages(
+    fiche_id: int,
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
     current_user: User = Depends(get_current_user),
-    agent_service: AgentService = Depends(get_agent_service),
+    fiche_service: FicheService = Depends(get_fiche_service),
 ) -> List[MessageResponse]:
-    """Get messages for an agent."""
+    """Get messages for a fiche."""
     try:
-        return agent_service.get_agent_messages(agent_id, current_user, skip=skip, limit=limit)
+        return fiche_service.get_fiche_messages(fiche_id, current_user, skip=skip, limit=limit)
     except PermissionError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 
 
-@agent_router.post("/{agent_id}/messages", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
-def create_agent_message(
-    agent_id: int,
+@fiche_router.post("/{fiche_id}/messages", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
+def create_fiche_message(
+    fiche_id: int,
     message: MessageCreate,
     current_user: User = Depends(get_current_user),
-    agent_service: AgentService = Depends(get_agent_service),
+    fiche_service: FicheService = Depends(get_fiche_service),
 ) -> MessageResponse:
-    """Create message for an agent."""
+    """Create message for a fiche."""
     try:
-        return agent_service.create_agent_message(agent_id, current_user, message.role, message.content)
+        return fiche_service.create_fiche_message(fiche_id, current_user, message.role, message.content)
     except PermissionError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 
@@ -180,13 +180,13 @@ thread_router = APIRouter()
 @thread_router.get("/", response_model=List[Thread])
 @thread_router.get("", response_model=List[Thread])
 def list_threads(
-    agent_id: Optional[int] = Query(None),
+    fiche_id: Optional[int] = Query(None),
     current_user: User = Depends(get_current_user),
     thread_service: ThreadService = Depends(get_thread_service),
 ) -> List[Thread]:
     """List threads for the current user."""
     try:
-        return thread_service.get_threads(current_user, agent_id=agent_id)
+        return thread_service.get_threads(current_user, fiche_id=fiche_id)
     except PermissionError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 

@@ -104,21 +104,21 @@ def build_llm_prompt(payload: LLMDecisionPayload) -> tuple[str, str]:
     Returns:
         Tuple of (system_prompt, user_prompt)
     """
-    system_prompt = """You are a worker monitoring assistant. Given the current state of a background task, decide the next action.
+    system_prompt = """You are a commis monitoring assistant. Given the current state of a background task, decide the next action.
 
 Return EXACTLY ONE word from: wait, exit, cancel, peek
 
 Decision rules:
 - wait: Default. Continue monitoring if task is progressing normally.
 - exit: Return immediately if the task has clearly produced a final answer or result. Look for output containing "Result:", "Summary:", "Done.", "Completed", or similar completion indicators.
-- cancel: Abort the worker if it appears stuck (>60s on one operation), has repeated failures, or is clearly on a wrong path.
+- cancel: Abort the commis if it appears stuck (>60s on one operation), has repeated failures, or is clearly on a wrong path.
 - peek: Request more details if you need to see full logs before deciding. Use sparingly.
 
 When in doubt, return "wait". Be conservative with exit/cancel."""
 
     # Format payload as compact JSON for user prompt
     user_content = json.dumps(asdict(payload), indent=2)
-    user_prompt = f"""Worker monitoring check:
+    user_prompt = f"""Commis monitoring check:
 
 {user_content}
 
@@ -254,7 +254,7 @@ TEST_SCENARIOS = [
         "expected_action": "cancel",
     },
     {
-        "name": "Worker success status - should exit",
+        "name": "Commis success status - should exit",
         "payload": {
             "job_id": 5,
             "status": "success",

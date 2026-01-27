@@ -9,7 +9,7 @@ import type {
   ForumRepoGroup,
   ForumRoom,
   ForumTask,
-  ForumWorker,
+  ForumCommis,
   ForumWorkspace,
 } from "./types";
 import { applyForumEvents, createForumState, type ForumMapState } from "./state";
@@ -161,14 +161,14 @@ function createRooms(
 function createInitialEntities(
   rooms: ForumRoom[],
   unitsPerRoom: number,
-  workersPerRoom: number,
+  commissPerRoom: number,
   rng: ForumRng,
 ): {
   entities: ForumEntity[];
-  workers: ForumWorker[];
+  commiss: ForumCommis[];
 } {
   const entities: ForumEntity[] = [];
-  const workers: ForumWorker[] = [];
+  const commiss: ForumCommis[] = [];
 
   rooms.forEach((room, roomIndex) => {
     for (let i = 0; i < unitsPerRoom; i += 1) {
@@ -193,19 +193,19 @@ function createInitialEntities(
       });
     }
 
-    for (let i = 0; i < workersPerRoom; i += 1) {
-      const entityId = `worker-entity-${roomIndex + 1}-${i + 1}`;
+    for (let i = 0; i < commissPerRoom; i += 1) {
+      const entityId = `commis-entity-${roomIndex + 1}-${i + 1}`;
       entities.push({
         id: entityId,
-        type: "worker",
+        type: "commis",
         roomId: room.id,
         position: randomPointInBounds(rng, room.bounds),
         status: "idle",
-        label: `Worker ${roomIndex + 1}.${i + 1}`,
+        label: `Commis ${roomIndex + 1}.${i + 1}`,
       });
-      workers.push({
-        id: `worker-${roomIndex + 1}-${i + 1}`,
-        name: `Worker ${roomIndex + 1}.${i + 1}`,
+      commiss.push({
+        id: `commis-${roomIndex + 1}-${i + 1}`,
+        name: `Commis ${roomIndex + 1}.${i + 1}`,
         status: "idle",
         roomId: room.id,
         entityId,
@@ -213,27 +213,27 @@ function createInitialEntities(
     }
   });
 
-  return { entities, workers };
+  return { entities, commiss };
 }
 
 function createInitialTasks(
   rooms: ForumRoom[],
   tasksPerRoom: number,
-  workers: ForumWorker[],
+  commiss: ForumCommis[],
   rng: ForumRng,
   startTime: number,
 ): ForumTask[] {
   const tasks: ForumTask[] = [];
   rooms.forEach((room, roomIndex) => {
     for (let i = 0; i < tasksPerRoom; i += 1) {
-      const worker = workers.length ? workers[(roomIndex * tasksPerRoom + i) % workers.length] : undefined;
+      const commis = commiss.length ? commiss[(roomIndex * tasksPerRoom + i) % commiss.length] : undefined;
       const task: ForumTask = {
         id: `task-${roomIndex + 1}-${i + 1}`,
         title: `Task ${roomIndex + 1}.${i + 1}`,
         status: rng.bool(0.4) ? "running" : "queued",
         roomId: room.id,
-        workerId: worker?.id,
-        entityId: worker?.entityId,
+        commisId: commis?.id,
+        entityId: commis?.entityId,
         progress: rng.bool(0.3) ? rng.next() * 0.4 : 0,
         createdAt: startTime,
         updatedAt: startTime,
@@ -251,7 +251,7 @@ export function generateForumReplay(config: ForumReplayConfig): ForumReplayScena
   const roomCount = config.roomCount ?? 4;
   const unitsPerRoom = config.unitsPerRoom ?? 6;
   const tasksPerRoom = config.tasksPerRoom ?? 4;
-  const workersPerRoom = config.workersPerRoom ?? 2;
+  const commissPerRoom = config.commissPerRoom ?? 2;
   const workspaceCount = config.workspaceCount ?? 1;
   const repoGroupsPerWorkspace = config.repoGroupsPerWorkspace ?? 2;
 
@@ -260,8 +260,8 @@ export function generateForumReplay(config: ForumReplayConfig): ForumReplayScena
   const rooms = createRooms(roomCount, layout, workspaces, repoGroups, rng);
   const startTime = 0;
 
-  const { entities, workers } = createInitialEntities(rooms, unitsPerRoom, workersPerRoom, rng);
-  const tasks = createInitialTasks(rooms, tasksPerRoom, workers, rng, startTime);
+  const { entities, commiss } = createInitialEntities(rooms, unitsPerRoom, commissPerRoom, rng);
+  const tasks = createInitialTasks(rooms, tasksPerRoom, commiss, rng, startTime);
 
   const events: ForumReplayEvent[] = [];
   let seq = 0;
@@ -278,7 +278,7 @@ export function generateForumReplay(config: ForumReplayConfig): ForumReplayScena
   pushEvent({ t: startTime, type: "layout.set", layout });
   rooms.forEach((room) => pushEvent({ t: startTime, type: "room.add", room }));
   entities.forEach((entity) => pushEvent({ t: startTime, type: "entity.add", entity }));
-  workers.forEach((worker) => pushEvent({ t: startTime, type: "worker.add", worker }));
+  commiss.forEach((commis) => pushEvent({ t: startTime, type: "commis.add", commis }));
   tasks.forEach((task) => pushEvent({ t: startTime, type: "task.add", task }));
 
   const taskProgress = new Map(tasks.map((task) => [task.id, task.progress]));

@@ -1,1 +1,1 @@
-"""Testing utilities and mocks for the Zerg agent platform."""
+"""Testing utilities and mocks for the Zerg fiche platform."""

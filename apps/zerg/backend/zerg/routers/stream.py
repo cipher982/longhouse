@@ -5,7 +5,7 @@ replay + live streaming. It enables clients to reconnect and catch up on missed
 events by replaying from the database event store, then continuing with live events.
 
 Key features:
-- Replay historical events from AgentRunEvent table
+- Replay historical events from RunEvent table
 - Continue with live events via EventBus subscription
 - Handle DEFERRED runs correctly (streamable, not treated as complete)
 - SSE format with id: field for client resumption
@@ -32,9 +32,9 @@ from zerg.database import db_session
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
 from zerg.models.enums import RunStatus
-from zerg.models.models import Agent
-from zerg.models.models import AgentRun
-from zerg.routers.jarvis_auth import get_current_jarvis_user
+from zerg.models.models import Fiche
+from zerg.models.models import Run
+from zerg.routers.oikos_auth import get_current_oikos_user
 from zerg.services.event_store import EventStore
 
 logger = logging.getLogger(__name__)
@@ -69,7 +69,7 @@ def _load_historical_events(
     Args:
         run_id: Run identifier
         after_event_id: Resume from this event ID (0 = from start)
-        include_tokens: Whether to include SUPERVISOR_TOKEN events
+        include_tokens: Whether to include OIKOS_TOKEN events
 
     Returns:
         List of (event_id, event_type, payload, timestamp_str) tuples
@@ -120,11 +120,11 @@ async def _replay_and_stream(
 
     This is the unified SSE streaming implementation used by both:
     - /api/stream/runs/{run_id} - resumable SSE with replay
-    - /api/jarvis/chat - live-only SSE for initial chat
+    - /api/oikos/chat - live-only SSE for initial chat
 
     The function can operate in two modes:
     1. Replay + Live (include_replay=True): Load historical events, then stream live
-    2. Live-only (include_replay=False): Stream live events only (jarvis chat)
+    2. Live-only (include_replay=False): Stream live events only (oikos chat)
 
     IMPORTANT: This function does NOT hold a DB connection open during streaming.
     Historical events are loaded into memory first, then the DB session is closed
@@ -139,7 +139,7 @@ async def _replay_and_stream(
         owner_id: Owner ID for security filtering
         status: Current run status (RUNNING, DEFERRED, SUCCESS, etc.)
         after_event_id: Resume from this event ID (0 = from start)
-        include_tokens: Whether to include SUPERVISOR_TOKEN events
+        include_tokens: Whether to include OIKOS_TOKEN events
         include_replay: If True, replay historical events before streaming live
         allow_continuation_runs: If True, also stream events from continuation runs
 
@@ -150,12 +150,12 @@ async def _replay_and_stream(
     # Bounded queue for backpressure - overflow triggers graceful stream closure
     queue: asyncio.Queue = asyncio.Queue(maxsize=STREAM_QUEUE_MAX_SIZE)
     last_sent_event_id = 0
-    pending_workers = 0
-    supervisor_done = False
-    saw_supervisor_complete = False
+    pending_commiss = 0
+    oikos_done = False
+    saw_oikos_complete = False
     continuation_active = False
     awaiting_continuation_until: float | None = None
-    worker_grace_seconds = 5.0
+    commis_grace_seconds = 5.0
     overflow_event = asyncio.Event()  # Signal overflow without queue sentinel
     continuation_cache: dict[int, bool] = {}  # Cache for continuation run lookups
 
@@ -165,7 +165,7 @@ async def _replay_and_stream(
 
     def _apply_event_state(event_type: str, event: dict, *, from_replay: bool = False) -> None:
         """Update stream lifecycle state from an event."""
-        nonlocal pending_workers, supervisor_done, saw_supervisor_complete, continuation_active, awaiting_continuation_until, complete
+        nonlocal pending_commiss, oikos_done, saw_oikos_complete, continuation_active, awaiting_continuation_until, complete
         nonlocal close_event_id, stream_lease_until
 
         # Handle stream_control events (explicit lifecycle control)
@@ -190,43 +190,43 @@ async def _replay_and_stream(
                 awaiting_continuation_until = None
                 return
 
-        if event_type == "worker_spawned":
-            pending_workers += 1
-            # Cancel any pending close while new workers are active.
+        if event_type == "commis_spawned":
+            pending_commiss += 1
+            # Cancel any pending close while new commiss are active.
             awaiting_continuation_until = None
             return
 
-        if event_type in ("worker_complete", "worker_summary_ready"):
-            if pending_workers > 0:
-                pending_workers -= 1
+        if event_type in ("commis_complete", "commis_summary_ready"):
+            if pending_commiss > 0:
+                pending_commiss -= 1
 
-            # If supervisor already finished, start a short grace window
+            # If oikos already finished, start a short grace window
             # to allow the inbox continuation to begin streaming.
-            if pending_workers == 0 and supervisor_done and not continuation_active and not from_replay:
+            if pending_commiss == 0 and oikos_done and not continuation_active and not from_replay:
                 if awaiting_continuation_until is None:
-                    awaiting_continuation_until = time.monotonic() + worker_grace_seconds
+                    awaiting_continuation_until = time.monotonic() + commis_grace_seconds
             return
 
-        if event_type == "supervisor_started":
-            if saw_supervisor_complete:
+        if event_type == "oikos_started":
+            if saw_oikos_complete:
                 continuation_active = True
-            supervisor_done = False
+            oikos_done = False
             awaiting_continuation_until = None
             return
 
-        if event_type == "supervisor_complete":
-            saw_supervisor_complete = True
-            supervisor_done = True
+        if event_type == "oikos_complete":
+            saw_oikos_complete = True
+            oikos_done = True
             if continuation_active:
                 continuation_active = False
-            # If workers are still pending, keep stream open for their events.
-            if pending_workers == 0 and not from_replay:
+            # If commiss are still pending, keep stream open for their events.
+            if pending_commiss == 0 and not from_replay:
                 complete = True
             return
 
-        if event_type == "supervisor_deferred":
+        if event_type == "oikos_deferred":
             # v2.2: Timeout migration default is to close the stream, but some
-            # DEFERRED states (e.g., waiting for worker continuations) should
+            # DEFERRED states (e.g., waiting for commis continuations) should
             # keep the stream open so the connected client receives the final answer.
             if event.get("close_stream", True):
                 complete = True
@@ -238,7 +238,7 @@ async def _replay_and_stream(
     def _is_continuation_of_run(candidate_run_id: int) -> bool:
         """Return True if candidate_run_id is a continuation of run_id (including chains).
 
-        This allows a single client SSE stream to receive the follow-up supervisor
+        This allows a single client SSE stream to receive the follow-up oikos
         synthesis that happens in a new run (durable runs v2.2).
 
         Uses root_run_id for chain traversal - a continuation-of-continuation will
@@ -249,10 +249,10 @@ async def _replay_and_stream(
 
         try:
             from zerg.database import db_session
-            from zerg.models.models import AgentRun
+            from zerg.models.models import Run
 
             with db_session() as db:
-                candidate = db.query(AgentRun).filter(AgentRun.id == candidate_run_id).first()
+                candidate = db.query(Run).filter(Run.id == candidate_run_id).first()
                 if not candidate:
                     continuation_cache[candidate_run_id] = False
                     return False
@@ -289,7 +289,7 @@ async def _replay_and_stream(
 
         # Tool events MUST have run_id to prevent leaking across runs
         event_type = event.get("event_type") or event.get("type")
-        if event_type in ("worker_tool_started", "worker_tool_completed", "worker_tool_failed", "worker_output_chunk"):
+        if event_type in ("commis_tool_started", "commis_tool_completed", "commis_tool_failed", "commis_output_chunk"):
             if "run_id" not in event:
                 logger.warning(f"Tool event missing run_id, dropping: {event_type}")
                 return
@@ -302,27 +302,27 @@ async def _replay_and_stream(
             logger.warning(f"Stream queue overflow for run {run_id}, signaling client to reconnect")
 
     # Subscribe to all relevant events
-    event_bus.subscribe(EventType.SUPERVISOR_STARTED, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_THINKING, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_TOKEN, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_DEFERRED, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_WAITING, event_handler)  # Interrupt/resume pattern
-    event_bus.subscribe(EventType.SUPERVISOR_RESUMED, event_handler)  # Interrupt/resume pattern
-    event_bus.subscribe(EventType.SUPERVISOR_HEARTBEAT, event_handler)
-    event_bus.subscribe(EventType.WORKER_SPAWNED, event_handler)
-    event_bus.subscribe(EventType.WORKER_STARTED, event_handler)
-    event_bus.subscribe(EventType.WORKER_COMPLETE, event_handler)
-    event_bus.subscribe(EventType.WORKER_SUMMARY_READY, event_handler)
+    event_bus.subscribe(EventType.OIKOS_STARTED, event_handler)
+    event_bus.subscribe(EventType.OIKOS_THINKING, event_handler)
+    event_bus.subscribe(EventType.OIKOS_TOKEN, event_handler)
+    event_bus.subscribe(EventType.OIKOS_COMPLETE, event_handler)
+    event_bus.subscribe(EventType.OIKOS_DEFERRED, event_handler)
+    event_bus.subscribe(EventType.OIKOS_WAITING, event_handler)  # Interrupt/resume pattern
+    event_bus.subscribe(EventType.OIKOS_RESUMED, event_handler)  # Interrupt/resume pattern
+    event_bus.subscribe(EventType.OIKOS_HEARTBEAT, event_handler)
+    event_bus.subscribe(EventType.COMMIS_SPAWNED, event_handler)
+    event_bus.subscribe(EventType.COMMIS_STARTED, event_handler)
+    event_bus.subscribe(EventType.COMMIS_COMPLETE, event_handler)
+    event_bus.subscribe(EventType.COMMIS_SUMMARY_READY, event_handler)
     event_bus.subscribe(EventType.ERROR, event_handler)
-    event_bus.subscribe(EventType.WORKER_TOOL_STARTED, event_handler)
-    event_bus.subscribe(EventType.WORKER_TOOL_COMPLETED, event_handler)
-    event_bus.subscribe(EventType.WORKER_TOOL_FAILED, event_handler)
-    event_bus.subscribe(EventType.WORKER_OUTPUT_CHUNK, event_handler)
-    # Supervisor tool events (for chat UI tool activity display)
-    event_bus.subscribe(EventType.SUPERVISOR_TOOL_STARTED, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_TOOL_COMPLETED, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_TOOL_FAILED, event_handler)
+    event_bus.subscribe(EventType.COMMIS_TOOL_STARTED, event_handler)
+    event_bus.subscribe(EventType.COMMIS_TOOL_COMPLETED, event_handler)
+    event_bus.subscribe(EventType.COMMIS_TOOL_FAILED, event_handler)
+    event_bus.subscribe(EventType.COMMIS_OUTPUT_CHUNK, event_handler)
+    # Oikos tool events (for chat UI tool activity display)
+    event_bus.subscribe(EventType.OIKOS_TOOL_STARTED, event_handler)
+    event_bus.subscribe(EventType.OIKOS_TOOL_COMPLETED, event_handler)
+    event_bus.subscribe(EventType.OIKOS_TOOL_FAILED, event_handler)
     event_bus.subscribe(EventType.SHOW_SESSION_PICKER, event_handler)
     # Stream lifecycle control
     event_bus.subscribe(EventType.STREAM_CONTROL, event_handler)
@@ -354,7 +354,7 @@ async def _replay_and_stream(
                     ),
                 }
         else:
-            # Live-only mode: emit connected event for Jarvis chat
+            # Live-only mode: emit connected event for Oikos chat
             connected_payload = {
                 "type": "connected",
                 "run_id": run_id,
@@ -370,10 +370,10 @@ async def _replay_and_stream(
             logger.debug(f"Stream closed after replay - reached close marker (event_id={close_event_id}) for run {run_id}")
             return
 
-        # 4b. If replay already includes a terminal supervisor_complete and no pending workers, close early
+        # 4b. If replay already includes a terminal oikos_complete and no pending commiss, close early
         # (Heuristic fallback for runs without stream_control events)
-        if saw_supervisor_complete and pending_workers == 0 and not continuation_active and close_event_id is None:
-            logger.debug(f"Stream closed after replay for run {run_id} (no pending workers, heuristic fallback)")
+        if saw_oikos_complete and pending_commiss == 0 and not continuation_active and close_event_id is None:
+            logger.debug(f"Stream closed after replay for run {run_id} (no pending commiss, heuristic fallback)")
             return
 
         # 5. If run is complete (not RUNNING / DEFERRED / WAITING), close stream
@@ -396,7 +396,7 @@ async def _replay_and_stream(
             ),
         }
 
-        # Stream live events until supervisor completes or errors
+        # Stream live events until oikos completes or errors
         complete = False
         while not complete:
             # Check overflow signal (set by event_handler when queue is full)
@@ -427,7 +427,7 @@ async def _replay_and_stream(
                 event_type = event.get("event_type") or event.get("type") or "event"
 
                 # Skip tokens if not requested
-                if not include_tokens and event_type == "supervisor_token":
+                if not include_tokens and event_type == "oikos_token":
                     continue
 
                 # CRITICAL: Skip events that were already in the replay
@@ -437,14 +437,14 @@ async def _replay_and_stream(
                     logger.debug(f"Skipping duplicate event {event_id} (already replayed)")
                     continue
 
-                # SUPERVISOR_TOKEN is emitted per-token and will spam logs when DEBUG is enabled
-                if event_type != EventType.SUPERVISOR_TOKEN.value:
+                # OIKOS_TOKEN is emitted per-token and will spam logs when DEBUG is enabled
+                if event_type != EventType.OIKOS_TOKEN.value:
                     logger.debug(f"Stream: received live event {event_type} for run {run_id}")
 
-                # Track worker lifecycle for UI telemetry (stream no longer waits on workers)
+                # Track commis lifecycle for UI telemetry (stream no longer waits on commiss)
                 _apply_event_state(event_type, event)
 
-                # If we've drained workers after a supervisor_complete and no continuation
+                # If we've drained commiss after a oikos_complete and no continuation
                 # started within the grace window, close the stream.
                 if awaiting_continuation_until is not None and time.monotonic() >= awaiting_continuation_until:
                     complete = True
@@ -500,26 +500,26 @@ async def _replay_and_stream(
         logger.info(f"Stream disconnected for run {run_id}")
     finally:
         # Unsubscribe from all events
-        event_bus.unsubscribe(EventType.SUPERVISOR_STARTED, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_THINKING, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_TOKEN, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_DEFERRED, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_WAITING, event_handler)  # Interrupt/resume pattern
-        event_bus.unsubscribe(EventType.SUPERVISOR_RESUMED, event_handler)  # Interrupt/resume pattern
-        event_bus.unsubscribe(EventType.SUPERVISOR_HEARTBEAT, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_SPAWNED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_STARTED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_COMPLETE, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_SUMMARY_READY, event_handler)
+        event_bus.unsubscribe(EventType.OIKOS_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.OIKOS_THINKING, event_handler)
+        event_bus.unsubscribe(EventType.OIKOS_TOKEN, event_handler)
+        event_bus.unsubscribe(EventType.OIKOS_COMPLETE, event_handler)
+        event_bus.unsubscribe(EventType.OIKOS_DEFERRED, event_handler)
+        event_bus.unsubscribe(EventType.OIKOS_WAITING, event_handler)  # Interrupt/resume pattern
+        event_bus.unsubscribe(EventType.OIKOS_RESUMED, event_handler)  # Interrupt/resume pattern
+        event_bus.unsubscribe(EventType.OIKOS_HEARTBEAT, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_SPAWNED, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_COMPLETE, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_SUMMARY_READY, event_handler)
         event_bus.unsubscribe(EventType.ERROR, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_TOOL_STARTED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_TOOL_COMPLETED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_TOOL_FAILED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_OUTPUT_CHUNK, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_STARTED, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_COMPLETED, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_FAILED, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_TOOL_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_TOOL_COMPLETED, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_TOOL_FAILED, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_OUTPUT_CHUNK, event_handler)
+        event_bus.unsubscribe(EventType.OIKOS_TOOL_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.OIKOS_TOOL_COMPLETED, event_handler)
+        event_bus.unsubscribe(EventType.OIKOS_TOOL_FAILED, event_handler)
         event_bus.unsubscribe(EventType.SHOW_SESSION_PICKER, event_handler)
         event_bus.unsubscribe(EventType.STREAM_CONTROL, event_handler)
 
@@ -528,12 +528,12 @@ async def stream_run_events_live(
     run_id: int,
     owner_id: int,
 ):
-    """Stream live run events without replay (for Jarvis chat).
+    """Stream live run events without replay (for Oikos chat).
 
-    This is a convenience wrapper around _replay_and_stream for the Jarvis chat
+    This is a convenience wrapper around _replay_and_stream for the Oikos chat
     use case. It:
     - Streams live events only (no replay from DB)
-    - Supports continuation run aliasing (follow-up supervisor runs)
+    - Supports continuation run aliasing (follow-up oikos runs)
     - Emits a "connected" event on start
 
     Args:
@@ -563,7 +563,7 @@ async def stream_run_replay(
     request: Request,
     after_event_id: int = 0,
     include_tokens: bool = True,
-    current_user=Depends(get_current_jarvis_user),
+    current_user=Depends(get_current_oikos_user),
 ):
     """Stream run events with replay support (Resumable SSE v1).
 
@@ -578,7 +578,7 @@ async def stream_run_replay(
         run_id: Run identifier
         request: HTTP request (for Last-Event-ID header)
         after_event_id: Resume from this event ID (0 = from start)
-        include_tokens: Whether to include SUPERVISOR_TOKEN events (default: true)
+        include_tokens: Whether to include OIKOS_TOKEN events (default: true)
         current_user: Authenticated user (multi-tenant filtered)
 
     Returns:
@@ -610,13 +610,7 @@ async def stream_run_replay(
     # CRITICAL: Don't use Depends(get_db) here - it holds the session open
     # for the entire SSE stream duration, blocking TRUNCATE during E2E resets.
     with db_session() as db:
-        run = (
-            db.query(AgentRun)
-            .join(Agent, Agent.id == AgentRun.agent_id)
-            .filter(AgentRun.id == run_id)
-            .filter(Agent.owner_id == current_user.id)
-            .first()
-        )
+        run = db.query(Run).join(Fiche, Fiche.id == Run.fiche_id).filter(Run.id == run_id).filter(Fiche.owner_id == current_user.id).first()
 
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")

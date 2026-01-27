@@ -24,7 +24,7 @@ test.describe('Infrastructure Smoke Test', () => {
     await page.goto('/');
 
     // Wait for app to render - use a single unique element
-    await expect(page.locator('[data-testid="create-agent-btn"]')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[data-testid="create-fiche-btn"]')).toBeVisible({ timeout: 15000 });
 
     // Check that the page loaded
     const title = await page.title();
@@ -32,7 +32,7 @@ test.describe('Infrastructure Smoke Test', () => {
   });
 
   test('backend API returns data', async ({ request }) => {
-    const response = await request.get('/api/agents');
+    const response = await request.get('/api/fiches');
 
     // Should return 200 or 401 (if auth required), not 500
     expect([200, 401]).toContain(response.status());
@@ -50,7 +50,7 @@ test.describe('Infrastructure Smoke Test', () => {
     await page.goto('/');
 
     // Wait for app to be ready
-    await expect(page.locator('[data-testid="create-agent-btn"]')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[data-testid="create-fiche-btn"]')).toBeVisible({ timeout: 15000 });
 
     // Test that we can take screenshots (basic visual testing requirement)
     const screenshot = await page.screenshot({ fullPage: true });

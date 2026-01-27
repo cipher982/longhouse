@@ -113,7 +113,7 @@ Worker prompt already includes "Connector Fallback (Important)" section instruct
 ### Phase 3: Validation (COMPLETE ✅)
 - [x] **Unit test:** `test_runner_exec_missing_runner_is_not_critical()` in `tests/test_critical_tool_error.py` already verifies this
 - [x] **Prompt composer test:** `test_format_servers_with_both_ssh_alias_and_concrete()` verifies both SSH formats appear
-- [ ] **Live test (optional):** With no runner connected, ask Jarvis to check disk space on a server, verify SSH fallback works
+- [ ] **Live test (optional):** With no runner connected, ask Oikos to check disk space on a server, verify SSH fallback works
 
 ## 6. Acceptance Criteria
 - [x] Workers can connect to servers using concrete SSH details even when `ssh_alias` is present

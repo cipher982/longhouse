@@ -19,11 +19,11 @@ test.describe('Dashboard - Core', () => {
     await expect(page.locator('.nav-tab:has-text("Dashboard")')).toBeVisible();
   });
 
-  test('create agent button is present', async ({ page }) => {
+  test('create fiche button is present', async ({ page }) => {
     await page.goto('/');
 
-    // Wait for the create agent button to be visible and ready
-    const createBtn = page.locator('[data-testid="create-agent-btn"]');
+    // Wait for the create fiche button to be visible and ready
+    const createBtn = page.locator('[data-testid="create-fiche-btn"]');
     await expect(createBtn).toBeVisible({ timeout: 15000 });
     await expect(createBtn).toBeEnabled();
   });

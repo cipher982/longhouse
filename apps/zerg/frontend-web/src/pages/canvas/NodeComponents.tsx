@@ -2,13 +2,13 @@ import { getNodeIcon } from "../../lib/iconUtils";
 import { Handle, Position, useStore } from "@xyflow/react";
 import type { NodeTypes } from "@xyflow/react";
 
-// Custom node component for agents
-export function AgentNode({ data }: { data: { label: string; agentId?: number } }) {
+// Custom node component for fiches
+export function FicheNode({ data }: { data: { label: string; ficheId?: number } }) {
   return (
-    <div className="agent-node">
+    <div className="fiche-node">
       <Handle type="target" position={Position.Left} />
-      <div className="agent-icon">{getNodeIcon("agent")}</div>
-      <div className="agent-name">{data.label}</div>
+      <div className="fiche-icon">{getNodeIcon("fiche")}</div>
+      <div className="fiche-name">{data.label}</div>
       <Handle type="source" position={Position.Right} />
     </div>
   );
@@ -38,11 +38,11 @@ export function TriggerNode({ data }: { data: { label: string } }) {
 }
 
 // Simplified node renderers for MiniMap (no handles - avoids React Flow warnings)
-function MiniMapAgentNode({ label }: { label: string }) {
+function MiniMapFicheNode({ label }: { label: string }) {
   return (
-    <div className="agent-node">
-      <div className="agent-icon">{getNodeIcon("agent")}</div>
-      <div className="agent-name">{label}</div>
+    <div className="fiche-node">
+      <div className="fiche-icon">{getNodeIcon("fiche")}</div>
+      <div className="fiche-name">{label}</div>
     </div>
   );
 }
@@ -84,7 +84,7 @@ export function MiniMapNode(props: { x: number; y: number; width: number; height
     <foreignObject x={x} y={y} width={width} height={height}>
       {/* We use a div with 100% size to contain the node component */}
       <div className="minimap-node-content" style={{ width: '100%', height: '100%' }}>
-        {type === 'agent' && <MiniMapAgentNode label={nodeData.label} />}
+        {type === 'fiche' && <MiniMapFicheNode label={nodeData.label} />}
         {type === 'tool' && <MiniMapToolNode label={nodeData.label} />}
         {type === 'trigger' && <MiniMapTriggerNode label={nodeData.label} />}
       </div>
@@ -93,7 +93,7 @@ export function MiniMapNode(props: { x: number; y: number; width: number; height
 }
 
 export const nodeTypes: NodeTypes = {
-  agent: AgentNode,
+  fiche: FicheNode,
   tool: ToolNode,
   trigger: TriggerNode,
 };

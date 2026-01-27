@@ -67,7 +67,7 @@ export async function fetchSessions(filters: SessionFilters = {}): Promise<Sessi
   if (filters.limit) params.set("limit", String(filters.limit));
 
   const queryString = params.toString();
-  const path = `/jarvis/life-hub/sessions${queryString ? `?${queryString}` : ""}`;
+  const path = `/oikos/life-hub/sessions${queryString ? `?${queryString}` : ""}`;
 
   return request<SessionsListResponse>(path, { method: "GET" });
 }
@@ -76,6 +76,6 @@ export async function fetchSessions(filters: SessionFilters = {}): Promise<Sessi
  * Get a preview of a session's recent messages.
  */
 export async function fetchSessionPreview(sessionId: string, lastN: number = 6): Promise<SessionPreview> {
-  const path = `/jarvis/life-hub/sessions/${sessionId}/preview?last_n=${lastN}`;
+  const path = `/oikos/life-hub/sessions/${sessionId}/preview?last_n=${lastN}`;
   return request<SessionPreview>(path, { method: "GET" });
 }

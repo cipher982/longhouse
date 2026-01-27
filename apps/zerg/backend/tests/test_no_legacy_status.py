@@ -38,9 +38,9 @@ def test_no_legacy_status_literals_in_schemas():
             lines = content.split("\n")
             for line_num, line in enumerate(lines, 1):
                 if legacy_regex.search(line):
-                    # Skip agent status references (different system)
+                    # Skip fiche status references (different system)
                     # Skip connector test_status references (credential testing, not workflow status)
-                    if "agent" not in line.lower() and "Agent" not in line and "test_status" not in line:
+                    if "fiche" not in line.lower() and "Fiche" not in line and "test_status" not in line:
                         violations.append(f"{file_path}:{line_num} - {line.strip()}")
         except Exception as e:
             print(f"Warning: Could not read {file_path}: {e}")
@@ -139,14 +139,14 @@ def test_create_envelope_functions_signature():
     """Test that envelope creation functions use phase/result parameters."""
     import inspect
 
-    from zerg.schemas.node_output import create_agent_envelope
+    from zerg.schemas.node_output import create_fiche_envelope
     from zerg.schemas.node_output import create_conditional_envelope
     from zerg.schemas.node_output import create_tool_envelope
     from zerg.schemas.node_output import create_trigger_envelope
 
     envelope_functions = [
         create_tool_envelope,
-        create_agent_envelope,
+        create_fiche_envelope,
         create_conditional_envelope,
         create_trigger_envelope,
     ]

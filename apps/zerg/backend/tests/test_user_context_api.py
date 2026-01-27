@@ -493,7 +493,7 @@ class TestContextValidation:
                     "location": True,
                     "whoop": False,
                     "obsidian": True,
-                    "supervisor": False,
+                    "oikos": False,
                 }
             }
         }
@@ -568,7 +568,7 @@ class TestContextValidation:
                     "location": True,
                     "whoop": True,
                     "obsidian": True,
-                    "supervisor": True,
+                    "oikos": True,
                 },
                 "custom_instructions": "Prefer TypeScript",
             }

@@ -1,6 +1,6 @@
 import contextlib
 
-from tests.conftest import TEST_WORKER_MODEL
+from tests.conftest import TEST_COMMIS_MODEL
 from zerg.crud import crud
 from zerg.main import app
 
@@ -16,18 +16,18 @@ def test_read_thread_ownership_enforced(client, db_session):
     owner = _user(db_session, "owner@local", "USER")
     other = _user(db_session, "other@local", "USER")
 
-    agent = crud.create_agent(
+    fiche = crud.create_fiche(
         db_session,
         owner_id=owner.id,
-        name="owning-agent",
+        name="owning-fiche",
         system_instructions="sys",
         task_instructions="task",
-        model=TEST_WORKER_MODEL,
+        model=TEST_COMMIS_MODEL,
         schedule=None,
         config={},
     )
     thread = crud.create_thread(
-        db=db_session, agent_id=agent.id, title="t", active=True, agent_state={}, memory_strategy="buffer"
+        db=db_session, fiche_id=fiche.id, title="t", active=True, fiche_state={}, memory_strategy="buffer"
     )
 
     from zerg.dependencies.auth import get_current_user
@@ -65,41 +65,41 @@ def test_list_threads_scoped_to_owner(client, db_session):
     owner = _user(db_session, "owner-list@local", "USER")
     other = _user(db_session, "other-list@local", "USER")
 
-    owner_agent = crud.create_agent(
+    owner_agent = crud.create_fiche(
         db_session,
         owner_id=owner.id,
-        name="owner-agent",
+        name="owner-fiche",
         system_instructions="sys",
         task_instructions="task",
-        model=TEST_WORKER_MODEL,
+        model=TEST_COMMIS_MODEL,
         schedule=None,
         config={},
     )
-    other_agent = crud.create_agent(
+    other_agent = crud.create_fiche(
         db_session,
         owner_id=other.id,
-        name="other-agent",
+        name="other-fiche",
         system_instructions="sys",
         task_instructions="task",
-        model=TEST_WORKER_MODEL,
+        model=TEST_COMMIS_MODEL,
         schedule=None,
         config={},
     )
 
     owner_thread = crud.create_thread(
         db=db_session,
-        agent_id=owner_agent.id,
+        fiche_id=owner_agent.id,
         title="owner-thread",
         active=True,
-        agent_state={},
+        fiche_state={},
         memory_strategy="buffer",
     )
     other_thread = crud.create_thread(
         db=db_session,
-        agent_id=other_agent.id,
+        fiche_id=other_agent.id,
         title="other-thread",
         active=True,
-        agent_state={},
+        fiche_state={},
         memory_strategy="buffer",
     )
 
@@ -122,22 +122,22 @@ def test_update_thread_ownership_enforced(client, db_session):
     owner = _user(db_session, "owner-update@local", "USER")
     other = _user(db_session, "other-update@local", "USER")
 
-    agent = crud.create_agent(
+    fiche = crud.create_fiche(
         db_session,
         owner_id=owner.id,
-        name="owning-agent-update",
+        name="owning-fiche-update",
         system_instructions="sys",
         task_instructions="task",
-        model=TEST_WORKER_MODEL,
+        model=TEST_COMMIS_MODEL,
         schedule=None,
         config={},
     )
     thread = crud.create_thread(
         db=db_session,
-        agent_id=agent.id,
+        fiche_id=fiche.id,
         title="t",
         active=True,
-        agent_state={},
+        fiche_state={},
         memory_strategy="buffer",
     )
 
@@ -164,22 +164,22 @@ def test_delete_thread_ownership_enforced(client, db_session):
     owner = _user(db_session, "owner-delete@local", "USER")
     other = _user(db_session, "other-delete@local", "USER")
 
-    agent = crud.create_agent(
+    fiche = crud.create_fiche(
         db_session,
         owner_id=owner.id,
-        name="owning-agent-delete",
+        name="owning-fiche-delete",
         system_instructions="sys",
         task_instructions="task",
-        model=TEST_WORKER_MODEL,
+        model=TEST_COMMIS_MODEL,
         schedule=None,
         config={},
     )
     thread = crud.create_thread(
         db=db_session,
-        agent_id=agent.id,
+        fiche_id=fiche.id,
         title="t",
         active=True,
-        agent_state={},
+        fiche_state={},
         memory_strategy="buffer",
     )
 

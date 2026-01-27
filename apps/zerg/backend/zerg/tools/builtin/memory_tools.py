@@ -1,4 +1,4 @@
-"""Memory file tools for long-term agent memory."""
+"""Memory file tools for long-term fiche memory."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from pydantic import Field
 
 from zerg.connectors.context import get_credential_resolver
-from zerg.context import get_worker_context
+from zerg.context import get_commis_context
 from zerg.crud import memory_crud
 from zerg.database import db_session
 from zerg.services import memory_embeddings
@@ -26,9 +26,9 @@ logger = logging.getLogger(__name__)
 
 def _get_owner_id() -> int | None:
     """Resolve owner_id from execution context."""
-    worker_ctx = get_worker_context()
-    if worker_ctx and worker_ctx.owner_id:
-        return worker_ctx.owner_id
+    commis_ctx = get_commis_context()
+    if commis_ctx and commis_ctx.owner_id:
+        return commis_ctx.owner_id
 
     resolver = get_credential_resolver()
     if resolver and resolver.owner_id:

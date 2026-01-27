@@ -3,13 +3,13 @@
 **Version:** 2.0
 **Date:** December 2025
 **Status:** Simplified Reference
-**Parent Spec:** [jarvis-supervisor-unification-v2.1.md](./jarvis-supervisor-unification-v2.1.md) (supersedes v2.0)
+**Parent Spec:** [oikos-supervisor-unification-v2.1.md](./oikos-supervisor-unification-v2.1.md) (supersedes v2.0)
 
 ---
 
 ## Overview
 
-This document covers UI components for supervisor tasks. For the current architecture direction, see [jarvis-supervisor-unification-v2.1.md](./jarvis-supervisor-unification-v2.1.md).
+This document covers UI components for supervisor tasks. For the current architecture direction, see [oikos-supervisor-unification-v2.1.md](./oikos-supervisor-unification-v2.1.md).
 
 **Core Principle:** Show what's happening, not how it's implemented.
 
@@ -33,7 +33,7 @@ This document covers UI components for supervisor tasks. For the current archite
 
 **Hides:** Worker IDs, job IDs, phase labels.
 
-**Location:** `apps/zerg/frontend-web/src/jarvis/app/components/WorkerProgress.tsx` (UI) + `apps/zerg/frontend-web/src/jarvis/lib/worker-progress-store.ts` (state)
+**Location:** `apps/zerg/frontend-web/src/oikos/app/components/WorkerProgress.tsx` (UI) + `apps/zerg/frontend-web/src/oikos/lib/worker-progress-store.ts` (state)
 
 ### 2. Result Display
 
@@ -110,7 +110,7 @@ No phase mapping, no narrative transformation.
 
 ```
 User: "What time is it?"
-Jarvis: "It's 3:47 PM"
+Oikos: "It's 3:47 PM"
 (No progress indicator - direct response)
 ```
 
@@ -118,9 +118,9 @@ Jarvis: "It's 3:47 PM"
 
 ```
 User: "Check my servers"
-Jarvis: "Let me check your servers." ← Acknowledgment
+Oikos: "Let me check your servers." ← Acknowledgment
 [Toast appears with live progress]
-Jarvis: "Your servers are healthy..." ← Result
+Oikos: "Your servers are healthy..." ← Result
 [Toast auto-hides]
 ```
 
@@ -128,8 +128,8 @@ Jarvis: "Your servers are healthy..." ← Result
 
 ```
 User: "What about backups specifically?"
-Jarvis: [Has context from previous turn]
-Jarvis: "The backup ran at 3am successfully."
+Oikos: [Has context from previous turn]
+Oikos: "The backup ran at 3am successfully."
 (May not need new worker if info already gathered)
 ```
 
@@ -137,7 +137,7 @@ Jarvis: "The backup ran at 3am successfully."
 
 ## Current Implementation
 
-Implemented in `apps/zerg/frontend-web/src/jarvis/app/components/WorkerProgress.tsx` + `apps/zerg/frontend-web/src/jarvis/lib/worker-progress-store.ts`:
+Implemented in `apps/zerg/frontend-web/src/oikos/app/components/WorkerProgress.tsx` + `apps/zerg/frontend-web/src/oikos/lib/worker-progress-store.ts`:
 
 - Shows task descriptions directly
 - Displays tool calls with simple status icons
@@ -161,7 +161,7 @@ User: "where am I?"
 │ 📍 get_current_location                              ✓ 0.2s │
 └─────────────────────────────────────────────────────────────┘
 
-Jarvis: "You're at Central Park West, near 81st Street..."
+Oikos: "You're at Central Park West, near 81st Street..."
 ```
 
 **Key differences from worker tool progress:**
@@ -177,4 +177,4 @@ Jarvis: "You're at Central Park West, near 81st Street..."
 
 ---
 
-_For current architecture direction, see [jarvis-supervisor-unification-v2.1.md](./jarvis-supervisor-unification-v2.1.md)._
+_For current architecture direction, see [oikos-supervisor-unification-v2.1.md](./oikos-supervisor-unification-v2.1.md)._

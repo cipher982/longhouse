@@ -1,5 +1,5 @@
 #!/bin/bash
-# Clean up worker-specific test database files (supports python/python3)
+# Clean up commis-specific test database files (supports python/python3)
 
 set -euo pipefail
 

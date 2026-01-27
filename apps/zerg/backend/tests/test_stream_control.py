@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from zerg.events.event_bus import EventBus, EventType
 from zerg.models.enums import RunStatus, RunTrigger
-from zerg.models.models import AgentRun, WorkerJob
+from zerg.models.models import Run, CommisJob
 
 
 @pytest.fixture
@@ -32,8 +32,8 @@ def mock_db():
 
 @pytest.fixture
 def mock_run(mock_db):
-    """Create a mock AgentRun."""
-    run = MagicMock(spec=AgentRun)
+    """Create a mock Run."""
+    run = MagicMock(spec=Run)
     run.id = 123
     run.trace_id = None
     run.status = RunStatus.RUNNING
@@ -45,8 +45,8 @@ class TestStreamControlEmission:
 
     @pytest.mark.asyncio
     async def test_emit_stream_control_close_all_complete(self, mock_db, mock_run):
-        """stream_control:close emitted with reason=all_complete when no pending workers."""
-        from zerg.services.supervisor_service import emit_stream_control
+        """stream_control:close emitted with reason=all_complete when no pending commiss."""
+        from zerg.services.oikos_service import emit_stream_control
 
         with patch("zerg.services.event_store.emit_run_event") as mock_emit:
             mock_emit.return_value = None
@@ -63,36 +63,36 @@ class TestStreamControlEmission:
             assert call_kwargs["payload"]["run_id"] == 123
 
     @pytest.mark.asyncio
-    async def test_emit_stream_control_keep_open_workers_pending(self, mock_db, mock_run):
-        """stream_control:keep_open includes pending_workers count."""
-        from zerg.services.supervisor_service import emit_stream_control
+    async def test_emit_stream_control_keep_open_commiss_pending(self, mock_db, mock_run):
+        """stream_control:keep_open includes pending_commiss count."""
+        from zerg.services.oikos_service import emit_stream_control
 
-        # Mock pending workers
+        # Mock pending commiss
         mock_db.query.return_value.filter.return_value.count.return_value = 3
 
         with patch("zerg.services.event_store.emit_run_event") as mock_emit:
             mock_emit.return_value = None
 
             await emit_stream_control(
-                mock_db, mock_run, "keep_open", "workers_pending", owner_id=1, ttl_ms=120_000
+                mock_db, mock_run, "keep_open", "commiss_pending", owner_id=1, ttl_ms=120_000
             )
 
             mock_emit.assert_called_once()
             call_kwargs = mock_emit.call_args.kwargs
             assert call_kwargs["payload"]["action"] == "keep_open"
-            assert call_kwargs["payload"]["pending_workers"] == 3
+            assert call_kwargs["payload"]["pending_commiss"] == 3
             assert call_kwargs["payload"]["ttl_ms"] == 120_000
 
     @pytest.mark.asyncio
     async def test_emit_stream_control_ttl_capped_at_max(self, mock_db, mock_run):
         """TTL is capped at 300000ms (5 minutes)."""
-        from zerg.services.supervisor_service import emit_stream_control
+        from zerg.services.oikos_service import emit_stream_control
 
         with patch("zerg.services.event_store.emit_run_event") as mock_emit:
             mock_emit.return_value = None
 
             await emit_stream_control(
-                mock_db, mock_run, "keep_open", "workers_pending", owner_id=1, ttl_ms=999_999
+                mock_db, mock_run, "keep_open", "commiss_pending", owner_id=1, ttl_ms=999_999
             )
 
             call_kwargs = mock_emit.call_args.kwargs
@@ -101,7 +101,7 @@ class TestStreamControlEmission:
     @pytest.mark.asyncio
     async def test_emit_stream_control_error_reason(self, mock_db, mock_run):
         """stream_control:close emitted with reason=error on failure."""
-        from zerg.services.supervisor_service import emit_stream_control
+        from zerg.services.oikos_service import emit_stream_control
 
         with patch("zerg.services.event_store.emit_run_event") as mock_emit:
             mock_emit.return_value = None
@@ -147,7 +147,7 @@ class TestStreamControlHandling:
 
         event = {
             "action": "keep_open",
-            "reason": "workers_pending",
+            "reason": "commiss_pending",
             "ttl_ms": 120_000,
         }
 
@@ -210,14 +210,14 @@ class TestStreamControlSchema:
         # Optional fields for keep_open
         payload_keep_open = {
             "action": "keep_open",
-            "reason": "workers_pending",
+            "reason": "commiss_pending",
             "run_id": 123,
             "ttl_ms": 120_000,
-            "pending_workers": 2,
+            "pending_commiss": 2,
             "trace_id": "abc-123",
         }
         assert payload_keep_open["ttl_ms"] == 120_000
-        assert payload_keep_open["pending_workers"] == 2
+        assert payload_keep_open["pending_commiss"] == 2
 
 
 class TestHeuristicFallback:
@@ -226,14 +226,14 @@ class TestHeuristicFallback:
     def test_heuristic_fallback_when_no_control_events(self):
         """Old runs without stream_control still close via heuristics."""
         close_event_id = None
-        saw_supervisor_complete = True
-        pending_workers = 0
+        saw_oikos_complete = True
+        pending_commiss = 0
         continuation_active = False
 
-        # Legacy heuristic: close if supervisor_complete and no workers, no control events
+        # Legacy heuristic: close if oikos_complete and no commis, no control events
         should_close = (
-            saw_supervisor_complete
-            and pending_workers == 0
+            saw_oikos_complete
+            and pending_commiss == 0
             and not continuation_active
             and close_event_id is None  # No stream_control events
         )
@@ -243,14 +243,14 @@ class TestHeuristicFallback:
     def test_no_heuristic_when_stream_control_present(self):
         """Heuristic fallback is skipped when stream_control is present."""
         close_event_id = 42  # stream_control:close was seen
-        saw_supervisor_complete = True
-        pending_workers = 0
+        saw_oikos_complete = True
+        pending_commiss = 0
         continuation_active = False
 
         # When close_event_id is set, heuristic should NOT apply
         should_close_heuristic = (
-            saw_supervisor_complete
-            and pending_workers == 0
+            saw_oikos_complete
+            and pending_commiss == 0
             and not continuation_active
             and close_event_id is None  # This is False now
         )

@@ -1,4 +1,4 @@
-"""AgentRun model for execution tracking."""
+"""Run model for execution tracking."""
 
 from sqlalchemy import Column
 from sqlalchemy import DateTime
@@ -18,35 +18,35 @@ from zerg.models.enums import RunStatus
 from zerg.models.enums import RunTrigger
 
 
-class AgentRun(Base):
-    """Represents a single *execution* of an Agent.
+class Run(Base):
+    """Represents a single *execution* of a Fiche.
 
-    An AgentRun is created whenever an agent task is executed either manually,
+    An Run is created whenever an agent task is executed either manually,
     via the scheduler or through an external trigger.  It references the
     underlying *Thread* that captures the chat transcript but keeps
     additional execution-level metadata (status, timing, cost, etc.) that is
     cumbersome to derive from the chat model alone.
     """
 
-    __tablename__ = "agent_runs"
+    __tablename__ = "runs"
 
     id = Column(Integer, primary_key=True, index=True)
 
     # Foreign keys -------------------------------------------------------
-    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False)
-    thread_id = Column(Integer, ForeignKey("agent_threads.id"), nullable=False)
+    fiche_id = Column(Integer, ForeignKey("fiches.id"), nullable=False)
+    thread_id = Column(Integer, ForeignKey("threads.id"), nullable=False)
     # Durable runs v2.2: Link continuation runs to original deferred run
-    continuation_of_run_id = Column(Integer, ForeignKey("agent_runs.id"), nullable=True)
+    continuation_of_run_id = Column(Integer, ForeignKey("runs.id"), nullable=True)
     # Root run ID for continuation chains (enables SSE aliasing through chains)
     # For direct continuations: root_run_id = continuation_of_run_id
     # For chain continuations: root_run_id = original root (propagated)
-    root_run_id = Column(Integer, ForeignKey("agent_runs.id"), nullable=True)
+    root_run_id = Column(Integer, ForeignKey("runs.id"), nullable=True)
 
     # Observability ------------------------------------------------------
     # Phase 1: Correlation ID for tracing requests end-to-end (chat-observability-eval)
     correlation_id = Column(String, nullable=True, index=True)
 
-    # Trace ID for end-to-end debugging (UUID, propagated to workers and LLM audit)
+    # Trace ID for end-to-end debugging (UUID, propagated to commiss and LLM audit)
     trace_id = Column(UUID(as_uuid=True), nullable=True, index=True)
 
     # Model used for this run (for continuation inheritance)
@@ -56,13 +56,13 @@ class AgentRun(Base):
     # Values: none, low, medium, high
     reasoning_effort = Column(String(20), nullable=True)
 
-    # Message ID (UUID) assigned to the assistant message in supervisor_started event.
+    # Message ID (UUID) assigned to the assistant message in oikos_started event.
     # Used by continuation runs to look up the original message's ID for
     # continuation_of_message_id (schema requires UUID, not sentinel string).
     assistant_message_id = Column(String(36), nullable=True)
 
     # Pending tool_call_id for WAITING runs (async inbox model).
-    # When wait_for_worker causes an interrupt, this stores its tool_call_id
+    # When wait_for_commis causes an interrupt, this stores its tool_call_id
     # so resume can inject the result into the correct tool call.
     pending_tool_call_id = Column(String(64), nullable=True)
 
@@ -92,7 +92,7 @@ class AgentRun(Base):
     cancel_reason = Column(Text, nullable=True)
 
     # Summary ------------------------------------------------------------
-    # Brief summary of the run for Jarvis Task Inbox (first assistant response or truncated output)
+    # Brief summary of the run for Oikos Task Inbox (first assistant response or truncated output)
     summary = Column(Text, nullable=True)
 
     # Timestamps ---------------------------------------------------------
@@ -102,12 +102,12 @@ class AgentRun(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=True)
 
     # Relationships ------------------------------------------------------
-    agent = relationship("Agent", back_populates="runs")
+    fiche = relationship("Fiche", back_populates="runs")
     thread = relationship("Thread", backref="runs")
     # Durable runs v2.2: Self-referential relationship for continuation chains
     # foreign_keys specified because there are multiple self-referential FKs (continuation_of_run_id, root_run_id)
     continued_from = relationship(
-        "AgentRun",
+        "Run",
         remote_side=[id],
         foreign_keys=[continuation_of_run_id],
         backref="continuations",
@@ -118,7 +118,7 @@ class AgentRun(Base):
         # Durable runs v2.2: Ensure only one continuation per original run (idempotency)
         # Allows multiple rows with NULL continuation_of_run_id (non-continuation runs)
         Index(
-            "ix_agent_runs_unique_continuation",
+            "ix_runs_unique_continuation",
             continuation_of_run_id,
             unique=True,
             postgresql_where=(continuation_of_run_id.isnot(None)),

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dump full assembled prompts for supervisor and worker agents.
+"""Dump full assembled prompts for oikos and commis fiches.
 
 This script shows the complete prompt that gets sent to the LLM, including:
 - Connector protocols (static)
@@ -9,10 +9,10 @@ This script shows the complete prompt that gets sent to the LLM, including:
 - Integration status
 
 Usage:
-    uv run scripts/dump_prompts.py --role supervisor
-    uv run scripts/dump_prompts.py --role worker
+    uv run scripts/dump_prompts.py --role oikos
+    uv run scripts/dump_prompts.py --role commis
     uv run scripts/dump_prompts.py --role all  # Default: both
-    uv run scripts/dump_prompts.py --role supervisor --format json
+    uv run scripts/dump_prompts.py --role oikos --format json
 """
 
 import argparse
@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from zerg.database import get_db
-from zerg.prompts.composer import build_supervisor_prompt, build_worker_prompt
+from zerg.prompts.composer import build_oikos_prompt, build_commis_prompt
 from zerg.prompts.connector_protocols import get_connector_protocols
 
 
@@ -74,7 +74,7 @@ def dump_prompt(role: str, output_format: str = "markdown") -> None:
     """Dump the assembled prompt for a role.
 
     Args:
-        role: 'supervisor' or 'worker'
+        role: 'oikos' or 'commis'
         output_format: 'markdown' or 'json'
     """
     db = next(get_db())
@@ -91,10 +91,10 @@ def dump_prompt(role: str, output_format: str = "markdown") -> None:
         protocols = get_connector_protocols()
 
         # Build role-specific prompt
-        if role == "supervisor":
-            prompt = build_supervisor_prompt(user)
-        elif role == "worker":
-            prompt = build_worker_prompt(user)
+        if role == "oikos":
+            prompt = build_oikos_prompt(user)
+        elif role == "commis":
+            prompt = build_commis_prompt(user)
         else:
             raise ValueError(f"Unknown role: {role}")
 
@@ -116,24 +116,24 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Show supervisor prompt
-  uv run scripts/dump_prompts.py --role supervisor
+  # Show oikos prompt
+  uv run scripts/dump_prompts.py --role oikos
 
-  # Show worker prompt
-  uv run scripts/dump_prompts.py --role worker
+  # Show commis prompt
+  uv run scripts/dump_prompts.py --role commis
 
   # Show both (default)
   uv run scripts/dump_prompts.py
 
   # JSON output for programmatic parsing
-  uv run scripts/dump_prompts.py --role supervisor --format json
+  uv run scripts/dump_prompts.py --role oikos --format json
         """,
     )
     parser.add_argument(
         "--role",
-        choices=["supervisor", "worker", "all"],
+        choices=["oikos", "commis", "all"],
         default="all",
-        help="Which agent role to dump (default: all)",
+        help="Which fiche role to dump (default: all)",
     )
     parser.add_argument(
         "--format",
@@ -145,7 +145,7 @@ Examples:
     args = parser.parse_args()
 
     if args.role == "all":
-        roles = ["supervisor", "worker"]
+        roles = ["oikos", "commis"]
     else:
         roles = [args.role]
 

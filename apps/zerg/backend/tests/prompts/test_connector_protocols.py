@@ -1,7 +1,7 @@
 """Tests for connector protocol definitions.
 
 This module tests the static protocol strings that are injected into the
-agent system prompt to define how the agent should interpret dynamic
+fiche system prompt to define how the fiche should interpret dynamic
 connector status.
 """
 

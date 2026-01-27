@@ -113,7 +113,7 @@ Agent:
 
 - Agents work fine defined in code/API
 - Canvas adds visual polish but not core capability
-- Most users will use Jarvis (conversational), not Canvas (visual workflows)
+- Most users will use Oikos (conversational), not Canvas (visual workflows)
 
 ---
 
@@ -177,11 +177,11 @@ POST /api/agents
 }
 ```
 
-### Option 2: Jarvis (Voice)
+### Option 2: Oikos (Voice)
 
 ```
 User: "Create a daily health check that runs every morning"
-Jarvis → Supervisor → Creates agent via API
+Oikos → Supervisor → Creates agent via API
 ```
 
 ### Option 3: Dashboard (UI)

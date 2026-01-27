@@ -93,6 +93,12 @@ function loadConfig(): AppConfig {
     ? window.WS_BASE_URL
     : (import.meta.env.VITE_WS_BASE_URL || (isDevelopment && typeof window !== 'undefined' ? 'ws://localhost:47300' : ''));
 
+  // When running behind the Vite proxy (e.g., Playwright E2E), force relative API paths
+  // to avoid CORS and ensure X-Test-Commis routing works.
+  if (import.meta.env.VITE_PROXY_TARGET && !isProduction) {
+    apiBaseUrl = '/api';
+  }
+
   if (isTesting) {
     if (!apiBaseUrl) {
       apiBaseUrl = 'http://127.0.0.1:47300';

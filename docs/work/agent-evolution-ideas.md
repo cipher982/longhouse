@@ -27,7 +27,7 @@ Since Zerg has no QA team, we use the **Trace Store** (existing successful runs)
 ### A. Interleaved Thinking (Non-blocking Reasoning)
 - **Concept:** Move from a rigid "Wait-for-Tools" loop to a streaming model.
 - **The Move:** Update the Supervisor ticker to stream "live reasoning" (using a cheap model like `gpt-4o-mini`) that analyzes worker logs as they arrive, rather than waiting for the worker to finish.
-- **UX Impact:** Jarvis shows *"Worker found the log, looking for errors..."* instead of a generic spinner.
+- **UX Impact:** Oikos shows *"Worker found the log, looking for errors..."* instead of a generic spinner.
 
 ### B. Async Decisive Re-planning
 - **Concept:** Allow the Supervisor to interrupt a batch of tool calls if one returns a decisive answer or critical error.

@@ -8,23 +8,23 @@
 # Swarmlet SPA Merge — Post‑Merge Review + Cleanup Spec
 
 **Date:** 2025-12-20
-**Scope:** Zerg + Jarvis unified frontend (single SPA)
+**Scope:** Zerg + Oikos unified frontend (single SPA)
 
 ## Executive Summary
 The core merge is **COMPLETE and VERIFIED**.
 - `/chat` is served by the Zerg React app (SPA).
-- `apps/zerg/frontend-web/src/jarvis/` has been **deleted**.
-- CSS leakage has been fixed by scoping Jarvis styles under `.jarvis-container`.
+- `apps/zerg/frontend-web/src/oikos/` has been **deleted**.
+- CSS leakage has been fixed by scoping Oikos styles under `.oikos-container`.
 - Duplicate header issue is resolved via `embedded` prop.
-- `docker/docker-compose.prod.yml` and scripts have been updated to remove `jarvis-web`.
+- `docker/docker-compose.prod.yml` and scripts have been updated to remove `oikos-web`.
 
 ---
 
 ## Verified Current State (repo reality)
 
 ### Frontend
-- `/chat` is served by the Zerg React app and mounts Jarvis from `apps/zerg/frontend-web/src/jarvis/` via `apps/zerg/frontend-web/src/pages/JarvisChatPage.tsx`.
-- `JarvisChatPage` wraps the app in `.jarvis-container`.
+- `/chat` is served by the Zerg React app and mounts Oikos from `apps/zerg/frontend-web/src/oikos/` via `apps/zerg/frontend-web/src/pages/OikosChatPage.tsx`.
+- `OikosChatPage` wraps the app in `.oikos-container`.
 - `App.tsx` respects `embedded={true}` to hide the internal header.
 - **Verification:** `bun run test` in `apps/zerg/frontend-web` PASSES.
 
@@ -32,11 +32,11 @@ The core merge is **COMPLETE and VERIFIED**.
 - Backend tests PASS (`apps/zerg/backend`: `./run_backend_tests.sh` - ~2m40s).
 
 ### Docker / nginx
-- `docker/docker-compose.prod.yml` no longer defines `jarvis-web`.
-- `scripts/dev-docker.sh` no longer waits for `jarvis-web` logs.
+- `docker/docker-compose.prod.yml` no longer defines `oikos-web`.
+- `scripts/dev-docker.sh` no longer waits for `oikos-web` logs.
 
 ### Repo hygiene
-- `apps/zerg/frontend-web/src/jarvis/` is **DELETED**.
+- `apps/zerg/frontend-web/src/oikos/` is **DELETED**.
 - `Makefile` targets updated to remove dead references.
 
 ---
@@ -45,24 +45,24 @@ The core merge is **COMPLETE and VERIFIED**.
 
 ### P0 — Must Fix (ship-stopper risk)
 
-1) **[DONE] Jarvis CSS leakage across the SPA**
-- Refactored all CSS in `apps/zerg/frontend-web/src/jarvis/styles/` to scope under `.jarvis-container`.
-- Updated `theme-glass.css` to scope variables under `.jarvis-container`.
+1) **[DONE] Oikos CSS leakage across the SPA**
+- Refactored all CSS in `apps/zerg/frontend-web/src/oikos/styles/` to scope under `.oikos-container`.
+- Updated `theme-glass.css` to scope variables under `.oikos-container`.
 
-2) **[DONE] Ensure `apps/zerg/frontend-web/src/jarvis/` is committed**
+2) **[DONE] Ensure `apps/zerg/frontend-web/src/oikos/` is committed**
 - Files are tracked in git.
 
 ### P1 — High Impact UX Simplifications
 
 3) **[DONE] Duplicate header on `/chat`**
 - `App.tsx` updated to accept `embedded` prop.
-- `JarvisChatPage` passes `embedded={true}`.
+- `OikosChatPage` passes `embedded={true}`.
 
-4) **[DONE] Remove dead standalone Jarvis frontend**
-- `apps/zerg/frontend-web/src/jarvis/` deleted.
+4) **[DONE] Remove dead standalone Oikos frontend**
+- `apps/zerg/frontend-web/src/oikos/` deleted.
 
 5) **[DONE] Fix “prod nginx config drift”**
-- `docker/docker-compose.prod.yml` updated to remove `jarvis-web`.
+- `docker/docker-compose.prod.yml` updated to remove `oikos-web`.
 
 ### P2 — Medium Impact Simplifications (architectural hygiene)
 
@@ -72,11 +72,11 @@ The core merge is **COMPLETE and VERIFIED**.
 7) **Model config source-of-truth** (Pending)
 - Drift risk still exists for model config.
 
-8) **Jarvis BFF endpoints naming** (Pending)
-- `/api/jarvis/*` remains.
+8) **Oikos BFF endpoints naming** (Pending)
+- `/api/oikos/*` remains.
 
 9) **E2E test environment consolidation** (Pending)
-- `apps/jarvis` still acts as the E2E harness. This is acceptable for now.
+- `apps/oikos` still acts as the E2E harness. This is acceptable for now.
 
 ### Known Issues
 

@@ -27,7 +27,7 @@ Creates realistic data for professional screenshots:
 - Realistic timestamps and token counts
 
 **Chat conversation:**
-- Marketing Demo Chat thread with Jarvis
+- Marketing Demo Chat thread with Oikos
 - Shows tool use (WHOOP data, location check)
 - Multi-turn conversation about health + activities
 
@@ -39,7 +39,7 @@ Creates realistic data for professional screenshots:
 | `scenario-inbox.png` | Email Automation Pipeline | 800×500 |
 | `scenario-home.png` | Smart Home Automation | 800×500 |
 | `canvas-preview.png` | Full canvas view | 1400×900 |
-| `chat-preview.png` | Real Jarvis conversation | 1400×900 |
+| `chat-preview.png` | Real Oikos conversation | 1400×900 |
 | `dashboard-preview.png` | Dashboard with agents | 1400×900 |
 
 ### 3. Applies "Vivid Mode" CSS

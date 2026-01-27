@@ -6,19 +6,19 @@
 ---
 
 > ⚠️ **HISTORICAL (Dec 2024):** This document predates the unified SPA merge (2025-12-20).
-> Jarvis no longer has a standalone `apps/zerg/frontend-web/src/jarvis/` frontend; the chat UI lives in `apps/zerg/frontend-web/src/jarvis/` and is served at `/chat`.
+> Oikos no longer has a standalone `apps/zerg/frontend-web/src/oikos/` frontend; the chat UI lives in `apps/zerg/frontend-web/src/oikos/` and is served at `/chat`.
 
 ⏺ Zerg Platform Refactor - Phase 2: Shared Packages (Ready to Start)
 
 ## Project Background
 
-Zerg is an AI agent orchestration platform (FastAPI + Python + LangGraph). Jarvis is a voice/text UI (React PWA + Express server) that connects to Zerg. Together they form a "swarm" system in a Bun/uv monorepo.
+Zerg is an AI agent orchestration platform (FastAPI + Python + LangGraph). Oikos is a voice/text UI (React PWA + Express server) that connects to Zerg. Together they form a "swarm" system in a Bun/uv monorepo.
 
 **Tech Stack:**
 
 - Backend: FastAPI, SQLAlchemy, LangGraph, PostgreSQL (Python via uv)
 - Frontend: React 18, Vite, React Query (TypeScript via Bun)
-- Jarvis: React 19 PWA + Express server (Bun workspace)
+- Oikos: React 19 PWA + Express server (Bun workspace)
 - Deployment: Docker Compose, designed for Coolify
 
 **Repository:** `/Users/davidrose/git/zerg/`
@@ -34,7 +34,7 @@ Zerg is an AI agent orchestration platform (FastAPI + Python + LangGraph). Jarvi
 - Consolidated environment variables into single `.env.example`
 - Added `make env-check` and `make env-check-prod` validation
 
-### Jarvis React Migration (Complete ✅)
+### Oikos React Migration (Complete ✅)
 
 **Core Migration (6 commits)**
 
@@ -42,9 +42,9 @@ Zerg is an AI agent orchestration platform (FastAPI + Python + LangGraph). Jarvi
 - Migrated from vanilla TypeScript to React 19
 - Created React components with TypeScript
 - Implemented Context + useReducer for state management
-- Built custom hooks (useVoice, useTextChannel, useJarvisClient, useRealtimeSession)
+- Built custom hooks (useVoice, useTextChannel, useOikosClient, useRealtimeSession)
 - Added PWA service worker with offline support
-- Feature flag: `VITE_JARVIS_ENABLE_REALTIME_BRIDGE` (default: false)
+- Feature flag: `VITE_OIKOS_ENABLE_REALTIME_BRIDGE` (default: false)
 
 **React Migration Hardening (10 commits - Dec 9, 2024)**
 
@@ -64,22 +64,22 @@ Zerg is an AI agent orchestration platform (FastAPI + Python + LangGraph). Jarvi
 
 ```bash
 Current branch: main
-Latest commit: e0d4021 - "test(jarvis): add bridge mode e2e smoke tests"
+Latest commit: e0d4021 - "test(oikos): add bridge mode e2e smoke tests"
 Clean working directory
 ```
 
 **Recent commits (last 11):**
 
 ```
-e0d4021 test(jarvis): add bridge mode e2e smoke tests
-92e5b7f feat(jarvis): disable PTT when not connected, add connection states
-ecce152 fix(jarvis): add retry/reconnect for realtime init failures
-fd471d1 fix(jarvis): add error handling and rollback for text sends
-2db5f73 fix(jarvis): resolve models.json path in Vitest
-e5b1011 test(jarvis): add comprehensive PWA offline tests
-f85b926 docs(jarvis): update migration docs and remove confusing deadline
-83a6398 fix(jarvis): wire useTextChannel to backend in bridge mode
-82bedf9 fix(jarvis): bridge mode auto-connect and PTT button initialization
+e0d4021 test(oikos): add bridge mode e2e smoke tests
+92e5b7f feat(oikos): disable PTT when not connected, add connection states
+ecce152 fix(oikos): add retry/reconnect for realtime init failures
+fd471d1 fix(oikos): add error handling and rollback for text sends
+2db5f73 fix(oikos): resolve models.json path in Vitest
+e5b1011 test(oikos): add comprehensive PWA offline tests
+f85b926 docs(oikos): update migration docs and remove confusing deadline
+83a6398 fix(oikos): wire useTextChannel to backend in bridge mode
+82bedf9 fix(oikos): bridge mode auto-connect and PTT button initialization
 4031c1a test: add React integration tests for core flows
 a05c8ff chore: quarantine legacy code with deprecation notices
 ```
@@ -92,7 +92,7 @@ All services healthy:
 postgres           - Up (healthy)
 backend       - Up (healthy)
 frontend-web      - Up (healthy)
-jarvis-web         - Up (healthy)
+oikos-web         - Up (healthy)
 reverse-proxy      - Up (healthy)
 ```
 
@@ -100,7 +100,7 @@ reverse-proxy      - Up (healthy)
 
 - `http://localhost:30080/` → Zerg dashboard (React)
 - `http://localhost:30080/dashboard` → Zerg dashboard (alias)
-- `http://localhost:30080/chat/` → Jarvis PWA (React)
+- `http://localhost:30080/chat/` → Oikos PWA (React)
 
 ### Test Status ✅
 
@@ -114,7 +114,7 @@ Tests: 174 passed | 5 skipped (179)
 - Unit tests: 174 passing (was 165 before hardening)
 - PWA offline tests: 8 tests
 - React integration tests: 6 tests
-- E2E tests: 5 tests (skipped by default, run with `VITE_JARVIS_ENABLE_REALTIME_BRIDGE=true`)
+- E2E tests: 5 tests (skipped by default, run with `VITE_OIKOS_ENABLE_REALTIME_BRIDGE=true`)
 
 **What was fixed:**
 
@@ -130,7 +130,7 @@ Tests: 174 passed | 5 skipped (179)
 
 ### Goal
 
-Create shared packages for code reuse between Zerg frontend and Jarvis web. Both are now React apps - time to DRY up common code and share configuration.
+Create shared packages for code reuse between Zerg frontend and Oikos web. Both are now React apps - time to DRY up common code and share configuration.
 
 ### What Needs to be Created
 
@@ -154,7 +154,7 @@ Create proper workspace package with:
 **Current imports to replace:**
 
 ```typescript
-// apps/zerg/frontend-web/src/jarvis/core/model-config.ts
+// apps/zerg/frontend-web/src/oikos/core/model-config.ts
 import modelsConfig from "../../../config/models.json"; // BRITTLE
 
 // Should become:
@@ -220,11 +220,11 @@ Skip this package. Premature abstraction is worse than duplication.
 │   │   ├── backend/         # FastAPI (Python via uv)
 │   │   ├── frontend-web/    # React 18 dashboard
 │   │   └── e2e/            # Playwright tests
-│   └── jarvis/
+│   └── oikos/
 │       ├── apps/
 │       │   ├── web/        # React 19 PWA (HARDENED ✅)
 │       │   └── server/     # Express bridge
-│       └── packages/       # Jarvis-specific packages
+│       └── packages/       # Oikos-specific packages
 │           ├── core/       # Logger, session manager, model config
 │           └── data/local/ # IndexedDB storage
 ├── config/
@@ -243,9 +243,9 @@ Skip this package. Premature abstraction is worse than duplication.
 
 ```json
 "workspaces": [
-  "apps/zerg/frontend-web/src/jarvis/apps/*",
-  "apps/zerg/frontend-web/src/jarvis/packages/*",
-  "apps/zerg/frontend-web/src/jarvis/packages/data/*",
+  "apps/zerg/frontend-web/src/oikos/apps/*",
+  "apps/zerg/frontend-web/src/oikos/packages/*",
+  "apps/zerg/frontend-web/src/oikos/packages/data/*",
   "apps/zerg/frontend-web",
   "apps/zerg/e2e"
   // Add: "packages/*" after creating Phase 2 packages
@@ -276,10 +276,10 @@ grep -r "export.*type\|export.*interface" --include="*.ts" --include="*.tsx" src
 grep -r "export const" --include="*.ts" src/ | head -30
 ```
 
-#### Analyze Jarvis Frontend
+#### Analyze Oikos Frontend
 
 ```bash
-cd apps/zerg/frontend-web/src/jarvis/src
+cd apps/zerg/frontend-web/src/oikos/src
 
 # Check for utility directories
 ls -la hooks/ components/ lib/
@@ -314,7 +314,7 @@ cat > PHASE_2_FINDINGS.md << 'EOF'
 ## Duplicated Code Found
 
 ### Utilities
-- [ ] Date formatters: zerg uses X, jarvis uses Y
+- [ ] Date formatters: zerg uses X, oikos uses Y
 - [ ] API helpers: both have fetch wrappers
 - [ ] ...
 
@@ -409,7 +409,7 @@ EOF
 cat > packages/config/README.md << 'EOF'
 # @swarm/config
 
-Shared configuration for Zerg and Jarvis.
+Shared configuration for Zerg and Oikos.
 
 ## Usage
 
@@ -443,7 +443,7 @@ bun run --filter @swarm/config --help
 
 ### Step 4: Update Consumers
 
-#### Update `@jarvis/core/model-config.ts`
+#### Update `@oikos/core/model-config.ts`
 
 ```typescript
 // BEFORE
@@ -466,7 +466,7 @@ import { modelsConfig, TEXT_TIER_1 } from "@swarm/config";
 #### Update Vitest Config (remove workaround)
 
 ```typescript
-// apps/zerg/frontend-web/src/jarvis/vitest.config.ts
+// apps/zerg/frontend-web/src/oikos/vitest.config.ts
 // REMOVE this line (no longer needed):
 // '../../../config/models.json': resolve(__dirname, '../../../../config/models.json')
 ```
@@ -566,11 +566,11 @@ git add package.json
 git commit -m "chore: add packages/* to workspace"
 
 # Commit 3: Update consumers
-git add apps/zerg/frontend-web/src/jarvis/core/model-config.ts
-git commit -m "refactor: use @swarm/config in @jarvis/core"
+git add apps/zerg/frontend-web/src/oikos/core/model-config.ts
+git commit -m "refactor: use @swarm/config in @oikos/core"
 
 # Commit 4: Remove Vitest workaround
-git add apps/zerg/frontend-web/src/jarvis/vitest.config.ts
+git add apps/zerg/frontend-web/src/oikos/vitest.config.ts
 git commit -m "refactor: remove models.json alias workaround"
 
 # etc.
@@ -585,7 +585,7 @@ Phase 2 is complete when:
 ✅ `packages/config` exists with typed exports of `models.json`
 ✅ `packages/utils` exists (if duplication was found) with shared TypeScript utilities
 ✅ `packages/ui` exists (if duplication was found) with shared React components
-✅ Both Zerg and Jarvis import from `@swarm/*` packages
+✅ Both Zerg and Oikos import from `@swarm/*` packages
 ✅ All type checks pass
 ✅ All tests pass (174+ tests)
 ✅ Docker builds succeed
@@ -611,8 +611,8 @@ Phase 2 is complete when:
 
 ### Docker Context
 
-- Jarvis Dockerfiles expect repo root context
-- Paths like `COPY apps/zerg/frontend-web/src/jarvis/...` not `COPY apps/...`
+- Oikos Dockerfiles expect repo root context
+- Paths like `COPY apps/zerg/frontend-web/src/oikos/...` not `COPY apps/...`
 - Building from wrong directory will fail
 
 ### Imports
@@ -667,16 +667,16 @@ git status  # Don't let it grow to dozens of files
 ```bash
 # Understand current dependencies
 cat apps/zerg/frontend-web/package.json
-cat apps/zerg/frontend-web/src/jarvis/package.json
+cat apps/zerg/frontend-web/src/oikos/package.json
 
 # See how models.json is currently used
-cat apps/zerg/frontend-web/src/jarvis/core/model-config.ts
+cat apps/zerg/frontend-web/src/oikos/core/model-config.ts
 
 # Survey Zerg frontend structure
 ls -R apps/zerg/frontend-web/src/
 
-# Survey Jarvis frontend structure
-ls -R apps/zerg/frontend-web/src/jarvis/src/
+# Survey Oikos frontend structure
+ls -R apps/zerg/frontend-web/src/oikos/src/
 ```
 
 ---
@@ -688,7 +688,7 @@ ls -R apps/zerg/frontend-web/src/jarvis/src/
 make stop && make dev
 
 # Check logs
-docker logs docker-jarvis-web-1
+docker logs docker-oikos-web-1
 docker logs docker-frontend-web-1
 
 # Check container status
@@ -713,9 +713,9 @@ bun run --help
 ## Related Documentation
 
 - **Phase 1 Results:** `docker/docker-compose.yml` (unified compose)
-- **React Migration:** `apps/zerg/frontend-web/src/jarvis/MIGRATION.md`
+- **React Migration:** `apps/zerg/frontend-web/src/oikos/MIGRATION.md`
 - **Platform Overview:** `AGENTS.md`
-- **E2E Testing:** `apps/zerg/frontend-web/src/jarvis/tests/E2E.md`
+- **E2E Testing:** `apps/zerg/frontend-web/src/oikos/tests/E2E.md`
 - **Git Log:** `git log --oneline -20` (see recent work)
 
 ---
@@ -723,14 +723,14 @@ bun run --help
 ## TL;DR
 
 **Phase 1:** ✅ Docker consolidation complete
-**Jarvis React Migration:** ✅ Complete and hardened (10 commits, all tests passing)
+**Oikos React Migration:** ✅ Complete and hardened (10 commits, all tests passing)
 **Phase 2:** Create shared packages starting with `@swarm/config`
 
 **First step:** Investigate what to share
 
 ```bash
 cd apps/zerg/frontend-web/src && grep -r "export" src/ | head -50
-cd apps/zerg/frontend-web/src/jarvis/src && grep -r "export" src/ | head -50
+cd apps/zerg/frontend-web/src/oikos/src && grep -r "export" src/ | head -50
 # Compare and document in PHASE_2_FINDINGS.md
 ```
 

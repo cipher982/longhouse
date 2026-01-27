@@ -14,7 +14,7 @@ from zerg.tools.builtin.task_tools import task_update
 @pytest.fixture
 def credential_context(db_session, test_user):
     """Set up credential resolver context for tools."""
-    resolver = CredentialResolver(agent_id=1, db=db_session, owner_id=test_user.id)
+    resolver = CredentialResolver(fiche_id=1, db=db_session, owner_id=test_user.id)
     token = set_credential_resolver(resolver)
     yield resolver
     set_credential_resolver(None)
@@ -331,7 +331,7 @@ def test_user_isolation(credential_context, db_session, test_user):
     user_b = crud.create_user(db=db_session, email="userb@test.com")
 
     # Switch to User B context
-    resolver_b = CredentialResolver(agent_id=2, db=db_session, owner_id=user_b.id)
+    resolver_b = CredentialResolver(fiche_id=2, db=db_session, owner_id=user_b.id)
     set_credential_resolver(resolver_b)
 
     # Verify User B cannot see User A's task

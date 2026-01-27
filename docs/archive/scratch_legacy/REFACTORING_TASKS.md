@@ -10,7 +10,7 @@
 
 ### ✅ Task 1.1: Split main.ts - Extract Configuration
 - **Status**: COMPLETED
-- **File**: `apps/jarvis/apps/web/main.ts`
+- **File**: `apps/oikos/apps/web/main.ts`
 - **Target**: `lib/config.ts` (165 lines)
 - **Contents**:
   - CONFIG object
@@ -86,8 +86,8 @@
 - **Status**: COMPLETED
 - **Commands**:
   ```bash
-  echo "apps/jarvis/package-lock.json" >> .gitignore
-  git rm --cached apps/jarvis/package-lock.json
+  echo "apps/oikos/package-lock.json" >> .gitignore
+  git rm --cached apps/oikos/package-lock.json
   git commit -m "chore: remove package-lock.json from tracking"
   ```
 
@@ -128,7 +128,7 @@
 ### ❌ Task 6: Clean Documentation
 - **Status**: NOT STARTED
 - **Files**:
-  - `apps/jarvis/docs/voice-button-redesign.md` (728 → <100 lines)
+  - `apps/oikos/docs/voice-button-redesign.md` (728 → <100 lines)
   - Remove philosophical discussions
   - Keep only technical specs
 
@@ -159,8 +159,8 @@
 
 | Test Suite | Last Run | Status | Coverage |
 |------------|----------|--------|----------|
-| Jarvis Unit Tests | - | ⏸️ NOT RUN | - |
-| Jarvis Integration | - | ⏸️ NOT RUN | - |
+| Oikos Unit Tests | - | ⏸️ NOT RUN | - |
+| Oikos Integration | - | ⏸️ NOT RUN | - |
 | Zerg Backend | - | ⏸️ NOT RUN | - |
 | Zerg Frontend | - | ⏸️ NOT RUN | - |
 | Zerg E2E | - | ⏸️ NOT RUN | - |

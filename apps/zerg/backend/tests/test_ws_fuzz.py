@@ -33,7 +33,7 @@ from typing import List
 
 import pytest
 
-from tests.conftest import TEST_WORKER_MODEL
+from tests.conftest import TEST_COMMIS_MODEL
 
 # ``hypothesis`` is optional – auto-skip when missing.
 try:
@@ -84,7 +84,7 @@ def test_ws_fuzz_roundtrip(client, db_session, data):  # type: ignore[valid-type
     """Randomised round-trip test exercising the WebSocket handler."""
 
     # ------------------------------------------------------------------
-    # 1) Set-up – create *one* user, agent and thread which the strategies
+    # 1) Set-up – create *one* user, fiche and thread which the strategies
     #    refer to through *thread_id*.  Keeping a single thread avoids
     #    fallout from implicit topic subscriptions when many IDs are in
     #    play while still touching the persistence layer.
@@ -97,18 +97,18 @@ def test_ws_fuzz_roundtrip(client, db_session, data):  # type: ignore[valid-type
         email="fuzz@example.com",
     )
 
-    agent = crud.create_agent(
+    fiche = crud.create_fiche(
         db_session,
         owner_id=user.id,
         name="FuzzAgent",
         system_instructions="",
         task_instructions="",
-        model=TEST_WORKER_MODEL,
+        model=TEST_COMMIS_MODEL,
     )
 
     thread = crud.create_thread(
         db_session,
-        agent_id=agent.id,
+        fiche_id=fiche.id,
         title="Fuzz thread",
     )
 
@@ -177,14 +177,14 @@ def _receive_with_timeout(ws, timeout: float):  # noqa: D401 – helper
     result = {}
     exc: list[BaseException] = []  # len==0 means success
 
-    def _worker():  # noqa: D401 – nested helper
+    def _commis():  # noqa: D401 – nested helper
         try:
             nonlocal result
             result = ws.receive_json()
         except BaseException as e:  # pragma: no cover – propagate in caller
             exc.append(e)
 
-    t = threading.Thread(target=_worker, daemon=True)
+    t = threading.Thread(target=_commis, daemon=True)
     t.start()
     t.join(timeout)
 

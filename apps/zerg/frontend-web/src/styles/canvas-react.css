@@ -90,12 +90,12 @@
     }
   }
 
-  /* Agent Shelf Items - consolidated into agent_shelf.css to avoid duplication
-   See: src/styles/css/agent_shelf.css (agent-pill styles)
+  /* Fiche Shelf Items - consolidated into fiche_shelf.css to avoid duplication
+   See: src/styles/css/fiche_shelf.css (fiche-pill styles)
    Removed: 34 lines of duplicate styling */
 
   /* Custom Node Styles - refined for modern aesthetic */
-  .agent-node {
+  .fiche-node {
     background: var(--surface-glass-2);
     border: 1px solid var(--border-glass-1);
     border-left: 3px solid var(--color-brand-primary);
@@ -113,13 +113,13 @@
     transition: all var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
-  .agent-node:hover {
+  .fiche-node:hover {
     border-color: var(--color-brand-primary);
     box-shadow: 0 0 20px rgba(99, 102, 241, 0.2);
     transform: translateY(-2px);
   }
 
-  .agent-node .agent-icon {
+  .fiche-node .fiche-icon {
     font-size: var(--font-size-md);
     margin-right: var(--space-2);
     opacity: 0.8;
@@ -274,10 +274,10 @@
     background: transparent;
   }
 
-  /* Agent shelf layout */
+  /* Fiche shelf layout */
 
-  /* #agent-shelf styling consolidated into agent_shelf.css (canonical source)
-   See: src/styles/css/agent_shelf.css for all shelf-related styles */
+  /* #fiche-shelf styling consolidated into fiche_shelf.css (canonical source)
+   See: src/styles/css/fiche_shelf.css for all shelf-related styles */
 
   /* Override React Flow edge styles */
   .react-flow__edge-path {
@@ -831,7 +831,7 @@
     .run-button,
     .cancel-button,
     .logs-button,
-    .agent-pill,
+    .fiche-pill,
     .tool-palette-item,
     .react-flow__edge,
     .react-flow__node {
@@ -839,7 +839,7 @@
     }
 
     /* Preserve hover/focus visual states without animation */
-    .agent-pill:hover {
+    .fiche-pill:hover {
       transform: none !important;
       box-shadow: 0 4px 8px rgb(0 0 0 / 20%);
     }
@@ -860,7 +860,7 @@
     }
 
     /* Remove transforms that create motion */
-    .agent-shelf-item:hover {
+    .fiche-shelf-item:hover {
       transform: none !important;
     }
   }

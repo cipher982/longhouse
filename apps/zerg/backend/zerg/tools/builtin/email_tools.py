@@ -21,7 +21,7 @@ from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.connectors.registry import ConnectorType
-from zerg.context import get_worker_context
+from zerg.context import get_commis_context
 from zerg.database import db_session
 from zerg.models.models import EmailSendLog
 from zerg.models.models import User
@@ -44,16 +44,16 @@ def _get_user_id() -> int | None:
     """Get user_id from context.
 
     Try multiple sources:
-    1. Worker context (for background workers)
-    2. Credential resolver (for agent execution)
+    1. Commis context (for background commis)
+    2. Credential resolver (for fiche execution)
 
     Returns:
         User ID if found, None otherwise
     """
-    # Try worker context first
-    worker_ctx = get_worker_context()
-    if worker_ctx and worker_ctx.owner_id:
-        return worker_ctx.owner_id
+    # Try commis context first
+    commis_ctx = get_commis_context()
+    if commis_ctx and commis_ctx.owner_id:
+        return commis_ctx.owner_id
 
     # Try credential resolver
     resolver = get_credential_resolver()
@@ -291,7 +291,7 @@ def send_email(
         user_id = _get_user_id()
 
         # Credential resolution order:
-        # 1. User-configured credentials (account or agent level)
+        # 1. User-configured credentials (account or fiche level)
         # 2. Platform-level credentials (from environment)
         resolved_access_key = None
         resolved_secret_key = None

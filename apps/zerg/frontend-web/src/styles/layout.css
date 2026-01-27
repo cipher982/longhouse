@@ -83,51 +83,6 @@
     z-index: 0;
   }
 
-  .demo-banner {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--spacing-md);
-    padding: 12px 24px;
-    background: linear-gradient(120deg, rgba(79, 70, 229, 0.2), rgba(6, 182, 212, 0.18));
-    border-bottom: 1px solid rgba(148, 163, 184, 0.2);
-    color: #e2e8f0;
-    backdrop-filter: blur(10px);
-  }
-
-  .demo-banner__content {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    font-size: 0.95rem;
-  }
-
-  .demo-banner__label {
-    font-weight: 600;
-    color: #f8fafc;
-  }
-
-  .demo-banner__hint {
-    color: rgba(226, 232, 240, 0.7);
-  }
-
-  .demo-banner__action {
-    border: 1px solid rgba(148, 163, 184, 0.6);
-    background: rgba(15, 23, 42, 0.4);
-    color: #f8fafc;
-    padding: 6px 14px;
-    border-radius: 999px;
-    font-size: 0.85rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: border-color 0.2s ease, background 0.2s ease;
-  }
-
-  .demo-banner__action:hover {
-    border-color: rgba(248, 250, 252, 0.8);
-    background: rgba(15, 23, 42, 0.6);
-  }
-
   /* Ambient visuals (Static)
      Static backgrounds allow glass panels (backdrop-filter) without GPU cost.
      Landing page has its own animated effects via data-fx-* attributes. */

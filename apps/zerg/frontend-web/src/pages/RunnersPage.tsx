@@ -111,7 +111,7 @@ export default function RunnersPage() {
       <div className="runners-page">
         <SectionHeader
           title="Runners"
-          description="Infrastructure nodes that execute commands for your agents."
+          description="Infrastructure nodes that execute commands for your fiches."
           actions={
             <Button variant="primary" onClick={() => setShowAddModal(true)}>
               <PlusIcon />

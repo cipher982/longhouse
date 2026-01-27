@@ -143,9 +143,9 @@ class WorkflowValidator:
                     tool_config = node.node_type.get("Tool", {}) if isinstance(node.node_type, dict) else {}
                     tool_errors = self._validate_tool_node(node.node_id, tool_config)
                 errors.extend(tool_errors)
-            elif node_type in ["agent", "agentidentity"]:
-                agent_errors = self._validate_agent_node(node.node_id, node)
-                errors.extend(agent_errors)
+            elif node_type in ["fiche", "ficheidentity"]:
+                fiche_errors = self._validate_fiche_node(node.node_id, node)
+                errors.extend(fiche_errors)
 
         return errors
 
@@ -198,18 +198,18 @@ class WorkflowValidator:
 
         return errors
 
-    def _validate_agent_node(self, node_id: str, node) -> List[ValidationError]:
-        """Validate agent node configuration."""
+    def _validate_fiche_node(self, node_id: str, node) -> List[ValidationError]:
+        """Validate fiche node configuration."""
         errors = []
 
-        # Check for required agent_id in config
-        agent_id = None
+        # Check for required fiche_id in config
+        fiche_id = None
         if hasattr(node, "config") and node.config:
-            agent_id = node.config.get("agent_id")
+            fiche_id = node.config.get("fiche_id")
 
-        if not agent_id:
+        if not fiche_id:
             errors.append(
-                ValidationError(code="MISSING_AGENT_ID", message=f"Agent node {node_id} missing required agent_id", node_id=node_id)
+                ValidationError(code="MISSING_FICHE_ID", message=f"Fiche node {node_id} missing required fiche_id", node_id=node_id)
             )
 
         return errors

@@ -180,7 +180,7 @@ screenshots:
     output: public/images/landing/canvas-preview.png
 
   chat-preview:
-    description: Jarvis chat conversation
+    description: Oikos chat conversation
     url: /chat?thread=marketing&marketing=true
     viewport: { width: 1400, height: 900 }
     output: public/images/landing/chat-preview.png
@@ -412,7 +412,7 @@ marketing-seed: ## Re-seed marketing data only
 - [ ] Invalid name shows error state
 
 #### Task 1.2: Thread name resolution
-**File:** `apps/zerg/frontend-web/src/jarvis/app/App.tsx` (or thread context)
+**File:** `apps/zerg/frontend-web/src/oikos/app/App.tsx` (or thread context)
 
 - Read `thread` param from URL
 - If param exists, resolve by name: `GET /api/threads?name={name}`
@@ -499,7 +499,7 @@ useEffect(() => {
 - [ ] Works with marketing mode
 
 #### Task 3.2: Chat ready signal
-**File:** `apps/zerg/frontend-web/src/jarvis/app/App.tsx` (or chat view)
+**File:** `apps/zerg/frontend-web/src/oikos/app/App.tsx` (or chat view)
 
 **Acceptance criteria:**
 - [ ] `data-ready="true"` set when messages rendered
@@ -627,7 +627,7 @@ After implementation, verify:
 | File | Change |
 |------|--------|
 | `apps/zerg/frontend-web/src/pages/CanvasPage.tsx` | URL params, ready signal |
-| `apps/zerg/frontend-web/src/jarvis/app/App.tsx` | URL params, ready signal |
+| `apps/zerg/frontend-web/src/oikos/app/App.tsx` | URL params, ready signal |
 | `apps/zerg/frontend-web/src/pages/DashboardPage.tsx` | Ready signal |
 | `apps/zerg/frontend-web/src/App.tsx` | Marketing mode toggle |
 | `apps/zerg/frontend-web/src/styles/marketing-mode.css` | New file |

@@ -2,7 +2,7 @@
 """Seed user context from a local config file.
 
 This script populates the user's context field with servers, integrations,
-and preferences that will be injected into AI agent prompts.
+and preferences that will be injected into AI fiche prompts.
 
 Usage:
     python scripts/seed_user_context.py                    # Uses default path

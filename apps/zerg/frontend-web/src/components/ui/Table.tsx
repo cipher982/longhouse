@@ -9,7 +9,7 @@ interface TableProps {
 export const Table: React.FC<TableProps> & {
   Header: React.FC<{ children: React.ReactNode; className?: string }>;
   Body: React.FC<{ children: React.ReactNode; className?: string; id?: string }>;
-  Row: React.FC<{ children: React.ReactNode; className?: string; onClick?: () => void; onKeyDown?: (e: React.KeyboardEvent<HTMLTableRowElement>) => void; style?: React.CSSProperties; 'aria-expanded'?: boolean | 'true' | 'false'; 'data-agent-id'?: number }>;
+  Row: React.FC<{ children: React.ReactNode; className?: string; onClick?: () => void; onKeyDown?: (e: React.KeyboardEvent<HTMLTableRowElement>) => void; style?: React.CSSProperties; 'aria-expanded'?: boolean | 'true' | 'false'; 'data-fiche-id'?: number }>;
   Cell: React.FC<{ children: React.ReactNode; className?: string; isHeader?: boolean; colSpan?: number; onClick?: () => void; style?: React.CSSProperties; 'data-label'?: string }>;
 } = ({ className, children }) => {
   return (

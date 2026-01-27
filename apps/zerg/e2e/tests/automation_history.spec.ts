@@ -21,50 +21,50 @@ test.beforeEach(async ({ request }) => {
 });
 
 /**
- * Create an agent via UI and return its ID.
+ * Create an fiche via UI and return its ID.
  * CRITICAL: Gets ID from API response, NOT from DOM query (.first() is racy).
  */
-async function createAgentAndGetId(page: Page): Promise<string> {
+async function createFicheAndGetId(page: Page): Promise<string> {
   await page.goto('/');
 
-  const createBtn = page.locator('[data-testid="create-agent-btn"]');
+  const createBtn = page.locator('[data-testid="create-fiche-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
   await expect(createBtn).toBeEnabled({ timeout: 5000 });
 
-  // Capture API response to get the ACTUAL created agent ID
+  // Capture API response to get the ACTUAL created fiche ID
   const [response] = await Promise.all([
     page.waitForResponse(
-      (r) => r.url().includes('/api/agents') && r.request().method() === 'POST' && r.status() === 201,
+      (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
       { timeout: 10000 }
     ),
     createBtn.click(),
   ]);
 
-  // Parse the agent ID from the response body - this is deterministic
+  // Parse the fiche ID from the response body - this is deterministic
   const body = await response.json();
-  const agentId = String(body.id);
+  const ficheId = String(body.id);
 
-  if (!agentId || agentId === 'undefined') {
-    throw new Error(`Failed to get agent ID from API response: ${JSON.stringify(body)}`);
+  if (!ficheId || ficheId === 'undefined') {
+    throw new Error(`Failed to get fiche ID from API response: ${JSON.stringify(body)}`);
   }
 
-  // Wait for THIS SPECIFIC agent's row to appear (not just any row)
-  const row = page.locator(`tr[data-agent-id="${agentId}"]`);
+  // Wait for THIS SPECIFIC fiche's row to appear (not just any row)
+  const row = page.locator(`tr[data-fiche-id="${ficheId}"]`);
   await expect(row).toBeVisible({ timeout: 10000 });
 
-  return agentId;
+  return ficheId;
 }
 
 test.describe('Automation History Section', () => {
   test('Collapsible section toggles visibility', async ({ page, request }) => {
     console.log('🎯 Testing: Automation history collapse/expand toggle');
 
-    const agentId = await createAgentAndGetId(page);
+    const ficheId = await createFicheAndGetId(page);
 
     // Create a chat thread first to prevent auto-creation
     await request.post('/api/threads', {
       data: {
-        agent_id: parseInt(agentId),
+        fiche_id: parseInt(ficheId),
         title: 'Chat Thread',
         thread_type: 'chat',
       }
@@ -73,7 +73,7 @@ test.describe('Automation History Section', () => {
     // Create a scheduled automation run via API
     const response = await request.post('/api/threads', {
       data: {
-        agent_id: parseInt(agentId),
+        fiche_id: parseInt(ficheId),
         title: 'Scheduled Test Run',
         thread_type: 'scheduled',
       }
@@ -84,7 +84,7 @@ test.describe('Automation History Section', () => {
     console.log(`📊 Created scheduled thread ID: ${thread.id}`);
 
     // Navigate to chat to see automation history
-    await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
+    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
     await page.waitForLoadState('networkidle');
     // Wait for chat interface to be ready (deterministic)
 
@@ -116,12 +116,12 @@ test.describe('Automation History Section', () => {
   test('Scheduled runs show correct badge', async ({ page, request }) => {
     console.log('🎯 Testing: Scheduled run badge display');
 
-    const agentId = await createAgentAndGetId(page);
+    const ficheId = await createFicheAndGetId(page);
 
     // Create a chat thread first to prevent auto-creation
     await request.post('/api/threads', {
       data: {
-        agent_id: parseInt(agentId),
+        fiche_id: parseInt(ficheId),
         title: 'Chat Thread',
         thread_type: 'chat',
       }
@@ -130,7 +130,7 @@ test.describe('Automation History Section', () => {
     // Create a scheduled run
     const response = await request.post('/api/threads', {
       data: {
-        agent_id: parseInt(agentId),
+        fiche_id: parseInt(ficheId),
         title: 'Scheduled Automation',
         thread_type: 'scheduled',
       }
@@ -140,7 +140,7 @@ test.describe('Automation History Section', () => {
     const thread = await response.json();
     console.log(`📊 Created scheduled thread ID: ${thread.id}`);
 
-    await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
+    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
     await page.waitForLoadState('networkidle');
     // Wait for chat interface to be ready (deterministic)
 
@@ -166,12 +166,12 @@ test.describe('Automation History Section', () => {
   test('Manual runs show correct badge', async ({ page, request }) => {
     console.log('🎯 Testing: Manual run badge display');
 
-    const agentId = await createAgentAndGetId(page);
+    const ficheId = await createFicheAndGetId(page);
 
     // Create a chat thread first to prevent auto-creation
     await request.post('/api/threads', {
       data: {
-        agent_id: parseInt(agentId),
+        fiche_id: parseInt(ficheId),
         title: 'Chat Thread',
         thread_type: 'chat',
       }
@@ -180,7 +180,7 @@ test.describe('Automation History Section', () => {
     // Create a manual run
     const response = await request.post('/api/threads', {
       data: {
-        agent_id: parseInt(agentId),
+        fiche_id: parseInt(ficheId),
         title: 'Manual Run',
         thread_type: 'manual',
       }
@@ -190,7 +190,7 @@ test.describe('Automation History Section', () => {
     const thread = await response.json();
     console.log(`📊 Created manual thread ID: ${thread.id}`);
 
-    await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
+    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
     await page.waitForLoadState('networkidle');
     // Wait for chat interface to be ready (deterministic)
 
@@ -216,12 +216,12 @@ test.describe('Automation History Section', () => {
   test('Automation threads separated from chat threads', async ({ page, request }) => {
     console.log('🎯 Testing: Thread type separation');
 
-    const agentId = await createAgentAndGetId(page);
+    const ficheId = await createFicheAndGetId(page);
 
     // Create both types of threads
     const chatResponse = await request.post('/api/threads', {
       data: {
-        agent_id: parseInt(agentId),
+        fiche_id: parseInt(ficheId),
         title: 'Regular Chat Thread',
         thread_type: 'chat'
       }
@@ -232,7 +232,7 @@ test.describe('Automation History Section', () => {
 
     const scheduledResponse = await request.post('/api/threads', {
       data: {
-        agent_id: parseInt(agentId),
+        fiche_id: parseInt(ficheId),
         title: 'Scheduled Run',
         thread_type: 'scheduled'
       }
@@ -241,7 +241,7 @@ test.describe('Automation History Section', () => {
     const scheduledThread = await scheduledResponse.json();
     console.log(`📊 Created scheduled thread ID: ${scheduledThread.id}`);
 
-    await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
+    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
     await page.waitForLoadState('networkidle');
     // Wait for chat interface to be ready (deterministic)
 
@@ -273,12 +273,12 @@ test.describe('Automation History Section', () => {
   test('Automation count badge shows correct number', async ({ page, request }) => {
     console.log('🎯 Testing: Automation count badge accuracy');
 
-    const agentId = await createAgentAndGetId(page);
+    const ficheId = await createFicheAndGetId(page);
 
     // Create a chat thread first to prevent auto-creation
     await request.post('/api/threads', {
       data: {
-        agent_id: parseInt(agentId),
+        fiche_id: parseInt(ficheId),
         title: 'Chat Thread',
         thread_type: 'chat',
       }
@@ -288,7 +288,7 @@ test.describe('Automation History Section', () => {
     for (let i = 0; i < 3; i++) {
       const response = await request.post('/api/threads', {
         data: {
-          agent_id: parseInt(agentId),
+          fiche_id: parseInt(ficheId),
           title: `Automation Run ${i + 1}`,
           thread_type: i % 2 === 0 ? 'scheduled' : 'manual',
         }
@@ -297,7 +297,7 @@ test.describe('Automation History Section', () => {
     }
     console.log('📊 Created 3 automation threads');
 
-    await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
+    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
     await page.waitForLoadState('networkidle');
     // Wait for chat interface to be ready (deterministic)
 
@@ -319,12 +319,12 @@ test.describe('Automation History Section', () => {
   test('Can select and view automation run', async ({ page, request }) => {
     console.log('🎯 Testing: Selecting automation run navigates to thread');
 
-    const agentId = await createAgentAndGetId(page);
+    const ficheId = await createFicheAndGetId(page);
 
     // Create a chat thread first to prevent auto-creation
     await request.post('/api/threads', {
       data: {
-        agent_id: parseInt(agentId),
+        fiche_id: parseInt(ficheId),
         title: 'Chat Thread',
         thread_type: 'chat',
       }
@@ -333,7 +333,7 @@ test.describe('Automation History Section', () => {
     // Create automation run with a message
     const response = await request.post('/api/threads', {
       data: {
-        agent_id: parseInt(agentId),
+        fiche_id: parseInt(ficheId),
         title: 'Clickable Automation',
         thread_type: 'manual',
       }
@@ -341,7 +341,7 @@ test.describe('Automation History Section', () => {
     expect(response.status()).toBe(201);
     const thread = await response.json();
 
-    await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
+    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
     await page.waitForLoadState('networkidle');
     // Wait for chat interface to be ready (deterministic)
 
@@ -366,18 +366,18 @@ test.describe('Automation History Section', () => {
   test('Automation section hidden when no automation threads exist', async ({ page, request }) => {
     console.log('🎯 Testing: Automation section hidden when empty');
 
-    const agentId = await createAgentAndGetId(page);
+    const ficheId = await createFicheAndGetId(page);
 
     // Only create a regular chat thread
     await request.post('/api/threads', {
       data: {
-        agent_id: parseInt(agentId),
+        fiche_id: parseInt(ficheId),
         title: 'Chat Only',
         thread_type: 'chat'
       }
     });
 
-    await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
+    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
 
     // Wait for chat interface to load (don't use networkidle as it may timeout)
     await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });

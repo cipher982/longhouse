@@ -1,4 +1,4 @@
-"""QA Agent job - AI-powered monitoring for Swarmlet health.
+"""QA Fiche job - AI-powered monitoring for Swarmlet health.
 
 Runs every 15 minutes to:
 - Collect system health metrics
@@ -6,7 +6,7 @@ Runs every 15 minutes to:
 - Alert on chronic issues via Discord
 """
 
-from zerg.jobs.qa.qa_agent import run
+from zerg.jobs.qa.qa_fiche import run
 from zerg.jobs.registry import JobConfig
 from zerg.jobs.registry import job_registry
 
@@ -19,7 +19,7 @@ job_registry.register(
         max_attempts=1,  # Don't retry - AI analysis is expensive
         tags=["zerg", "qa", "agentic", "monitoring"],
         project="zerg",
-        description="AI QA agent - monitors Zerg health and detects anomalies",
+        description="AI QA fiche - monitors Zerg health and detects anomalies",
     )
 )
 

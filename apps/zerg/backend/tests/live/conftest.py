@@ -22,7 +22,7 @@ def auth_headers(request):
     return headers
 
 
-class SupervisorClient:
+class OikosClient:
     def __init__(self, base_url: str, headers: Dict[str, str]):
         self.base_url = base_url
         self.headers = headers
@@ -30,7 +30,7 @@ class SupervisorClient:
     def dispatch(self, task: str) -> int:
         """Dispatches a task and returns the run_id."""
         resp = requests.post(
-            f"{self.base_url}/api/jarvis/supervisor", json={"task": task}, headers=self.headers, timeout=10
+            f"{self.base_url}/api/oikos/run", json={"task": task}, headers=self.headers, timeout=10
         )
         try:
             resp.raise_for_status()
@@ -83,7 +83,7 @@ class SupervisorClient:
                         events.append({"type": event_type, "data": data})
 
                     # Check for completion
-                    if event_type == "supervisor_complete":
+                    if event_type == "oikos_complete":
                         completion_time = time.time()
 
                     # Grace period: drain trailing events after completion
@@ -96,7 +96,7 @@ class SupervisorClient:
                         if isinstance(data, dict):
                             payload = data.get("payload", {})
                             error_msg = payload.get("error") or payload.get("message") or data.get("error", str(data))
-                        raise RuntimeError(f"Supervisor Error: {error_msg}")
+                        raise RuntimeError(f"Oikos Error: {error_msg}")
 
         return events
 
@@ -130,7 +130,7 @@ class SupervisorClient:
                         data = data_str
 
                     # Handle Events - access nested payload
-                    if event_type == "supervisor_complete":
+                    if event_type == "oikos_complete":
                         if isinstance(data, dict):
                             # Result is nested in payload
                             return data.get("payload", {}).get("result", "")
@@ -143,11 +143,11 @@ class SupervisorClient:
                         if isinstance(data, dict):
                             payload = data.get("payload", {})
                             error_msg = payload.get("error") or payload.get("message") or data.get("error", str(data))
-                        raise RuntimeError(f"Supervisor Error: {error_msg}")
+                        raise RuntimeError(f"Oikos Error: {error_msg}")
 
         return ""
 
 
 @pytest.fixture(scope="session")
-def supervisor_client(base_url, auth_headers):
-    return SupervisorClient(base_url, auth_headers)
+def oikos_client(base_url, auth_headers):
+    return OikosClient(base_url, auth_headers)

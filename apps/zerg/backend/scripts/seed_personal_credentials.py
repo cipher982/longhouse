@@ -2,7 +2,7 @@
 """Seed personal tool credentials from a local config file.
 
 This script populates the account_connector_credentials table with credentials
-for personal integrations (Traccar, WHOOP, Obsidian) that enable Jarvis's
+for personal integrations (Traccar, WHOOP, Obsidian) that enable Oikos's
 personal tools.
 
 Usage:

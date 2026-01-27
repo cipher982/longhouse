@@ -1,65 +1,65 @@
 import { testLog } from './test-logger';
 
 import { Page, expect } from '@playwright/test';
-import { createApiClient, Agent, Thread, CreateAgentRequest, CreateThreadRequest } from './api-client';
-import { resetDatabaseForWorker } from './database-helpers';
-import { createAgentViaAPI, createMultipleAgents, cleanupAgents } from './agent-helpers';
+import { createApiClient, Fiche, Thread, CreateFicheRequest, CreateThreadRequest } from './api-client';
+import { resetDatabaseForCommis } from './database-helpers';
+import { createFicheViaAPI, createMultipleFiches, cleanupFiches } from './fiche-helpers';
 import { retryWithBackoff, waitForStableElement, logTestStep } from './test-utils';
 
 export interface TestContext {
-  agents: Agent[];
+  fiches: Fiche[];
   threads: Thread[];
 }
 
 /**
  * Setup helper that creates test data and returns a context object
  */
-export async function setupTestData(workerId: string, options: {
-  agents?: CreateAgentRequest[];
-  threadsPerAgent?: number;
+export async function setupTestData(commisId: string, options: {
+  fiches?: CreateFicheRequest[];
+  threadsPerFiche?: number;
 } = {}): Promise<TestContext> {
-  logTestStep('Setting up test data', { workerId, options });
+  logTestStep('Setting up test data', { commisId, options });
 
-  const apiClient = createApiClient(workerId);
+  const apiClient = createApiClient(commisId);
   const context: TestContext = {
-    agents: [],
+    fiches: [],
     threads: []
   };
 
-  // Create agents using the consolidated helper
-  const agentConfigs = options.agents || [{}]; // Default to one agent
-  for (const agentConfig of agentConfigs) {
-    const agent = await createAgentViaAPI(workerId, agentConfig);
-    context.agents.push(agent);
+  // Create fiches using the consolidated helper
+  const ficheConfigs = options.fiches || [{}]; // Default to one fiche
+  for (const ficheConfig of ficheConfigs) {
+    const fiche = await createFicheViaAPI(commisId, ficheConfig);
+    context.fiches.push(fiche);
 
-    // Create threads for this agent
-    const threadCount = options.threadsPerAgent || 0;
+    // Create threads for this fiche
+    const threadCount = options.threadsPerFiche || 0;
     for (let i = 0; i < threadCount; i++) {
       const thread = await apiClient.createThread({
-        agent_id: agent.id,
-        title: `Test Thread ${i + 1} for ${agent.name}`
+        fiche_id: fiche.id,
+        title: `Test Thread ${i + 1} for ${fiche.name}`
       });
       context.threads.push(thread);
     }
   }
 
-  logTestStep('Test data setup complete', { agentCount: context.agents.length, threadCount: context.threads.length });
+  logTestStep('Test data setup complete', { ficheCount: context.fiches.length, threadCount: context.threads.length });
   return context;
 }
 
 /**
  * Cleanup helper that removes test data
  */
-export async function cleanupTestData(workerId: string, context: TestContext): Promise<void> {
+export async function cleanupTestData(commisId: string, context: TestContext): Promise<void> {
   if (!context) {
     return;
   }
 
-  logTestStep('Cleaning up test data', { workerId, agentCount: context.agents?.length, threadCount: context.threads?.length });
+  logTestStep('Cleaning up test data', { commisId, ficheCount: context.fiches?.length, threadCount: context.threads?.length });
 
-  const apiClient = createApiClient(workerId);
+  const apiClient = createApiClient(commisId);
 
-  // Delete threads first (they reference agents)
+  // Delete threads first (they reference fiches)
   if (context.threads) {
     for (const thread of context.threads) {
       try {
@@ -70,9 +70,9 @@ export async function cleanupTestData(workerId: string, context: TestContext): P
     }
   }
 
-  // Delete agents using the consolidated helper
-  if (context.agents) {
-    await cleanupAgents(workerId, context.agents);
+  // Delete fiches using the consolidated helper
+  if (context.fiches) {
+    await cleanupFiches(commisId, context.fiches);
   }
 
   logTestStep('Test data cleanup complete');
@@ -99,7 +99,7 @@ export async function waitForDashboardReady(page: Page): Promise<void> {
     // Wait for critical UI elements to be interactive
     await Promise.all([
       page.waitForSelector('#dashboard:visible', { timeout: 2000 }),
-      page.waitForSelector('[data-testid="create-agent-btn"]:not([disabled])', { timeout: 2000 })
+      page.waitForSelector('[data-testid="create-fiche-btn"]:not([disabled])', { timeout: 2000 })
     ]);
   } catch (error) {
     // Log detailed error information
@@ -111,7 +111,7 @@ export async function waitForDashboardReady(page: Page): Promise<void> {
       dashboardContainer: !!document.querySelector('#dashboard-container'),
       dashboard: !!document.querySelector('#dashboard'),
       table: !!document.querySelector('table'),
-      createBtn: !!document.querySelector('[data-testid="create-agent-btn"]'),
+      createBtn: !!document.querySelector('[data-testid="create-fiche-btn"]'),
       bodyHTML: document.body.innerHTML.substring(0, 200)
     }));
 
@@ -128,50 +128,50 @@ export async function waitForDashboardReady(page: Page): Promise<void> {
 }
 
 /**
- * Get the count of agent rows in the dashboard
+ * Get the count of fiche rows in the dashboard
  */
-export async function getAgentRowCount(page: Page): Promise<number> {
+export async function getFicheRowCount(page: Page): Promise<number> {
   await page.waitForLoadState('networkidle');
-  return await page.locator('tr[data-agent-id]:visible').count();
+  return await page.locator('tr[data-fiche-id]:visible').count();
 }
 
 /**
- * Create an agent via the UI and return its ID
+ * Create an fiche via the UI and return its ID
  * CRITICAL: Gets ID from API response, NOT from DOM query (.first() is racy in parallel tests)
  */
-export async function createAgentViaUI(page: Page): Promise<string> {
-  const createBtn = page.locator('[data-testid="create-agent-btn"]');
+export async function createFicheViaUI(page: Page): Promise<string> {
+  const createBtn = page.locator('[data-testid="create-fiche-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
   await expect(createBtn).toBeEnabled({ timeout: 5000 });
 
-  // Capture API response to get the ACTUAL created agent ID
+  // Capture API response to get the ACTUAL created fiche ID
   const [response] = await Promise.all([
     page.waitForResponse(
-      (r) => r.url().includes('/api/agents') && r.request().method() === 'POST' && r.status() === 201,
+      (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
       { timeout: 10000 }
     ),
     createBtn.click(),
   ]);
 
-  // Parse the agent ID from the response body - this is deterministic
+  // Parse the fiche ID from the response body - this is deterministic
   const body = await response.json();
-  const agentId = String(body.id);
+  const ficheId = String(body.id);
 
-  if (!agentId || agentId === 'undefined') {
-    throw new Error(`Failed to get agent ID from API response: ${JSON.stringify(body)}`);
+  if (!ficheId || ficheId === 'undefined') {
+    throw new Error(`Failed to get fiche ID from API response: ${JSON.stringify(body)}`);
   }
 
-  // Wait for THIS SPECIFIC agent's row to appear (not just any row)
-  const newRow = page.locator(`tr[data-agent-id="${agentId}"]`);
+  // Wait for THIS SPECIFIC fiche's row to appear (not just any row)
+  const newRow = page.locator(`tr[data-fiche-id="${ficheId}"]`);
   await expect(newRow).toBeVisible({ timeout: 10000 });
 
-  return agentId;
+  return ficheId;
 }
 
 /**
- * Edit an agent via the UI modal
+ * Edit an fiche via the UI modal
  */
-export async function editAgentViaUI(page: Page, agentId: string, data: {
+export async function editFicheViaUI(page: Page, ficheId: string, data: {
   name?: string;
   systemInstructions?: string;
   taskInstructions?: string;
@@ -179,13 +179,13 @@ export async function editAgentViaUI(page: Page, agentId: string, data: {
   model?: string;
 }): Promise<void> {
   // Open edit modal
-  await page.locator(`[data-testid="edit-agent-${agentId}"]`).click();
-  await expect(page.locator('#agent-modal')).toBeVisible({ timeout: 2000 });
-  await page.waitForSelector('#agent-name:not([disabled])', { timeout: 2000 });
+  await page.locator(`[data-testid="edit-fiche-${ficheId}"]`).click();
+  await expect(page.locator('#fiche-modal')).toBeVisible({ timeout: 2000 });
+  await page.waitForSelector('#fiche-name:not([disabled])', { timeout: 2000 });
 
   // Fill form fields
   if (data.name !== undefined) {
-    await page.locator('#agent-name').fill(data.name);
+    await page.locator('#fiche-name').fill(data.name);
   }
 
   if (data.systemInstructions !== undefined) {
@@ -211,16 +211,16 @@ export async function editAgentViaUI(page: Page, agentId: string, data: {
   }
 
   // Save changes
-  await page.locator('#save-agent').click();
+  await page.locator('#save-fiche').click();
 
   // Wait for modal to close (hidden)
-  await expect(page.locator('#agent-modal')).not.toBeVisible({ timeout: 5000 });
+  await expect(page.locator('#fiche-modal')).not.toBeVisible({ timeout: 5000 });
 }
 
 /**
- * Delete an agent via the UI and handle confirmation dialog
+ * Delete an fiche via the UI and handle confirmation dialog
  */
-export async function deleteAgentViaUI(page: Page, agentId: string, confirm: boolean = true): Promise<void> {
+export async function deleteFicheViaUI(page: Page, ficheId: string, confirm: boolean = true): Promise<void> {
   // Set up dialog handler
   page.once('dialog', (dialog) => {
     if (confirm) {
@@ -231,22 +231,22 @@ export async function deleteAgentViaUI(page: Page, agentId: string, confirm: boo
   });
 
   // Click delete button
-  await page.locator(`[data-testid="delete-agent-${agentId}"]`).click();
+  await page.locator(`[data-testid="delete-fiche-${ficheId}"]`).click();
 
   if (confirm) {
     // Wait for row to disappear
-    await expect(page.locator(`tr[data-agent-id="${agentId}"]`)).toHaveCount(0, { timeout: 5000 });
+    await expect(page.locator(`tr[data-fiche-id="${ficheId}"]`)).toHaveCount(0, { timeout: 5000 });
   } else {
     // Row should still be present
-    await expect(page.locator(`tr[data-agent-id="${agentId}"]`)).toHaveCount(1);
+    await expect(page.locator(`tr[data-fiche-id="${ficheId}"]`)).toHaveCount(1);
   }
 }
 
 /**
- * Navigate to chat for a specific agent
+ * Navigate to chat for a specific fiche
  */
-export async function navigateToChat(page: Page, agentId: string): Promise<void> {
-  await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
+export async function navigateToChat(page: Page, ficheId: string): Promise<void> {
+  await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
 
   // Wait for chat interface to load (if implemented)
   try {
@@ -259,21 +259,21 @@ export async function navigateToChat(page: Page, agentId: string): Promise<void>
 
 /**
  * Reset the database to a clean state
- * @deprecated Use resetDatabaseForWorker from database-helpers.ts instead
+ * @deprecated Use resetDatabaseForCommis from database-helpers.ts instead
  */
-export async function resetDatabase(workerId: string): Promise<void> {
-  logTestStep('Resetting database (deprecated method)', { workerId });
-  await resetDatabaseForWorker(workerId);
+export async function resetDatabase(commisId: string): Promise<void> {
+  logTestStep('Resetting database (deprecated method)', { commisId });
+  await resetDatabaseForCommis(commisId);
 }
 
 /**
  * Check if the backend is healthy and responding
  */
-export async function checkBackendHealth(workerId: string = '0'): Promise<boolean> {
-  const apiClient = createApiClient(workerId);
+export async function checkBackendHealth(commisId: string = '0'): Promise<boolean> {
+  const apiClient = createApiClient(commisId);
   try {
     const response = await apiClient.healthCheck();
-    return response && response.message === 'Agent Platform API is running';
+    return response && response.message === 'Fiche Platform API is running';
   } catch (error) {
     testLog.error('Backend health check failed:', error);
     return false;
@@ -308,7 +308,7 @@ export function skipIfNotImplemented(page: Page, selector: string, reason: strin
  * await waitForToast(page, 'Settings saved');
  *
  * // Wait for success toast
- * const toast = getToastLocator(page, { type: 'success', text: 'Agent created' });
+ * const toast = getToastLocator(page, { type: 'success', text: 'Fiche created' });
  * await expect(toast).toBeVisible();
  */
 
@@ -363,12 +363,12 @@ export async function waitForToast(
  * Create a test thread using the API client
  * This is a convenience wrapper for tests that have a Page but need to create threads
  */
-export async function createTestThread(page: Page, agentId: string, title: string): Promise<Thread> {
-  const workerId = process.env.TEST_PARALLEL_INDEX ?? process.env.TEST_WORKER_INDEX ?? '0';
-  const apiClient = createApiClient(workerId);
+export async function createTestThread(page: Page, ficheId: string, title: string): Promise<Thread> {
+  const commisId = process.env.TEST_PARALLEL_INDEX ?? process.env.TEST_WORKER_INDEX ?? '0';
+  const apiClient = createApiClient(commisId);
 
   const thread = await apiClient.createThread({
-    agent_id: agentId,
+    fiche_id: ficheId,
     title: title || `Test Thread ${Date.now()}`,
   });
 

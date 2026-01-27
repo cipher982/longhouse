@@ -153,7 +153,7 @@ export function mapSessionsToEntities(
 
       entities.set(session.id, {
         id: session.id,
-        type: "worker",
+        type: "commis",
         roomId: room.id,
         position,
         status: mapSessionStatusToEntityStatus(session.status),

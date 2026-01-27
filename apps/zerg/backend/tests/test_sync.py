@@ -29,7 +29,7 @@ def test_push_sync_operations(client, auth_headers):
     }
 
     # Push operations
-    response = client.post("/api/jarvis/sync/push", json=push_data, headers=auth_headers)
+    response = client.post("/api/oikos/sync/push", json=push_data, headers=auth_headers)
     assert response.status_code == 200
 
     data = response.json()
@@ -59,13 +59,13 @@ def test_push_sync_operations_idempotent(client, auth_headers):
     }
 
     # First push
-    response1 = client.post("/api/jarvis/sync/push", json=push_data, headers=auth_headers)
+    response1 = client.post("/api/oikos/sync/push", json=push_data, headers=auth_headers)
     assert response1.status_code == 200
     data1 = response1.json()
     assert "op-duplicate" in data1["acked"]
 
     # Second push with same opId - should also succeed
-    response2 = client.post("/api/jarvis/sync/push", json=push_data, headers=auth_headers)
+    response2 = client.post("/api/oikos/sync/push", json=push_data, headers=auth_headers)
     assert response2.status_code == 200
     data2 = response2.json()
     assert "op-duplicate" in data2["acked"]
@@ -97,7 +97,7 @@ def test_push_batch_with_mixed_new_and_duplicate_operations(client, auth_headers
             }
         ],
     }
-    response = client.post("/api/jarvis/sync/push", json=initial_push, headers=auth_headers)
+    response = client.post("/api/oikos/sync/push", json=initial_push, headers=auth_headers)
     assert response.status_code == 200
     initial_cursor = response.json()["nextCursor"]
 
@@ -131,7 +131,7 @@ def test_push_batch_with_mixed_new_and_duplicate_operations(client, auth_headers
         ],
     }
 
-    response = client.post("/api/jarvis/sync/push", json=mixed_batch, headers=auth_headers)
+    response = client.post("/api/oikos/sync/push", json=mixed_batch, headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
 
@@ -179,10 +179,10 @@ def test_pull_sync_operations(client, auth_headers):
             },
         ],
     }
-    client.post("/api/jarvis/sync/push", json=push_data, headers=auth_headers)
+    client.post("/api/oikos/sync/push", json=push_data, headers=auth_headers)
 
     # Pull from cursor 0 (should get all operations)
-    response = client.get("/api/jarvis/sync/pull?cursor=0", headers=auth_headers)
+    response = client.get("/api/oikos/sync/pull?cursor=0", headers=auth_headers)
     assert response.status_code == 200
 
     data = response.json()
@@ -211,10 +211,10 @@ def test_pull_sync_operations_with_cursor(client, auth_headers):
             for i in range(1, 4)
         ],
     }
-    client.post("/api/jarvis/sync/push", json=push_data, headers=auth_headers)
+    client.post("/api/oikos/sync/push", json=push_data, headers=auth_headers)
 
     # Pull from cursor 1 (should get operations after first one)
-    response = client.get("/api/jarvis/sync/pull?cursor=1", headers=auth_headers)
+    response = client.get("/api/oikos/sync/pull?cursor=1", headers=auth_headers)
     assert response.status_code == 200
 
     data = response.json()
@@ -227,7 +227,7 @@ def test_pull_sync_operations_with_cursor(client, auth_headers):
 def test_pull_sync_operations_empty(client, auth_headers):
     """Test pulling when no new operations exist."""
     # Pull from cursor 0 when no operations pushed
-    response = client.get("/api/jarvis/sync/pull?cursor=0", headers=auth_headers)
+    response = client.get("/api/oikos/sync/pull?cursor=0", headers=auth_headers)
     assert response.status_code == 200
 
     data = response.json()
@@ -238,7 +238,7 @@ def test_pull_sync_operations_empty(client, auth_headers):
 def test_pull_sync_operations_invalid_cursor(client, auth_headers):
     """Test pulling with invalid cursor."""
     # Negative cursor should fail
-    response = client.get("/api/jarvis/sync/pull?cursor=-1", headers=auth_headers)
+    response = client.get("/api/oikos/sync/pull?cursor=-1", headers=auth_headers)
     assert response.status_code == 400
 
 
@@ -261,7 +261,7 @@ def test_sync_operations_user_isolation(client, auth_headers, other_user, db_ses
             }
         ],
     }
-    response = client.post("/api/jarvis/sync/push", json=push_data, headers=auth_headers)
+    response = client.post("/api/oikos/sync/push", json=push_data, headers=auth_headers)
     assert response.status_code == 200
 
     # Verify operation is stored with correct user_id in database
@@ -274,7 +274,7 @@ def test_sync_operations_user_isolation(client, auth_headers, other_user, db_ses
     assert sync_op.body == {"text": "User message"}
 
     # Pull operations - should get back the operation
-    response = client.get("/api/jarvis/sync/pull?cursor=0", headers=auth_headers)
+    response = client.get("/api/oikos/sync/pull?cursor=0", headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert len(data["ops"]) == 1

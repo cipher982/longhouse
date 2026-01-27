@@ -170,12 +170,12 @@ class ToolNodeType(BaseModel):
     static_params: Dict[str, Any] = Field(default_factory=dict, description="Static parameters")
 
 
-class AgentNodeType(BaseModel):
-    """Agent node type configuration."""
+class FicheNodeType(BaseModel):
+    """Fiche node type configuration."""
 
-    agent_id: int = Field(0, description="ID of the agent to execute")
-    message: str = Field("Execute this task", description="Message to send to agent")
-    config: Dict[str, Any] = Field(default_factory=dict, description="Agent configuration")
+    fiche_id: int = Field(0, description="ID of the fiche to execute")
+    message: str = Field("Execute this task", description="Message to send to fiche")
+    config: Dict[str, Any] = Field(default_factory=dict, description="Fiche configuration")
 
 
 class TriggerNodeType(BaseModel):
@@ -191,20 +191,20 @@ class NodeTypeHelper:
     @staticmethod
     def parse_node_type(
         node_type_raw: Union[str, Dict[str, Any]],
-    ) -> tuple[str, Union[ToolNodeType, AgentNodeType, TriggerNodeType, None]]:
+    ) -> tuple[str, Union[ToolNodeType, FicheNodeType, TriggerNodeType, None]]:
         """
         Parse node type and return (type_name, typed_config).
 
         Replaces all isinstance(node_type_raw, dict) patterns in the codebase.
         """
         if isinstance(node_type_raw, dict):
-            # Handle frontend format: {"Tool": {...}}, {"Agent": {...}}, etc.
+            # Handle frontend format: {"Tool": {...}}, {"Fiche": {...}}, etc.
             if "Tool" in node_type_raw:
                 config_data = node_type_raw["Tool"] if isinstance(node_type_raw["Tool"], dict) else {}
                 return "tool", ToolNodeType(**config_data)
-            elif "Agent" in node_type_raw:
-                config_data = node_type_raw["Agent"] if isinstance(node_type_raw["Agent"], dict) else {}
-                return "agent", AgentNodeType(**config_data)
+            elif "Fiche" in node_type_raw:
+                config_data = node_type_raw["Fiche"] if isinstance(node_type_raw["Fiche"], dict) else {}
+                return "fiche", FicheNodeType(**config_data)
             elif "Trigger" in node_type_raw:
                 config_data = node_type_raw["Trigger"] if isinstance(node_type_raw["Trigger"], dict) else {}
                 return "trigger", TriggerNodeType(**config_data)
@@ -223,10 +223,10 @@ class NodeTypeHelper:
         return type_name == "tool"
 
     @staticmethod
-    def is_agent_type(node_type_raw: Union[str, Dict[str, Any]]) -> bool:
-        """Check if node type is an agent."""
+    def is_fiche_type(node_type_raw: Union[str, Dict[str, Any]]) -> bool:
+        """Check if node type is a fiche."""
         type_name, _ = NodeTypeHelper.parse_node_type(node_type_raw)
-        return type_name in ["agent", "agentidentity"]
+        return type_name in ["fiche", "ficheidentity"]
 
     @staticmethod
     def is_trigger_type(node_type_raw: Union[str, Dict[str, Any]]) -> bool:

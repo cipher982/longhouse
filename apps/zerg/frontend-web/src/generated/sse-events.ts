@@ -16,8 +16,8 @@ export interface UsageData {
   reasoning_tokens?: number;
 }
 
-/** Worker execution result */
-export type WorkerStatus = "success" | "failed";
+/** Commis execution result */
+export type CommisStatus = "success" | "failed";
 
 export interface ConnectedPayload {
   /** Connection confirmation message */
@@ -35,7 +35,7 @@ export interface HeartbeatPayload {
   timestamp?: string;
 }
 
-export interface SupervisorStartedPayload {
+export interface OikosStartedPayload {
   /** Run ID (may be omitted in legacy events) */
   run_id?: number;
   /** Thread ID for this conversation */
@@ -50,7 +50,7 @@ export interface SupervisorStartedPayload {
   trace_id?: string;
 }
 
-export interface SupervisorThinkingPayload {
+export interface OikosThinkingPayload {
   /** Thinking status message */
   message: string;
   run_id?: number;
@@ -58,7 +58,7 @@ export interface SupervisorThinkingPayload {
   trace_id?: string;
 }
 
-export interface SupervisorTokenPayload {
+export interface OikosTokenPayload {
   /** LLM token (may be empty string) */
   token: string;
   run_id?: number;
@@ -69,8 +69,8 @@ export interface SupervisorTokenPayload {
   trace_id?: string;
 }
 
-export interface SupervisorCompletePayload {
-  /** Final supervisor result */
+export interface OikosCompletePayload {
+  /** Final oikos result */
   result: string;
   /** Completion status ('success' for normal completion, 'cancelled' for user-initiated cancellation) */
   status: "success" | "cancelled";
@@ -78,7 +78,7 @@ export interface SupervisorCompletePayload {
   duration_ms?: number;
   usage?: UsageData;
   run_id?: number;
-  agent_id?: number;
+  fiche_id?: number;
   thread_id?: number;
   /** URL for debug/inspection */
   debug_url?: string;
@@ -88,7 +88,7 @@ export interface SupervisorCompletePayload {
   trace_id?: string;
 }
 
-export interface SupervisorDeferredPayload {
+export interface OikosDeferredPayload {
   /** Deferred status message */
   message: string;
   /** URL to re-attach to the running execution */
@@ -96,7 +96,7 @@ export interface SupervisorDeferredPayload {
   /** Timeout that triggered deferral */
   timeout_seconds?: number;
   run_id?: number;
-  agent_id?: number;
+  fiche_id?: number;
   thread_id?: number;
   /** Unique identifier for the assistant message */
   message_id?: string;
@@ -104,15 +104,15 @@ export interface SupervisorDeferredPayload {
   trace_id?: string;
 }
 
-export interface SupervisorWaitingPayload {
-  /** Waiting status message (e.g., worker spawned) */
+export interface OikosWaitingPayload {
+  /** Waiting status message (e.g., commis spawned) */
   message: string;
-  /** Worker job ID (if applicable) */
+  /** Commis job ID (if applicable) */
   job_id?: number;
   /** If false, keep SSE stream open while waiting */
   close_stream?: boolean;
   run_id?: number;
-  agent_id?: number;
+  fiche_id?: number;
   thread_id?: number;
   /** Unique identifier for the assistant message */
   message_id?: string;
@@ -120,9 +120,9 @@ export interface SupervisorWaitingPayload {
   trace_id?: string;
 }
 
-export interface SupervisorResumedPayload {
+export interface OikosResumedPayload {
   run_id?: number;
-  agent_id?: number;
+  fiche_id?: number;
   thread_id: number;
   /** Unique identifier for the assistant message */
   message_id: string;
@@ -140,36 +140,36 @@ export interface ErrorPayload {
   trace_id?: string;
 }
 
-export interface WorkerSpawnedPayload {
-  /** Worker job ID */
+export interface CommisSpawnedPayload {
+  /** Commis job ID */
   job_id: number;
-  /** Tool call ID for the spawn_worker invocation */
+  /** Tool call ID for the spawn_commis invocation */
   tool_call_id?: string;
-  /** Worker task (may be truncated to 100 chars) */
+  /** Commis task (may be truncated to 100 chars) */
   task: string;
-  /** LLM model for worker */
+  /** LLM model for commis */
   model?: string;
   run_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
 
-export interface WorkerStartedPayload {
+export interface CommisStartedPayload {
   job_id: number;
-  /** Worker execution ID */
-  worker_id: string;
+  /** Commis execution ID */
+  commis_id: string;
   run_id?: number;
-  /** Worker task (may be truncated) */
+  /** Commis task (may be truncated) */
   task?: string;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
 
-export interface WorkerCompletePayload {
+export interface CommisCompletePayload {
   job_id: number;
-  /** Worker execution ID */
-  worker_id?: string;
-  status: WorkerStatus;
+  /** Commis execution ID */
+  commis_id?: string;
+  status: CommisStatus;
   duration_ms?: number;
   /** Error message (only present if status=failed) */
   error?: string;
@@ -178,19 +178,19 @@ export interface WorkerCompletePayload {
   trace_id?: string;
 }
 
-export interface WorkerSummaryReadyPayload {
+export interface CommisSummaryReadyPayload {
   job_id: number;
-  /** Worker execution ID */
-  worker_id?: string;
-  /** Extracted worker summary */
+  /** Commis execution ID */
+  commis_id?: string;
+  /** Extracted commis summary */
   summary: string;
   run_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
 
-export interface WorkerToolStartedPayload {
-  worker_id: string;
+export interface CommisToolStartedPayload {
+  commis_id: string;
   tool_name: string;
   /** LangChain tool call ID */
   tool_call_id: string;
@@ -202,8 +202,8 @@ export interface WorkerToolStartedPayload {
   trace_id?: string;
 }
 
-export interface WorkerToolCompletedPayload {
-  worker_id: string;
+export interface CommisToolCompletedPayload {
+  commis_id: string;
   tool_name: string;
   tool_call_id: string;
   duration_ms: number;
@@ -214,8 +214,8 @@ export interface WorkerToolCompletedPayload {
   trace_id?: string;
 }
 
-export interface WorkerToolFailedPayload {
-  worker_id: string;
+export interface CommisToolFailedPayload {
+  commis_id: string;
   tool_name: string;
   tool_call_id: string;
   duration_ms: number;
@@ -226,10 +226,10 @@ export interface WorkerToolFailedPayload {
   trace_id?: string;
 }
 
-export interface WorkerOutputChunkPayload {
-  /** Worker job ID (spawn_worker job) */
+export interface CommisOutputChunkPayload {
+  /** Commis job ID (spawn_commis job) */
   job_id?: number;
-  worker_id: string;
+  commis_id: string;
   /** Runner exec job UUID */
   runner_job_id?: string;
   /** Output stream for this chunk */
@@ -242,7 +242,7 @@ export interface WorkerOutputChunkPayload {
   trace_id?: string;
 }
 
-export interface SupervisorToolStartedPayload {
+export interface OikosToolStartedPayload {
   tool_name: string;
   /** Stable ID linking all events for this tool call */
   tool_call_id: string;
@@ -250,13 +250,13 @@ export interface SupervisorToolStartedPayload {
   tool_args_preview?: string;
   /** Full tool arguments (for persistence/raw view) */
   tool_args?: Record<string, any>;
-  /** Supervisor run ID for correlation */
+  /** Oikos run ID for correlation */
   run_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
 }
 
-export interface SupervisorToolProgressPayload {
+export interface OikosToolProgressPayload {
   tool_call_id: string;
   /** Progress message (log line) */
   message: string;
@@ -271,7 +271,7 @@ export interface SupervisorToolProgressPayload {
   trace_id?: string;
 }
 
-export interface SupervisorToolCompletedPayload {
+export interface OikosToolCompletedPayload {
   tool_name: string;
   tool_call_id: string;
   duration_ms: number;
@@ -284,7 +284,7 @@ export interface SupervisorToolCompletedPayload {
   trace_id?: string;
 }
 
-export interface SupervisorToolFailedPayload {
+export interface OikosToolFailedPayload {
   tool_name: string;
   tool_call_id: string;
   duration_ms: number;
@@ -299,7 +299,7 @@ export interface SupervisorToolFailedPayload {
 
 /** Trigger session picker modal in frontend */
 export interface ShowSessionPickerPayload {
-  /** Current supervisor run ID */
+  /** Current oikos run ID */
   run_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
@@ -311,7 +311,7 @@ export interface ShowSessionPickerPayload {
 export interface StreamControlPayload {
   /** keep_open extends stream lease; close is terminal end-marker */
   action: "keep_open" | "close";
-  /** Why this action (workers_pending, continuation_start, all_complete, timeout, error) */
+  /** Why this action (commiss_pending, continuation_start, all_complete, timeout, error) */
   reason: string;
   /** Lease time in ms (max 5 min); stream closes if no activity/renewal */
   ttl_ms?: number;
@@ -319,34 +319,34 @@ export interface StreamControlPayload {
   run_id: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;
-  /** Current pending worker count (for debugging) */
-  pending_workers?: number;
+  /** Current pending commis count (for debugging) */
+  pending_commiss?: number;
 }
 
 // All SSE event types as a constant array (use for validation)
 export const SSE_EVENT_TYPES = [
   "connected",
   "heartbeat",
-  "supervisor_started",
-  "supervisor_thinking",
-  "supervisor_token",
-  "supervisor_complete",
-  "supervisor_deferred",
-  "supervisor_waiting",
-  "supervisor_resumed",
+  "oikos_started",
+  "oikos_thinking",
+  "oikos_token",
+  "oikos_complete",
+  "oikos_deferred",
+  "oikos_waiting",
+  "oikos_resumed",
   "error",
-  "worker_spawned",
-  "worker_started",
-  "worker_complete",
-  "worker_summary_ready",
-  "worker_tool_started",
-  "worker_tool_completed",
-  "worker_tool_failed",
-  "worker_output_chunk",
-  "supervisor_tool_started",
-  "supervisor_tool_progress",
-  "supervisor_tool_completed",
-  "supervisor_tool_failed",
+  "commis_spawned",
+  "commis_started",
+  "commis_complete",
+  "commis_summary_ready",
+  "commis_tool_started",
+  "commis_tool_completed",
+  "commis_tool_failed",
+  "commis_output_chunk",
+  "oikos_tool_started",
+  "oikos_tool_progress",
+  "oikos_tool_completed",
+  "oikos_tool_failed",
   "show_session_picker",
   "stream_control",
 ] as const;
@@ -378,26 +378,26 @@ export interface SSEEventWrapper<T> {
 export type SSEPayloadFor<T extends SSEEventType> =
   T extends "connected" ? ConnectedPayload :
   T extends "heartbeat" ? HeartbeatPayload :
-  T extends "supervisor_started" ? SupervisorStartedPayload :
-  T extends "supervisor_thinking" ? SupervisorThinkingPayload :
-  T extends "supervisor_token" ? SupervisorTokenPayload :
-  T extends "supervisor_complete" ? SupervisorCompletePayload :
-  T extends "supervisor_deferred" ? SupervisorDeferredPayload :
-  T extends "supervisor_waiting" ? SupervisorWaitingPayload :
-  T extends "supervisor_resumed" ? SupervisorResumedPayload :
+  T extends "oikos_started" ? OikosStartedPayload :
+  T extends "oikos_thinking" ? OikosThinkingPayload :
+  T extends "oikos_token" ? OikosTokenPayload :
+  T extends "oikos_complete" ? OikosCompletePayload :
+  T extends "oikos_deferred" ? OikosDeferredPayload :
+  T extends "oikos_waiting" ? OikosWaitingPayload :
+  T extends "oikos_resumed" ? OikosResumedPayload :
   T extends "error" ? ErrorPayload :
-  T extends "worker_spawned" ? WorkerSpawnedPayload :
-  T extends "worker_started" ? WorkerStartedPayload :
-  T extends "worker_complete" ? WorkerCompletePayload :
-  T extends "worker_summary_ready" ? WorkerSummaryReadyPayload :
-  T extends "worker_tool_started" ? WorkerToolStartedPayload :
-  T extends "worker_tool_completed" ? WorkerToolCompletedPayload :
-  T extends "worker_tool_failed" ? WorkerToolFailedPayload :
-  T extends "worker_output_chunk" ? WorkerOutputChunkPayload :
-  T extends "supervisor_tool_started" ? SupervisorToolStartedPayload :
-  T extends "supervisor_tool_progress" ? SupervisorToolProgressPayload :
-  T extends "supervisor_tool_completed" ? SupervisorToolCompletedPayload :
-  T extends "supervisor_tool_failed" ? SupervisorToolFailedPayload :
+  T extends "commis_spawned" ? CommisSpawnedPayload :
+  T extends "commis_started" ? CommisStartedPayload :
+  T extends "commis_complete" ? CommisCompletePayload :
+  T extends "commis_summary_ready" ? CommisSummaryReadyPayload :
+  T extends "commis_tool_started" ? CommisToolStartedPayload :
+  T extends "commis_tool_completed" ? CommisToolCompletedPayload :
+  T extends "commis_tool_failed" ? CommisToolFailedPayload :
+  T extends "commis_output_chunk" ? CommisOutputChunkPayload :
+  T extends "oikos_tool_started" ? OikosToolStartedPayload :
+  T extends "oikos_tool_progress" ? OikosToolProgressPayload :
+  T extends "oikos_tool_completed" ? OikosToolCompletedPayload :
+  T extends "oikos_tool_failed" ? OikosToolFailedPayload :
   T extends "show_session_picker" ? ShowSessionPickerPayload :
   T extends "stream_control" ? StreamControlPayload :
   never;

@@ -44,21 +44,21 @@ export interface VoiceTtsResponse {
 }
 
 export async function voiceTurn(formData: FormData): Promise<VoiceTurnResponse> {
-  return request<VoiceTurnResponse>("/jarvis/voice/turn", {
+  return request<VoiceTurnResponse>("/api/oikos/voice/turn", {
     method: "POST",
     body: formData,
   });
 }
 
 export async function voiceTranscribe(formData: FormData): Promise<VoiceTranscribeResponse> {
-  return request<VoiceTranscribeResponse>("/jarvis/voice/transcribe", {
+  return request<VoiceTranscribeResponse>("/api/oikos/voice/transcribe", {
     method: "POST",
     body: formData,
   });
 }
 
 export async function voiceTts(payload: VoiceTtsRequest): Promise<VoiceTtsResponse> {
-  return request<VoiceTtsResponse>("/jarvis/voice/tts", {
+  return request<VoiceTtsResponse>("/api/oikos/voice/tts", {
     method: "POST",
     body: JSON.stringify(payload),
   });

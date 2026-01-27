@@ -56,7 +56,7 @@ This section preserves the prior remediation record for reference.
 - [x] WorkerRunner timeout docs drift → add doc check or update docs.
 
 ## Workstream: Frontend
-- [x] useJarvisClient sets connected without real connection + cached agent fetch only → add hook tests + implement real SSE connect + fetch.
+- [x] useOikosClient sets connected without real connection + cached agent fetch only → add hook tests + implement real SSE connect + fetch.
 - [x] useVoice stubbed flow → add hook tests + connect to voiceController (no fake timers).
 - [x] Knowledge Sources “Add Context” no-op → add UI/service test + implement API call.
 

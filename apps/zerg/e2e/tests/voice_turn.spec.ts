@@ -57,7 +57,7 @@ test("Voice turn: transcript + response appear in chat", async ({ page }) => {
     });
   });
 
-  await page.route("**/api/jarvis/voice/turn", async (route) => {
+  await page.route("**/api/oikos/voice/turn", async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",

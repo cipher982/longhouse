@@ -6,7 +6,7 @@ default; root filesystem is read-only; a writable workspace is mounted
 at /workspace.
 
 Keep this minimal; policy/approvals are enforced at the product layer
-by allowlists and per-agent tool scopes.
+by allowlists and per-fiche tool scopes.
 """
 
 from __future__ import annotations

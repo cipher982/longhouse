@@ -3,11 +3,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
   fetchDashboardSnapshot,
-  runAgent,
-  updateAgent,
+  runFiche,
+  updateFiche,
   fetchModels,
-  type AgentRun,
-  type AgentSummary,
+  type Run,
+  type FicheSummary,
   type DashboardSnapshot,
   type ModelConfig,
 } from "../services/api";
@@ -15,7 +15,7 @@ import { buildUrl } from "../services/api";
 import { ConnectionStatus, useWebSocket } from "../lib/useWebSocket";
 import { useAuth } from "../lib/auth";
 import { PlusIcon } from "../components/icons";
-import AgentSettingsDrawer from "../components/agent-settings/AgentSettingsDrawer";
+import FicheSettingsDrawer from "../components/fiche-settings/FicheSettingsDrawer";
 import UsageWidget from "../components/UsageWidget";
 import type { WebSocketMessage } from "../generated/ws-messages";
 import {
@@ -26,8 +26,9 @@ import {
   Spinner
 } from "../components/ui";
 import { useConfirm } from "../components/confirm";
-import { AgentTableRow } from "./dashboard/AgentTableRow";
-import { sortAgents, loadSortConfig, persistSortConfig, type SortKey, type SortConfig, type AgentRunsState } from "./dashboard/sorting";
+import { FicheTableRow } from "./dashboard/FicheTableRow";
+import { sortFiches, loadSortConfig, persistSortConfig, type SortKey, type SortConfig, type FicheRunsState } from "./dashboard/sorting";
+import { applyRunUpdate, applyFicheStateUpdate } from "./dashboard/websocketHandlers";
 
 // App logo (served from public folder)
 const appLogo = "/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png";
@@ -43,22 +44,22 @@ export default function DashboardPage() {
   const confirm = useConfirm();
   const [scope, setScope] = useState<Scope>("my");
   const [sortConfig, setSortConfig] = useState<SortConfig>(() => loadSortConfig());
-  const [expandedAgentId, setExpandedAgentId] = useState<number | null>(null);
+  const [expandedFicheId, setExpandedFicheId] = useState<number | null>(null);
   const dashboardQueryKey = useMemo(() => ["dashboard", scope, RUNS_LIMIT] as const, [scope]);
   const [expandedRunHistory, setExpandedRunHistory] = useState<Set<number>>(new Set());
-  const [settingsAgentId, setSettingsAgentId] = useState<number | null>(null);
-  const [editingAgentId, setEditingAgentId] = useState<number | null>(null);
+  const [settingsFicheId, setSettingsFicheId] = useState<number | null>(null);
+  const [editingFicheId, setEditingFicheId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState<string>("");
 
   // WebSocket state - must be declared before useQuery to avoid reference errors
-  const subscribedAgentIdsRef = useRef<Set<number>>(new Set());
+  const subscribedFicheIdsRef = useRef<Set<number>>(new Set());
   const [wsReconnectToken, setWsReconnectToken] = useState(0);
   const sendMessageRef = useRef<((message: any) => void) | null>(null);
   const messageIdCounterRef = useRef(0);
 
   // Track pending subscriptions to handle confirmations and timeouts
   // Don't mark as subscribed until we get subscribe_ack to enable automatic retry
-  const pendingSubscriptionsRef = useRef<Map<string, { topics: string[]; timeoutId: number; agentIds: number[] }>>(new Map());
+  const pendingSubscriptionsRef = useRef<Map<string, { topics: string[]; timeoutId: number; ficheIds: number[] }>>(new Map());
 
   // Generate unique message IDs to prevent collision
   const generateMessageId = useCallback(() => {
@@ -95,8 +96,8 @@ export default function DashboardPage() {
             pendingSubscriptionsRef.current.delete(messageId);
 
             if (message.type === "subscribe_ack") {
-              pending.agentIds.forEach((agentId) => {
-                subscribedAgentIdsRef.current.add(agentId);
+              pending.ficheIds.forEach((ficheId) => {
+                subscribedFicheIdsRef.current.add(ficheId);
               });
             } else {
               console.error("[WS] Subscription failed for topics:", pending.topics);
@@ -108,13 +109,13 @@ export default function DashboardPage() {
       }
 
       const topic = typeof message.topic === "string" ? message.topic : "";
-      if (!topic.startsWith("agent:")) {
+      if (!topic.startsWith("fiche:")) {
         return;
       }
 
-      const [, agentIdRaw] = topic.split(":");
-      const agentId = Number.parseInt(agentIdRaw ?? "", 10);
-      if (!Number.isFinite(agentId)) {
+      const [, ficheIdRaw] = topic.split(":");
+      const ficheId = Number.parseInt(ficheIdRaw ?? "", 10);
+      if (!Number.isFinite(ficheId)) {
         return;
       }
 
@@ -122,211 +123,14 @@ export default function DashboardPage() {
         typeof message.data === "object" && message.data !== null ? (message.data as Record<string, unknown>) : {};
       const eventType = message.type;
 
-      if (eventType === "agent_state" || eventType === "agent_updated") {
-        const validStatuses = ["idle", "running", "processing", "error"] as const;
-        const statusValue =
-          typeof dataPayload.status === "string" && validStatuses.includes(dataPayload.status as (typeof validStatuses)[number])
-            ? (dataPayload.status as AgentSummary["status"])
-            : undefined;
-        const lastRunAtValue = typeof dataPayload.last_run_at === "string" ? dataPayload.last_run_at : undefined;
-        const nextRunAtValue = typeof dataPayload.next_run_at === "string" ? dataPayload.next_run_at : undefined;
-        const lastErrorValue =
-          dataPayload.last_error === null || typeof dataPayload.last_error === "string"
-            ? (dataPayload.last_error as string | null)
-            : undefined;
-
-        applyDashboardUpdate((current) => {
-          let changed = false;
-          const nextAgents = current.agents.map((agent) => {
-            if (agent.id !== agentId) {
-              return agent;
-            }
-
-            const nextAgent: AgentSummary = {
-              ...agent,
-              status: statusValue ?? agent.status,
-              last_run_at: lastRunAtValue ?? agent.last_run_at,
-              next_run_at: nextRunAtValue ?? agent.next_run_at,
-              last_error: lastErrorValue !== undefined ? lastErrorValue : agent.last_error,
-            };
-
-            if (
-              nextAgent.status !== agent.status ||
-              nextAgent.last_run_at !== agent.last_run_at ||
-              nextAgent.next_run_at !== agent.next_run_at ||
-              nextAgent.last_error !== agent.last_error
-            ) {
-              changed = true;
-              return nextAgent;
-            }
-            return agent;
-          });
-
-          if (!changed) {
-            return current;
-          }
-
-          return {
-            ...current,
-            agents: nextAgents,
-          };
-        });
-
+      if (eventType === "fiche_state" || eventType === "fiche_updated") {
+        applyDashboardUpdate((current) => applyFicheStateUpdate(current, ficheId, dataPayload));
         return;
       }
 
       if (eventType === "run_update") {
-        const runIdCandidate = dataPayload.id ?? dataPayload.run_id;
-        const runId = typeof runIdCandidate === "number" ? runIdCandidate : null;
-        if (runId == null) {
-          return;
-        }
-
-        const threadId =
-          typeof dataPayload.thread_id === "number" ? (dataPayload.thread_id as number) : undefined;
-
-        applyDashboardUpdate((current) => {
-          const runsBundles = current.runs.slice();
-          let bundleIndex = runsBundles.findIndex((bundle) => bundle.agentId === agentId);
-          let runsChanged = false;
-
-          if (bundleIndex === -1) {
-            runsBundles.push({ agentId, runs: [] });
-            bundleIndex = runsBundles.length - 1;
-            runsChanged = true;
-          }
-
-          const targetBundle = runsBundles[bundleIndex];
-          const existingRuns = targetBundle.runs ?? [];
-          const existingIndex = existingRuns.findIndex((run) => run.id === runId);
-          let nextRuns = existingRuns;
-
-          if (existingIndex === -1) {
-            if (threadId === undefined) {
-              return current;
-            }
-
-            const newRun: AgentRun = {
-              id: runId,
-              agent_id: agentId,
-              thread_id: threadId,
-              status:
-                typeof dataPayload.status === "string"
-                  ? (dataPayload.status as AgentRun["status"])
-                  : "running",
-              trigger:
-                typeof dataPayload.trigger === "string"
-                  ? (dataPayload.trigger as AgentRun["trigger"])
-                  : "manual",
-              started_at: typeof dataPayload.started_at === "string" ? (dataPayload.started_at as string) : null,
-              finished_at: typeof dataPayload.finished_at === "string" ? (dataPayload.finished_at as string) : null,
-              duration_ms: typeof dataPayload.duration_ms === "number" ? (dataPayload.duration_ms as number) : null,
-              total_tokens: typeof dataPayload.total_tokens === "number" ? (dataPayload.total_tokens as number) : null,
-              total_cost_usd:
-                typeof dataPayload.total_cost_usd === "number" ? (dataPayload.total_cost_usd as number) : null,
-              error:
-                dataPayload.error === undefined
-                  ? null
-                  : (dataPayload.error as string | null) ?? null,
-            };
-
-            nextRuns = [newRun, ...existingRuns];
-            if (nextRuns.length > current.runsLimit) {
-              nextRuns = nextRuns.slice(0, current.runsLimit);
-            }
-            runsChanged = true;
-          } else {
-            const previousRun = existingRuns[existingIndex];
-            const updatedRun: AgentRun = {
-              ...previousRun,
-              status:
-                typeof dataPayload.status === "string"
-                  ? (dataPayload.status as AgentRun["status"])
-                  : previousRun.status,
-              started_at:
-                typeof dataPayload.started_at === "string"
-                  ? (dataPayload.started_at as AgentRun["started_at"])
-                  : previousRun.started_at,
-              finished_at:
-                typeof dataPayload.finished_at === "string"
-                  ? (dataPayload.finished_at as AgentRun["finished_at"])
-                  : previousRun.finished_at,
-              duration_ms:
-                typeof dataPayload.duration_ms === "number"
-                  ? (dataPayload.duration_ms as AgentRun["duration_ms"])
-                  : previousRun.duration_ms,
-              total_tokens:
-                typeof dataPayload.total_tokens === "number"
-                  ? (dataPayload.total_tokens as AgentRun["total_tokens"])
-                  : previousRun.total_tokens,
-              total_cost_usd:
-                typeof dataPayload.total_cost_usd === "number"
-                  ? (dataPayload.total_cost_usd as AgentRun["total_cost_usd"])
-                  : previousRun.total_cost_usd,
-              error:
-                dataPayload.error === undefined
-                  ? previousRun.error
-                  : ((dataPayload.error as string | null) ?? null),
-            };
-
-            const hasRunDiff =
-              updatedRun.status !== previousRun.status ||
-              updatedRun.started_at !== previousRun.started_at ||
-              updatedRun.finished_at !== previousRun.finished_at ||
-              updatedRun.duration_ms !== previousRun.duration_ms ||
-              updatedRun.total_tokens !== previousRun.total_tokens ||
-              updatedRun.total_cost_usd !== previousRun.total_cost_usd ||
-              updatedRun.error !== previousRun.error;
-
-            if (hasRunDiff) {
-              nextRuns = [...existingRuns];
-              nextRuns[existingIndex] = updatedRun;
-              runsChanged = true;
-            }
-          }
-
-          if (runsChanged) {
-            runsBundles[bundleIndex] = {
-              agentId,
-              runs: nextRuns,
-            };
-          }
-
-          let agentsChanged = false;
-          const updatedAgents = current.agents.map((agent) => {
-            if (agent.id !== agentId) {
-              return agent;
-            }
-
-            const statusValue =
-              typeof dataPayload.status === "string"
-                ? (dataPayload.status as AgentSummary["status"])
-                : agent.status;
-            const lastRunValue =
-              typeof dataPayload.started_at === "string" ? (dataPayload.started_at as string) : agent.last_run_at;
-
-            if (statusValue === agent.status && lastRunValue === agent.last_run_at) {
-              return agent;
-            }
-
-            agentsChanged = true;
-            return {
-              ...agent,
-              status: statusValue,
-              last_run_at: lastRunValue,
-            };
-          });
-
-          if (!runsChanged && !agentsChanged) {
-            return current;
-          }
-
-          return {
-            ...current,
-            agents: agentsChanged ? updatedAgents : current.agents,
-            runs: runsChanged ? runsBundles : current.runs,
-          };
-        });
+        applyDashboardUpdate((current) => applyRunUpdate(current, ficheId, dataPayload));
+        return;
       }
     },
     [applyDashboardUpdate]
@@ -335,7 +139,7 @@ export default function DashboardPage() {
   const { connectionStatus, sendMessage } = useWebSocket(isAuthenticated, {
     onMessage: handleWebSocketMessage,
     onConnect: () => {
-      subscribedAgentIdsRef.current.clear();
+      subscribedFicheIdsRef.current.clear();
       // Clear any pending subscriptions from previous connection
       pendingSubscriptionsRef.current.forEach((pending) => {
         clearTimeout(pending.timeoutId);
@@ -367,21 +171,21 @@ export default function DashboardPage() {
     refetchInterval: connectionStatus === ConnectionStatus.CONNECTED ? false : 2000,
   });
 
-  const agents: AgentSummary[] = useMemo(() => dashboardData?.agents ?? [], [dashboardData]);
+  const fiches: FicheSummary[] = useMemo(() => dashboardData?.fiches ?? [], [dashboardData]);
 
-  const runsByAgent: AgentRunsState = useMemo(() => {
+  const runsByFiche: FicheRunsState = useMemo(() => {
     if (!dashboardData) {
       return {};
     }
 
-    const lookup: AgentRunsState = {};
+    const lookup: FicheRunsState = {};
     for (const bundle of dashboardData.runs) {
-      lookup[bundle.agentId] = bundle.runs;
+      lookup[bundle.ficheId] = bundle.runs;
     }
 
-    for (const agent of dashboardData.agents) {
-      if (!lookup[agent.id]) {
-        lookup[agent.id] = [];
+    for (const fiche of dashboardData.fiches) {
+      if (!lookup[fiche.id]) {
+        lookup[fiche.id] = [];
       }
     }
 
@@ -397,7 +201,7 @@ export default function DashboardPage() {
     if (!isLoading) {
       document.body.setAttribute('data-ready', 'true');
       // Dashboard is screenshot-ready as soon as it's interactive
-      // (agents table is visible even if empty)
+      // (fiches table is visible even if empty)
       document.body.setAttribute('data-screenshot-ready', 'true');
     }
     return () => {
@@ -411,10 +215,10 @@ export default function DashboardPage() {
     sendMessageRef.current = sendMessage;
   }, [sendMessage]);
 
-  // Mutation for starting an agent run (hybrid: optimistic + WebSocket)
-  const runAgentMutation = useMutation({
-    mutationFn: runAgent,
-    onMutate: async (agentId: number) => {
+  // Mutation for starting a fiche run (hybrid: optimistic + WebSocket)
+  const startRunMutation = useMutation({
+    mutationFn: runFiche,
+    onMutate: async (ficheId: number) => {
       await queryClient.cancelQueries({ queryKey: dashboardQueryKey });
 
       const previousSnapshot = queryClient.getQueryData<DashboardSnapshot>(dashboardQueryKey);
@@ -426,22 +230,22 @@ export default function DashboardPage() {
 
         return {
           ...current,
-          agents: current.agents.map((agent) =>
-            agent.id === agentId ? { ...agent, status: "running" as const } : agent
+          fiches: current.fiches.map((fiche) =>
+            fiche.id === ficheId ? { ...fiche, status: "running" as const } : fiche
           ),
         };
       });
 
       return { previousSnapshot };
     },
-    onError: (err: Error, agentId: number, context) => {
+    onError: (err: Error, ficheId: number, context) => {
       if (context?.previousSnapshot) {
         queryClient.setQueryData(dashboardQueryKey, context.previousSnapshot);
       }
-      console.error("Failed to run agent:", err);
+      console.error("Failed to start run:", err);
     },
-    onSettled: (_, __, agentId) => {
-      dispatchDashboardEvent("run", agentId);
+    onSettled: (_, __, ficheId) => {
+      dispatchDashboardEvent("run", ficheId);
     },
   });
 
@@ -461,14 +265,14 @@ export default function DashboardPage() {
   }, [error]);
 
   useEffect(() => {
-    if (expandedAgentId === null) {
+    if (expandedFicheId === null) {
       return;
     }
-    if (agents.some((agent) => agent.id === expandedAgentId)) {
+    if (fiches.some((fiche) => fiche.id === expandedFicheId)) {
       return;
     }
-    setExpandedAgentId(null);
-  }, [agents, expandedAgentId]);
+    setExpandedFicheId(null);
+  }, [fiches, expandedFicheId]);
 
   // Use unified WebSocket hook for real-time updates
   // Only connect when authenticated to avoid auth failure spam
@@ -480,28 +284,28 @@ export default function DashboardPage() {
       return;
     }
 
-    const activeIds = new Set(agents.map((agent) => agent.id));
+    const activeIds = new Set(fiches.map((fiche) => fiche.id));
 
-    // Find agents that need subscription (not currently subscribed AND not pending)
-    const pendingAgentIds = new Set<number>();
+    // Find fiches that need subscription (not currently subscribed AND not pending)
+    const pendingFicheIds = new Set<number>();
     pendingSubscriptionsRef.current.forEach((pending) => {
-      pending.agentIds.forEach((id) => pendingAgentIds.add(id));
+      pending.ficheIds.forEach((id) => pendingFicheIds.add(id));
     });
 
     const topicsToSubscribe: string[] = [];
-    const agentIdsToSubscribe: number[] = [];
+    const ficheIdsToSubscribe: number[] = [];
     for (const id of activeIds) {
-      if (!subscribedAgentIdsRef.current.has(id) && !pendingAgentIds.has(id)) {
-        topicsToSubscribe.push(`agent:${id}`);
-        agentIdsToSubscribe.push(id);
+      if (!subscribedFicheIdsRef.current.has(id) && !pendingFicheIds.has(id)) {
+        topicsToSubscribe.push(`fiche:${id}`);
+        ficheIdsToSubscribe.push(id);
       }
     }
 
     const topicsToUnsubscribe: string[] = [];
-    for (const id of Array.from(subscribedAgentIdsRef.current)) {
+    for (const id of Array.from(subscribedFicheIdsRef.current)) {
       if (!activeIds.has(id)) {
-        subscribedAgentIdsRef.current.delete(id);
-        topicsToUnsubscribe.push(`agent:${id}`);
+        subscribedFicheIdsRef.current.delete(id);
+        topicsToUnsubscribe.push(`fiche:${id}`);
       }
     }
 
@@ -523,7 +327,7 @@ export default function DashboardPage() {
       pendingSubscriptionsRef.current.set(messageId, {
         topics: topicsToSubscribe,
         timeoutId,
-        agentIds: agentIdsToSubscribe
+        ficheIds: ficheIdsToSubscribe
       });
 
       sendMessageRef.current?.({
@@ -540,32 +344,32 @@ export default function DashboardPage() {
         message_id: generateMessageId(),
       });
     }
-  }, [agents, connectionStatus, isAuthenticated, wsReconnectToken, generateMessageId]);
+  }, [fiches, connectionStatus, isAuthenticated, wsReconnectToken, generateMessageId]);
 
   useEffect(() => {
     if (isAuthenticated) {
       return;
     }
 
-    if (subscribedAgentIdsRef.current.size === 0) {
+    if (subscribedFicheIdsRef.current.size === 0) {
       return;
     }
 
-    const topics = Array.from(subscribedAgentIdsRef.current).map((id) => `agent:${id}`);
+    const topics = Array.from(subscribedFicheIdsRef.current).map((id) => `fiche:${id}`);
     sendMessageRef.current?.({
       type: "unsubscribe",
       topics,
       message_id: generateMessageId(),
     });
-    subscribedAgentIdsRef.current.clear();
+    subscribedFicheIdsRef.current.clear();
   }, [isAuthenticated, generateMessageId]);
 
-  // Cleanup effect - runs only on unmount to unsubscribe from all agents
+  // Cleanup effect - runs only on unmount to unsubscribe from all fiches
   /* eslint-disable react-hooks/exhaustive-deps -- Intentional: cleanup reads current values at unmount time */
   useEffect(() => {
     // Capture refs for cleanup (ESLint wants this pattern)
     const pendingSubscriptions = pendingSubscriptionsRef.current;
-    const subscribedAgentIds = subscribedAgentIdsRef.current;
+    const subscribedFicheIds = subscribedFicheIdsRef.current;
     const sendMessage = sendMessageRef.current;
     const msgId = generateMessageId; // Capture for cleanup
 
@@ -576,16 +380,16 @@ export default function DashboardPage() {
       });
       pendingSubscriptions.clear();
 
-      if (subscribedAgentIds.size === 0) {
+      if (subscribedFicheIds.size === 0) {
         return;
       }
-      const topics = Array.from(subscribedAgentIds).map((id) => `agent:${id}`);
+      const topics = Array.from(subscribedFicheIds).map((id) => `fiche:${id}`);
       sendMessage?.({
         type: "unsubscribe",
         topics,
         message_id: msgId(),
       });
-      subscribedAgentIds.clear();
+      subscribedFicheIds.clear();
     };
   }, []);
   /* eslint-enable react-hooks/exhaustive-deps */
@@ -593,14 +397,14 @@ export default function DashboardPage() {
   // Generate idempotency key per mutation to prevent double-creates
   const idempotencyKeyRef = useRef<string | null>(null);
 
-  const createAgentMutation = useMutation({
+  const createFicheMutation = useMutation({
     mutationFn: async () => {
       // Generate fresh key for each create attempt
-      const key = `create-agent-${Date.now()}-${Math.random()}`;
+      const key = `create-fiche-${Date.now()}-${Math.random()}`;
       idempotencyKeyRef.current = key;
 
-      // Backend auto-generates name as "Agent #<id>"
-      const response = await fetch(buildUrl("/agents"), {
+      // Backend auto-generates name as "Fiche #<id>"
+      const response = await fetch(buildUrl("/fiches"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -615,22 +419,22 @@ export default function DashboardPage() {
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to create agent: ${response.status}`);
+        throw new Error(`Failed to create fiche: ${response.status}`);
       }
 
       return response.json();
     },
     onSuccess: () => {
-      // WebSocket will deliver the agent with real name
+      // WebSocket will deliver the fiche with real name
       queryClient.invalidateQueries({ queryKey: dashboardQueryKey });
       idempotencyKeyRef.current = null; // Reset for next creation
     },
   });
 
-  // Delete agent mutation
-  const deleteAgentMutation = useMutation({
-    mutationFn: async (agentId: number) => {
-      const response = await fetch(buildUrl(`/agents/${agentId}`), {
+  // Delete fiche mutation
+  const deleteFicheMutation = useMutation({
+    mutationFn: async (ficheId: number) => {
+      const response = await fetch(buildUrl(`/fiches/${ficheId}`), {
         method: "DELETE",
         credentials: 'include', // Cookie auth
       });
@@ -643,43 +447,43 @@ export default function DashboardPage() {
   });
 
   // Inline name editing handlers
-  function startEditingName(agentId: number, currentName: string) {
-    setEditingAgentId(agentId);
+  function startEditingName(ficheId: number, currentName: string) {
+    setEditingFicheId(ficheId);
     setEditingName(currentName);
   }
 
-  async function saveNameAndExit(agentId: number) {
+  async function saveNameAndExit(ficheId: number) {
     if (!editingName.trim()) {
       // Don't allow empty names
       return;
     }
 
     try {
-      await updateAgent(agentId, { name: editingName });
+      await updateFiche(ficheId, { name: editingName });
       queryClient.invalidateQueries({ queryKey: dashboardQueryKey });
     } catch (error) {
       console.error("Failed to rename:", error);
     }
 
-    setEditingAgentId(null);
+    setEditingFicheId(null);
     setEditingName("");
   }
 
   function cancelEditing() {
-    setEditingAgentId(null);
+    setEditingFicheId(null);
     setEditingName("");
   }
 
-  const sortedAgents = useMemo(() => {
-    return sortAgents(agents, runsByAgent, sortConfig);
-  }, [agents, runsByAgent, sortConfig]);
+  const sortedFiches = useMemo(() => {
+    return sortFiches(fiches, runsByFiche, sortConfig);
+  }, [fiches, runsByFiche, sortConfig]);
 
   if (isLoading) {
     return (
       <div id="dashboard-container" className="dashboard-page">
         <EmptyState
           icon={<Spinner size="lg" />}
-          title="Loading agents..."
+          title="Loading fiches..."
           description="Fetching your autonomous workforce."
         />
       </div>
@@ -687,7 +491,7 @@ export default function DashboardPage() {
   }
 
   if (error) {
-    const message = error instanceof Error ? error.message : "Failed to load agents";
+    const message = error instanceof Error ? error.message : "Failed to load fiches";
     return (
       <div id="dashboard-container" className="dashboard-page">
         <EmptyState
@@ -710,8 +514,8 @@ export default function DashboardPage() {
   return (
     <div id="dashboard-container" className="dashboard-page">
       <SectionHeader
-        title={scope === "all" ? "All agents" : "My agents"}
-        description="Monitor and manage your autonomous workers."
+        title={scope === "all" ? "All fiches" : "My fiches"}
+        description="Monitor and manage your autonomous commis."
         actions={
           <div className="button-container">
             <div className="scope-wrapper">
@@ -720,7 +524,7 @@ export default function DashboardPage() {
                   type="checkbox"
                   id="dashboard-scope-toggle"
                   data-testid="dashboard-scope-toggle"
-                  aria-label="Toggle between my agents and all agents"
+                  aria-label="Toggle between my fiches and all fiches"
                   checked={scope === "all"}
                   onChange={(e) => {
                     const newScope = e.target.checked ? "all" : "my";
@@ -732,16 +536,16 @@ export default function DashboardPage() {
             </div>
             <Button
               variant="primary"
-              onClick={() => createAgentMutation.mutate()}
-              disabled={createAgentMutation.isPending}
-              data-testid="create-agent-btn"
+              onClick={() => createFicheMutation.mutate()}
+              disabled={createFicheMutation.isPending}
+              data-testid="create-fiche-btn"
             >
-              {createAgentMutation.isPending ? (
+              {createFicheMutation.isPending ? (
                 <Spinner size="sm" />
               ) : (
                 <>
                   <PlusIcon />
-                  Create Agent
+                  Create Fiche
                 </>
               )}
             </Button>
@@ -753,7 +557,7 @@ export default function DashboardPage() {
         {/* LLM Usage Widget */}
         <UsageWidget />
 
-        <Table>
+        <Table className="fiches-table">
           <Table.Header>
             {renderHeaderCell("Name", "name", sortConfig, handleSort)}
             {includeOwner && renderHeaderCell("Owner", "owner", sortConfig, handleSort, false)}
@@ -766,25 +570,25 @@ export default function DashboardPage() {
               Actions
             </Table.Cell>
           </Table.Header>
-          <Table.Body id="agents-table-body">
-            {sortedAgents.map((agent) => (
-              <AgentTableRow
-                key={agent.id}
-                agent={agent}
-                runs={runsByAgent[agent.id] || []}
+          <Table.Body id="fiches-table-body">
+            {sortedFiches.map((fiche) => (
+              <FicheTableRow
+                key={fiche.id}
+                fiche={fiche}
+                runs={runsByFiche[fiche.id] || []}
                 includeOwner={includeOwner}
-                isExpanded={expandedAgentId === agent.id}
-                isRunHistoryExpanded={expandedRunHistory.has(agent.id)}
-                isPendingRun={runAgentMutation.isPending && runAgentMutation.variables === agent.id}
+                isExpanded={expandedFicheId === fiche.id}
+                isRunHistoryExpanded={expandedRunHistory.has(fiche.id)}
+                isPendingRun={startRunMutation.isPending && startRunMutation.variables === fiche.id}
                 runsDataLoading={runsDataLoading}
-                editingAgentId={editingAgentId}
+                editingFicheId={editingFicheId}
                 editingName={editingName}
-                onToggleRow={toggleAgentRow}
+                onToggleRow={toggleFicheRow}
                 onToggleRunHistory={toggleRunHistory}
-                onRunAgent={handleRunAgent}
-                onChatAgent={handleChatAgent}
-                onDebugAgent={handleDebugAgent}
-                onDeleteAgent={handleDeleteAgent}
+                onRunFiche={handleStartRun}
+                onChatFiche={handleChatFiche}
+                onDebugFiche={handleDebugFiche}
+                onDeleteFiche={handleDeleteFiche}
                 onStartEditingName={startEditingName}
                 onSaveNameAndExit={saveNameAndExit}
                 onCancelEditing={cancelEditing}
@@ -792,13 +596,13 @@ export default function DashboardPage() {
                 onRunActionsClick={dispatchDashboardEvent.bind(null, "run-actions")}
               />
             ))}
-            {sortedAgents.length === 0 && (
+            {sortedFiches.length === 0 && (
               <Table.Row>
                 <Table.Cell isHeader colSpan={emptyColspan}>
                   <EmptyState
                     icon={<img src={appLogo} alt="Swarmlet Logo" className="dashboard-empty-logo" />}
-                    title="No agents found"
-                    description="Click 'Create Agent' to get started."
+                    title="No fiches found"
+                    description="Click 'Create Fiche' to get started."
                   />
                 </Table.Cell>
               </Table.Row>
@@ -806,28 +610,28 @@ export default function DashboardPage() {
           </Table.Body>
         </Table>
       </div>
-      {settingsAgentId != null && (
-        <AgentSettingsDrawer
-          agentId={settingsAgentId}
-          isOpen={settingsAgentId != null}
-          onClose={() => setSettingsAgentId(null)}
+      {settingsFicheId != null && (
+        <FicheSettingsDrawer
+          ficheId={settingsFicheId}
+          isOpen={settingsFicheId != null}
+          onClose={() => setSettingsFicheId(null)}
         />
       )}
     </div>
   );
 
-  function toggleAgentRow(agentId: number) {
-    setExpandedAgentId((prev) => (prev === agentId ? null : agentId));
+  function toggleFicheRow(ficheId: number) {
+    setExpandedFicheId((prev) => (prev === ficheId ? null : ficheId));
   }
 
-  function toggleRunHistory(agentId: number) {
+  function toggleRunHistory(ficheId: number) {
     setExpandedRunHistory((prev) => {
       const next = new Set(prev);
-      if (next.has(agentId)) {
-        next.delete(agentId);
+      if (next.has(ficheId)) {
+        next.delete(ficheId);
       } else {
         next.clear();
-        next.add(agentId);
+        next.add(ficheId);
       }
       return next;
     });
@@ -842,30 +646,30 @@ export default function DashboardPage() {
     });
   }
 
-  function handleRunAgent(event: ReactMouseEvent<HTMLButtonElement>, agentId: number, status: string) {
+  function handleStartRun(event: ReactMouseEvent<HTMLButtonElement>, ficheId: number, status: string) {
     event.stopPropagation();
     // Don't run if already running
     if (status === "running") {
       return;
     }
     // Use the optimistic mutation
-    runAgentMutation.mutate(agentId);
+    startRunMutation.mutate(ficheId);
   }
 
-  function handleChatAgent(event: ReactMouseEvent<HTMLButtonElement>, agentId: number, agentName: string) {
+  function handleChatFiche(event: ReactMouseEvent<HTMLButtonElement>, ficheId: number, ficheName: string) {
     event.stopPropagation();
-    navigate(`/agent/${agentId}/thread/?name=${encodeURIComponent(agentName)}`);
+    navigate(`/fiche/${ficheId}/thread/?name=${encodeURIComponent(ficheName)}`);
   }
 
-  function handleDebugAgent(event: ReactMouseEvent<HTMLButtonElement>, agentId: number) {
+  function handleDebugFiche(event: ReactMouseEvent<HTMLButtonElement>, ficheId: number) {
     event.stopPropagation();
-    setSettingsAgentId(agentId);
+    setSettingsFicheId(ficheId);
   }
 
-  async function handleDeleteAgent(event: ReactMouseEvent<HTMLButtonElement>, agentId: number, name: string) {
+  async function handleDeleteFiche(event: ReactMouseEvent<HTMLButtonElement>, ficheId: number, name: string) {
     event.stopPropagation();
     const confirmed = await confirm({
-      title: `Delete agent "${name}"?`,
+      title: `Delete fiche "${name}"?`,
       message: 'This action cannot be undone. All associated data will be permanently removed.',
       confirmLabel: 'Delete',
       cancelLabel: 'Keep',
@@ -874,7 +678,7 @@ export default function DashboardPage() {
     if (!confirmed) {
       return;
     }
-    deleteAgentMutation.mutate(agentId);
+    deleteFicheMutation.mutate(ficheId);
   }
 }
 
@@ -908,14 +712,14 @@ const renderHeaderCell: HeaderRenderer = (label, sortKey, sortConfig, onSort, so
 
 type DashboardEventType = "run" | "edit" | "debug" | "delete" | "run-actions";
 
-function dispatchDashboardEvent(type: DashboardEventType, agentId: number, runId?: number) {
+function dispatchDashboardEvent(type: DashboardEventType, ficheId: number, runId?: number) {
   if (typeof window === "undefined") {
     return;
   }
   const event = new CustomEvent("dashboard:event", {
     detail: {
       type,
-      agentId,
+      ficheId,
       runId,
     },
   });

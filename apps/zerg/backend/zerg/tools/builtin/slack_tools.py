@@ -29,8 +29,8 @@ def send_slack_webhook(
 ) -> Dict[str, Any]:
     """Send a message to Slack via an incoming webhook.
 
-    This tool allows agents to send rich, formatted messages to Slack channels.
-    If Slack is configured in Agent Settings, the webhook URL is used automatically.
+    This tool allows fiches to send rich, formatted messages to Slack channels.
+    If Slack is configured in Fiche Settings, the webhook URL is used automatically.
     Otherwise, you must provide the webhook_url parameter.
 
     Rate Limits:
@@ -40,7 +40,7 @@ def send_slack_webhook(
     Args:
         text: Main message text (also used as fallback for notifications)
         webhook_url: Optional Slack webhook URL. If not provided, uses the
-            webhook configured in Agent Settings -> Connectors -> Slack.
+            webhook configured in Fiche Settings -> Connectors -> Slack.
         blocks: Optional list of Block Kit blocks for rich formatting.
             See https://api.slack.com/block-kit for block structure.
         attachments: Optional list of legacy attachments for additional content.
@@ -57,7 +57,7 @@ def send_slack_webhook(
 
     Example:
         # Simple text message (uses configured webhook)
-        >>> send_slack_webhook(text="Hello from Zerg agent!")
+        >>> send_slack_webhook(text="Hello from Zerg fiche!")
         {"success": True, "status_code": 200, "response": "ok"}
 
         # Rich message with blocks
@@ -143,7 +143,7 @@ def send_slack_webhook(
                 json=payload,
                 headers={
                     "Content-Type": "application/json",
-                    "User-Agent": "Zerg-Agent/1.0",
+                    "User-Fiche": "Zerg-Fiche/1.0",
                 },
                 timeout=10.0,
             )
@@ -220,7 +220,7 @@ TOOLS: List[StructuredTool] = [
         name="send_slack_webhook",
         description=(
             "Send a message to Slack via incoming webhook. "
-            "If Slack is configured in Agent Settings -> Connectors, the webhook URL is used automatically. "
+            "If Slack is configured in Fiche Settings -> Connectors, the webhook URL is used automatically. "
             "Supports simple text messages and rich formatting with Block Kit blocks. "
             "Use this to send notifications, alerts, or status updates to Slack channels."
         ),

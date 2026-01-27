@@ -187,7 +187,7 @@ def is_critical_tool_error(
 ) -> bool:
     """Return True if a tool error is a "fail-fast" configuration/setup problem.
 
-    This intentionally errs on the side of *not* failing fast so the agent can:
+    This intentionally errs on the side of *not* failing fast so the fiche can:
     - correct bad arguments (validation errors)
     - try alternate tools (e.g. runner_exec -> ssh_exec)
     """

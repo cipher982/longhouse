@@ -1,4 +1,4 @@
-# 🔧 Jarvis/Zerg Platform Refactoring Master Plan
+# 🔧 Oikos/Zerg Platform Refactoring Master Plan
 
 **Created**: 2025-11-15
 **Status**: IN PROGRESS
@@ -83,7 +83,7 @@ main.ts (orchestrator, <500 lines)
 ## 🔨 Implementation Tasks
 
 ### Task 1: Split main.ts (P0)
-**File**: `apps/jarvis/apps/web/main.ts`
+**File**: `apps/oikos/apps/web/main.ts`
 
 1. **Extract Configuration Module** (`lib/config.ts`)
    - Move all CONFIG objects
@@ -127,14 +127,14 @@ main.ts (orchestrator, <500 lines)
    - Keep under 500 lines
 
 ### Task 2: Remove package-lock.json (P0)
-**File**: `apps/jarvis/package-lock.json`
+**File**: `apps/oikos/package-lock.json`
 
 1. Add to `.gitignore`
-2. Remove from tracking: `git rm --cached apps/jarvis/package-lock.json`
+2. Remove from tracking: `git rm --cached apps/oikos/package-lock.json`
 3. Commit change
 
 ### Task 3: Simplify Button Phases (P1)
-**Files**: Various in `apps/jarvis/`
+**Files**: Various in `apps/oikos/`
 
 Current 11 phases → 3 phases:
 1. **Ready** (disconnected, can connect)
@@ -147,7 +147,7 @@ Remove:
 - Philosophical documentation
 
 ### Task 4: Split CSS (P1)
-**File**: `apps/jarvis/apps/web/styles.css`
+**File**: `apps/oikos/apps/web/styles.css`
 
 Split into:
 - `styles/base.css` - Reset, variables
@@ -158,7 +158,7 @@ Split into:
 - `styles/components.css` - Other components
 
 ### Task 5: Documentation Cleanup (P2)
-**Files**: `apps/jarvis/docs/*.md`
+**Files**: `apps/oikos/docs/*.md`
 
 - Remove philosophical discussions
 - Keep only technical implementation details
@@ -187,9 +187,9 @@ Split into:
 ## 🧪 Testing Plan
 
 After each major change:
-1. Run Jarvis tests: `cd apps/jarvis && npm test`
+1. Run Oikos tests: `cd apps/oikos && npm test`
 2. Run Zerg tests: `cd apps/zerg && npm test`
-3. Manual testing: `make jarvis-dev`
+3. Manual testing: `make oikos-dev`
 4. Verify voice/text separation still works
 5. Check button states
 
@@ -221,12 +221,12 @@ After each major change:
 
 ```bash
 # Development
-make jarvis-dev     # Test Jarvis locally
+make oikos-dev     # Test Oikos locally
 make zerg-dev      # Test Zerg locally
 make dev           # Test full platform
 
 # Testing
-cd apps/jarvis && npm test
+cd apps/oikos && npm test
 cd apps/zerg/backend && ./run_backend_tests.sh
 cd apps/zerg/frontend-web && npm test
 cd apps/zerg/e2e && npx playwright test

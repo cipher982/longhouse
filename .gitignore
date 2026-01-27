@@ -184,7 +184,7 @@ scratch/
 
 # Yarn
 .yarn/install-state.gz
-apps/jarvis/.yarn
+apps/oikos/.yarn
 
 # Test credentials (never commit!)
 .env.test

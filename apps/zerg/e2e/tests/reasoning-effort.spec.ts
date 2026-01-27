@@ -6,7 +6,7 @@
  *
  * Includes extensive debugging to trace data flow through:
  * - Frontend request (reasoning_effort parameter)
- * - Backend SSE response (supervisor_complete event with usage)
+ * - Backend SSE response (oikos_complete event with usage)
  * - UI rendering (reasoning tokens badge)
  */
 
@@ -16,7 +16,7 @@ import { resetDatabase } from './test-utils';
 // Skip: Reasoning effort tests need chat selector updates
 test.skip();
 
-// Reset DB before each test to keep agent/thread ids predictable
+// Reset DB before each test to keep fiche/thread ids predictable
 // Uses strict reset that throws on failure to fail fast
 test.beforeEach(async ({ request }) => {
   await resetDatabase(request);
@@ -25,7 +25,7 @@ test.beforeEach(async ({ request }) => {
 async function navigateToChatPage(page: Page): Promise<void> {
   await page.goto('/chat');
 
-  // Wait for Jarvis chat UI to load
+  // Wait for Oikos chat UI to load
   const chatInterface = page.locator('.text-input-container, .chat-wrapper, .transcript');
   await expect(chatInterface.first()).toBeVisible({ timeout: 10000 });
   console.log('✅ Chat page loaded');
@@ -70,11 +70,11 @@ async function setupDebugging(page: Page): Promise<TestDebugData> {
     debugData.consoleMessages.push(`[${msg.type()}] ${text}`);
 
     // Log SSE events from frontend code
-    if (text.includes('SSE event:') || text.includes('supervisor_complete') || text.includes('supervisor:complete')) {
+    if (text.includes('SSE event:') || text.includes('oikos_complete') || text.includes('oikos:complete')) {
       console.log(`📋 Console: ${text}`);
 
       // Try to extract usage object from console
-      if (text.includes('supervisor:complete') && text.includes('usage:')) {
+      if (text.includes('oikos:complete') && text.includes('usage:')) {
         try {
           const args = msg.args();
           if (args.length > 1) {
@@ -97,7 +97,7 @@ async function setupDebugging(page: Page): Promise<TestDebugData> {
     const method = request.method();
 
     // Only track relevant endpoints
-    if (url.includes('/api/jarvis/chat') || url.includes('/api/jarvis/history')) {
+    if (url.includes('/api/oikos/chat') || url.includes('/api/oikos/history')) {
       const capturedRequest: CapturedRequest = {
         timestamp: Date.now(),
         method,
@@ -105,7 +105,7 @@ async function setupDebugging(page: Page): Promise<TestDebugData> {
       };
 
       // Capture POST data for chat endpoint
-      if (method === 'POST' && url.includes('/api/jarvis/chat')) {
+      if (method === 'POST' && url.includes('/api/oikos/chat')) {
         try {
           const postData = request.postDataJSON();
           capturedRequest.postData = postData;
@@ -122,7 +122,7 @@ async function setupDebugging(page: Page): Promise<TestDebugData> {
   page.on('response', async response => {
     const url = response.url();
 
-    if (url.includes('/api/jarvis/chat') || url.includes('/api/jarvis/history')) {
+    if (url.includes('/api/oikos/chat') || url.includes('/api/oikos/history')) {
       const request = debugData.networkRequests.find(r => r.url === url && !r.response);
       if (request) {
         request.response = {
@@ -205,7 +205,7 @@ async function setReasoningEffort(page: Page, value: 'none' | 'low' | 'medium' |
  * Send a message and wait for response
  */
 async function sendMessageAndWaitForResponse(page: Page, message: string): Promise<void> {
-  // Jarvis chat uses .text-input and .send-button
+  // Oikos chat uses .text-input and .send-button
   const inputSelector = page.locator('.text-input');
   const sendButton = page.locator('.send-button');
 
@@ -255,7 +255,7 @@ function printDebugReport(debugData: TestDebugData, sseEvents: CapturedSSEEvent[
   console.log('\n📋 RELEVANT CONSOLE MESSAGES:');
   const relevantMessages = debugData.consoleMessages.filter(msg =>
     msg.includes('SSE') ||
-    msg.includes('supervisor') ||
+    msg.includes('oikos') ||
     msg.includes('reasoning') ||
     msg.includes('usage') ||
     msg.includes('token')
@@ -296,7 +296,7 @@ test.describe('Reasoning Effort Feature E2E Tests', () => {
 
     // 1. Verify request includes reasoning_effort: "none"
     const chatRequest = debugData.networkRequests.find(r =>
-      r.method === 'POST' && r.url.includes('/api/jarvis/chat')
+      r.method === 'POST' && r.url.includes('/api/oikos/chat')
     );
     expect(chatRequest).toBeDefined();
     expect(chatRequest?.postData).toHaveProperty('reasoning_effort', 'none');
@@ -368,7 +368,7 @@ test.describe('Reasoning Effort Feature E2E Tests', () => {
 
     // 1. Verify request includes reasoning_effort: "high"
     const chatRequest = debugData.networkRequests.find(r =>
-      r.method === 'POST' && r.url.includes('/api/jarvis/chat')
+      r.method === 'POST' && r.url.includes('/api/oikos/chat')
     );
     expect(chatRequest).toBeDefined();
     expect(chatRequest?.postData).toHaveProperty('reasoning_effort', 'high');
@@ -410,7 +410,7 @@ test.describe('Reasoning Effort Feature E2E Tests', () => {
           foundCompleteEvent = true;
           try {
             const parsed = typeof evt.data === 'string' ? JSON.parse(evt.data) : evt.data;
-            console.log(`📡 supervisor_complete event ${i + 1}:`, JSON.stringify(parsed, null, 2));
+            console.log(`📡 oikos_complete event ${i + 1}:`, JSON.stringify(parsed, null, 2));
 
             if (parsed.payload?.usage) {
               console.log(`   ✅ Has usage field:`, parsed.payload.usage);
@@ -429,7 +429,7 @@ test.describe('Reasoning Effort Feature E2E Tests', () => {
       });
 
       if (!foundCompleteEvent) {
-        console.log('❌ No supervisor_complete event found in SSE stream');
+        console.log('❌ No oikos_complete event found in SSE stream');
       }
 
       // Check console for state manager updates
@@ -442,7 +442,7 @@ test.describe('Reasoning Effort Feature E2E Tests', () => {
       // Fail the test with detailed diagnostic info
       throw new Error(
         'Reasoning tokens badge not found in UI. Check debug report above for:\n' +
-        '  1. Did the backend send usage.reasoning_tokens in supervisor_complete SSE event?\n' +
+        '  1. Did the backend send usage.reasoning_tokens in oikos_complete SSE event?\n' +
         '  2. Did the frontend receive and parse the event correctly?\n' +
         '  3. Did the state manager update the message with usage data?\n' +
         '  4. Did the ChatContainer component render the badge?'
@@ -493,7 +493,7 @@ test.describe('Reasoning Effort Feature E2E Tests', () => {
 
     // Verify both messages were sent with correct reasoning_effort values
     const chatRequests = debugData.networkRequests.filter(r =>
-      r.method === 'POST' && r.url.includes('/api/jarvis/chat')
+      r.method === 'POST' && r.url.includes('/api/oikos/chat')
     );
     expect(chatRequests.length).toBeGreaterThanOrEqual(2);
 

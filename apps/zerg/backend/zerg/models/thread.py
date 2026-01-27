@@ -1,4 +1,4 @@
-"""Thread and ThreadMessage models for agent conversations."""
+"""Thread and ThreadMessage models for fiche conversations."""
 
 from sqlalchemy import JSON
 from sqlalchemy import Boolean
@@ -19,14 +19,14 @@ from zerg.models.enums import ThreadType
 
 
 class Thread(Base):
-    __tablename__ = "agent_threads"
+    __tablename__ = "threads"
 
     id = Column(Integer, primary_key=True, index=True)
-    agent_id = Column(Integer, ForeignKey("agents.id"))
+    fiche_id = Column(Integer, ForeignKey("fiches.id"))
     title = Column(String, nullable=False)
     active = Column(Boolean, default=True)
-    # Store additional metadata like agent state
-    agent_state = Column(MutableDict.as_mutable(JSON), nullable=True)
+    # Store additional metadata like fiche state
+    fiche_state = Column(MutableDict.as_mutable(JSON), nullable=True)
     memory_strategy = Column(String, default="buffer", nullable=True)
     thread_type = Column(
         SAEnum(ThreadType, native_enum=False, name="thread_type_enum"),
@@ -36,8 +36,8 @@ class Thread(Base):
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
-    # Define relationship with Agent
-    agent = relationship("Agent", back_populates="threads")
+    # Define relationship with Fiche
+    fiche = relationship("Fiche", back_populates="threads")
     # Define relationship with ThreadMessage
     messages = relationship("ThreadMessage", back_populates="thread", cascade="all, delete-orphan")
 
@@ -46,7 +46,7 @@ class ThreadMessage(Base):
     __tablename__ = "thread_messages"
 
     id = Column(Integer, primary_key=True, index=True)
-    thread_id = Column(Integer, ForeignKey("agent_threads.id"))
+    thread_id = Column(Integer, ForeignKey("threads.id"))
     role = Column(String, nullable=False)  # "system", "user", "assistant", "tool"
     content = Column(Text, nullable=False)
     # Store *list* of tool call dicts emitted by OpenAI ChatCompleteion
@@ -54,7 +54,7 @@ class ThreadMessage(Base):
     tool_call_id = Column(String, nullable=True)  # For tool responses
     name = Column(String, nullable=True)  # For tool messages
     sent_at = Column(DateTime(timezone=True), server_default=func.now())  # When user sent the message (UTC)
-    processed = Column(Boolean, default=False, nullable=False)  # Track if message has been processed by agent
+    processed = Column(Boolean, default=False, nullable=False)  # Track if message has been processed by fiche
     message_metadata = Column(MutableDict.as_mutable(JSON), nullable=True)  # Store additional metadata
     parent_id = Column(Integer, ForeignKey("thread_messages.id"), nullable=True)
     # Internal messages are orchestration artifacts (continuations, system notifications)

@@ -50,7 +50,7 @@ Shows unified timeline: supervisor → worker → LLM calls
 
 #### Context Propagation (Phases 1-2)
 ```
-jarvis_chat.py (generate trace_id)
+oikos_chat.py (generate trace_id)
     ↓
 SupervisorContext (trace_id field added)
     ↓
@@ -105,7 +105,7 @@ Timeline:
 **New Files:**
 - `apps/zerg/backend/scripts/debug_trace.py` (14KB)
 - `scripts/mcp_debug_trace/server.py` (9KB)
-- `apps/zerg/frontend-web/src/jarvis/app/components/TraceIdDisplay.tsx` (4KB)
+- `apps/zerg/frontend-web/src/oikos/app/components/TraceIdDisplay.tsx` (4KB)
 
 **Modified Files:**
 - `zerg/models/run.py` - Added trace_id column
@@ -113,7 +113,7 @@ Timeline:
 - `zerg/models/llm_audit.py` - Added trace_id, span_id columns
 - `zerg/context.py` - Added trace_id to WorkerContext
 - `zerg/services/supervisor_context.py` - Added trace_id to SupervisorContext
-- `zerg/routers/jarvis_chat.py` - Generate trace_id at entry
+- `zerg/routers/oikos_chat.py` - Generate trace_id at entry
 - `zerg/services/supervisor_service.py` - Set trace_id on context
 - `zerg/tools/builtin/supervisor_tools.py` - Copy trace_id to WorkerJob
 - `zerg/services/worker_resume.py` - Inherit trace_id on continuation
@@ -200,7 +200,7 @@ if has_spawn_worker and len(tool_calls) > 1:
 After all changes, the supervisor/worker flow:
 
 ```
-User Message → jarvis_chat.py
+User Message → oikos_chat.py
     │
     ├── Generate trace_id (UUID)
     ├── Create AgentRun with trace_id
@@ -296,7 +296,7 @@ zerg/services/worker_runner.py                     # WorkerContext.trace_id
 zerg/services/worker_job_processor.py              # trace_id in event_context
 zerg/services/llm_audit.py                         # trace_id storage, TTL prune
 zerg/managers/agent_runner.py                      # parent_id, WorkerContext fallback
-zerg/routers/jarvis_chat.py                        # trace_id generation
+zerg/routers/oikos_chat.py                        # trace_id generation
 
 # Backend - Tools
 zerg/tools/builtin/supervisor_tools.py             # trace_id copy, prefix removal
@@ -307,10 +307,10 @@ tests/test_master_worker_flow_integration.py       # Updated expectations
 tests/test_langgraph_free_resume.py                # Minor update
 
 # Frontend
-src/jarvis/app/App.tsx                             # TraceIdDisplay import
-src/jarvis/app/components/index.ts                 # Export
-src/jarvis/lib/event-bus.ts                        # traceId types
-src/jarvis/lib/supervisor-chat-controller.ts       # traceId emission
+src/oikos/app/App.tsx                             # TraceIdDisplay import
+src/oikos/app/components/index.ts                 # Export
+src/oikos/lib/event-bus.ts                        # traceId types
+src/oikos/lib/supervisor-chat-controller.ts       # traceId emission
 src/generated/sse-events.ts                        # Generated
 
 # Schemas

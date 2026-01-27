@@ -1,7 +1,7 @@
 """Test application entry point.
 
 This module provides the entry point for the test version of the application,
-used by E2E tests with isolated worker databases.
+used by E2E tests with isolated commis databases.
 """
 
 import os
@@ -12,9 +12,9 @@ if "ENVIRONMENT" not in os.environ:
     os.environ["ENVIRONMENT"] = "test"
 
 # Clear any cached session factories before creating app
-from zerg.database import clear_worker_caches  # noqa: E402
+from zerg.database import clear_commis_caches  # noqa: E402
 
-clear_worker_caches()
+clear_commis_caches()
 
 from zerg.core.config import load_config  # noqa: E402
 from zerg.core.factory import create_app  # noqa: E402
@@ -35,9 +35,9 @@ if __name__ == "__main__":
             port = int(arg.split("=")[1])
             break
 
-    # Fallback to worker-based port calculation
+    # Fallback to commis-based port calculation
     if port is None:
-        worker_id = os.getenv("TEST_WORKER_ID", "0")
-        port = 8000 + int(worker_id)
+        commis_id = os.getenv("TEST_COMMIS_ID", "0")
+        port = 8000 + int(commis_id)
 
     uvicorn.run(app, host="0.0.0.0", port=port)

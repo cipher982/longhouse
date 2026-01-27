@@ -1,6 +1,6 @@
 """Channel Router.
 
-Routes messages between the Zerg agent system and channel plugins.
+Routes messages between the Zerg fiche system and channel plugins.
 Handles message dispatch, event routing, and conversation state.
 """
 
@@ -55,11 +55,11 @@ OutboundFilter = Callable[[ChannelMessage], ChannelMessage | None]
 
 
 class ChannelRouter:
-    """Routes messages between Zerg agents and channel plugins.
+    """Routes messages between Zerg fiches and channel plugins.
 
     The router:
-    - Receives incoming messages from channels and dispatches to agents
-    - Sends outgoing messages from agents to appropriate channels
+    - Receives incoming messages from channels and dispatches to fiches
+    - Sends outgoing messages from fiches to appropriate channels
     - Maintains conversation context for multi-turn interactions
     - Applies message filters and transformations
 

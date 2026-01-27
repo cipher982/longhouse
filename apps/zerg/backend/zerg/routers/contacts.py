@@ -1,6 +1,6 @@
 """User contacts routes for approved external action recipients.
 
-Users maintain approved contacts lists that agents can send to.
+Users maintain approved contacts lists that fiches can send to.
 This prevents abuse (spam, phishing) while keeping the platform usable.
 """
 

@@ -17,7 +17,7 @@ Commits reviewed (baseline → `HEAD`), focusing on doc-impacting changes:
 - `ecbf429` feat(backend): add supervisor tool SSE event schema and frontend event types
 - `49912f0` fix(backend): add SSE subscriptions for supervisor tool events
 - `0015f35` feat(frontend): add supervisor tool store and UI components
-- `0effeeb` fix(jarvis): render tool cards inline with messages for temporal ordering
+- `0effeeb` fix(oikos): render tool cards inline with messages for temporal ordering
 
 ## What Changed (High Signal)
 

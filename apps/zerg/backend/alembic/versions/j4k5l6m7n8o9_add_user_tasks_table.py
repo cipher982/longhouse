@@ -4,7 +4,7 @@ Revision ID: j4k5l6m7n8o9
 Revises: 35e451933c7a
 Create Date: 2025-12-18 00:00:00.000000
 
-Add user_tasks table for agent-created task management.
+Add user_tasks table for fiche-created task management.
 """
 from typing import Sequence, Union
 

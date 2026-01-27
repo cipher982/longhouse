@@ -4,7 +4,7 @@ import type { WorkflowData, WorkflowDataInput, WorkflowNode, WorkflowEdge } from
 // Type for node config data - properly typed to match backend schema
 interface NodeConfig {
   text?: string;
-  agent_id?: number;
+  fiche_id?: number;
   tool_type?: string;
   [key: string]: unknown; // Allow additional properties
 }
@@ -17,7 +17,7 @@ export function convertToReactFlowData(workflowData: WorkflowData): { nodes: Flo
     position: { x: node.position.x, y: node.position.y },
     data: {
       label: (node.config as NodeConfig)?.text || `${node.type} node`,
-      agentId: (node.config as NodeConfig)?.agent_id,
+      ficheId: (node.config as NodeConfig)?.fiche_id,
       toolType: (node.config as NodeConfig)?.tool_type,
     },
   }));
@@ -37,14 +37,14 @@ export function normalizeWorkflow(nodes: FlowNode[], edges: Edge[]): WorkflowDat
     .sort((a, b) => a.id.localeCompare(b.id))
     .map((node) => ({
       id: node.id,
-      type: node.type as "agent" | "tool" | "trigger" | "conditional",
+      type: node.type as "fiche" | "tool" | "trigger" | "conditional",
       position: {
         x: Math.round(node.position.x * 2) / 2, // 0.5px quantization
         y: Math.round(node.position.y * 2) / 2,
       },
       config: {
         text: node.data.label,
-        agent_id: node.data.agentId,
+        fiche_id: node.data.ficheId,
         tool_type: node.data.toolType,
       },
     })) as unknown as WorkflowNode[];

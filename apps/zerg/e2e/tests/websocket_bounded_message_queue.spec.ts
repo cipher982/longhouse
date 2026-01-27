@@ -154,16 +154,16 @@ test.describe('WebSocket Bounded Message Queue', () => {
   test('should flush queued messages when connection established', async ({ page, request }) => {
     console.log('🚀 Testing queue flush on connection...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
-    // Create test agent
-    const response = await request.post('/api/agents', {
+    // Create test fiche
+    const response = await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {
-        name: 'Queue Flush Test Agent',
+        name: 'Queue Flush Test Fiche',
         system_instructions: 'Test',
         task_instructions: 'Test',
         model: 'gpt-mock',
@@ -212,12 +212,12 @@ test.describe('WebSocket Bounded Message Queue', () => {
   test('should maintain queue during reconnection attempts', async ({ page, request }) => {
     console.log('🚀 Testing queue behavior during reconnection...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
-    // Create test agent
-    await request.post('/api/agents', {
+    // Create test fiche
+    await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {
@@ -272,11 +272,11 @@ test.describe('WebSocket Bounded Message Queue', () => {
   test('should clear queue on successful reconnection', async ({ page, request }) => {
     console.log('🚀 Testing queue clear after successful reconnection...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
-    await request.post('/api/agents', {
+    await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {
@@ -355,11 +355,11 @@ test.describe('WebSocket Bounded Message Queue', () => {
   test('should handle mixed message types in queue', async ({ page, request }) => {
     console.log('🚀 Testing queue with different message types...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
-    await request.post('/api/agents', {
+    await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {
@@ -408,11 +408,11 @@ test.describe('WebSocket Bounded Message Queue', () => {
   test('should not queue messages when WebSocket is OPEN', async ({ page, request }) => {
     console.log('🚀 Testing that messages send immediately when connected...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
-    await request.post('/api/agents', {
+    await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {

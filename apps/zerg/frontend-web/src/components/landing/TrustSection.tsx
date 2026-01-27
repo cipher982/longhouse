@@ -16,7 +16,7 @@ const faqs: FAQ[] = [
   },
   {
     question: "Can I delete my data?",
-    answer: "Yes! Full account deletion is available in your profile settings. When you delete your account, all your data, agents, and workflows are permanently removed."
+    answer: "Yes! Full account deletion is available in your profile settings. When you delete your account, all your data, fiches, and workflows are permanently removed."
   },
   {
     question: "Do you train AI models on my data?",

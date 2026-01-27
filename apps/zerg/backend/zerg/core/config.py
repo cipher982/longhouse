@@ -74,20 +74,20 @@ class TestConfig(AppConfig):
     - E2ETestConfig for end-to-end tests
     """
 
-    worker_id: str
+    commis_id: str
     db_path: Optional[str] = None
     mock_responses: Optional[dict] = None
 
     @classmethod
-    def for_worker(cls, worker_id: str) -> TestConfig:
-        """Create test configuration for specific worker."""
+    def for_commis(cls, commis_id: str) -> TestConfig:
+        """Create test configuration for specific commis."""
         # For backward compatibility, use UnitTestConfig
-        return UnitTestConfig.for_worker(worker_id)
+        return UnitTestConfig.for_commis(commis_id)
 
     def create_database(self) -> Database:
         """Create isolated test database."""
         # Use SQLAlchemyDatabase which will use get_session_factory()
-        # This picks up the worker context from the middleware dynamically
+        # This picks up the commis context from the middleware dynamically
         from zerg.core.implementations import SQLAlchemyDatabase
 
         return SQLAlchemyDatabase()
@@ -139,14 +139,14 @@ def load_config() -> AppConfig:
 
     Environment variables:
     - ENVIRONMENT: production, development, test, test:unit, test:integration, test:e2e
-    - TEST_WORKER_ID: Worker ID for parallel test execution
+    - TEST_COMMIS_ID: Commis ID for parallel test execution
     - TEST_TYPE: Override for test type (unit, integration, e2e)
     """
     environment = os.getenv("ENVIRONMENT", "production")
 
     # Handle test environments with optional subtype
     if environment.startswith("test"):
-        worker_id = os.getenv("TEST_WORKER_ID", "0")
+        commis_id = os.getenv("TEST_COMMIS_ID", "0")
 
         # Check for explicit test type
         if ":" in environment:
@@ -156,12 +156,12 @@ def load_config() -> AppConfig:
             test_type = os.getenv("TEST_TYPE", "unit")
 
         if test_type == "e2e":
-            return E2ETestConfig.for_worker(worker_id)
+            return E2ETestConfig.for_commis(commis_id)
         elif test_type == "integration":
-            return IntegrationTestConfig.for_worker(worker_id)
+            return IntegrationTestConfig.for_commis(commis_id)
         else:
             # Default to unit test config for backward compatibility
-            return UnitTestConfig.for_worker(worker_id)
+            return UnitTestConfig.for_commis(commis_id)
     elif environment == "development":
         return DevelopmentConfig()
     else:

@@ -3,13 +3,13 @@
 **Version:** 2.1
 **Date:** December 2025
 **Status:** Simplified Reference
-**Parent Spec:** [jarvis-supervisor-unification-v2.1.md](./jarvis-supervisor-unification-v2.1.md) (supersedes v2.0)
+**Parent Spec:** [oikos-supervisor-unification-v2.1.md](./oikos-supervisor-unification-v2.1.md) (supersedes v2.0)
 
 ---
 
 ## Overview
 
-This document covers worker monitoring patterns and event schemas. For the current architecture direction, see [jarvis-supervisor-unification-v2.1.md](./jarvis-supervisor-unification-v2.1.md).
+This document covers worker monitoring patterns and event schemas. For the current architecture direction, see [oikos-supervisor-unification-v2.1.md](./oikos-supervisor-unification-v2.1.md).
 
 **Key insight:** The problem wasn't polling - it's natural for a supervisor to check on workers (like glancing at a second monitor). The problem was the `make_heuristic_decision()` function that pre-programmed decisions. Remove the decision engine, keep monitoring.
 
@@ -172,4 +172,4 @@ Supervisor: "Health checks return in 1-5s. This is stuck. Cancel."
 
 ---
 
-_For current architecture direction, see [jarvis-supervisor-unification-v2.1.md](./jarvis-supervisor-unification-v2.1.md)._
+_For current architecture direction, see [oikos-supervisor-unification-v2.1.md](./oikos-supervisor-unification-v2.1.md)._

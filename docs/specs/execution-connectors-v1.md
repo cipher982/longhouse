@@ -82,13 +82,13 @@ Important: The **worker chooses commands** (as it does today). The runner is "du
 
 ## Onboarding UX (v1)
 
-### Primary path (Jarvis-first)
+### Primary path (Oikos-first)
 
-Zerg (dashboard) is **not** the primary user experience. Jarvis is.
+Zerg (dashboard) is **not** the primary user experience. Oikos is.
 
 The intended flow is:
 
-1. User asks Jarvis to do something that requires command execution (e.g. "check disk on prod").
+1. User asks Oikos to do something that requires command execution (e.g. "check disk on prod").
 2. Supervisor decides a worker needs infra access.
 3. If no runner is online (or the required capability is missing), the Supervisor guides setup in chat:
    - `runner_list()` to see what exists
@@ -117,7 +117,7 @@ This avoids "install on every prod server" while still letting users reach many 
    - `docker run ...` (copy/paste)
 3. Runner registers and appears "Online".
 
-Note: the UI flow is helpful for power users/admins, but Jarvis-first onboarding should work even if the user never opens the dashboard.
+Note: the UI flow is helpful for power users/admins, but Oikos-first onboarding should work even if the user never opens the dashboard.
 
 ### Runner runtime packaging
 

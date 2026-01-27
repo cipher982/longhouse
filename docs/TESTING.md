@@ -59,9 +59,9 @@ On failure:
 
 ## E2E Gotchas
 
-- **E2E runs on insecure origin**: Use `src/jarvis/lib/uuid.ts` not `crypto.randomUUID()`
+- **E2E runs on insecure origin**: Use `src/oikos/lib/uuid.ts` not `crypto.randomUUID()`
 - **WebRTC tests**: Skip at describe-level when `SKIP_WEBRTC_TESTS=true`
-- **Deterministic UI tests**: Emit events via `window.__jarvis.eventBus` (DEV only)
+- **Deterministic UI tests**: Emit events via `window.__oikos.eventBus` (DEV only)
 - **Test isolation issues**: Try `make test-e2e-reset`
 
 ## UI / Design QA (Quick Checks)

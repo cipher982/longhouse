@@ -54,7 +54,7 @@ VALID_EVENTS = {
     "scroll_100",  # Scrolled to bottom
 }
 
-# Known bot user-agent patterns (lowercase)
+# Known bot user-fiche patterns (lowercase)
 KNOWN_BOT_PATTERNS = [
     "bot",
     "crawler",
@@ -82,7 +82,7 @@ KNOWN_BOT_PATTERNS = [
 
 
 def is_known_bot(user_agent: str) -> bool:
-    """Check if user agent matches known bot patterns."""
+    """Check if user fiche matches known bot patterns."""
     if not user_agent:
         return False
     ua_lower = user_agent.lower()

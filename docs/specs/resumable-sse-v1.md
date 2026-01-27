@@ -100,7 +100,7 @@ After examining the actual code, here's what's confirmed:
 
 ### ✅ Root Cause #1: No Durable Event Log (VALIDATED)
 
-**File**: `apps/zerg/backend/zerg/routers/jarvis_sse.py`
+**File**: `apps/zerg/backend/zerg/routers/oikos_sse.py`
 
 The `stream_run_events()` generator (lines 29-168) is **purely a live forwarder**:
 - Subscribes to EventBus on connect (lines 63-76)
@@ -148,7 +148,7 @@ Both execute for the same worker spawn, causing duplicate events on SSE streams.
 
 ### ✅ Root Cause #4: DEFERRED Runs Not Treated as Attachable (VALIDATED)
 
-**File**: `apps/zerg/backend/zerg/routers/jarvis_runs.py` (lines 300-310)
+**File**: `apps/zerg/backend/zerg/routers/oikos_runs.py` (lines 300-310)
 
 The `/runs/{run_id}/stream` endpoint checks:
 ```python
@@ -162,7 +162,7 @@ else:
 
 ### ✅ Root Cause #5: JSON Validity Enforced at Edge (VALIDATED)
 
-**File**: `apps/zerg/backend/zerg/routers/jarvis_sse.py` (lines 122-136)
+**File**: `apps/zerg/backend/zerg/routers/oikos_sse.py` (lines 122-136)
 
 Events are serialized via `json.dumps(..., default=_json_default)` at SSE yield time. If serialization fails (e.g., non-JSON-safe object in payload), the **entire stream crashes** with a 500 error.
 
@@ -309,7 +309,7 @@ async def stream_run_replay(
     after_sequence: int = 0,
     include_tokens: bool = True,
     db: Session = Depends(get_db),
-    current_user = Depends(get_current_jarvis_user),
+    current_user = Depends(get_current_oikos_user),
 ):
     """Stream run events with replay support.
 
@@ -404,13 +404,13 @@ The new `/api/stream/` endpoint has been configured in nginx with proper SSE han
 - `X-Accel-Buffering no` - Additional nginx buffering control
 
 **Backward Compatibility:**
-Legacy SSE endpoints (`/api/jarvis/supervisor/events`, `/api/jarvis/chat`, `/api/jarvis/runs/<id>/stream`) remain configured and functional.
+Legacy SSE endpoints (`/api/oikos/supervisor/events`, `/api/oikos/chat`, `/api/oikos/runs/<id>/stream`) remain configured and functional.
 
 ### JSON Serialization Workaround
 
 The `_json_default()` function remains in use across all SSE endpoints:
 - **Event Store** (`event_store.py`): Uses it for emit-time validation
-- **SSE Routers** (`jarvis_sse.py`, `stream.py`): Uses it for stream-time serialization
+- **SSE Routers** (`oikos_sse.py`, `stream.py`): Uses it for stream-time serialization
 - **Purpose**: Provides consistent datetime serialization and graceful degradation
 - **Status**: This is intentional defense-in-depth, not a workaround to be removed
 
@@ -465,7 +465,7 @@ The `_json_default()` function remains in use across all SSE endpoints:
 - DEFERRED runs are streamable (not just completed)
 
 ### Phase 4: Frontend Integration
-**Goal**: Use resumable streams in Jarvis chat.
+**Goal**: Use resumable streams in Oikos chat.
 
 **Tasks:**
 1. Update `EventSource` URL to `/api/stream/runs/{run_id}`
@@ -541,7 +541,7 @@ await emit_run_event(
 **Before:**
 ```typescript
 // Connect to SSE stream
-const eventSource = new EventSource(`/api/jarvis/chat`);
+const eventSource = new EventSource(`/api/oikos/chat`);
 ```
 
 **After:**
@@ -569,7 +569,7 @@ const eventSource = new EventSource(
 **VALIDATED**: Both `WorkerJobProcessor` (line 125) and `WorkerRunner` (line 171) emit.
 
 ### Report Claim #4: "DEFERRED runs not attachable"
-**VALIDATED**: Line 300 in `jarvis_runs.py` treats DEFERRED as completed.
+**VALIDATED**: Line 300 in `oikos_runs.py` treats DEFERRED as completed.
 
 ### Report Claim #5: "JSON validity enforced at edge"
 **VALIDATED**: `_json_default()` at line 16 catches issues at SSE yield time, not emit time.
@@ -612,7 +612,7 @@ All root causes from the report are **confirmed by code inspection**.
 ## References
 
 - **EventBus Implementation**: `apps/zerg/backend/zerg/events/event_bus.py`
-- **Current SSE Streaming**: `apps/zerg/backend/zerg/routers/jarvis_sse.py`
+- **Current SSE Streaming**: `apps/zerg/backend/zerg/routers/oikos_sse.py`
 - **Supervisor Events**: `apps/zerg/backend/zerg/services/supervisor_service.py`
 - **Worker Events**: `apps/zerg/backend/zerg/services/worker_runner.py`
 - **Duplicate Publisher**: `apps/zerg/backend/zerg/services/worker_job_processor.py` (line 125)

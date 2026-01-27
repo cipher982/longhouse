@@ -1,10 +1,10 @@
-"""add_agent_memory_kv_table
+"""add_fiche_memory_kv_table
 
 Revision ID: k5l6m7n8o9p0
 Revises: j4k5l6m7n8o9
 Create Date: 2025-12-18 00:00:00.000000
 
-Add agent_memory_kv table for persistent key-value storage.
+Add fiche_memory_kv table for persistent key-value storage.
 """
 from typing import Sequence, Union
 
@@ -20,16 +20,16 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Create agent_memory_kv table."""
+    """Create fiche_memory_kv table."""
     # Check if table already exists (may have been created by schema init)
     conn = op.get_bind()
     inspector = sa.inspect(conn)
-    if 'agent_memory_kv' in inspector.get_table_names():
-        print("agent_memory_kv table already exists - skipping")
+    if 'fiche_memory_kv' in inspector.get_table_names():
+        print("fiche_memory_kv table already exists - skipping")
         return
 
     op.create_table(
-        'agent_memory_kv',
+        'fiche_memory_kv',
         sa.Column('user_id', sa.Integer(), nullable=False),
         sa.Column('key', sa.Text(), nullable=False),
         sa.Column('value', sa.JSON(), nullable=False),
@@ -49,8 +49,8 @@ def upgrade() -> None:
     # Create partial index for expires_at
     # Note: SQLite supports partial indexes starting from version 3.8.0
     op.create_index(
-        'ix_agent_memory_kv_expires_at',
-        'agent_memory_kv',
+        'ix_fiche_memory_kv_expires_at',
+        'fiche_memory_kv',
         ['expires_at'],
         unique=False,
         postgresql_where=sa.text('expires_at IS NOT NULL'),
@@ -59,6 +59,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Drop agent_memory_kv table."""
-    op.drop_index('ix_agent_memory_kv_expires_at', table_name='agent_memory_kv')
-    op.drop_table('agent_memory_kv')
+    """Drop fiche_memory_kv table."""
+    op.drop_index('ix_fiche_memory_kv_expires_at', table_name='fiche_memory_kv')
+    op.drop_table('fiche_memory_kv')

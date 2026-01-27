@@ -286,8 +286,8 @@
   font-size: 12px;
 }
 
-/* Top agents table */
-.ops-dashboard table.top-agents {
+/* Top fiches table */
+.ops-dashboard .top-fiches-table table {
   width: 100%;
   border-collapse: collapse;
   background: var(--bg-dark);
@@ -296,8 +296,8 @@
   overflow: hidden;
 }
 
-.ops-dashboard table.top-agents th,
-.ops-dashboard table.top-agents td {
+.ops-dashboard .top-fiches-table table th,
+.ops-dashboard .top-fiches-table table td {
   padding: 10px 12px;
   border-bottom: 1px solid var(--border-color);
   text-align: left;
@@ -305,7 +305,7 @@
   color: var(--text);
 }
 
-.ops-dashboard table.top-agents th {
+.ops-dashboard .top-fiches-table table th {
   padding: 10px 12px;
   border-bottom: 1px solid var(--border-color);
   text-align: left;
@@ -315,11 +315,11 @@
   background: var(--dark-lighter);
 }
 
-.ops-dashboard table.top-agents tbody tr:last-child td {
+.ops-dashboard .top-fiches-table table tbody tr:last-child td {
   border-bottom: none;
 }
 
-.ops-dashboard table.top-agents tbody tr:hover {
+.ops-dashboard .top-fiches-table table tbody tr:hover {
   background: rgb(255 255 255 / 4%);
 }
 

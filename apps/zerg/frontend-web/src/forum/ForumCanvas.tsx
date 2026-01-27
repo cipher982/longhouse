@@ -34,7 +34,7 @@ type PointerState = {
 const ENTITY_COLORS: Record<ForumEntity["type"], string> = {
   unit: "#5CE0FF",
   structure: "#F7B955",
-  worker: "#7B7CFF",
+  commis: "#7B7CFF",
   task_node: "#36EBA8",
 };
 

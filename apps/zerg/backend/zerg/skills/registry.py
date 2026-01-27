@@ -224,7 +224,20 @@ class SkillRegistry:
         Returns:
             SkillSnapshot with prompt and metadata
         """
-        skills = self.filter_by_allowlist(allowed)
+        skills = self.get_all_skills()
+        if allowed:
+            filtered: List[Skill] = []
+            for skill in skills:
+                for pattern in allowed:
+                    if pattern.endswith("*"):
+                        prefix = pattern[:-1]
+                        if skill.name.startswith(prefix):
+                            filtered.append(skill)
+                            break
+                    elif pattern == skill.name:
+                        filtered.append(skill)
+                        break
+            skills = filtered
         prompt = self.format_skills_prompt(skills)
 
         skill_summaries = [

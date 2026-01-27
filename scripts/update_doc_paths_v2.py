@@ -4,18 +4,18 @@ import re
 
 # Order matters: more specific first
 replacements = [
-    (r"apps/jarvis/apps/web/lib/", "apps/zerg/frontend-web/src/jarvis/lib/"),
-    (r"apps/jarvis/apps/web/src/", "apps/zerg/frontend-web/src/jarvis/app/"),
-    (r"apps/jarvis/apps/web/", "apps/zerg/frontend-web/src/jarvis/"),
-    (r"apps/jarvis/packages/core/src/", "apps/zerg/frontend-web/src/jarvis/core/"),
-    (r"apps/jarvis/packages/core/", "apps/zerg/frontend-web/src/jarvis/core/"),
-    (r"apps/jarvis/packages/data/local/src/", "apps/zerg/frontend-web/src/jarvis/data/"),
-    (r"apps/jarvis/packages/data/local/", "apps/zerg/frontend-web/src/jarvis/data/"),
-    (r"apps/jarvis/", "apps/zerg/frontend-web/src/jarvis/"),
-    (r"src/jarvis/core/src/", "apps/zerg/frontend-web/src/jarvis/core/"), # Fix previous mistakes
-    (r"src/jarvis/data/src/", "apps/zerg/frontend-web/src/jarvis/data/"), # Fix previous mistakes
-    (r"src/jarvis/lib/", "apps/zerg/frontend-web/src/jarvis/lib/"), # Fix previous mistakes
-    (r"src/jarvis/", "apps/zerg/frontend-web/src/jarvis/"), # Fix previous mistakes
+    (r"apps/oikos/apps/web/lib/", "apps/zerg/frontend-web/src/oikos/lib/"),
+    (r"apps/oikos/apps/web/src/", "apps/zerg/frontend-web/src/oikos/app/"),
+    (r"apps/oikos/apps/web/", "apps/zerg/frontend-web/src/oikos/"),
+    (r"apps/oikos/packages/core/src/", "apps/zerg/frontend-web/src/oikos/core/"),
+    (r"apps/oikos/packages/core/", "apps/zerg/frontend-web/src/oikos/core/"),
+    (r"apps/oikos/packages/data/local/src/", "apps/zerg/frontend-web/src/oikos/data/"),
+    (r"apps/oikos/packages/data/local/", "apps/zerg/frontend-web/src/oikos/data/"),
+    (r"apps/oikos/", "apps/zerg/frontend-web/src/oikos/"),
+    (r"src/oikos/core/src/", "apps/zerg/frontend-web/src/oikos/core/"), # Fix previous mistakes
+    (r"src/oikos/data/src/", "apps/zerg/frontend-web/src/oikos/data/"), # Fix previous mistakes
+    (r"src/oikos/lib/", "apps/zerg/frontend-web/src/oikos/lib/"), # Fix previous mistakes
+    (r"src/oikos/", "apps/zerg/frontend-web/src/oikos/"), # Fix previous mistakes
 ]
 
 def update_paths(directory):

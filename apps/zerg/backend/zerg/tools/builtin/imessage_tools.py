@@ -3,7 +3,7 @@
 These helpers lean on the local Messages app and are intentionally scoped for
 power users running the backend on a Mac with the Messages app signed in.
 
-iMessage can be enabled via Agent Settings when running on a macOS host.
+iMessage can be enabled via Fiche Settings when running on a macOS host.
 """
 
 from __future__ import annotations
@@ -130,9 +130,9 @@ def send_imessage(
 ) -> Dict[str, Any]:
     """Send an iMessage (or SMS fallback) using the local Messages app.
 
-    iMessage can be enabled via Agent Settings when running on a macOS host.
+    iMessage can be enabled via Fiche Settings when running on a macOS host.
     """
-    # Check if iMessage is configured for this agent
+    # Check if iMessage is configured for this fiche
     resolver = get_credential_resolver()
     if resolver:
         creds = resolver.get(ConnectorType.IMESSAGE)
@@ -225,9 +225,9 @@ def list_imessage_messages(
 ) -> Dict[str, Any]:
     """Read recent iMessage transcripts from the local chat database.
 
-    iMessage can be enabled via Agent Settings when running on a macOS host.
+    iMessage can be enabled via Fiche Settings when running on a macOS host.
     """
-    # Check if iMessage is configured for this agent
+    # Check if iMessage is configured for this fiche
     resolver = get_credential_resolver()
     if resolver:
         creds = resolver.get(ConnectorType.IMESSAGE)
@@ -364,7 +364,7 @@ TOOLS = [
         description=(
             "Send an iMessage (or SMS fallback) via the local Messages app. "
             "Requires the backend to run on macOS with Messages signed in. "
-            "Can be enabled via Agent Settings."
+            "Can be enabled via Fiche Settings."
         ),
     ),
     StructuredTool.from_function(
@@ -373,7 +373,7 @@ TOOLS = [
         description=(
             "Fetch recent iMessage transcripts from the local chat database. "
             "Supports filtering by chat and incremental polling via row_id. "
-            "Can be enabled via Agent Settings."
+            "Can be enabled via Fiche Settings."
         ),
     ),
 ]

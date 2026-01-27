@@ -8,7 +8,7 @@ const scenario = generateForumReplay({
   roomCount: 2,
   unitsPerRoom: 1,
   tasksPerRoom: 1,
-  workersPerRoom: 1,
+  commissPerRoom: 1,
 });
 
 describe("forum replay cursor", () => {

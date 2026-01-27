@@ -38,12 +38,12 @@ Recent example: tool events were misclassified (`supervisor_tool_*` emitted as `
   - `/api/stream/runs/{run_id}`
   - Subscribes to live events via `event_bus` first, replays from DB with short-lived session, then continues live from an in-memory queue.
 
-### 2.3 Jarvis/Chat SSE (additional endpoints)
+### 2.3 Oikos/Chat SSE (additional endpoints)
 
-- `apps/zerg/backend/zerg/routers/jarvis_chat.py`
-- `apps/zerg/backend/zerg/routers/jarvis_supervisor.py`
-- `apps/zerg/backend/zerg/routers/jarvis_runs.py`
-- `apps/zerg/backend/zerg/routers/jarvis_sse.py`
+- `apps/zerg/backend/zerg/routers/oikos_chat.py`
+- `apps/zerg/backend/zerg/routers/oikos_supervisor.py`
+- `apps/zerg/backend/zerg/routers/oikos_runs.py`
+- `apps/zerg/backend/zerg/routers/oikos_sse.py`
 
 ### 2.4 WebSockets (topic-based + runner WS)
 
@@ -202,7 +202,7 @@ This matches what already exists in `routers/stream.py` and `services/event_stor
    - In `_call_tool_async`, open a session for event emission (and close it) rather than using a shared session held elsewhere.
 4) Clarify event channels:
    - Treat `/api/stream/runs/{run_id}` as the primary timeline feed.
-   - Keep Jarvis-specific SSE only as a thin wrapper or deprecate it gradually.
+   - Keep Oikos-specific SSE only as a thin wrapper or deprecate it gradually.
 5) Explicitly disable parallel execution for DB-mutating tools if needed (a short-term guard), or route DB mutations through a single-writer pattern.
 6) Ensure event payload includes `run_id` + `owner_id` everywhere (security/correlation).
 
@@ -211,7 +211,7 @@ This matches what already exists in `routers/stream.py` and `services/event_stor
 Goal: collapse to one clear streaming primitive and delete redundant plumbing.
 
 1) **One timeline stream:** standardize on `routers/stream.py` for all run timelines.
-2) Deprecate Jarvis-specific SSE generators and unify them behind the resumable run stream.
+2) Deprecate Oikos-specific SSE generators and unify them behind the resumable run stream.
 3) Remove WebSocket token streaming for supervisor runs; only stream tokens via SSE (and don’t persist per-token).
 4) Replace contextvar-heavy state with a small explicit `RunContext` object passed to orchestrator entrypoints, containing only IDs/snapshots.
 5) Move all DB interactions behind clear boundaries:

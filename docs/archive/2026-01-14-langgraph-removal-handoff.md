@@ -43,7 +43,7 @@ Replace LangGraph with a simple, explicit ReAct loop in `supervisor_react_engine
 | Document | Purpose |
 |----------|---------|
 | `docs/specs/durable-runs-v2.2.md` | **Main architecture spec** - Durable runs, interrupt/resume pattern |
-| `docs/specs/jarvis-supervisor-unification-v2.1.md` | Architecture overview (v2.1) |
+| `docs/specs/oikos-supervisor-unification-v2.1.md` | Architecture overview (v2.1) |
 | `docs/archive/super-siri-architecture.md` | Historical v2.0 architecture |
 
 ### Implementation Plans

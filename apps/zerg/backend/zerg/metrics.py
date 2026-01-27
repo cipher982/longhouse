@@ -94,15 +94,15 @@ try:
         buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
     )
 
-    dashboard_snapshot_agents_returned = Histogram(
-        "dashboard_snapshot_agents_returned",
-        "Number of agents included in dashboard snapshot responses",
+    dashboard_snapshot_fiches_returned = Histogram(
+        "dashboard_snapshot_fiches_returned",
+        "Number of fiches included in dashboard snapshot responses",
         buckets=(0, 1, 5, 10, 25, 50, 100, 200, 500, 1000),
     )
 
     dashboard_snapshot_runs_returned = Histogram(
         "dashboard_snapshot_runs_returned",
-        "Number of runs included across all agents in dashboard snapshots",
+        "Number of runs included across all fiches in dashboard snapshots",
         buckets=(0, 5, 10, 25, 50, 100, 200, 500, 1000, 2000),
     )
 
@@ -165,6 +165,6 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     gmail_http_latency_seconds = _NoopHistogram()  # type: ignore[assignment]
     trigger_processing_seconds = _NoopHistogram()  # type: ignore[assignment]
     dashboard_snapshot_latency_seconds = _NoopHistogram()  # type: ignore[assignment]
-    dashboard_snapshot_agents_returned = _NoopHistogram()  # type: ignore[assignment]
+    dashboard_snapshot_fiches_returned = _NoopHistogram()  # type: ignore[assignment]
     dashboard_snapshot_runs_returned = _NoopHistogram()  # type: ignore[assignment]
     websocket_run_update_latency_seconds = _NoopHistogram()  # type: ignore[assignment]

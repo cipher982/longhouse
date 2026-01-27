@@ -47,5 +47,5 @@ github_create_issue(
 
 ## Authentication
 
-Configure GitHub token in Agent Settings > Connectors, or ensure
+Configure GitHub token in Fiche Settings > Connectors, or ensure
 `GITHUB_TOKEN` is set in the environment.

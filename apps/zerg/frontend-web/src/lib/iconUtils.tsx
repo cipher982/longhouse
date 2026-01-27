@@ -1,7 +1,7 @@
 import React from "react";
-import { AgentIcon, GlobeIcon, SignalIcon, WrenchIcon, ZapIcon } from "../components/icons";
+import { FicheIcon, GlobeIcon, SignalIcon, WrenchIcon, ZapIcon } from "../components/icons";
 
-export type NodeType = "agent" | "tool" | "trigger";
+export type NodeType = "fiche" | "tool" | "trigger";
 
 interface IconOptions {
   width?: number;
@@ -18,8 +18,8 @@ export function getNodeIcon(
   subType?: string,
   options: IconOptions = { width: 20, height: 20 }
 ): React.ReactElement {
-  if (type === "agent") {
-    return <AgentIcon {...options} />;
+  if (type === "fiche") {
+    return <FicheIcon {...options} />;
   }
 
   if (type === "trigger") {

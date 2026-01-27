@@ -18,8 +18,8 @@ test.describe('Accessibility and UI/UX', () => {
   test('WCAG compliance and semantic markup', async ({ page }) => {
     console.log('🚀 Starting WCAG compliance test...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
-    console.log('📊 Worker ID:', workerId);
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
+    console.log('📊 Commis ID:', commisId);
 
     // Navigate to application
     await page.goto('/');
@@ -471,10 +471,10 @@ test.describe('Accessibility and UI/UX', () => {
   test('User workflow usability testing', async ({ page, request }) => {
     console.log('🚀 Starting user workflow usability test...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
-    // Test 1: Primary user journey - Agent creation
-    console.log('📊 Test 1: Testing agent creation workflow...');
+    // Test 1: Primary user journey - Fiche creation
+    console.log('📊 Test 1: Testing fiche creation workflow...');
 
     await page.goto('/');
     await page.waitForTimeout(1000);
@@ -488,50 +488,50 @@ test.describe('Accessibility and UI/UX', () => {
     const step1Time = Date.now() - step1Start;
     workflowSteps.push({ step: 'Navigate to dashboard', time: step1Time });
 
-    // Step 2: Look for agent creation interface
+    // Step 2: Look for fiche creation interface
     const createButton = await page.locator('button:has-text("Create"), [data-testid*="create"]').count();
     console.log('📊 Create buttons found:', createButton);
 
     if (createButton > 0) {
       const step2Start = Date.now();
-      // This would be where user creates an agent via UI
+      // This would be where user creates an fiche via UI
       // For now, we'll create via API to test the rest of the workflow
       const step2Time = Date.now() - step2Start;
-      workflowSteps.push({ step: 'Agent creation interface', time: step2Time });
+      workflowSteps.push({ step: 'Fiche creation interface', time: step2Time });
     }
 
-    // Create agent via API for workflow testing
-    const agentResponse = await request.post('/api/agents', {
+    // Create fiche via API for workflow testing
+    const ficheResponse = await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {
-        name: `Usability Test Agent ${Date.now()}`,
-        system_instructions: 'Agent for usability testing',
+        name: `Usability Test Fiche ${Date.now()}`,
+        system_instructions: 'Fiche for usability testing',
         task_instructions: 'Test user workflow',
         model: 'gpt-mock',
       }
     });
 
-    if (agentResponse.ok()) {
-      const agent = await agentResponse.json();
-      console.log('📊 Test agent created:', agent.id);
+    if (ficheResponse.ok()) {
+      const fiche = await ficheResponse.json();
+      console.log('📊 Test fiche created:', fiche.id);
 
-      // Step 3: Verify agent appears in dashboard
+      // Step 3: Verify fiche appears in dashboard
       await page.reload();
       await page.waitForTimeout(1000);
       await page.locator('.header-nav').click();
       await page.waitForTimeout(500);
 
-      const agentVisible = await page.locator(`text=${agent.name}`).isVisible();
-      console.log('📊 Agent visible in dashboard:', agentVisible);
+      const ficheVisible = await page.locator(`text=${fiche.name}`).isVisible();
+      console.log('📊 Fiche visible in dashboard:', ficheVisible);
 
-      if (agentVisible) {
-        workflowSteps.push({ step: 'Agent appears in dashboard', time: 100 });
+      if (ficheVisible) {
+        workflowSteps.push({ step: 'Fiche appears in dashboard', time: 100 });
       }
 
-      // Step 4: Navigate to canvas with agent
+      // Step 4: Navigate to canvas with fiche
       const step4Start = Date.now();
       await page.getByTestId('global-canvas-tab').click();
       await page.waitForTimeout(1000);
@@ -541,7 +541,7 @@ test.describe('Accessibility and UI/UX', () => {
       // Check canvas workflow elements
       const canvasElements = {
         canvas: await page.locator('[data-testid="canvas-container"]').count(),
-        agentShelf: await page.locator('[data-testid="agent-shelf"]').count(),
+        ficheShelf: await page.locator('[data-testid="fiche-shelf"]').count(),
         toolPalette: await page.locator('[data-testid="tool-palette"]').count()
       };
 

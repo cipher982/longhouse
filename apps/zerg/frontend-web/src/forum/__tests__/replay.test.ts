@@ -8,7 +8,7 @@ const baseConfig = {
   roomCount: 3,
   unitsPerRoom: 2,
   tasksPerRoom: 2,
-  workersPerRoom: 1,
+  commissPerRoom: 1,
   workspaceCount: 1,
   repoGroupsPerWorkspace: 2,
 };
@@ -23,10 +23,10 @@ describe("forum replay", () => {
   it("hydrates expected entity counts", () => {
     const scenario = generateForumReplay(baseConfig);
     const state = hydrateForumReplay(scenario);
-    const expectedEntitiesPerRoom = baseConfig.unitsPerRoom + 2 + baseConfig.workersPerRoom;
+    const expectedEntitiesPerRoom = baseConfig.unitsPerRoom + 2 + baseConfig.commissPerRoom;
     expect(state.rooms.size).toBe(baseConfig.roomCount);
     expect(state.entities.size).toBe(baseConfig.roomCount * expectedEntitiesPerRoom);
     expect(state.tasks.size).toBe(baseConfig.roomCount * baseConfig.tasksPerRoom);
-    expect(state.workers.size).toBe(baseConfig.roomCount * baseConfig.workersPerRoom);
+    expect(state.commiss.size).toBe(baseConfig.roomCount * baseConfig.commissPerRoom);
   });
 });

@@ -2,9 +2,9 @@ import type { components } from "../../generated/openapi-types";
 
 type Schemas = components["schemas"];
 
-export type Agent = Schemas["Agent"];
-export type AgentSummary = Agent;
-export type AgentRun = Schemas["AgentRunOut"];
+export type Fiche = Schemas["Fiche"];
+export type FicheSummary = Fiche;
+export type Run = Schemas["RunOut"];
 export type Thread = Schemas["Thread"];
 export type ThreadMessage = Schemas["ThreadMessageResponse"] & { created_at?: string };
 export type ThreadUpdatePayload = Schemas["ThreadUpdate"];
@@ -55,24 +55,24 @@ export type McpServerAddRequest = components["schemas"]["MCPServerAddRequest"];
 export type McpServerResponse = components["schemas"]["MCPServerResponse"];
 export type McpTestConnectionResponse = components["schemas"]["MCPTestConnectionResponse"];
 
-type AgentCreate = Schemas["AgentCreate"];
-type AgentUpdate = Schemas["AgentUpdate"];
+type FicheCreate = Schemas["FicheCreate"];
+type FicheUpdate = Schemas["FicheUpdate"];
 
-export type AgentCreatePayload = Pick<AgentCreate, "system_instructions" | "task_instructions" | "model"> &
-  Partial<Omit<AgentCreate, "system_instructions" | "task_instructions" | "model">>;
+export type FicheCreatePayload = Pick<FicheCreate, "system_instructions" | "task_instructions" | "model"> &
+  Partial<Omit<FicheCreate, "system_instructions" | "task_instructions" | "model">>;
 
-export type AgentUpdatePayload = AgentUpdate;
+export type FicheUpdatePayload = FicheUpdate;
 
 export interface DashboardRunsBundle {
-  agentId: number;
-  runs: AgentRun[];
+  ficheId: number;
+  runs: Run[];
 }
 
 export interface DashboardSnapshot {
   scope: "my" | "all";
   fetchedAt: string;
   runsLimit: number;
-  agents: AgentSummary[];
+  fiches: FicheSummary[];
   runs: DashboardRunsBundle[];
 }
 
@@ -101,7 +101,7 @@ export interface UserContext {
     location?: boolean;
     whoop?: boolean;
     obsidian?: boolean;
-    supervisor?: boolean;
+    oikos?: boolean;
     [key: string]: boolean | undefined;
   };
 }

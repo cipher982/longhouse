@@ -17,7 +17,7 @@ spawn_worker(
 Desired flow:
 ```
 User: "fix the auth bug in zerg"
-Jarvis: (resolves "zerg" → repo URL, spawns cloud worker)
+Oikos: (resolves "zerg" → repo URL, spawns cloud worker)
 ```
 
 For autonomous agents that respond to PR comments, we also need webhooks.
@@ -35,7 +35,7 @@ For autonomous agents that respond to PR comments, we also need webhooks.
 | Auto-refresh tokens | ❌ | ✅ |
 | User picks specific repos | ❌ (broad scope) | ✅ |
 
-**Webhooks are key** - they let Jarvis respond autonomously when:
+**Webhooks are key** - they let Oikos respond autonomously when:
 - PR review comment is added
 - Issue is created
 - Push happens
@@ -45,7 +45,7 @@ For autonomous agents that respond to PR comments, we also need webhooks.
 ### Phase 1: GitHub App Setup
 
 1. **Create GitHub App** at github.com/settings/apps/new
-   - Name: `Swarmlet` or `Jarvis`
+   - Name: `Swarmlet` or `Oikos`
    - Homepage: `https://swarmlet.com`
    - Webhook URL: `https://api.swarmlet.com/webhooks/github`
    - Permissions:
@@ -173,7 +173,7 @@ apps/zerg/backend/zerg/
 
 1. **Unit tests**: Token refresh, signature verification, event routing
 2. **Integration test**: Install app on test repo, trigger webhook, verify agent responds
-3. **E2E**: "fix typo in README" → PR created → comment on PR → Jarvis responds
+3. **E2E**: "fix typo in README" → PR created → comment on PR → Oikos responds
 
 ## Security Considerations
 
@@ -185,7 +185,7 @@ apps/zerg/backend/zerg/
 
 ## Open Questions
 
-1. Should Jarvis auto-respond to ALL PR comments, or only when @mentioned?
+1. Should Oikos auto-respond to ALL PR comments, or only when @mentioned?
 2. Multi-org support: one user with multiple GitHub orgs?
 3. Should resolved repos be cached in memory or always API call?
 

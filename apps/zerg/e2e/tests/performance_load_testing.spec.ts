@@ -21,8 +21,8 @@ test.describe('Performance and Load Testing', () => {
   test('UI responsiveness benchmarking', async ({ page, request }) => {
     console.log('🚀 Starting UI responsiveness test...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
-    console.log('📊 Worker ID:', workerId);
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
+    console.log('📊 Commis ID:', commisId);
 
     // Test 1: Page load performance
     console.log('📊 Test 1: Page load performance...');
@@ -97,13 +97,13 @@ test.describe('Performance and Load Testing', () => {
   test('API response time benchmarking', async ({ page, request }) => {
     console.log('🚀 Starting API performance test...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Test 1: Single API request benchmarking
     console.log('📊 Test 1: Single API request performance...');
 
     const apiTests = [
-      { name: 'GET /api/agents', method: 'get', endpoint: '/api/agents' },
+      { name: 'GET /api/fiches', method: 'get', endpoint: '/api/fiches' },
       { name: 'GET /api/workflows', method: 'get', endpoint: '/api/workflows' },
       { name: 'GET /api/users/me', method: 'get', endpoint: '/api/users/me' }
     ];
@@ -112,7 +112,7 @@ test.describe('Performance and Load Testing', () => {
       try {
         const startTime = Date.now();
         const response = await request[apiTest.method](`${apiTest.endpoint}`, {
-          headers: { 'X-Test-Worker': workerId }
+          headers: { 'X-Test-Commis': commisId }
         });
         const responseTime = Date.now() - startTime;
 
@@ -136,8 +136,8 @@ test.describe('Performance and Load Testing', () => {
 
     const batchSize = 10;
     const batchRequests = Array.from({ length: batchSize }, () =>
-      request.get('/api/agents', {
-        headers: { 'X-Test-Worker': workerId }
+      request.get('/api/fiches', {
+        headers: { 'X-Test-Commis': commisId }
       })
     );
 
@@ -164,23 +164,23 @@ test.describe('Performance and Load Testing', () => {
   test('Database performance with large datasets', async ({ page, request }) => {
     console.log('🚀 Starting database performance test...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Test 1: Create large dataset
     console.log('📊 Test 1: Creating large dataset...');
-    const datasetSize = 50; // Create 50 agents for performance testing
+    const datasetSize = 50; // Create 50 fiches for performance testing
     const creationPromises = [];
 
     const creationStart = Date.now();
     for (let i = 0; i < datasetSize; i++) {
-      const promise = request.post('/api/agents', {
+      const promise = request.post('/api/fiches', {
         headers: {
-          'X-Test-Worker': workerId,
+          'X-Test-Commis': commisId,
           'Content-Type': 'application/json',
         },
         data: {
-          name: `Performance Test Agent ${i} ${Date.now()}`,
-          system_instructions: `Performance testing agent number ${i}`,
+          name: `Performance Test Fiche ${i} ${Date.now()}`,
+          system_instructions: `Performance testing fiche number ${i}`,
           task_instructions: `Handle performance test case ${i}`,
           model: 'gpt-mock',
         }
@@ -198,9 +198,9 @@ test.describe('Performance and Load Testing', () => {
     const creationTime = Date.now() - creationStart;
     const successfulCreations = creationResults.filter(r => r.status() === 201).length;
 
-    console.log('📊 Agents created successfully:', successfulCreations, '/', datasetSize);
+    console.log('📊 Fiches created successfully:', successfulCreations, '/', datasetSize);
     console.log('📊 Creation time:', creationTime, 'ms');
-    console.log('📊 Average creation time:', Math.round(creationTime / datasetSize), 'ms per agent');
+    console.log('📊 Average creation time:', Math.round(creationTime / datasetSize), 'ms per fiche');
 
     if (successfulCreations >= datasetSize * 0.9) {
       console.log('✅ Large dataset creation successful');
@@ -210,14 +210,14 @@ test.describe('Performance and Load Testing', () => {
     console.log('📊 Test 2: Query performance with large dataset...');
 
     const queryStart = Date.now();
-    const queryResponse = await request.get('/api/agents', {
-      headers: { 'X-Test-Worker': workerId }
+    const queryResponse = await request.get('/api/fiches', {
+      headers: { 'X-Test-Commis': commisId }
     });
     const queryTime = Date.now() - queryStart;
 
     if (queryResponse.ok()) {
-      const agents = await queryResponse.json();
-      console.log('📊 Total agents retrieved:', agents.length);
+      const fiches = await queryResponse.json();
+      console.log('📊 Total fiches retrieved:', fiches.length);
       console.log('📊 Query time:', queryTime, 'ms');
 
       if (queryTime < 1000) {
@@ -232,8 +232,8 @@ test.describe('Performance and Load Testing', () => {
 
     try {
       const paginationStart = Date.now();
-      const paginatedResponse = await request.get('/api/agents?limit=10&offset=0', {
-        headers: { 'X-Test-Worker': workerId }
+      const paginatedResponse = await request.get('/api/fiches?limit=10&offset=0', {
+        headers: { 'X-Test-Commis': commisId }
       });
       const paginationTime = Date.now() - paginationStart;
 
@@ -259,7 +259,7 @@ test.describe('Performance and Load Testing', () => {
   test('Memory usage and resource monitoring', async ({ page, context, request }) => {
     console.log('🚀 Starting memory usage test...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Test 1: Initial memory baseline
     console.log('📊 Test 1: Establishing memory baseline...');
@@ -296,16 +296,16 @@ test.describe('Performance and Load Testing', () => {
       await page.waitForTimeout(100);
     }
 
-    // Create several agents to test memory usage
+    // Create several fiches to test memory usage
     for (let i = 0; i < 10; i++) {
-      await request.post('/api/agents', {
+      await request.post('/api/fiches', {
         headers: {
-          'X-Test-Worker': workerId,
+          'X-Test-Commis': commisId,
           'Content-Type': 'application/json',
         },
         data: {
-          name: `Memory Test Agent ${i} ${Date.now()}`,
-          system_instructions: `Memory testing agent ${i}`,
+          name: `Memory Test Fiche ${i} ${Date.now()}`,
+          system_instructions: `Memory testing fiche ${i}`,
           task_instructions: 'Test memory usage',
           model: 'gpt-mock',
         }
@@ -374,7 +374,7 @@ test.describe('Performance and Load Testing', () => {
   test('Concurrent user simulation', async ({ browser, request }) => {
     console.log('🚀 Starting concurrent user simulation...');
 
-    const workerIdBase = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisIdBase = process.env.TEST_PARALLEL_INDEX || '0';
     const concurrentUsers = 5;
 
     // Test 1: Simulate concurrent users
@@ -383,7 +383,7 @@ test.describe('Performance and Load Testing', () => {
     const userSimulations = Array.from({ length: concurrentUsers }, async (_, index) => {
       const context = await browser.newContext();
       const page = await context.newPage();
-      const userId = `${workerIdBase}_user_${index}`;
+      const userId = `${commisIdBase}_user_${index}`;
 
       try {
         // Navigate to application
@@ -394,22 +394,22 @@ test.describe('Performance and Load Testing', () => {
         await page.locator('.header-nav').click();
         await page.waitForTimeout(500);
 
-        // Create an agent as this user
-        const agentResponse = await request.post('/api/agents', {
+        // Create an fiche as this user
+        const ficheResponse = await request.post('/api/fiches', {
           headers: {
-            'X-Test-Worker': userId,
+            'X-Test-Commis': userId,
             'Content-Type': 'application/json',
           },
           data: {
-            name: `Concurrent User ${index} Agent ${Date.now()}`,
-            system_instructions: `Agent created by concurrent user ${index}`,
+            name: `Concurrent User ${index} Fiche ${Date.now()}`,
+            system_instructions: `Fiche created by concurrent user ${index}`,
             task_instructions: `Test concurrent user ${index} operations`,
             model: 'gpt-mock',
           }
         });
 
-        const success = agentResponse.status() === 201;
-        console.log(`📊 User ${index} agent creation:`, success ? 'success' : 'failed');
+        const success = ficheResponse.status() === 201;
+        console.log(`📊 User ${index} fiche creation:`, success ? 'success' : 'failed');
 
         // Navigate between tabs
         await page.getByTestId('global-canvas-tab').click();
@@ -447,49 +447,49 @@ test.describe('Performance and Load Testing', () => {
   test('Large workflow performance', async ({ page, request }) => {
     console.log('🚀 Starting large workflow performance test...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
-    // Test 1: Create agents for large workflow
-    console.log('📊 Test 1: Creating agents for large workflow...');
-    const agentCount = 10;
-    const agents = [];
+    // Test 1: Create fiches for large workflow
+    console.log('📊 Test 1: Creating fiches for large workflow...');
+    const ficheCount = 10;
+    const fiches = [];
 
-    for (let i = 0; i < agentCount; i++) {
-      const agentResponse = await request.post('/api/agents', {
+    for (let i = 0; i < ficheCount; i++) {
+      const ficheResponse = await request.post('/api/fiches', {
         headers: {
-          'X-Test-Worker': workerId,
+          'X-Test-Commis': commisId,
           'Content-Type': 'application/json',
         },
         data: {
-          name: `Large Workflow Agent ${i} ${Date.now()}`,
-          system_instructions: `Agent ${i} for large workflow testing`,
+          name: `Large Workflow Fiche ${i} ${Date.now()}`,
+          system_instructions: `Fiche ${i} for large workflow testing`,
           task_instructions: `Handle task ${i} in large workflow`,
           model: 'gpt-mock',
         }
       });
 
-      if (agentResponse.ok()) {
-        const agent = await agentResponse.json();
-        agents.push(agent);
-        console.log(`📊 Created agent ${i}:`, agent.id);
+      if (ficheResponse.ok()) {
+        const fiche = await ficheResponse.json();
+        fiches.push(fiche);
+        console.log(`📊 Created fiche ${i}:`, fiche.id);
       }
     }
 
-    console.log('📊 Total agents for large workflow:', agents.length);
+    console.log('📊 Total fiches for large workflow:', fiches.length);
 
     // Test 2: Create large workflow
     console.log('📊 Test 2: Creating large workflow...');
 
-    if (agents.length >= 5) {
+    if (fiches.length >= 5) {
       const largeWorkflowStart = Date.now();
 
       // Create a complex workflow with many nodes and connections
       const nodes = [
         { id: 'trigger-1', type: 'trigger', position: { x: 50, y: 300 } },
-        ...agents.map((agent, index) => ({
-          id: `agent-${index}`,
-          type: 'agent',
-          agent_id: agent.id,
+        ...fiches.map((fiche, index) => ({
+          id: `fiche-${index}`,
+          type: 'fiche',
+          fiche_id: fiche.id,
           position: { x: 200 + (index % 5) * 150, y: 100 + Math.floor(index / 5) * 150 }
         })),
         // Add multiple tool nodes
@@ -504,20 +504,20 @@ test.describe('Performance and Load Testing', () => {
 
       // Create complex connection topology
       const edges = [
-        // Connect trigger to first few agents
-        { id: 'edge-trigger-0', source: 'trigger-1', target: 'agent-0', type: 'default' },
-        { id: 'edge-trigger-1', source: 'trigger-1', target: 'agent-1', type: 'default' },
-        // Sequential connections between agents
-        ...agents.slice(0, -1).map((_, index) => ({
-          id: `edge-agent-${index}-${index + 1}`,
-          source: `agent-${index}`,
-          target: `agent-${index + 1}`,
+        // Connect trigger to first few fiches
+        { id: 'edge-trigger-0', source: 'trigger-1', target: 'fiche-0', type: 'default' },
+        { id: 'edge-trigger-1', source: 'trigger-1', target: 'fiche-1', type: 'default' },
+        // Sequential connections between fiches
+        ...fiches.slice(0, -1).map((_, index) => ({
+          id: `edge-fiche-${index}-${index + 1}`,
+          source: `fiche-${index}`,
+          target: `fiche-${index + 1}`,
           type: 'default'
         })),
         // Parallel connections to tools
-        ...agents.slice(0, 5).map((_, index) => ({
-          id: `edge-agent-${index}-tool-${index}`,
-          source: `agent-${index}`,
+        ...fiches.slice(0, 5).map((_, index) => ({
+          id: `edge-fiche-${index}-tool-${index}`,
+          source: `fiche-${index}`,
           target: `tool-${index}`,
           type: 'default'
         }))
@@ -531,7 +531,7 @@ test.describe('Performance and Load Testing', () => {
 
       const workflowResponse = await request.post('/api/workflows', {
         headers: {
-          'X-Test-Worker': workerId,
+          'X-Test-Commis': commisId,
           'Content-Type': 'application/json',
         },
         data: largeWorkflow
@@ -551,7 +551,7 @@ test.describe('Performance and Load Testing', () => {
         // Test retrieval performance
         const retrievalStart = Date.now();
         const retrievalResponse = await request.get(`/api/workflows/${workflow.id}`, {
-          headers: { 'X-Test-Worker': workerId }
+          headers: { 'X-Test-Commis': commisId }
         });
         const retrievalTime = Date.now() - retrievalStart;
 

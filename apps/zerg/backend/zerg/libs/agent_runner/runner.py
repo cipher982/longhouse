@@ -116,7 +116,7 @@ async def run(
                 output="",
                 exit_code=-1,  # Special code for timeout
                 duration_ms=duration_ms,
-                error=f"Agent timed out after {timeout_s}s",
+                error=f"Fiche timed out after {timeout_s}s",
             )
 
         if return_code != 0:

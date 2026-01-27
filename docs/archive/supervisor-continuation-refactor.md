@@ -17,7 +17,7 @@ The supervisor/worker path now uses a LangGraph-free ReAct loop with DB-based co
 - **Modified:** `zerg/tools/builtin/supervisor_tools.py` - `spawn_worker_async()` returns job info; loop raises `AgentInterrupted`
 - **Modified:** `zerg/services/supervisor_react_engine.py` - LangGraph-free ReAct loop (supervisor)
 - **Modified:** `zerg/services/worker_runner.py` - Calls resume handler (LangGraph-free)
-- **Modified:** `zerg/routers/jarvis_sse.py` - Subscribes to `SUPERVISOR_WAITING`/`SUPERVISOR_RESUMED` events
+- **Modified:** `zerg/routers/oikos_sse.py` - Subscribes to `SUPERVISOR_WAITING`/`SUPERVISOR_RESUMED` events
 - **Modified:** `zerg/events/event_bus.py` - Added new event types
 - **Deleted:** `run_continuation()` method from supervisor_service.py
 
@@ -30,7 +30,7 @@ The supervisor/worker path now uses a LangGraph-free ReAct loop with DB-based co
 1. **Idempotency key improvement** - Currently keyed on `(supervisor_run_id, task)` fallback. Consider relying purely on `tool_call_id` where possible.
 2. **Event emission placement** - `emit_run_event("supervisor_resumed")` could be wrapped in try/except for best-effort semantics.
 3. **E2E integration test** - Current test mocks the resume function; add test exercising real LangGraph-free continuation path.
-4. **Status semantics** - `jarvis_internal.py` returns `"status": "resumed"` even when handler returns `"skipped"`.
+4. **Status semantics** - `oikos_internal.py` returns `"status": "resumed"` even when handler returns `"skipped"`.
 
 The remainder of this document is historical context from the original LangGraph-based design.
 
@@ -114,12 +114,12 @@ HACK: Mark fake messages as internal=True so they don't show in UI
   - `run_supervisor()` - Always creates a user message for the task
   - `run_continuation()` - Injects fake messages, creates new run
 - `apps/zerg/backend/zerg/models/thread.py` - Has `internal` column
-- `apps/zerg/backend/zerg/routers/jarvis.py` - Filters internal messages
+- `apps/zerg/backend/zerg/routers/oikos.py` - Filters internal messages
 
 **Frontend:**
-- `apps/zerg/frontend-web/src/jarvis/app/components/ChatContainer.tsx` - Timeline rendering
-- `apps/zerg/frontend-web/src/jarvis/app/hooks/useJarvisApp.ts` - Message loading
-- `apps/zerg/frontend-web/src/jarvis/lib/supervisor-chat-controller.ts` - SSE handling
+- `apps/zerg/frontend-web/src/oikos/app/components/ChatContainer.tsx` - Timeline rendering
+- `apps/zerg/frontend-web/src/oikos/app/hooks/useOikosApp.ts` - Message loading
+- `apps/zerg/frontend-web/src/oikos/lib/supervisor-chat-controller.ts` - SSE handling
 
 ---
 
@@ -391,7 +391,7 @@ if "__interrupt__" in result:
 
 - Delete `run_continuation()` from `supervisor_service.py`
 - Delete `internal` column from `ThreadMessage` model
-- Delete `internal` filtering from `jarvis.py` history endpoint
+- Delete `internal` filtering from `oikos.py` history endpoint
 - Remove migration for `internal` column (or add removal migration)
 - Simplify frontend message handling (remove `BIND_MESSAGE_ID_TO_CORRELATION_ID` etc.)
 
@@ -446,7 +446,7 @@ if "__interrupt__" in result:
 | Agent definition | `apps/zerg/backend/zerg/agents_def/zerg_react_agent.py` |
 | Checkpointer | `apps/zerg/backend/zerg/services/checkpointer.py` |
 | Worker runner | `apps/zerg/backend/zerg/services/worker_runner.py` |
-| Frontend chat | `apps/zerg/frontend-web/src/jarvis/` |
+| Frontend chat | `apps/zerg/frontend-web/src/oikos/` |
 
 ### LangGraph Documentation
 

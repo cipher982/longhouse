@@ -444,7 +444,7 @@ export const ZERG_UI_VARIANTS: UIVariant[] = [
     name: 'rust-dashboard',
     url: '/',
     description: 'Legacy Rust/WASM UI (target design to match)',
-    waitFor: '[data-testid="agent-dashboard"], .dashboard, main'
+    waitFor: '[data-testid="fiche-dashboard"], .dashboard, main'
   },
   {
     name: 'react-dashboard',

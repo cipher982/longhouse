@@ -1,10 +1,10 @@
-# Jarvis Chat Performance Analysis
+# Oikos Chat Performance Analysis
 
 > Investigation conducted 2025-12-27. Reference for future optimization work.
 
 ## Executive Summary
 
-Jarvis chat streaming was perceived as slow compared to ChatGPT. Investigation revealed:
+Oikos chat streaming was perceived as slow compared to ChatGPT. Investigation revealed:
 
 - **Streaming is healthy**: Backend delivers tokens at ~45 tok/s (normal for gpt-5.2)
 - **Perceived slowness is TTFT**: ~7,400 base tokens must be processed before first output
@@ -54,7 +54,7 @@ Jarvis chat streaming was perceived as slow compared to ChatGPT. Investigation r
 | Layer | Rate | Method |
 |-------|------|--------|
 | Raw LangChain | 58-74 tok/s | Direct `ChatOpenAI.ainvoke()` in container |
-| SSE HTTP | 44.7 tok/s | `curl` to `/api/jarvis/chat` |
+| SSE HTTP | 44.7 tok/s | `curl` to `/api/oikos/chat` |
 | E2E Playwright | 24.7 tok/s | DOM polling via `waitForFunction` |
 
 ### Why E2E Shows Lower Throughput
@@ -112,7 +112,7 @@ with get_db_session() as db:
 
 ```bash
 # Make a chat request and analyze token timing
-curl -s -X POST "http://127.0.0.1:47300/api/jarvis/chat" \
+curl -s -X POST "http://127.0.0.1:47300/api/oikos/chat" \
   -H "Content-Type: application/json" \
   -H "Accept: text/event-stream" \
   -d '{"message": "Explain technical debt in exactly 100 words."}' \
@@ -226,7 +226,7 @@ if run_id is not None:
     return  # Early return - don't also broadcast via WebSocket
 ```
 
-This eliminates unnecessary Pydantic serialization and lock acquisition for every token during Jarvis chat.
+This eliminates unnecessary Pydantic serialization and lock acquisition for every token during Oikos chat.
 
 ### Removed: Debug Scripts
 
@@ -238,7 +238,7 @@ Temporary scripts created during investigation were cleaned up:
 
 Why ChatGPT feels faster:
 
-| Aspect | Jarvis | ChatGPT (estimated) |
+| Aspect | Oikos | ChatGPT (estimated) |
 |--------|--------|---------------------|
 | Base prompt | ~7,400 tokens | ~1,000-2,000 tokens |
 | Tools | 18 tools, full schemas | Fewer, server-compressed |
@@ -269,6 +269,6 @@ The primary difference is **prompt size affecting TTFT**, not streaming speed.
 
 - E2E performance test: `apps/zerg/e2e/tests/chat_performance_eval.spec.ts`
 - Token streaming callback: `apps/zerg/backend/zerg/callbacks/token_stream.py`
-- SSE streaming: `apps/zerg/backend/zerg/routers/jarvis_sse.py`
+- SSE streaming: `apps/zerg/backend/zerg/routers/oikos_sse.py`
 - Tool resolver: `apps/zerg/backend/zerg/tools/unified_access.py`
 - Agent runner (prompt assembly): `apps/zerg/backend/zerg/managers/agent_runner.py`

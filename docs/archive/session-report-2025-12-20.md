@@ -11,29 +11,29 @@
 **Focus:** Post-merge review cleanup, bug fixes, and test stabilization.
 
 ## Summary
-Successfully completed high-priority (P0/P1) tasks from the post-merge review. The Zerg + Jarvis unification is now code-complete, with styling scoped, dead code removed, and configuration updated. E2E test performance remains an open investigation item.
+Successfully completed high-priority (P0/P1) tasks from the post-merge review. The Zerg + Oikos unification is now code-complete, with styling scoped, dead code removed, and configuration updated. E2E test performance remains an open investigation item.
 
 ## Key Accomplishments
 
 ### 1. Stylesheet Isolation (P0)
-- **Problem:** Jarvis global styles (e.g., `body`, `*` selectors) were leaking into the Zerg SPA, affecting other pages.
-- **Fix:** Refactored all Jarvis CSS (`apps/zerg/frontend-web/src/jarvis/styles/*.css`) to be scoped under a root class `.jarvis-container`.
-- **Refinement:** Updated `theme-glass.css` to scope CSS variables under `.jarvis-container` instead of `:root`.
-- **Outcome:** Jarvis styling is completely contained within its route.
+- **Problem:** Oikos global styles (e.g., `body`, `*` selectors) were leaking into the Zerg SPA, affecting other pages.
+- **Fix:** Refactored all Oikos CSS (`apps/zerg/frontend-web/src/oikos/styles/*.css`) to be scoped under a root class `.oikos-container`.
+- **Refinement:** Updated `theme-glass.css` to scope CSS variables under `.oikos-container` instead of `:root`.
+- **Outcome:** Oikos styling is completely contained within its route.
 
 ### 2. UI Integration & Component Logic (P1)
-- **Problem:** `/chat` rendered two headers (Zerg global + Jarvis internal).
-- **Fix:** Added `embedded` prop to Jarvis `App` component. Updated `JarvisChatPage` to pass `embedded={true}`.
-- **Outcome:** Jarvis internal header is hidden when mounted within the SPA.
+- **Problem:** `/chat` rendered two headers (Zerg global + Oikos internal).
+- **Fix:** Added `embedded` prop to Oikos `App` component. Updated `OikosChatPage` to pass `embedded={true}`.
+- **Outcome:** Oikos internal header is hidden when mounted within the SPA.
 
 ### 3. Dead Code Removal (P1)
-- **Problem:** `apps/zerg/frontend-web/src/jarvis/` (legacy standalone frontend) was redundant and causing confusion.
+- **Problem:** `apps/zerg/frontend-web/src/oikos/` (legacy standalone frontend) was redundant and causing confusion.
 - **Action:** Deleted the entire directory.
 - **Outcome:** Single source of truth for frontend code.
 
 ### 4. Configuration & Hygiene
-- **Docker:** Removed `jarvis-web` service from `docker/docker-compose.prod.yml` and `scripts/dev-docker.sh`.
-- **Makefile:** Updated targets to remove references to the deleted legacy app (`test-jarvis`, `jarvis`, etc.).
+- **Docker:** Removed `oikos-web` service from `docker/docker-compose.prod.yml` and `scripts/dev-docker.sh`.
+- **Makefile:** Updated targets to remove references to the deleted legacy app (`test-oikos`, `oikos`, etc.).
 - **Tests:** Fixed `scripts/verify-single-react.mjs` to stop checking the deleted workspace.
 
 ### 5. E2E Test Configuration (Ongoing)
@@ -44,9 +44,9 @@ Successfully completed high-priority (P0/P1) tasks from the post-merge review. T
 - **Status:** Configuration is correct, but execution performance (parallelism) needs further investigation.
 
 ## Artifacts Updated
-- `apps/zerg/frontend-web/src/jarvis/styles/**`
-- `apps/zerg/frontend-web/src/pages/JarvisChatPage.tsx`
-- `apps/zerg/frontend-web/src/jarvis/app/App.tsx`
+- `apps/zerg/frontend-web/src/oikos/styles/**`
+- `apps/zerg/frontend-web/src/pages/OikosChatPage.tsx`
+- `apps/zerg/frontend-web/src/oikos/app/App.tsx`
 - `apps/zerg/e2e/playwright.config.js`
 - `apps/zerg/e2e/spawn-test-backend.js`
 - `Makefile`

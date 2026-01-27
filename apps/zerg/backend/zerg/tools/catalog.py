@@ -17,8 +17,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
-# Import supervisor tool names from the single source of truth
-from zerg.tools.builtin.supervisor_tools import SUPERVISOR_TOOL_NAMES
+# Import oikos tool names from the single source of truth
+from zerg.tools.builtin.oikos_tools import OIKOS_TOOL_NAMES
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
@@ -29,14 +29,14 @@ logger = logging.getLogger(__name__)
 # Core tools - always loaded with full schemas
 # ---------------------------------------------------------------------------
 
-# Core tools are pre-loaded for all agents. This includes:
-# - All supervisor tools (for worker coordination)
+# Core tools are pre-loaded for all fiches. This includes:
+# - All oikos tools (for commis coordination)
 # - Tool discovery tools (for lazy loading)
 # - Common utilities
 #
-# NOTE: SUPERVISOR_TOOL_NAMES is imported from supervisor_tools.py
+# NOTE: OIKOS_TOOL_NAMES is imported from oikos_tools.py
 # which is the single source of truth. Do NOT duplicate tool names here.
-CORE_TOOLS: frozenset[str] = SUPERVISOR_TOOL_NAMES | frozenset(
+CORE_TOOLS: frozenset[str] = OIKOS_TOOL_NAMES | frozenset(
     [
         # User interaction
         "contact_user",
@@ -69,20 +69,20 @@ CATEGORY_PREFIXES = {
     "runner_": "infrastructure",
     "container_": "infrastructure",
     "task_": "tasks",
-    "agent_memory_": "memory",
+    "fiche_memory_": "memory",
     "memory_": "memory",
     "knowledge_": "knowledge",
     "web_": "web",
     "http_": "web",
-    "spawn_worker": "supervisor",
-    "spawn_workspace_worker": "supervisor",
-    "list_workers": "supervisor",
-    "read_worker": "supervisor",
-    "get_worker_evidence": "supervisor",
-    "get_tool_output": "supervisor",
-    "grep_workers": "supervisor",
-    "get_worker": "supervisor",
-    "contact_user": "supervisor",
+    "spawn_commis": "oikos",
+    "spawn_workspace_commis": "oikos",
+    "list_commiss": "oikos",
+    "read_commis": "oikos",
+    "get_commis_evidence": "oikos",
+    "get_tool_output": "oikos",
+    "grep_commiss": "oikos",
+    "get_commis": "oikos",
+    "contact_user": "oikos",
     "get_current_": "personal",
     "get_whoop_": "personal",
     "search_notes": "personal",
@@ -283,7 +283,7 @@ def format_catalog_for_prompt(
 
     # Category display order
     category_order = [
-        "supervisor",
+        "oikos",
         "web",
         "messaging",
         "github",

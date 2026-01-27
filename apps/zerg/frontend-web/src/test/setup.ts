@@ -10,10 +10,10 @@ const originalError = console.error;
 beforeAll(() => {
   console.warn = (...args: unknown[]) => {
     const msg = String(args[0] || '');
-    // WorkerProgress orphan/edge case warnings - tests deliberately trigger these
-    if (msg.includes('[WorkerProgress]')) return;
-    // SupervisorToolStore failure warnings - tests deliberately trigger these
-    if (msg.includes('[SupervisorToolStore]')) return;
+    // CommisProgress orphan/edge case warnings - tests deliberately trigger these
+    if (msg.includes('[CommisProgress]')) return;
+    // OikosToolStore failure warnings - tests deliberately trigger these
+    if (msg.includes('[OikosToolStore]')) return;
     originalWarn.apply(console, args);
   };
 

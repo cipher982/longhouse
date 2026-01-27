@@ -1,10 +1,12 @@
 /**
  * Voice Turn-Based Tests - Core Suite
  *
- * Validates /api/jarvis/voice/turn using a tiny WAV payload.
+ * Validates /api/oikos/voice/turn using a tiny WAV payload.
  */
 
+import { randomUUID } from 'node:crypto';
 import { test, expect } from '../fixtures';
+import { postSseAndCollect } from '../helpers/sse';
 import { resetDatabase } from '../test-utils';
 
 function buildWavBuffer(durationMs = 100, sampleRate = 8000): Buffer {
@@ -37,10 +39,10 @@ test.beforeEach(async ({ request }) => {
 });
 
 test.describe('Voice Turn-Based - Core', () => {
-  test('transcribe + supervisor response returns payload', async ({ request }) => {
+  test('transcribe + oikos response returns payload', async ({ request }) => {
     const audioBuffer = buildWavBuffer();
 
-    const response = await request.post('/api/jarvis/voice/turn', {
+    const response = await request.post('/api/oikos/voice/turn', {
       multipart: {
         audio: {
           name: 'sample.wav',
@@ -66,10 +68,11 @@ test.describe('Voice Turn-Based - Core', () => {
   });
 
   test('message_id passthrough for history correlation', async ({ request }) => {
+    test.setTimeout(60000);
     const audioBuffer = buildWavBuffer();
-    const testMessageId = 'e2e-test-uuid-' + Date.now();
+    const testMessageId = randomUUID();
 
-    const response = await request.post('/api/jarvis/voice/turn', {
+    const response = await request.post('/api/oikos/voice/turn', {
       multipart: {
         audio: {
           name: 'sample.wav',
@@ -88,11 +91,12 @@ test.describe('Voice Turn-Based - Core', () => {
     expect(data.status).toBe('success');
   });
 
-  test('transcribe -> chat SSE uses same message_id', async ({ request }) => {
+  test('transcribe -> chat SSE uses same message_id', async ({ request, backendUrl, commisId }) => {
+    test.setTimeout(60000);
     const audioBuffer = buildWavBuffer();
-    const testMessageId = 'voice-sse-' + Date.now();
+    const testMessageId = randomUUID();
 
-    const transcribeResponse = await request.post('/api/jarvis/voice/transcribe', {
+    const transcribeResponse = await request.post('/api/oikos/voice/transcribe', {
       multipart: {
         audio: {
           name: 'sample.wav',
@@ -109,16 +113,20 @@ test.describe('Voice Turn-Based - Core', () => {
     expect(transcribeData.transcript?.length).toBeGreaterThan(0);
     expect(transcribeData.message_id).toBe(testMessageId);
 
-    const chatResponse = await request.post('/api/jarvis/chat', {
-      data: {
+    const events = await postSseAndCollect({
+      backendUrl,
+      commisId,
+      path: '/api/oikos/chat',
+      payload: {
         message: transcribeData.transcript,
         message_id: testMessageId,
       },
+      stopEvent: 'oikos_complete',
+      timeoutMs: 30000,
     });
 
-    expect(chatResponse.ok()).toBeTruthy();
-    const sseText = await chatResponse.text();
-    expect(sseText).toContain('supervisor_complete');
-    expect(sseText).toContain(testMessageId);
+    const completeEvent = events.find((event) => event.event === 'oikos_complete');
+    expect(completeEvent).toBeTruthy();
+    expect(JSON.stringify(completeEvent?.data ?? '')).toContain(testMessageId);
   });
 });

@@ -104,7 +104,7 @@ if [ -n "$WS" ]; then
 fi
 
 # Build connect-src with API and WS domains
-CONNECT_SRC="'self' https://accounts.google.com https://analytics.drose.io https://api.openai.com wss://api.openai.com"
+CONNECT_SRC="'self' https://accounts.google.com https://analytics.drose.io"
 if [ -n "$API_DOMAIN" ]; then
   CONNECT_SRC="$CONNECT_SRC https://$API_DOMAIN wss://$API_DOMAIN"
 fi

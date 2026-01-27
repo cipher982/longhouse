@@ -1,10 +1,10 @@
 """Notion API tools for interacting with Notion workspaces.
 
-These tools allow agents to create pages, query databases, append blocks, and search
+These tools allow fiches to create pages, query databases, append blocks, and search
 within a Notion workspace. Authentication is handled via Notion Integration Tokens.
 
 Configuration:
-- Configure Notion credentials in Agent Settings -> Connectors, OR
+- Configure Notion credentials in Fiche Settings -> Connectors, OR
 - Pass api_key parameter directly to each tool function
 - Create integration at notion.so/my-integrations
 - The integration must be shared with target pages/databases
@@ -576,31 +576,31 @@ TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
         func=notion_create_page,
         name="notion_create_page",
-        description="Create a new page in Notion workspace (in a page or database). Uses configured Notion credentials from Agent Settings if api_key not provided.",
+        description="Create a new page in Notion workspace (in a page or database). Uses configured Notion credentials from Fiche Settings if api_key not provided.",
     ),
     StructuredTool.from_function(
         func=notion_get_page,
         name="notion_get_page",
-        description="Retrieve a page from Notion by its ID. Uses configured Notion credentials from Agent Settings if api_key not provided.",
+        description="Retrieve a page from Notion by its ID. Uses configured Notion credentials from Fiche Settings if api_key not provided.",
     ),
     StructuredTool.from_function(
         func=notion_update_page,
         name="notion_update_page",
-        description="Update a Notion page's properties or archive status. Uses configured Notion credentials from Agent Settings if api_key not provided.",
+        description="Update a Notion page's properties or archive status. Uses configured Notion credentials from Fiche Settings if api_key not provided.",
     ),
     StructuredTool.from_function(
         func=notion_search,
         name="notion_search",
-        description="Search across pages and databases in Notion workspace. Uses configured Notion credentials from Agent Settings if api_key not provided.",
+        description="Search across pages and databases in Notion workspace. Uses configured Notion credentials from Fiche Settings if api_key not provided.",
     ),
     StructuredTool.from_function(
         func=notion_query_database,
         name="notion_query_database",
-        description="Query a Notion database with filters and sorting. Uses configured Notion credentials from Agent Settings if api_key not provided.",
+        description="Query a Notion database with filters and sorting. Uses configured Notion credentials from Fiche Settings if api_key not provided.",
     ),
     StructuredTool.from_function(
         func=notion_append_blocks,
         name="notion_append_blocks",
-        description="Append content blocks to an existing Notion page. Uses configured Notion credentials from Agent Settings if api_key not provided.",
+        description="Append content blocks to an existing Notion page. Uses configured Notion credentials from Fiche Settings if api_key not provided.",
     ),
 ]

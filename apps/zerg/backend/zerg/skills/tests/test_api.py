@@ -62,7 +62,7 @@ class TestPathValidation:
         """Path with .. is blocked."""
         response = client.get(
             "/api/skills",
-            params={"workspace_path": "/var/jarvis/workspaces/../../../etc"},
+            params={"workspace_path": "/var/oikos/workspaces/../../../etc"},
         )
         assert response.status_code == 400
 
@@ -71,7 +71,7 @@ class TestPathValidation:
         # This may not exist, but path validation should pass
         response = client.get(
             "/api/skills",
-            params={"workspace_path": "/var/jarvis/workspaces/test"},
+            params={"workspace_path": "/var/oikos/workspaces/test"},
         )
         # Should not get 400 for path validation
         # May get 200 with empty list if directory doesn't exist
@@ -95,8 +95,8 @@ class TestSkillsAPI:
 
     def test_list_skills_with_workspace(self, client: TestClient, skill_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """List skills from workspace."""
-        # Set JARVIS_WORKSPACE_PATH to parent of test workspace to allow access
-        monkeypatch.setenv("JARVIS_WORKSPACE_PATH", str(skill_workspace.parent))
+        # Set OIKOS_WORKSPACE_PATH to parent of test workspace to allow access
+        monkeypatch.setenv("OIKOS_WORKSPACE_PATH", str(skill_workspace.parent))
 
         response = client.get("/api/skills", params={"workspace_path": str(skill_workspace)})
         assert response.status_code == 200

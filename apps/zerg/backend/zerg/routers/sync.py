@@ -1,6 +1,6 @@
 """Conversation sync API router.
 
-Provides endpoints for Jarvis clients to push and pull conversation sync
+Provides endpoints for Oikos clients to push and pull conversation sync
 operations. Implements idempotent push and cursor-based pull for offline-first
 conversation synchronization.
 """
@@ -25,16 +25,16 @@ from zerg.models.sync import SyncOperation
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/jarvis/sync", tags=["sync"])
+router = APIRouter(prefix="/api/oikos/sync", tags=["sync"])
 
 
 # ---------------------------------------------------------------------------
-# Authentication - Import from jarvis router
+# Authentication - Import from oikos router
 # ---------------------------------------------------------------------------
 
 
-# Import the actual dependency function from jarvis router
-from zerg.routers.jarvis import get_current_jarvis_user  # noqa: E402
+# Import the actual dependency function from oikos router
+from zerg.routers.oikos import get_current_oikos_user  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Request/Response Models
@@ -82,7 +82,7 @@ class PullResponse(BaseModel):
 def push_sync_operations(
     request: PushRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_jarvis_user),
+    current_user: User = Depends(get_current_oikos_user),
 ) -> PushResponse:
     """Push sync operations from client.
 
@@ -162,7 +162,7 @@ def push_sync_operations(
 def pull_sync_operations(
     cursor: int = Query(0, description="Cursor position to pull from"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_jarvis_user),
+    current_user: User = Depends(get_current_oikos_user),
 ) -> PullResponse:
     """Pull sync operations from server.
 

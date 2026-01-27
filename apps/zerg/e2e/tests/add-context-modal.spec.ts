@@ -92,7 +92,7 @@ test.describe('AddContextModal - Modal Open/Close', () => {
     await expect(modal).toBeVisible({ timeout: 5000 });
 
     // Click Cancel button
-    const cancelBtn = page.locator('.modal-button-secondary:has-text("Cancel")');
+    const cancelBtn = page.getByRole('button', { name: 'Cancel' });
     await cancelBtn.click();
 
     // Modal should not be visible
@@ -199,7 +199,7 @@ test.describe('AddContextModal - Form Validation', () => {
     await openAddContextModal(page);
 
     // Submit button should be visible and disabled
-    const submitBtn = page.locator('.modal-button-primary:has-text("Save Document")');
+    const submitBtn = page.getByRole('button', { name: 'Save Document' });
     await expect(submitBtn).toBeVisible({ timeout: 5000 });
     await expect(submitBtn).toBeDisabled();
 
@@ -216,7 +216,7 @@ test.describe('AddContextModal - Form Validation', () => {
     await page.locator('#context-title').fill('Test Title');
 
     // Submit button should still be disabled
-    const submitBtn = page.locator('.modal-button-primary:has-text("Save Document")');
+    const submitBtn = page.getByRole('button', { name: 'Save Document' });
     await expect(submitBtn).toBeDisabled();
 
     console.log('✅ Submit button disabled with only title');
@@ -232,7 +232,7 @@ test.describe('AddContextModal - Form Validation', () => {
     await page.locator('#context-content').fill('Test content');
 
     // Submit button should still be disabled
-    const submitBtn = page.locator('.modal-button-primary:has-text("Save Document")');
+    const submitBtn = page.getByRole('button', { name: 'Save Document' });
     await expect(submitBtn).toBeDisabled();
 
     console.log('✅ Submit button disabled with only content');
@@ -249,7 +249,7 @@ test.describe('AddContextModal - Form Validation', () => {
     await page.locator('#context-content').fill('Test content');
 
     // Submit button should be enabled
-    const submitBtn = page.locator('.modal-button-primary:has-text("Save Document")');
+    const submitBtn = page.getByRole('button', { name: 'Save Document' });
     await expect(submitBtn).toBeEnabled();
 
     console.log('✅ Submit button enabled when both fields filled');
@@ -266,7 +266,7 @@ test.describe('AddContextModal - Form Validation', () => {
     await page.locator('#context-content').fill('   ');
 
     // Submit button should be disabled (trims whitespace)
-    const submitBtn = page.locator('.modal-button-primary:has-text("Save Document")');
+    const submitBtn = page.getByRole('button', { name: 'Save Document' });
     await expect(submitBtn).toBeDisabled();
 
     console.log('✅ Submit button disabled with whitespace-only input');
@@ -287,7 +287,7 @@ test.describe('AddContextModal - Form Submission', () => {
     await page.locator('#context-content').fill('This is my test content');
 
     // Submit
-    const submitBtn = page.locator('.modal-button-primary:has-text("Save Document")');
+    const submitBtn = page.getByRole('button', { name: 'Save Document' });
     await submitBtn.click();
 
     // Success message should appear
@@ -310,7 +310,7 @@ test.describe('AddContextModal - Form Submission', () => {
     await page.locator('#context-content').fill('This is my test content');
 
     // Submit
-    const submitBtn = page.locator('.modal-button-primary:has-text("Save Document")');
+    const submitBtn = page.getByRole('button', { name: 'Save Document' });
     await submitBtn.click();
 
     await expect(page.locator('.context-success')).toBeVisible({ timeout: 15000 });
@@ -334,7 +334,7 @@ test.describe('AddContextModal - Form Submission', () => {
     // First submission
     await page.locator('#context-title').fill('First Document');
     await page.locator('#context-content').fill('First content');
-    await page.locator('.modal-button-primary:has-text("Save Document")').click();
+    await page.getByRole('button', { name: 'Save Document' }).click();
 
     // Success message should appear
     await expect(page.locator('.context-success')).toBeVisible({ timeout: 15000 });
@@ -346,7 +346,7 @@ test.describe('AddContextModal - Form Submission', () => {
     await page.locator('#context-content').fill('Second content');
 
     // Submit button should be enabled again
-    const submitBtn = page.locator('.modal-button-primary:has-text("Save Document")');
+    const submitBtn = page.getByRole('button', { name: 'Save Document' });
     await expect(submitBtn).toBeEnabled();
 
     // Submit again
@@ -369,7 +369,7 @@ test.describe('AddContextModal - Form Submission', () => {
     await page.locator('#context-title').fill('Test Document');
     await page.locator('#context-content').fill('Test content');
 
-    const submitBtn = page.locator('.modal-button-primary');
+    const submitBtn = page.locator('.modal-actions button').nth(1);
 
     // Submit and verify the flow completes successfully
     // Note: "Saving..." text may appear too briefly to catch reliably in fast environments

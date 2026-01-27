@@ -162,12 +162,12 @@ Ctrl+C
 
 ### Making Changes
 
-**Frontend changes** (unified SPA: dashboard + Jarvis chat):
+**Frontend changes** (unified SPA: dashboard + Oikos chat):
 
-- Edit files in `apps/zerg/frontend-web/src/` (Jarvis lives in `apps/zerg/frontend-web/src/jarvis/`)
+- Edit files in `apps/zerg/frontend-web/src/` (Oikos lives in `apps/zerg/frontend-web/src/oikos/`)
 - Browser auto-refreshes (Vite HMR)
 
-**Backend changes** (FastAPI, includes `/api/jarvis/*`):
+**Backend changes** (FastAPI, includes `/api/oikos/*`):
 
 - Edit files in `apps/zerg/backend/`
 - Hot-reloads in dev mode (RELOAD=true)
@@ -180,8 +180,8 @@ Ctrl+C
 User → http://localhost:30080 (nginx)
   /            → Unified React SPA (dashboard + /chat)
   /dashboard   → Zerg dashboard (SPA route)
-  /chat        → Jarvis chat UI (SPA route)
-  /api/*       → FastAPI backend (includes /api/jarvis/*)
+  /chat        → Oikos chat UI (SPA route)
+  /api/*       → FastAPI backend (includes /api/oikos/*)
   /ws/*        → SSE/WS
 
 Internal service ports (dev):
@@ -197,7 +197,7 @@ Internal service ports (dev):
 zerg/
 ├── apps/
 │   └── zerg/                # Agent platform
-│       ├── backend/         # FastAPI (includes /api/jarvis/*)
+│       ├── backend/         # FastAPI (includes /api/oikos/*)
 │       ├── frontend-web/    # Unified React SPA (dashboard + /chat)
 │       └── e2e/             # Playwright E2E (unified SPA)
 ├── docker/

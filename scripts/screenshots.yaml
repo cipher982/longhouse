@@ -14,7 +14,7 @@ screenshots:
     output: public/images/landing/canvas-preview.png
 
   chat-preview:
-    description: Jarvis chat conversation
+    description: Oikos chat conversation
     url: /chat?thread=marketing&marketing=true
     viewport: { width: 1400, height: 900 }
     output: public/images/landing/chat-preview.png

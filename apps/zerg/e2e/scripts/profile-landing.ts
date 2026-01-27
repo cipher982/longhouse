@@ -158,8 +158,8 @@ const LAYOUT_EVENTS = new Set([
 const RASTERIZE_EVENTS = new Set([
   "TileManager::PrepareTiles",
   "TileManager::ScheduleTasks",
-  "DidFinishRunningAllTilesTask::RunOnWorkerThread",
-  "TaskSetFinishedTaskImpl::RunOnWorkerThread",
+  "DidFinishRunningAllTilesTask::RunOnCommisThread",
+  "TaskSetFinishedTaskImpl::RunOnCommisThread",
   "RasterTask",
   "Rasterize",
 ]);

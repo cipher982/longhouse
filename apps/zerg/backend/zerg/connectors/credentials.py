@@ -1,10 +1,10 @@
 """Account-level credential helpers for services (not tool context).
 
 This module provides simple functions for retrieving account-level credentials
-outside of the agent tool context. Use this for service-level operations like
-syncing knowledge sources where there's no agent involved.
+outside of the fiche tool context. Use this for service-level operations like
+syncing knowledge sources where there's no fiche involved.
 
-For agent tool credential resolution, use CredentialResolver from resolver.py.
+For fiche tool credential resolution, use CredentialResolver from resolver.py.
 """
 
 import json
@@ -27,7 +27,7 @@ def get_account_credential(
     """Get decrypted account-level credential for a user.
 
     Mirrors the decrypt+JSON pattern from CredentialResolver._resolve_account_credential().
-    Use this for service-level operations outside of agent tool context.
+    Use this for service-level operations outside of fiche tool context.
 
     Args:
         db: Database session

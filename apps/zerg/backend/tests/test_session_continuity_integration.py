@@ -137,7 +137,7 @@ class TestPrepareSessionIntegration:
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
-                f"{url}/query/agents/sessions",
+                f"{url}/query/fiches/sessions",
                 headers={"X-API-Key": api_key},
                 params={"limit": 10, "provider": "claude"},  # Get more to filter
             )
@@ -167,7 +167,7 @@ class TestShipSessionIntegration:
             with tempfile.TemporaryDirectory() as config_dir:
                 result = await ship_session_to_life_hub(
                     workspace_path=Path(workspace),
-                    worker_id="test-worker",
+                    commis_id="test-commis",
                     claude_config_dir=Path(config_dir),
                 )
                 assert result is None
@@ -206,7 +206,7 @@ class TestShipSessionIntegration:
                 # Ship it
                 result = await ship_session_to_life_hub(
                     workspace_path=workspace_path,
-                    worker_id="integration-test-worker",
+                    commis_id="integration-test-commis",
                     claude_config_dir=config_path,
                 )
 
@@ -215,40 +215,40 @@ class TestShipSessionIntegration:
                 assert len(result) > 10, f"Session ID looks invalid: {result}"
 
 
-class TestWorkerJobProcessorIntegration:
-    """Worker job processor integration is now tested in E2E.
+class TestCommisJobProcessorIntegration:
+    """Commis job processor integration is now tested in E2E.
 
     See: apps/zerg/e2e/tests/core/session-continuity.spec.ts
 
     These tests required:
-    1. WorkerJobProcessor running (available in E2E mode)
+    1. CommisJobProcessor running (available in E2E mode)
     2. Real Life Hub API (LIFE_HUB_API_KEY in CI secrets)
     3. Mock hatch CLI (creates session files without running real Claude Code)
 
     Run with: make test-e2e-core
 
     The E2E tests provide full coverage including:
-    - Workspace worker execution with mock hatch
+    - Workspace commis execution with mock hatch
     - Session fetch from real Life Hub API
     - Graceful fallback when session not found
     """
 
-    @pytest.mark.skip(reason="Covered by E2E: session-continuity.spec.ts::workspace worker with resume_session_id")
+    @pytest.mark.skip(reason="Covered by E2E: session-continuity.spec.ts::workspace commis with resume_session_id")
     @pytest.mark.asyncio
-    async def test_worker_with_resume_session_id(self, db_session):
-        """Test that passing resume_session_id to a worker prepares the session.
+    async def test_commis_with_resume_session_id(self, db_session):
+        """Test that passing resume_session_id to a commis prepares the session.
 
         E2E test sends a chat message with a real Life Hub session ID,
-        and verifies the workspace worker completes successfully.
+        and verifies the workspace commis completes successfully.
         """
         pass
 
-    @pytest.mark.skip(reason="Covered by E2E: session-continuity.spec.ts::workspace worker executes with mock hatch")
+    @pytest.mark.skip(reason="Covered by E2E: session-continuity.spec.ts::workspace commis executes with mock hatch")
     @pytest.mark.asyncio
-    async def test_successful_worker_ships_session(self, db_session):
-        """Test that successful worker completion ships session to Life Hub.
+    async def test_successful_commis_ships_session(self, db_session):
+        """Test that successful commis completion ships session to Life Hub.
 
-        E2E test triggers workspace worker, verifies worker_complete event,
+        E2E test triggers workspace commis, verifies commis_complete event,
         and can query Life Hub to verify session was shipped.
         """
         pass
@@ -330,7 +330,7 @@ class TestEndToEndResumeFlow:
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
-                f"{url}/query/agents/sessions",
+                f"{url}/query/fiches/sessions",
                 headers={"X-API-Key": api_key},
                 params={"limit": 10, "provider": "claude"},  # Get more to filter
             )

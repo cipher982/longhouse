@@ -103,10 +103,10 @@ class TopicConnectionManager:
     def _setup_event_handlers(self) -> None:
         """Set up handlers for events we want to broadcast."""
         logger.info("Setting up WebSocket event handlers")
-        # Agent events
-        event_bus.subscribe(EventType.AGENT_CREATED, self._handle_agent_event)
-        event_bus.subscribe(EventType.AGENT_UPDATED, self._handle_agent_event)
-        event_bus.subscribe(EventType.AGENT_DELETED, self._handle_agent_event)
+        # Fiche events
+        event_bus.subscribe(EventType.FICHE_CREATED, self._handle_fiche_event)
+        event_bus.subscribe(EventType.FICHE_UPDATED, self._handle_fiche_event)
+        event_bus.subscribe(EventType.FICHE_DELETED, self._handle_fiche_event)
         # Thread events
         event_bus.subscribe(EventType.THREAD_CREATED, self._handle_thread_event)
         event_bus.subscribe(EventType.THREAD_UPDATED, self._handle_thread_event)
@@ -273,7 +273,7 @@ class TopicConnectionManager:
 
         Args:
             client_id: The client ID to subscribe
-            topic: The topic to subscribe to (e.g., "agent:123", "thread:45")
+            topic: The topic to subscribe to (e.g., "fiche:123", "thread:45")
         """
         async with self._get_lock():
             if topic not in self.topic_subscriptions:
@@ -430,7 +430,7 @@ class TopicConnectionManager:
         """
         logger.debug(f"broadcast_to_topic called for topic: {topic}")
         # If there are no active subscribers we silently skip to avoid log
-        # spam – this situation is perfectly normal when scheduled agents or
+        # spam – this situation is perfectly normal when scheduled fiches or
         # background jobs emit updates while no browser is connected.
         async with self._get_lock():
             if topic not in self.topic_subscriptions:
@@ -475,6 +475,13 @@ class TopicConnectionManager:
             # ----------------------------------------------------------
             try:
                 queue.put_nowait(final_message)
+            except RuntimeError as exc:
+                # Stale queue from a closed event loop (common in tests); drop it.
+                if "Event loop is closed" in str(exc):
+                    logger.warning("Queue loop closed for client %s, disconnecting", client_id)
+                    asyncio.create_task(self.disconnect(client_id))
+                    continue
+                raise
             except asyncio.QueueFull:
                 # Back-pressure: drop client to protect server memory
                 logger.warning("Queue full for client %s, disconnecting due to back-pressure", client_id)
@@ -493,13 +500,13 @@ class TopicConnectionManager:
                 return_exceptions=True,
             )
 
-    async def _handle_agent_event(self, data: Dict[str, Any]) -> None:
-        """Handle agent-related events from the event bus."""
+    async def _handle_fiche_event(self, data: Dict[str, Any]) -> None:
+        """Handle fiche-related events from the event bus."""
         if "id" not in data:
             return
 
-        agent_id = data["id"]
-        topic = f"agent:{agent_id}"
+        fiche_id = data["id"]
+        topic = f"fiche:{fiche_id}"
 
         # Extract event_type before serialization to avoid duplication in envelope
         event_type = data["event_type"]
@@ -532,12 +539,12 @@ class TopicConnectionManager:
         await self.broadcast_to_topic(topic, envelope.model_dump())
 
     async def _handle_run_event(self, data: Dict[str, Any]) -> None:
-        """Forward run events to the *agent:* topic so dashboards update."""
-        if "agent_id" not in data:
+        """Forward run events to the *fiche:* topic so dashboards update."""
+        if "fiche_id" not in data:
             return
 
-        agent_id = data["agent_id"]
-        topic = f"agent:{agent_id}"
+        fiche_id = data["fiche_id"]
+        topic = f"fiche:{fiche_id}"
 
         # Map run_id to id to match schema expectations
         clean_data = {k: v for k, v in data.items() if k != "event_type"}
@@ -565,15 +572,15 @@ class TopicConnectionManager:
         thread_id = clean_data.get("thread_id")
         if thread_id is None:
             logger.warning(
-                "run_update payload missing thread_id (agent=%s run=%s source=%s)",
-                agent_id,
+                "run_update payload missing thread_id (fiche=%s run=%s source=%s)",
+                fiche_id,
                 run_id,
                 source_event,
             )
 
         logger.info(
-            "Broadcasting run_update (agent=%s run=%s status=%s thread=%s elapsed=%s)",
-            agent_id,
+            "Broadcasting run_update (fiche=%s run=%s status=%s thread=%s elapsed=%s)",
+            fiche_id,
             run_id,
             status_value,
             thread_id if thread_id is not None else "unknown",

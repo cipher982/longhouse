@@ -1,8 +1,8 @@
 """Unit tests for the injected emitter infrastructure.
 
 Tests the EventEmitter protocol and its implementations:
-- WorkerEmitter: Always emits worker_tool_* events
-- SupervisorEmitter: Always emits supervisor_tool_* events
+- CommisEmitter (alias: CommisEmitter): Always emits commis_tool_* events
+- OikosEmitter (alias: OikosEmitter): Always emits oikos_tool_* events
 - NullEmitter: No-op emitter for testing
 
 Key property: Emitter identity is baked in at construction and cannot change.
@@ -20,31 +20,31 @@ import pytest
 
 from zerg.events import EventEmitter
 from zerg.events import NullEmitter
-from zerg.events import SupervisorEmitter
-from zerg.events import WorkerEmitter
+from zerg.events import OikosEmitter
+from zerg.events import CommisEmitter
 from zerg.events import get_emitter
 from zerg.events import reset_emitter
 from zerg.events import set_emitter
 
 
-class TestWorkerEmitter:
-    """Tests for WorkerEmitter."""
+class TestCommisEmitter:
+    """Tests for CommisEmitter (aliased as CommisEmitter)."""
 
-    def test_is_worker_always_true(self):
-        """WorkerEmitter.is_worker is always True."""
-        emitter = WorkerEmitter(
-            worker_id="test-worker",
+    def test_is_commis_always_true(self):
+        """CommisEmitter.is_commis is always True."""
+        emitter = CommisEmitter(
+            commis_id="test-commis",
             owner_id=1,
             run_id=100,
             job_id=50,
         )
-        assert emitter.is_worker is True
-        assert emitter.is_supervisor is False
+        assert emitter.is_commis is True
+        assert emitter.is_oikos is False
 
     def test_implements_protocol(self):
-        """WorkerEmitter implements EventEmitter protocol."""
-        emitter = WorkerEmitter(
-            worker_id="test-worker",
+        """CommisEmitter implements EventEmitter protocol."""
+        emitter = CommisEmitter(
+            commis_id="test-commis",
             owner_id=1,
             run_id=100,
             job_id=50,
@@ -52,10 +52,10 @@ class TestWorkerEmitter:
         assert isinstance(emitter, EventEmitter)
 
     @pytest.mark.asyncio
-    async def test_emit_tool_started_emits_worker_event(self):
-        """emit_tool_started always emits worker_tool_started."""
-        emitter = WorkerEmitter(
-            worker_id="test-worker",
+    async def test_emit_tool_started_emits_commis_event(self):
+        """emit_tool_started always emits commis_tool_started."""
+        emitter = CommisEmitter(
+            commis_id="test-commis",
             owner_id=1,
             run_id=100,
             job_id=50,
@@ -67,17 +67,17 @@ class TestWorkerEmitter:
 
             mock_emit.assert_called_once()
             call_kwargs = mock_emit.call_args.kwargs
-            assert call_kwargs["event_type"] == "worker_tool_started"
-            assert call_kwargs["payload"]["worker_id"] == "test-worker"
+            assert call_kwargs["event_type"] == "commis_tool_started"
+            assert call_kwargs["payload"]["commis_id"] == "test-commis"
             assert call_kwargs["payload"]["job_id"] == 50
             assert call_kwargs["payload"]["tool_name"] == "test_tool"
             assert call_kwargs["payload"]["trace_id"] == "12345678-1234-5678-1234-567812345678"
 
     @pytest.mark.asyncio
-    async def test_emit_tool_completed_emits_worker_event(self):
-        """emit_tool_completed always emits worker_tool_completed."""
-        emitter = WorkerEmitter(
-            worker_id="test-worker",
+    async def test_emit_tool_completed_emits_commis_event(self):
+        """emit_tool_completed always emits commis_tool_completed."""
+        emitter = CommisEmitter(
+            commis_id="test-commis",
             owner_id=1,
             run_id=100,
             job_id=50,
@@ -88,14 +88,14 @@ class TestWorkerEmitter:
 
             mock_emit.assert_called_once()
             call_kwargs = mock_emit.call_args.kwargs
-            assert call_kwargs["event_type"] == "worker_tool_completed"
+            assert call_kwargs["event_type"] == "commis_tool_completed"
             assert call_kwargs["payload"]["duration_ms"] == 500
 
     @pytest.mark.asyncio
-    async def test_emit_tool_failed_emits_worker_event(self):
-        """emit_tool_failed always emits worker_tool_failed."""
-        emitter = WorkerEmitter(
-            worker_id="test-worker",
+    async def test_emit_tool_failed_emits_commis_event(self):
+        """emit_tool_failed always emits commis_tool_failed."""
+        emitter = CommisEmitter(
+            commis_id="test-commis",
             owner_id=1,
             run_id=100,
             job_id=50,
@@ -106,14 +106,14 @@ class TestWorkerEmitter:
 
             mock_emit.assert_called_once()
             call_kwargs = mock_emit.call_args.kwargs
-            assert call_kwargs["event_type"] == "worker_tool_failed"
+            assert call_kwargs["event_type"] == "commis_tool_failed"
             assert call_kwargs["payload"]["error"] == "error message"
 
     @pytest.mark.asyncio
     async def test_skips_emit_when_no_run_id(self):
         """Emitter skips emission when run_id is None."""
-        emitter = WorkerEmitter(
-            worker_id="test-worker",
+        emitter = CommisEmitter(
+            commis_id="test-commis",
             owner_id=1,
             run_id=None,  # No run_id
             job_id=50,
@@ -124,9 +124,9 @@ class TestWorkerEmitter:
             mock_emit.assert_not_called()
 
     def test_tool_tracking(self):
-        """WorkerEmitter tracks tool calls for activity log."""
-        emitter = WorkerEmitter(
-            worker_id="test-worker",
+        """CommisEmitter tracks tool calls for activity log."""
+        emitter = CommisEmitter(
+            commis_id="test-commis",
             owner_id=1,
             run_id=100,
             job_id=50,
@@ -144,9 +144,9 @@ class TestWorkerEmitter:
         assert tool_call.duration_ms is not None
 
     def test_critical_error_tracking(self):
-        """WorkerEmitter tracks critical errors for fail-fast."""
-        emitter = WorkerEmitter(
-            worker_id="test-worker",
+        """CommisEmitter tracks critical errors for fail-fast."""
+        emitter = CommisEmitter(
+            commis_id="test-commis",
             owner_id=1,
             run_id=100,
             job_id=50,
@@ -158,22 +158,22 @@ class TestWorkerEmitter:
         assert emitter.critical_error_message == "SSH connection failed"
 
 
-class TestSupervisorEmitter:
-    """Tests for SupervisorEmitter."""
+class TestOikosEmitter:
+    """Tests for OikosEmitter (aliased as OikosEmitter)."""
 
-    def test_is_supervisor_always_true(self):
-        """SupervisorEmitter.is_supervisor is always True."""
-        emitter = SupervisorEmitter(
+    def test_is_oikos_always_true(self):
+        """OikosEmitter.is_oikos is always True."""
+        emitter = OikosEmitter(
             run_id=100,
             owner_id=1,
             message_id="msg-123",
         )
-        assert emitter.is_supervisor is True
-        assert emitter.is_worker is False
+        assert emitter.is_oikos is True
+        assert emitter.is_commis is False
 
     def test_implements_protocol(self):
-        """SupervisorEmitter implements EventEmitter protocol."""
-        emitter = SupervisorEmitter(
+        """OikosEmitter implements EventEmitter protocol."""
+        emitter = OikosEmitter(
             run_id=100,
             owner_id=1,
             message_id="msg-123",
@@ -181,9 +181,9 @@ class TestSupervisorEmitter:
         assert isinstance(emitter, EventEmitter)
 
     @pytest.mark.asyncio
-    async def test_emit_tool_started_emits_supervisor_event(self):
-        """emit_tool_started always emits supervisor_tool_started."""
-        emitter = SupervisorEmitter(
+    async def test_emit_tool_started_emits_oikos_event(self):
+        """emit_tool_started always emits oikos_tool_started."""
+        emitter = OikosEmitter(
             run_id=100,
             owner_id=1,
             message_id="msg-123",
@@ -191,58 +191,58 @@ class TestSupervisorEmitter:
         )
 
         with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
-            await emitter.emit_tool_started("spawn_worker", "call_456", "task preview")
+            await emitter.emit_tool_started("spawn_commis", "call_456", "task preview")
 
             mock_emit.assert_called_once()
             call_kwargs = mock_emit.call_args.kwargs
-            assert call_kwargs["event_type"] == "supervisor_tool_started"
+            assert call_kwargs["event_type"] == "oikos_tool_started"
             assert call_kwargs["payload"]["owner_id"] == 1
-            assert call_kwargs["payload"]["tool_name"] == "spawn_worker"
+            assert call_kwargs["payload"]["tool_name"] == "spawn_commis"
             assert call_kwargs["payload"]["trace_id"] == "12345678-1234-5678-1234-567812345678"
 
     @pytest.mark.asyncio
-    async def test_emit_tool_completed_emits_supervisor_event(self):
-        """emit_tool_completed always emits supervisor_tool_completed."""
-        emitter = SupervisorEmitter(
+    async def test_emit_tool_completed_emits_oikos_event(self):
+        """emit_tool_completed always emits oikos_tool_completed."""
+        emitter = OikosEmitter(
             run_id=100,
             owner_id=1,
             message_id="msg-123",
         )
 
         with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
-            await emitter.emit_tool_completed("spawn_worker", "call_456", 1000, "result preview")
+            await emitter.emit_tool_completed("spawn_commis", "call_456", 1000, "result preview")
 
             mock_emit.assert_called_once()
             call_kwargs = mock_emit.call_args.kwargs
-            assert call_kwargs["event_type"] == "supervisor_tool_completed"
+            assert call_kwargs["event_type"] == "oikos_tool_completed"
             assert call_kwargs["payload"]["duration_ms"] == 1000
 
     @pytest.mark.asyncio
-    async def test_emit_tool_failed_emits_supervisor_event(self):
-        """emit_tool_failed always emits supervisor_tool_failed."""
-        emitter = SupervisorEmitter(
+    async def test_emit_tool_failed_emits_oikos_event(self):
+        """emit_tool_failed always emits oikos_tool_failed."""
+        emitter = OikosEmitter(
             run_id=100,
             owner_id=1,
             message_id="msg-123",
         )
 
         with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
-            await emitter.emit_tool_failed("spawn_worker", "call_456", 100, "worker failed")
+            await emitter.emit_tool_failed("spawn_commis", "call_456", 100, "commis failed")
 
             mock_emit.assert_called_once()
             call_kwargs = mock_emit.call_args.kwargs
-            assert call_kwargs["event_type"] == "supervisor_tool_failed"
-            assert call_kwargs["payload"]["error"] == "worker failed"
+            assert call_kwargs["event_type"] == "oikos_tool_failed"
+            assert call_kwargs["payload"]["error"] == "commis failed"
 
 
 class TestNullEmitter:
     """Tests for NullEmitter."""
 
-    def test_is_neither_worker_nor_supervisor(self):
-        """NullEmitter is neither worker nor supervisor."""
+    def test_is_neither_commis_nor_oikos(self):
+        """NullEmitter is neither commis nor oikos."""
         emitter = NullEmitter()
-        assert emitter.is_worker is False
-        assert emitter.is_supervisor is False
+        assert emitter.is_commis is False
+        assert emitter.is_oikos is False
 
     def test_implements_protocol(self):
         """NullEmitter implements EventEmitter protocol."""
@@ -274,18 +274,18 @@ class TestEmitterContext:
 
     def test_set_and_get_emitter(self):
         """set_emitter sets the emitter, get_emitter retrieves it."""
-        worker_emitter = WorkerEmitter(
-            worker_id="test-worker",
+        commis_emitter = CommisEmitter(
+            commis_id="test-commis",
             owner_id=1,
             run_id=100,
             job_id=50,
         )
 
-        token = set_emitter(worker_emitter)
+        token = set_emitter(commis_emitter)
         try:
             retrieved = get_emitter()
-            assert retrieved is worker_emitter
-            assert retrieved.is_worker is True
+            assert retrieved is commis_emitter
+            assert retrieved.is_commis is True
         finally:
             reset_emitter(token)
 
@@ -293,14 +293,14 @@ class TestEmitterContext:
         """reset_emitter restores the previous emitter value."""
         original = get_emitter()
 
-        worker_emitter = WorkerEmitter(
-            worker_id="test-worker",
+        commis_emitter = CommisEmitter(
+            commis_id="test-commis",
             owner_id=1,
             run_id=100,
             job_id=50,
         )
 
-        token = set_emitter(worker_emitter)
+        token = set_emitter(commis_emitter)
         reset_emitter(token)
 
         assert get_emitter() is original
@@ -312,18 +312,18 @@ class TestEmitterContext:
             emitter = get_emitter()
             if emitter:
                 # Even if context was copied, identity is fixed
-                return emitter.is_worker
+                return emitter.is_commis
             return None
 
         async def run_test():
-            worker_emitter = WorkerEmitter(
-                worker_id="test-worker",
+            commis_emitter = CommisEmitter(
+                commis_id="test-commis",
                 owner_id=1,
                 run_id=100,
                 job_id=50,
             )
 
-            token = set_emitter(worker_emitter)
+            token = set_emitter(commis_emitter)
             try:
                 # Create task that inherits context
                 task = asyncio.create_task(task_that_uses_emitter())
@@ -339,10 +339,10 @@ class TestEmitterIdentityGuarantee:
     """Tests that emitter identity cannot be changed after construction."""
 
     @pytest.mark.asyncio
-    async def test_worker_emitter_always_emits_worker_events(self):
-        """WorkerEmitter ALWAYS emits worker_* events, even if confused."""
-        emitter = WorkerEmitter(
-            worker_id="test-worker",
+    async def test_commis_emitter_always_emits_commis_events(self):
+        """CommisEmitter ALWAYS emits commis_* events, even if confused."""
+        emitter = CommisEmitter(
+            commis_id="test-commis",
             owner_id=1,
             run_id=100,
             job_id=50,
@@ -354,15 +354,15 @@ class TestEmitterIdentityGuarantee:
             await emitter.emit_tool_completed("a", "b", 1, "c")
             await emitter.emit_tool_failed("a", "b", 1, "c")
 
-            # ALL calls should be worker_* events
+            # ALL calls should be commis_* events
             for call in mock_emit.call_args_list:
                 event_type = call.kwargs["event_type"]
-                assert event_type.startswith("worker_"), f"Expected worker_* but got {event_type}"
+                assert event_type.startswith("commis_"), f"Expected commis_* but got {event_type}"
 
     @pytest.mark.asyncio
-    async def test_supervisor_emitter_always_emits_supervisor_events(self):
-        """SupervisorEmitter ALWAYS emits supervisor_* events, even if confused."""
-        emitter = SupervisorEmitter(
+    async def test_oikos_emitter_always_emits_oikos_events(self):
+        """OikosEmitter ALWAYS emits oikos_* events, even if confused."""
+        emitter = OikosEmitter(
             run_id=100,
             owner_id=1,
             message_id="msg-123",
@@ -374,7 +374,7 @@ class TestEmitterIdentityGuarantee:
             await emitter.emit_tool_completed("a", "b", 1, "c")
             await emitter.emit_tool_failed("a", "b", 1, "c")
 
-            # ALL calls should be supervisor_* events
+            # ALL calls should be oikos_* events
             for call in mock_emit.call_args_list:
                 event_type = call.kwargs["event_type"]
-                assert event_type.startswith("supervisor_"), f"Expected supervisor_* but got {event_type}"
+                assert event_type.startswith("oikos_"), f"Expected oikos_* but got {event_type}"

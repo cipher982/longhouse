@@ -1,5 +1,5 @@
 #!/bin/bash
-# QA Agent - Deterministic Data Collection
+# QA Fiche - Deterministic Data Collection
 #
 # Collects system health data for AI analysis.
 # Writes all output to $RUN_DIR (default /tmp/qa-run).
@@ -174,15 +174,15 @@ else
 fi
 
 # ============================================================================
-# Check 6: Stuck Workers
+# Check 6: Stuck Commis
 # ============================================================================
-echo "Checking stuck workers..."
-if http_get "${API_URL}/reliability/workers/stuck?threshold_mins=10" "stuck_workers.json" 2>/dev/null; then
-    CHECKS_OK+=("stuck_workers")
-    echo "  ✓ Stuck workers check OK"
+echo "Checking stuck commis..."
+if http_get "${API_URL}/reliability/commis/stuck?threshold_mins=10" "stuck_commis.json" 2>/dev/null; then
+    CHECKS_OK+=("stuck_commis")
+    echo "  ✓ Stuck commis check OK"
 else
-    write_json "stuck_workers.json" '{"status": "auth_required"}'
-    echo "  - Stuck workers skipped (auth required)"
+    write_json "stuck_commis.json" '{"status": "auth_required"}'
+    echo "  - Stuck commis skipped (auth required)"
 fi
 
 # ============================================================================

@@ -5,7 +5,6 @@ import { useAuth } from "../lib/auth";
 import { useShelf } from "../lib/useShelfState";
 import { useWebSocket, ConnectionStatusIndicator } from "../lib/useWebSocket";
 import { useConfirm } from "./confirm";
-import config from "../lib/config";
 import "../styles/layout.css";
 import { SidebarIcon, XIcon } from "./icons";
 import { getNavItems } from "./navigation/navItems";
@@ -50,7 +49,7 @@ function WelcomeHeader() {
   const toggleMobileNav = useCallback(() => setMobileNavOpen(prev => !prev), []);
 
   // Only show shelf toggle on routes that have drawer UI
-  const SHELF_ENABLED_ROUTES = ["/canvas", "/agent"];
+  const SHELF_ENABLED_ROUTES = ["/canvas", "/fiche"];
   const shouldShowShelfToggle = SHELF_ENABLED_ROUTES.some(route =>
     location.pathname.startsWith(route)
   );
@@ -92,37 +91,9 @@ function WelcomeHeader() {
   };
 
   const navItems = getNavItems(user?.role);
-  const isDemoUser = Boolean((user as { is_demo?: boolean; prefs?: Record<string, unknown> } | null)?.is_demo
-    || (user as { prefs?: Record<string, unknown> } | null)?.prefs?.demo
-    || (user as { prefs?: Record<string, unknown> } | null)?.prefs?.is_demo);
-
-  const handleExitDemo = async () => {
-    try {
-      await fetch(`${config.apiBaseUrl}/auth/impersonate/stop`, {
-        method: "POST",
-        credentials: "include",
-      });
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.warn("Failed to stop impersonation", error);
-    } finally {
-      window.location.assign("/admin");
-    }
-  };
 
   return (
     <>
-    {isDemoUser && (
-      <div className="demo-banner">
-        <div className="demo-banner__content">
-          <span className="demo-banner__label">Demo account view</span>
-          <span className="demo-banner__hint">Your real account stays untouched.</span>
-        </div>
-        <button className="demo-banner__action" type="button" onClick={handleExitDemo}>
-          Return to admin
-        </button>
-      </div>
-    )}
     <header className="main-header" data-testid="welcome-header">
       <div className="header-left">
         {/* Mobile hamburger menu - shown only on mobile via CSS */}
@@ -182,8 +153,8 @@ function WelcomeHeader() {
           <button
             id="shelf-toggle-btn"
             className="header-button shelf-toggle"
-            aria-label="Toggle agent panel"
-            aria-controls="agent-shelf"
+            aria-label="Toggle fiche panel"
+            aria-controls="fiche-shelf"
             aria-expanded={isShelfOpen}
             onClick={toggleShelf}
           >

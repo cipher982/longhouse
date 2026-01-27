@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from zerg.crud import crud
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
-from zerg.schemas.schemas import Agent
+from zerg.schemas.schemas import Fiche
 
 # MCP manager singleton – needed by several endpoints
 from zerg.tools.mcp_adapter import MCPManager  # noqa: E402 – placed after stdlib imports
@@ -33,7 +33,7 @@ from zerg.utils.json_helpers import set_json_field
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
-    prefix="/agents/{agent_id}/mcp-servers",
+    prefix="/fiches/{fiche_id}/mcp-servers",
     tags=["mcp-servers"],
     dependencies=[Depends(get_current_user)],
 )
@@ -106,14 +106,14 @@ class MCPTestConnectionResponse(BaseModel):
 
 # Helper functions
 def _get_mcp_servers_from_config(config: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Extract MCP server configurations from agent config."""
+    """Extract MCP server configurations from fiche config."""
     if not config:
         return []
     return config.get("mcp_servers", [])
 
 
 def _update_mcp_servers_in_config(config: Dict[str, Any], mcp_servers: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Update MCP server configurations in agent config."""
+    """Update MCP server configurations in fiche config."""
     if not config:
         config = {}
     config["mcp_servers"] = mcp_servers
@@ -123,21 +123,21 @@ def _update_mcp_servers_in_config(config: Dict[str, Any], mcp_servers: List[Dict
 # API endpoints
 @router.get("/", response_model=List[MCPServerResponse])
 async def list_mcp_servers(
-    agent_id: int,
+    fiche_id: int,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """List all MCP servers configured for an agent."""
-    # Get agent and check permissions
-    agent = crud.get_agent(db, agent_id=agent_id)
-    if not agent:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    """List all MCP servers configured for a fiche."""
+    # Get fiche and check permissions
+    fiche = crud.get_fiche(db, fiche_id=fiche_id)
+    if not fiche:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
 
-    if agent.owner_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this agent")
+    if fiche.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this fiche")
 
     # Get MCP servers from config
-    mcp_servers = _get_mcp_servers_from_config(agent.config)
+    mcp_servers = _get_mcp_servers_from_config(fiche.config)
 
     # Build response with tool information
     response = []
@@ -198,28 +198,28 @@ async def list_mcp_servers(
 
     _ = MCPManager()
     # NOTE: We deliberately skip adapters that are **not** present in the stored
-    # configuration so the API reflects exactly what is persisted on the Agent
+    # configuration so the API reflects exactly what is persisted on the Fiche
     # row.  This avoids stale entries after a server is removed within the same
     # request cycle (test_remove_mcp_server regression).
 
     return response
 
 
-@router.post("/", response_model=Agent, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=Fiche, status_code=status.HTTP_201_CREATED)
 async def add_mcp_server(
-    agent_id: int,
+    fiche_id: int,
     request: MCPServerAddRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Add an MCP server to an agent."""
-    # Get agent and check permissions
-    agent = crud.get_agent(db, agent_id=agent_id)
-    if not agent:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    """Add an MCP server to a fiche."""
+    # Get fiche and check permissions
+    fiche = crud.get_fiche(db, fiche_id=fiche_id)
+    if not fiche:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
 
-    if agent.owner_id != current_user.id and current_user.role != "ADMIN":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to modify this agent")
+    if fiche.owner_id != current_user.id and current_user.role != "ADMIN":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to modify this fiche")
 
     # Build MCP server config
     if request.preset:
@@ -255,8 +255,8 @@ async def add_mcp_server(
     if request.allowed_tools:
         server_config["allowed_tools"] = request.allowed_tools
 
-    # Add to agent config
-    current_config = agent.config or {}
+    # Add to fiche config
+    current_config = fiche.config or {}
     mcp_servers = _get_mcp_servers_from_config(current_config)
 
     # Check for duplicates
@@ -264,17 +264,17 @@ async def add_mcp_server(
         if request.preset and existing.get("preset") == request.preset:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Preset '{request.preset}' is already configured for this agent",
+                detail=f"Preset '{request.preset}' is already configured for this fiche",
             )
         elif request.transport == "stdio" and existing.get("command") == request.command:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Server with command '{request.command}' is already configured for this agent",
+                detail=f"Server with command '{request.command}' is already configured for this fiche",
             )
         elif request.transport == "http" and not request.preset and existing.get("url") == request.url:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Server URL '{request.url}' is already configured for this agent",
+                detail=f"Server URL '{request.url}' is already configured for this fiche",
             )
 
     # Try to connect to the server
@@ -291,35 +291,35 @@ async def add_mcp_server(
         logger.exception("Failed to add MCP server")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
-    # Update agent config
+    # Update fiche config
     mcp_servers.append(server_config)
     updated_config = _update_mcp_servers_in_config(current_config, mcp_servers)
 
     # Save to database
-    set_json_field(agent, "config", updated_config)
+    set_json_field(fiche, "config", updated_config)
     db.commit()
-    db.refresh(agent)
-    return agent
+    db.refresh(fiche)
+    return fiche
 
 
 @router.delete("/{server_name}", status_code=status.HTTP_204_NO_CONTENT)
 async def remove_mcp_server(
-    agent_id: int,
+    fiche_id: int,
     server_name: str,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Remove an MCP server from an agent."""
-    # Get agent and check permissions
-    agent = crud.get_agent(db, agent_id=agent_id)
-    if not agent:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    """Remove an MCP server from a fiche."""
+    # Get fiche and check permissions
+    fiche = crud.get_fiche(db, fiche_id=fiche_id)
+    if not fiche:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
 
-    if agent.owner_id != current_user.id and current_user.role != "ADMIN":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to modify this agent")
+    if fiche.owner_id != current_user.id and current_user.role != "ADMIN":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to modify this fiche")
 
     # Get MCP servers from config
-    current_config = agent.config or {}
+    current_config = fiche.config or {}
     mcp_servers = _get_mcp_servers_from_config(current_config)
 
     # Find and remove the server
@@ -342,8 +342,8 @@ async def remove_mcp_server(
     if not found:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"MCP server '{server_name}' not found")
 
-    # Update agent config
-    set_json_field(agent, "config", {"mcp_servers": updated_servers})
+    # Update fiche config
+    set_json_field(fiche, "config", {"mcp_servers": updated_servers})
     db.commit()
 
     # If any removed servers were stdio transport, shut down their processes
@@ -370,19 +370,19 @@ async def remove_mcp_server(
 
 @router.post("/test", response_model=MCPTestConnectionResponse)
 async def test_mcp_connection(
-    agent_id: int,
+    fiche_id: int,
     request: MCPServerAddRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """Test connection to an MCP server without saving it."""
-    # Get agent and check permissions (for context)
-    agent = crud.get_agent(db, agent_id=agent_id)
-    if not agent:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    # Get fiche and check permissions (for context)
+    fiche = crud.get_fiche(db, fiche_id=fiche_id)
+    if not fiche:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
 
-    if agent.owner_id != current_user.id and current_user.role != "ADMIN":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to test servers for this agent")
+    if fiche.owner_id != current_user.id and current_user.role != "ADMIN":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to test servers for this fiche")
 
     # Build MCP server config
     if request.preset:
@@ -453,18 +453,18 @@ async def test_mcp_connection(
 
 @router.get("/available-tools", response_model=Dict[str, Any])
 async def get_available_tools(
-    agent_id: int,
+    fiche_id: int,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Get all available tools for an agent (built-in + MCP)."""
-    # Get agent and check permissions
-    agent = crud.get_agent(db, agent_id=agent_id)
-    if not agent:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    """Get all available tools for a fiche (built-in + MCP)."""
+    # Get fiche and check permissions
+    fiche = crud.get_fiche(db, fiche_id=fiche_id)
+    if not fiche:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
 
-    if agent.owner_id != current_user.id and current_user.role != "ADMIN":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this agent")
+    if fiche.owner_id != current_user.id and current_user.role != "ADMIN":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this fiche")
 
     # Get all tools from registry (built-in + MCP)
     resolver = get_tool_resolver()

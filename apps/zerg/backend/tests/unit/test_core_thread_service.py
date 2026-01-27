@@ -1,6 +1,6 @@
 import pytest
 
-from tests.conftest import TEST_WORKER_MODEL
+from tests.conftest import TEST_COMMIS_MODEL
 from zerg.core.implementations import SQLAlchemyDatabase
 from zerg.core.services import ThreadService
 from zerg.core.test_implementations import TestAuthProvider as AuthProviderStub
@@ -11,41 +11,41 @@ def test_core_thread_service_scopes_threads(db_session):
     owner = crud.create_user(db_session, email="owner-core@local", provider=None, role="USER")
     other = crud.create_user(db_session, email="other-core@local", provider=None, role="USER")
 
-    owner_agent = crud.create_agent(
+    owner_agent = crud.create_fiche(
         db_session,
         owner_id=owner.id,
-        name="owner-agent",
+        name="owner-fiche",
         system_instructions="sys",
         task_instructions="task",
-        model=TEST_WORKER_MODEL,
+        model=TEST_COMMIS_MODEL,
         schedule=None,
         config={},
     )
-    other_agent = crud.create_agent(
+    other_agent = crud.create_fiche(
         db_session,
         owner_id=other.id,
-        name="other-agent",
+        name="other-fiche",
         system_instructions="sys",
         task_instructions="task",
-        model=TEST_WORKER_MODEL,
+        model=TEST_COMMIS_MODEL,
         schedule=None,
         config={},
     )
 
     owner_thread = crud.create_thread(
         db=db_session,
-        agent_id=owner_agent.id,
+        fiche_id=owner_agent.id,
         title="owner-thread",
         active=True,
-        agent_state={},
+        fiche_state={},
         memory_strategy="buffer",
     )
     other_thread = crud.create_thread(
         db=db_session,
-        agent_id=other_agent.id,
+        fiche_id=other_agent.id,
         title="other-thread",
         active=True,
-        agent_state={},
+        fiche_state={},
         memory_strategy="buffer",
     )
 
@@ -60,13 +60,13 @@ def test_core_thread_service_create_requires_owner(db_session):
     owner = crud.create_user(db_session, email="owner-core-create@local", provider=None, role="USER")
     other = crud.create_user(db_session, email="other-core-create@local", provider=None, role="USER")
 
-    agent = crud.create_agent(
+    fiche = crud.create_fiche(
         db_session,
         owner_id=owner.id,
-        name="owner-agent",
+        name="owner-fiche",
         system_instructions="sys",
         task_instructions="task",
-        model=TEST_WORKER_MODEL,
+        model=TEST_COMMIS_MODEL,
         schedule=None,
         config={},
     )
@@ -74,4 +74,4 @@ def test_core_thread_service_create_requires_owner(db_session):
     service = ThreadService(SQLAlchemyDatabase(), AuthProviderStub(other))
 
     with pytest.raises(PermissionError):
-        service.create_thread(other, agent.id, "nope")
+        service.create_thread(other, fiche.id, "nope")

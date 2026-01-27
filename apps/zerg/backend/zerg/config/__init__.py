@@ -99,9 +99,9 @@ class Settings:  # noqa: D401 – simple data container
     # Database reset security
     db_reset_password: str | None
 
-    # Jarvis integration ------------------------------------------------
-    jarvis_device_secret: str | None
-    jarvis_workspace_path: str  # Base path for cloud workspaces
+    # Oikos integration ------------------------------------------------
+    oikos_device_secret: str | None
+    oikos_workspace_path: str  # Base path for cloud workspaces
 
     # Completion notifications ------------------------------------------
     notification_webhook: str | None  # Discord/Slack webhook for run completion
@@ -136,13 +136,13 @@ class Settings:  # noqa: D401 – simple data container
     # Bootstrap API settings -------------------------------------------
     bootstrap_token: str | None  # Token for CLI-based bootstrap API auth
 
-    # Supervisor tool output storage -----------------------------------
-    supervisor_tool_output_max_chars: int  # Max tool output chars before storing (0 = disabled)
-    supervisor_tool_output_preview_chars: int  # Preview size for stored tool outputs
+    # Oikos tool output storage -----------------------------------
+    oikos_tool_output_max_chars: int  # Max tool output chars before storing (0 = disabled)
+    oikos_tool_output_preview_chars: int  # Preview size for stored tool outputs
 
     # E2E test database isolation --------------------------------------
     e2e_use_postgres_schemas: bool  # Use Postgres schemas for E2E test isolation (vs SQLite files)
-    e2e_worker_id: str | None  # Override worker ID for E2E testing
+    e2e_commis_id: str | None  # Override commis ID for E2E testing
 
     # Dynamic guards (evaluated at runtime) -----------------------------
     @property
@@ -280,8 +280,8 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         discord_enable_alerts=_truthy(os.getenv("DISCORD_ENABLE_ALERTS")),
         discord_daily_digest_cron=os.getenv("DISCORD_DAILY_DIGEST_CRON", "0 8 * * *"),
         db_reset_password=os.getenv("DB_RESET_PASSWORD"),
-        jarvis_device_secret=os.getenv("JARVIS_DEVICE_SECRET"),
-        jarvis_workspace_path=os.getenv("JARVIS_WORKSPACE_PATH", "/var/jarvis/workspaces"),
+        oikos_device_secret=os.getenv("OIKOS_DEVICE_SECRET"),
+        oikos_workspace_path=os.getenv("OIKOS_WORKSPACE_PATH", "/var/oikos/workspaces"),
         notification_webhook=os.getenv("NOTIFICATION_WEBHOOK"),
         smoke_test_secret=os.getenv("SMOKE_TEST_SECRET"),
         job_queue_enabled=_truthy(os.getenv("JOB_QUEUE_ENABLED")),
@@ -305,12 +305,12 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         roundabout_llm_timeout=float(os.getenv("ROUNDABOUT_LLM_TIMEOUT", "1.5")),
         # Bootstrap API settings
         bootstrap_token=os.getenv("BOOTSTRAP_TOKEN"),
-        # Supervisor tool output storage
-        supervisor_tool_output_max_chars=int(os.getenv("SUPERVISOR_TOOL_OUTPUT_MAX_CHARS", "8000")),
-        supervisor_tool_output_preview_chars=int(os.getenv("SUPERVISOR_TOOL_OUTPUT_PREVIEW_CHARS", "1200")),
+        # Oikos tool output storage
+        oikos_tool_output_max_chars=int(os.getenv("OIKOS_TOOL_OUTPUT_MAX_CHARS", "8000")),
+        oikos_tool_output_preview_chars=int(os.getenv("OIKOS_TOOL_OUTPUT_PREVIEW_CHARS", "1200")),
         # E2E test database isolation
         e2e_use_postgres_schemas=_truthy(os.getenv("E2E_USE_POSTGRES_SCHEMAS")),
-        e2e_worker_id=os.getenv("E2E_WORKER_ID"),
+        e2e_commis_id=os.getenv("E2E_COMMIS_ID"),
     )
 
 
@@ -340,11 +340,11 @@ def _validate_required(settings: Settings) -> None:  # noqa: D401 – helper
         )
 
     # SAFETY GATE: E2E Postgres schema isolation relies on request-controlled routing
-    # (via the X-Test-Worker header). It must never be enabled outside tests.
+    # (via the X-Test-Commis header). It must never be enabled outside tests.
     if settings.e2e_use_postgres_schemas and not settings.testing:
         raise RuntimeError(
             "CRITICAL: E2E_USE_POSTGRES_SCHEMAS=1 but TESTING is not enabled. "
-            "Per-worker schema routing is TEST-ONLY infrastructure; unset E2E_USE_POSTGRES_SCHEMAS or set TESTING=1."
+            "Per-commis schema routing is TEST-ONLY infrastructure; unset E2E_USE_POSTGRES_SCHEMAS or set TESTING=1."
         )
 
     if settings.testing:  # Unit-/integration tests run with stubbed LLMs

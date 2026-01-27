@@ -16,7 +16,6 @@ interface User {
   last_login?: string | null;
   prefs?: Record<string, unknown> | null;
   role?: string; // ADMIN or USER
-  is_demo?: boolean;
 }
 
 interface AuthContextType {

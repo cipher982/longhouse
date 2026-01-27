@@ -8,8 +8,11 @@
 #     --from-literal=password=$(openssl rand -base64 32)
 #   kubectl apply -f k8s/ci-postgres.yaml
 #
-# Connection from runners:
+# Connection from runners (internal):
 #   postgresql://ci_zerg:PASSWORD@ci-postgres.ci.svc.cluster.local:5432/ci_zerg
+#
+# Connection from laptop (via Tailscale):
+#   postgresql://ci_zerg:PASSWORD@cube:30432/ci_zerg
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -114,4 +117,5 @@ spec:
   ports:
     - port: 5432
       targetPort: 5432
-  type: ClusterIP
+      nodePort: 30432
+  type: NodePort

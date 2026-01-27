@@ -25,7 +25,7 @@ export async function createAgentViaUI(page: Page): Promise<string> {
   // Capture API response to get the ACTUAL created agent ID
   const [response] = await Promise.all([
     page.waitForResponse(
-      (r) => r.url().includes('/api/agents') && r.request().method() === 'POST' && r.status() === 201,
+      (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
       { timeout: 10000 }
     ),
     createBtn.click(),
@@ -50,7 +50,7 @@ export async function createAgentViaUI(page: Page): Promise<string> {
  * Create an agent via API (faster, for tests that don't need UI verification)
  */
 export async function createAgentViaAPI(request: APIRequestContext): Promise<string> {
-  const response = await request.post('/api/agents', {
+  const response = await request.post('/api/fiches', {
     data: {
       system_instructions: 'You are a helpful assistant.',
       task_instructions: 'Answer user questions clearly and briefly.',
@@ -166,20 +166,20 @@ export async function waitForAssistantMessage(page: Page): Promise<void> {
  * Reset database to clean state (call in beforeEach).
  * STRICT: Throws on failure to fail fast and avoid dirty state propagation.
  * Includes aggressive retry logic to handle lock contention under high concurrency.
- * Adds initial stagger delay to prevent all workers from hitting reset simultaneously.
+ * Adds initial stagger delay to prevent all commiss from hitting reset simultaneously.
  */
 export async function resetDatabase(request: APIRequestContext): Promise<void> {
   const maxRetries = 5;
   const baseDelay = 200;
   const maxJitter = 300; // Wider spread to reduce concurrent retries
 
-  // Add initial stagger delay (0-500ms) to spread out reset calls across workers
+  // Add initial stagger delay (0-500ms) to spread out reset calls across commiss
   // This prevents all beforeEach hooks from hitting the backend simultaneously
   await new Promise(r => setTimeout(r, Math.random() * 500));
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const response = await request.post('/admin/reset-database', {
+      const response = await request.post('/api/admin/reset-database', {
         data: { reset_type: 'clear_data' },
         timeout: 15000, // Explicit 15s timeout (backend has 30s statement_timeout)
       });

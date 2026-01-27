@@ -13,13 +13,13 @@ test('The Forum renders and responds to live events', async ({ page }) => {
   await expect(page.locator('.forum-task-empty')).toBeVisible({ timeout: 15000 });
   await expect(page.locator('.forum-panel-header .ui-badge', { hasText: 'Live' })).toBeVisible();
 
-  await page.waitForFunction(() => Boolean((window as any).__jarvis?.eventBus));
+  await page.waitForFunction(() => Boolean((window as any).__oikos?.eventBus));
   await page.waitForFunction(
-    () => (window as any).__jarvis?.eventBus?.listenerCount?.('supervisor:started') > 0,
+    () => (window as any).__oikos?.eventBus?.listenerCount?.('oikos:started') > 0,
   );
 
   await page.evaluate(() => {
-    (window as any).__jarvis.eventBus.emit('supervisor:started', {
+    (window as any).__oikos.eventBus.emit('oikos:started', {
       runId: 101,
       task: 'Ship logs',
       timestamp: Date.now(),

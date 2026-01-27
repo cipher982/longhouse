@@ -5,11 +5,11 @@ import glob
 import re
 
 replacements = [
-    (r"apps/jarvis/apps/web/lib/", "src/jarvis/lib/"),
-    (r"apps/jarvis/apps/web/", "src/jarvis/"),
-    (r"apps/jarvis/packages/core/", "src/jarvis/core/"),
-    (r"apps/jarvis/packages/data/local/", "src/jarvis/data/"),
-    (r"apps/jarvis/", "apps/zerg/frontend-web/src/jarvis/"),
+    (r"apps/oikos/apps/web/lib/", "src/oikos/lib/"),
+    (r"apps/oikos/apps/web/", "src/oikos/"),
+    (r"apps/oikos/packages/core/", "src/oikos/core/"),
+    (r"apps/oikos/packages/data/local/", "src/oikos/data/"),
+    (r"apps/oikos/", "apps/zerg/frontend-web/src/oikos/"),
     (r"zerg-backend", "backend"),
     (r"zerg-frontend", "frontend-web"),
 ]

@@ -2,12 +2,12 @@
  * Canvas Tab Switch Persistence Test
  *
  * This test reproduces and validates the fix for the critical bug where:
- * 1. User drags agent to canvas → works ✓
- * 2. User connects trigger to agent → works ✓
+ * 1. User drags fiche to canvas → works ✓
+ * 2. User connects trigger to fiche → works ✓
  * 3. User switches to dashboard and back to canvas → NODES DISAPPEAR ✗
  *
  * The bug occurs because CurrentWorkflowLoaded clears all nodes and doesn't
- * properly restore agent nodes that weren't saved to the workflow.
+ * properly restore fiche nodes that weren't saved to the workflow.
  */
 
 import { test, expect } from './fixtures';
@@ -16,8 +16,8 @@ import { test, expect } from './fixtures';
 test.skip();
 import {
   navigateToCanvas,
-  createAgentToolWorkflow,
-  dragAgentToCanvas,
+  createFicheToolWorkflow,
+  dragFicheToCanvas,
   getCanvasNodes,
   connectNodes,
   executeWorkflow,
@@ -33,24 +33,24 @@ test.describe('Canvas Tab Switch Persistence', () => {
     await expect(page.locator('#header-title')).toBeVisible();
   });
 
-  test('agent nodes and connections persist across tab switches', async ({ page, request }, testInfo) => {
-    const workerId = String(testInfo.parallelIndex);
+  test('fiche nodes and connections persist across tab switches', async ({ page, request }, testInfo) => {
+    const commisId = String(testInfo.parallelIndex);
 
-    // Step 1: Create an agent via API
-    console.log('📝 Step 1: Creating agent via API...');
-    const agentResponse = await request.post('/api/agents', {
+    // Step 1: Create an fiche via API
+    console.log('📝 Step 1: Creating fiche via API...');
+    const ficheResponse = await request.post('/api/fiches', {
       data: {
-        name: `Persistence Test Agent ${workerId}`,
-        system_instructions: 'You are a test agent for persistence testing',
+        name: `Persistence Test Fiche ${commisId}`,
+        system_instructions: 'You are a test fiche for persistence testing',
         task_instructions: 'Execute tasks as needed for testing',
         model: 'gpt-mock',
       }
     });
 
-    expect(agentResponse.status()).toBe(201);
-    const createdAgent = await agentResponse.json();
-    const agentId = createdAgent.id;
-    console.log(`✅ Created agent with ID: ${agentId}`);
+    expect(ficheResponse.status()).toBe(201);
+    const createdFiche = await ficheResponse.json();
+    const ficheId = createdFiche.id;
+    console.log(`✅ Created fiche with ID: ${ficheId}`);
 
     // Step 2: Navigate to application and go to canvas
     console.log('📝 Step 2: Navigating to canvas...');
@@ -65,21 +65,21 @@ test.describe('Canvas Tab Switch Persistence', () => {
     await expect(page.locator('#canvas-container')).toBeVisible();
     console.log('✅ Canvas loaded');
 
-    // Step 3: Verify agent shelf and drag agent to canvas
-    console.log('📝 Step 3: Looking for agent in shelf...');
-    const agentShelf = page.locator('#agent-shelf');
-    await expect(agentShelf).toBeVisible();
+    // Step 3: Verify fiche shelf and drag fiche to canvas
+    console.log('📝 Step 3: Looking for fiche in shelf...');
+    const ficheShelf = page.locator('#fiche-shelf');
+    await expect(ficheShelf).toBeVisible();
 
-    // Look for the agent by name
-    const agentPill = agentShelf.locator(`text=${createdAgent.name}`);
-    await expect(agentPill).toBeVisible();
-    console.log('✅ Found agent in shelf');
+    // Look for the fiche by name
+    const fichePill = ficheShelf.locator(`text=${createdFiche.name}`);
+    await expect(fichePill).toBeVisible();
+    console.log('✅ Found fiche in shelf');
 
-    // Try simple drag and drop from agent shelf to canvas
+    // Try simple drag and drop from fiche shelf to canvas
     const canvas = page.locator('#node-canvas');
-    await agentPill.dragTo(canvas, { targetPosition: { x: 400, y: 200 } });
+    await fichePill.dragTo(canvas, { targetPosition: { x: 400, y: 200 } });
     await page.waitForTimeout(1000);
-    console.log('✅ Dragged agent to canvas');
+    console.log('✅ Dragged fiche to canvas');
 
     // For now, focus on testing node persistence - connection testing will be added later
     console.log('📝 Step 3.5: Node successfully added to canvas');
@@ -129,16 +129,16 @@ test.describe('Canvas Tab Switch Persistence', () => {
 
     console.log(`📊 Canvas content check: ${canvasContent}`);
 
-    // Also check agent shelf state - if the bug exists, agent should be back to enabled state
-    const agentPillAfterSwitch = agentShelf.locator(`text=${createdAgent.name}`);
-    const isDisabled = await agentPillAfterSwitch.getAttribute('class');
-    console.log(`📊 Agent pill class after switch: ${isDisabled}`);
+    // Also check fiche shelf state - if the bug exists, fiche should be back to enabled state
+    const fichePillAfterSwitch = ficheShelf.locator(`text=${createdFiche.name}`);
+    const isDisabled = await fichePillAfterSwitch.getAttribute('class');
+    console.log(`📊 Fiche pill class after switch: ${isDisabled}`);
 
-    // Verify persistence: node should exist and agent should be disabled
+    // Verify persistence: node should exist and fiche should be disabled
     if (canvasContent === 'has-content' && isDisabled && isDisabled.includes('disabled')) {
-      console.log('✅ NODE PERSISTED - Node exists and agent is disabled in shelf');
+      console.log('✅ NODE PERSISTED - Node exists and fiche is disabled in shelf');
     } else {
-      console.log(`❌ BUG REPRODUCED - Canvas: ${canvasContent}, Agent disabled: ${isDisabled?.includes('disabled')}`);
+      console.log(`❌ BUG REPRODUCED - Canvas: ${canvasContent}, Fiche disabled: ${isDisabled?.includes('disabled')}`);
       throw new Error('Canvas persistence bug reproduced: Node disappeared after tab switch');
     }
   });
@@ -151,7 +151,7 @@ test.describe('Canvas Tab Switch Persistence', () => {
     await navigateToCanvas(page);
 
     // Create a simple workflow
-    await createAgentToolWorkflow(page, 'Multi Switch Test Agent');
+    await createFicheToolWorkflow(page, 'Multi Switch Test Fiche');
 
     const initialNodes = await getCanvasNodes(page);
     const initialConnections = await page.locator('.connection-line').count();
@@ -188,7 +188,7 @@ test.describe('Canvas Tab Switch Persistence', () => {
     await navigateToCanvas(page);
 
     // Create workflow with nodes at specific positions
-    await createAgentToolWorkflow(page, 'Position Test Agent');
+    await createFicheToolWorkflow(page, 'Position Test Fiche');
 
     // Pan canvas to specific position
     const canvas = page.locator('#node-canvas');

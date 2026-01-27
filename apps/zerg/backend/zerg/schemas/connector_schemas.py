@@ -1,6 +1,6 @@
-"""Pydantic schemas for agent connector credentials API.
+"""Pydantic schemas for fiche connector credentials API.
 
-These schemas define the request/response models for the agent connectors
+These schemas define the request/response models for the fiche connectors
 API endpoints used to configure credentials for built-in connector tools.
 """
 
@@ -35,7 +35,7 @@ class CredentialFieldSchema(BaseModel):
 
 
 class ConnectorStatusResponse(BaseModel):
-    """Status of a connector type for an agent.
+    """Status of a connector type for an fiche.
 
     Used in the list endpoint to show all available connectors
     and their configuration status.
@@ -59,7 +59,7 @@ class AccountConnectorStatusResponse(BaseModel):
     """Status of a connector type at account level.
 
     Similar to ConnectorStatusResponse but for account-level credentials
-    that are shared across all agents owned by the user.
+    that are shared across all fiches owned by the user.
     """
 
     type: str = Field(..., description="Connector type identifier (e.g., 'slack', 'github')")

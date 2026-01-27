@@ -15,7 +15,7 @@ echo "  Config: playwright.timeline.config.js"
 echo "  Output: $OUT_FILE"
 echo ""
 
-# Forward any args to Playwright (e.g. tests/foo.spec.ts, --grep, --workers=8, etc.)
+# Forward any args to Playwright (e.g. tests/foo.spec.ts, --grep, --commis=8, etc.)
 set +e
 bunx playwright test --config playwright.timeline.config.js "$@"
 EXIT_CODE=$?

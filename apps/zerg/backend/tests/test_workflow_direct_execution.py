@@ -12,7 +12,7 @@ from zerg.services.workflow_engine import workflow_engine
 
 
 @pytest.mark.asyncio
-async def test_direct_workflow_execution(db, test_user, sample_agent):
+async def test_direct_workflow_execution(db, test_user, sample_fiche):
     """Test workflow execution directly without HTTP layer."""
 
     # Mock tool for testing
@@ -24,7 +24,7 @@ async def test_direct_workflow_execution(db, test_user, sample_agent):
         mock_resolver_instance.get_tool = lambda name: mock_tool if name == "test_tool" else None
         mock_resolver.return_value = mock_resolver_instance
 
-        # Mock AgentRunner
+        # Mock FicheRunner
         async def mock_run_thread(db, thread):
             mock_msg = type("MockMessage", (), {})()
             mock_msg.id = 1
@@ -34,10 +34,10 @@ async def test_direct_workflow_execution(db, test_user, sample_agent):
             mock_msg.thread_id = thread.id
             return [mock_msg]
 
-        with patch("zerg.services.node_executors.AgentRunner") as mock_agent_runner:
+        with patch("zerg.services.node_executors.FicheRunner") as mock_fiche_runner:
             mock_runner_instance = type("MockRunner", (), {})()
             mock_runner_instance.run_thread = mock_run_thread
-            mock_agent_runner.return_value = mock_runner_instance
+            mock_fiche_runner.return_value = mock_runner_instance
 
             # Create workflow
             from zerg.models.models import Workflow
@@ -59,15 +59,15 @@ async def test_direct_workflow_execution(db, test_user, sample_agent):
                         "config": {"tool_name": "test_tool", "static_params": {"input": "test_data"}},
                     },
                     {
-                        "id": "agent-1",
-                        "type": "agent",
+                        "id": "fiche-1",
+                        "type": "fiche",
                         "position": {"x": 350, "y": 100},
-                        "config": {"agent_id": sample_agent.id, "message": "Process: ${tool-1.value.result}"},
+                        "config": {"fiche_id": sample_fiche.id, "message": "Process: ${tool-1.value.result}"},
                     },
                 ],
                 "edges": [
                     {"from_node_id": "trigger-1", "to_node_id": "tool-1"},
-                    {"from_node_id": "tool-1", "to_node_id": "agent-1"},
+                    {"from_node_id": "tool-1", "to_node_id": "fiche-1"},
                 ],
             }
 

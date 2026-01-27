@@ -1,8 +1,8 @@
 export type DropPayload =
-  | { type: "agent"; agentId: number; label: string }
+  | { type: "fiche"; ficheId: number; label: string }
   | { type: "tool"; toolType: string; label: string };
 
-export type DragPreviewKind = "agent" | "tool";
+export type DragPreviewKind = "fiche" | "tool";
 
 export interface DragPreviewData {
   kind: DragPreviewKind;
@@ -10,25 +10,25 @@ export interface DragPreviewData {
   icon: string;
   baseSize: { width: number; height: number };
   pointerRatio: { x: number; y: number };
-  agentId?: number;
+  ficheId?: number;
   toolType?: string;
 }
 
 export const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
 export function toDropPayload(
-  raw: { type: "agent" | "tool"; id?: string; name: string; tool_type?: string }
+  raw: { type: "fiche" | "tool"; id?: string; name: string; tool_type?: string }
 ): DropPayload | null {
   if (!raw?.type || !raw.name) {
     return null;
   }
 
-  if (raw.type === "agent") {
-    const agentId = parseInt(raw.id ?? "", 10);
-    if (!agentId) {
+  if (raw.type === "fiche") {
+    const ficheId = parseInt(raw.id ?? "", 10);
+    if (!ficheId) {
       return null;
     }
-    return { type: "agent", agentId, label: raw.name };
+    return { type: "fiche", ficheId, label: raw.name };
   }
 
   if (raw.type === "tool") {

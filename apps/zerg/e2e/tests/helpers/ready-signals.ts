@@ -28,14 +28,14 @@
  * For interactive readiness (most tests):
  *   await waitForPageReady(page);
  *
- * For chat-specific (checks window.__jarvis.ready.chatReady):
+ * For chat-specific (checks window.__oikos.ready.chatReady):
  *   await waitForReadyFlag(page, 'chatReady');
  *
  * For marketing screenshots:
  *   await waitForScreenshotReady(page);
  *
- * For async operations (supervisor completion, etc.):
- *   await waitForEvent(page, 'supervisor:complete', { timeout: 30000 });
+ * For async operations (oikos completion, etc.):
+ *   await waitForEvent(page, 'oikos:complete', { timeout: 30000 });
  *
  * Note: Prefer sticky flags/attributes over events for "ready" signals to avoid race
  * conditions where the event fires before the test listener is attached.
@@ -95,15 +95,15 @@ export async function waitForPageReady(
 }
 
 /**
- * Wait for a sticky ready flag on window.__jarvis.ready.
+ * Wait for a sticky ready flag on window.__oikos.ready.
  *
  * This is the PREFERRED method for waiting on "ready" signals because it avoids
  * the race condition where an event fires before the test listener is attached.
- * The app sets flags like `window.__jarvis.ready.chatReady = true` which persist
+ * The app sets flags like `window.__oikos.ready.chatReady = true` which persist
  * until the component unmounts.
  *
  * Available flags:
- * - 'chatReady' - Jarvis chat UI is mounted and interactive
+ * - 'chatReady' - Oikos chat UI is mounted and interactive
  *
  * @example
  * await waitForReadyFlag(page, 'chatReady');
@@ -119,7 +119,7 @@ export async function waitForReadyFlag(
   await page.waitForFunction(
     ({ flag }) => {
       const w = window as any;
-      return w.__jarvis?.ready?.[flag] === true;
+      return w.__oikos?.ready?.[flag] === true;
     },
     { flag: flagName },
     { timeout }
@@ -127,9 +127,9 @@ export async function waitForReadyFlag(
 }
 
 /**
- * Wait for the EventBus to become available (window.__jarvis.eventBus).
+ * Wait for the EventBus to become available (window.__oikos.eventBus).
  *
- * This is useful after navigation to chat pages to ensure the Jarvis app is mounted
+ * This is useful after navigation to chat pages to ensure the Oikos app is mounted
  * before attempting to use event-based waiting.
  *
  * @example
@@ -146,7 +146,7 @@ export async function waitForEventBusAvailable(
   await page.waitForFunction(
     () => {
       const w = window as any;
-      const bus = w.__jarvis?.eventBus;
+      const bus = w.__oikos?.eventBus;
       // Check that eventBus exists AND has the required methods
       return bus && typeof bus.on === 'function' && typeof bus.emit === 'function';
     },
@@ -158,7 +158,7 @@ export async function waitForEventBusAvailable(
 /**
  * Wait for a specific EventBus event to be emitted.
  *
- * This leverages window.__jarvis.eventBus (exposed in DEV mode) to wait for
+ * This leverages window.__oikos.eventBus (exposed in DEV mode) to wait for
  * application events instead of using arbitrary timeouts.
  *
  * The function will poll for the eventBus to become available (it may not be
@@ -168,8 +168,8 @@ export async function waitForEventBusAvailable(
  * // Wait for chat to be ready
  * await waitForEvent(page, 'test:chat_ready');
  *
- * // Wait for supervisor to complete
- * await waitForEvent(page, 'supervisor:complete', { timeout: 30000 });
+ * // Wait for oikos to complete
+ * await waitForEvent(page, 'oikos:complete', { timeout: 30000 });
  */
 export async function waitForEvent<T = unknown>(
   page: Page,
@@ -187,7 +187,7 @@ export async function waitForEvent<T = unknown>(
         const checkEventBus = () => {
           const w = window as any;
 
-          if (w.__jarvis?.eventBus) {
+          if (w.__oikos?.eventBus) {
             // eventBus is available, subscribe to event
             const remainingTime = timeout - (Date.now() - startTime);
             if (remainingTime <= 0) {
@@ -196,7 +196,7 @@ export async function waitForEvent<T = unknown>(
             }
 
             let timeoutId: number | undefined;
-            const unsubscribe = w.__jarvis.eventBus.on(eventName, (data: T) => {
+            const unsubscribe = w.__oikos.eventBus.on(eventName, (data: T) => {
               if (timeoutId !== undefined) {
                 clearTimeout(timeoutId);
               }
@@ -229,11 +229,11 @@ export async function waitForEvent<T = unknown>(
  * Emit a test event via EventBus to trigger component reactions.
  *
  * Use this to test UI responses to events without needing the actual backend
- * to produce them. Only works in DEV mode where window.__jarvis.eventBus is exposed.
+ * to produce them. Only works in DEV mode where window.__oikos.eventBus is exposed.
  *
  * @example
- * // Simulate supervisor completing
- * await emitTestEvent(page, 'supervisor:complete', {
+ * // Simulate oikos completing
+ * await emitTestEvent(page, 'oikos:complete', {
  *   runId: 1,
  *   result: 'Test complete',
  *   status: 'success',
@@ -249,11 +249,11 @@ export async function emitTestEvent<T = unknown>(
     ({ eventName, data }) => {
       const w = window as any;
 
-      if (!w.__jarvis?.eventBus) {
+      if (!w.__oikos?.eventBus) {
         throw new Error('EventBus not available. Ensure app is running in DEV mode.');
       }
 
-      w.__jarvis.eventBus.emit(eventName, data);
+      w.__oikos.eventBus.emit(eventName, data);
     },
     { eventName, data }
   );

@@ -41,7 +41,7 @@ def send_discord_webhook(
         content: Message text content (max 2000 characters). Optional if embeds are provided.
         webhook_url: Discord webhook URL in format:
             https://discord.com/api/webhooks/{webhook.id}/{webhook.token}
-            Optional - uses configured credentials from Agent Settings if not provided.
+            Optional - uses configured credentials from Fiche Settings if not provided.
         username: Override the webhook's default username (optional)
         avatar_url: Override the webhook's default avatar (optional)
         embeds: List of embed objects for rich content (max 10 embeds). See below for structure.
@@ -76,7 +76,7 @@ def send_discord_webhook(
         >>> # Simple text message
         >>> send_discord_webhook(
         ...     webhook_url="https://discord.com/api/webhooks/123/abc",
-        ...     content="Agent task completed successfully!"
+        ...     content="Fiche task completed successfully!"
         ... )
         {"success": True, "status_code": 204}
 
@@ -84,7 +84,7 @@ def send_discord_webhook(
         >>> send_discord_webhook(
         ...     webhook_url="https://discord.com/api/webhooks/123/abc",
         ...     content="Status Update",
-        ...     username="Zerg Agent",
+        ...     username="Zerg Fiche",
         ...     embeds=[{
         ...         "title": "Task Complete",
         ...         "description": "All operations finished",
@@ -188,7 +188,7 @@ def send_discord_webhook(
                 json=payload,
                 headers={
                     "Content-Type": "application/json",
-                    "User-Agent": "Zerg-Agent/1.0",
+                    "User-Fiche": "Zerg-Fiche/1.0",
                 },
                 timeout=30.0,
             )
@@ -273,6 +273,6 @@ TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
         func=send_discord_webhook,
         name="send_discord_webhook",
-        description="Send a message to Discord via webhook. Supports text content, custom usernames/avatars, and rich embeds with formatting, images, and fields. Uses webhook URL from Agent Settings -> Connectors if not explicitly provided.",
+        description="Send a message to Discord via webhook. Supports text content, custom usernames/avatars, and rich embeds with formatting, images, and fields. Uses webhook URL from Fiche Settings -> Connectors if not explicitly provided.",
     ),
 ]

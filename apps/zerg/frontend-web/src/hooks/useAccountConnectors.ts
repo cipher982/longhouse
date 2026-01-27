@@ -2,7 +2,7 @@
  * React Query hooks for account-level connector credentials API.
  *
  * These hooks manage account-level integrations that are shared across
- * all agents owned by the user.
+ * all fiches owned by the user.
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";

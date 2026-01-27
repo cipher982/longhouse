@@ -13,14 +13,14 @@ regression will be caught immediately.
 from __future__ import annotations
 
 
-def test_get_unprocessed_messages_returns_pending(db_session, sample_agent):
+def test_get_unprocessed_messages_returns_pending(db_session, sample_fiche):
     """Create a thread → insert an *unprocessed* message → expect it back."""
 
     from zerg.crud import crud
     from zerg.services.thread_service import ThreadService
 
     # 1. Create fresh thread (also inserts system message)
-    thread = ThreadService.create_thread_with_system_message(db_session, sample_agent, title="bug-guard")
+    thread = ThreadService.create_thread_with_system_message(db_session, sample_fiche, title="bug-guard")
 
     # 2. Insert a *user* message marked as *unprocessed*
     inserted = crud.create_thread_message(

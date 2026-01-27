@@ -5,17 +5,17 @@ call stack. Unlike the old pattern where contextvars determined event *type*,
 here the contextvar only *transports* an emitter whose identity is already fixed.
 
 Usage:
-    # At entry point (worker_runner.py, supervisor_service.py):
-    from zerg.events import WorkerEmitter, set_emitter, reset_emitter
+    # At entry point (commis_runner.py, oikos_service.py):
+    from zerg.events import CommisEmitter, set_emitter, reset_emitter
 
-    emitter = WorkerEmitter(worker_id=..., ...)
+    emitter = CommisEmitter(commis_id=..., ...)
     token = set_emitter(emitter)
     try:
-        await agent.run()
+        await runner.run()
     finally:
         reset_emitter(token)
 
-    # In tool execution (supervisor_react_engine.py):
+    # In tool execution (oikos_react_engine.py):
     from zerg.events import get_emitter
 
     emitter = get_emitter()
@@ -24,8 +24,8 @@ Usage:
 
 Why This Is Safe:
     Even if asyncio.create_task() copies the contextvar, the emitter object's
-    identity (worker vs supervisor) is fixed at construction. A WorkerEmitter
-    will always emit worker_tool_* events.
+    identity (commis vs oikos) is fixed at construction. A CommisEmitter
+    will always emit commis_tool_* events.
 """
 
 from __future__ import annotations
@@ -37,11 +37,11 @@ from typing import Optional
 from typing import Union
 
 if TYPE_CHECKING:
+    from zerg.events.commis_emitter import CommisEmitter
     from zerg.events.null_emitter import NullEmitter
-    from zerg.events.supervisor_emitter import SupervisorEmitter
-    from zerg.events.worker_emitter import WorkerEmitter
+    from zerg.events.oikos_emitter import OikosEmitter
 
-    EmitterType = Union[WorkerEmitter, SupervisorEmitter, NullEmitter]
+    EmitterType = Union[CommisEmitter, OikosEmitter, NullEmitter]
 
 # Single contextvar for emitter transport
 # The emitter's identity is baked in at construction time
@@ -52,7 +52,7 @@ def get_emitter() -> Optional["EmitterType"]:
     """Get the current emitter, if any.
 
     Returns:
-        The current emitter (WorkerEmitter, SupervisorEmitter, or NullEmitter),
+        The current emitter (CommisEmitter, OikosEmitter, or NullEmitter),
         or None if not in an emitter context.
 
     Usage:
@@ -69,16 +69,16 @@ def set_emitter(emitter: "EmitterType") -> Token[Optional["EmitterType"]]:
     Must be paired with reset_emitter() in a finally block.
 
     Args:
-        emitter: The emitter to set (WorkerEmitter, SupervisorEmitter, or NullEmitter)
+        emitter: The emitter to set (CommisEmitter, OikosEmitter, or NullEmitter)
 
     Returns:
         Token for resetting via reset_emitter()
 
     Usage:
-        emitter = WorkerEmitter(...)
+        emitter = CommisEmitter(...)
         token = set_emitter(emitter)
         try:
-            await agent.run()
+            await runner.run()
         finally:
             reset_emitter(token)
     """

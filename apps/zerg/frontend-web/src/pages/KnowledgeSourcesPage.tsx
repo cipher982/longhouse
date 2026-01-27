@@ -101,7 +101,7 @@ export default function KnowledgeSourcesPage() {
     <PageShell size="normal" className="knowledge-sources-page-container">
       <SectionHeader
         title="Knowledge Sources"
-        description="Connect knowledge sources to give your agents context about your codebase, documentation, and more."
+        description="Connect knowledge sources to give your fiches context about your codebase, documentation, and more."
         actions={
           <div className="knowledge-sources-actions">
             <Button variant="secondary" onClick={() => setIsContextModalOpen(true)} data-testid="add-context-btn">

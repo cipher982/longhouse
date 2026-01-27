@@ -24,7 +24,7 @@ test.describe('Infrastructure - Core', () => {
     await page.goto('/');
 
     // Wait for the app to render with create button visible
-    await expect(page.locator('[data-testid="create-agent-btn"]')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[data-testid="create-fiche-btn"]')).toBeVisible({ timeout: 15000 });
 
     // Verify page has a title
     const title = await page.title();
@@ -32,7 +32,7 @@ test.describe('Infrastructure - Core', () => {
   });
 
   test('backend API returns valid response', async ({ request }) => {
-    const response = await request.get('/api/agents');
+    const response = await request.get('/api/fiches');
 
     // Should return 200 (or 401 if auth required), not 500
     expect([200, 401]).toContain(response.status());

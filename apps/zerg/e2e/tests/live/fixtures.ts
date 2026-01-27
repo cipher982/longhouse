@@ -171,7 +171,7 @@ export const test = base.extend<LiveFixtures>({
 
 test.beforeEach(async ({ request }) => {
   try {
-    await request.delete('/api/jarvis/history');
+    await request.delete('/api/oikos/history');
   } catch {
     // Best-effort cleanup only
   }

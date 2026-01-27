@@ -5,7 +5,7 @@ Zerg agent runs by querying traces across all tables (agent_runs, worker_jobs,
 llm_audit_log) with a single trace_id.
 
 Workflow:
-1. User copies trace_id from Jarvis chat UI footer
+1. User copies trace_id from Oikos chat UI footer
 2. User asks AI: "debug trace abc-123"
 3. AI calls this MCP tool → gets full context
 4. AI explains what happened

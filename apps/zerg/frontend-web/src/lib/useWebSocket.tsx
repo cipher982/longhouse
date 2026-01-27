@@ -136,10 +136,10 @@ export function useWebSocket(
     // Cookies are automatically sent on WebSocket connections to same-origin
     // No need to pass token as query param anymore
 
-    // Add test worker ID for E2E testing
-    const workerId = (window as typeof window & { __TEST_WORKER_ID__?: string }).__TEST_WORKER_ID__;
-    if (workerId !== undefined) {
-      url.searchParams.set("worker", String(workerId));
+    // Add test commis ID for E2E testing
+    const commisId = (window as typeof window & { __TEST_COMMIS_ID__?: string }).__TEST_COMMIS_ID__;
+    if (commisId !== undefined) {
+      url.searchParams.set("commis", String(commisId));
     }
 
     return url.toString();
@@ -379,9 +379,9 @@ export function useWebSocket(
 
   // Expose sendMessage for E2E testing of queue behavior
   // This allows tests to directly call sendMessage to test queue bounds
-  // Only active when __TEST_WORKER_ID__ is set by Playwright fixtures
+  // Only active when __TEST_COMMIS_ID__ is set by Playwright fixtures
   useEffect(() => {
-    if (typeof window !== 'undefined' && (window as any).__TEST_WORKER_ID__ !== undefined) {
+    if (typeof window !== 'undefined' && (window as any).__TEST_COMMIS_ID__ !== undefined) {
       (window as any).__testSendMessage = sendMessage;
     }
     // Cleanup when component unmounts

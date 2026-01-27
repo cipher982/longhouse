@@ -23,7 +23,7 @@ This document defines the new standardized output structure for all workflow nod
 
 ```json
 {
-  "agent_id": 123,
+  "fiche_id": 123,
   "thread_id": 456,
   "messages_created": 3,
   "status": "completed"
@@ -32,7 +32,7 @@ This document defines the new standardized output structure for all workflow nod
 
 ### User Experience Issues
 
-1. **Confusing Access Patterns:** `${tool.result.actual}` vs `${agent.messages_created}`
+1. **Confusing Access Patterns:** `${tool.result.actual}` vs `${fiche.messages_created}`
 2. **Implementation Leakage:** Users must understand internal wrapping structure
 3. **Inconsistent Metadata:** Different nodes expose different metadata fields
 4. **Poor Discoverability:** No standard way to access "the main result"
@@ -45,7 +45,7 @@ This document defines the new standardized output structure for all workflow nod
 {
   "value": <primary_result_data>,
   "meta": {
-    "node_type": "tool|agent|trigger|conditional",
+    "node_type": "tool|fiche|trigger|conditional",
     "status": "completed|failed|running",
     "execution_time_ms": 1250,
     "node_specific_field": "...",
@@ -107,7 +107,7 @@ This document defines the new standardized output structure for all workflow nod
 
 ```json
 {
-  "agent_id": 123,
+  "fiche_id": 123,
   "thread_id": 456,
   "messages_created": 3,
   "status": "completed"
@@ -124,11 +124,11 @@ This document defines the new standardized output structure for all workflow nod
     "thread_id": 456
   },
   "meta": {
-    "node_type": "agent",
+    "node_type": "fiche",
     "status": "completed",
     "execution_time_ms": 5670,
-    "agent_id": 123,
-    "agent_name": "Data Analyst",
+    "fiche_id": 123,
+    "fiche_name": "Data Analyst",
     "model_used": "gpt-4",
     "total_tokens": 1250,
     "total_cost_usd": 0.025
@@ -138,10 +138,10 @@ This document defines the new standardized output structure for all workflow nod
 
 **Variable Access:**
 
-- `${agent-1.result}` → `{"messages_created": 3, "final_response": "...", "thread_id": 456}`
-- `${agent-1.result.messages_created}` → `3`
-- `${agent-1.meta.agent_name}` → `"Data Analyst"`
-- `${agent-1.meta.total_tokens}` → `1250`
+- `${fiche-1.result}` → `{"messages_created": 3, "final_response": "...", "thread_id": 456}`
+- `${fiche-1.result.messages_created}` → `3`
+- `${fiche-1.meta.fiche_name}` → `"Data Analyst"`
+- `${fiche-1.meta.total_tokens}` → `1250`
 
 ### ConditionalNodeExecutor
 
@@ -222,7 +222,7 @@ This document defines the new standardized output structure for all workflow nod
 ```json
 {
   "meta": {
-    "node_type": "tool|agent|trigger|conditional",
+    "node_type": "tool|fiche|trigger|conditional",
     "status": "completed|failed|running",
     "execution_time_ms": 1250,
     "started_at": "2024-01-15T10:30:00Z",
@@ -260,13 +260,13 @@ This document defines the new standardized output structure for all workflow nod
 }
 ```
 
-**Agent Nodes:**
+**Fiche Nodes:**
 
 ```json
 {
   "meta": {
-    "agent_id": 123,
-    "agent_name": "Data Analyst",
+    "fiche_id": 123,
+    "fiche_name": "Data Analyst",
     "model_used": "gpt-4",
     "total_tokens": 1250,
     "total_cost_usd": 0.025,

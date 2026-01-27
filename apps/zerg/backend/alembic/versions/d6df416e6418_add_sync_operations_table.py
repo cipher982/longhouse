@@ -5,7 +5,7 @@ Revises: 51db4599fd92
 Create Date: 2025-12-11 18:07:21.814620
 
 Add sync_operations table for conversation synchronization between
-Jarvis clients and zerg-backend.
+Oikos clients and zerg-backend.
 """
 from typing import Sequence, Union
 

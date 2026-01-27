@@ -10,7 +10,7 @@ test.skip();
  * 1. Tool palette discovery and cataloging
  * 2. Tool drag-and-drop from palette to canvas
  * 3. Node connection handle detection and interaction
- * 4. Connection creation between nodes (agent -> tool, tool -> tool)
+ * 4. Connection creation between nodes (fiche -> tool, tool -> tool)
  * 5. Connection validation and constraint checking
  * 6. Connection deletion and modification
  * 7. Complex workflow topology creation
@@ -21,8 +21,8 @@ test.describe('Tool Palette and Node Connections', () => {
   test('Tool palette discovery and cataloging', async ({ page, request }) => {
     console.log('🚀 Starting tool palette discovery test...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
-    console.log('📊 Worker ID:', workerId);
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
+    console.log('📊 Commis ID:', commisId);
 
     // Navigate to canvas
     await page.goto('/');
@@ -87,25 +87,25 @@ test.describe('Tool Palette and Node Connections', () => {
   test('Tool drag-and-drop from palette to canvas', async ({ page, request }) => {
     console.log('🚀 Starting tool drag-and-drop test...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
-    // First create an agent to work with
-    const agentResponse = await request.post('/api/agents', {
+    // First create an fiche to work with
+    const ficheResponse = await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {
-        name: `Tool Test Agent ${Date.now()}`,
-        system_instructions: 'Agent for tool drag-and-drop testing',
+        name: `Tool Test Fiche ${Date.now()}`,
+        system_instructions: 'Fiche for tool drag-and-drop testing',
         task_instructions: 'Work with dragged tools',
         model: 'gpt-mock',
       }
     });
 
-    expect(agentResponse.status()).toBe(201);
-    const agent = await agentResponse.json();
-    console.log('📊 Created test agent:', agent.id);
+    expect(ficheResponse.status()).toBe(201);
+    const fiche = await ficheResponse.json();
+    console.log('📊 Created test fiche:', fiche.id);
 
     // Navigate to canvas
     await page.goto('/');
@@ -183,24 +183,24 @@ test.describe('Tool Palette and Node Connections', () => {
   test('Node connection handle detection and interaction', async ({ page, request }) => {
     console.log('🚀 Starting node connection test...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
-    // Create test agent for connections
-    const agentResponse = await request.post('/api/agents', {
+    // Create test fiche for connections
+    const ficheResponse = await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {
-        name: `Connection Test Agent ${Date.now()}`,
-        system_instructions: 'Agent for connection testing',
+        name: `Connection Test Fiche ${Date.now()}`,
+        system_instructions: 'Fiche for connection testing',
         task_instructions: 'Test node connections',
         model: 'gpt-mock',
       }
     });
 
-    expect(agentResponse.status()).toBe(201);
-    const agent = await agentResponse.json();
+    expect(ficheResponse.status()).toBe(201);
+    const fiche = await ficheResponse.json();
 
     // Navigate to canvas
     await page.goto('/');
@@ -216,21 +216,21 @@ test.describe('Tool Palette and Node Connections', () => {
     if (existingNodes === 0) {
       console.log('📊 No existing nodes - attempting to create nodes for connection test...');
 
-      // Try to get agent from shelf and add to canvas
-      const agentShelf = page.locator('[data-testid="agent-shelf"]');
-      const shelfVisible = await agentShelf.isVisible();
+      // Try to get fiche from shelf and add to canvas
+      const ficheShelf = page.locator('[data-testid="fiche-shelf"]');
+      const shelfVisible = await ficheShelf.isVisible();
 
       if (shelfVisible) {
-        const agentInShelf = agentShelf.locator(`text=${agent.name}`);
-        const agentAvailable = await agentInShelf.isVisible();
+        const ficheInShelf = ficheShelf.locator(`text=${fiche.name}`);
+        const ficheAvailable = await ficheInShelf.isVisible();
 
-        if (agentAvailable) {
+        if (ficheAvailable) {
           const canvasContainer = page.locator('[data-testid="canvas-container"]');
-          await agentInShelf.dragTo(canvasContainer, {
+          await ficheInShelf.dragTo(canvasContainer, {
             targetPosition: { x: 200, y: 200 }
           });
           await page.waitForTimeout(1000);
-          console.log('📊 Agent node creation attempted');
+          console.log('📊 Fiche node creation attempted');
         }
       }
     }
@@ -312,43 +312,43 @@ test.describe('Tool Palette and Node Connections', () => {
   test('Complex workflow topology creation', async ({ page, request }) => {
     console.log('🚀 Starting complex workflow topology test...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
-    // Test 1: Create multiple agents for complex workflow
-    console.log('📊 Test 1: Creating multiple agents...');
-    const agents = [];
+    // Test 1: Create multiple fiches for complex workflow
+    console.log('📊 Test 1: Creating multiple fiches...');
+    const fiches = [];
 
     for (let i = 0; i < 3; i++) {
-      const agentResponse = await request.post('/api/agents', {
+      const ficheResponse = await request.post('/api/fiches', {
         headers: {
-          'X-Test-Worker': workerId,
+          'X-Test-Commis': commisId,
           'Content-Type': 'application/json',
         },
         data: {
-          name: `Topology Agent ${i+1} ${Date.now()}`,
-          system_instructions: `Agent ${i+1} for topology testing`,
+          name: `Topology Fiche ${i+1} ${Date.now()}`,
+          system_instructions: `Fiche ${i+1} for topology testing`,
           task_instructions: `Handle step ${i+1} of complex workflow`,
           model: 'gpt-mock',
         }
       });
 
-      if (agentResponse.ok()) {
-        const agent = await agentResponse.json();
-        agents.push(agent);
-        console.log(`📊 Created agent ${i+1}:`, agent.id);
+      if (ficheResponse.ok()) {
+        const fiche = await ficheResponse.json();
+        fiches.push(fiche);
+        console.log(`📊 Created fiche ${i+1}:`, fiche.id);
       }
     }
 
-    console.log('📊 Total agents created:', agents.length);
+    console.log('📊 Total fiches created:', fiches.length);
 
     // Test 2: Create complex workflow via API
     console.log('📊 Test 2: Creating complex workflow topology...');
 
-    if (agents.length >= 2) {
+    if (fiches.length >= 2) {
       try {
         const complexWorkflow = {
           name: `Complex Topology Workflow ${Date.now()}`,
-          description: 'Multi-agent workflow with complex connections',
+          description: 'Multi-fiche workflow with complex connections',
           canvas_data: {
             nodes: [
               // Trigger node
@@ -358,11 +358,11 @@ test.describe('Tool Palette and Node Connections', () => {
                 position: { x: 50, y: 200 },
                 config: { trigger: { type: 'manual', config: { enabled: true, params: {}, filters: [] } } }
               },
-              // Agent nodes
-              ...agents.map((agent, index) => ({
-                id: `agent-${index + 1}`,
-                type: 'agent',
-                agent_id: agent.id,
+              // Fiche nodes
+              ...fiches.map((fiche, index) => ({
+                id: `fiche-${index + 1}`,
+                type: 'fiche',
+                fiche_id: fiche.id,
                 position: { x: 200 + (index * 200), y: 150 + (index * 50) }
               })),
               // Tool nodes
@@ -382,20 +382,20 @@ test.describe('Tool Palette and Node Connections', () => {
               }
             ],
             edges: [
-              // Sequential flow: trigger -> agent1 -> agent2 -> agent3
-              { id: 'edge-1', source: 'trigger-1', target: 'agent-1', type: 'default' },
-              ...(agents.length > 1 ? [{ id: 'edge-2', source: 'agent-1', target: 'agent-2', type: 'default' }] : []),
-              ...(agents.length > 2 ? [{ id: 'edge-3', source: 'agent-2', target: 'agent-3', type: 'default' }] : []),
+              // Sequential flow: trigger -> fiche1 -> fiche2 -> fiche3
+              { id: 'edge-1', source: 'trigger-1', target: 'fiche-1', type: 'default' },
+              ...(fiches.length > 1 ? [{ id: 'edge-2', source: 'fiche-1', target: 'fiche-2', type: 'default' }] : []),
+              ...(fiches.length > 2 ? [{ id: 'edge-3', source: 'fiche-2', target: 'fiche-3', type: 'default' }] : []),
               // Parallel tool execution
-              { id: 'edge-4', source: 'agent-1', target: 'http-tool-1', type: 'default' },
-              { id: 'edge-5', source: 'agent-1', target: 'http-tool-2', type: 'default' }
+              { id: 'edge-4', source: 'fiche-1', target: 'http-tool-1', type: 'default' },
+              { id: 'edge-5', source: 'fiche-1', target: 'http-tool-2', type: 'default' }
             ]
           }
         };
 
         const workflowResponse = await request.post('/api/workflows', {
           headers: {
-            'X-Test-Worker': workerId,
+            'X-Test-Commis': commisId,
             'Content-Type': 'application/json',
           },
           data: complexWorkflow
@@ -409,7 +409,7 @@ test.describe('Tool Palette and Node Connections', () => {
           console.log('📊 Test 3: Verifying topology integrity...');
 
           const verifyResponse = await request.get(`/api/workflows/${workflow.id}`, {
-            headers: { 'X-Test-Worker': workerId }
+            headers: { 'X-Test-Commis': commisId }
           });
 
           if (verifyResponse.ok()) {
@@ -420,15 +420,15 @@ test.describe('Tool Palette and Node Connections', () => {
             console.log('📊 Workflow nodes:', nodeCount);
             console.log('📊 Workflow edges:', edgeCount);
 
-            // Verify all agents are referenced
-            const agentIds = agents.map(a => a.id.toString());
+            // Verify all fiches are referenced
+            const ficheIds = fiches.map(a => a.id.toString());
             const workflowJson = JSON.stringify(workflowData.canvas_data);
-            const referencedAgents = agentIds.filter(id => workflowJson.includes(id));
+            const referencedFiches = ficheIds.filter(id => workflowJson.includes(id));
 
-            console.log('📊 Agents referenced in workflow:', referencedAgents.length);
+            console.log('📊 Fiches referenced in workflow:', referencedFiches.length);
 
-            if (referencedAgents.length === agents.length) {
-              console.log('✅ All agents properly referenced in complex topology');
+            if (referencedFiches.length === fiches.length) {
+              console.log('✅ All fiches properly referenced in complex topology');
             }
 
             // Test 4: Validate connection consistency
@@ -461,40 +461,40 @@ test.describe('Tool Palette and Node Connections', () => {
   test('Connection validation and constraint checking', async ({ page, request }) => {
     console.log('🚀 Starting connection validation test...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
-    // Create test agents
-    const agent1Response = await request.post('/api/agents', {
+    // Create test fiches
+    const fiche1Response = await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {
-        name: `Validation Agent 1 ${Date.now()}`,
-        system_instructions: 'First validation agent',
+        name: `Validation Fiche 1 ${Date.now()}`,
+        system_instructions: 'First validation fiche',
         task_instructions: 'Test connection validation',
         model: 'gpt-mock',
       }
     });
 
-    const agent2Response = await request.post('/api/agents', {
+    const fiche2Response = await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {
-        name: `Validation Agent 2 ${Date.now()}`,
-        system_instructions: 'Second validation agent',
+        name: `Validation Fiche 2 ${Date.now()}`,
+        system_instructions: 'Second validation fiche',
         task_instructions: 'Test connection validation',
         model: 'gpt-mock',
       }
     });
 
-    expect(agent1Response.status()).toBe(201);
-    expect(agent2Response.status()).toBe(201);
+    expect(fiche1Response.status()).toBe(201);
+    expect(fiche2Response.status()).toBe(201);
 
-    const agent1 = await agent1Response.json();
-    const agent2 = await agent2Response.json();
+    const fiche1 = await fiche1Response.json();
+    const fiche2 = await fiche2Response.json();
 
     // Test 1: Valid connection topology
     console.log('📊 Test 1: Testing valid connection topology...');
@@ -505,21 +505,21 @@ test.describe('Tool Palette and Node Connections', () => {
       canvas_data: {
         nodes: [
           { id: 'trigger-1', type: 'trigger', position: { x: 50, y: 150 } },
-          { id: 'agent-1', type: 'agent', agent_id: agent1.id, position: { x: 200, y: 150 } },
-          { id: 'agent-2', type: 'agent', agent_id: agent2.id, position: { x: 350, y: 150 } },
+          { id: 'fiche-1', type: 'fiche', fiche_id: fiche1.id, position: { x: 200, y: 150 } },
+          { id: 'fiche-2', type: 'fiche', fiche_id: fiche2.id, position: { x: 350, y: 150 } },
           { id: 'tool-1', type: 'tool', tool_name: 'http_request', position: { x: 500, y: 150 } }
         ],
         edges: [
-          { id: 'edge-1', source: 'trigger-1', target: 'agent-1', type: 'default' },
-          { id: 'edge-2', source: 'agent-1', target: 'agent-2', type: 'default' },
-          { id: 'edge-3', source: 'agent-2', target: 'tool-1', type: 'default' }
+          { id: 'edge-1', source: 'trigger-1', target: 'fiche-1', type: 'default' },
+          { id: 'edge-2', source: 'fiche-1', target: 'fiche-2', type: 'default' },
+          { id: 'edge-3', source: 'fiche-2', target: 'tool-1', type: 'default' }
         ]
       }
     };
 
     const validResponse = await request.post('/api/workflows', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: validWorkflow
@@ -539,19 +539,19 @@ test.describe('Tool Palette and Node Connections', () => {
       description: 'Test circular reference validation',
       canvas_data: {
         nodes: [
-          { id: 'agent-1', type: 'agent', agent_id: agent1.id, position: { x: 200, y: 150 } },
-          { id: 'agent-2', type: 'agent', agent_id: agent2.id, position: { x: 350, y: 150 } }
+          { id: 'fiche-1', type: 'fiche', fiche_id: fiche1.id, position: { x: 200, y: 150 } },
+          { id: 'fiche-2', type: 'fiche', fiche_id: fiche2.id, position: { x: 350, y: 150 } }
         ],
         edges: [
-          { id: 'edge-1', source: 'agent-1', target: 'agent-2', type: 'default' },
-          { id: 'edge-2', source: 'agent-2', target: 'agent-1', type: 'default' } // Circular
+          { id: 'edge-1', source: 'fiche-1', target: 'fiche-2', type: 'default' },
+          { id: 'edge-2', source: 'fiche-2', target: 'fiche-1', type: 'default' } // Circular
         ]
       }
     };
 
     const circularResponse = await request.post('/api/workflows', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: circularWorkflow
@@ -572,17 +572,17 @@ test.describe('Tool Palette and Node Connections', () => {
       description: 'Test invalid node reference validation',
       canvas_data: {
         nodes: [
-          { id: 'agent-1', type: 'agent', agent_id: agent1.id, position: { x: 200, y: 150 } }
+          { id: 'fiche-1', type: 'fiche', fiche_id: fiche1.id, position: { x: 200, y: 150 } }
         ],
         edges: [
-          { id: 'edge-1', source: 'agent-1', target: 'non-existent-node', type: 'default' }
+          { id: 'edge-1', source: 'fiche-1', target: 'non-existent-node', type: 'default' }
         ]
       }
     };
 
     const invalidNodeResponse = await request.post('/api/workflows', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: invalidNodeWorkflow

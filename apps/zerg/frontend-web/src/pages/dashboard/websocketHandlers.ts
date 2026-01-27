@@ -1,14 +1,14 @@
-import type { DashboardSnapshot, AgentSummary, AgentRun } from "../../services/api";
+import type { DashboardSnapshot, FicheSummary, Run } from "../../services/api";
 
-export function applyAgentStateUpdate(
+export function applyFicheStateUpdate(
   current: DashboardSnapshot,
-  agentId: number,
+  ficheId: number,
   dataPayload: Record<string, unknown>
 ): DashboardSnapshot {
   const validStatuses = ["idle", "running", "processing", "error"] as const;
   const statusValue =
     typeof dataPayload.status === "string" && validStatuses.includes(dataPayload.status as (typeof validStatuses)[number])
-      ? (dataPayload.status as AgentSummary["status"])
+      ? (dataPayload.status as FicheSummary["status"])
       : undefined;
   const lastRunAtValue = typeof dataPayload.last_run_at === "string" ? dataPayload.last_run_at : undefined;
   const nextRunAtValue = typeof dataPayload.next_run_at === "string" ? dataPayload.next_run_at : undefined;
@@ -18,29 +18,29 @@ export function applyAgentStateUpdate(
       : undefined;
 
   let changed = false;
-  const nextAgents = current.agents.map((agent) => {
-    if (agent.id !== agentId) {
-      return agent;
+  const nextFiches = current.fiches.map((fiche) => {
+    if (fiche.id !== ficheId) {
+      return fiche;
     }
 
-    const nextAgent: AgentSummary = {
-      ...agent,
-      status: statusValue ?? agent.status,
-      last_run_at: lastRunAtValue ?? agent.last_run_at,
-      next_run_at: nextRunAtValue ?? agent.next_run_at,
-      last_error: lastErrorValue !== undefined ? lastErrorValue : agent.last_error,
+    const nextFiche: FicheSummary = {
+      ...fiche,
+      status: statusValue ?? fiche.status,
+      last_run_at: lastRunAtValue ?? fiche.last_run_at,
+      next_run_at: nextRunAtValue ?? fiche.next_run_at,
+      last_error: lastErrorValue !== undefined ? lastErrorValue : fiche.last_error,
     };
 
     if (
-      nextAgent.status !== agent.status ||
-      nextAgent.last_run_at !== agent.last_run_at ||
-      nextAgent.next_run_at !== agent.next_run_at ||
-      nextAgent.last_error !== agent.last_error
+      nextFiche.status !== fiche.status ||
+      nextFiche.last_run_at !== fiche.last_run_at ||
+      nextFiche.next_run_at !== fiche.next_run_at ||
+      nextFiche.last_error !== fiche.last_error
     ) {
       changed = true;
-      return nextAgent;
+      return nextFiche;
     }
-    return agent;
+    return fiche;
   });
 
   if (!changed) {
@@ -49,13 +49,13 @@ export function applyAgentStateUpdate(
 
   return {
     ...current,
-    agents: nextAgents,
+    fiches: nextFiches,
   };
 }
 
 export function applyRunUpdate(
   current: DashboardSnapshot,
-  agentId: number,
+  ficheId: number,
   dataPayload: Record<string, unknown>
 ): DashboardSnapshot {
   const runIdCandidate = dataPayload.id ?? dataPayload.run_id;
@@ -67,17 +67,17 @@ export function applyRunUpdate(
   const threadId =
     typeof dataPayload.thread_id === "number" ? (dataPayload.thread_id as number) : undefined;
 
-  const runsBundles = current.runs.slice();
-  let bundleIndex = runsBundles.findIndex((bundle) => bundle.agentId === agentId);
+  const runBundles = current.runs.slice();
+  let bundleIndex = runBundles.findIndex((bundle) => bundle.ficheId === ficheId);
   let runsChanged = false;
 
   if (bundleIndex === -1) {
-    runsBundles.push({ agentId, runs: [] });
-    bundleIndex = runsBundles.length - 1;
+    runBundles.push({ ficheId, runs: [] });
+    bundleIndex = runBundles.length - 1;
     runsChanged = true;
   }
 
-  const targetBundle = runsBundles[bundleIndex];
+  const targetBundle = runBundles[bundleIndex];
   const existingRuns = targetBundle.runs ?? [];
   const existingIndex = existingRuns.findIndex((run) => run.id === runId);
   let nextRuns = existingRuns;
@@ -87,17 +87,17 @@ export function applyRunUpdate(
       return current;
     }
 
-    const newRun: AgentRun = {
+    const newRun: Run = {
       id: runId,
-      agent_id: agentId,
+      fiche_id: ficheId,
       thread_id: threadId,
       status:
         typeof dataPayload.status === "string"
-          ? (dataPayload.status as AgentRun["status"])
+          ? (dataPayload.status as Run["status"])
           : "running",
       trigger:
         typeof dataPayload.trigger === "string"
-          ? (dataPayload.trigger as AgentRun["trigger"])
+          ? (dataPayload.trigger as Run["trigger"])
           : "manual",
       started_at: typeof dataPayload.started_at === "string" ? (dataPayload.started_at as string) : null,
       finished_at: typeof dataPayload.finished_at === "string" ? (dataPayload.finished_at as string) : null,
@@ -109,6 +109,8 @@ export function applyRunUpdate(
         dataPayload.error === undefined
           ? null
           : (dataPayload.error as string | null) ?? null,
+      display_type:
+        typeof dataPayload.display_type === "string" ? (dataPayload.display_type as string) : "run",
     };
 
     nextRuns = [newRun, ...existingRuns];
@@ -118,31 +120,31 @@ export function applyRunUpdate(
     runsChanged = true;
   } else {
     const previousRun = existingRuns[existingIndex];
-    const updatedRun: AgentRun = {
+    const updatedRun: Run = {
       ...previousRun,
       status:
         typeof dataPayload.status === "string"
-          ? (dataPayload.status as AgentRun["status"])
+          ? (dataPayload.status as Run["status"])
           : previousRun.status,
       started_at:
         typeof dataPayload.started_at === "string"
-          ? (dataPayload.started_at as AgentRun["started_at"])
+          ? (dataPayload.started_at as Run["started_at"])
           : previousRun.started_at,
       finished_at:
         typeof dataPayload.finished_at === "string"
-          ? (dataPayload.finished_at as AgentRun["finished_at"])
+          ? (dataPayload.finished_at as Run["finished_at"])
           : previousRun.finished_at,
       duration_ms:
         typeof dataPayload.duration_ms === "number"
-          ? (dataPayload.duration_ms as AgentRun["duration_ms"])
+          ? (dataPayload.duration_ms as Run["duration_ms"])
           : previousRun.duration_ms,
       total_tokens:
         typeof dataPayload.total_tokens === "number"
-          ? (dataPayload.total_tokens as AgentRun["total_tokens"])
+          ? (dataPayload.total_tokens as Run["total_tokens"])
           : previousRun.total_tokens,
       total_cost_usd:
         typeof dataPayload.total_cost_usd === "number"
-          ? (dataPayload.total_cost_usd as AgentRun["total_cost_usd"])
+          ? (dataPayload.total_cost_usd as Run["total_cost_usd"])
           : previousRun.total_cost_usd,
       error:
         dataPayload.error === undefined
@@ -167,44 +169,45 @@ export function applyRunUpdate(
   }
 
   if (runsChanged) {
-    runsBundles[bundleIndex] = {
-      agentId,
+    runBundles[bundleIndex] = {
+      ficheId,
       runs: nextRuns,
     };
   }
 
-  let agentsChanged = false;
-  const updatedAgents = current.agents.map((agent) => {
-    if (agent.id !== agentId) {
-      return agent;
+  let fichesChanged = false;
+  const validFicheStatuses = ["idle", "running", "processing", "error"] as const;
+  const updatedFiches = current.fiches.map((fiche) => {
+    if (fiche.id !== ficheId) {
+      return fiche;
     }
 
     const statusValue =
-      typeof dataPayload.status === "string"
-        ? (dataPayload.status as AgentSummary["status"])
-        : agent.status;
+      typeof dataPayload.status === "string" && validFicheStatuses.includes(dataPayload.status as (typeof validFicheStatuses)[number])
+        ? (dataPayload.status as FicheSummary["status"])
+        : fiche.status;
     const lastRunValue =
-      typeof dataPayload.started_at === "string" ? (dataPayload.started_at as string) : agent.last_run_at;
+      typeof dataPayload.started_at === "string" ? (dataPayload.started_at as string) : fiche.last_run_at;
 
-    if (statusValue === agent.status && lastRunValue === agent.last_run_at) {
-      return agent;
+    if (statusValue === fiche.status && lastRunValue === fiche.last_run_at) {
+      return fiche;
     }
 
-    agentsChanged = true;
+    fichesChanged = true;
     return {
-      ...agent,
+      ...fiche,
       status: statusValue,
       last_run_at: lastRunValue,
     };
   });
 
-  if (!runsChanged && !agentsChanged) {
+  if (!runsChanged && !fichesChanged) {
     return current;
   }
 
   return {
     ...current,
-    agents: agentsChanged ? updatedAgents : current.agents,
-    runs: runsChanged ? runsBundles : current.runs,
+    fiches: fichesChanged ? updatedFiches : current.fiches,
+    runs: runsChanged ? runBundles : current.runs,
   };
 }

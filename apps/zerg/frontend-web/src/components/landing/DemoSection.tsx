@@ -14,7 +14,7 @@ export function DemoSection() {
         <span className="landing-section-label">See it in action</span>
         <h2 className="landing-section-title">Everything You Need, One Place</h2>
         <p className="landing-section-subtitle">
-          Chat with your AI, monitor your agents, and build workflows visually.
+          Chat with your AI, monitor your fiches, and build workflows visually.
         </p>
 
         <ProductShowcase />

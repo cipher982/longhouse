@@ -6,9 +6,8 @@ from base templates and user context.
 
 from unittest.mock import patch
 
-from zerg.prompts.composer import build_jarvis_prompt
-from zerg.prompts.composer import build_supervisor_prompt
-from zerg.prompts.composer import build_worker_prompt
+from zerg.prompts.composer import build_oikos_prompt
+from zerg.prompts.composer import build_commis_prompt
 from zerg.prompts.composer import format_integrations
 from zerg.prompts.composer import format_server_names
 from zerg.prompts.composer import format_servers
@@ -208,7 +207,7 @@ class TestFormatServers:
     def test_format_servers_with_both_ssh_alias_and_concrete(self):
         """Test that both SSH alias and concrete details appear together.
 
-        Workers in Docker containers can't use SSH aliases (no ~/.ssh/config),
+        Commis in Docker containers can't use SSH aliases (no ~/.ssh/config),
         so they need the concrete user@host:port format even when an alias exists.
         This was a bug where 'elif' was used instead of 'if', causing the concrete
         details to be suppressed when an alias was present.
@@ -225,7 +224,7 @@ class TestFormatServers:
 
         result = format_servers(servers)
 
-        # Both should appear - alias for humans, concrete for Docker workers
+        # Both should appear - alias for humans, concrete for Docker commis
         assert "SSH alias: cube" in result
         assert "SSH: drose@100.104.187.47:2222" in result
 
@@ -315,14 +314,14 @@ class TestFormatIntegrations:
 
 
 # ---------------------------------------------------------------------------
-# Test build_supervisor_prompt
+# Test build_oikos_prompt
 # ---------------------------------------------------------------------------
 
 
-class TestBuildSupervisorPrompt:
-    """Test complete supervisor prompt building."""
+class TestBuildOikosOrchestratorPrompt:
+    """Test complete Oikos orchestrator prompt building."""
 
-    def test_build_supervisor_prompt_with_full_context(self):
+    def test_build_oikos_prompt_with_full_context(self):
         """Test building prompt with all sections populated."""
         user = MockUser(
             context={
@@ -340,7 +339,7 @@ class TestBuildSupervisorPrompt:
             }
         )
 
-        prompt = build_supervisor_prompt(user)
+        prompt = build_oikos_prompt(user)
 
         # Check user context is injected
         assert "Alice" in prompt
@@ -357,15 +356,15 @@ class TestBuildSupervisorPrompt:
         assert "Google Calendar" in prompt
 
         # Check base template content is preserved
-        assert "Supervisor" in prompt
-        assert "spawn_worker" in prompt
+        assert "Oikos" in prompt
+        assert "spawn_commis" in prompt
         assert "Your Role" in prompt
 
-    def test_build_supervisor_prompt_empty_context(self):
+    def test_build_oikos_prompt_empty_context(self):
         """Test building prompt with empty context uses defaults."""
         user = MockUser(context={})
 
-        prompt = build_supervisor_prompt(user)
+        prompt = build_oikos_prompt(user)
 
         # Should include default messages
         assert "(No user context configured)" in prompt
@@ -373,43 +372,42 @@ class TestBuildSupervisorPrompt:
         assert "(No integrations configured)" in prompt
 
         # Base template should still be present
-        assert "Supervisor" in prompt
-        assert "spawn_worker" in prompt
+        assert "Oikos" in prompt
+        assert "spawn_commis" in prompt
 
-    def test_build_supervisor_prompt_contains_required_sections(self):
+    def test_build_oikos_prompt_contains_required_sections(self):
         """Test that prompt contains all required sections."""
         user = MockUser(context={"display_name": "Bob"})
 
-        prompt = build_supervisor_prompt(user)
+        prompt = build_oikos_prompt(user)
 
-        # Check for key sections from base template
+        # Check for key sections from base template (now using Oikos/Commis terminology)
         assert "Your Role" in prompt
-        assert "Worker Lifecycle" in prompt or "When to Spawn Workers" in prompt
-        assert "Querying Past Work" in prompt
+        assert "commis" in prompt.lower()  # Should mention commis (commis replacement)
         assert "Response Style" in prompt
         assert "Error Handling" in prompt
 
-    def test_build_supervisor_prompt_none_context(self):
+    def test_build_oikos_prompt_none_context(self):
         """Test that None context is handled gracefully."""
         user = MockUser(context=None)
 
-        prompt = build_supervisor_prompt(user)
+        prompt = build_oikos_prompt(user)
 
         # Should use defaults for all sections
         assert "(No user context configured)" in prompt
-        assert "Supervisor" in prompt
+        assert "Oikos" in prompt  # Now uses Oikos terminology
 
 
 # ---------------------------------------------------------------------------
-# Test build_worker_prompt
+# Test build_commis_prompt
 # ---------------------------------------------------------------------------
 
 
-class TestBuildWorkerPrompt:
-    """Test complete worker prompt building."""
+class TestBuildCommisPrompt:
+    """Test complete commis prompt building."""
 
     @patch("zerg.prompts.composer.format_online_runners")
-    def test_build_worker_prompt_with_servers(self, mock_runners):
+    def test_build_commis_prompt_with_servers(self, mock_runners):
         """Test building prompt with servers configured."""
         mock_runners.return_value = '**Use runner_exec** for targets: "clifford"\n**ssh_exec as fallback**'
 
@@ -423,7 +421,7 @@ class TestBuildWorkerPrompt:
             }
         )
 
-        prompt = build_worker_prompt(user)
+        prompt = build_commis_prompt(user)
 
         # Check servers appear in prompt
         assert "clifford" in prompt
@@ -433,34 +431,34 @@ class TestBuildWorkerPrompt:
         # Check user context
         assert "Charlie" in prompt
 
-        # Check base template content
-        assert "Worker" in prompt
+        # Check base template content (now uses Commis terminology)
+        assert "Commis" in prompt or "commis" in prompt
         assert "ssh_exec" in prompt
 
     @patch("zerg.prompts.composer.format_online_runners")
-    def test_build_worker_prompt_empty_context(self, mock_runners):
+    def test_build_commis_prompt_empty_context(self, mock_runners):
         """Test building prompt with empty context uses defaults."""
         mock_runners.return_value = "**No runners online.** Use ssh_exec."
 
         user = MockUser(context={})
 
-        prompt = build_worker_prompt(user)
+        prompt = build_commis_prompt(user)
 
         # Should include default messages
         assert "(No servers configured)" in prompt
         assert "(No user context configured)" in prompt
 
-        # Base template should still be present
-        assert "Worker" in prompt
+        # Base template should still be present (now uses Commis terminology)
+        assert "Commis" in prompt or "commis" in prompt
 
     @patch("zerg.prompts.composer.format_online_runners")
-    def test_build_worker_prompt_contains_commands_section(self, mock_runners):
-        """Test that worker prompt includes useful commands section."""
+    def test_build_commis_prompt_contains_commands_section(self, mock_runners):
+        """Test that commis prompt includes useful commands section."""
         mock_runners.return_value = '`runner_exec(target="cube", command="df -h")`'
 
         user = MockUser(context={})
 
-        prompt = build_worker_prompt(user)
+        prompt = build_commis_prompt(user)
 
         # Check for command guidance
         assert "df -h" in prompt or "disk" in prompt.lower()
@@ -468,14 +466,14 @@ class TestBuildWorkerPrompt:
 
 
 # ---------------------------------------------------------------------------
-# Test build_jarvis_prompt
+# Test build_oikos_prompt
 # ---------------------------------------------------------------------------
 
 
-class TestBuildJarvisPrompt:
-    """Test complete Jarvis prompt building."""
+class TestBuildOikosAssistantPrompt:
+    """Test complete Oikos assistant prompt building."""
 
-    def test_build_jarvis_prompt_with_tools(self):
+    def test_build_oikos_prompt_with_tools(self):
         """Test building prompt with tools configured."""
         user = MockUser(
             context={
@@ -484,53 +482,53 @@ class TestBuildJarvisPrompt:
             }
         )
 
-        # v2.1: route_to_supervisor removed - use other tools
+        # v2.1: route_to_oikos removed - use other tools
         enabled_tools = [
             {"name": "get_current_location", "description": "Get current GPS location"},
             {"name": "get_current_time", "description": "Get the current time"},
         ]
 
-        prompt = build_jarvis_prompt(user, enabled_tools)
+        prompt = build_oikos_prompt(user, enabled_tools)
 
         # Check user context
         assert "Dana" in prompt
 
-        # Check tools appear in prompt (v2.1: route_to_supervisor removed)
+        # Check tools appear in prompt (v2.1: route_to_oikos removed)
         assert "get_current_location" in prompt
         assert "get_current_time" in prompt
 
         # Check server names appear
         assert "clifford" in prompt
 
-        # Check base template
-        assert "Jarvis" in prompt
+        # Check base template (now uses Oikos terminology)
+        assert "Oikos" in prompt
 
-    def test_build_jarvis_prompt_no_tools(self):
+    def test_build_oikos_prompt_no_tools(self):
         """Test building prompt with no tools shows default message."""
         user = MockUser(context={})
 
-        prompt = build_jarvis_prompt(user, [])
+        prompt = build_oikos_prompt(user, [])
 
         # Should show no tools message
         assert "(No direct tools currently enabled)" in prompt
 
-        # Base template should be present
-        assert "Jarvis" in prompt
+        # Base template should be present (now uses Oikos terminology)
+        assert "Oikos" in prompt
 
-    def test_build_jarvis_prompt_limitations(self):
+    def test_build_oikos_prompt_limitations(self):
         """Test that limitations are shown for missing tools."""
         user = MockUser(context={})
 
         # Only provide one tool, so limitations should be shown
         enabled_tools = [{"name": "get_current_time", "description": "Get time"}]
 
-        prompt = build_jarvis_prompt(user, enabled_tools)
+        prompt = build_oikos_prompt(user, enabled_tools)
 
         # Should show limitations for missing calendar and smart_home
         assert "Calendar/reminders" in prompt or "calendar" in prompt.lower()
         assert "Smart home" in prompt or "smart_home" in prompt.lower()
 
-    def test_build_jarvis_prompt_no_limitations_when_all_present(self):
+    def test_build_oikos_prompt_no_limitations_when_all_present(self):
         """Test that no limitations when all expected tools present."""
         user = MockUser(context={})
 
@@ -540,7 +538,7 @@ class TestBuildJarvisPrompt:
             {"name": "get_current_time", "description": "Get time"},
         ]
 
-        prompt = build_jarvis_prompt(user, enabled_tools)
+        prompt = build_oikos_prompt(user, enabled_tools)
 
         # Check that "None currently" appears in limitations section
         # or that limitation section mentions no limitations

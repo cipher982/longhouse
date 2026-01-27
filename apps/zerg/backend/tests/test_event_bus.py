@@ -17,11 +17,11 @@ async def test_event_bus_basic_publish_subscribe():
         received_data = data
 
     # Subscribe to an event
-    bus.subscribe(EventType.AGENT_CREATED, test_handler)
+    bus.subscribe(EventType.FICHE_CREATED, test_handler)
 
     # Publish an event
-    test_data = {"agent_id": 123, "name": "Test Agent"}
-    await bus.publish(EventType.AGENT_CREATED, test_data)
+    test_data = {"fiche_id": 123, "name": "Test Fiche"}
+    await bus.publish(EventType.FICHE_CREATED, test_data)
 
     # Verify handler was called with correct data
     assert received_data == test_data
@@ -42,11 +42,11 @@ async def test_event_bus_multiple_subscribers():
         received_count += 1
 
     # Subscribe both handlers
-    bus.subscribe(EventType.AGENT_UPDATED, test_handler1)
-    bus.subscribe(EventType.AGENT_UPDATED, test_handler2)
+    bus.subscribe(EventType.FICHE_UPDATED, test_handler1)
+    bus.subscribe(EventType.FICHE_UPDATED, test_handler2)
 
     # Publish an event
-    await bus.publish(EventType.AGENT_UPDATED, {"id": 123})
+    await bus.publish(EventType.FICHE_UPDATED, {"id": 123})
 
     # Verify both handlers were called
     assert received_count == 2
@@ -63,11 +63,11 @@ async def test_event_bus_unsubscribe():
         call_count += 1
 
     # Subscribe and then unsubscribe
-    bus.subscribe(EventType.AGENT_DELETED, test_handler)
-    bus.unsubscribe(EventType.AGENT_DELETED, test_handler)
+    bus.subscribe(EventType.FICHE_DELETED, test_handler)
+    bus.unsubscribe(EventType.FICHE_DELETED, test_handler)
 
     # Publish an event
-    await bus.publish(EventType.AGENT_DELETED, {"id": 123})
+    await bus.publish(EventType.FICHE_DELETED, {"id": 123})
 
     # Verify handler was not called
     assert call_count == 0

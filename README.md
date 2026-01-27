@@ -2,13 +2,13 @@
   <img src="apps/zerg/frontend-web/branding/swarm-logo-master.png" alt="Zerg" width="200" />
 </p>
 
-<h1 align="center">Zerg + Jarvis (Unified)</h1>
+<h1 align="center">Zerg + Oikos (Unified)</h1>
 
 <p align="center">
   <strong>Supervisor + Workers with a unified single-origin UI.</strong>
 </p>
 
-Zerg is the supervisor/worker orchestration backend. Jarvis is the voice/text UI. They now ship behind one nginx entrypoint for same-origin UX.
+Zerg is the supervisor/worker orchestration backend. Oikos is the voice/text UI. They now ship behind one nginx entrypoint for same-origin UX.
 
 ---
 
@@ -18,13 +18,13 @@ Zerg is the supervisor/worker orchestration backend. Jarvis is the voice/text UI
 User → http://localhost:30080 (nginx)
   /            → Unified React SPA (dashboard + /chat)
   /dashboard   → Zerg dashboard (alias)
-  /chat        → Jarvis chat UI (SPA route)
-  /api/*       → Zerg FastAPI backend (includes Jarvis BFF at /api/jarvis/*)
+  /chat        → Oikos chat UI (SPA route)
+  /api/*       → Zerg FastAPI backend (includes Oikos BFF at /api/oikos/*)
   /ws/*        → Zerg WS (SSE/WS)
 
 Backend: FastAPI + LangGraph-free supervisor/worker agents (workflow engine uses LangGraph)
 Workers: disposable agents, artifacts under /data/workers
-Frontend: Unified React SPA (Zerg dashboard + Jarvis chat), served same-origin
+Frontend: Unified React SPA (Zerg dashboard + Oikos chat), served same-origin
 ```
 
 Ports (dev): nginx 30080 external; service ports 47200 (frontend), 47300 (backend).
@@ -86,7 +86,7 @@ scripts/                # Dev tools + generators
 - `docs/specs/durable-runs-v2.2.md` – durable runs (current core architecture).
 - `docs/agent-improvements-progress.md` – context management & progressive disclosure (phases 1-4 complete).
 - `docs/specs/worker-supervision-roundabout.md` – phases 1–6 complete, matches code.
-- `docs/specs/jarvis-supervisor-unification-v2.1.md` – supervisor/Jarvis unification (v2.1).
+- `docs/specs/oikos-supervisor-unification-v2.1.md` – supervisor/Oikos unification (v2.1).
 - `apps/zerg/backend/docs/email_testing_guide.md` – guide for Gmail/Email integration testing.
 - `docs/archive/super-siri-architecture.md` – v2.0 overall vision (historical).
 - `docs/DEPLOYMENT.md` – production deployment guide (Coolify + `docker/docker-compose.prod.yml`).

@@ -21,7 +21,7 @@ from zerg.models.models import WorkflowExecution
     reason="TestClient doesn't handle async background tasks properly. See test_workflow_direct_execution.py for validation of core functionality."
 )
 @pytest.mark.asyncio
-async def test_full_workflow_http_execution(db, test_user, sample_agent, auth_headers):
+async def test_full_workflow_http_execution(db, test_user, sample_fiche, auth_headers):
     """Test complete HTTP API workflow execution flow to prevent parameter mismatches."""
 
     client = TestClient(app)
@@ -35,7 +35,7 @@ async def test_full_workflow_http_execution(db, test_user, sample_agent, auth_he
         mock_resolver_instance.get_tool = lambda name: mock_tool if name == "test_tool" else None
         mock_resolver.return_value = mock_resolver_instance
 
-        # Mock AgentRunner
+        # Mock FicheRunner
         async def mock_run_thread(db, thread):
             mock_msg = type("MockMessage", (), {})()
             mock_msg.id = 1
@@ -45,10 +45,10 @@ async def test_full_workflow_http_execution(db, test_user, sample_agent, auth_he
             mock_msg.thread_id = thread.id
             return [mock_msg]
 
-        with patch("zerg.services.node_executors.AgentRunner") as mock_agent_runner:
+        with patch("zerg.services.node_executors.FicheRunner") as mock_fiche_runner:
             mock_runner_instance = type("MockRunner", (), {})()
             mock_runner_instance.run_thread = mock_run_thread
-            mock_agent_runner.return_value = mock_runner_instance
+            mock_fiche_runner.return_value = mock_runner_instance
 
             # 1. POST /api/workflows (create workflow)
             workflow_payload = {
@@ -71,15 +71,15 @@ async def test_full_workflow_http_execution(db, test_user, sample_agent, auth_he
                             "config": {"tool_name": "test_tool", "static_params": {"input": "test_data"}},
                         },
                         {
-                            "id": "agent-1",
-                            "type": "agent",
+                            "id": "fiche-1",
+                            "type": "fiche",
                             "position": {"x": 350, "y": 100},
-                            "config": {"agent_id": sample_agent.id, "message": "Process: ${tool-1.value.result}"},
+                            "config": {"fiche_id": sample_fiche.id, "message": "Process: ${tool-1.value.result}"},
                         },
                     ],
                     "edges": [
                         {"from_node_id": "trigger-1", "to_node_id": "tool-1"},
-                        {"from_node_id": "tool-1", "to_node_id": "agent-1"},
+                        {"from_node_id": "tool-1", "to_node_id": "fiche-1"},
                     ],
                 },
             }
@@ -130,7 +130,7 @@ async def test_full_workflow_http_execution(db, test_user, sample_agent, auth_he
             node_states = db.query(NodeExecutionState).filter_by(workflow_execution_id=execution_id).all()
 
             executed_nodes = {state.node_id: state for state in node_states}
-            expected_nodes = ["trigger-1", "tool-1", "agent-1"]
+            expected_nodes = ["trigger-1", "tool-1", "fiche-1"]
 
             for node_id in expected_nodes:
                 assert node_id in executed_nodes, f"Node {node_id} should have executed"
@@ -153,7 +153,7 @@ async def test_full_workflow_http_execution(db, test_user, sample_agent, auth_he
 
 
 @pytest.mark.asyncio
-async def test_workflow_execution_parameter_consistency(db, test_user, sample_agent, auth_headers):
+async def test_workflow_execution_parameter_consistency(db, test_user, sample_fiche, auth_headers):
     """Test that HTTP endpoints and internal execution use consistent parameter names."""
 
     client = TestClient(app)

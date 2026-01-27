@@ -48,7 +48,7 @@ CRITICAL ANALYSIS REQUIRED: Compare these dashboard screenshots with EXTREME att
 - Focus on FUNCTIONALITY gaps, not just styling
 
 **CRITICAL QUESTION:**
-If a user needs to manage agents, what actions can they take in Rust UI vs React UI?
+If a user needs to manage fiches, what actions can they take in Rust UI vs React UI?
 
 Be extremely specific about missing interactive elements and their impact on user workflows.
 `;

@@ -1,9 +1,9 @@
-"""End-to-end tests for the Supervisor flow via Jarvis API.
+"""End-to-end tests for the Oikos flow via Oikos API.
 
-These tests simulate the full flow a user would experience through Jarvis:
-1. POST /api/jarvis/supervisor - dispatch a task
-2. GET /api/jarvis/supervisor/events - listen to SSE for progress
-3. Verify workers are spawned and results are captured
+These tests simulate the full flow a user would experience through Oikos:
+1. POST /api/oikos/run - dispatch a task
+2. GET /api/stream/runs/{run_id} - listen to SSE for progress
+3. Verify commis are spawned and results are captured
 
 Note: These tests use mocked LLMs, so they test the infrastructure,
 not the actual LLM decision-making.
@@ -16,12 +16,12 @@ import pytest
 
 from zerg.events import EventType
 from zerg.events import event_bus
-from zerg.services.supervisor_service import SupervisorService
+from zerg.services.oikos_service import OikosService
 
 
-@pytest.mark.timeout(60)  # Supervisor tests need more time, especially in CI with parallel workers
-class TestSupervisorE2EFlow:
-    """End-to-end tests for supervisor flow via API."""
+@pytest.mark.timeout(60)  # Oikos tests need more time, especially in CI with parallel commis
+class TestOikosE2EFlow:
+    """End-to-end tests for oikos flow via API."""
 
     @pytest.fixture
     def temp_artifact_path(self, monkeypatch):
@@ -30,17 +30,17 @@ class TestSupervisorE2EFlow:
             monkeypatch.setenv("SWARMLET_DATA_PATH", tmpdir)
             yield tmpdir
 
-    def test_supervisor_dispatch_returns_stream_url(self, client, db_session, test_user, temp_artifact_path):
-        """Test POST /api/jarvis/supervisor returns run_id and stream_url."""
+    def test_oikos_dispatch_returns_stream_url(self, client, db_session, test_user, temp_artifact_path):
+        """Test POST /api/oikos/run returns run_id and stream_url."""
         response = client.post(
-            "/api/jarvis/supervisor",
+            "/api/oikos/run",
             json={"task": "What time is it?"},
         )
 
         assert response.status_code == 200
         data = response.json()
 
-        # Verify response structure matches JarvisSupervisorResponse
+        # Verify response structure matches OikosRunResponse
         assert "run_id" in data
         assert "thread_id" in data
         assert "status" in data
@@ -49,19 +49,19 @@ class TestSupervisorE2EFlow:
         # Stream URL should point to unified stream endpoint
         assert f"/api/stream/runs/{data['run_id']}" in data["stream_url"]
 
-    @pytest.mark.xdist_group(name="supervisor")
-    def test_supervisor_creates_one_brain_per_user(self, client, db_session, test_user, temp_artifact_path):
-        """Test that multiple dispatches use the same supervisor thread."""
+    @pytest.mark.xdist_group(name="oikos")
+    def test_oikos_creates_one_brain_per_user(self, client, db_session, test_user, temp_artifact_path):
+        """Test that multiple dispatches use the same oikos thread."""
         # First dispatch
         response1 = client.post(
-            "/api/jarvis/supervisor",
+            "/api/oikos/run",
             json={"task": "First task"},
         )
         data1 = response1.json()
 
         # Second dispatch
         response2 = client.post(
-            "/api/jarvis/supervisor",
+            "/api/oikos/run",
             json={"task": "Second task"},
         )
         data2 = response2.json()
@@ -73,19 +73,19 @@ class TestSupervisorE2EFlow:
         assert data1["run_id"] != data2["run_id"]
 
     @pytest.mark.skip(reason="TestClient doesn't support SSE streaming - use Playwright tests instead")
-    def test_supervisor_sse_stream_connects(self, client, db_session, test_user, temp_artifact_path):
+    def test_oikos_sse_stream_connects(self, client, db_session, test_user, temp_artifact_path):
         """Test SSE stream connects and receives initial event.
 
         NOTE: This test is skipped because:
         1. TestClient.stream() blocks synchronously waiting for data
-        2. By the time we connect to SSE, the supervisor run has already completed
+        2. By the time we connect to SSE, the oikos run has already completed
         3. No events will arrive because the run finished before subscription
 
         SSE functionality is properly tested via Playwright E2E tests in apps/zerg/e2e/.
         """
         # First create a run
         response = client.post(
-            "/api/jarvis/supervisor",
+            "/api/oikos/run",
             json={"task": "Test SSE connection"},
         )
         run_id = response.json()["run_id"]
@@ -102,16 +102,16 @@ class TestSupervisorE2EFlow:
                 assert "connected" in first_line or "event" in first_line
 
     def test_cancel_endpoint_works(self, client, db_session, test_user, temp_artifact_path):
-        """Test that cancel endpoint stops a running supervisor."""
+        """Test that cancel endpoint stops a running oikos."""
         # Create a run
         response = client.post(
-            "/api/jarvis/supervisor",
+            "/api/oikos/run",
             json={"task": "Long running task"},
         )
         run_id = response.json()["run_id"]
 
         # Cancel it
-        cancel_response = client.post(f"/api/jarvis/supervisor/{run_id}/cancel")
+        cancel_response = client.post(f"/api/oikos/run/{run_id}/cancel")
 
         # Should succeed (might already be complete from mock)
         assert cancel_response.status_code == 200
@@ -120,8 +120,8 @@ class TestSupervisorE2EFlow:
         assert data["status"] in ["cancelled", "success", "failed"]
 
 
-class TestSupervisorServiceDirect:
-    """Direct tests for SupervisorService without API layer."""
+class TestOikosServiceDirect:
+    """Direct tests for OikosService without API layer."""
 
     @pytest.fixture
     def temp_artifact_path(self, monkeypatch):
@@ -131,11 +131,11 @@ class TestSupervisorServiceDirect:
             yield tmpdir
 
     @pytest.mark.asyncio
-    async def test_run_supervisor_completes(self, db_session, test_user, temp_artifact_path):
-        """Test that run_supervisor executes and returns result."""
-        service = SupervisorService(db_session)
+    async def test_run_oikos_completes(self, db_session, test_user, temp_artifact_path):
+        """Test that run_oikos executes and returns result."""
+        service = OikosService(db_session)
 
-        result = await service.run_supervisor(
+        result = await service.run_oikos(
             owner_id=test_user.id,
             task="What is 2 + 2?",
             timeout=30,
@@ -152,9 +152,9 @@ class TestSupervisorServiceDirect:
         assert str(result.run_id) in result.debug_url
 
     @pytest.mark.asyncio
-    async def test_run_supervisor_emits_events(self, db_session, test_user, temp_artifact_path):
-        """Test that supervisor emits SSE events during execution."""
-        service = SupervisorService(db_session)
+    async def test_run_oikos_emits_events(self, db_session, test_user, temp_artifact_path):
+        """Test that oikos emits SSE events during execution."""
+        service = OikosService(db_session)
 
         # Collect events
         events_received = []
@@ -163,12 +163,12 @@ class TestSupervisorServiceDirect:
             events_received.append(event_data)
 
         # Subscribe to events
-        event_bus.subscribe(EventType.SUPERVISOR_STARTED, capture_event)
-        event_bus.subscribe(EventType.SUPERVISOR_THINKING, capture_event)
-        event_bus.subscribe(EventType.SUPERVISOR_COMPLETE, capture_event)
+        event_bus.subscribe(EventType.OIKOS_STARTED, capture_event)
+        event_bus.subscribe(EventType.OIKOS_THINKING, capture_event)
+        event_bus.subscribe(EventType.OIKOS_COMPLETE, capture_event)
 
         try:
-            result = await service.run_supervisor(
+            result = await service.run_oikos(
                 owner_id=test_user.id,
                 task="Simple test task",
                 timeout=30,
@@ -177,30 +177,30 @@ class TestSupervisorServiceDirect:
             # Give events time to propagate
             await asyncio.sleep(0.1)
 
-            # Should have received SUPERVISOR_STARTED at minimum
+            # Should have received OIKOS_STARTED at minimum
             event_types = [e.get("event_type") for e in events_received]
-            assert EventType.SUPERVISOR_STARTED in event_types or any("SUPERVISOR" in str(et) for et in event_types)
+            assert EventType.OIKOS_STARTED in event_types or any("OIKOS" in str(et) for et in event_types)
 
         finally:
             # Unsubscribe
-            event_bus.unsubscribe(EventType.SUPERVISOR_STARTED, capture_event)
-            event_bus.unsubscribe(EventType.SUPERVISOR_THINKING, capture_event)
-            event_bus.unsubscribe(EventType.SUPERVISOR_COMPLETE, capture_event)
+            event_bus.unsubscribe(EventType.OIKOS_STARTED, capture_event)
+            event_bus.unsubscribe(EventType.OIKOS_THINKING, capture_event)
+            event_bus.unsubscribe(EventType.OIKOS_COMPLETE, capture_event)
 
     @pytest.mark.asyncio
-    async def test_supervisor_thread_persists_across_calls(self, db_session, test_user, temp_artifact_path):
-        """Test that supervisor thread accumulates context."""
-        service = SupervisorService(db_session)
+    async def test_oikos_thread_persists_across_calls(self, db_session, test_user, temp_artifact_path):
+        """Test that oikos thread accumulates context."""
+        service = OikosService(db_session)
 
         # First run
-        result1 = await service.run_supervisor(
+        result1 = await service.run_oikos(
             owner_id=test_user.id,
             task="Remember the number 42",
             timeout=30,
         )
 
         # Second run
-        result2 = await service.run_supervisor(
+        result2 = await service.run_oikos(
             owner_id=test_user.id,
             task="What number did I mention?",
             timeout=30,
@@ -213,8 +213,8 @@ class TestSupervisorServiceDirect:
         assert result1.run_id != result2.run_id
 
 
-class TestWorkerSpawning:
-    """Tests for worker spawning from supervisor."""
+class TestCommisSpawning:
+    """Tests for commis spawning from oikos."""
 
     @pytest.fixture
     def temp_artifact_path(self, monkeypatch):
@@ -223,28 +223,28 @@ class TestWorkerSpawning:
             monkeypatch.setenv("SWARMLET_DATA_PATH", tmpdir)
             yield tmpdir
 
-    def test_spawn_worker_creates_job(self, db_session, test_user, temp_artifact_path):
-        """Test that spawn_worker tool creates a WorkerJob."""
-        from tests.conftest import TEST_WORKER_MODEL
+    def test_spawn_commis_creates_job(self, db_session, test_user, temp_artifact_path):
+        """Test that spawn_commis tool creates a CommisJob."""
+        from tests.conftest import TEST_COMMIS_MODEL
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
-        from zerg.models.models import WorkerJob
-        from zerg.tools.builtin.supervisor_tools import spawn_worker
+        from zerg.models.models import CommisJob
+        from zerg.tools.builtin.oikos_tools import spawn_commis
 
         # Set up credential context
-        resolver = CredentialResolver(agent_id=1, db=db_session, owner_id=test_user.id)
+        resolver = CredentialResolver(fiche_id=1, db=db_session, owner_id=test_user.id)
         token = set_credential_resolver(resolver)
 
         try:
-            result = spawn_worker(
+            result = spawn_commis(
                 task="Check disk usage on cube",
-                model=TEST_WORKER_MODEL,
+                model=TEST_COMMIS_MODEL,
             )
 
             assert "queued successfully" in result
 
             # Verify job was created
-            job = db_session.query(WorkerJob).filter(WorkerJob.task == "Check disk usage on cube").first()
+            job = db_session.query(CommisJob).filter(CommisJob.task == "Check disk usage on cube").first()
 
             assert job is not None
             assert job.status == "queued"
@@ -254,20 +254,20 @@ class TestWorkerSpawning:
             set_credential_resolver(None)
 
     @pytest.mark.asyncio
-    async def test_worker_job_has_correct_tools(self, db_session, test_user, temp_artifact_path):
-        """Test that worker agents are created with infrastructure tools."""
-        from tests.conftest import TEST_WORKER_MODEL
-        from zerg.services.worker_artifact_store import WorkerArtifactStore
-        from zerg.services.worker_runner import WorkerRunner
+    async def test_commis_job_has_correct_tools(self, db_session, test_user, temp_artifact_path):
+        """Test that commis fiches are created with infrastructure tools."""
+        from tests.conftest import TEST_COMMIS_MODEL
+        from zerg.services.commis_artifact_store import CommisArtifactStore
+        from zerg.services.commis_runner import CommisRunner
 
-        store = WorkerArtifactStore(base_path=temp_artifact_path)
-        runner = WorkerRunner(artifact_store=store)
+        store = CommisArtifactStore(base_path=temp_artifact_path)
+        runner = CommisRunner(artifact_store=store)
 
-        # Create a temporary agent to check its tools
-        temp_agent = await runner._create_temporary_agent(
+        # Create a temporary fiche to check its tools
+        temp_agent = await runner._create_temporary_fiche(
             db=db_session,
             task="test infrastructure tools",
-            config={"owner_id": test_user.id, "model": TEST_WORKER_MODEL},
+            config={"owner_id": test_user.id, "model": TEST_COMMIS_MODEL},
         )
 
         try:
@@ -280,5 +280,5 @@ class TestWorkerSpawning:
             # Clean up
             from zerg.crud import crud
 
-            crud.delete_agent(db_session, temp_agent.id)
+            crud.delete_fiche(db_session, temp_agent.id)
             db_session.commit()
