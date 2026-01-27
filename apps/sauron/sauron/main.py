@@ -47,7 +47,7 @@ async def run_scheduler() -> None:
     # Import zerg.jobs components
     # These are installed as dependencies via pyproject.toml
     from zerg.jobs import GitSyncService, register_all_jobs, run_git_sync_loop, set_git_sync_service
-    from zerg.jobs.worker import enqueue_missed_runs, run_queue_worker
+    from zerg.jobs.commis import enqueue_missed_runs, run_queue_commis
 
     settings = get_settings()
 
@@ -120,7 +120,7 @@ async def run_scheduler() -> None:
         logger.info(f"  {job.id}: {job.next_run_time}")
 
     # Start queue worker in background
-    worker_task = asyncio.create_task(run_queue_worker(), name="queue-worker")
+    worker_task = asyncio.create_task(run_queue_commis(), name="queue-commis")
 
     # Keep running forever
     try:
