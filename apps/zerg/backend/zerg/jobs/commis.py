@@ -17,6 +17,7 @@ from datetime import datetime
 from datetime import timedelta
 
 from zerg.jobs.ops_db import emit_job_run
+from zerg.jobs.ops_db import get_scheduler_name
 from zerg.jobs.ops_db import is_job_queue_db_enabled
 from zerg.jobs.queue import DEFAULT_POLL_SECONDS
 from zerg.jobs.queue import QueueJob
@@ -276,6 +277,7 @@ async def _run_job(queue_job: QueueJob, owner: QueueOwner) -> None:
 
     # Emit to ops.runs with script metadata
     try:
+        scheduler_name = get_scheduler_name()
         await emit_job_run(
             job_id=queue_job.job_id,
             status=status,
@@ -285,7 +287,7 @@ async def _run_job(queue_job: QueueJob, owner: QueueOwner) -> None:
             error_message=error_text,
             tags=tags,
             project=project,
-            scheduler="zerg",
+            scheduler=scheduler_name,
             metadata=script_metadata,  # Include script source, SHA, etc.
         )
     except Exception as e:
