@@ -41,7 +41,7 @@ def _run_coro_sync(coro: Any) -> Dict[str, Any]:
     except RuntimeError:
         return asyncio.run(coro)
 
-    with concurrent.futures.ThreadPoolExecutor(max_commis=1) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(lambda: asyncio.run(coro)).result()
 
 

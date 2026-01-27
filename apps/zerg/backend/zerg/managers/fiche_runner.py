@@ -2,7 +2,7 @@
 
 This class bridges:
 
-• Agent ORM row (system instructions, model name, …)
+• Fiche ORM row (system instructions, model name, …)
 • ThreadService for DB persistence
 • ReAct execution loop (LangGraph-free)
 
@@ -154,14 +154,14 @@ class FicheInterrupted(Exception):
 
     def __init__(self, interrupt_value: dict):
         self.interrupt_value = interrupt_value
-        super().__init__(f"Agent interrupted: {interrupt_value}")
+        super().__init__(f"Fiche interrupted: {interrupt_value}")
 
 
 @dataclass(frozen=True)
 class RuntimeView:
-    """Read-only runtime view of an Agent row.
+    """Read-only runtime view of a Fiche row.
 
-    IMPORTANT: This avoids mutating the SQLAlchemy-managed Agent ORM object.
+    IMPORTANT: This avoids mutating the SQLAlchemy-managed Fiche ORM object.
     Per-request overrides (model, reasoning_effort) must not be persisted to DB
     and must not leak across concurrent runs.
     """
@@ -310,9 +310,9 @@ class Runner:  # noqa: D401 – naming follows project conventions
         # ------------------------------------------------------------------
 
         # Load agent from DB to get current system_instructions
-        agent_row = crud.get_agent(db, self.agent.id)
+        agent_row = crud.get_fiche(db, self.agent.id)
         if not agent_row or not agent_row.system_instructions:
-            raise RuntimeError(f"Agent {self.agent.id} has no system_instructions")
+            raise RuntimeError(f"Fiche {self.agent.id} has no system_instructions")
 
         # Build system message with connector protocols prepended
         protocols = get_connector_protocols()
@@ -371,7 +371,7 @@ class Runner:  # noqa: D401 – naming follows project conventions
         except Exception as e:
             # Graceful degradation: if context injection fails, agent still runs
             logger.warning(
-                "[Runner] Failed to inject connector context: %s. Agent will run without status awareness.",
+                "[Runner] Failed to inject connector context: %s. Fiche will run without status awareness.",
                 e,
                 exc_info=True,
                 extra={"tag": "AGENT"},
@@ -493,7 +493,7 @@ class Runner:  # noqa: D401 – naming follows project conventions
             # Run the oikos loop
             loop_result = await run_oikos_loop(
                 messages=original_msgs,
-                agent_row=self.agent,
+                fiche_row=self.agent,
                 tools=tools,
                 run_id=run_id,
                 owner_id=self.agent.owner_id,
@@ -643,7 +643,7 @@ class Runner:  # noqa: D401 – naming follows project conventions
         # ------------------------------------------------------------------
 
         if unprocessed_rows and not created_rows:
-            error_msg = "Agent produced no messages despite pending user input."
+            error_msg = "Fiche produced no messages despite pending user input."
             logger.error(f"[Runner] {error_msg}", extra={"tag": "AGENT"})
             raise RuntimeError(error_msg)
 
@@ -750,9 +750,9 @@ class Runner:  # noqa: D401 – naming follows project conventions
             logger.debug(f"[Runner] Persisted ToolMessage for tool_call_id={tool_call_id} (parent_id={parent_id})")
 
         # Build fresh system prompt
-        agent_row = crud.get_agent(db, self.agent.id)
+        agent_row = crud.get_fiche(db, self.agent.id)
         if not agent_row or not agent_row.system_instructions:
-            raise RuntimeError(f"Agent {self.agent.id} has no system_instructions")
+            raise RuntimeError(f"Fiche {self.agent.id} has no system_instructions")
 
         protocols = get_connector_protocols()
         system_content = f"{protocols}\n\n{agent_row.system_instructions}"
@@ -855,7 +855,7 @@ class Runner:  # noqa: D401 – naming follows project conventions
             # Run the oikos loop using the new engine
             result = await run_oikos_loop(
                 messages=full_messages,
-                agent_row=self.agent,
+                fiche_row=self.agent,
                 tools=tools,
                 run_id=run_id,
                 owner_id=self.agent.owner_id,
@@ -1049,9 +1049,9 @@ class Runner:  # noqa: D401 – naming follows project conventions
             tool_messages.append(tool_msg)
 
         # Build fresh system prompt
-        agent_row = crud.get_agent(db, self.agent.id)
+        agent_row = crud.get_fiche(db, self.agent.id)
         if not agent_row or not agent_row.system_instructions:
-            raise RuntimeError(f"Agent {self.agent.id} has no system_instructions")
+            raise RuntimeError(f"Fiche {self.agent.id} has no system_instructions")
 
         protocols = get_connector_protocols()
         system_content = f"{protocols}\n\n{agent_row.system_instructions}"
@@ -1134,7 +1134,7 @@ class Runner:  # noqa: D401 – naming follows project conventions
             # Run the oikos loop using the new engine
             result = await run_oikos_loop(
                 messages=full_messages,
-                agent_row=self.agent,
+                fiche_row=self.agent,
                 tools=tools,
                 run_id=run_id,
                 owner_id=self.agent.owner_id,
@@ -1227,6 +1227,4 @@ class Runner:  # noqa: D401 – naming follows project conventions
     # No synchronous wrapper – all call-sites should be async going forward.
 
 
-# Terminology aliases
 FicheRunner = Runner
-AgentRunner = Runner  # Backwards compat

@@ -3,19 +3,16 @@
 # Re-export from split model files
 from .commis_barrier import CommisBarrier
 from .commis_barrier import CommisBarrierJob
-from .commis_barrier import CommisBarrierJob as BarrierJob  # Backwards compatibility alias
 from .connector import Connector
 from .fiche import Fiche
-from .fiche import Fiche as Agent  # Backwards compatibility alias
 from .fiche import FicheMessage
-from .fiche import FicheMessage as AgentMessage  # Backwards compatibility alias
 
 # Re-export remaining models from models.py
 from .models import AccountConnectorCredential
-from .models import AgentMemoryKV
 from .models import CanvasLayout
 from .models import CommisJob
 from .models import ConnectorCredential
+from .models import FicheMemoryKV
 from .models import KnowledgeDocument
 from .models import KnowledgeSource
 from .models import MemoryEmbedding
@@ -45,12 +42,9 @@ __all__ = [
     # Core models (split into separate files)
     "Fiche",
     "FicheMessage",
-    "Agent",  # Backwards compatibility alias
-    "AgentMessage",  # Backwards compatibility alias
     "Run",
     "RunEvent",
     "CommisBarrierJob",
-    "BarrierJob",  # Backwards compatibility alias
     "Connector",
     "Thread",
     "ThreadMessage",
@@ -60,7 +54,7 @@ __all__ = [
     "CommisBarrier",
     # Remaining models (still in models.py)
     "AccountConnectorCredential",
-    "AgentMemoryKV",
+    "FicheMemoryKV",
     "CanvasLayout",
     "ConnectorCredential",
     "KnowledgeDocument",

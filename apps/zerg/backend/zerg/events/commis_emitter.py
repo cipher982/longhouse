@@ -260,7 +260,4 @@ class CommisEmitter:
             logger.warning("Failed to emit commis_heartbeat event", exc_info=True)
 
 
-# Keep CommisEmitter as alias for backward compatibility during migration
-CommisEmitter = CommisEmitter
-
-__all__ = ["CommisEmitter", "CommisEmitter", "ToolCall"]
+__all__ = ["CommisEmitter", "ToolCall"]

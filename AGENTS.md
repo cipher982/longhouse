@@ -199,3 +199,4 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-26) [gotcha] New SSE event types must be added to `EventType` enum or `append_run_event()` won't publish live (modal won't open until reconnect).
 - (2026-01-26) [gotcha] Skills platform exists under `apps/zerg/backend/zerg/skills/` but isn't wired into oikos/commis prompts or tool registry (no SkillIntegration usage yet).
 - (2026-01-26) [gotcha] Playwright E2E can time out at webServer startup (0 tests) if the backend fails to boot; ensure repo `.env` (DATABASE_URL) and backend deps are present before running.
+- (2026-01-27) [pattern] Rebrand work: remove backward-compat shims; use only Oikos/Commis/Fiche names (no supervisor/worker/agent aliases).

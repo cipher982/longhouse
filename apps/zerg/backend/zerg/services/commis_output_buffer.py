@@ -1,6 +1,6 @@
-"""Live worker output buffer for streaming runner_exec chunks.
+"""Live commis output buffer for streaming runner_exec chunks.
 
-This is a volatile in-memory tail buffer keyed by worker_id. It is designed
+This is a volatile in-memory tail buffer keyed by commis_id. It is designed
 for low-latency "peeking" without persisting every chunk to the database.
 """
 
@@ -14,15 +14,15 @@ from typing import Deque
 from typing import Dict
 from typing import Optional
 
-# Max bytes to retain per worker (tail buffer)
+# Max bytes to retain per commis (tail buffer)
 DEFAULT_MAX_BYTES = 50 * 1024
 # Drop buffers after inactivity to avoid leaks
 DEFAULT_TTL_SECONDS = 6 * 60 * 60  # 6 hours
 
 
 @dataclass
-class WorkerOutputMeta:
-    """Metadata cached for a worker output buffer."""
+class CommisOutputMeta:
+    """Metadata cached for a commis output buffer."""
 
     job_id: Optional[int] = None
     run_id: Optional[int] = None
@@ -32,7 +32,7 @@ class WorkerOutputMeta:
 
 
 class _OutputBuffer:
-    """Thread-safe tail buffer for a single worker."""
+    """Thread-safe tail buffer for a single commis."""
 
     def __init__(self, max_bytes: int) -> None:
         self._chunks: Deque[str] = deque()
@@ -41,7 +41,7 @@ class _OutputBuffer:
         self._lock = threading.Lock()
         self.updated_at = time.time()
         self.last_runner_job_id: Optional[str] = None
-        self.meta = WorkerOutputMeta()
+        self.meta = CommisOutputMeta()
 
     def append(self, data: str) -> None:
         if not data:
@@ -101,8 +101,8 @@ class _OutputBuffer:
             self.meta.last_resolved_at = time.time()
 
 
-class WorkerOutputBuffer:
-    """Singleton store for live worker output buffers."""
+class CommisOutputBuffer:
+    """Singleton store for live commis output buffers."""
 
     def __init__(
         self,
@@ -117,23 +117,23 @@ class WorkerOutputBuffer:
 
     def _prune_locked(self) -> None:
         now = time.time()
-        stale = [worker_id for worker_id, buf in self._buffers.items() if now - buf.updated_at > self._ttl_seconds]
-        for worker_id in stale:
-            self._buffers.pop(worker_id, None)
+        stale = [commis_id for commis_id, buf in self._buffers.items() if now - buf.updated_at > self._ttl_seconds]
+        for commis_id in stale:
+            self._buffers.pop(commis_id, None)
 
-    def _get_or_create(self, worker_id: str) -> _OutputBuffer:
+    def _get_or_create(self, commis_id: str) -> _OutputBuffer:
         with self._lock:
             self._prune_locked()
-            buf = self._buffers.get(worker_id)
+            buf = self._buffers.get(commis_id)
             if buf is None:
                 buf = _OutputBuffer(self._max_bytes)
-                self._buffers[worker_id] = buf
+                self._buffers[commis_id] = buf
             return buf
 
     def append_output(
         self,
         *,
-        worker_id: str,
+        commis_id: str,
         stream: str,
         data: str,
         runner_job_id: Optional[str] = None,
@@ -143,11 +143,11 @@ class WorkerOutputBuffer:
         owner_id: Optional[int] = None,
         resolved: bool = False,
     ) -> None:
-        """Append output chunk for a worker."""
-        if not worker_id:
+        """Append output chunk for a commis."""
+        if not commis_id:
             return
 
-        buf = self._get_or_create(worker_id)
+        buf = self._get_or_create(commis_id)
         buf.set_meta(
             job_id=job_id,
             run_id=run_id,
@@ -168,38 +168,34 @@ class WorkerOutputBuffer:
 
         buf.append(prefix + data)
 
-    def get_tail(self, worker_id: str, *, max_bytes: int | None = None) -> str:
-        """Get tail output for a worker."""
+    def get_tail(self, commis_id: str, *, max_bytes: int | None = None) -> str:
+        """Get tail output for a commis."""
         with self._lock:
             self._prune_locked()
-            buf = self._buffers.get(worker_id)
+            buf = self._buffers.get(commis_id)
         if not buf:
             return ""
         return buf.get_tail(max_bytes)
 
-    def get_meta(self, worker_id: str) -> WorkerOutputMeta | None:
-        """Return cached metadata for a worker output buffer."""
+    def get_meta(self, commis_id: str) -> CommisOutputMeta | None:
+        """Return cached metadata for a commis output buffer."""
         with self._lock:
             self._prune_locked()
-            buf = self._buffers.get(worker_id)
+            buf = self._buffers.get(commis_id)
         if not buf:
             return None
         return buf.meta
 
 
-_OUTPUT_BUFFER: WorkerOutputBuffer | None = None
+_OUTPUT_BUFFER: CommisOutputBuffer | None = None
 
 
-def get_worker_output_buffer() -> WorkerOutputBuffer:
-    """Get singleton worker output buffer."""
+def get_commis_output_buffer() -> CommisOutputBuffer:
+    """Get singleton commis output buffer."""
     global _OUTPUT_BUFFER
     if _OUTPUT_BUFFER is None:
-        _OUTPUT_BUFFER = WorkerOutputBuffer()
+        _OUTPUT_BUFFER = CommisOutputBuffer()
     return _OUTPUT_BUFFER
 
 
-__all__ = [
-    "WorkerOutputBuffer",
-    "WorkerOutputMeta",
-    "get_worker_output_buffer",
-]
+__all__ = ["CommisOutputBuffer", "CommisOutputMeta", "get_commis_output_buffer"]

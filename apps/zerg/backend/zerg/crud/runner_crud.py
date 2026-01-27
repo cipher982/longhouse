@@ -313,8 +313,8 @@ def create_runner_job(
         runner_id: ID of the runner to execute the job
         command: Shell command to execute
         timeout_secs: Maximum execution time in seconds
-        commis_id: Optional commis ID for correlation
-        run_id: Optional run ID for correlation
+    commis_id: Optional commis ID for correlation
+    run_id: Optional run ID for correlation
 
     Returns:
         Created job record with status='queued'

@@ -575,7 +575,7 @@ class CommisArtifactStore:
         with open(file_path, "r") as f:
             return f.read()
 
-    def list_commis(
+    def list_commiss(
         self,
         limit: int = 50,
         status: str | None = None,
@@ -661,7 +661,7 @@ class CommisArtifactStore:
         compiled_pattern = re.compile(pattern)
 
         # Get all commis
-        commis = self.list_commis(limit=1000)  # Reasonable upper bound
+        commis = self.list_commiss(limit=1000)  # Reasonable upper bound
 
         # Restrict search scope if commis_ids provided
         if commis_ids:

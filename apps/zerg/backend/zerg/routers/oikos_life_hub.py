@@ -1,4 +1,4 @@
-"""Life Hub session integration for Jarvis.
+"""Life Hub session integration for Oikos.
 
 Provides endpoints to list and preview past AI sessions from Life Hub.
 Used by the Session Picker modal to enable resuming past sessions.

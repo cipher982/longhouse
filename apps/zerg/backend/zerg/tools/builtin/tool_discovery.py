@@ -118,7 +118,7 @@ async def list_tools(
 
     Args:
         category: Optional category filter. Categories include:
-            - oikos: spawn_commis, list_commis, contact_user
+            - oikos: spawn_commis, list_commiss, contact_user
             - messaging: send_email, send_sms, send_slack_webhook, etc.
             - github: github_list_issues, github_create_issue, etc.
             - jira: jira_list_issues, jira_create_issue, etc.

@@ -2,7 +2,7 @@
 
 This service handles:
 - Finding or creating the user's long-lived oikos thread
-- Running the oikos agent with streaming events
+- Running the oikos fiche with streaming events
 - Coordinating commis execution and result synthesis
 
 The key invariant is ONE oikos thread per user that persists across sessions.
@@ -38,14 +38,14 @@ from zerg.tools.builtin.oikos_tools import get_oikos_allowed_tools
 
 logger = logging.getLogger(__name__)
 
-# Thread type for oikos threads - distinguishes from regular agent threads
-SUPERVISOR_THREAD_TYPE = ThreadType.SUPER
+# Thread type for oikos threads - distinguishes from regular fiche threads
+OIKOS_THREAD_TYPE = ThreadType.SUPER
 
 # Configuration for recent commis history injection
-RECENT_WORKER_HISTORY_LIMIT = 5  # Max commiss to show
-RECENT_WORKER_HISTORY_MINUTES = 10  # Only show commiss from last N minutes
+RECENT_COMMIS_HISTORY_LIMIT = 5  # Max commiss to show
+RECENT_COMMIS_HISTORY_MINUTES = 10  # Only show commiss from last N minutes
 # Marker to identify ephemeral context messages (for cleanup)
-RECENT_WORKER_CONTEXT_MARKER = "<!-- RECENT_WORKER_CONTEXT -->"
+RECENT_COMMIS_CONTEXT_MARKER = "<!-- RECENT_COMMIS_CONTEXT -->"
 
 
 @dataclass
@@ -114,10 +114,10 @@ async def emit_stream_control(
 
 
 class OikosService:
-    """Service for managing oikos agent execution."""
+    """Service for managing oikos fiche execution."""
 
-    # Bump this whenever BASE_SUPERVISOR_PROMPT meaningfully changes.
-    SUPERVISOR_PROMPT_VERSION = 2
+    # Bump this whenever BASE_OIKOS_PROMPT meaningfully changes.
+    OIKOS_PROMPT_VERSION = 2
 
     def __init__(self, db: Session):
         """Initialize the oikos service.
@@ -127,24 +127,24 @@ class OikosService:
         """
         self.db = db
 
-    def get_or_create_oikos_agent(self, owner_id: int) -> FicheModel:
-        """Get or create the oikos agent for a user.
+    def get_or_create_oikos_fiche(self, owner_id: int) -> FicheModel:
+        """Get or create the oikos fiche for a user.
 
-        The oikos agent is a special agent with oikos tools enabled.
-        Each user has exactly one oikos agent.
+        The oikos fiche is a special fiche with oikos tools enabled.
+        Each user has exactly one oikos fiche.
 
         Args:
             owner_id: User ID
 
         Returns:
-            The oikos agent
+            The oikos fiche
         """
         from zerg.models_config import DEFAULT_MODEL_ID
 
-        # Look for existing oikos agent
-        agents = crud.get_agents(self.db, owner_id=owner_id)
-        for agent in agents:
-            config = agent.config or {}
+        # Look for existing oikos fiche
+        fiches = crud.get_fiches(self.db, owner_id=owner_id)
+        for fiche in fiches:
+            config = fiche.config or {}
             if config.get("is_oikos"):
                 # Keep the oikos prompt and tool allowlist in sync with code.
                 # Oikos agents are system-managed; stale prompts routinely cause
@@ -154,31 +154,31 @@ class OikosService:
                 user = crud.get_user(self.db, owner_id)
                 if user:
                     desired_prompt = build_oikos_prompt(user)
-                    if agent.system_instructions != desired_prompt:
-                        agent.system_instructions = desired_prompt
+                    if fiche.system_instructions != desired_prompt:
+                        fiche.system_instructions = desired_prompt
                         changed = True
 
                 # Use centralized tool list from oikos_tools.py (single source of truth)
                 oikos_tools = get_oikos_allowed_tools()
-                if agent.allowed_tools != oikos_tools:
-                    agent.allowed_tools = oikos_tools
+                if fiche.allowed_tools != oikos_tools:
+                    fiche.allowed_tools = oikos_tools
                     changed = True
 
                 # Track prompt version in config for future migrations/debugging.
-                if config.get("prompt_version") != self.SUPERVISOR_PROMPT_VERSION:
-                    config["prompt_version"] = self.SUPERVISOR_PROMPT_VERSION
-                    agent.config = config
+                if config.get("prompt_version") != self.OIKOS_PROMPT_VERSION:
+                    config["prompt_version"] = self.OIKOS_PROMPT_VERSION
+                    fiche.config = config
                     changed = True
 
                 if changed:
                     self.db.commit()
-                    self.db.refresh(agent)
+                    self.db.refresh(fiche)
 
-                logger.debug(f"Found existing oikos agent {agent.id} for user {owner_id}")
-                return agent
+                logger.debug(f"Found existing oikos fiche {fiche.id} for user {owner_id}")
+                return fiche
 
-        # Create new oikos agent
-        logger.info(f"Creating oikos agent for user {owner_id}")
+        # Create new oikos fiche
+        logger.info(f"Creating oikos fiche for user {owner_id}")
 
         # Fetch user for context-aware prompt composition
         user = crud.get_user(self.db, owner_id)
@@ -187,7 +187,7 @@ class OikosService:
 
         oikos_config = {
             "is_oikos": True,
-            "prompt_version": self.SUPERVISOR_PROMPT_VERSION,
+            "prompt_version": self.OIKOS_PROMPT_VERSION,
             "temperature": 0.7,
             "max_tokens": 2000,
             "reasoning_effort": "none",  # Disable reasoning for fast responses
@@ -196,7 +196,7 @@ class OikosService:
         # Use centralized tool list from oikos_tools.py (single source of truth)
         oikos_tools = get_oikos_allowed_tools()
 
-        agent = crud.create_agent(
+        fiche = crud.create_fiche(
             db=self.db,
             owner_id=owner_id,
             name="Oikos",
@@ -205,15 +205,19 @@ class OikosService:
             task_instructions="You are helping the user accomplish their goals. " "Analyze their request and decide how to handle it.",
             config=oikos_config,
         )
-        # Set allowed_tools (not supported in crud.create_agent)
-        agent.allowed_tools = oikos_tools
+        # Set allowed_tools (not supported in crud.create_fiche)
+        fiche.allowed_tools = oikos_tools
         self.db.commit()
-        self.db.refresh(agent)
+        self.db.refresh(fiche)
 
-        logger.info(f"Created oikos agent {agent.id} for user {owner_id}")
-        return agent
+        logger.info(f"Created oikos fiche {fiche.id} for user {owner_id}")
+        return fiche
 
-    def get_or_create_oikos_thread(self, owner_id: int, agent: FicheModel | None = None) -> ThreadModel:
+    def get_or_create_oikos_thread(
+        self,
+        owner_id: int,
+        fiche: FicheModel | None = None,
+    ) -> ThreadModel:
         """Get or create the long-lived oikos thread for a user.
 
         Each user has exactly ONE oikos thread that persists across sessions.
@@ -221,18 +225,18 @@ class OikosService:
 
         Args:
             owner_id: User ID
-            agent: Optional oikos agent (will be created if not provided)
+            fiche: Optional oikos fiche (will be created if not provided)
 
         Returns:
             The oikos thread
         """
-        if agent is None:
-            agent = self.get_or_create_oikos_agent(owner_id)
+        if fiche is None:
+            fiche = self.get_or_create_oikos_fiche(owner_id)
 
         # Look for existing oikos thread
-        threads = crud.get_threads(self.db, fiche_id=agent.id)
+        threads = crud.get_threads(self.db, fiche_id=fiche.id)
         for thread in threads:
-            if thread.thread_type == SUPERVISOR_THREAD_TYPE:
+            if thread.thread_type == OIKOS_THREAD_TYPE:
                 logger.debug(f"Found existing oikos thread {thread.id} for user {owner_id}")
                 return thread
 
@@ -241,9 +245,9 @@ class OikosService:
 
         thread = ThreadService.create_thread_with_system_message(
             self.db,
-            agent,
+            fiche,
             title="Oikos",
-            thread_type=SUPERVISOR_THREAD_TYPE,
+            thread_type=OIKOS_THREAD_TYPE,
             active=True,
         )
         self.db.commit()
@@ -282,7 +286,7 @@ class OikosService:
                 CommisJob.status.in_(["queued", "running"]),
             )
             .order_by(CommisJob.created_at.desc())
-            .limit(RECENT_WORKER_HISTORY_LIMIT)
+            .limit(RECENT_COMMIS_HISTORY_LIMIT)
             .all()
         )
 
@@ -296,12 +300,12 @@ class OikosService:
                 CommisJob.acknowledged == False,  # noqa: E712
             )
             .order_by(CommisJob.created_at.desc())
-            .limit(RECENT_WORKER_HISTORY_LIMIT)
+            .limit(RECENT_COMMIS_HISTORY_LIMIT)
             .all()
         )
 
         # Also include recent acknowledged jobs for context (last N minutes)
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=RECENT_WORKER_HISTORY_MINUTES)
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=RECENT_COMMIS_HISTORY_MINUTES)
         recent_acknowledged_jobs = (
             self.db.query(CommisJob)
             .filter(
@@ -352,7 +356,7 @@ class OikosService:
 
         # Build context with marker for cleanup
         lines = [
-            RECENT_WORKER_CONTEXT_MARKER,  # Marker for identifying ephemeral context
+            RECENT_COMMIS_CONTEXT_MARKER,  # Marker for identifying ephemeral context
             "## Commis Inbox",
         ]
 
@@ -421,7 +425,7 @@ class OikosService:
         """Delete previous recent commis context messages from the thread.
 
         This prevents stale context from accumulating across runs.
-        Messages are identified by the RECENT_WORKER_CONTEXT_MARKER.
+        Messages are identified by the RECENT_COMMIS_CONTEXT_MARKER.
 
         Strategy to handle both race conditions and back-to-back requests:
         1. Find all marked messages, sorted newest-first
@@ -447,7 +451,7 @@ class OikosService:
             .filter(
                 ThreadMessage.thread_id == thread_id,
                 ThreadMessage.role == "system",
-                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+                ThreadMessage.content.contains(RECENT_COMMIS_CONTEXT_MARKER),
             )
             .order_by(ThreadMessage.sent_at.desc())
             .all()
@@ -493,13 +497,13 @@ class OikosService:
         reasoning_effort: str | None = None,
         return_on_deferred: bool = True,
     ) -> OikosRunResult:
-        """Run the oikos agent with a task.
+        """Run the oikos fiche with a task.
 
         This method:
         1. Gets or creates the oikos thread for the user
         2. Uses existing run record OR creates a new one
         3. Adds the task as a user message
-        4. Runs the oikos agent
+        4. Runs the oikos fiche
         5. Returns the result
 
         Args:
@@ -508,10 +512,10 @@ class OikosService:
             run_id: Optional existing run ID (avoids duplicate run creation)
             message_id: Client-generated message ID (UUID). If None, one will be generated.
             timeout: Maximum execution time in seconds
-            model_override: Optional model to use instead of agent's default
+            model_override: Optional model to use instead of fiche's default
             reasoning_effort: Optional reasoning effort (none, low, medium, high)
             return_on_deferred: If True, return a DEFERRED response once the timeout hits.
-                If False, emit SUPERVISOR_DEFERRED but continue running in the background until completion.
+                If False, emit OIKOS_DEFERRED but continue running in the background until completion.
 
         Returns:
             OikosRunResult with run details and result
@@ -520,49 +524,49 @@ class OikosService:
         started_at_naive = start_time.replace(tzinfo=None)
 
         # Get or create oikos components
-        agent = self.get_or_create_oikos_agent(owner_id)
+        fiche = self.get_or_create_oikos_fiche(owner_id)
 
         # Always refresh oikos prompt from current templates + user context.
-        # The oikos agent is long-lived; without this, prompt updates (and user profile changes)
-        # won't take effect until the agent row is recreated.
+        # The oikos fiche is long-lived; without this, prompt updates (and user profile changes)
+        # won't take effect until the fiche row is recreated.
         user = crud.get_user(self.db, owner_id)
         if not user:
             raise ValueError(f"User {owner_id} not found")
-        agent.system_instructions = build_oikos_prompt(user)
+        fiche.system_instructions = build_oikos_prompt(user)
         self.db.commit()
-        logger.debug(f"Refreshed oikos prompt for agent {agent.id} (user {owner_id})")
-        thread = self.get_or_create_oikos_thread(owner_id, agent)
+        logger.debug(f"Refreshed oikos prompt for fiche {fiche.id} (user {owner_id})")
+        thread = self.get_or_create_oikos_thread(owner_id, fiche)
 
         # Use existing run or create new one
         if run_id:
             run = self.db.query(Run).filter(Run.id == run_id).first()
             if not run:
                 raise ValueError(f"Run {run_id} not found")
-            logger.info(f"Using existing oikos run {run.id}", extra={"tag": "AGENT"})
+            logger.info(f"Using existing oikos run {run.id}", extra={"tag": "OIKOS"})
         else:
             # Create run record (fallback for direct calls)
             from zerg.models.enums import RunTrigger
 
             run = Run(
-                fiche_id=agent.id,
+                fiche_id=fiche.id,
                 thread_id=thread.id,
                 status=RunStatus.RUNNING,
                 trigger=RunTrigger.API,
                 started_at=started_at_naive,
-                model=model_override or agent.model,
+                model=model_override or fiche.model,
                 reasoning_effort=reasoning_effort,
             )
             self.db.add(run)
             self.db.commit()
             self.db.refresh(run)
-            logger.info(f"Created new oikos run {run.id}", extra={"tag": "AGENT"})
+            logger.info(f"Created new oikos run {run.id}", extra={"tag": "OIKOS"})
 
         # Ensure started_at is populated for existing runs as well.
         if run.started_at is None:
             run.started_at = started_at_naive
             self.db.commit()
 
-        logger.info(f"Starting oikos run {run.id} for user {owner_id}, task: {task[:50]}...", extra={"tag": "AGENT"})
+        logger.info(f"Starting oikos run {run.id} for user {owner_id}, task: {task[:50]}...", extra={"tag": "OIKOS"})
 
         # Use client-provided message_id or generate one (for direct API calls / tests)
         # This ID is stable across oikos_started -> oikos_token -> oikos_complete
@@ -638,7 +642,7 @@ class OikosService:
                     thread_id=thread.id,
                     role="system",
                     content=recent_commis_context,
-                    processed=True,  # Mark as processed so agent doesn't re-process
+                    processed=True,  # Mark as processed so fiche doesn't re-process
                 )
 
             # Add task as user message
@@ -680,7 +684,7 @@ class OikosService:
                 owner_id=owner_id,
                 message_id=message_id,
                 trace_id=effective_trace_id,
-                model=model_override or agent.model,
+                model=model_override or fiche.model,
                 reasoning_effort=reasoning_effort,
             )
 
@@ -704,8 +708,8 @@ class OikosService:
 
             _user_ctx_token = set_current_user_id(owner_id)
 
-            # Run the agent with timeout (shielded so timeout doesn't cancel work)
-            runner = Runner(agent, model_override=model_override, reasoning_effort=reasoning_effort)
+            # Run the fiche with timeout (shielded so timeout doesn't cancel work)
+            runner = Runner(fiche, model_override=model_override, reasoning_effort=reasoning_effort)
             run_task = asyncio.create_task(runner.run_thread(self.db, thread))
             try:
                 # asyncio.shield() prevents timeout from cancelling the task -
@@ -731,7 +735,7 @@ class OikosService:
                     run_id=run.id,
                     event_type="oikos_deferred",
                     payload={
-                        "fiche_id": agent.id,
+                        "fiche_id": fiche.id,
                         "thread_id": thread.id,
                         "message": "Still working on this in the background. I'll continue when ready.",
                         "timeout_seconds": timeout,
@@ -748,7 +752,7 @@ class OikosService:
                     run_id=run.id,
                     event_type="run_updated",
                     payload={
-                        "fiche_id": agent.id,
+                        "fiche_id": fiche.id,
                         "status": "deferred",
                         "thread_id": thread.id,
                         "owner_id": owner_id,
@@ -772,7 +776,7 @@ class OikosService:
                     )
 
                 # Background mode: keep awaiting the original run_task to completion, then mark the run
-                # finished and persist the result (SSE streams can close on SUPERVISOR_DEFERRED).
+                # finished and persist the result (SSE streams can close on OIKOS_DEFERRED).
                 created_messages = await run_task
 
             except FicheInterrupted as interrupt:
@@ -796,8 +800,8 @@ class OikosService:
                 # CRITICAL: Barrier creation and WAITING status must be in SAME transaction
                 # to prevent race where commis completes before barrier exists
                 if isinstance(interrupt_value, dict) and interrupt_value.get("type") == "commiss_pending":
-                    from zerg.models.commis_barrier import BarrierJob
                     from zerg.models.commis_barrier import CommisBarrier
+                    from zerg.models.commis_barrier import CommisBarrierJob
 
                     job_ids = interrupt_value.get("job_ids", [])
                     created_jobs = interrupt_value.get("created_jobs", [])
@@ -815,12 +819,12 @@ class OikosService:
                     self.db.add(barrier)
                     self.db.flush()  # Get barrier.id
 
-                    # Create BarrierJob records with tool_call_id mapping
+                    # Create CommisBarrierJob records with tool_call_id mapping
                     for job_info in created_jobs:
                         job = job_info["job"]
                         tool_call_id = job_info["tool_call_id"]
                         self.db.add(
-                            BarrierJob(
+                            CommisBarrierJob(
                                 barrier_id=barrier.id,
                                 job_id=job.id,
                                 tool_call_id=tool_call_id,
@@ -860,7 +864,7 @@ class OikosService:
                         )
                     logger.info(f"Emitted {len(created_jobs)} commis_spawned events")
 
-                    # For backwards compatibility with event payload
+                    # Use first job_id for payload/UI convenience
                     job_id = job_ids[0] if job_ids else None
                     interrupt_message = f"Working on {len(job_ids)} tasks in the background..."
 
@@ -884,7 +888,7 @@ class OikosService:
                         logger.info(f"{already_completed}/{len(job_ids)} commiss already completed - scheduled barrier checks")
 
                 else:
-                    # SINGLE-WORKER PATH (wait_for_commis or backwards compatibility)
+                    # SINGLE-COMMIS PATH (wait_for_commis or single-commis interrupt)
                     job_id = interrupt_value.get("job_id") if isinstance(interrupt_value, dict) else None
                     interrupt_message = (
                         interrupt_value.get("message", "Working on this in the background...")
@@ -929,7 +933,7 @@ class OikosService:
                     run_id=run.id,
                     event_type="oikos_waiting",
                     payload={
-                        "fiche_id": agent.id,
+                        "fiche_id": fiche.id,
                         "thread_id": thread.id,
                         "job_id": job_id,
                         "message": interrupt_message,
@@ -945,7 +949,7 @@ class OikosService:
                     run_id=run.id,
                     event_type="run_updated",
                     payload={
-                        "fiche_id": agent.id,
+                        "fiche_id": fiche.id,
                         "status": "waiting",
                         "thread_id": thread.id,
                         "owner_id": owner_id,
@@ -996,14 +1000,14 @@ class OikosService:
             self.db.commit()
 
             # Emit completion event with OikosResult-aligned schema
-            # Note: summary/recommendations/caveats would require parsing agent response
+            # Note: summary/recommendations/caveats would require parsing fiche response
             # For now, include required fields and let frontend extract details
             await emit_run_event(
                 db=self.db,
                 run_id=run.id,
                 event_type="oikos_complete",
                 payload={
-                    "fiche_id": agent.id,
+                    "fiche_id": fiche.id,
                     "thread_id": thread.id,
                     "result": result_text or "(No result)",
                     "status": "success",
@@ -1042,7 +1046,7 @@ class OikosService:
                 run_id=run.id,
                 event_type="run_updated",
                 payload={
-                    "fiche_id": agent.id,
+                    "fiche_id": fiche.id,
                     "status": "success",
                     "finished_at": end_time.isoformat(),
                     "duration_ms": duration_ms,
@@ -1074,7 +1078,7 @@ class OikosService:
                 run_url=f"https://swarmlet.com/runs/{run.id}",
             )
 
-            logger.info(f"Oikos run {run.id} completed in {duration_ms}ms", extra={"tag": "AGENT"})
+            logger.info(f"Oikos run {run.id} completed in {duration_ms}ms", extra={"tag": "OIKOS"})
 
             return OikosRunResult(
                 run_id=run.id,
@@ -1102,7 +1106,7 @@ class OikosService:
                 run_id=run.id,
                 event_type="oikos_complete",
                 payload={
-                    "fiche_id": agent.id,
+                    "fiche_id": fiche.id,
                     "thread_id": thread.id,
                     "status": "cancelled",
                     "duration_ms": duration_ms,
@@ -1120,7 +1124,7 @@ class OikosService:
                 run_id=run.id,
                 event_type="run_updated",
                 payload={
-                    "fiche_id": agent.id,
+                    "fiche_id": fiche.id,
                     "status": "cancelled",
                     "finished_at": end_time.isoformat(),
                     "duration_ms": duration_ms,
@@ -1155,7 +1159,7 @@ class OikosService:
                 run_id=run.id,
                 event_type="error",
                 payload={
-                    "fiche_id": agent.id,
+                    "fiche_id": fiche.id,
                     "thread_id": thread.id,
                     "message": str(e),
                     "status": "error",
@@ -1174,7 +1178,7 @@ class OikosService:
                 run_id=run.id,
                 event_type="run_updated",
                 payload={
-                    "fiche_id": agent.id,
+                    "fiche_id": fiche.id,
                     "status": "failed",
                     "finished_at": end_time.isoformat(),
                     "duration_ms": duration_ms,
@@ -1378,4 +1382,11 @@ class OikosService:
     # See commis_resume.py for the new implementation using Runner.run_continuation()
 
 
-__all__ = ["OikosService", "OikosRunResult", "SUPERVISOR_THREAD_TYPE"]
+__all__ = [
+    "OikosService",
+    "OikosRunResult",
+    "OIKOS_THREAD_TYPE",
+    "RECENT_COMMIS_HISTORY_LIMIT",
+    "RECENT_COMMIS_HISTORY_MINUTES",
+    "RECENT_COMMIS_CONTEXT_MARKER",
+]

@@ -708,47 +708,47 @@ async def runner_websocket(
                             logger.warning(f"Ignoring exec_chunk for invalid job {job_id} from runner {runner_id}")
                         else:
                             updated_job = runner_crud.update_job_output(db, job_id, stream, data)
-                            if updated_job and updated_job.worker_id:
+                            if updated_job and updated_job.commis_id:
                                 from zerg.events import EventType
                                 from zerg.events.event_bus import event_bus
-                                from zerg.models.models import WorkerJob
-                                from zerg.services.worker_output_buffer import get_worker_output_buffer
+                                from zerg.models.models import CommisJob
+                                from zerg.services.commis_output_buffer import get_commis_output_buffer
 
-                                output_buffer = get_worker_output_buffer()
+                                output_buffer = get_commis_output_buffer()
 
-                                # Resolve worker job metadata once (cached in buffer)
-                                worker_job_id = None
+                                # Resolve commis job metadata once (cached in buffer)
+                                commis_job_id = None
                                 trace_id = None
-                                meta = output_buffer.get_meta(updated_job.worker_id)
+                                meta = output_buffer.get_meta(updated_job.commis_id)
                                 last_resolved_at = 0
                                 if meta:
-                                    worker_job_id = meta.job_id
+                                    commis_job_id = meta.job_id
                                     trace_id = meta.trace_id
                                     last_resolved_at = meta.last_resolved_at
 
                                 # Throttle DB lookup to once per 5 seconds if not yet resolved
                                 import time
 
-                                if worker_job_id is None and (time.time() - last_resolved_at) > 5.0:
-                                    worker_job = (
-                                        db.query(WorkerJob)
+                                if commis_job_id is None and (time.time() - last_resolved_at) > 5.0:
+                                    commis_job = (
+                                        db.query(CommisJob)
                                         .filter(
-                                            WorkerJob.worker_id == updated_job.worker_id,
-                                            WorkerJob.owner_id == owner_id,
+                                            CommisJob.commis_id == updated_job.commis_id,
+                                            CommisJob.owner_id == owner_id,
                                         )
-                                        .order_by(WorkerJob.id.desc())
+                                        .order_by(CommisJob.id.desc())
                                         .first()
                                     )
-                                    if worker_job:
-                                        worker_job_id = worker_job.id
-                                        trace_id = str(worker_job.trace_id) if worker_job.trace_id else None
+                                    if commis_job:
+                                        commis_job_id = commis_job.id
+                                        trace_id = str(commis_job.trace_id) if commis_job.trace_id else None
 
                                     # Mark as resolved (even if not found, to trigger throttling)
                                     output_buffer.append_output(
-                                        worker_id=updated_job.worker_id,
+                                        commis_id=updated_job.commis_id,
                                         stream=stream,
                                         data="",  # Don't append data here, just updating meta
-                                        job_id=worker_job_id,
+                                        job_id=commis_job_id,
                                         trace_id=trace_id,
                                         owner_id=owner_id,
                                         resolved=True,
@@ -762,11 +762,11 @@ async def runner_websocket(
                                         run_id_int = None
 
                                 output_buffer.append_output(
-                                    worker_id=updated_job.worker_id,
+                                    commis_id=updated_job.commis_id,
                                     stream=stream,
                                     data=data,
                                     runner_job_id=job_id,
-                                    job_id=worker_job_id,
+                                    job_id=commis_job_id,
                                     run_id=run_id_int,
                                     trace_id=trace_id,
                                     owner_id=owner_id,
@@ -776,8 +776,8 @@ async def runner_websocket(
                                 if run_id_int:
                                     MAX_CHUNK_CHARS = 4000
                                     payload = {
-                                        "job_id": worker_job_id,
-                                        "worker_id": updated_job.worker_id,
+                                        "job_id": commis_job_id,
+                                        "commis_id": updated_job.commis_id,
                                         "runner_job_id": job_id,
                                         "stream": stream,
                                         "data": data[-MAX_CHUNK_CHARS:] if len(data) > MAX_CHUNK_CHARS else data,
@@ -785,7 +785,7 @@ async def runner_websocket(
                                         "trace_id": trace_id,
                                         "owner_id": owner_id,
                                     }
-                                    await event_bus.publish(EventType.WORKER_OUTPUT_CHUNK, payload)
+                                    await event_bus.publish(EventType.COMMIS_OUTPUT_CHUNK, payload)
 
                 elif message_type == "exec_done":
                     # Handle job completion

@@ -117,7 +117,6 @@ TIER_3: str = _TIERS["TIER_3"]  # Basic, cheapest (gpt-5-nano)
 
 DEFAULT_MODEL_ID: str = _TIERS[_DEFAULTS["fiche"]]
 DEFAULT_COMMIS_MODEL_ID: str = _TIERS[_DEFAULTS["commis"]]
-DEFAULT_WORKER_MODEL_ID: str = DEFAULT_COMMIS_MODEL_ID  # Backwards compat alias
 TEST_MODEL_ID: str = _TIERS[_DEFAULTS["test"]]
 
 AVAILABLE_MODELS: List[ModelConfig] = []
@@ -178,6 +177,11 @@ def get_model_by_id(model_id: str) -> Optional[ModelConfig]:
 def get_default_model() -> ModelConfig:
     """Get the default model"""
     return DEFAULT_MODEL
+
+
+def get_default_model_id_str() -> str:
+    """Backwards compatibility helper returning default model ID."""
+    return DEFAULT_MODEL_ID
 
 
 def get_default_model_id() -> str:

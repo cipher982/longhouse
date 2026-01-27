@@ -69,7 +69,7 @@ def _load_historical_events(
     Args:
         run_id: Run identifier
         after_event_id: Resume from this event ID (0 = from start)
-        include_tokens: Whether to include SUPERVISOR_TOKEN events
+        include_tokens: Whether to include OIKOS_TOKEN events
 
     Returns:
         List of (event_id, event_type, payload, timestamp_str) tuples
@@ -139,7 +139,7 @@ async def _replay_and_stream(
         owner_id: Owner ID for security filtering
         status: Current run status (RUNNING, DEFERRED, SUCCESS, etc.)
         after_event_id: Resume from this event ID (0 = from start)
-        include_tokens: Whether to include SUPERVISOR_TOKEN events
+        include_tokens: Whether to include OIKOS_TOKEN events
         include_replay: If True, replay historical events before streaming live
         allow_continuation_runs: If True, also stream events from continuation runs
 
@@ -302,27 +302,27 @@ async def _replay_and_stream(
             logger.warning(f"Stream queue overflow for run {run_id}, signaling client to reconnect")
 
     # Subscribe to all relevant events
-    event_bus.subscribe(EventType.SUPERVISOR_STARTED, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_THINKING, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_TOKEN, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_DEFERRED, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_WAITING, event_handler)  # Interrupt/resume pattern
-    event_bus.subscribe(EventType.SUPERVISOR_RESUMED, event_handler)  # Interrupt/resume pattern
-    event_bus.subscribe(EventType.SUPERVISOR_HEARTBEAT, event_handler)
-    event_bus.subscribe(EventType.WORKER_SPAWNED, event_handler)
-    event_bus.subscribe(EventType.WORKER_STARTED, event_handler)
-    event_bus.subscribe(EventType.WORKER_COMPLETE, event_handler)
-    event_bus.subscribe(EventType.WORKER_SUMMARY_READY, event_handler)
+    event_bus.subscribe(EventType.OIKOS_STARTED, event_handler)
+    event_bus.subscribe(EventType.OIKOS_THINKING, event_handler)
+    event_bus.subscribe(EventType.OIKOS_TOKEN, event_handler)
+    event_bus.subscribe(EventType.OIKOS_COMPLETE, event_handler)
+    event_bus.subscribe(EventType.OIKOS_DEFERRED, event_handler)
+    event_bus.subscribe(EventType.OIKOS_WAITING, event_handler)  # Interrupt/resume pattern
+    event_bus.subscribe(EventType.OIKOS_RESUMED, event_handler)  # Interrupt/resume pattern
+    event_bus.subscribe(EventType.OIKOS_HEARTBEAT, event_handler)
+    event_bus.subscribe(EventType.COMMIS_SPAWNED, event_handler)
+    event_bus.subscribe(EventType.COMMIS_STARTED, event_handler)
+    event_bus.subscribe(EventType.COMMIS_COMPLETE, event_handler)
+    event_bus.subscribe(EventType.COMMIS_SUMMARY_READY, event_handler)
     event_bus.subscribe(EventType.ERROR, event_handler)
-    event_bus.subscribe(EventType.WORKER_TOOL_STARTED, event_handler)
-    event_bus.subscribe(EventType.WORKER_TOOL_COMPLETED, event_handler)
-    event_bus.subscribe(EventType.WORKER_TOOL_FAILED, event_handler)
-    event_bus.subscribe(EventType.WORKER_OUTPUT_CHUNK, event_handler)
+    event_bus.subscribe(EventType.COMMIS_TOOL_STARTED, event_handler)
+    event_bus.subscribe(EventType.COMMIS_TOOL_COMPLETED, event_handler)
+    event_bus.subscribe(EventType.COMMIS_TOOL_FAILED, event_handler)
+    event_bus.subscribe(EventType.COMMIS_OUTPUT_CHUNK, event_handler)
     # Oikos tool events (for chat UI tool activity display)
-    event_bus.subscribe(EventType.SUPERVISOR_TOOL_STARTED, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_TOOL_COMPLETED, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_TOOL_FAILED, event_handler)
+    event_bus.subscribe(EventType.OIKOS_TOOL_STARTED, event_handler)
+    event_bus.subscribe(EventType.OIKOS_TOOL_COMPLETED, event_handler)
+    event_bus.subscribe(EventType.OIKOS_TOOL_FAILED, event_handler)
     # Stream lifecycle control
     event_bus.subscribe(EventType.STREAM_CONTROL, event_handler)
 
@@ -436,8 +436,8 @@ async def _replay_and_stream(
                     logger.debug(f"Skipping duplicate event {event_id} (already replayed)")
                     continue
 
-                # SUPERVISOR_TOKEN is emitted per-token and will spam logs when DEBUG is enabled
-                if event_type != EventType.SUPERVISOR_TOKEN.value:
+                # OIKOS_TOKEN is emitted per-token and will spam logs when DEBUG is enabled
+                if event_type != EventType.OIKOS_TOKEN.value:
                     logger.debug(f"Stream: received live event {event_type} for run {run_id}")
 
                 # Track commis lifecycle for UI telemetry (stream no longer waits on commiss)
@@ -499,26 +499,26 @@ async def _replay_and_stream(
         logger.info(f"Stream disconnected for run {run_id}")
     finally:
         # Unsubscribe from all events
-        event_bus.unsubscribe(EventType.SUPERVISOR_STARTED, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_THINKING, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_TOKEN, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_DEFERRED, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_WAITING, event_handler)  # Interrupt/resume pattern
-        event_bus.unsubscribe(EventType.SUPERVISOR_RESUMED, event_handler)  # Interrupt/resume pattern
-        event_bus.unsubscribe(EventType.SUPERVISOR_HEARTBEAT, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_SPAWNED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_STARTED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_COMPLETE, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_SUMMARY_READY, event_handler)
+        event_bus.unsubscribe(EventType.OIKOS_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.OIKOS_THINKING, event_handler)
+        event_bus.unsubscribe(EventType.OIKOS_TOKEN, event_handler)
+        event_bus.unsubscribe(EventType.OIKOS_COMPLETE, event_handler)
+        event_bus.unsubscribe(EventType.OIKOS_DEFERRED, event_handler)
+        event_bus.unsubscribe(EventType.OIKOS_WAITING, event_handler)  # Interrupt/resume pattern
+        event_bus.unsubscribe(EventType.OIKOS_RESUMED, event_handler)  # Interrupt/resume pattern
+        event_bus.unsubscribe(EventType.OIKOS_HEARTBEAT, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_SPAWNED, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_COMPLETE, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_SUMMARY_READY, event_handler)
         event_bus.unsubscribe(EventType.ERROR, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_TOOL_STARTED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_TOOL_COMPLETED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_TOOL_FAILED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_OUTPUT_CHUNK, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_STARTED, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_COMPLETED, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_FAILED, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_TOOL_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_TOOL_COMPLETED, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_TOOL_FAILED, event_handler)
+        event_bus.unsubscribe(EventType.COMMIS_OUTPUT_CHUNK, event_handler)
+        event_bus.unsubscribe(EventType.OIKOS_TOOL_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.OIKOS_TOOL_COMPLETED, event_handler)
+        event_bus.unsubscribe(EventType.OIKOS_TOOL_FAILED, event_handler)
         event_bus.unsubscribe(EventType.STREAM_CONTROL, event_handler)
 
 
@@ -576,7 +576,7 @@ async def stream_run_replay(
         run_id: Run identifier
         request: HTTP request (for Last-Event-ID header)
         after_event_id: Resume from this event ID (0 = from start)
-        include_tokens: Whether to include SUPERVISOR_TOKEN events (default: true)
+        include_tokens: Whether to include OIKOS_TOKEN events (default: true)
         current_user: Authenticated user (multi-tenant filtered)
 
     Returns:

@@ -213,7 +213,7 @@ async def spawn_commis_async(
             db.refresh(commis_job)
             logger.info(f"[SPAWN] Created commis job {commis_job.id} with tool_call_id={_tool_call_id}")
 
-            # Emit WORKER_SPAWNED event durably (replays on reconnect)
+            # Emit COMMIS_SPAWNED event durably (replays on reconnect)
             # Only persist if we have a oikos run_id (test mocks may not have one)
             if oikos_run_id is not None:
                 from zerg.services.event_store import append_run_event
@@ -1397,6 +1397,12 @@ TOOLS: List[StructuredTool] = [
         "This prevents context overflow when scanning 50+ commiss.",
     ),
     StructuredTool.from_function(
+        func=list_commiss,
+        coroutine=list_commiss_async,
+        name="list_commiss",
+        description="List recent commis jobs with SUMMARIES ONLY. " "Alias for list_commiss (single-s spelling).",
+    ),
+    StructuredTool.from_function(
         func=read_commis_result,
         coroutine=read_commis_result_async,
         name="read_commis_result",
@@ -1441,6 +1447,12 @@ TOOLS: List[StructuredTool] = [
         description="Search across completed commis job artifacts for a text pattern. "
         "Performs case-insensitive search and returns matches with job IDs and context. "
         "Useful for finding jobs that encountered specific errors or outputs.",
+    ),
+    StructuredTool.from_function(
+        func=grep_commiss,
+        coroutine=grep_commiss_async,
+        name="grep_commiss",
+        description="Search across completed commis job artifacts for a text pattern. " "Alias for grep_commiss (single-s spelling).",
     ),
     StructuredTool.from_function(
         func=get_commis_metadata,
@@ -1491,12 +1503,12 @@ TOOLS: List[StructuredTool] = [
 # ---------------------------------------------------------------------------
 
 # Tool names derived from TOOLS list - this is the canonical source
-SUPERVISOR_TOOL_NAMES: frozenset[str] = frozenset(t.name for t in TOOLS)
+OIKOS_TOOL_NAMES: frozenset[str] = frozenset(t.name for t in TOOLS)
 
 # Additional utility tools that oikoss need access to.
 # These are NOT oikos-specific but are commonly used by the oikos agent.
 # Organized by category for clarity.
-SUPERVISOR_UTILITY_TOOLS: frozenset[str] = frozenset(
+OIKOS_UTILITY_TOOLS: frozenset[str] = frozenset(
     [
         # Time/scheduling
         "get_current_time",
@@ -1519,11 +1531,6 @@ SUPERVISOR_UTILITY_TOOLS: frozenset[str] = frozenset(
 )
 
 
-# Terminology aliases (Supervisor → Oikos)
-OIKOS_TOOL_NAMES = SUPERVISOR_TOOL_NAMES
-OIKOS_UTILITY_TOOLS = SUPERVISOR_UTILITY_TOOLS
-
-
 def get_oikos_allowed_tools() -> list[str]:
     """Get the complete list of tools a oikos agent should have access to.
 
@@ -1533,4 +1540,4 @@ def get_oikos_allowed_tools() -> list[str]:
     Returns:
         Sorted list of tool names (oikos tools + utility tools)
     """
-    return sorted(SUPERVISOR_TOOL_NAMES | SUPERVISOR_UTILITY_TOOLS)
+    return sorted(OIKOS_TOOL_NAMES | OIKOS_UTILITY_TOOLS)

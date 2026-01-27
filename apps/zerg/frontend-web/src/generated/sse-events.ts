@@ -78,7 +78,7 @@ export interface OikosCompletePayload {
   duration_ms?: number;
   usage?: UsageData;
   run_id?: number;
-  agent_id?: number;
+  fiche_id?: number;
   thread_id?: number;
   /** URL for debug/inspection */
   debug_url?: string;
@@ -96,7 +96,7 @@ export interface OikosDeferredPayload {
   /** Timeout that triggered deferral */
   timeout_seconds?: number;
   run_id?: number;
-  agent_id?: number;
+  fiche_id?: number;
   thread_id?: number;
   /** Unique identifier for the assistant message */
   message_id?: string;
@@ -112,7 +112,7 @@ export interface OikosWaitingPayload {
   /** If false, keep SSE stream open while waiting */
   close_stream?: boolean;
   run_id?: number;
-  agent_id?: number;
+  fiche_id?: number;
   thread_id?: number;
   /** Unique identifier for the assistant message */
   message_id?: string;
@@ -122,7 +122,7 @@ export interface OikosWaitingPayload {
 
 export interface OikosResumedPayload {
   run_id?: number;
-  agent_id?: number;
+  fiche_id?: number;
   thread_id: number;
   /** Unique identifier for the assistant message */
   message_id: string;

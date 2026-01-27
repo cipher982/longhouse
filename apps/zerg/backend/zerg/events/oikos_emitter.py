@@ -188,7 +188,4 @@ class OikosEmitter:
             logger.warning("Failed to emit oikos_heartbeat event", exc_info=True)
 
 
-# Keep OikosEmitter as alias for backward compatibility during migration
-OikosEmitter = OikosEmitter
-
-__all__ = ["OikosEmitter", "OikosEmitter"]
+__all__ = ["OikosEmitter"]

@@ -85,10 +85,10 @@ def seed_oikos(user_email: str = None, name: str = "Oikos"):
     oikos_tools = [
         # Oikos/delegation tools
         "spawn_commis",
-        "list_commis",
+        "list_commiss",
         "read_commis_result",
         "read_commis_file",
-        "grep_commis",
+        "grep_commiss",
         "get_commis_metadata",
         # Direct utility tools
         "get_current_time",
@@ -161,7 +161,7 @@ Be helpful, concise, and transparent about what you're doing."""
     print(f"   Owner: {user.email}")
     print(f"   Model: {fiche.model}")
     print(f"   Tools: {len(fiche.allowed_tools)} tools")
-    print(f"     - Oikos: spawn_commis, list_commis, read_commis_result, etc.")
+    print(f"     - Oikos: spawn_commis, list_commiss, read_commis_result, etc.")
     print(f"     - Direct: get_current_time, http_request, send_email")
 
     print(f"\n🚀 Oikos is ready!")

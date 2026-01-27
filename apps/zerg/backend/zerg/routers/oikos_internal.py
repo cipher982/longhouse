@@ -4,7 +4,7 @@ These endpoints are called internally by the backend (not exposed to public API)
 to handle run resume when a oikos is interrupted and commis complete.
 
 Uses the LangGraph-free oikos resume pattern:
-- Oikos calls spawn_commis() and the loop raises RunInterrupted
+- Oikos calls spawn_commis() and the loop raises FicheInterrupted
 - Run status becomes WAITING
 - Commis completes, calls resume endpoint
 - FicheRunner.run_continuation() continues execution

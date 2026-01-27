@@ -299,8 +299,8 @@ async def resume_oikos_batch(
     from zerg.events import OikosEmitter
     from zerg.events import reset_emitter
     from zerg.events import set_emitter
+    from zerg.managers.fiche_runner import FicheInterrupted
     from zerg.managers.fiche_runner import FicheRunner
-    from zerg.managers.fiche_runner import RunInterrupted
     from zerg.services.event_store import emit_run_event
     from zerg.services.oikos_context import reset_oikos_context
     from zerg.services.oikos_context import set_oikos_context
@@ -502,7 +502,7 @@ async def resume_oikos_batch(
         logger.info("Successfully batch resumed oikos run %s", run_id)
         return {"status": "success", "result": final_response}
 
-    except RunInterrupted as e:
+    except FicheInterrupted as e:
         # Oikos spawned more commis - set back to WAITING and reuse/reset barrier
         interrupt_value = e.interrupt_value
         interrupt_message = "Working on more tasks in the background..."
@@ -737,8 +737,8 @@ async def _continue_oikos_langgraph_free(
     from zerg.events import OikosEmitter
     from zerg.events import reset_emitter
     from zerg.events import set_emitter
+    from zerg.managers.fiche_runner import FicheInterrupted
     from zerg.managers.fiche_runner import FicheRunner
-    from zerg.managers.fiche_runner import RunInterrupted
     from zerg.services.event_store import emit_run_event
     from zerg.services.oikos_context import reset_oikos_context
     from zerg.services.oikos_context import set_oikos_context
@@ -1020,7 +1020,7 @@ async def _continue_oikos_langgraph_free(
         logger.info("Successfully resumed oikos run %s", run_id)
         return {"status": "success", "result": final_response}
 
-    except RunInterrupted as e:
+    except FicheInterrupted as e:
         # Oikos spawned another commis - set back to WAITING
         interrupt_value = e.interrupt_value
         job_id = interrupt_value.get("job_id") if isinstance(interrupt_value, dict) else None
@@ -1218,8 +1218,8 @@ async def trigger_commis_inbox_run(
 
         # Get original run's context
         thread = original_run.thread
-        agent = original_run.agent
-        owner_id = agent.owner_id
+        fiche = original_run.fiche
+        owner_id = fiche.owner_id
 
         # Determine root_run_id for SSE aliasing through continuation chains
         # If original_run already has a root_run_id, propagate it; otherwise use original_run_id
@@ -1286,7 +1286,7 @@ async def trigger_commis_inbox_run(
         new_message_id = str(uuid.uuid4())
 
         continuation_run = Run(
-            fiche_id=agent.id,
+            fiche_id=fiche.id,
             thread_id=thread.id,
             continuation_of_run_id=original_run_id,
             root_run_id=root_run_id,  # For SSE aliasing through chains

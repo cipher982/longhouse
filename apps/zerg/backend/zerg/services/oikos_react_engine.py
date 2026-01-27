@@ -6,7 +6,7 @@ decorated graph with explicit control flow.
 
 Key differences from LangGraph-based implementation:
 - No checkpointer - state is managed via DB thread messages
-- No interrupt() - spawn_commis raises RunInterrupted directly
+- No interrupt() - spawn_commis raises FicheInterrupted directly
 - No add_messages() - plain list operations
 - Returns (messages, usage) tuple for explicit persistence
 
@@ -45,7 +45,7 @@ from langchain_core.messages import SystemMessage
 from langchain_core.messages import ToolMessage
 from langchain_openai import ChatOpenAI
 
-from zerg.managers.fiche_runner import RunInterrupted
+from zerg.managers.fiche_runner import FicheInterrupted
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
@@ -401,7 +401,7 @@ async def _execute_tool(
 ) -> ToolMessage:
     """Execute a single tool call with event emission.
 
-    For spawn_commis, raises RunInterrupted instead of returning ToolMessage.
+    For spawn_commis, raises FicheInterrupted instead of returning ToolMessage.
     For other tools, returns ToolMessage with result.
 
     Args:
@@ -413,7 +413,7 @@ async def _execute_tool(
             called with tool_name to get/load the tool. Used for lazy loading.
 
     Raises:
-        RunInterrupted: If spawn_commis is called and job is queued (not already complete).
+        FicheInterrupted: If spawn_commis is called and job is queued (not already complete).
     """
     import json
 
@@ -490,7 +490,7 @@ async def _execute_tool(
                             )
 
                         # Raise interrupt to pause oikos
-                        raise RunInterrupted(
+                        raise FicheInterrupted(
                             {
                                 "type": "commis_pending",
                                 "job_id": job_id,
@@ -533,7 +533,7 @@ async def _execute_tool(
                                 result_preview=f"Commis job {job_id} spawned",
                                 result=str(job_result),
                             )
-                        raise RunInterrupted(
+                        raise FicheInterrupted(
                             {
                                 "type": "commis_pending",
                                 "job_id": job_id,
@@ -572,7 +572,7 @@ async def _execute_tool(
                                 result_preview=f"Commis job {job_id} spawned",
                                 result=str(job_result),
                             )
-                        raise RunInterrupted(
+                        raise FicheInterrupted(
                             {
                                 "type": "commis_pending",
                                 "job_id": job_id,
@@ -617,7 +617,7 @@ async def _execute_tool(
                 else:
                     result_content = str(observation)
 
-        except RunInterrupted:
+        except FicheInterrupted:
             # Re-raise interrupt
             raise
         except Exception as exc:
@@ -762,7 +762,7 @@ async def _execute_tools_parallel(
         - interrupt_value: Dict with spawn_commis info if any, None otherwise
 
     Note:
-        Does NOT raise RunInterrupted - caller handles interruption.
+        Does NOT raise FicheInterrupted - caller handles interruption.
     """
 
     # Separate spawn_commis from other tools
@@ -784,7 +784,7 @@ async def _execute_tools_parallel(
                     owner_id=owner_id,
                     tool_getter=tool_getter,
                 )
-            except RunInterrupted:
+            except FicheInterrupted:
                 # Re-raise - shouldn't happen for non-spawn tools
                 raise
             except Exception as exc:
@@ -802,14 +802,14 @@ async def _execute_tools_parallel(
         )
 
         # Process results, preserving order
-        # CRITICAL: Check for RunInterrupted first - it must propagate, not become a ToolMessage
-        from zerg.managers.fiche_runner import RunInterrupted
+        # CRITICAL: Check for FicheInterrupted first - it must propagate, not become a ToolMessage
+        from zerg.managers.fiche_runner import FicheInterrupted
 
         for tc, result in zip(other_calls, results):
-            if isinstance(result, RunInterrupted):
+            if isinstance(result, FicheInterrupted):
                 # Re-raise interrupt (e.g., from wait_for_commis)
                 # This ensures the oikos enters WAITING state
-                logger.info(f"[INTERRUPT] Re-raising RunInterrupted from {tc.get('name')}")
+                logger.info(f"[INTERRUPT] Re-raising FicheInterrupted from {tc.get('name')}")
                 raise result
             elif isinstance(result, Exception):
                 # Shouldn't happen often since execute_single_tool catches exceptions
@@ -1068,8 +1068,8 @@ async def _execute_tools_parallel(
 
 async def run_oikos_loop(
     messages: list[BaseMessage],
-    fiche_row,
-    tools: list[BaseTool],
+    fiche_row=None,
+    tools: list[BaseTool] | None = None,
     *,
     run_id: int | None = None,
     owner_id: int | None = None,
@@ -1096,6 +1096,9 @@ async def run_oikos_loop(
         OikosResult with messages, usage, and interrupt status.
         If interrupted=True, caller should persist messages and set run to WAITING.
     """
+    if tools is None:
+        tools = []
+
     # Set up tool binder (lazy or eager)
     if lazy_loading:
         from zerg.tools.catalog import build_catalog

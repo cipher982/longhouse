@@ -28,11 +28,9 @@ from zerg.models_config import DEFAULT_COMMIS_MODEL_ID
 
 from .connector import Connector  # noqa: F401
 
-# Re-export models that have been split into separate files for backwards compatibility
+# Re-export models that have been split into separate files.
 from .fiche import Fiche  # noqa: F401
-from .fiche import Fiche as Agent  # noqa: F401 - backwards compat
 from .fiche import FicheMessage  # noqa: F401
-from .fiche import FicheMessage as AgentMessage  # noqa: F401 - backwards compat
 from .llm_audit import LLMAuditLog  # noqa: F401
 from .run import Run  # noqa: F401
 from .thread import Thread  # noqa: F401
@@ -298,11 +296,11 @@ class AccountConnectorCredential(Base):
     """Account-level encrypted credential for built-in connector tools.
 
     These credentials are shared across all agents owned by the user.
-    Agents can optionally override with per-agent credentials in
+    Fiches can optionally override with per-fiche credentials in
     ConnectorCredential (agent-level overrides).
 
     Resolution order in CredentialResolver:
-    1. Agent-level override (ConnectorCredential)
+    1. Fiche-level override (ConnectorCredential)
     2. Account-level credential (this table)
     3. None if neither exists
 
@@ -642,14 +640,14 @@ class KnowledgeDocument(Base):
 
 
 # ---------------------------------------------------------------------------
-# User Tasks – Agent-created tasks for users
+# User Tasks – Fiche-created tasks for users
 # ---------------------------------------------------------------------------
 
 
 class UserTask(Base):
     """A task created by an agent for a user.
 
-    Agents can use task management tools to create, update, and track
+    Fiches can use task management tools to create, update, and track
     tasks for their users. This provides a lightweight task management
     system without external dependencies.
     """
@@ -721,19 +719,19 @@ class UserSkill(Base):
 
 
 # ---------------------------------------------------------------------------
-# Agent Memory – Persistent key-value storage for agents
+# Fiche Memory – Persistent key-value storage for fiches
 # ---------------------------------------------------------------------------
 
 
-class AgentMemoryKV(Base):
-    """Persistent key-value memory storage for agents.
+class FicheMemoryKV(Base):
+    """Persistent key-value memory storage for fiches.
 
     Allows agents to store and retrieve arbitrary data across conversations.
     Each entry is scoped to a user and can be tagged for easy retrieval.
     Optional expiration allows for automatic cleanup of temporary data.
     """
 
-    __tablename__ = "agent_memory_kv"
+    __tablename__ = "fiche_memory_kv"
 
     # Composite primary key (user_id, key)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, primary_key=True)
@@ -754,11 +752,7 @@ class AgentMemoryKV(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     # Relationships
-    user = relationship("User", backref="agent_memory")
-
-
-# Terminology alias for AgentMemoryKV → FicheMemoryKV
-FicheMemoryKV = AgentMemoryKV
+    user = relationship("User", backref="fiche_memory")
 
 
 # ---------------------------------------------------------------------------

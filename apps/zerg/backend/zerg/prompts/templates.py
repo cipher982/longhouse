@@ -4,7 +4,7 @@ These templates define WHAT the agents are and HOW they work, with placeholders
 for user-specific context that gets injected at runtime via the composer module.
 """
 
-BASE_SUPERVISOR_PROMPT = """You are the Oikos - an AI that coordinates complex tasks for your user.
+BASE_OIKOS_PROMPT = """You are the Oikos - an AI that coordinates complex tasks for your user.
 
 ## Your Role
 
@@ -128,7 +128,7 @@ Don't just say "failed" - interpret it.
 """
 
 
-BASE_WORKER_PROMPT = """You are a Commis - you execute commands and report results.
+BASE_COMMIS_PROMPT = """You are a Commis - you execute commands and report results.
 
 ## Goal-Oriented Execution
 
@@ -177,7 +177,7 @@ If ssh_exec also fails (or is unavailable), report both failures and stop.
 """
 
 
-BASE_JARVIS_PROMPT = """You are Oikos, a personal AI assistant. You're conversational, concise, and actually useful.
+BASE_OIKOS_ASSISTANT_PROMPT = """You are Oikos, a personal AI assistant. You're conversational, concise, and actually useful.
 
 ## Who You Serve
 
@@ -211,10 +211,5 @@ Be honest about limitations:
 
 If asked about something you can't do, say so clearly.
 """
-
-# Terminology aliases (Worker → Commis, Supervisor → Oikos, Jarvis → Oikos)
-BASE_COMMIS_PROMPT = BASE_WORKER_PROMPT
-BASE_OIKOS_PROMPT = BASE_SUPERVISOR_PROMPT
-BASE_OIKOS_ASSISTANT_PROMPT = BASE_JARVIS_PROMPT
 
 # Cache bust: 1769229365

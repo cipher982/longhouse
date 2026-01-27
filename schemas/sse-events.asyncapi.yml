@@ -453,7 +453,7 @@ components:
         run_id:
           type: integer
           minimum: 1
-        agent_id:
+        fiche_id:
           type: integer
           minimum: 1
         thread_id:
@@ -489,7 +489,7 @@ components:
         run_id:
           type: integer
           minimum: 1
-        agent_id:
+        fiche_id:
           type: integer
           minimum: 1
         thread_id:
@@ -522,7 +522,7 @@ components:
         run_id:
           type: integer
           minimum: 1
-        agent_id:
+        fiche_id:
           type: integer
           minimum: 1
         thread_id:
@@ -544,7 +544,7 @@ components:
         run_id:
           type: integer
           minimum: 1
-        agent_id:
+        fiche_id:
           type: integer
           minimum: 1
         thread_id:

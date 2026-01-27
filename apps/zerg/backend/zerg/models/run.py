@@ -19,7 +19,7 @@ from zerg.models.enums import RunTrigger
 
 
 class Run(Base):
-    """Represents a single *execution* of an Agent.
+    """Represents a single *execution* of a Fiche.
 
     An Run is created whenever an agent task is executed either manually,
     via the scheduler or through an external trigger.  It references the

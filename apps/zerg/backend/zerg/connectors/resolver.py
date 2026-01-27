@@ -48,7 +48,14 @@ class CredentialResolver:
             webhook_url = creds.get("webhook_url")
     """
 
-    def __init__(self, fiche_id: int, db: Session, *, owner_id: int | None = None, prefetch: bool = True):
+    def __init__(
+        self,
+        db: Session,
+        fiche_id: int | None = None,
+        *,
+        owner_id: int | None = None,
+        prefetch: bool = True,
+    ):
         """Initialize resolver for a specific fiche.
 
         Args:
@@ -57,6 +64,7 @@ class CredentialResolver:
             owner_id: The ID of the fiche's owner (for account-level fallback).
                       If None, account-level lookup is skipped.
         """
+        # fiche_id can be None for account-level only resolution (commis tools)
         self.fiche_id = fiche_id
         self.owner_id = owner_id
         self.db = db
@@ -83,26 +91,27 @@ class CredentialResolver:
             self._prefetch_enabled = False
             return
 
-        # Fiche-level overrides first.
-        try:
-            fiche_creds = self.db.query(ConnectorCredential).filter(ConnectorCredential.fiche_id == self.fiche_id).all()
-        except Exception:
-            logger.warning("Failed to prefetch fiche connector credentials", exc_info=True)
-            self._prefetch_enabled = False
-            return
-
-        for cred in fiche_creds:
+        # Fiche-level overrides first (if fiche_id provided).
+        if self.fiche_id is not None:
             try:
-                decrypted = decrypt(cred.encrypted_value)
-                value = json.loads(decrypted)
-                self._cache[cred.connector_type] = (value, "fiche")
+                fiche_creds = self.db.query(ConnectorCredential).filter(ConnectorCredential.fiche_id == self.fiche_id).all()
             except Exception:
-                logger.warning(
-                    "Failed to decrypt fiche credential fiche_id=%d connector=%s during prefetch",
-                    self.fiche_id,
-                    cred.connector_type,
-                    exc_info=True,
-                )
+                logger.warning("Failed to prefetch fiche connector credentials", exc_info=True)
+                self._prefetch_enabled = False
+                return
+
+            for cred in fiche_creds:
+                try:
+                    decrypted = decrypt(cred.encrypted_value)
+                    value = json.loads(decrypted)
+                    self._cache[cred.connector_type] = (value, "fiche")
+                except Exception:
+                    logger.warning(
+                        "Failed to decrypt fiche credential fiche_id=%s connector=%s during prefetch",
+                        self.fiche_id,
+                        cred.connector_type,
+                        exc_info=True,
+                    )
 
         # Account-level fallbacks (only for types not overridden at fiche level).
         if self.owner_id is not None:
@@ -196,6 +205,9 @@ class CredentialResolver:
     def _resolve_fiche_credential(self, type_str: str) -> CacheEntry:
         """Resolve credential from fiche-level overrides."""
         from zerg.models.models import ConnectorCredential
+
+        if self.fiche_id is None:
+            return (None, "none")
 
         cred = (
             self.db.query(ConnectorCredential)
