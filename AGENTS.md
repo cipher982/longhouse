@@ -235,3 +235,6 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-26) [gotcha] Live SSE stream only forwards subscribed events; `show_session_picker` missing in `apps/zerg/backend/zerg/routers/stream.py` means the session picker modal never opens on live Jarvis streams.
 - (2026-01-26) [gotcha] CI runner "cube" pods lack a Docker daemon; testcontainers-backed tests fail unless using an external Postgres or non-Docker DB setup.
 - (2026-01-27) [pattern] CI backend tests use `--db-mode=external` with per-xdist-worker schemas (`CI_TEST_SCHEMA + _gw0`). SQLAlchemy `schema_translate_map` redirects ORM `zerg.table` references to worker schemas. Dedicated CI Postgres runs in k3s `ci` namespace.
+- (2026-01-27) [gotcha] Sauron /sync reloads manifest but scheduler doesn’t reschedule jobs; changes/new jobs won’t run until restart or explicit re-schedule.
+- (2026-01-27) [gotcha] ScriptedLLM treats any ToolMessage as a successful workspace worker completion; tool error strings can still yield “Workspace worker completed successfully,” masking spawn failures in E2E.
+- (2026-01-27) [gotcha] If Zerg backend has `JOB_QUEUE_ENABLED=1` and `JOBS_GIT_*` set, it will schedule external sauron-jobs too; remove/disable those vars when Sauron is the sole scheduler.
