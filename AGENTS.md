@@ -102,6 +102,36 @@ This waits for health, runs API checks (auth, LLM, voice, CRUD), then browser te
 4. ✅ Run `make verify-prod` (~80s)
 5. ✅ Report result to user
 
+## apps/sauron - Standalone Scheduler
+
+Sauron is the centralized ops scheduler, deployed as a standalone service on clifford VPS. It reuses `zerg.jobs` infrastructure.
+
+**Location:** `apps/sauron/`
+
+**Key files:**
+- `main.py` - APScheduler + worker loop
+- `api.py` - FastAPI for Jarvis control
+- `cli.py` - CLI for manual operations
+- `Dockerfile` - Builds from monorepo root
+- `docker-compose.yml` - Coolify deployment config
+
+**How it works:**
+1. On startup, clones `cipher982/sauron-jobs` repo via `GitSyncService`
+2. Loads jobs from `manifest.py` using `zerg.jobs.loader`
+3. Schedules jobs with APScheduler
+4. Executes via durable queue (same as Zerg backend)
+
+**API endpoints:**
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/health` | GET | Health check |
+| `/status` | GET | Scheduler + git sync status |
+| `/jobs` | GET | List all jobs |
+| `/jobs/{id}/trigger` | POST | Manual trigger |
+| `/sync` | POST | Force git sync |
+
+**Deploy:** Coolify on clifford, separate from main Zerg deployment.
+
 ## Deep Dives
 
 | Topic | Guide |
@@ -113,6 +143,8 @@ This waits for health, runs API checks (auth, LLM, voice, CRUD), then browser te
 | Database | `docs/DATABASE.md` |
 | Coolify | `docs/COOLIFY_DEBUGGING.md` |
 | Architecture spec | `docs/specs/durable-runs-v2.2.md` |
+| Jobs infrastructure | `docs/specs/runtime-git-jobs.md` |
+| Sauron scheduler | `apps/sauron/README.md` |
 
 ## Misc
 - GH actions use runners on Cube
