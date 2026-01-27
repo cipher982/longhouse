@@ -179,7 +179,7 @@ export async function resetDatabase(request: APIRequestContext): Promise<void> {
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const response = await request.post('/admin/reset-database', {
+      const response = await request.post('/api/admin/reset-database', {
         data: { reset_type: 'clear_data' },
         timeout: 15000, // Explicit 15s timeout (backend has 30s statement_timeout)
       });

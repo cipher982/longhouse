@@ -18,6 +18,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { test, expect, type Page } from '../fixtures';
+import { postSseAndCollect } from '../helpers/sse';
 
 /**
  * Navigate to Oikos chat page and wait for it to be ready
@@ -26,46 +27,6 @@ async function navigateToChatPage(page: Page): Promise<void> {
   await page.goto('/chat');
   // Wait for chat interface using data-testid (not CSS class per banana handoff)
   await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 15000 });
-}
-
-/**
- * Parse SSE text into structured events
- * Handles both \n and \r\n line endings, and captures final event if stream doesn't end with blank line
- */
-function parseSSEEvents(sseText: string): Array<{ event: string; data: unknown }> {
-  const events: Array<{ event: string; data: unknown }> = [];
-  // Normalize line endings to \n
-  const lines = sseText.replace(/\r\n/g, '\n').split('\n');
-  let currentEvent = '';
-  const currentDataLines: string[] = [];
-
-  const pushEvent = () => {
-    const currentData = currentDataLines.join('\n').trim();
-    if (currentEvent && currentData) {
-      try {
-        events.push({ event: currentEvent, data: JSON.parse(currentData) });
-      } catch {
-        events.push({ event: currentEvent, data: currentData });
-      }
-      currentEvent = '';
-      currentDataLines.length = 0;
-    }
-  };
-
-  for (const line of lines) {
-    if (line.startsWith('event:')) {
-      currentEvent = line.substring(6).trim();
-    } else if (line.startsWith('data:')) {
-      currentDataLines.push(line.substring(5));
-    } else if (line === '') {
-      pushEvent();
-    }
-  }
-
-  // Capture final event if stream doesn't end with blank line
-  pushEvent();
-
-  return events;
 }
 
 /**
@@ -89,7 +50,7 @@ test.describe('Core User Journey - Scripted LLM', () => {
   // Set longer timeout for this test as it involves full oikos flow
   test.setTimeout(120000);
 
-  test('oikos direct response flow with gpt-scripted model', async ({ page, request }) => {
+  test('oikos direct response flow with gpt-scripted model', async ({ page, request, backendUrl, commisId }) => {
     console.log('[Core Journey] Starting test');
 
     // Send a simple message that uses the "generic_oikos" scenario
@@ -97,24 +58,20 @@ test.describe('Core User Journey - Scripted LLM', () => {
     // which avoids the continuation flow complexity for this core test.
     //
     // For commis flow testing, see commis_flow.spec.ts (TODO)
-    const chatResponse = await request.post('/api/oikos/chat', {
-      data: {
+    const events = await postSseAndCollect({
+      backendUrl,
+      commisId,
+      path: '/api/oikos/chat',
+      payload: {
         message: 'hello oikos',
         message_id: randomUUID(),
         model: 'gpt-scripted',
         client_correlation_id: 'e2e-core-journey-test',
       },
+      stopEvent: 'oikos_complete',
+      timeoutMs: 60000,
     });
-
-    expect(chatResponse.status()).toBe(200);
-    console.log('[Core Journey] Chat request sent with gpt-scripted model');
-
-    // The response is SSE stream, consume it
-    const sseText = await chatResponse.text();
-    console.log('[Core Journey] SSE response received, length:', sseText.length);
-
-    // Parse SSE events
-    const events = parseSSEEvents(sseText);
+    console.log('[Core Journey] SSE events received:', events.length);
     console.log(
       '[Core Journey] Parsed SSE events:',
       events.map((e) => e.event)
@@ -599,20 +556,20 @@ test.describe('Core User Journey - Scripted LLM', () => {
 test.describe('Core Journey - API Flow', () => {
   test.setTimeout(60000);
 
-  test('oikos_complete event contains result text', async ({ request }) => {
-    // Send a simple message via API
-    const chatResponse = await request.post('/api/oikos/chat', {
-      data: {
+  test('oikos_complete event contains result text', async ({ request, backendUrl, commisId }) => {
+    const events = await postSseAndCollect({
+      backendUrl,
+      commisId,
+      path: '/api/oikos/chat',
+      payload: {
         message: 'hello',
         message_id: randomUUID(),
         model: 'gpt-mock',
         client_correlation_id: 'e2e-api-test',
       },
+      stopEvent: 'oikos_complete',
+      timeoutMs: 30000,
     });
-
-    expect(chatResponse.status()).toBe(200);
-    const sseText = await chatResponse.text();
-    const events = parseSSEEvents(sseText);
 
     // Verify connected event
     const connectedEvent = events.find((e) => e.event === 'connected');
@@ -629,20 +586,20 @@ test.describe('Core Journey - API Flow', () => {
     console.log('[API Flow] oikos_complete event validated');
   });
 
-  test('run events endpoint returns events for a run', async ({ request }) => {
-    // First, create a run
-    const chatResponse = await request.post('/api/oikos/chat', {
-      data: {
+  test('run events endpoint returns events for a run', async ({ request, backendUrl, commisId }) => {
+    const events = await postSseAndCollect({
+      backendUrl,
+      commisId,
+      path: '/api/oikos/chat',
+      payload: {
         message: 'test message',
         message_id: randomUUID(),
         model: 'gpt-mock',
         client_correlation_id: 'e2e-events-test',
       },
+      stopEvent: 'oikos_complete',
+      timeoutMs: 30000,
     });
-
-    expect(chatResponse.status()).toBe(200);
-    const sseText = await chatResponse.text();
-    const events = parseSSEEvents(sseText);
 
     // Extract run_id
     const connectedEvent = events.find((e) => e.event === 'connected');

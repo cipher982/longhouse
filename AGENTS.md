@@ -237,3 +237,4 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-27) [pattern] CI backend tests use `--db-mode=external` with per-xdist-worker schemas (`CI_TEST_SCHEMA + _gw0`). SQLAlchemy `schema_translate_map` redirects ORM `zerg.table` references to worker schemas. Dedicated CI Postgres runs in k3s `ci` namespace.
 - (2026-01-27) [pattern] Rebrand work: remove backward-compat shims; use only Oikos/Commis/Fiche names (no supervisor/worker/agent aliases).
 - (2026-01-27) [gotcha] Life Hub agent log API still uses /ingest/agents/events and /query/agents/sessions; session continuity must target those endpoints.
+- (2026-01-27) [test] Playwright E2E: set `workers` (not `commis`) and keep local workers at 4 when using remote Postgres to avoid reset lock timeouts.

@@ -58,12 +58,17 @@ type TestFixtures = {
   context: BrowserContext;
   request: import('@playwright/test').APIRequestContext;
   backendUrl: string;
+  commisId: string;
 };
 
 export const test = base.extend<TestFixtures>({
   backendUrl: async ({}, use) => {
     const basePort = getBackendPort();
     await use(`http://127.0.0.1:${basePort}`);
+  },
+
+  commisId: async ({}, use, testInfo) => {
+    await use(String(testInfo.parallelIndex));
   },
 
   request: async ({ playwright, backendUrl }, use, testInfo) => {
@@ -95,6 +100,7 @@ export const test = base.extend<TestFixtures>({
     const reactBaseUrl = process.env.PLAYWRIGHT_FRONTEND_BASE || 'http://localhost:3000';
 
     await context.addInitScript((config: { baseUrl: string, commisId: string }) => {
+      (window as any).__TEST_COMMIS_ID__ = config.commisId;
       try {
         const normalized = config.baseUrl.replace(/\/$/, '');
         window.localStorage.setItem('zerg_use_react_dashboard', '1');
@@ -105,8 +111,6 @@ export const test = base.extend<TestFixtures>({
         // Add test JWT token for React authentication
         window.localStorage.setItem('zerg_jwt', 'test-jwt-token-for-e2e-tests');
 
-        // Inject test commis ID for API request headers
-        (window as any).__TEST_COMMIS_ID__ = config.commisId;
         } catch (error) {
           // If localStorage is unavailable (unlikely), continue without failing tests.
           console.warn('Playwright init: unable to seed React flags', error);

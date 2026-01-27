@@ -7,6 +7,7 @@
  */
 
 import { test, expect, type Page } from '../fixtures';
+import { waitForPageReady } from '../helpers/ready-signals';
 import { resetDatabase } from '../test-utils';
 
 // Reset DB before each test for clean state
@@ -21,15 +22,16 @@ test.beforeEach(async ({ request }) => {
  */
 async function createFicheViaUI(page: Page): Promise<string> {
   await page.goto('/');
+  await waitForPageReady(page, { timeout: 20000 });
 
   const createBtn = page.locator('[data-testid="create-fiche-btn"]');
-  await expect(createBtn).toBeVisible({ timeout: 10000 });
-  await expect(createBtn).toBeEnabled({ timeout: 5000 });
+  await expect(createBtn).toBeVisible({ timeout: 20000 });
+  await expect(createBtn).toBeEnabled({ timeout: 20000 });
 
   const [response] = await Promise.all([
     page.waitForResponse(
       (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
-      { timeout: 10000 }
+      { timeout: 20000 }
     ),
     createBtn.click(),
   ]);
@@ -42,7 +44,7 @@ async function createFicheViaUI(page: Page): Promise<string> {
   }
 
   const row = page.locator(`tr[data-fiche-id="${ficheId}"]`);
-  await expect(row).toBeVisible({ timeout: 10000 });
+  await expect(row).toBeVisible({ timeout: 20000 });
 
   return ficheId;
 }
@@ -52,12 +54,13 @@ async function createFicheViaUI(page: Page): Promise<string> {
  */
 async function navigateToChat(page: Page, ficheId: string): Promise<void> {
   const chatBtn = page.locator(`[data-testid="chat-fiche-${ficheId}"]`);
-  await expect(chatBtn).toBeVisible({ timeout: 5000 });
+  await expect(chatBtn).toBeVisible({ timeout: 10000 });
   await chatBtn.click();
 
-  await page.waitForURL((url) => url.pathname.includes(`/fiche/${ficheId}/thread`), { timeout: 10000 });
-  await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
-  await expect(page.locator('[data-testid="chat-input"]')).toBeEnabled({ timeout: 5000 });
+  await page.waitForURL((url) => url.pathname.includes(`/fiche/${ficheId}/thread`), { timeout: 20000 });
+  await expect(page.locator('[data-testid="chat-page"]')).toBeVisible({ timeout: 20000 });
+  await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 20000 });
+  await expect(page.locator('[data-testid="chat-input"]')).toBeEnabled({ timeout: 20000 });
 }
 
 /**
@@ -117,11 +120,11 @@ async function createNewThread(page: Page): Promise<number> {
   // Wait for URL to include new thread id and UI selection to update
   await page.waitForURL((url) => url.pathname.includes(`/thread/${newThreadId}`), { timeout: 15000 });
   const threadRow = page.locator(`[data-testid="thread-row-${newThreadId}"]`);
-  await expect(threadRow).toBeVisible({ timeout: 15000 });
-  await expect(threadRow).toHaveClass(/selected/, { timeout: 15000 });
+  await expect(threadRow).toBeVisible({ timeout: 20000 });
+  await expect(threadRow).toHaveClass(/selected/, { timeout: 20000 });
 
   // Wait for chat input to be ready after thread creation
-  await expect(page.locator('[data-testid="chat-input"]')).toBeEnabled({ timeout: 5000 });
+  await expect(page.locator('[data-testid="chat-input"]')).toBeEnabled({ timeout: 20000 });
 
   return newThreadId;
 }

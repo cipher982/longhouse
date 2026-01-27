@@ -53,14 +53,17 @@ async function globalSetup(config) {
   process.env.NODE_ENV = 'test';
   process.env.TESTING = '1';
 
-  // Calculate commis count (must match playwright.config.js logic)
-  // Keep in sync with playwright.config.js.
+  // Calculate commis count (must match playwright.config.js logic).
+  // Prefer resolved config.workers so schema pre-creation aligns with actual runner count.
+  const resolvedWorkers = typeof config?.workers === 'number' ? config.workers : undefined;
   const envCommis = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? "", 10);
-  const defaultLocalCommis = 16;
+  const defaultLocalCommis = 4;
   const defaultCICommis = 4;
-  const commis = Number.isFinite(envCommis) && envCommis > 0
-    ? envCommis
-    : (process.env.CI ? defaultCICommis : defaultLocalCommis);
+  const commis = Number.isFinite(resolvedWorkers) && resolvedWorkers > 0
+    ? resolvedWorkers
+    : (Number.isFinite(envCommis) && envCommis > 0
+        ? envCommis
+        : (process.env.CI ? defaultCICommis : defaultLocalCommis));
 
   // Pre-create one schema per Playwright commis id (0..commis-1).
   // Other tests may use custom non-numeric commis IDs (e.g. guardrail_a) which are

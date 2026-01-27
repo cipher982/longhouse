@@ -15,13 +15,13 @@ test.describe('Swarm Ops - Core', () => {
   test('shows signal and last event for seeded runs', async ({ page, request }) => {
     test.setTimeout(45000);
 
-    const seedResponse = await request.post('/admin/seed-scenario', {
+    const seedResponse = await request.post('/api/admin/seed-scenario', {
       data: { name: 'swarm-mvp', clean: true },
     });
 
     expect(seedResponse.ok()).toBeTruthy();
 
-    await page.goto('/swarm');
+    await page.goto('/runs');
 
     await page.getByRole('button', { name: 'All' }).click();
 

@@ -11,6 +11,7 @@
  */
 
 import { test, expect } from '../fixtures';
+import { postSseAndCollect } from '../helpers/sse';
 import { resetDatabase } from '../test-utils';
 
 const LIFE_HUB_URL = process.env.LIFE_HUB_URL || 'https://data.drose.io';
@@ -21,7 +22,7 @@ test.describe('Session Continuity E2E', () => {
     await resetDatabase(request);
   });
 
-  test('workspace commis executes with mock hatch', async ({ request }) => {
+  test('workspace commis executes with mock hatch', async ({ request, backendUrl, commisId }) => {
     // Skip if Life Hub credentials not available (local dev without key)
     test.skip(!LIFE_HUB_API_KEY, 'LIFE_HUB_API_KEY not set - skipping session continuity test');
     test.setTimeout(90000);
@@ -30,14 +31,18 @@ test.describe('Session Continuity E2E', () => {
 
     // Send a message that triggers workspace commis scenario
     // The scripted LLM detects "workspace" or "repository" keywords
-    const chatRes = await request.post('/api/oikos/chat', {
-      data: {
+    await postSseAndCollect({
+      backendUrl,
+      commisId,
+      path: '/api/oikos/chat',
+      payload: {
         message: 'Create a workspace and analyze the repository',
         message_id: crypto.randomUUID(),
         model: 'gpt-scripted',
       },
+      stopOnFirstEvent: true,
+      timeoutMs: 20000,
     });
-    expect(chatRes.ok()).toBeTruthy();
 
     // Wait for oikos run to appear
     let runId: number | null = null;
@@ -104,7 +109,7 @@ test.describe('Session Continuity E2E', () => {
     expect(commisComplete.payload?.status).toBe('success');
   });
 
-  test('workspace commis with resume_session_id fetches from Life Hub', async ({ request }) => {
+  test('workspace commis with resume_session_id fetches from Life Hub', async ({ request, backendUrl, commisId }) => {
     // Skip if Life Hub credentials not available
     test.skip(!LIFE_HUB_API_KEY, 'LIFE_HUB_API_KEY not set - skipping session continuity test');
     test.setTimeout(90000);
@@ -138,14 +143,18 @@ test.describe('Session Continuity E2E', () => {
 
     // Send a message that triggers workspace commis with resume
     // Include the session ID in the message - scripted LLM extracts it
-    const chatRes = await request.post('/api/oikos/chat', {
-      data: {
+    await postSseAndCollect({
+      backendUrl,
+      commisId,
+      path: '/api/oikos/chat',
+      payload: {
         message: `Resume session ${testSessionId} and continue working on the repository`,
         message_id: crypto.randomUUID(),
         model: 'gpt-scripted',
       },
+      stopOnFirstEvent: true,
+      timeoutMs: 20000,
     });
-    expect(chatRes.ok()).toBeTruthy();
 
     // Wait for oikos run
     let runId: number | null = null;
@@ -203,7 +212,7 @@ test.describe('Session Continuity E2E', () => {
     expect(commisComplete.payload?.status).toBe('success');
   });
 
-  test('graceful fallback when session not found in Life Hub', async ({ request }) => {
+  test('graceful fallback when session not found in Life Hub', async ({ request, backendUrl, commisId }) => {
     // Skip if Life Hub credentials not available
     test.skip(!LIFE_HUB_API_KEY, 'LIFE_HUB_API_KEY not set - skipping session continuity test');
     test.setTimeout(60000);
@@ -213,14 +222,18 @@ test.describe('Session Continuity E2E', () => {
     // Use a non-existent session ID (valid UUID format but doesn't exist)
     const nonExistentSessionId = '00000000-0000-0000-0000-000000000000';
 
-    const chatRes = await request.post('/api/oikos/chat', {
-      data: {
+    await postSseAndCollect({
+      backendUrl,
+      commisId,
+      path: '/api/oikos/chat',
+      payload: {
         message: `Resume session ${nonExistentSessionId} and continue the work`,
         message_id: crypto.randomUUID(),
         model: 'gpt-scripted',
       },
+      stopOnFirstEvent: true,
+      timeoutMs: 20000,
     });
-    expect(chatRes.ok()).toBeTruthy();
 
     // Wait for oikos run
     let runId: number | null = null;

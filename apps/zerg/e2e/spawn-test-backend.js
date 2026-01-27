@@ -7,6 +7,7 @@
  * ensuring complete test isolation without shared state.
  */
 
+import crypto from 'crypto';
 import { spawn } from 'child_process';
 import { join } from 'path';
 import fs from 'fs';
@@ -57,6 +58,13 @@ function loadDotEnv(filePath) {
 {
     const envPath = findDotEnv(__dirname);
     if (envPath) loadDotEnv(envPath);
+}
+
+if (!process.env.FERNET_SECRET) {
+    const raw = crypto.randomBytes(32).toString('base64');
+    const urlSafe = raw.replace(/\+/g, '-').replace(/\//g, '_');
+    process.env.FERNET_SECRET = urlSafe;
+    console.log('[spawn-backend] FERNET_SECRET not set; generated ephemeral key for tests.');
 }
 
 // Load dynamic port from .env file
@@ -115,7 +123,7 @@ const backend = spawn('uv', [
     'run', 'python', '-m', 'uvicorn', 'zerg.main:app',
     `--host=127.0.0.1`,
     `--port=${port}`,
-    `--commis=${uvicornCommis}`,
+    `--workers=${uvicornCommis}`,
     '--log-level=error'  // Only show errors, not INFO logs (reduces output from 26K to ~100 lines)
 ], {
     env: {
