@@ -214,7 +214,7 @@ def test_run_fiche_thread(client: TestClient, sample_fiche: Fiche, db_session):
         mock_fiche_runner.run_thread.side_effect = mock_run_thread
 
         # Run the thread
-        response = client.post(f"/api/threads/{thread['id']}/run", json={"content": "Test message"})
+        response = client.post(f"/api/threads/{thread['id']}/runs", json={"content": "Test message"})
         assert response.status_code == 202
 
         # Verify the fiche status in the database is still valid

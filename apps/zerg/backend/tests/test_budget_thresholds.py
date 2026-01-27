@@ -56,7 +56,7 @@ async def test_user_budget_denies_when_exhausted(client, db_session, monkeypatch
         crud.mark_run_finished(db_session, run.id, total_tokens=10, total_cost_usd=1.00)
 
         # Next run should be denied for non-admin
-        r = client.post(f"/api/threads/{thread.id}/run")
+        r = client.post(f"/api/threads/{thread.id}/runs")
         assert r.status_code == 429, r.text
         assert "budget" in r.text.lower()
     finally:
@@ -83,7 +83,7 @@ async def test_admin_exempt_from_budgets(client, db_session, monkeypatch):
 
         # Admin should still be allowed to run
         crud.create_thread_message(db=db_session, thread_id=thread.id, role="user", content="next")
-        r = client.post(f"/api/threads/{thread.id}/run")
+        r = client.post(f"/api/threads/{thread.id}/runs")
         assert r.status_code == 202, r.text
     finally:
         with contextlib.suppress(Exception):

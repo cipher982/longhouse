@@ -159,8 +159,8 @@ async def test_run_commis_handles_errors(commis_runner, temp_store, db_session, 
     db_session.commit()
     db_session.refresh(fiche)
 
-    # Mock FicheRunner to raise an error
-    with patch("zerg.services.commis_runner.FicheRunner") as mock_runner_class:
+    # Mock Runner to raise an error
+    with patch("zerg.services.commis_runner.Runner") as mock_runner_class:
         mock_instance = AsyncMock()
         mock_instance.run_thread.side_effect = RuntimeError("Simulated fiche failure")
         mock_runner_class.return_value = mock_instance

@@ -52,18 +52,18 @@ async def test_non_admin_daily_runs_cap_blocks_on_third(client, db_session, monk
         fiche, thread = _create_fiche_and_thread(db_session, user.id)
 
         # First run: allowed
-        r1 = client.post(f"/api/threads/{thread.id}/run")
+        r1 = client.post(f"/api/threads/{thread.id}/runs")
         assert r1.status_code == 202, r1.text
 
         # Add another user message for the second run
         crud.create_thread_message(db=db_session, thread_id=thread.id, role="user", content="2")
-        r2 = client.post(f"/api/threads/{thread.id}/run")
+        r2 = client.post(f"/api/threads/{thread.id}/runs")
         assert r2.status_code == 202, r2.text
 
         # Add message again
         crud.create_thread_message(db=db_session, thread_id=thread.id, role="user", content="3")
         # Third run: should be blocked
-        r3 = client.post(f"/api/threads/{thread.id}/run")
+        r3 = client.post(f"/api/threads/{thread.id}/runs")
         assert r3.status_code == 429, r3.text
     finally:
         with contextlib.suppress(Exception):
@@ -82,11 +82,11 @@ async def test_admin_exempt_from_daily_runs_cap(client, db_session, monkeypatch)
         fiche, thread = _create_fiche_and_thread(db_session, admin.id)
         # First run
         crud.create_thread_message(db=db_session, thread_id=thread.id, role="user", content="hi")
-        r1 = client.post(f"/api/threads/{thread.id}/run")
+        r1 = client.post(f"/api/threads/{thread.id}/runs")
         assert r1.status_code == 202
         # Second run should still be allowed for admin
         crud.create_thread_message(db=db_session, thread_id=thread.id, role="user", content="next")
-        r2 = client.post(f"/api/threads/{thread.id}/run")
+        r2 = client.post(f"/api/threads/{thread.id}/runs")
         assert r2.status_code == 202
     finally:
         with contextlib.suppress(Exception):

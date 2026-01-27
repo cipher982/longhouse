@@ -43,7 +43,7 @@ async def test_non_owner_cannot_run_thread(client, db_session):
 
     app.dependency_overrides[get_current_user] = lambda: other
     try:
-        resp = client.post(f"/api/threads/{thread.id}/run")
+        resp = client.post(f"/api/threads/{thread.id}/runs")
         assert resp.status_code == 403, resp.text
     finally:
         with contextlib.suppress(Exception):

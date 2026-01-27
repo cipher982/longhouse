@@ -55,7 +55,7 @@ class TestWorkspaceJobSessionContinuity:
         result.duration_ms = 1000
 
         mock_class = MagicMock()
-        mock_class.return_value.run_agent = AsyncMock(return_value=result)
+        mock_class.return_value.run_commis = AsyncMock(return_value=result)
         return mock_class
 
     @pytest.mark.asyncio
@@ -110,10 +110,10 @@ class TestWorkspaceJobSessionContinuity:
         call_args = mock_prepare.call_args
         assert call_args.kwargs["session_id"] == "life-hub-session-123"
 
-        # Verify CloudExecutor.run_agent was called with the prepared session ID
+        # Verify CloudExecutor.run_commis was called with the prepared session ID
         executor_instance = mock_cloud_executor_class.return_value
-        executor_instance.run_agent.assert_called_once()
-        run_args = executor_instance.run_agent.call_args
+        executor_instance.run_commis.assert_called_once()
+        run_args = executor_instance.run_commis.call_args
         assert run_args.kwargs["resume_session_id"] == "provider-session-abc"
 
     @pytest.mark.asyncio
@@ -166,10 +166,10 @@ class TestWorkspaceJobSessionContinuity:
         # Verify prepare_session_for_resume was NOT called
         mock_prepare.assert_not_called()
 
-        # Verify CloudExecutor.run_agent was called without resume_session_id
+        # Verify CloudExecutor.run_commis was called without resume_session_id
         executor_instance = mock_cloud_executor_class.return_value
-        executor_instance.run_agent.assert_called_once()
-        run_args = executor_instance.run_agent.call_args
+        executor_instance.run_commis.assert_called_once()
+        run_args = executor_instance.run_commis.call_args
         assert run_args.kwargs.get("resume_session_id") is None
 
     @pytest.mark.asyncio
@@ -245,7 +245,7 @@ class TestWorkspaceJobSessionContinuity:
         failed_result.duration_ms = 1000
 
         mock_executor_class = MagicMock()
-        mock_executor_class.return_value.run_agent = AsyncMock(return_value=failed_result)
+        mock_executor_class.return_value.run_commis = AsyncMock(return_value=failed_result)
 
         mock_ship = AsyncMock(return_value="shipped-session-456")
 
@@ -319,8 +319,8 @@ class TestWorkspaceJobSessionContinuity:
 
         # Verify the job still ran (without resume)
         executor_instance = mock_cloud_executor_class.return_value
-        executor_instance.run_agent.assert_called_once()
-        run_args = executor_instance.run_agent.call_args
+        executor_instance.run_commis.assert_called_once()
+        run_args = executor_instance.run_commis.call_args
         assert run_args.kwargs.get("resume_session_id") is None
 
     @pytest.mark.asyncio

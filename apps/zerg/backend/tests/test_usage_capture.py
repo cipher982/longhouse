@@ -71,7 +71,7 @@ async def test_usage_totals_persist_with_metadata(client, db_session, monkeypatc
 
     app.dependency_overrides[get_current_user] = lambda: user
     try:
-        resp = client.post(f"/api/threads/{thread.id}/run")
+        resp = client.post(f"/api/threads/{thread.id}/runs")
     finally:
         with contextlib.suppress(Exception):
             del app.dependency_overrides[get_current_user]
@@ -132,7 +132,7 @@ async def test_usage_missing_leaves_totals_null(client, db_session, monkeypatch)
 
     app.dependency_overrides[get_current_user] = lambda: user
     try:
-        resp = client.post(f"/api/threads/{thread.id}/run")
+        resp = client.post(f"/api/threads/{thread.id}/runs")
     finally:
         with contextlib.suppress(Exception):
             del app.dependency_overrides[get_current_user]

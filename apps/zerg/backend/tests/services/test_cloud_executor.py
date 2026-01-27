@@ -241,7 +241,7 @@ class TestCloudExecutor:
         assert "--resume" not in cmd_list
 
     @pytest.mark.asyncio
-    async def test_run_agent_includes_output_format_flag_from_env(self, tmp_path, monkeypatch):
+    async def test_run_commis_includes_output_format_flag_from_env(self, tmp_path, monkeypatch):
         """Verify --output-format flag is included when env var is set."""
         workspace = tmp_path / "workspace"
         workspace.mkdir()
@@ -261,7 +261,7 @@ class TestCloudExecutor:
             return mock_process
 
         with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
-            await executor.run_agent(
+            await executor.run_commis(
                 task="test task",
                 workspace_path=workspace,
             )
@@ -273,7 +273,7 @@ class TestCloudExecutor:
         assert cmd_list[fmt_idx + 1] == "stream-json"
 
     @pytest.mark.asyncio
-    async def test_run_agent_includes_partial_messages_flag_from_env(self, tmp_path, monkeypatch):
+    async def test_run_commis_includes_partial_messages_flag_from_env(self, tmp_path, monkeypatch):
         """Verify --include-partial-messages flag is included when env var is set."""
         workspace = tmp_path / "workspace"
         workspace.mkdir()
@@ -293,7 +293,7 @@ class TestCloudExecutor:
             return mock_process
 
         with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
-            await executor.run_agent(
+            await executor.run_commis(
                 task="test task",
                 workspace_path=workspace,
             )

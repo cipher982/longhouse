@@ -5,7 +5,7 @@ The test recreates the *exact* REST flow the frontend performs:
 1. Create an fiche
 2. Create a thread for that fiche
 3. POST a *user* message (unprocessed)
-4. POST /threads/{id}/run – should return **202 Accepted** and *not* raise
+4. POST /threads/{id}/runs – should return **202 Accepted** and *not* raise
    ``InvalidUpdateError`` internally.
 
 If the underlying bug resurfaces (e.g. ChatOpenAI invokes return a Future that
@@ -50,5 +50,5 @@ def test_thread_run_returns_202(client: TestClient):
     assert msg_resp.status_code == 201, msg_resp.text
 
     # 4. Run – should now succeed (202) after bug-fix.
-    run_resp = client.post(f"/api/threads/{thread_id}/run")
+    run_resp = client.post(f"/api/threads/{thread_id}/runs")
     assert run_resp.status_code == 202, run_resp.text

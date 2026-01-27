@@ -366,7 +366,7 @@ def test_create_thread_message_not_found(client: TestClient):
 
 
 def test_run_thread(client: TestClient, sample_thread: Thread, db_session):
-    """Test the POST /api/threads/{thread_id}/run endpoint"""
+    """Test the POST /api/threads/{thread_id}/runs endpoint"""
 
     # Add a user message
     message = ThreadMessage(thread_id=sample_thread.id, role="user", content="Hello, assistant", processed=False)
@@ -374,7 +374,7 @@ def test_run_thread(client: TestClient, sample_thread: Thread, db_session):
     db_session.commit()
 
     # Run the thread
-    response = client.post(f"/api/threads/{sample_thread.id}/run")
+    response = client.post(f"/api/threads/{sample_thread.id}/runs")
     assert response.status_code == 202
 
     # Check if message was marked as processed
@@ -385,15 +385,15 @@ def test_run_thread(client: TestClient, sample_thread: Thread, db_session):
 def test_run_thread_no_unprocessed_messages(client: TestClient, sample_thread: Thread):
     """Test running a thread with no unprocessed messages"""
     response = client.post(
-        f"/api/threads/{sample_thread.id}/run",
+        f"/api/threads/{sample_thread.id}/runs",
         json={"content": "Test message"},
     )
     assert response.status_code == 202  # Changed from 200 to 202 for async operation
 
 
 def test_run_thread_not_found(client: TestClient):
-    """Test the POST /api/threads/{thread_id}/run endpoint with a non-existent thread ID"""
-    response = client.post("/api/threads/999/run", json={"content": "Test message"})
+    """Test the POST /api/threads/{thread_id}/runs endpoint with a non-existent thread ID"""
+    response = client.post("/api/threads/999/runs", json={"content": "Test message"})
     assert response.status_code == 404
     assert "detail" in response.json()
     assert response.json()["detail"] == "Thread not found"

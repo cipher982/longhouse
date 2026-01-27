@@ -133,8 +133,8 @@ async def test_commis_with_error(db_session, test_user):
         artifact_store = CommisArtifactStore(base_path=tmpdir)
         commis_runner = CommisRunner(artifact_store=artifact_store)
 
-        # Mock FicheRunner to raise an error
-        with patch("zerg.services.commis_runner.FicheRunner") as mock_runner_class:
+        # Mock Runner to raise an error
+        with patch("zerg.services.commis_runner.Runner") as mock_runner_class:
             mock_instance = AsyncMock()
             mock_instance.run_thread.side_effect = RuntimeError("Test error: fiche failure")
             mock_runner_class.return_value = mock_instance
