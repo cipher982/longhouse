@@ -9,7 +9,7 @@ Zerg is an AI agent orchestration platform (product name: Swarmlet). This monore
 | Service | Location | Deploys To | Port | URL |
 |---------|----------|------------|------|-----|
 | **zerg-api** | `apps/zerg/backend/` | Zerg server | 8000 | api.swarmlet.com |
-| **zerg-web** | `apps/zerg/frontend-web/` | Zerg server | 3000 | swarmlet.com |
+| **zerg-web** | `apps/zerg/frontend-web/` | Zerg server | 80 (prod) / 5173 (dev) | swarmlet.com |
 | **sauron** | `apps/sauron/` | Clifford | 8080 | (internal only) |
 
 ### zerg-api (Backend)
@@ -76,7 +76,8 @@ Both zerg-api and sauron connect to the same database and share the `ops.job_que
 
 Sauron imports from the zerg package:
 ```python
-from zerg.jobs import GitSyncService, register_all_jobs, run_queue_worker
+from zerg.jobs import GitSyncService, register_all_jobs
+from zerg.jobs.worker import run_queue_worker
 ```
 
 This is why they're in the same monorepo - sauron reuses `zerg.jobs` infrastructure.

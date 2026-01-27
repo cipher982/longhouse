@@ -28,8 +28,13 @@ def _build_definition(job: Any, scheduler_name: str) -> dict[str, Any]:
 
     entrypoint = f"{job.func.__module__}.{job.func.__name__}"
     # Valid values: builtin, git, http (check constraint on ops.jobs)
+    VALID_SOURCES = ("builtin", "git", "http")
     raw_source = meta.get("script_source", "git") if meta else "builtin"
-    script_source = raw_source if raw_source in ("builtin", "git", "http") else "git"
+    if raw_source not in VALID_SOURCES:
+        logger.warning("Invalid script_source '%s' for job %s, coercing to 'git'", raw_source, job.id)
+        script_source = "git"
+    else:
+        script_source = raw_source
 
     payload: dict[str, Any] = {
         "job_key": f"{scheduler_name}:{job.id}",
