@@ -83,7 +83,6 @@ services:
       # === Job-specific env vars (passed through to jobs) ===
       # llm-benchmarks
       LLM_BENCH_MONGODB_URI: ${LLM_BENCH_MONGODB_URI}
-      LLM_BENCH_OPENAI_API_KEY: ${LLM_BENCH_OPENAI_API_KEY}
 
       # Life-Hub API (for jobs that call life-hub endpoints)
       LIFE_HUB_API_URL: ${LIFE_HUB_API_URL:-https://data.drose.io}
@@ -99,17 +98,16 @@ services:
       GOOGLE_ADS_REFRESH_TOKEN: ${GOOGLE_ADS_REFRESH_TOKEN}
       GOOGLE_ADS_LOGIN_CUSTOMER_ID: ${GOOGLE_ADS_LOGIN_CUSTOMER_ID}
 
-      # Crestwood camera
-      CRESTWOOD_REFERENCE_PATH: ${CRESTWOOD_REFERENCE_PATH:-/data/crestwood/reference.jpg}
-      CRESTWOOD_REFERENCE_URL: ${CRESTWOOD_REFERENCE_URL}
+      # Stop sign camera
+      STOPSIGN_REFERENCE_PATH: ${STOPSIGN_REFERENCE_PATH:-/data/stopsign/reference.jpg}
+      STOPSIGN_REFERENCE_URL: ${STOPSIGN_REFERENCE_URL}
 
       # Traccar
       TRACCAR_STALE_THRESHOLD_MINUTES: ${TRACCAR_STALE_THRESHOLD_MINUTES:-1440}
       TRACCAR_ALERT_COOLDOWN_HOURS: ${TRACCAR_ALERT_COOLDOWN_HOURS:-24}
 
       # === sauron-jobs specific env vars ===
-      # Jobs use LIFE_HUB_DB_URL (different name from DATABASE_URL)
-      LIFE_HUB_DB_URL: ${LIFE_HUB_DB_URL}
+      # Jobs read LIFE_HUB_DB_URL; entrypoint mirrors DATABASE_URL for them.
 
       # AI Tools catalog (MinIO)
       AITOOLS_MINIO_ENDPOINT: ${AITOOLS_MINIO_ENDPOINT}
