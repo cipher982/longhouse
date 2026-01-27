@@ -93,7 +93,8 @@ async def fetch_session_from_life_hub(session_id: str) -> tuple[bytes, str, str]
     if not LIFE_HUB_API_KEY:
         raise ValueError("LIFE_HUB_API_KEY not configured")
 
-    url = f"{LIFE_HUB_URL}/query/fiches/sessions/{session_id}/export"
+    # Life Hub API currently exposes agent-session endpoints.
+    url = f"{LIFE_HUB_URL}/query/agents/sessions/{session_id}/export"
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.get(
@@ -215,10 +216,11 @@ async def ship_session_to_life_hub(
     # Read session content
     session_content = session_file.read_bytes()
 
-    # Ship to Life Hub ingest endpoint
+    # Ship to Life Hub ingest endpoint.
+    # Life Hub currently ingests agent events at /ingest/agents/events.
     # Note: The shipper service handles the full event ingestion format,
-    # but for immediate shipping we use a simplified approach
-    url = f"{LIFE_HUB_URL}/ingest/fiches/events"
+    # but for immediate shipping we use a simplified approach.
+    url = f"{LIFE_HUB_URL}/ingest/agents/events"
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:

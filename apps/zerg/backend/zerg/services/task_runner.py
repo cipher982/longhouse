@@ -95,165 +95,95 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
     # ------------------------------------------------------------------
     use_advisory = bool(getattr(db.bind, "dialect", None) and db.bind.dialect.name == "postgresql")
 
-    if use_advisory:
-        from zerg.services.fiche_locks import FicheLockManager
+    async def _run_task_locked() -> ThreadModel:
+        """Run the fiche task assuming exclusivity is already enforced."""
+        # Persist status for UI/telemetry while the lock enforces exclusivity
+        crud.update_fiche(db, fiche.id, status="running")
+        db.commit()
+        await event_bus.publish(
+            EventType.FICHE_UPDATED,
+            {"event_type": "fiche_updated", "id": fiche.id, "status": "running"},
+        )
 
-        # Hold the advisory lock for the entire run window.
-        with FicheLockManager.fiche_lock(db, fiche.id) as acquired:
-            if not acquired:
-                raise ValueError("Fiche already running")
+        # ------------------------------------------------------------------
+        # Create the new thread + seed messages.
+        # ------------------------------------------------------------------
+        timestamp_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        title = f"Task Run – {timestamp_str}"
 
-            # Persist status for UI/telemetry while the advisory lock enforces exclusivity
-            crud.update_fiche(db, fiche.id, status="running")
-            db.commit()
-            await event_bus.publish(
-                EventType.FICHE_UPDATED,
-                {"event_type": "fiche_updated", "id": fiche.id, "status": "running"},
-            )
+        thread = ThreadService.create_thread_with_system_message(
+            db,
+            fiche,
+            title=title,
+            thread_type=thread_type,
+            active=False,  # task runs are not the *active* chat thread
+        )
 
-            # Proceed with execution inside the lock scope
-            # ------------------------------------------------------------------
-            # Create the new thread + seed messages.
-            # ------------------------------------------------------------------
-            timestamp_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-            title = f"Task Run – {timestamp_str}"
+        # Insert the user *task* prompt (unprocessed)
+        crud.create_thread_message(
+            db=db,
+            thread_id=thread.id,
+            role="user",
+            content=fiche.task_instructions,
+            processed=False,
+        )
 
-            thread = ThreadService.create_thread_with_system_message(
-                db,
-                fiche,
-                title=title,
-                thread_type=thread_type,
-                active=False,  # task runs are not the *active* chat thread
-            )
+        # ------------------------------------------------------------------
+        # Persist a Run row so dashboards can display progress.
+        # ------------------------------------------------------------------
+        # Use explicit trigger if provided, otherwise infer from thread_type
+        run_trigger = trigger if trigger else (thread_type if thread_type in {"manual", "schedule"} else "api")
+        run_row = crud.create_run(
+            db,
+            fiche_id=fiche.id,
+            thread_id=thread.id,
+            trigger=run_trigger,
+            status="queued",
+        )
 
-            # Insert the user *task* prompt (unprocessed)
-            crud.create_thread_message(
-                db=db,
-                thread_id=thread.id,
-                role="user",
-                content=fiche.task_instructions,
-                processed=False,
-            )
+        await event_bus.publish(
+            EventType.RUN_CREATED,
+            {
+                "event_type": "run_created",
+                "fiche_id": fiche.id,
+                "run_id": run_row.id,
+                "status": "queued",
+                "thread_id": thread.id,
+            },
+        )
 
-            # ------------------------------------------------------------------
-            # Persist a Run row so dashboards can display progress.
-            # ------------------------------------------------------------------
-            # Use explicit trigger if provided, otherwise infer from thread_type
-            run_trigger = trigger if trigger else (thread_type if thread_type in {"manual", "schedule"} else "api")
-            run_row = crud.create_run(
-                db,
-                fiche_id=fiche.id,
-                thread_id=thread.id,
-                trigger=run_trigger,
-                status="queued",
-            )
+        # Immediately mark as running (no async queue yet)
+        start_ts = datetime.now(timezone.utc)
+        crud.mark_run_running(db, run_row.id, started_at=start_ts)
+        await event_bus.publish(
+            EventType.RUN_UPDATED,
+            {
+                "event_type": "run_updated",
+                "fiche_id": fiche.id,
+                "run_id": run_row.id,
+                "status": "running",
+                "started_at": start_ts.isoformat(),
+                "thread_id": thread.id,
+            },
+        )
 
-            await event_bus.publish(
-                EventType.RUN_CREATED,
-                {
-                    "event_type": "run_created",
-                    "fiche_id": fiche.id,
-                    "run_id": run_row.id,
-                    "status": "queued",
-                    "thread_id": thread.id,
-                },
-            )
+        # ------------------------------------------------------------------
+        # Delegate to FicheRunner (no token stream) and capture duration.
+        # ------------------------------------------------------------------
+        runner = FicheRunner(fiche)
 
-            # Immediately mark as running (no async queue yet)
-            start_ts = datetime.now(timezone.utc)
-            crud.mark_run_running(db, run_row.id, started_at=start_ts)
-            await event_bus.publish(
-                EventType.RUN_UPDATED,
-                {
-                    "event_type": "run_updated",
-                    "fiche_id": fiche.id,
-                    "run_id": run_row.id,
-                    "status": "running",
-                    "started_at": start_ts.isoformat(),
-                    "thread_id": thread.id,
-                },
-            )
+        # Set user context for token streaming
+        set_current_user_id(fiche.owner_id)
 
-            # ------------------------------------------------------------------
-            # Delegate to FicheRunner (no token stream) and capture duration.
-            # ------------------------------------------------------------------
-            runner = FicheRunner(fiche)
-
-            # Set user context for token streaming
-            set_current_user_id(fiche.owner_id)
-
+        try:
             try:
-                try:
-                    await runner.run_thread(db, thread)
+                await runner.run_thread(db, thread)
 
-                except Exception as exc:
-                    # Persist run failure first
-                    end_ts = datetime.now(timezone.utc)
-                    duration_ms = int((end_ts - start_ts).total_seconds() * 1000)
-                    crud.mark_run_failed(db, run_row.id, finished_at=end_ts, duration_ms=duration_ms, error=str(exc))
-
-                    await event_bus.publish(
-                        EventType.RUN_UPDATED,
-                        {
-                            "event_type": "run_updated",
-                            "fiche_id": fiche.id,
-                            "run_id": run_row.id,
-                            "status": "failed",
-                            "finished_at": end_ts.isoformat(),
-                            "duration_ms": duration_ms,
-                            "error": str(exc),
-                            "thread_id": thread.id,
-                        },
-                    )
-
-                    # Persist fiche error state & broadcast so dashboards refresh
-                    crud.update_fiche(db, fiche.id, status="error", last_error=str(exc))
-                    db.commit()
-
-                    await event_bus.publish(
-                        EventType.FICHE_UPDATED,
-                        {
-                            "event_type": "fiche_updated",
-                            "id": fiche.id,
-                            "status": "error",
-                            "last_error": str(exc),
-                        },
-                    )
-
-                    logger.exception("Task run failed for fiche %s", fiche.id)
-                    raise
-
-                # ------------------------------------------------------------------
-                # Success – update run + flip fiche back to idle.
-                # ------------------------------------------------------------------
+            except Exception as exc:
+                # Persist run failure first
                 end_ts = datetime.now(timezone.utc)
                 duration_ms = int((end_ts - start_ts).total_seconds() * 1000)
-
-                # Persist usage + cost if available
-                total_tokens = runner.usage_total_tokens
-                total_cost_usd = None
-                if runner.usage_prompt_tokens is not None and runner.usage_completion_tokens is not None:
-                    # Compute cost only when pricing known
-                    from zerg.pricing import get_usd_prices_per_1k
-
-                    prices = get_usd_prices_per_1k(fiche.model)
-                    if prices is not None:
-                        in_price, out_price = prices
-                        total_cost_usd = ((runner.usage_prompt_tokens * in_price) + (runner.usage_completion_tokens * out_price)) / 1000.0
-
-                # Mark run as finished (summary auto-extracted if not provided)
-                finished_run = crud.mark_run_finished(
-                    db,
-                    run_row.id,
-                    finished_at=end_ts,
-                    duration_ms=duration_ms,
-                    total_tokens=total_tokens,
-                    total_cost_usd=total_cost_usd,
-                )
-
-                # Refresh to get the auto-extracted summary
-                if finished_run:
-                    db.refresh(finished_run)
+                crud.mark_run_failed(db, run_row.id, finished_at=end_ts, duration_ms=duration_ms, error=str(exc))
 
                 await event_bus.publish(
                     EventType.RUN_UPDATED,
@@ -261,18 +191,16 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
                         "event_type": "run_updated",
                         "fiche_id": fiche.id,
                         "run_id": run_row.id,
-                        "status": "success",
+                        "status": "failed",
                         "finished_at": end_ts.isoformat(),
                         "duration_ms": duration_ms,
-                        "summary": finished_run.summary if finished_run else None,
+                        "error": str(exc),
                         "thread_id": thread.id,
                     },
                 )
 
-                # For scheduled fiches, revert to idle (status enum only supports idle/running/error/processing)
-                new_status = "idle"
-
-                crud.update_fiche(db, fiche.id, status=new_status, last_run_at=end_ts, last_error=None)
+                # Persist fiche error state & broadcast so dashboards refresh
+                crud.update_fiche(db, fiche.id, status="error", last_error=str(exc))
                 db.commit()
 
                 await event_bus.publish(
@@ -280,18 +208,93 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
                     {
                         "event_type": "fiche_updated",
                         "id": fiche.id,
-                        "status": new_status,
-                        "last_run_at": end_ts.isoformat(),
-                        "thread_id": thread.id,
-                        "last_error": None,
+                        "status": "error",
+                        "last_error": str(exc),
                     },
                 )
 
-                return thread
-            finally:
-                # Always clean up user context
-                set_current_user_id(None)
+                logger.exception("Task run failed for fiche %s", fiche.id)
+                raise
 
-    # If we are here, the database is not PostgreSQL; this app requires
-    # PostgreSQL for advisory locks. Simplify by failing fast.
-    raise ValueError("PostgreSQL is required for fiche execution (advisory locks)")
+            # ------------------------------------------------------------------
+            # Success – update run + flip fiche back to idle.
+            # ------------------------------------------------------------------
+            end_ts = datetime.now(timezone.utc)
+            duration_ms = int((end_ts - start_ts).total_seconds() * 1000)
+
+            # Persist usage + cost if available
+            total_tokens = runner.usage_total_tokens
+            total_cost_usd = None
+            if runner.usage_prompt_tokens is not None and runner.usage_completion_tokens is not None:
+                # Compute cost only when pricing known
+                from zerg.pricing import get_usd_prices_per_1k
+
+                prices = get_usd_prices_per_1k(fiche.model)
+                if prices is not None:
+                    in_price, out_price = prices
+                    total_cost_usd = ((runner.usage_prompt_tokens * in_price) + (runner.usage_completion_tokens * out_price)) / 1000.0
+
+            # Mark run as finished (summary auto-extracted if not provided)
+            finished_run = crud.mark_run_finished(
+                db,
+                run_row.id,
+                finished_at=end_ts,
+                duration_ms=duration_ms,
+                total_tokens=total_tokens,
+                total_cost_usd=total_cost_usd,
+            )
+
+            # Refresh to get the auto-extracted summary
+            if finished_run:
+                db.refresh(finished_run)
+
+            await event_bus.publish(
+                EventType.RUN_UPDATED,
+                {
+                    "event_type": "run_updated",
+                    "fiche_id": fiche.id,
+                    "run_id": run_row.id,
+                    "status": "success",
+                    "finished_at": end_ts.isoformat(),
+                    "duration_ms": duration_ms,
+                    "summary": finished_run.summary if finished_run else None,
+                    "thread_id": thread.id,
+                },
+            )
+
+            # For scheduled fiches, revert to idle (status enum only supports idle/running/error/processing)
+            new_status = "idle"
+
+            crud.update_fiche(db, fiche.id, status=new_status, last_run_at=end_ts, last_error=None)
+            db.commit()
+
+            await event_bus.publish(
+                EventType.FICHE_UPDATED,
+                {
+                    "event_type": "fiche_updated",
+                    "id": fiche.id,
+                    "status": new_status,
+                    "last_run_at": end_ts.isoformat(),
+                    "thread_id": thread.id,
+                    "last_error": None,
+                },
+            )
+
+            return thread
+        finally:
+            # Always clean up user context
+            set_current_user_id(None)
+
+    if use_advisory:
+        from zerg.services.fiche_locks import FicheLockManager
+
+        # Hold the advisory lock for the entire run window.
+        with FicheLockManager.fiche_lock(db, fiche.id) as acquired:
+            if not acquired:
+                raise ValueError("Fiche already running")
+            return await _run_task_locked()
+
+    # Non-Postgres fallback (tests/dev). Preserve legacy status guard.
+    if fiche.status == "running":
+        raise ValueError("Fiche already running")
+    return await _run_task_locked()
