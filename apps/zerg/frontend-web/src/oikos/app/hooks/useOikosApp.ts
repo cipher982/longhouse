@@ -201,7 +201,7 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
       } else {
         // Fetch actual oikos thread info
         try {
-          const threadResponse = await fetch(toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/oikos/thread`), {
+          const threadResponse = await fetch(toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/thread`), {
             credentials: 'include',
           })
 

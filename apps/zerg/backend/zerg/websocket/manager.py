@@ -475,6 +475,13 @@ class TopicConnectionManager:
             # ----------------------------------------------------------
             try:
                 queue.put_nowait(final_message)
+            except RuntimeError as exc:
+                # Stale queue from a closed event loop (common in tests); drop it.
+                if "Event loop is closed" in str(exc):
+                    logger.warning("Queue loop closed for client %s, disconnecting", client_id)
+                    asyncio.create_task(self.disconnect(client_id))
+                    continue
+                raise
             except asyncio.QueueFull:
                 # Back-pressure: drop client to protect server memory
                 logger.warning("Queue full for client %s, disconnecting due to back-pressure", client_id)

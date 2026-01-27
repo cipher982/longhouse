@@ -15,8 +15,8 @@ import { test as base, expect } from './fixtures';
 // any numeric ID via dynamic schema creation in the DB routing layer.
 // Note: Using string IDs like 'guardrail_a' doesn't work because schemas
 // are only created for numeric commis IDs.
-const WORKER_ID_A = '100';
-const WORKER_ID_B = '101';
+const COMMIS_ID_A = '100';
+const COMMIS_ID_B = '101';
 
 const backendUrl = `http://127.0.0.1:${process.env.BACKEND_PORT || '8001'}`;
 
@@ -33,11 +33,11 @@ base.describe('Schema Isolation Guardrail', () => {
     // Create API contexts for two isolated commis
     requestA = await playwright.request.newContext({
       baseURL: backendUrl,
-      extraHTTPHeaders: { 'X-Test-Commis': WORKER_ID_A },
+      extraHTTPHeaders: { 'X-Test-Commis': COMMIS_ID_A },
     });
     requestB = await playwright.request.newContext({
       baseURL: backendUrl,
-      extraHTTPHeaders: { 'X-Test-Commis': WORKER_ID_B },
+      extraHTTPHeaders: { 'X-Test-Commis': COMMIS_ID_B },
     });
   });
 

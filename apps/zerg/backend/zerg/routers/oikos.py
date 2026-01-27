@@ -714,7 +714,7 @@ class OikosThreadInfo(BaseModel):
     message_count: int = Field(..., description="Number of messages in thread")
 
 
-@router.get("/oikos/thread", response_model=OikosThreadInfo)
+@router.get("/thread", response_model=OikosThreadInfo)
 def get_oikos_thread(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_oikos_user),

@@ -731,8 +731,8 @@ async def debug_db_schema(
     search_path = db.execute(text("SHOW search_path")).scalar()
     fiches_unqualified = db.execute(text("SELECT to_regclass('fiches')")).scalar()
     fiches_public = db.execute(text("SELECT to_regclass('public.fiches')")).scalar()
-    fiches_count = db.execute(text("SELECT COUNT(*) FROM fiches")).scalar()
-    fiches_public_count = db.execute(text("SELECT COUNT(*) FROM public.fiches")).scalar()
+    fiches_count = db.execute(text("SELECT COUNT(*) FROM fiches")).scalar() if fiches_unqualified else None
+    fiches_public_count = db.execute(text("SELECT COUNT(*) FROM public.fiches")).scalar() if fiches_public else None
     return {
         "current_schema": current_schema,
         "search_path": search_path,

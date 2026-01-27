@@ -50,8 +50,8 @@ async def debug_chat_flow():
                                 print(f"     [D] DEFERRED: {data['payload'].get('message')}")
                             elif event_type == "supervisor_complete":
                                 print(f"     [C] COMPLETE: {data['payload'].get('result')}")
-                            elif event_type == "worker_complete":
-                                print(f"     [W] WORKER DONE: {data['payload'].get('worker_id')}")
+                            elif event_type == "commis_complete":
+                                print(f"     [W] COMMIS DONE: {data['payload'].get('commis_id')}")
 
                         except json.JSONDecodeError:
                             print(f"  <- RAW: {data_str}")

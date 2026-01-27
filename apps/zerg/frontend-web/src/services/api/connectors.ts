@@ -62,13 +62,13 @@ export async function deleteFicheConnector(
 
 // Account-level connectors
 export async function fetchAccountConnectors(): Promise<AccountConnectorStatus[]> {
-  return request<AccountConnectorStatus[]>(`/account/connectors`);
+  return request<AccountConnectorStatus[]>(`/account/connectors/`);
 }
 
 export async function configureAccountConnector(
   payload: ConnectorConfigureRequest
 ): Promise<ConnectorSuccessResponse> {
-  return request<ConnectorSuccessResponse>(`/account/connectors`, {
+  return request<ConnectorSuccessResponse>(`/account/connectors/`, {
     method: "POST",
     body: JSON.stringify(payload),
   });

@@ -25,7 +25,7 @@ export async function createAgentViaUI(page: Page): Promise<string> {
   // Capture API response to get the ACTUAL created agent ID
   const [response] = await Promise.all([
     page.waitForResponse(
-      (r) => r.url().includes('/api/agents') && r.request().method() === 'POST' && r.status() === 201,
+      (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
       { timeout: 10000 }
     ),
     createBtn.click(),
@@ -50,7 +50,7 @@ export async function createAgentViaUI(page: Page): Promise<string> {
  * Create an agent via API (faster, for tests that don't need UI verification)
  */
 export async function createAgentViaAPI(request: APIRequestContext): Promise<string> {
-  const response = await request.post('/api/agents', {
+  const response = await request.post('/api/fiches', {
     data: {
       system_instructions: 'You are a helpful assistant.',
       task_instructions: 'Answer user questions clearly and briefly.',

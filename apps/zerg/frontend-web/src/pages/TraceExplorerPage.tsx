@@ -67,7 +67,7 @@ interface TraceDetail {
 // API functions
 async function fetchTraces(limit: number = 20, offset: number = 0): Promise<TracesResponse> {
   const response = await fetch(
-    `${config.apiBaseUrl}/traces?limit=${limit}&offset=${offset}`,
+    `${config.apiBaseUrl}/traces/?limit=${limit}&offset=${offset}`,
     { credentials: "include" }
   );
 

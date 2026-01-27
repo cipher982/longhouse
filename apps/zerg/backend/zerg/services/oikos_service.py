@@ -577,6 +577,8 @@ class OikosService:
         if run.assistant_message_id != message_id:
             run.assistant_message_id = message_id
             self.db.commit()
+        # Always use the persisted message_id for downstream events.
+        message_id = run.assistant_message_id or message_id
 
         # Check if this is a continuation run (processing commis result from a deferred run)
         # If so, include continuation_of_message_id so frontend creates a NEW message bubble

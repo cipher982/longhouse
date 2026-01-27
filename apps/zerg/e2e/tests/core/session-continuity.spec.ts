@@ -288,12 +288,17 @@ test.describe('Session Continuity E2E', () => {
       )
       .toBeTruthy();
 
-    // Check run didn't crash the system
-    const statusRes = await request.get(`/api/oikos/runs/${runId}`);
-    expect(statusRes.ok()).toBeTruthy();
-    const runStatus = await statusRes.json();
-
-    // The run should complete (success or failed, but not stuck)
-    expect(['success', 'failed']).toContain(runStatus.status);
+    // Check run didn't crash the system and reaches a terminal state
+    await expect
+      .poll(
+        async () => {
+          const statusRes = await request.get(`/api/oikos/runs/${runId}`);
+          if (!statusRes.ok()) return null;
+          const runStatus = await statusRes.json();
+          return runStatus.status as string | null;
+        },
+        { timeout: 20000, intervals: [1000, 2000, 5000] }
+      )
+      .toMatch(/^(success|failed)$/);
   });
 });

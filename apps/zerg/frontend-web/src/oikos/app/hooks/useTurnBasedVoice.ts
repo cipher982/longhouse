@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppDispatch, useAppState, type ChatMessage, type VoiceStatus } from "../context";
-import { voiceTranscribe, voiceTts, ApiError } from "../../../services/api";
+import { voiceTurn, voiceTts, ApiError } from "../../../services/api";
 import { uuid } from "../../lib/uuid";
 import { logger } from "../../core";
 
@@ -363,7 +363,7 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
         formData.append("message_id", assistantMessageId);
       }
 
-      const response = await voiceTranscribe(formData);
+      const response = await voiceTurn(formData);
       if (response.status !== "success") {
         handleError(response.error || "Voice transcription failed", undefined, placeholders);
         return;
@@ -379,6 +379,13 @@ export function useTurnBasedVoice(options: UseTurnBasedVoiceOptions = {}) {
 
       if (placeholders.userItemId) {
         dispatch({ type: "UPDATE_MESSAGE", itemId: placeholders.userItemId, content: transcript });
+      }
+
+      const responseText = response.response_text?.trim() || "";
+      if (responseText) {
+        updatePlaceholders(responseText, placeholders, "final");
+        logger.info(`[useTurnBasedVoice] Response text received; skipping SSE send (messageId: ${assistantMessageId})`);
+        return;
       }
 
       if (!options.sendText || !assistantMessageId) {

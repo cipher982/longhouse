@@ -18,27 +18,40 @@ test.describe('Run Button Real-time Update', () => {
     await resetDatabase(request);
   });
 
-  test('should transition to running via optimistic update and websocket', async ({ page }) => {
-    await page.goto('/dashboard');
-
+  async function createFicheAndGetId(page: any): Promise<string> {
     const createBtn = page.locator('[data-testid="create-fiche-btn"]');
     await expect(createBtn).toBeVisible({ timeout: 10000 });
 
-    // Create fiche with deterministic wait for API response
-    await Promise.all([
+    const [response] = await Promise.all([
       page.waitForResponse(
-        (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
+        (r: any) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
         { timeout: 10000 }
       ),
       createBtn.click(),
     ]);
 
-    // Wait for the new fiche row to appear
-    const ficheRow = page.locator('tr[data-fiche-id]').last();
-    await expect(ficheRow).toBeVisible({ timeout: 5000 });
+    const body = await response.json();
+    const ficheId = String(body.id);
+    if (!ficheId || ficheId === 'undefined') {
+      throw new Error(`Failed to get fiche ID from API response: ${JSON.stringify(body)}`);
+    }
 
-    const ficheId = await ficheRow.getAttribute('data-fiche-id');
-    expect(ficheId).toBeTruthy();
+    const ficheRow = page.locator(`tr[data-fiche-id="${ficheId}"]`);
+    await expect(ficheRow).toBeVisible({ timeout: 5000 });
+    return ficheId;
+  }
+
+  test('should transition to running via optimistic update and websocket', async ({ page }) => {
+    await page.goto('/dashboard');
+
+    // Slow down run requests so optimistic UI has time to render Running
+    await page.route('**/api/fiches/*/task', async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 750));
+      await route.continue();
+    });
+
+    const ficheId = await createFicheAndGetId(page);
+    const ficheRow = page.locator(`tr[data-fiche-id="${ficheId}"]`);
 
     // Get initial status
     const statusCell = ficheRow.locator('td[data-label="Status"]');
@@ -60,40 +73,17 @@ test.describe('Run Button Real-time Update', () => {
   test('should handle run button click with multiple fiches', async ({ page }) => {
     await page.goto('/dashboard');
 
-    const createBtn = page.locator('[data-testid="create-fiche-btn"]');
-    await expect(createBtn).toBeVisible({ timeout: 10000 });
+    // Slow down run requests so optimistic UI has time to render Running
+    await page.route('**/api/fiches/*/task', async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 750));
+      await route.continue();
+    });
 
-    // Create first fiche with deterministic wait
-    await Promise.all([
-      page.waitForResponse(
-        (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
-        { timeout: 10000 }
-      ),
-      createBtn.click(),
-    ]);
+    const firstFicheId = await createFicheAndGetId(page);
+    const secondFicheId = await createFicheAndGetId(page);
 
-    // Create second fiche with deterministic wait
-    await Promise.all([
-      page.waitForResponse(
-        (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
-        { timeout: 10000 }
-      ),
-      createBtn.click(),
-    ]);
-
-    // Wait for both fiches to appear
-    const ficheRows = page.locator('tr[data-fiche-id]');
-    await expect.poll(
-      async () => await ficheRows.count(),
-      { timeout: 10000 }
-    ).toBeGreaterThanOrEqual(2);
-
-    // Get the two most recent fiches (last two rows)
-    const firstFicheRow = ficheRows.nth(-2);
-    const secondFicheRow = ficheRows.last();
-
-    const firstFicheId = await firstFicheRow.getAttribute('data-fiche-id');
-    const secondFicheId = await secondFicheRow.getAttribute('data-fiche-id');
+    const firstFicheRow = page.locator(`tr[data-fiche-id="${firstFicheId}"]`);
+    const secondFicheRow = page.locator(`tr[data-fiche-id="${secondFicheId}"]`);
 
     // Get both status cells
     const firstStatusCell = firstFicheRow.locator('td[data-label="Status"]');

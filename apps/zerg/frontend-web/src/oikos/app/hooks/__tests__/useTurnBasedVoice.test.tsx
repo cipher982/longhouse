@@ -6,7 +6,7 @@ import { useTurnBasedVoice } from "../useTurnBasedVoice";
 import { AppProvider, useAppDispatch, useAppState } from "../../context";
 import * as api from "../../../../services/api";
 
-let mockVoiceTranscribe: ReturnType<typeof vi.spyOn>;
+let mockVoiceTurn: ReturnType<typeof vi.spyOn>;
 let mockVoiceTts: ReturnType<typeof vi.spyOn>;
 
 class MockMediaRecorder {
@@ -54,7 +54,7 @@ function useHarness(sendText?: (text: string, messageId: string) => Promise<void
 describe("useTurnBasedVoice", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    mockVoiceTranscribe = vi.spyOn(api, "voiceTranscribe");
+    mockVoiceTurn = vi.spyOn(api, "voiceTurn");
     mockVoiceTts = vi.spyOn(api, "voiceTts");
 
     Object.defineProperty(globalThis, "MediaRecorder", {
@@ -76,7 +76,7 @@ describe("useTurnBasedVoice", () => {
 
   it("records audio, transcribes, and sends transcript via SSE", async () => {
     const sendText = vi.fn().mockResolvedValue(undefined);
-    mockVoiceTranscribe.mockResolvedValue({
+    mockVoiceTurn.mockResolvedValue({
       status: "success",
       transcript: "Hello from voice",
     });
@@ -93,7 +93,7 @@ describe("useTurnBasedVoice", () => {
 
     await waitFor(() => {
       const userMessage = result.current.state.messages.find((msg) => msg.role === "user");
-      expect(mockVoiceTranscribe).toHaveBeenCalledTimes(1);
+      expect(mockVoiceTurn).toHaveBeenCalledTimes(1);
       expect(sendText).toHaveBeenCalledTimes(1);
       expect(userMessage?.content).toBe("Hello from voice");
     });
@@ -101,7 +101,7 @@ describe("useTurnBasedVoice", () => {
 
   it("requests TTS when assistant message is finalized", async () => {
     const sendText = vi.fn().mockResolvedValue(undefined);
-    mockVoiceTranscribe.mockResolvedValue({
+    mockVoiceTurn.mockResolvedValue({
       status: "success",
       transcript: "Hello from voice",
     });

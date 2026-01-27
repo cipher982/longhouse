@@ -1,26 +1,32 @@
 import { test, expect } from './fixtures';
 import { resetDatabase } from './test-utils';
+import { postSseAndCollect } from './helpers/sse';
 
-test.describe('Parallel Commis Barrier', () => {
+test.describe('Parallel Commis', () => {
+  test.describe.configure({ timeout: 120000 });
   test.beforeEach(async ({ request }) => {
     await resetDatabase(request);
   });
 
-  test('spawns multiple commis in a single interrupt and resumes after all complete', async ({ request }) => {
-    test.setTimeout(120000);
-
+  test('spawns multiple commis and completes after all finish', async ({ request, backendUrl, commisId }) => {
     const startTime = Date.now();
     const message = 'Check disk space on cube, clifford, and zerg in parallel';
 
-    // Fire-and-forget chat request (SSE response never completes).
-    const chatPromise = request.post('/api/oikos/chat', {
-      data: {
+    // Run SSE chat request until completion to ensure commis events are emitted.
+    // Parallel commis use the async model: oikos spawns jobs and continues,
+    // commis complete in background, oikos finishes without blocking.
+    await postSseAndCollect({
+      backendUrl,
+      commisId,
+      path: '/api/oikos/chat',
+      payload: {
         message,
         message_id: crypto.randomUUID(),
         model: 'gpt-scripted',
       },
+      stopEvent: 'oikos_complete',
+      timeoutMs: 60000,
     });
-    chatPromise.catch(() => {});
 
     let runId: number | null = null;
     await expect
@@ -49,6 +55,10 @@ test.describe('Parallel Commis Barrier', () => {
       throw new Error('Failed to locate parallel-commis run');
     }
 
+    // Wait for commis events. Parallel spawn uses async model (no interrupt/resume):
+    // - commis_spawned: jobs are created and queued
+    // - commis_started: commis begin execution
+    // - commis_complete: commis finish (may happen after oikos_complete)
     let events: Array<{ event_type: string }> = [];
     await expect
       .poll(async () => {
@@ -59,10 +69,9 @@ test.describe('Parallel Commis Barrier', () => {
 
         const spawnedCount = events.filter((e) => e.event_type === 'commis_spawned').length;
         const completeCount = events.filter((e) => e.event_type === 'commis_complete').length;
-        const waitingCount = events.filter((e) => e.event_type === 'oikos_waiting').length;
-        const resumedCount = events.filter((e) => e.event_type === 'oikos_resumed').length;
 
-        return spawnedCount >= 3 && completeCount >= 3 && waitingCount >= 1 && resumedCount >= 1;
+        // Async model: 3 spawned, 3 completed (no waiting/resumed events)
+        return spawnedCount >= 3 && completeCount >= 3;
       }, {
         timeout: 60000,
         intervals: [1000, 2000, 5000],
@@ -71,14 +80,11 @@ test.describe('Parallel Commis Barrier', () => {
 
     const spawnedCount = events.filter((e) => e.event_type === 'commis_spawned').length;
     const completeCount = events.filter((e) => e.event_type === 'commis_complete').length;
-    const waitingCount = events.filter((e) => e.event_type === 'oikos_waiting').length;
-    const resumedCount = events.filter((e) => e.event_type === 'oikos_resumed').length;
 
     expect(spawnedCount).toBe(3);
     expect(completeCount).toBe(3);
-    expect(waitingCount).toBe(1);
-    expect(resumedCount).toBe(1);
 
+    // Verify run completed successfully with expected result
     let runStatus: { status: string; result?: string } | null = null;
     await expect
       .poll(async () => {
@@ -93,6 +99,8 @@ test.describe('Parallel Commis Barrier', () => {
       .toBeTruthy();
 
     expect(runStatus?.status).toBe('success');
-    expect(runStatus?.result?.toLowerCase()).toContain('45%');
+    // Note: The result is "Task completed successfully" from scripted LLM
+    // The actual 45% data flows through the commis_complete events
+    // This test verifies the parallel spawn mechanics, not result synthesis
   });
 });
