@@ -173,7 +173,7 @@ export default function App() {
           )
         },
         {
-          path: "/swarm/ops",
+          path: "/runs",
           element: (
             <ErrorBoundary>
               <Suspense fallback={<PageLoader />}>
