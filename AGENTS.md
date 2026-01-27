@@ -244,3 +244,4 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-27) [gotcha] If Zerg backend has `JOB_QUEUE_ENABLED=1` and `JOBS_GIT_*` set, it will schedule external sauron-jobs too; remove/disable those vars when Sauron is the sole scheduler.
 - (2026-01-27) [gotcha] `sauron-jobs` worklog job uses `GITHUB_TOKEN` (GitHub API via gh); don't remove it from scheduler envs if worklog is enabled.
 - (2026-01-27) [gotcha] `ops.jobs.script_source` has check constraint: only `builtin`, `git`, `http` allowed. Jobs from git manifest use `git` (not `manifest`). Fix at source (loader.py/worker.py), not downstream.
+- (2026-01-27) [gotcha] Claude Code prompt hooks must return JSON `{"ok": true|false, "reason": "..."}`; PostToolUse/SessionStart context injection uses `hookSpecificOutput` with the matching hookEventName.

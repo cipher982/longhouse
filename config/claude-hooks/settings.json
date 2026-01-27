@@ -1,0 +1,51 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Evaluate if Claude completed the assigned task. Check: 1) Were all requested changes made? 2) Did any tools fail without recovery? 3) Is the work in a consistent state? 4) Were there any unresolved errors? Respond with JSON: {\"ok\": true, \"reason\": \"task completed\"} to allow stopping, or {\"ok\": false, \"reason\": \"explanation of what's incomplete\"} to continue working."
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $ZERG_HOOKS_DIR/scripts/notify.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"hookSpecificOutput\": {\"hookEventName\": \"PostToolUse\", \"additionalContext\": \"File modified. Consider running tests or validation if appropriate.\"}}'",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $ZERG_HOOKS_DIR/scripts/session_start.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
