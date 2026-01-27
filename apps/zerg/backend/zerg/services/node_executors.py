@@ -16,12 +16,12 @@ if TYPE_CHECKING:
 from zerg.callbacks.token_stream import set_current_user_id
 from zerg.crud import crud
 from zerg.database import get_session_factory
-from zerg.managers.agent_runner import AgentRunner
+from zerg.managers.fiche_runner import FicheRunner
 from zerg.models.enums import FailureKind
-from zerg.models.models import Agent
+from zerg.models.models import Fiche
 from zerg.models.models import NodeExecutionState
-from zerg.schemas.node_output import create_agent_envelope
 from zerg.schemas.node_output import create_conditional_envelope
+from zerg.schemas.node_output import create_fiche_envelope
 from zerg.schemas.node_output import create_tool_envelope
 from zerg.schemas.node_output import create_trigger_envelope
 from zerg.services.execution_state import ExecutionStateMachine
@@ -129,8 +129,8 @@ class BaseNodeExecutor:
         """Create envelope output based on node type."""
         if node_type == "tool":
             return create_tool_envelope(value, **kwargs)
-        elif node_type == "agent":
-            return create_agent_envelope(value, **kwargs)
+        elif node_type == "fiche":
+            return create_fiche_envelope(value, **kwargs)
         elif node_type == "conditional":
             return create_conditional_envelope(value, **kwargs)
         elif node_type == "trigger":
@@ -145,33 +145,33 @@ class BaseNodeExecutor:
         )
 
 
-class AgentNodeExecutor(BaseNodeExecutor):
-    """Executes agent nodes. Envelope format only."""
+class FicheNodeExecutor(BaseNodeExecutor):
+    """Executes fiche nodes. Envelope format only."""
 
     async def _execute_node_logic(self, db, state, execution_id: int):
         # Resolve variables in node configuration
         node_outputs = state.get("node_outputs", {})
         resolved_config = resolve_variables(self.node.config, node_outputs)
 
-        agent_id = resolved_config.get("agent_id")
+        fiche_id = resolved_config.get("fiche_id")
         message = resolved_config.get("message", "Execute this task")
 
-        if not agent_id:
-            raise ValueError(f"Agent node {self.node_id} missing agent_id in config")
+        if not fiche_id:
+            raise ValueError(f"Fiche node {self.node_id} missing fiche_id in config")
 
-        logger.info(f"[AgentNode] Starting execution – node_id={self.node_id}, agent_id={agent_id}")
+        logger.info(f"[FicheNode] Starting execution – node_id={self.node_id}, fiche_id={fiche_id}")
 
-        # Get agent
-        agent = db.query(Agent).filter_by(id=agent_id).first()
-        if not agent:
-            raise ValueError(f"Agent {agent_id} not found in database")
+        # Get fiche
+        fiche = db.query(Fiche).filter_by(id=fiche_id).first()
+        if not fiche:
+            raise ValueError(f"Fiche {fiche_id} not found in database")
 
-        logger.info(f"[AgentNode] Found agent: {agent.name} (id={agent.id})")
+        logger.info(f"[FicheNode] Found fiche: {fiche.name} (id={fiche.id})")
 
         # Create thread and execute
         thread = crud.create_thread(
             db=db,
-            agent_id=agent_id,
+            fiche_id=fiche_id,
             title=f"Workflow execution {execution_id}",
         )
 
@@ -183,11 +183,11 @@ class AgentNodeExecutor(BaseNodeExecutor):
             processed=False,
         )
 
-        # Execute via AgentRunner
-        runner = AgentRunner(agent)
+        # Execute via FicheRunner
+        runner = FicheRunner(fiche)
 
         # Set user context for token streaming
-        set_current_user_id(agent.owner_id)
+        set_current_user_id(fiche.owner_id)
 
         try:
             created_messages = await runner.run_thread(db, thread)
@@ -214,11 +214,11 @@ class AgentNodeExecutor(BaseNodeExecutor):
                 "messages": serialized_messages,
                 "messages_created": len(created_messages),
             },
-            node_type="agent",
+            node_type="fiche",
             phase="finished",
             result="success",
-            agent_id=agent_id,
-            agent_name=agent.name,
+            fiche_id=fiche_id,
+            fiche_name=fiche.name,
             thread_id=thread.id,
         )
 
@@ -348,8 +348,8 @@ class ConditionalNodeExecutor(BaseNodeExecutor):
 
 def create_node_executor(node, publish_event_callback) -> BaseNodeExecutor:
     """Factory function to create node executor. Envelope format only."""
-    if node.type == "agent":
-        return AgentNodeExecutor(node, publish_event_callback, "agent")
+    if node.type == "fiche":
+        return FicheNodeExecutor(node, publish_event_callback, "fiche")
     elif node.type == "tool":
         return ToolNodeExecutor(node, publish_event_callback, "tool")
     elif node.type == "trigger":

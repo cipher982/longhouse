@@ -146,7 +146,7 @@ MemGPT implements pause/resume for long-running operations:
 - `started_at`, `finished_at`, `duration_ms` - Timing
 - `total_tokens`, `total_cost_usd` - Usage metrics
 - `error`, `cancel_reason` - Failure info
-- `summary` - Text summary of run (for Jarvis inbox)
+- `summary` - Text summary of run (for Oikos inbox)
 
 ### Current Context Building Process
 
@@ -829,7 +829,7 @@ ON thread_messages(thread_id, is_archived);
   - `apps/zerg/backend/zerg/services/thread_service.py` - Thread persistence helpers
 - **Related Zerg Docs:**
   - `connector_aware_agents_prd.md` - Temporal awareness, connector protocols
-  - `jarvis_integration.md` - Supervisor agent architecture
+  - `oikos_integration.md` - Supervisor agent architecture
 
 ---
 

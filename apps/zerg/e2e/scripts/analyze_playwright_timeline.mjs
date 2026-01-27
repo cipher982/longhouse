@@ -38,7 +38,7 @@ const intervals = items
     const endMs = startMs + (result.duration ?? 0);
     return {
       title: test.title,
-      workerIndex: result.workerIndex,
+      commisIndex: result.commisIndex,
       status: result.status,
       startMs,
       endMs,
@@ -52,7 +52,7 @@ if (intervals.length === 0) {
   process.exit(1);
 }
 
-const workerSet = new Set(intervals.map((i) => i.workerIndex));
+const commisSet = new Set(intervals.map((i) => i.commisIndex));
 const startMin = Math.min(...intervals.map((i) => i.startMs));
 const endMax = Math.max(...intervals.map((i) => i.endMs));
 
@@ -76,7 +76,7 @@ console.log("Playwright timeline summary");
 console.log("--------------------------");
 console.log(`File: ${path.relative(process.cwd(), jsonPath)}`);
 console.log(`Tests (results): ${intervals.length}`);
-console.log(`Workers observed: ${workerSet.size} (${[...workerSet].sort((a, b) => a - b).join(", ")})`);
+console.log(`Commis observed: ${commisSet.size} (${[...commisSet].sort((a, b) => a - b).join(", ")})`);
 console.log(`Max concurrent tests: ${maxActive}`);
 console.log(`Wall time (min start → max end): ${(wallMs / 1000).toFixed(2)}s`);
 
@@ -85,7 +85,7 @@ const failed = intervals.filter((i) => i.status === "failed").length;
 const skipped = intervals.filter((i) => i.status === "skipped").length;
 console.log(`Status: passed=${passed} failed=${failed} skipped=${skipped}`);
 
-if (workerSet.size <= 1 || maxActive <= 1) {
+if (commisSet.size <= 1 || maxActive <= 1) {
   console.log("Interpretation: serial (or nearly serial) execution.");
 } else {
   console.log("Interpretation: parallel execution.");

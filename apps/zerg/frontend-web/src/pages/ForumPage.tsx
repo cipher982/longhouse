@@ -4,7 +4,7 @@ import { Badge, Button, Card, PageShell, SectionHeader, Spinner } from "../compo
 import { generateForumReplay } from "../forum/replay";
 import { ForumCanvas } from "../forum/ForumCanvas";
 import { useForumReplayPlayer } from "../forum/useForumReplay";
-import { eventBus } from "../jarvis/lib/event-bus";
+import { eventBus } from "../oikos/lib/event-bus";
 import type {
   ForumMarker,
   ForumReplayEvent,
@@ -12,11 +12,11 @@ import type {
   ForumTask,
 } from "../forum/types";
 import {
-  mapSupervisorComplete,
-  mapSupervisorStarted,
-  mapWorkerComplete,
-  mapWorkerSpawned,
-  mapWorkerToolFailed,
+  mapOikosComplete,
+  mapOikosStarted,
+  mapCommisComplete,
+  mapCommisSpawned,
+  mapCommisToolFailed,
 } from "../forum/live-mapper";
 import { useActiveSessions } from "../hooks/useActiveSessions";
 import {
@@ -69,7 +69,7 @@ export default function ForumPage() {
         roomCount: 4,
         unitsPerRoom: 6,
         tasksPerRoom: 4,
-        workersPerRoom: 2,
+        commissPerRoom: 2,
         workspaceCount: 1,
         repoGroupsPerWorkspace: 2,
       }),
@@ -85,7 +85,7 @@ export default function ForumPage() {
         roomCount: 2,
         unitsPerRoom: 0,
         tasksPerRoom: 0,
-        workersPerRoom: 0,
+        commissPerRoom: 0,
         workspaceCount: 1,
         repoGroupsPerWorkspace: 1,
       }),
@@ -237,8 +237,8 @@ export default function ForumPage() {
     const unsubscribers: Array<() => void> = [];
 
     unsubscribers.push(
-      eventBus.on("supervisor:started", (data) => {
-        const events = mapSupervisorStarted(stateRef.current, data).map(makeLocalEvent);
+      eventBus.on("oikos:started", (data) => {
+        const events = mapOikosStarted(stateRef.current, data).map(makeLocalEvent);
         if (events.length) {
           dispatchEvents(events);
         }
@@ -246,8 +246,8 @@ export default function ForumPage() {
     );
 
     unsubscribers.push(
-      eventBus.on("supervisor:worker_spawned", (data) => {
-        const events = mapWorkerSpawned(stateRef.current, data).map(makeLocalEvent);
+      eventBus.on("oikos:commis_spawned", (data) => {
+        const events = mapCommisSpawned(stateRef.current, data).map(makeLocalEvent);
         if (events.length) {
           dispatchEvents(events);
         }
@@ -255,8 +255,8 @@ export default function ForumPage() {
     );
 
     unsubscribers.push(
-      eventBus.on("supervisor:worker_complete", (data) => {
-        const events = mapWorkerComplete(stateRef.current, data).map(makeLocalEvent);
+      eventBus.on("oikos:commis_complete", (data) => {
+        const events = mapCommisComplete(stateRef.current, data).map(makeLocalEvent);
         if (events.length) {
           dispatchEvents(events);
         }
@@ -264,8 +264,8 @@ export default function ForumPage() {
     );
 
     unsubscribers.push(
-      eventBus.on("supervisor:complete", (data) => {
-        const events = mapSupervisorComplete(stateRef.current, data).map(makeLocalEvent);
+      eventBus.on("oikos:complete", (data) => {
+        const events = mapOikosComplete(stateRef.current, data).map(makeLocalEvent);
         if (events.length) {
           dispatchEvents(events);
         }
@@ -273,8 +273,8 @@ export default function ForumPage() {
     );
 
     unsubscribers.push(
-      eventBus.on("worker:tool_failed", (data) => {
-        const events = mapWorkerToolFailed(stateRef.current, data).map(makeLocalEvent);
+      eventBus.on("commis:tool_failed", (data) => {
+        const events = mapCommisToolFailed(stateRef.current, data).map(makeLocalEvent);
         if (events.length) {
           dispatchEvents(events);
         }
@@ -423,7 +423,7 @@ export default function ForumPage() {
             ) : null}
 
             {!selectedEntity && !selectedTask && !selectedSession ? (
-              <div className="forum-selection-empty">Select a worker or task to inspect.</div>
+              <div className="forum-selection-empty">Select a commis or task to inspect.</div>
             ) : null}
           </div>
           <div className="forum-legend">
@@ -438,8 +438,8 @@ export default function ForumPage() {
                 Structure
               </div>
               <div className="forum-legend-item">
-                <span className="forum-legend-swatch forum-legend-swatch--worker" />
-                Worker
+                <span className="forum-legend-swatch forum-legend-swatch--commis" />
+                Commis
               </div>
               <div className="forum-legend-item">
                 <span className="forum-legend-swatch forum-legend-swatch--task" />

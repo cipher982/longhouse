@@ -4,38 +4,38 @@ import { resetDatabase } from './test-utils';
 // Skip: Token streaming UI selectors have changed
 test.skip();
 
-// Reset DB before each test to keep agent/thread ids predictable
+// Reset DB before each test to keep fiche/thread ids predictable
 // Uses strict reset that throws on failure to fail fast
 test.beforeEach(async ({ request }) => {
   await resetDatabase(request);
 });
 
-async function createAgentAndGetId(page: Page): Promise<string> {
+async function createFicheAndGetId(page: Page): Promise<string> {
   await page.goto('/');
-  const createBtn = page.locator('[data-testid="create-agent-btn"]');
+  const createBtn = page.locator('[data-testid="create-fiche-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
 
   const [response] = await Promise.all([
     page.waitForResponse(
-      (r) => r.url().includes('/api/agents') && r.request().method() === 'POST' && r.status() === 201,
+      (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
       { timeout: 10000 }
     ),
     createBtn.click(),
   ]);
 
   const body = await response.json();
-  const agentId = String(body.id);
+  const ficheId = String(body.id);
 
-  const row = page.locator(`tr[data-agent-id="${agentId}"]`);
+  const row = page.locator(`tr[data-fiche-id="${ficheId}"]`);
   await expect(row).toBeVisible({ timeout: 10000 });
-  return agentId;
+  return ficheId;
 }
 
 test.describe('Chat Token Streaming Tests', () => {
   test('Verify token streaming shows up in UI', async ({ page }) => {
-    // Create agent and navigate to chat
-    const agentId = await createAgentAndGetId(page);
-    await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
+    // Create fiche and navigate to chat
+    const ficheId = await createFicheAndGetId(page);
+    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
 
     // Verify chat UI loads
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
@@ -78,8 +78,8 @@ test.describe('Chat Token Streaming Tests', () => {
   });
 
   test('Verify tokens accumulate during streaming', async ({ page }) => {
-    const agentId = await createAgentAndGetId(page);
-    await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
+    const ficheId = await createFicheAndGetId(page);
+    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
 
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
 
@@ -130,8 +130,8 @@ test.describe('Chat Token Streaming Tests', () => {
   });
 
   test('Verify multiple token chunks appear incrementally', async ({ page }) => {
-    const agentId = await createAgentAndGetId(page);
-    await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
+    const ficheId = await createFicheAndGetId(page);
+    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
 
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
 
@@ -178,8 +178,8 @@ test.describe('Chat Token Streaming Tests', () => {
   });
 
   test('Verify streaming cursor animation', async ({ page }) => {
-    const agentId = await createAgentAndGetId(page);
-    await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
+    const ficheId = await createFicheAndGetId(page);
+    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
 
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
 
@@ -227,8 +227,8 @@ test.describe('Chat Token Streaming Tests', () => {
   test('CRITICAL: Switching threads mid-stream prevents token leakage', async ({ page }) => {
     console.log('🎯 Testing: Thread-switching token leakage prevention');
 
-    const agentId = await createAgentAndGetId(page);
-    await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
+    const ficheId = await createFicheAndGetId(page);
+    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
 
     // Send message in Thread A to trigger streaming
@@ -327,8 +327,8 @@ test.describe('Chat Token Streaming Tests', () => {
   test('Writing indicator badge appears on background streaming threads', async ({ page }) => {
     console.log('🎯 Testing: ✍️ badge visibility for background threads');
 
-    const agentId = await createAgentAndGetId(page);
-    await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
+    const ficheId = await createFicheAndGetId(page);
+    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
 
     // Send message to trigger streaming

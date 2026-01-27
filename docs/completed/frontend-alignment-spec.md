@@ -5,7 +5,7 @@
 
 ---
 
-# Frontend Alignment Spec: Zerg Dashboard + Jarvis Chat
+# Frontend Alignment Spec: Zerg Dashboard + Oikos Chat
 
 **Status:** Phases 1-3 Complete
 **Date:** 2025-12-20
@@ -13,8 +13,8 @@
 
 ## Executive Summary
 
-The Zerg dashboard and Jarvis chat UI were originally separate projects, now unified under the Swarmlet brand. They share the same backend and authentication but have divergent:
-- Branding ("Swarmlet" vs "Jarvis AI")
+The Zerg dashboard and Oikos chat UI were originally separate projects, now unified under the Swarmlet brand. They share the same backend and authentication but have divergent:
+- Branding ("Swarmlet" vs "Oikos AI")
 - Navigation patterns
 - Design token systems
 - Visual aesthetics
@@ -35,10 +35,10 @@ This spec outlines a phased approach to align them as a cohesive product while p
 | **Components** | 29 React components |
 | **CSS** | 11,500 lines, layer-based cascade |
 
-### Jarvis Chat (`/chat`)
+### Oikos Chat (`/chat`)
 | Aspect | Current State |
 |--------|---------------|
-| **Branding** | "Jarvis AI" title |
+| **Branding** | "Oikos AI" title |
 | **Navigation** | Dashboard link button + Sync button only |
 | **Aesthetic** | Cyber/sci-fi - glass morphism, animated backgrounds, neon accents |
 | **Tokens** | Hand-written CSS custom properties |
@@ -73,13 +73,13 @@ This spec outlines a phased approach to align them as a cohesive product while p
 **Scope:** Unify naming without structural changes
 
 **Changes:**
-1. Rename "Jarvis AI" → "Swarmlet" in chat header
+1. Rename "Oikos AI" → "Swarmlet" in chat header
 2. Add Swarmlet logo to chat header
 3. Update PWA manifest name
 4. Align favicon if different
 
 **Files to modify:**
-- `apps/zerg/frontend-web/src/jarvis/app/components/Header.tsx`
+- `apps/zerg/frontend-web/src/oikos/app/components/Header.tsx`
 - `apps/zerg/frontend-web/public/site.webmanifest`
 - `apps/zerg/frontend-web/index.html` (title tag)
 
@@ -96,7 +96,7 @@ Add a minimal global nav bar above the chat UI's existing header:
 ┌─────────────────────────────────────────────────┐
 │ [Logo] Swarmlet    Chat │ Dashboard │ ...  [DE]│  ← Global nav (from Zerg)
 ├─────────────────────────────────────────────────┤
-│            [Existing Jarvis header]             │  ← Context header
+│            [Existing Oikos header]             │  ← Context header
 │         [Conversations]  │  [Chat Area]         │
 │                          │                      │
 └─────────────────────────────────────────────────┘
@@ -112,7 +112,7 @@ Add a minimal global nav bar above the chat UI's existing header:
 - Two "headers" might feel redundant
 
 #### Option B: Integrate into Existing Header
-Expand Jarvis header to include navigation tabs:
+Expand Oikos header to include navigation tabs:
 ```
 ┌─────────────────────────────────────────────────┐
 │ [Logo] Swarmlet  │ Chat │ Dashboard │...│ [DE] │
@@ -126,7 +126,7 @@ Expand Jarvis header to include navigation tabs:
 - Cleaner visual hierarchy
 
 **Cons:**
-- Requires more CSS work to match Jarvis aesthetic
+- Requires more CSS work to match Oikos aesthetic
 - May feel cramped on mobile
 
 #### Option C: Sidebar Navigation
@@ -147,11 +147,11 @@ Move global nav to a collapsible sidebar:
 - Significant restructure of both UIs
 - Inconsistent with current dashboard tabs
 
-**Recommendation:** Start with **Option B** - integrate nav into Jarvis header. Simplest path to cohesion.
+**Recommendation:** Start with **Option B** - integrate nav into Oikos header. Simplest path to cohesion.
 
 **Files to modify:**
-- `apps/zerg/frontend-web/src/jarvis/app/components/Header.tsx`
-- `apps/zerg/frontend-web/src/jarvis/styles/layout.css`
+- `apps/zerg/frontend-web/src/oikos/app/components/Header.tsx`
+- `apps/zerg/frontend-web/src/oikos/styles/layout.css`
 
 ---
 
@@ -162,7 +162,7 @@ Move global nav to a collapsible sidebar:
 ```
 apps/zerg/frontend-web/src/styles/tokens.css         # Shared tokens (single source of truth)
 apps/zerg/frontend-web/src/styles/legacy.css         # Imports tokens.css (layers)
-apps/zerg/frontend-web/src/jarvis/styles/base.css    # Imports ../../styles/tokens.css
+apps/zerg/frontend-web/src/oikos/styles/base.css    # Imports ../../styles/tokens.css
 ```
 
 **Token Merge Strategy:**
@@ -180,7 +180,7 @@ apps/zerg/frontend-web/src/jarvis/styles/base.css    # Imports ../../styles/toke
 
 **Migration Path:**
 1. Keep shared tokens in `apps/zerg/frontend-web/src/styles/tokens.css`
-2. Import tokens into both dashboard and Jarvis CSS entrypoints
+2. Import tokens into both dashboard and Oikos CSS entrypoints
 3. Delete/avoid duplicate token definitions elsewhere
 
 ---
@@ -241,10 +241,10 @@ Defer. Keep shared components in `apps/zerg/frontend-web/src/components/` for no
 - [x] Add logo to chat header (with cyber glow effect)
 - [x] Update `manifest.json` name/short_name
 - [x] Update `index.html` title tag
-- [x] Copy logo asset to Jarvis public folder
+- [x] Copy logo asset to Oikos public folder
 
 ### Phase 2: Navigation ✅
-- [x] Implement nav tabs in Jarvis Header (Chat, Dashboard, Canvas, Integrations, Runners)
+- [x] Implement nav tabs in Oikos Header (Chat, Dashboard, Canvas, Integrations, Runners)
 - [x] Style nav to match cyber aesthetic (glowing underline indicator)
 - [x] Add active state indication (pulsing cyan/indigo glow)
 - [x] Responsive: tabs shrink at 900px, hide at 640px
@@ -252,7 +252,7 @@ Defer. Keep shared components in `apps/zerg/frontend-web/src/components/` for no
 
 ### Phase 3: Tokens ✅
 - [x] Create shared tokens in `apps/zerg/frontend-web/src/styles/tokens.css`
-- [x] Import tokens into Jarvis via `apps/zerg/frontend-web/src/jarvis/styles/base.css`
+- [x] Import tokens into Oikos via `apps/zerg/frontend-web/src/oikos/styles/base.css`
 - [x] Import tokens into dashboard via `apps/zerg/frontend-web/src/styles/legacy.css`
 
 ### Phase 4: Components (Deferred)
@@ -285,7 +285,7 @@ Defer. Keep shared components in `apps/zerg/frontend-web/src/components/` for no
 
 ## Appendix: Current Token Comparison
 
-| Token | Zerg Dashboard | Jarvis Chat |
+| Token | Zerg Dashboard | Oikos Chat |
 |-------|----------------|-------------|
 | Primary brand | `#6366f1` | `#6366f1` |
 | Primary hover | `#4f46e5` | `#4f46e5` |

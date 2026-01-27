@@ -388,7 +388,7 @@ def check_deprecated_patterns(self, path: str):
         )
 
     # Check for legacy direct field access that should use meta
-    deprecated_direct_fields = ["status", "tool_name", "agent_id"]
+    deprecated_direct_fields = ["status", "tool_name", "fiche_id"]
     parts = path.split('.')
     if len(parts) == 2 and parts[1] in deprecated_direct_fields:
         logger.warning(

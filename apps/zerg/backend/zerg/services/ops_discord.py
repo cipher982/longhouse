@@ -141,7 +141,7 @@ async def send_waitlist_signup_alert(email: str, source: str, waitlist_count: Op
 async def send_qa_alert(issue: dict, dashboard_url: str = "https://swarmlet.com/reliability") -> None:
     """Send a QA chronic issue alert to Discord.
 
-    Called when the QA agent detects a new chronic issue that needs attention.
+    Called when the QA fiche detects a new chronic issue that needs attention.
 
     Parameters
     ----------
@@ -205,13 +205,13 @@ async def send_run_completion_notification(
 ) -> None:
     """Send a run completion notification to Discord or Slack.
 
-    This is used for cloud agent execution notifications, allowing users
+    This is used for cloud fiche execution notifications, allowing users
     to close their laptop and get notified when work completes.
 
     Parameters
     ----------
     run_id
-        The AgentRun ID
+        The Run ID
     status
         Run status: "success", "failed", etc.
     summary

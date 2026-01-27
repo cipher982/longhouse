@@ -25,26 +25,26 @@ from zerg.crud import crud
 from zerg.database import DB_SCHEMA
 from zerg.database import Base
 from zerg.database import db_session
-from zerg.models.models import Agent
-from zerg.models.models import AgentMessage
+from zerg.models.models import Fiche
+from zerg.models.models import FicheMessage
 from zerg.models.models import Thread
 from zerg.models.models import User
 
 
 class IsolatedSQLiteDatabase(Database):
-    """Test database implementation using isolated SQLite files per worker."""
+    """Test database implementation using isolated SQLite files per commis."""
 
-    def __init__(self, worker_id: str, db_path: Optional[str] = None):
-        self.worker_id = worker_id
+    def __init__(self, commis_id: str, db_path: Optional[str] = None):
+        self.commis_id = commis_id
 
         # Create isolated database file
         if db_path:
             self.db_path = Path(db_path)
         else:
-            # Create in temp directory with worker ID
+            # Create in temp directory with commis ID
             temp_dir = Path(tempfile.gettempdir()) / "zerg_test_dbs"
             temp_dir.mkdir(exist_ok=True)
-            self.db_path = temp_dir / f"test_worker_{worker_id}.db"
+            self.db_path = temp_dir / f"test_commis_{commis_id}.db"
 
         # Create engine and session factory
         base_engine = create_engine(
@@ -84,22 +84,22 @@ class IsolatedSQLiteDatabase(Database):
         if self.db_path.exists():
             self.db_path.unlink()
 
-    def get_agents(self, owner_id: Optional[int] = None, skip: int = 0, limit: int = 100) -> List[Agent]:
-        """Get list of agents, optionally filtered by owner."""
+    def get_fiches(self, owner_id: Optional[int] = None, skip: int = 0, limit: int = 100) -> List[Fiche]:
+        """Get list of fiches, optionally filtered by owner."""
         with db_session(self.session_factory) as db:
-            agents = crud.get_agents(db, owner_id=owner_id, skip=skip, limit=limit)
+            fiches = crud.get_fiches(db, owner_id=owner_id, skip=skip, limit=limit)
             # Force load relationships before session closes
-            for agent in agents:
-                _ = agent.owner
-                _ = agent.messages
-            return agents
+            for fiche in fiches:
+                _ = fiche.owner
+                _ = fiche.messages
+            return fiches
 
-    def get_agent(self, agent_id: int) -> Optional[Agent]:
-        """Get single agent by ID."""
+    def get_fiche(self, fiche_id: int) -> Optional[Fiche]:
+        """Get single fiche by ID."""
         with db_session(self.session_factory) as db:
-            return crud.get_agent(db, agent_id)
+            return crud.get_fiche(db, fiche_id)
 
-    def create_agent(
+    def create_fiche(
         self,
         owner_id: int,
         name: str,
@@ -108,10 +108,10 @@ class IsolatedSQLiteDatabase(Database):
         model: str,
         schedule: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
-    ) -> Agent:
-        """Create new agent."""
+    ) -> Fiche:
+        """Create new fiche."""
         with db_session(self.session_factory) as db:
-            agent = crud.create_agent(
+            fiche = crud.create_fiche(
                 db=db,
                 owner_id=owner_id,
                 name=name,
@@ -122,13 +122,13 @@ class IsolatedSQLiteDatabase(Database):
                 config=config,
             )
             # Force load relationships before session closes
-            _ = agent.owner
-            _ = agent.messages
-            return agent
+            _ = fiche.owner
+            _ = fiche.messages
+            return fiche
 
-    def update_agent(
+    def update_fiche(
         self,
-        agent_id: int,
+        fiche_id: int,
         name: Optional[str] = None,
         system_instructions: Optional[str] = None,
         task_instructions: Optional[str] = None,
@@ -136,12 +136,12 @@ class IsolatedSQLiteDatabase(Database):
         status: Optional[str] = None,
         schedule: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Agent]:
-        """Update existing agent."""
+    ) -> Optional[Fiche]:
+        """Update existing fiche."""
         with db_session(self.session_factory) as db:
-            return crud.update_agent(
+            return crud.update_fiche(
                 db=db,
-                agent_id=agent_id,
+                fiche_id=fiche_id,
                 name=name,
                 system_instructions=system_instructions,
                 task_instructions=task_instructions,
@@ -151,10 +151,10 @@ class IsolatedSQLiteDatabase(Database):
                 config=config,
             )
 
-    def delete_agent(self, agent_id: int) -> bool:
-        """Delete agent by ID."""
+    def delete_fiche(self, fiche_id: int) -> bool:
+        """Delete fiche by ID."""
         with db_session(self.session_factory) as db:
-            return crud.delete_agent(db, agent_id)
+            return crud.delete_fiche(db, fiche_id)
 
     def get_user_by_email(self, email: str) -> Optional[User]:
         """Get user by email address."""
@@ -166,25 +166,25 @@ class IsolatedSQLiteDatabase(Database):
         with db_session(self.session_factory) as db:
             return crud.create_user(db, email=email, **kwargs)
 
-    def get_threads(self, agent_id: Optional[int] = None, owner_id: Optional[int] = None) -> List[Thread]:
-        """Get threads, optionally filtered by agent or owner."""
+    def get_threads(self, fiche_id: Optional[int] = None, owner_id: Optional[int] = None) -> List[Thread]:
+        """Get threads, optionally filtered by fiche or owner."""
         with db_session(self.session_factory) as db:
-            return crud.get_threads(db, agent_id=agent_id, owner_id=owner_id)
+            return crud.get_threads(db, fiche_id=fiche_id, owner_id=owner_id)
 
-    def create_thread(self, agent_id: int, title: str) -> Thread:
+    def create_thread(self, fiche_id: int, title: str) -> Thread:
         """Create new thread."""
         with db_session(self.session_factory) as db:
-            return crud.create_thread(db, agent_id=agent_id, title=title)
+            return crud.create_thread(db, fiche_id=fiche_id, title=title)
 
-    def get_agent_messages(self, agent_id: int, skip: int = 0, limit: int = 100) -> List[AgentMessage]:
-        """Get messages for an agent."""
+    def get_fiche_messages(self, fiche_id: int, skip: int = 0, limit: int = 100) -> List[FicheMessage]:
+        """Get messages for a fiche."""
         with db_session(self.session_factory) as db:
-            return crud.get_agent_messages(db, agent_id=agent_id, skip=skip, limit=limit)
+            return crud.get_fiche_messages(db, fiche_id=fiche_id, skip=skip, limit=limit)
 
-    def create_agent_message(self, agent_id: int, role: str, content: str) -> AgentMessage:
-        """Create new agent message."""
+    def create_fiche_message(self, fiche_id: int, role: str, content: str) -> FicheMessage:
+        """Create new fiche message."""
         with db_session(self.session_factory) as db:
-            return crud.create_agent_message(db, agent_id=agent_id, role=role, content=content)
+            return crud.create_fiche_message(db, fiche_id=fiche_id, role=role, content=content)
 
 
 class TestAuthProvider(AuthProvider):

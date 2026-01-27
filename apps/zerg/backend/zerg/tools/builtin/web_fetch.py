@@ -173,7 +173,7 @@ def web_fetch(
         logger.info(f"Fetching URL: {url} (timeout={timeout_secs}s)")
         try:
             with httpx.Client(timeout=timeout_secs, follow_redirects=True) as client:
-                response = client.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; Swarmlet/1.0)"})
+                response = client.get(url, headers={"User-Fiche": "Mozilla/5.0 (compatible; Swarmlet/1.0)"})
                 response.raise_for_status()
                 downloaded = response.text
         except httpx.TimeoutException:

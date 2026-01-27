@@ -57,7 +57,7 @@ export default function SettingsPage() {
     location: true,
     whoop: true,
     obsidian: true,
-    supervisor: true,
+    oikos: true,
   });
 
   // Track if we need to show the "add integration" form
@@ -84,7 +84,7 @@ export default function SettingsPage() {
         location: ctx.tools?.location ?? true,
         whoop: ctx.tools?.whoop ?? true,
         obsidian: ctx.tools?.obsidian ?? true,
-        supervisor: ctx.tools?.supervisor ?? true,
+        oikos: ctx.tools?.oikos ?? true,
       });
     }
   }, [data]);
@@ -134,7 +134,7 @@ export default function SettingsPage() {
         location: ctx.tools?.location ?? true,
         whoop: ctx.tools?.whoop ?? true,
         obsidian: ctx.tools?.obsidian ?? true,
-        supervisor: ctx.tools?.supervisor ?? true,
+        oikos: ctx.tools?.oikos ?? true,
       });
     }
   };
@@ -202,7 +202,7 @@ export default function SettingsPage() {
     <PageShell size="narrow" className="settings-page-container">
       <SectionHeader
         title="User Context Settings"
-        description="Configure your personal context that AI agents will use to better understand and assist you."
+        description="Configure your personal context that AI fiches will use to better understand and assist you."
       />
 
       <form onSubmit={handleSubmit} className="profile-form">
@@ -257,7 +257,7 @@ export default function SettingsPage() {
                     className="ui-input settings-textarea"
                     rows={3}
                   />
-                  <small>What you do and how AI agents can help you</small>
+                  <small>What you do and how AI fiches can help you</small>
                 </div>
               </div>
             </Card.Body>
@@ -273,7 +273,7 @@ export default function SettingsPage() {
             </Card.Header>
             <Card.Body>
               <p className="section-description">
-                Configure servers that AI agents can reference or SSH into
+                Configure servers that AI fiches can reference or SSH into
               </p>
 
               {servers.length === 0 ? (
@@ -412,14 +412,14 @@ export default function SettingsPage() {
             </Card.Body>
           </Card>
 
-          {/* Jarvis Tools */}
+          {/* Oikos Tools */}
           <Card>
             <Card.Header>
-              <h3 className="settings-section-title ui-section-title">Jarvis Tools</h3>
+              <h3 className="settings-section-title ui-section-title">Oikos Tools</h3>
             </Card.Header>
             <Card.Body>
               <p className="section-description">
-                Enable or disable tools that Jarvis can use to help you
+                Enable or disable tools that Oikos can use to help you
               </p>
 
               <div className="tools-list">
@@ -427,7 +427,7 @@ export default function SettingsPage() {
                   { id: 'location', name: 'Location', desc: 'Get current GPS location via Traccar' },
                   { id: 'whoop', name: 'WHOOP Health Data', desc: 'Get WHOOP health metrics and recovery data' },
                   { id: 'obsidian', name: 'Obsidian Notes', desc: 'Search and read notes from your Obsidian vault' },
-                  { id: 'supervisor', name: 'Supervisor Agent', desc: 'Delegate complex multi-step tasks to supervisor' }
+                  { id: 'oikos', name: 'Oikos', desc: 'Delegate complex multi-step tasks to Oikos' }
                 ].map(tool => (
                   <div key={tool.id} className="tool-toggle">
                     <label className="tool-label">
@@ -455,7 +455,7 @@ export default function SettingsPage() {
             </Card.Header>
             <Card.Body>
               <p className="section-description">
-                Specific preferences for how AI agents should respond to you
+                Specific preferences for how AI fiches should respond to you
               </p>
 
               <div className="form-group">

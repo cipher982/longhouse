@@ -223,11 +223,11 @@ job_registry.register(JobConfig(
         assert result is False
 
 
-class TestWorkerMetadataIntegration:
-    """Tests for metadata propagation to worker."""
+class TestCommisMetadataIntegration:
+    """Tests for metadata propagation to commis."""
 
     def test_manifest_job_metadata_structure(self):
-        """Verify manifest metadata has expected structure for worker."""
+        """Verify manifest metadata has expected structure for commis."""
         set_manifest_metadata(
             "integration-test-job",
             {
@@ -240,7 +240,7 @@ class TestWorkerMetadataIntegration:
 
         metadata = get_manifest_metadata("integration-test-job")
 
-        # Worker expects these fields
+        # Commis expects these fields
         assert "script_source" in metadata
         assert "git_sha" in metadata
         assert "loaded_at" in metadata

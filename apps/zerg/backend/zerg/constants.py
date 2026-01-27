@@ -22,7 +22,7 @@ API_PREFIX = "/api"
 WS_ENDPOINT = "/ws"
 
 # Router prefixes (relative to API_PREFIX)
-AGENTS_PREFIX = "/agents"
+FICHES_PREFIX = "/fiches"
 THREADS_PREFIX = "/threads"
 MODELS_PREFIX = "/models"
 
@@ -66,7 +66,7 @@ def get_full_path(relative_path: str) -> str:  # noqa: D401 – tiny helper
 __all__ = [
     "API_PREFIX",
     "WS_ENDPOINT",
-    "AGENTS_PREFIX",
+    "FICHES_PREFIX",
     "THREADS_PREFIX",
     "MODELS_PREFIX",
     "get_full_path",

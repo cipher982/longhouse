@@ -21,10 +21,10 @@ class LatencyStats(BaseModel):
     p95: int
 
 
-class OpsTopAgent(BaseModel):
-    """Top performing agent information."""
+class OpsTopFiche(BaseModel):
+    """Top performing fiche information."""
 
-    agent_id: int
+    fiche_id: int
     name: str
     owner_email: str
     runs: int
@@ -40,11 +40,11 @@ class OpsSummary(BaseModel):
     budget_user: BudgetInfo
     budget_global: BudgetInfo
     active_users_24h: int
-    agents_total: int
-    agents_scheduled: int
+    fiches_total: int
+    fiches_scheduled: int
     latency_ms: LatencyStats
     errors_last_hour: int
-    top_agents_today: List[OpsTopAgent]
+    top_fiches_today: List[OpsTopFiche]
 
 
 class OpsSeriesPoint(BaseModel):
@@ -60,7 +60,7 @@ class TimeSeriesResponse(BaseModel):
     series: List[OpsSeriesPoint]
 
 
-class TopAgentsResponse(BaseModel):
-    """Response containing top agents list."""
+class TopFichesResponse(BaseModel):
+    """Response containing top fiches list."""
 
-    top_agents: List[OpsTopAgent]
+    top_fiches: List[OpsTopFiche]

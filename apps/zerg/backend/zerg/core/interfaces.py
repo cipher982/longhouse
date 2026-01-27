@@ -13,8 +13,8 @@ from typing import Dict
 from typing import List
 from typing import Optional
 
-from zerg.models.models import Agent
-from zerg.models.models import AgentMessage
+from zerg.models.models import Fiche
+from zerg.models.models import FicheMessage
 from zerg.models.models import Thread
 from zerg.models.models import User
 
@@ -22,19 +22,19 @@ from zerg.models.models import User
 class Database(ABC):
     """Abstract interface for database operations."""
 
-    # Agent operations
+    # Fiche operations
     @abstractmethod
-    def get_agents(self, owner_id: Optional[int] = None, skip: int = 0, limit: int = 100) -> List[Agent]:
-        """Get list of agents, optionally filtered by owner."""
+    def get_fiches(self, owner_id: Optional[int] = None, skip: int = 0, limit: int = 100) -> List[Fiche]:
+        """Get list of fiches, optionally filtered by owner."""
         pass
 
     @abstractmethod
-    def get_agent(self, agent_id: int) -> Optional[Agent]:
-        """Get single agent by ID."""
+    def get_fiche(self, fiche_id: int) -> Optional[Fiche]:
+        """Get single fiche by ID."""
         pass
 
     @abstractmethod
-    def create_agent(
+    def create_fiche(
         self,
         owner_id: int,
         name: str,
@@ -43,14 +43,14 @@ class Database(ABC):
         model: str,
         schedule: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
-    ) -> Agent:
-        """Create new agent."""
+    ) -> Fiche:
+        """Create new fiche."""
         pass
 
     @abstractmethod
-    def update_agent(
+    def update_fiche(
         self,
-        agent_id: int,
+        fiche_id: int,
         name: Optional[str] = None,
         system_instructions: Optional[str] = None,
         task_instructions: Optional[str] = None,
@@ -58,13 +58,13 @@ class Database(ABC):
         status: Optional[str] = None,
         schedule: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Agent]:
-        """Update existing agent."""
+    ) -> Optional[Fiche]:
+        """Update existing fiche."""
         pass
 
     @abstractmethod
-    def delete_agent(self, agent_id: int) -> bool:
-        """Delete agent by ID."""
+    def delete_fiche(self, fiche_id: int) -> bool:
+        """Delete fiche by ID."""
         pass
 
     # User operations
@@ -80,24 +80,24 @@ class Database(ABC):
 
     # Thread operations
     @abstractmethod
-    def get_threads(self, agent_id: Optional[int] = None, owner_id: Optional[int] = None) -> List[Thread]:
-        """Get threads, optionally filtered by agent or owner."""
+    def get_threads(self, fiche_id: Optional[int] = None, owner_id: Optional[int] = None) -> List[Thread]:
+        """Get threads, optionally filtered by fiche or owner."""
         pass
 
     @abstractmethod
-    def create_thread(self, agent_id: int, title: str) -> Thread:
+    def create_thread(self, fiche_id: int, title: str) -> Thread:
         """Create new thread."""
         pass
 
     # Message operations
     @abstractmethod
-    def get_agent_messages(self, agent_id: int, skip: int = 0, limit: int = 100) -> List[AgentMessage]:
-        """Get messages for an agent."""
+    def get_fiche_messages(self, fiche_id: int, skip: int = 0, limit: int = 100) -> List[FicheMessage]:
+        """Get messages for a fiche."""
         pass
 
     @abstractmethod
-    def create_agent_message(self, agent_id: int, role: str, content: str) -> AgentMessage:
-        """Create new agent message."""
+    def create_fiche_message(self, fiche_id: int, role: str, content: str) -> FicheMessage:
+        """Create new fiche message."""
         pass
 
 

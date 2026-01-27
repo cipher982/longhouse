@@ -1,5 +1,5 @@
 /**
- * Performance Debug Script for Jarvis CSS Effects
+ * Performance Debug Script for Oikos CSS Effects
  *
  * Usage: Open browser console and run:
  *   const perf = await import('/debug-perf.js'); perf.init();
@@ -10,42 +10,42 @@
 const effects = {
   nebulaBlur: {
     name: 'Nebula Blur (60px filter)',
-    selector: '.jarvis-container .app-container::after',
+    selector: '.oikos-container .app-container::after',
     property: 'filter',
     enabled: true,
     // Can't directly toggle ::after, so we use a class approach
     toggle: (on) => {
-      document.querySelector('.jarvis-container .app-container')
+      document.querySelector('.oikos-container .app-container')
         ?.classList.toggle('no-nebula', !on);
     }
   },
   nebulaAnimation: {
     name: 'Nebula Animation (30s drift)',
-    selector: '.jarvis-container .app-container::after',
+    selector: '.oikos-container .app-container::after',
     property: 'animation',
     enabled: true,
     toggle: (on) => {
-      document.querySelector('.jarvis-container .app-container')
+      document.querySelector('.oikos-container .app-container')
         ?.classList.toggle('no-nebula-animation', !on);
     }
   },
   gridAnimation: {
     name: 'Grid Animation (20s move + perspective)',
-    selector: '.jarvis-container .app-container::before',
+    selector: '.oikos-container .app-container::before',
     property: 'animation',
     enabled: true,
     toggle: (on) => {
-      document.querySelector('.jarvis-container .app-container')
+      document.querySelector('.oikos-container .app-container')
         ?.classList.toggle('no-grid', !on);
     }
   },
   backdropBlur: {
     name: 'Main Content Backdrop Blur',
-    selector: '.jarvis-container .main-content',
+    selector: '.oikos-container .main-content',
     property: 'backdrop-filter',
     enabled: true,
     toggle: (on) => {
-      const el = document.querySelector('.jarvis-container .main-content');
+      const el = document.querySelector('.oikos-container .main-content');
       if (el) el.style.backdropFilter = on ? '' : 'none';
     }
   },
@@ -69,14 +69,14 @@ function injectToggleStyles() {
   style.id = 'perf-debug-styles';
   style.textContent = `
     /* Toggle classes for pseudo-elements */
-    .jarvis-container .app-container.no-nebula::after {
+    .oikos-container .app-container.no-nebula::after {
       filter: none !important;
       background: none !important;
     }
-    .jarvis-container .app-container.no-nebula-animation::after {
+    .oikos-container .app-container.no-nebula-animation::after {
       animation: none !important;
     }
-    .jarvis-container .app-container.no-grid::before {
+    .oikos-container .app-container.no-grid::before {
       animation: none !important;
       background: none !important;
     }
@@ -174,7 +174,7 @@ async function testEffect(effectKey, durationMs = 5000) {
 // Run full suite
 async function testAll(durationMs = 3000) {
   console.log('╔═══════════════════════════════════════════════════════════╗');
-  console.log('║     JARVIS CSS PERFORMANCE PROFILER                       ║');
+  console.log('║     OIKOS CSS PERFORMANCE PROFILER                       ║');
   console.log('║     Testing each effect individually                      ║');
   console.log('╚═══════════════════════════════════════════════════════════╝');
 

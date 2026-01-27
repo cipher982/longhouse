@@ -12,9 +12,9 @@
 **Status:** Archived (superseded by v2.1)
 **Philosophy:** Trust the AI. Remove scaffolding that limits capability.
 
-> **Archived:** This doc describes the v2.0 design where Jarvis (OpenAI Realtime) is a decision-making agent that can call `route_to_supervisor`.
+> **Archived:** This doc describes the v2.0 design where Oikos (OpenAI Realtime) is a decision-making agent that can call `route_to_supervisor`.
 > We are moving to a stricter “one brain” architecture (Supervisor SSOT + all tools; Realtime optional I/O-only) in:
-> `docs/specs/jarvis-supervisor-unification-v2.1.md`
+> `docs/specs/oikos-supervisor-unification-v2.1.md`
 
 ---
 
@@ -22,7 +22,7 @@
 
 Super Siri is a unified AI assistant that trusts modern LLM capabilities:
 
-- **Jarvis**: Voice/text interface powered by OpenAI Realtime
+- **Oikos**: Voice/text interface powered by OpenAI Realtime
 - **Zerg Supervisor**: Backend intelligence that delegates when needed
 - **Workers**: Autonomous agents with terminal access
 - **Zerg Dashboard**: Power user inspection tools
@@ -91,7 +91,7 @@ Super Siri behaves like a capable paid intern:
 **All requests follow the same path:**
 
 ```
-User → Jarvis (OpenAI Realtime) → Decides autonomously
+User → Oikos (OpenAI Realtime) → Decides autonomously
                                     ↓
                         Need external access?
                      /                      \
@@ -114,16 +114,16 @@ User → Jarvis (OpenAI Realtime) → Decides autonomously
                                             ↓
                                     Supervisor synthesizes
                                             ↓
-                                    SSE → Jarvis → User
+                                    SSE → Oikos → User
 ```
 
-**Key change from v1.0:** No mode detection, no keyword routing. Jarvis (OpenAI Realtime) has `route_to_supervisor` as a tool. It decides when to call it based on the request.
+**Key change from v1.0:** No mode detection, no keyword routing. Oikos (OpenAI Realtime) has `route_to_supervisor` as a tool. It decides when to call it based on the request.
 
 **Examples:**
 
-- "What time is it?" → Jarvis calls `get_current_time` directly
-- "Check disk space on cube" → Jarvis calls `route_to_supervisor`, supervisor spawns worker
-- "Is my backup working?" → Jarvis routes to supervisor, supervisor decides to spawn worker or check past workers
+- "What time is it?" → Oikos calls `get_current_time` directly
+- "Check disk space on cube" → Oikos calls `route_to_supervisor`, supervisor spawns worker
+- "Is my backup working?" → Oikos routes to supervisor, supervisor decides to spawn worker or check past workers
 
 The LLM makes these decisions naturally - we don't pre-program them.
 
@@ -135,7 +135,7 @@ The LLM makes these decisions naturally - we don't pre-program them.
 ├──────────────────────────────────────────────────────────────────┤
 │                                                                   │
 │  ┌──────────────────────┐         ┌─────────────────────────┐   │
-│  │      JARVIS          │         │    ZERG DASHBOARD       │   │
+│  │      OIKOS          │         │    ZERG DASHBOARD       │   │
 │  │  (Unified Agent)     │         │   (Debug & Config)      │   │
 │  │                      │         │                         │   │
 │  │  • Voice/text I/O    │         │  • Worker artifacts     │   │
@@ -156,7 +156,7 @@ The LLM makes these decisions naturally - we don't pre-program them.
 │  ├──────────────────────────────────────────────────────────┤   │
 │  │                                                           │   │
 │  │  ┌────────────────┐    ┌──────────────┐    ┌──────────┐ │   │
-│  │  │ Jarvis Router  │───▶│  Supervisor  │───▶│ Workers  │ │   │
+│  │  │ Oikos Router  │───▶│  Supervisor  │───▶│ Workers  │ │   │
 │  │  │                │    │              │    │          │ │   │
 │  │  │ • /supervisor  │◀───│ Autonomous   │◀───│ Terminal │ │   │
 │  │  │ • /events (SSE)│    │ Delegation   │    │ Access   │ │   │
@@ -180,7 +180,7 @@ The LLM makes these decisions naturally - we don't pre-program them.
 
 ## 3. Component Responsibilities
 
-### 3.1 Jarvis (Frontend)
+### 3.1 Oikos (Frontend)
 
 **Primary Role:** Unified AI interface that decides when to delegate.
 
@@ -188,12 +188,12 @@ The LLM makes these decisions naturally - we don't pre-program them.
 | -------------------- | ------------------------------------------- |
 | Voice I/O            | OpenAI Realtime (WebRTC)                    |
 | Text fallback        | Standard input field                        |
-| Decision-making      | Jarvis decides: answer OR delegate          |
+| Decision-making      | Oikos decides: answer OR delegate          |
 | Progress display     | SSE subscription for delegated tasks        |
 | Result rendering     | Text + optional TTS                         |
 | Conversation history | Hydrates last 8 turns into Realtime session |
 
-**Key difference from v1.0:** Jarvis doesn't route between "modes" - it's a single agent that calls `route_to_supervisor` tool when it determines delegation is needed.
+**Key difference from v1.0:** Oikos doesn't route between "modes" - it's a single agent that calls `route_to_supervisor` tool when it determines delegation is needed.
 
 ### 3.2 Zerg Supervisor Agent
 
@@ -201,7 +201,7 @@ The LLM makes these decisions naturally - we don't pre-program them.
 
 **What it does:**
 
-- Receives tasks from Jarvis (or scheduled triggers)
+- Receives tasks from Oikos (or scheduled triggers)
 - **Decides autonomously:** Do I need workers? How many? What should they do?
 - Spawns workers as needed (not pre-programmed)
 - Synthesizes results from multiple sources
@@ -285,9 +285,9 @@ send_email(to, subject, body)  # Notifications
 ### 4.1 Simple Request
 
 ```
-USER: "Hey Jarvis, what time is it?"
+USER: "Hey Oikos, what time is it?"
   ↓
-JARVIS (OpenAI Realtime):
+OIKOS (OpenAI Realtime):
   • Reasons: "This is simple, I have get_current_time tool"
   • Calls: get_current_time()
   • Responds: "It's 3:47 PM"
@@ -301,12 +301,12 @@ Latency: ~1.5 seconds
 ```
 USER: "Check my server health"
   ↓
-JARVIS (OpenAI Realtime):
+OIKOS (OpenAI Realtime):
   • Reasons: "This needs SSH access to check servers"
   • Responds: "Let me check your servers."
   • Calls: route_to_supervisor("Check my server health")
   ↓
-POST /api/jarvis/supervisor {"task": "Check my server health"}
+POST /api/oikos/supervisor {"task": "Check my server health"}
   ↓
 SUPERVISOR (Zerg Backend):
   • Reasons: "Server health = disk + docker + connectivity + backups"
@@ -328,20 +328,20 @@ SUPERVISOR:
   • Synthesizes: "Your servers are healthy. Cube is at 78% disk capacity with
                   15 containers running. Backup completed 4 hours ago successfully."
   ↓ (via SSE)
-JARVIS speaks result
+OIKOS speaks result
   ↓
 USER HEARS synthesized answer
 Latency: ~15-30 seconds
 ```
 
-**Key difference from v1.0:** No "quick mode" vs "supervisor mode" routing. Jarvis decides when to delegate. Supervisor decides whether to spawn workers. Workers decide what commands to run.
+**Key difference from v1.0:** No "quick mode" vs "supervisor mode" routing. Oikos decides when to delegate. Supervisor decides whether to spawn workers. Workers decide what commands to run.
 
 ### 4.3 Follow-Up Query
 
 ```
 USER: "What about backups specifically?"
   ↓
-JARVIS:
+OIKOS:
   • Has conversation history (last 8 turns hydrated)
   • Reasons: "User just asked about servers, now narrowing to backups"
   • Calls: route_to_supervisor("What about backups specifically?")
@@ -360,7 +360,7 @@ USER HEARS detailed backup info without spawning new worker
 ```
 USER: "Check disk space on cube"
   ↓
-JARVIS → SUPERVISOR → WORKER
+OIKOS → SUPERVISOR → WORKER
   ↓
 WORKER fails with: ForeignKeyViolation
   ↓
@@ -384,7 +384,7 @@ USER HEARS intelligent error explanation (no custom ErrorContext code needed)
 
 ## 5. API Specifications
 
-### 5.1 POST /api/jarvis/supervisor
+### 5.1 POST /api/oikos/supervisor
 
 **Purpose:** Delegate a task to the supervisor agent.
 
@@ -394,8 +394,8 @@ USER HEARS intelligent error explanation (no custom ErrorContext code needed)
 {
   "task": "Check my server health",
   "context": {
-    "conversation_id": "jarvis-session-123",
-    "previous_messages": [] // Optional: if Jarvis needs to pass context
+    "conversation_id": "oikos-session-123",
+    "previous_messages": [] // Optional: if Oikos needs to pass context
   }
 }
 ```
@@ -407,11 +407,11 @@ USER HEARS intelligent error explanation (no custom ErrorContext code needed)
   "run_id": 456,
   "thread_id": 789,
   "status": "running",
-  "stream_url": "/api/jarvis/events?run_id=456"
+  "stream_url": "/api/oikos/events?run_id=456"
 }
 ```
 
-### 5.2 GET /api/jarvis/events
+### 5.2 GET /api/oikos/events
 
 **Purpose:** SSE stream for real-time progress.
 
@@ -464,7 +464,7 @@ data: {"worker_id": "...", "tool_name": "ssh_exec", "duration_ms": 2500}
 Thread:
   id: int
   agent_id: int              # Supervisor agent ID
-  title: str                 # "Jarvis Session 2025-12-07"
+  title: str                 # "Oikos Session 2025-12-07"
   thread_type: "supervisor"
   active: bool
   agent_state: JSON          # Core memory, learned facts
@@ -535,20 +535,20 @@ Thread:
 - Supervisor tools (spawn, list, read, grep, metadata)
 - Owner-based security filtering
 
-### ✅ Phase 2: Jarvis Integration (COMPLETE)
+### ✅ Phase 2: Oikos Integration (COMPLETE)
 
 | Component                                    | Status |
 | -------------------------------------------- | ------ |
-| `POST /api/jarvis/supervisor` endpoint       | ✅     |
+| `POST /api/oikos/supervisor` endpoint       | ✅     |
 | SSE event streaming                          | ✅     |
-| `route_to_supervisor` tool in Jarvis         | ✅     |
+| `route_to_supervisor` tool in Oikos         | ✅     |
 | Floating progress UI                         | ✅     |
 | Tool acknowledgment prompting                | ✅     |
 | Conversation history hydration               | ✅     |
 | ForeignKeyViolation fix (ON DELETE SET NULL) | ✅     |
 | UI retry bug fix                             | ✅     |
 
-**Deliverable achieved:** User can say "check my servers" and Jarvis autonomously delegates to supervisor, shows progress, returns synthesized result.
+**Deliverable achieved:** User can say "check my servers" and Oikos autonomously delegates to supervisor, shows progress, returns synthesized result.
 
 ### ✅ Phase 2.5: Summary Extraction (COMPLETE)
 
@@ -697,7 +697,7 @@ User sees intelligent explanation (no ErrorContext classification needed)
 
 | Component             | Target  | Notes                    |
 | --------------------- | ------- | ------------------------ |
-| Jarvis response       | < 2s    | Direct tool calls        |
+| Oikos response       | < 2s    | Direct tool calls        |
 | Supervisor delegation | < 60s   | Complex multi-step tasks |
 | Worker execution      | < 300s  | Timeout after 5 minutes  |
 | SSE event latency     | < 500ms | Near real-time updates   |
@@ -776,7 +776,7 @@ async def ssh_exec(host, command, allow_destructive=False):
 | Decision              | Paid Intern                              | AI Agent                       |
 | --------------------- | ---------------------------------------- | ------------------------------ |
 | "Check server health" | Figures out: df, docker ps, logs         | ✅ Worker figures it out       |
-| Intent detection      | Understands complex vs simple            | ✅ Jarvis decides autonomously |
+| Intent detection      | Understands complex vs simple            | ✅ Oikos decides autonomously |
 | Error interpretation  | Reads "ForeignKeyViolation" and explains | ✅ Supervisor interprets       |
 | When to exit early    | Judges "I have enough info"              | ✅ Supervisor decides          |
 | What to check first   | Prioritizes: disk > docker > backups     | ✅ Worker prioritizes          |
@@ -789,7 +789,7 @@ if 'check' in keywords:
     route_to_supervisor()
 
 # RIGHT: Let LLM decide
-jarvis.call_tool_if_needed(route_to_supervisor)
+oikos.call_tool_if_needed(route_to_supervisor)
 
 # WRONG: Specialized workers
 class BackupMonitorWorker:
@@ -894,9 +894,9 @@ language summary of what you found.
 | Supervisor tools      | `zerg/tools/builtin/supervisor_tools.py`     |
 | Worker artifact store | `zerg/services/worker_artifact_store.py`     |
 | Worker runner         | `zerg/services/worker_runner.py`             |
-| Jarvis router         | `zerg/routers/jarvis.py`                     |
-| Jarvis frontend       | `apps/zerg/frontend-web/src/jarvis/`                      |
-| History hydration     | `apps/zerg/frontend-web/src/jarvis/lib/history-mapper.ts` |
+| Oikos router         | `zerg/routers/oikos.py`                     |
+| Oikos frontend       | `apps/zerg/frontend-web/src/oikos/`                      |
+| History hydration     | `apps/zerg/frontend-web/src/oikos/lib/history-mapper.ts` |
 
 ---
 
@@ -911,7 +911,7 @@ language summary of what you found.
    if (keywords.includes('check', 'investigate'))...
 
    // KEEP: route_to_supervisor as a tool
-   // Jarvis decides when to call it
+   // Oikos decides when to call it
    ```
 
 2. **Remove roundabout monitoring:**

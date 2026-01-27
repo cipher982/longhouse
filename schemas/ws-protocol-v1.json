@@ -4,7 +4,7 @@
   "info": {
     "title": "Zerg WebSocket Protocol",
     "version": "1.0.0",
-    "description": "Comprehensive WebSocket protocol for the Zerg Agent Platform.\nConsolidates message types, payload schemas, and routing patterns into\na single source of truth for contract-first development.\n\nFeatures:\n- Topic-based routing with parameterized channels\n- Strongly-typed message payloads\n- Bidirectional operations (send/receive)\n- Alias support for message evolution\n- Handler method mapping for code generation\n"
+    "description": "Comprehensive WebSocket protocol for the Zerg Fiche Platform.\nConsolidates message types, payload schemas, and routing patterns into\na single source of truth for contract-first development.\n\nFeatures:\n- Topic-based routing with parameterized channels\n- Strongly-typed message payloads\n- Bidirectional operations (send/receive)\n- Alias support for message evolution\n- Handler method mapping for code generation\n"
   },
   "channels": {
     "SystemChannel": {
@@ -43,12 +43,12 @@
         "AssistantId"
       ]
     },
-    "AgentChannel": {
-      "address": "agent:{agent_id}",
-      "description": "Agent lifecycle events and run updates",
+    "FicheChannel": {
+      "address": "fiche:{fiche_id}",
+      "description": "Fiche lifecycle events and run updates",
       "parameters": {
-        "agent_id": {
-          "description": "Numeric identifier of the agent",
+        "fiche_id": {
+          "description": "Numeric identifier of the fiche",
           "examples": [
             "17",
             "42"
@@ -56,7 +56,7 @@
         }
       },
       "messages": [
-        "AgentEvent",
+        "FicheEvent",
         "RunUpdate"
       ]
     },
@@ -222,21 +222,21 @@
       "handler_method": "handle_assistant_id",
       "aliases": []
     },
-    "agent_event": {
-      "summary": "Agent lifecycle or status event",
+    "fiche_event": {
+      "summary": "Fiche lifecycle or status event",
       "payload_schema": {
-        "$ref": "#/components/schemas/AgentEventData"
+        "$ref": "#/components/schemas/FicheEventData"
       },
-      "handler_method": "handle_agent_event",
+      "handler_method": "handle_fiche_event",
       "aliases": [
-        "agent_created",
-        "agent_updated",
-        "agent_deleted",
-        "agent_state"
+        "fiche_created",
+        "fiche_updated",
+        "fiche_deleted",
+        "fiche_state"
       ]
     },
     "run_update": {
-      "summary": "Agent run status update",
+      "summary": "Fiche run status update",
       "payload_schema": {
         "$ref": "#/components/schemas/RunUpdateData"
       },
@@ -299,10 +299,10 @@
       },
       "messages": []
     },
-    "AgentOperations": {
+    "FicheOperations": {
       "action": "send",
       "channel": {
-        "$ref": "#/channels/AgentChannel"
+        "$ref": "#/channels/FicheChannel"
       },
       "messages": []
     },
@@ -350,7 +350,7 @@
       "subscribe"
     ],
     "authorization_checks": [
-      "agent_event",
+      "fiche_event",
       "run_update"
     ],
     "data_validation": "strict",

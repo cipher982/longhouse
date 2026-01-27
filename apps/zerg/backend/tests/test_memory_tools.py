@@ -14,7 +14,7 @@ from zerg.tools.builtin.memory_tools import memory_write
 @pytest.fixture
 def credential_context(db_session, test_user):
     """Set up credential resolver context for memory tools."""
-    resolver = CredentialResolver(agent_id=1, db=db_session, owner_id=test_user.id)
+    resolver = CredentialResolver(fiche_id=1, db=db_session, owner_id=test_user.id)
     token = set_credential_resolver(resolver)
     yield resolver
     set_credential_resolver(None)

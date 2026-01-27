@@ -76,13 +76,13 @@ uv run scripts/seed_personal_credentials.py
 
 ## Step 7: Try It!
 
-Start Jarvis and ask:
+Start Oikos and ask:
 
 - "Where am I?"
 - "What's my current location?"
 - "Where am I right now?"
 
-Jarvis will use the `get_current_location` tool to fetch your GPS position!
+Oikos will use the `get_current_location` tool to fetch your GPS position!
 
 ## Troubleshooting
 

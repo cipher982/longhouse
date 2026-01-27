@@ -71,7 +71,7 @@ function WaitlistModal({ onClose }: WaitlistModalProps) {
           <>
             <h2>Join the Pro Waitlist</h2>
             <p className="landing-login-subtext">
-              Be the first to know when Swarmlet Pro launches with unlimited agents and advanced
+              Be the first to know when Swarmlet Pro launches with unlimited fiches and advanced
               workflows.
             </p>
 
@@ -124,7 +124,7 @@ export function PricingSection() {
       price: "$0",
       period: "/month",
       description: "Everything you need to get started",
-      features: ["5 AI agents", "Core integrations", "Community support", "Basic automations"],
+      features: ["5 AI fiches", "Core integrations", "Community support", "Basic automations"],
       ctaText: "Start Free Beta",
       ctaAction: handleGetStarted,
       highlighted: true,
@@ -135,7 +135,7 @@ export function PricingSection() {
       period: "/month",
       description: "For power users",
       features: [
-        "Unlimited agents",
+        "Unlimited fiches",
         "All integrations",
         "Priority support",
         "Advanced workflows",

@@ -21,7 +21,7 @@ Rules for this effort:
 
 ## Current Baseline (as of start of this doc)
 
-- Repo structure is primarily under `apps/` (Zerg backend/frontend/e2e + runner). Jarvis lives inside `apps/zerg/frontend-web/src/jarvis/`.
+- Repo structure is primarily under `apps/` (Zerg backend/frontend/e2e + runner). Oikos lives inside `apps/zerg/frontend-web/src/oikos/`.
 - There is significant drift in root scripts/configs that still assume old `backend/`, `frontend/`, `asyncapi/` paths.
 
 ---
@@ -100,15 +100,15 @@ Rules for this effort:
 
 ---
 
-## Phase 4 — Jarvis Cleanup
+## Phase 4 — Oikos Cleanup
 
 ### 4.1 Remove tracked Yarn artifacts (Bun-first repo)
 
-- [x] Delete tracked `apps/zerg/frontend-web/src/jarvis/.yarn/install-state.gz` and stop tracking `.yarn/`. (N/A - apps/jarvis deleted)
+- [x] Delete tracked `apps/zerg/frontend-web/src/oikos/.yarn/install-state.gz` and stop tracking `.yarn/`. (N/A - apps/oikos deleted)
 
 ### 4.2 Remove committed symlink hacks (if feasible)
 
-- [x] Remove `apps/zerg/frontend-web/src/jarvis/swarm-packages/config` symlink and switch Jarvis to use the root Bun workspace cleanly. (N/A - apps/jarvis deleted)
+- [x] Remove `apps/zerg/frontend-web/src/oikos/swarm-packages/config` symlink and switch Oikos to use the root Bun workspace cleanly. (N/A - apps/oikos deleted)
 
 ---
 

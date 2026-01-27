@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import { generateForumReplay } from "../replay";
 import { applyForumEvents, createForumState } from "../state";
 import {
-  mapSupervisorComplete,
-  mapSupervisorStarted,
-  mapWorkerComplete,
-  mapWorkerSpawned,
-  mapWorkerToolFailed,
+  mapOikosComplete,
+  mapOikosStarted,
+  mapCommisComplete,
+  mapCommisSpawned,
+  mapCommisToolFailed,
 } from "../live-mapper";
 import type { ForumReplayEventInput } from "../types";
 
@@ -17,7 +17,7 @@ const scenario = generateForumReplay({
   roomCount: 1,
   unitsPerRoom: 0,
   tasksPerRoom: 0,
-  workersPerRoom: 0,
+  commissPerRoom: 0,
   workspaceCount: 1,
   repoGroupsPerWorkspace: 1,
 });
@@ -41,10 +41,10 @@ const createBaseState = () =>
   });
 
 describe("forum live mapper", () => {
-  it("maps supervisor start into task + node", () => {
+  it("maps oikos start into task + node", () => {
     const state = createBaseState();
     const toReplayEvents = createSequencer();
-    const inputs = mapSupervisorStarted(state, {
+    const inputs = mapOikosStarted(state, {
       runId: 42,
       task: "Ship logs",
       timestamp: 1000,
@@ -57,21 +57,21 @@ describe("forum live mapper", () => {
     expect(state.entities.has("task-node-run-42")).toBe(true);
   });
 
-  it("maps worker spawn + completion into worker and task updates", () => {
+  it("maps commis spawn + completion into commis and task updates", () => {
     const state = createBaseState();
     const toReplayEvents = createSequencer();
 
-    const spawnInputs = mapWorkerSpawned(state, {
+    const spawnInputs = mapCommisSpawned(state, {
       jobId: 7,
       task: "Lint repo",
       timestamp: 1100,
     });
     applyForumEvents(state, toReplayEvents(spawnInputs));
 
-    expect(state.workers.has("worker-7")).toBe(true);
+    expect(state.commiss.has("commis-7")).toBe(true);
     expect(state.tasks.has("job-7")).toBe(true);
 
-    const completeInputs = mapWorkerComplete(state, {
+    const completeInputs = mapCommisComplete(state, {
       jobId: 7,
       status: "failed",
       timestamp: 1200,
@@ -83,17 +83,17 @@ describe("forum live mapper", () => {
     expect(state.alerts.size).toBe(1);
   });
 
-  it("maps supervisor completion into task resolve", () => {
+  it("maps oikos completion into task resolve", () => {
     const state = createBaseState();
     const toReplayEvents = createSequencer();
-    const startInputs = mapSupervisorStarted(state, {
+    const startInputs = mapOikosStarted(state, {
       runId: 3,
       task: "Plan sprint",
       timestamp: 900,
     });
     applyForumEvents(state, toReplayEvents(startInputs));
 
-    const completeInputs = mapSupervisorComplete(state, {
+    const completeInputs = mapOikosComplete(state, {
       runId: 3,
       result: "done",
       status: "success",
@@ -107,8 +107,8 @@ describe("forum live mapper", () => {
   it("maps tool failure into alert", () => {
     const state = createBaseState();
     const toReplayEvents = createSequencer();
-    const inputs = mapWorkerToolFailed(state, {
-      workerId: "worker-1",
+    const inputs = mapCommisToolFailed(state, {
+      commisId: "commis-1",
       toolName: "fetch",
       toolCallId: "call-1",
       durationMs: 2000,

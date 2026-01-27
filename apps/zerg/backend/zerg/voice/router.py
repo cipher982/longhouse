@@ -1,4 +1,4 @@
-"""Jarvis turn-based voice endpoints."""
+"""Oikos turn-based voice endpoints."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from zerg.config import get_settings
-from zerg.routers.jarvis_auth import get_current_jarvis_user
+from zerg.routers.oikos_auth import get_current_oikos_user
 from zerg.voice.stt_service import ALLOWED_AUDIO_TYPES
 from zerg.voice.stt_service import MAX_AUDIO_BYTES
 from zerg.voice.stt_service import get_stt_service
@@ -25,7 +25,7 @@ from zerg.voice.turn_based import run_voice_turn
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/voice", tags=["jarvis-voice"])
+router = APIRouter(prefix="/voice", tags=["oikos-voice"])
 
 
 def _voice_turn_error(
@@ -133,16 +133,16 @@ async def voice_turn(
     return_audio: bool = Form(True, description="Include synthesized audio response"),
     tts_provider: str | None = Form(None, description="Override TTS provider (edge, elevenlabs)"),
     tts_voice_id: str | None = Form(None, description="Override TTS voice ID/name"),
-    model: str | None = Form(None, description="Override supervisor model"),
+    model: str | None = Form(None, description="Override oikos model"),
     message_id: str | None = Form(None, description="Client-generated message ID for correlation"),
-    current_user=Depends(get_current_jarvis_user),
+    current_user=Depends(get_current_oikos_user),
 ) -> VoiceTurnResponse:
-    """Turn-based voice: audio -> transcript -> supervisor response.
+    """Turn-based voice: audio -> transcript -> oikos response.
 
     This endpoint is optimized for "Alexa-style" interactions:
     - User speaks once
     - System transcribes
-    - Supervisor responds with text
+    - Oikos responds with text
     """
     if not audio:
         return _voice_turn_error(400, "Audio file is required", message_id)
@@ -261,9 +261,9 @@ async def voice_transcribe(
     stt_language: str | None = Form(None, description="Optional ISO-639-1 language hint"),
     stt_model: str | None = Form(None, description="Override STT model"),
     message_id: str | None = Form(None, description="Client-generated message ID for correlation"),
-    current_user=Depends(get_current_jarvis_user),
+    current_user=Depends(get_current_oikos_user),
 ) -> VoiceTranscribeResponse:
-    """Transcribe audio to text (no supervisor execution)."""
+    """Transcribe audio to text (no oikos execution)."""
     if not audio:
         return _transcribe_error(400, "Audio file is required", message_id)
 
@@ -305,9 +305,9 @@ async def voice_transcribe(
 @router.post("/tts", response_model=VoiceTtsResponse)
 async def voice_tts(
     request: VoiceTtsRequest,
-    current_user=Depends(get_current_jarvis_user),
+    current_user=Depends(get_current_oikos_user),
 ) -> VoiceTtsResponse:
-    """Convert text to speech (no supervisor execution)."""
+    """Convert text to speech (no oikos execution)."""
     text = (request.text or "").strip()
     if not text:
         return VoiceTtsResponse(

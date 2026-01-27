@@ -1,11 +1,11 @@
 asyncapi: 3.0.0
 
 info:
-  title: Jarvis SSE Event Protocol
+  title: Oikos SSE Event Protocol
   version: 1.0.0
   description: |
-    Server-Sent Events (SSE) protocol for real-time updates from Jarvis backend to frontend.
-    Provides typed contracts for supervisor execution, worker lifecycle, and tool monitoring.
+    Server-Sent Events (SSE) protocol for real-time updates from Oikos backend to frontend.
+    Provides typed contracts for oikos execution, commis lifecycle, and tool monitoring.
 
     Features:
     - Strongly-typed event payloads
@@ -21,54 +21,54 @@ defaultContentType: application/json
 
 channels:
   RunEventsChannel:
-    address: /api/jarvis/chat/stream
-    description: Real-time supervisor and worker events for a specific run
+    address: /api/oikos/chat/stream
+    description: Real-time oikos and commis events for a specific run
     messages:
       ConnectedEvent:
         $ref: '#/components/messages/ConnectedEvent'
       HeartbeatEvent:
         $ref: '#/components/messages/HeartbeatEvent'
-      SupervisorStartedEvent:
-        $ref: '#/components/messages/SupervisorStartedEvent'
-      SupervisorThinkingEvent:
-        $ref: '#/components/messages/SupervisorThinkingEvent'
-      SupervisorTokenEvent:
-        $ref: '#/components/messages/SupervisorTokenEvent'
-      SupervisorCompleteEvent:
-        $ref: '#/components/messages/SupervisorCompleteEvent'
-      SupervisorDeferredEvent:
-        $ref: '#/components/messages/SupervisorDeferredEvent'
-      SupervisorWaitingEvent:
-        $ref: '#/components/messages/SupervisorWaitingEvent'
-      SupervisorResumedEvent:
-        $ref: '#/components/messages/SupervisorResumedEvent'
+      OikosStartedEvent:
+        $ref: '#/components/messages/OikosStartedEvent'
+      OikosThinkingEvent:
+        $ref: '#/components/messages/OikosThinkingEvent'
+      OikosTokenEvent:
+        $ref: '#/components/messages/OikosTokenEvent'
+      OikosCompleteEvent:
+        $ref: '#/components/messages/OikosCompleteEvent'
+      OikosDeferredEvent:
+        $ref: '#/components/messages/OikosDeferredEvent'
+      OikosWaitingEvent:
+        $ref: '#/components/messages/OikosWaitingEvent'
+      OikosResumedEvent:
+        $ref: '#/components/messages/OikosResumedEvent'
       ErrorEvent:
         $ref: '#/components/messages/ErrorEvent'
-      WorkerSpawnedEvent:
-        $ref: '#/components/messages/WorkerSpawnedEvent'
-      WorkerStartedEvent:
-        $ref: '#/components/messages/WorkerStartedEvent'
-      WorkerCompleteEvent:
-        $ref: '#/components/messages/WorkerCompleteEvent'
-      WorkerSummaryReadyEvent:
-        $ref: '#/components/messages/WorkerSummaryReadyEvent'
-      WorkerToolStartedEvent:
-        $ref: '#/components/messages/WorkerToolStartedEvent'
-      WorkerToolCompletedEvent:
-        $ref: '#/components/messages/WorkerToolCompletedEvent'
-      WorkerToolFailedEvent:
-        $ref: '#/components/messages/WorkerToolFailedEvent'
-      WorkerOutputChunkEvent:
-        $ref: '#/components/messages/WorkerOutputChunkEvent'
-      # Supervisor tool monitoring (same treatment as worker tools)
-      SupervisorToolStartedEvent:
-        $ref: '#/components/messages/SupervisorToolStartedEvent'
-      SupervisorToolProgressEvent:
-        $ref: '#/components/messages/SupervisorToolProgressEvent'
-      SupervisorToolCompletedEvent:
-        $ref: '#/components/messages/SupervisorToolCompletedEvent'
-      SupervisorToolFailedEvent:
-        $ref: '#/components/messages/SupervisorToolFailedEvent'
+      CommisSpawnedEvent:
+        $ref: '#/components/messages/CommisSpawnedEvent'
+      CommisStartedEvent:
+        $ref: '#/components/messages/CommisStartedEvent'
+      CommisCompleteEvent:
+        $ref: '#/components/messages/CommisCompleteEvent'
+      CommisSummaryReadyEvent:
+        $ref: '#/components/messages/CommisSummaryReadyEvent'
+      CommisToolStartedEvent:
+        $ref: '#/components/messages/CommisToolStartedEvent'
+      CommisToolCompletedEvent:
+        $ref: '#/components/messages/CommisToolCompletedEvent'
+      CommisToolFailedEvent:
+        $ref: '#/components/messages/CommisToolFailedEvent'
+      CommisOutputChunkEvent:
+        $ref: '#/components/messages/CommisOutputChunkEvent'
+      # Oikos tool monitoring (same treatment as commis tools)
+      OikosToolStartedEvent:
+        $ref: '#/components/messages/OikosToolStartedEvent'
+      OikosToolProgressEvent:
+        $ref: '#/components/messages/OikosToolProgressEvent'
+      OikosToolCompletedEvent:
+        $ref: '#/components/messages/OikosToolCompletedEvent'
+      OikosToolFailedEvent:
+        $ref: '#/components/messages/OikosToolFailedEvent'
       ShowSessionPickerEvent:
         $ref: '#/components/messages/ShowSessionPickerEvent'
       StreamControlEvent:
@@ -83,7 +83,7 @@ operations:
     action: send
     channel:
       $ref: '#/channels/RunEventsChannel'
-    summary: Stream supervisor and worker events for a run
+    summary: Stream oikos and commis events for a run
 
 # ---------------------------------------------------------------------------
 # Components - Messages and schemas
@@ -106,55 +106,55 @@ components:
         $ref: '#/components/schemas/HeartbeatPayload'
       x-sse-event-type: heartbeat
 
-    # Supervisor lifecycle
-    SupervisorStartedEvent:
-      name: supervisor_started
-      summary: Supervisor began processing task
+    # Oikos lifecycle
+    OikosStartedEvent:
+      name: oikos_started
+      summary: Oikos began processing task
       payload:
-        $ref: '#/components/schemas/SupervisorStartedPayload'
-      x-sse-event-type: supervisor_started
+        $ref: '#/components/schemas/OikosStartedPayload'
+      x-sse-event-type: oikos_started
 
-    SupervisorThinkingEvent:
-      name: supervisor_thinking
-      summary: Supervisor reasoning phase
+    OikosThinkingEvent:
+      name: oikos_thinking
+      summary: Oikos reasoning phase
       payload:
-        $ref: '#/components/schemas/SupervisorThinkingPayload'
-      x-sse-event-type: supervisor_thinking
+        $ref: '#/components/schemas/OikosThinkingPayload'
+      x-sse-event-type: oikos_thinking
 
-    SupervisorTokenEvent:
-      name: supervisor_token
+    OikosTokenEvent:
+      name: oikos_token
       summary: LLM token stream (high frequency)
       payload:
-        $ref: '#/components/schemas/SupervisorTokenPayload'
-      x-sse-event-type: supervisor_token
+        $ref: '#/components/schemas/OikosTokenPayload'
+      x-sse-event-type: oikos_token
 
-    SupervisorCompleteEvent:
-      name: supervisor_complete
-      summary: Supervisor finished successfully
+    OikosCompleteEvent:
+      name: oikos_complete
+      summary: Oikos finished successfully
       payload:
-        $ref: '#/components/schemas/SupervisorCompletePayload'
-      x-sse-event-type: supervisor_complete
+        $ref: '#/components/schemas/OikosCompletePayload'
+      x-sse-event-type: oikos_complete
 
-    SupervisorDeferredEvent:
-      name: supervisor_deferred
-      summary: Timeout migration - supervisor continues in background
+    OikosDeferredEvent:
+      name: oikos_deferred
+      summary: Timeout migration - oikos continues in background
       payload:
-        $ref: '#/components/schemas/SupervisorDeferredPayload'
-      x-sse-event-type: supervisor_deferred
+        $ref: '#/components/schemas/OikosDeferredPayload'
+      x-sse-event-type: oikos_deferred
 
-    SupervisorWaitingEvent:
-      name: supervisor_waiting
-      summary: Supervisor interrupted waiting for worker completion
+    OikosWaitingEvent:
+      name: oikos_waiting
+      summary: Oikos interrupted waiting for commis completion
       payload:
-        $ref: '#/components/schemas/SupervisorWaitingPayload'
-      x-sse-event-type: supervisor_waiting
+        $ref: '#/components/schemas/OikosWaitingPayload'
+      x-sse-event-type: oikos_waiting
 
-    SupervisorResumedEvent:
-      name: supervisor_resumed
-      summary: Supervisor resumed from interrupt after worker completion
+    OikosResumedEvent:
+      name: oikos_resumed
+      summary: Oikos resumed from interrupt after commis completion
       payload:
-        $ref: '#/components/schemas/SupervisorResumedPayload'
-      x-sse-event-type: supervisor_resumed
+        $ref: '#/components/schemas/OikosResumedPayload'
+      x-sse-event-type: oikos_resumed
 
     # Error handling
     ErrorEvent:
@@ -164,92 +164,92 @@ components:
         $ref: '#/components/schemas/ErrorPayload'
       x-sse-event-type: error
 
-    # Worker lifecycle
-    WorkerSpawnedEvent:
-      name: worker_spawned
-      summary: Worker job queued
+    # Commis lifecycle
+    CommisSpawnedEvent:
+      name: commis_spawned
+      summary: Commis job queued
       payload:
-        $ref: '#/components/schemas/WorkerSpawnedPayload'
-      x-sse-event-type: worker_spawned
+        $ref: '#/components/schemas/CommisSpawnedPayload'
+      x-sse-event-type: commis_spawned
 
-    WorkerStartedEvent:
-      name: worker_started
-      summary: Worker execution began
+    CommisStartedEvent:
+      name: commis_started
+      summary: Commis execution began
       payload:
-        $ref: '#/components/schemas/WorkerStartedPayload'
-      x-sse-event-type: worker_started
+        $ref: '#/components/schemas/CommisStartedPayload'
+      x-sse-event-type: commis_started
 
-    WorkerCompleteEvent:
-      name: worker_complete
-      summary: Worker finished (success or failure)
+    CommisCompleteEvent:
+      name: commis_complete
+      summary: Commis finished (success or failure)
       payload:
-        $ref: '#/components/schemas/WorkerCompletePayload'
-      x-sse-event-type: worker_complete
+        $ref: '#/components/schemas/CommisCompletePayload'
+      x-sse-event-type: commis_complete
 
-    WorkerSummaryReadyEvent:
-      name: worker_summary_ready
-      summary: Worker summary extracted
+    CommisSummaryReadyEvent:
+      name: commis_summary_ready
+      summary: Commis summary extracted
       payload:
-        $ref: '#/components/schemas/WorkerSummaryReadyPayload'
-      x-sse-event-type: worker_summary_ready
+        $ref: '#/components/schemas/CommisSummaryReadyPayload'
+      x-sse-event-type: commis_summary_ready
 
-    # Worker tool monitoring
-    WorkerToolStartedEvent:
-      name: worker_tool_started
-      summary: Worker tool call began
+    # Commis tool monitoring
+    CommisToolStartedEvent:
+      name: commis_tool_started
+      summary: Commis tool call began
       payload:
-        $ref: '#/components/schemas/WorkerToolStartedPayload'
-      x-sse-event-type: worker_tool_started
+        $ref: '#/components/schemas/CommisToolStartedPayload'
+      x-sse-event-type: commis_tool_started
 
-    WorkerToolCompletedEvent:
-      name: worker_tool_completed
-      summary: Worker tool call succeeded
+    CommisToolCompletedEvent:
+      name: commis_tool_completed
+      summary: Commis tool call succeeded
       payload:
-        $ref: '#/components/schemas/WorkerToolCompletedPayload'
-      x-sse-event-type: worker_tool_completed
+        $ref: '#/components/schemas/CommisToolCompletedPayload'
+      x-sse-event-type: commis_tool_completed
 
-    WorkerToolFailedEvent:
-      name: worker_tool_failed
-      summary: Worker tool call failed
+    CommisToolFailedEvent:
+      name: commis_tool_failed
+      summary: Commis tool call failed
       payload:
-        $ref: '#/components/schemas/WorkerToolFailedPayload'
-      x-sse-event-type: worker_tool_failed
+        $ref: '#/components/schemas/CommisToolFailedPayload'
+      x-sse-event-type: commis_tool_failed
 
-    WorkerOutputChunkEvent:
-      name: worker_output_chunk
-      summary: Live worker output chunk (ephemeral)
+    CommisOutputChunkEvent:
+      name: commis_output_chunk
+      summary: Live commis output chunk (ephemeral)
       payload:
-        $ref: '#/components/schemas/WorkerOutputChunkPayload'
-      x-sse-event-type: worker_output_chunk
+        $ref: '#/components/schemas/CommisOutputChunkPayload'
+      x-sse-event-type: commis_output_chunk
 
-    # Supervisor tool monitoring (uniform treatment with worker tools)
-    SupervisorToolStartedEvent:
-      name: supervisor_tool_started
-      summary: Supervisor tool call began
+    # Oikos tool monitoring (uniform treatment with commis tools)
+    OikosToolStartedEvent:
+      name: oikos_tool_started
+      summary: Oikos tool call began
       payload:
-        $ref: '#/components/schemas/SupervisorToolStartedPayload'
-      x-sse-event-type: supervisor_tool_started
+        $ref: '#/components/schemas/OikosToolStartedPayload'
+      x-sse-event-type: oikos_tool_started
 
-    SupervisorToolProgressEvent:
-      name: supervisor_tool_progress
-      summary: Supervisor tool progress update (streaming logs)
+    OikosToolProgressEvent:
+      name: oikos_tool_progress
+      summary: Oikos tool progress update (streaming logs)
       payload:
-        $ref: '#/components/schemas/SupervisorToolProgressPayload'
-      x-sse-event-type: supervisor_tool_progress
+        $ref: '#/components/schemas/OikosToolProgressPayload'
+      x-sse-event-type: oikos_tool_progress
 
-    SupervisorToolCompletedEvent:
-      name: supervisor_tool_completed
-      summary: Supervisor tool call succeeded
+    OikosToolCompletedEvent:
+      name: oikos_tool_completed
+      summary: Oikos tool call succeeded
       payload:
-        $ref: '#/components/schemas/SupervisorToolCompletedPayload'
-      x-sse-event-type: supervisor_tool_completed
+        $ref: '#/components/schemas/OikosToolCompletedPayload'
+      x-sse-event-type: oikos_tool_completed
 
-    SupervisorToolFailedEvent:
-      name: supervisor_tool_failed
-      summary: Supervisor tool call failed
+    OikosToolFailedEvent:
+      name: oikos_tool_failed
+      summary: Oikos tool call failed
       payload:
-        $ref: '#/components/schemas/SupervisorToolFailedPayload'
-      x-sse-event-type: supervisor_tool_failed
+        $ref: '#/components/schemas/OikosToolFailedPayload'
+      x-sse-event-type: oikos_tool_failed
 
     ShowSessionPickerEvent:
       name: show_session_picker
@@ -280,24 +280,24 @@ components:
           enum:
             - connected
             - heartbeat
-            - supervisor_started
-            - supervisor_thinking
-            - supervisor_token
-            - supervisor_complete
-            - supervisor_deferred
+            - oikos_started
+            - oikos_thinking
+            - oikos_token
+            - oikos_complete
+            - oikos_deferred
             - error
-            - worker_spawned
-            - worker_started
-            - worker_complete
-            - worker_summary_ready
-            - worker_tool_started
-            - worker_tool_completed
-            - worker_tool_failed
-            - worker_output_chunk
-            - supervisor_tool_started
-            - supervisor_tool_progress
-            - supervisor_tool_completed
-            - supervisor_tool_failed
+            - commis_spawned
+            - commis_started
+            - commis_complete
+            - commis_summary_ready
+            - commis_tool_started
+            - commis_tool_completed
+            - commis_tool_failed
+            - commis_output_chunk
+            - oikos_tool_started
+            - oikos_tool_progress
+            - oikos_tool_completed
+            - oikos_tool_failed
             - show_session_picker
             - stream_control
         id:
@@ -329,10 +329,10 @@ components:
           minimum: 0
           description: Reasoning tokens (OpenAI o1/o3 models)
 
-    WorkerStatus:
+    CommisStatus:
       type: string
       enum: [success, failed]
-      description: Worker execution result
+      description: Commis execution result
 
     # ---------------------------------------------------------------------------
     # Connection Lifecycle Payloads
@@ -364,9 +364,9 @@ components:
           description: ISO 8601 timestamp
 
     # ---------------------------------------------------------------------------
-    # Supervisor Event Payloads
+    # Oikos Event Payloads
     # ---------------------------------------------------------------------------
-    SupervisorStartedPayload:
+    OikosStartedPayload:
       type: object
       required: [task, thread_id, message_id]
       properties:
@@ -395,7 +395,7 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging (copy from UI for agent debugging)
 
-    SupervisorThinkingPayload:
+    OikosThinkingPayload:
       type: object
       required: [message]
       properties:
@@ -411,7 +411,7 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    SupervisorTokenPayload:
+    OikosTokenPayload:
       type: object
       required: [token]
       properties:
@@ -433,13 +433,13 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    SupervisorCompletePayload:
+    OikosCompletePayload:
       type: object
       required: [result, status]
       properties:
         result:
           type: string
-          description: Final supervisor result
+          description: Final oikos result
         status:
           type: string
           enum: [success, cancelled]
@@ -453,7 +453,7 @@ components:
         run_id:
           type: integer
           minimum: 1
-        agent_id:
+        fiche_id:
           type: integer
           minimum: 1
         thread_id:
@@ -471,7 +471,7 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    SupervisorDeferredPayload:
+    OikosDeferredPayload:
       type: object
       required: [message]
       properties:
@@ -489,7 +489,7 @@ components:
         run_id:
           type: integer
           minimum: 1
-        agent_id:
+        fiche_id:
           type: integer
           minimum: 1
         thread_id:
@@ -504,25 +504,25 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    SupervisorWaitingPayload:
+    OikosWaitingPayload:
       type: object
       required: [message]
       properties:
         message:
           type: string
           minLength: 1
-          description: Waiting status message (e.g., worker spawned)
+          description: Waiting status message (e.g., commis spawned)
         job_id:
           type: integer
           minimum: 1
-          description: Worker job ID (if applicable)
+          description: Commis job ID (if applicable)
         close_stream:
           type: boolean
           description: If false, keep SSE stream open while waiting
         run_id:
           type: integer
           minimum: 1
-        agent_id:
+        fiche_id:
           type: integer
           minimum: 1
         thread_id:
@@ -537,14 +537,14 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    SupervisorResumedPayload:
+    OikosResumedPayload:
       type: object
       required: [thread_id, message_id]
       properties:
         run_id:
           type: integer
           minimum: 1
-        agent_id:
+        fiche_id:
           type: integer
           minimum: 1
         thread_id:
@@ -580,26 +580,26 @@ components:
           description: End-to-end trace ID for debugging
 
     # ---------------------------------------------------------------------------
-    # Worker Event Payloads
+    # Commis Event Payloads
     # ---------------------------------------------------------------------------
-    WorkerSpawnedPayload:
+    CommisSpawnedPayload:
       type: object
       required: [job_id, task]
       properties:
         job_id:
           type: integer
           minimum: 1
-          description: Worker job ID
+          description: Commis job ID
         tool_call_id:
           type: string
-          description: Tool call ID for the spawn_worker invocation
+          description: Tool call ID for the spawn_commis invocation
         task:
           type: string
           minLength: 1
-          description: Worker task (may be truncated to 100 chars)
+          description: Commis task (may be truncated to 100 chars)
         model:
           type: string
-          description: LLM model for worker
+          description: LLM model for commis
         run_id:
           type: integer
           minimum: 1
@@ -608,40 +608,40 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    WorkerStartedPayload:
+    CommisStartedPayload:
       type: object
-      required: [job_id, worker_id]
+      required: [job_id, commis_id]
       properties:
         job_id:
           type: integer
           minimum: 1
-        worker_id:
+        commis_id:
           type: string
           minLength: 1
-          description: Worker execution ID
+          description: Commis execution ID
         run_id:
           type: integer
           minimum: 1
         task:
           type: string
-          description: Worker task (may be truncated)
+          description: Commis task (may be truncated)
         trace_id:
           type: string
           format: uuid
           description: End-to-end trace ID for debugging
 
-    WorkerCompletePayload:
+    CommisCompletePayload:
       type: object
       required: [job_id, status]
       properties:
         job_id:
           type: integer
           minimum: 1
-        worker_id:
+        commis_id:
           type: string
-          description: Worker execution ID
+          description: Commis execution ID
         status:
-          $ref: '#/components/schemas/WorkerStatus'
+          $ref: '#/components/schemas/CommisStatus'
         duration_ms:
           type: integer
           minimum: 0
@@ -656,20 +656,20 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    WorkerSummaryReadyPayload:
+    CommisSummaryReadyPayload:
       type: object
       required: [job_id, summary]
       properties:
         job_id:
           type: integer
           minimum: 1
-        worker_id:
+        commis_id:
           type: string
-          description: Worker execution ID
+          description: Commis execution ID
         summary:
           type: string
           minLength: 1
-          description: Extracted worker summary
+          description: Extracted commis summary
         run_id:
           type: integer
           minimum: 1
@@ -679,13 +679,13 @@ components:
           description: End-to-end trace ID for debugging
 
     # ---------------------------------------------------------------------------
-    # Worker Tool Monitoring Payloads
+    # Commis Tool Monitoring Payloads
     # ---------------------------------------------------------------------------
-    WorkerToolStartedPayload:
+    CommisToolStartedPayload:
       type: object
-      required: [worker_id, tool_name, tool_call_id]
+      required: [commis_id, tool_name, tool_call_id]
       properties:
-        worker_id:
+        commis_id:
           type: string
           minLength: 1
         tool_name:
@@ -707,11 +707,11 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    WorkerToolCompletedPayload:
+    CommisToolCompletedPayload:
       type: object
-      required: [worker_id, tool_name, tool_call_id, duration_ms]
+      required: [commis_id, tool_name, tool_call_id, duration_ms]
       properties:
-        worker_id:
+        commis_id:
           type: string
           minLength: 1
         tool_name:
@@ -734,11 +734,11 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    WorkerToolFailedPayload:
+    CommisToolFailedPayload:
       type: object
-      required: [worker_id, tool_name, tool_call_id, duration_ms, error]
+      required: [commis_id, tool_name, tool_call_id, duration_ms, error]
       properties:
-        worker_id:
+        commis_id:
           type: string
           minLength: 1
         tool_name:
@@ -762,15 +762,15 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    WorkerOutputChunkPayload:
+    CommisOutputChunkPayload:
       type: object
-      required: [worker_id, stream, data, run_id]
+      required: [commis_id, stream, data, run_id]
       properties:
         job_id:
           type: integer
           minimum: 1
-          description: Worker job ID (spawn_worker job)
-        worker_id:
+          description: Commis job ID (spawn_commis job)
+        commis_id:
           type: string
           minLength: 1
         runner_job_id:
@@ -795,9 +795,9 @@ components:
           description: End-to-end trace ID for debugging
 
     # ---------------------------------------------------------------------------
-    # Supervisor Tool Monitoring Payloads
+    # Oikos Tool Monitoring Payloads
     # ---------------------------------------------------------------------------
-    SupervisorToolStartedPayload:
+    OikosToolStartedPayload:
       type: object
       required: [tool_name, tool_call_id]
       properties:
@@ -817,13 +817,13 @@ components:
         run_id:
           type: integer
           minimum: 1
-          description: Supervisor run ID for correlation
+          description: Oikos run ID for correlation
         trace_id:
           type: string
           format: uuid
           description: End-to-end trace ID for debugging
 
-    SupervisorToolProgressPayload:
+    OikosToolProgressPayload:
       type: object
       required: [tool_call_id, message]
       properties:
@@ -853,7 +853,7 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    SupervisorToolCompletedPayload:
+    OikosToolCompletedPayload:
       type: object
       required: [tool_name, tool_call_id, duration_ms]
       properties:
@@ -880,7 +880,7 @@ components:
           format: uuid
           description: End-to-end trace ID for debugging
 
-    SupervisorToolFailedPayload:
+    OikosToolFailedPayload:
       type: object
       required: [tool_name, tool_call_id, duration_ms, error]
       properties:
@@ -918,7 +918,7 @@ components:
         run_id:
           type: integer
           minimum: 1
-          description: Current supervisor run ID
+          description: Current oikos run ID
         trace_id:
           type: string
           format: uuid
@@ -951,7 +951,7 @@ components:
           description: keep_open extends stream lease; close is terminal end-marker
         reason:
           type: string
-          description: Why this action (workers_pending, continuation_start, all_complete, timeout, error)
+          description: Why this action (commiss_pending, continuation_start, all_complete, timeout, error)
         ttl_ms:
           type: integer
           minimum: 0
@@ -965,10 +965,10 @@ components:
           type: string
           format: uuid
           description: End-to-end trace ID for debugging
-        pending_workers:
+        pending_commiss:
           type: integer
           minimum: 0
-          description: Current pending worker count (for debugging)
+          description: Current pending commis count (for debugging)
 
 # ---------------------------------------------------------------------------
 # Extensions for code generation
@@ -988,6 +988,6 @@ x-security-notes:
   - SSE stream filters events by run_id and owner_id
 
 x-performance-notes:
-  - supervisor_token events are high-frequency (per-token streaming)
+  - oikos_token events are high-frequency (per-token streaming)
   - Heartbeat sent every 30s to prevent timeout
   - Event IDs enable resumable streams (reconnect with Last-Event-ID header)

@@ -25,7 +25,7 @@ class ImmutableToolRegistry:
     """
     Thread-safe, immutable tool registry.
 
-    Built once at startup, passed to agents via dependency injection.
+    Built once at startup, passed to fiches via dependency injection.
     No global state, no mutations, no surprises.
     """
 

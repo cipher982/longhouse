@@ -10,7 +10,7 @@
 **Date:** 2025-12-16
 **Status:** ✅ Complete
 
-> Note (2025-12-20): `apps/zerg/frontend-web/src/jarvis/` was deleted during the unified SPA merge.
+> Note (2025-12-20): `apps/zerg/frontend-web/src/oikos/` was deleted during the unified SPA merge.
 > This doc is still accurate as a record of what was backed up on 2025-12-16.
 
 ## Overview
@@ -34,7 +34,7 @@ Backup includes:
 - `.env-backups-2025-12-16/.env` (root .env - original)
 - `.env-backups-2025-12-16/apps/zerg/frontend-web/.env`
 - `.env-backups-2025-12-16/apps/zerg/backend/.env`
-- `.env-backups-2025-12-16/apps/zerg/frontend-web/src/jarvis/.env`
+- `.env-backups-2025-12-16/apps/zerg/frontend-web/src/oikos/.env`
 
 **⚠️ DO NOT DELETE THE BACKUP DIRECTORY** - It contains the only copies of the original configuration.
 
@@ -49,7 +49,7 @@ Backup includes:
 - Development server ports
 - Runtime environment
 - Discord notifications
-- Jarvis integration
+- Oikos integration
 
 ### From `apps/zerg/frontend-web/.env`
 
@@ -66,10 +66,10 @@ Backup includes:
 - `TMPDIR`, `XDG_CACHE_HOME` - UV cache directories
 - `DOCKER_HOST` - Docker socket path
 
-### From `apps/zerg/frontend-web/src/jarvis/.env`
+### From `apps/zerg/frontend-web/src/oikos/.env`
 
-- `VITE_ZERG_API_URL` - Zerg backend URL for Jarvis
-- `VITE_JARVIS_DEVICE_SECRET` - Device authentication secret
+- `VITE_ZERG_API_URL` - Zerg backend URL for Oikos
+- `VITE_OIKOS_DEVICE_SECRET` - Device authentication secret
 - `VITE_VOICE_CONTEXT` - Voice context setting
 - Umami analytics configuration (shared with Zerg frontend)
 
@@ -90,7 +90,7 @@ const repoRoot = path.resolve(__dirname, "../../..");
 const rootEnv = loadEnv(mode, repoRoot, "");
 ```
 
-#### `apps/zerg/frontend-web/src/jarvis/vite.config.ts`
+#### `apps/zerg/frontend-web/src/oikos/vite.config.ts`
 
 **Changed:**
 
@@ -134,7 +134,7 @@ Replaced with notice files pointing to root `.env`:
 
 - `apps/zerg/frontend-web/.env` - Notice file
 - `apps/zerg/backend/.env` - Notice file
-- `apps/zerg/frontend-web/src/jarvis/.env` - Notice file
+- `apps/zerg/frontend-web/src/oikos/.env` - Notice file
 
 ## Root `.env` Structure
 
@@ -148,10 +148,10 @@ The consolidated `.env` file is organized into 13 sections:
 6. **Development Server Ports** - Configurable ports for parallel projects
 7. **Runtime** - Environment mode settings
 8. **Discord Notifications** - Webhook alerts and digest
-9. **Jarvis Integration** - Device secrets
+9. **Oikos Integration** - Device secrets
 10. **Database Connection** - Connection URL
 11. **Frontend - Zerg Web** - Vite proxy, API URLs, analytics
-12. **Frontend - Jarvis Web** - Jarvis-specific settings
+12. **Frontend - Oikos Web** - Oikos-specific settings
 13. **Backend Container Tools** - Testing configuration
 
 ## Verification Steps
@@ -160,14 +160,14 @@ The consolidated `.env` file is organized into 13 sections:
 
 ```bash
 cd ~/git/zerg/apps/zerg/backend
-uv run python -c "from zerg.config import get_settings; s = get_settings(); print(f'OpenAI Key: {s.openai_api_key[:20]}...'); print(f'Database: {s.database_url}'); print(f'Jarvis Secret: {s.jarvis_device_secret}')"
+uv run python -c "from zerg.config import get_settings; s = get_settings(); print(f'OpenAI Key: {s.openai_api_key[:20]}...'); print(f'Database: {s.database_url}'); print(f'Oikos Secret: {s.oikos_device_secret}')"
 ```
 
 Expected output should show values from root `.env`:
 
 - OpenAI key starts with `sk-proj-QgkOU4SEU6VFn...`
 - Database URL: `postgresql://zerg:dev@localhost:5432/zerg`
-- Jarvis secret: `test-secret-for-integration-testing-change-in-production`
+- Oikos secret: `test-secret-for-integration-testing-change-in-production`
 
 ### 2. Verify Zerg Frontend Loads Environment Correctly
 
@@ -182,10 +182,10 @@ Then check the browser console or network tab to verify:
 - WebSocket connects to `ws://localhost:47300/ws`
 - Umami analytics script loads from `https://analytics.drose.io/script.js`
 
-### 3. Verify Jarvis Web Loads Environment Correctly
+### 3. Verify Oikos Web Loads Environment Correctly
 
 ```bash
-cd ~/git/zerg/apps/zerg/frontend-web/src/jarvis/apps/web
+cd ~/git/zerg/apps/zerg/frontend-web/src/oikos/apps/web
 bun run dev
 ```
 
@@ -237,7 +237,7 @@ To add new environment variables:
 
 1. **For backend:** Add to `~/git/zerg/.env` (any section, preferably organized)
 2. **For Zerg frontend:** Add with `VITE_` prefix in section 11
-3. **For Jarvis frontend:** Add with `VITE_` prefix in section 12
+3. **For Oikos frontend:** Add with `VITE_` prefix in section 12
 4. **For Docker Compose:** Add to root `.env`, reference in `docker-compose.*.yml`
 
 ### Secrets Management
@@ -272,11 +272,11 @@ cd ~/git/zerg
 cp .env-backups-2025-12-16/.env .env
 cp .env-backups-2025-12-16/apps/zerg/frontend-web/.env apps/zerg/frontend-web/.env
 cp .env-backups-2025-12-16/apps/zerg/backend/.env apps/zerg/backend/.env
-cp .env-backups-2025-12-16/apps/zerg/frontend-web/src/jarvis/.env apps/zerg/frontend-web/src/jarvis/.env
+cp .env-backups-2025-12-16/apps/zerg/frontend-web/src/oikos/.env apps/zerg/frontend-web/src/oikos/.env
 
 # Revert vite.config.ts changes
 git checkout apps/zerg/frontend-web/vite.config.ts
-git checkout apps/zerg/frontend-web/src/jarvis/vite.config.ts
+git checkout apps/zerg/frontend-web/src/oikos/vite.config.ts
 ```
 
 ## Git Status
@@ -286,9 +286,9 @@ The following files were modified (not committed):
 - `.env` - Consolidated all variables
 - `apps/zerg/frontend-web/.env` - Replaced with notice file
 - `apps/zerg/backend/.env` - Replaced with notice file
-- `apps/zerg/frontend-web/src/jarvis/.env` - Replaced with notice file
+- `apps/zerg/frontend-web/src/oikos/.env` - Replaced with notice file
 - `apps/zerg/frontend-web/vite.config.ts` - Updated to load from repo root
-- `apps/zerg/frontend-web/src/jarvis/vite.config.ts` - Updated to load from repo root
+- `apps/zerg/frontend-web/src/oikos/vite.config.ts` - Updated to load from repo root
 
 The backup directory `.env-backups-2025-12-16/` should be added to `.gitignore`.
 

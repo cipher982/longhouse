@@ -53,7 +53,7 @@ export type ForumRoom = {
   center: ForumGridPoint;
 };
 
-export type ForumEntityType = "unit" | "structure" | "worker" | "task_node";
+export type ForumEntityType = "unit" | "structure" | "commis" | "task_node";
 
 export type ForumEntityStatus = "idle" | "moving" | "working" | "disabled";
 
@@ -75,18 +75,18 @@ export type ForumTask = {
   status: ForumTaskStatus;
   roomId: ForumId;
   entityId?: ForumId;
-  workerId?: ForumId;
+  commisId?: ForumId;
   progress: number;
   createdAt: number;
   updatedAt: number;
 };
 
-export type ForumWorkerStatus = "idle" | "busy" | "offline";
+export type ForumCommisStatus = "idle" | "busy" | "offline";
 
-export type ForumWorker = {
+export type ForumCommis = {
   id: ForumId;
   name: string;
-  status: ForumWorkerStatus;
+  status: ForumCommisStatus;
   roomId: ForumId;
   entityId?: ForumId;
 };
@@ -128,8 +128,8 @@ export type ForumReplayEventType =
   | "alert.clear"
   | "marker.add"
   | "marker.clear"
-  | "worker.add"
-  | "worker.update";
+  | "commis.add"
+  | "commis.update";
 
 export type ForumReplayEventBase = {
   id: ForumId;
@@ -171,7 +171,7 @@ export type ForumReplayEvent =
       taskId: ForumId;
       status?: ForumTaskStatus;
       progress?: number;
-      workerId?: ForumId;
+      commisId?: ForumId;
       entityId?: ForumId;
       title?: string;
       updatedAt: number;
@@ -200,13 +200,13 @@ export type ForumReplayEvent =
       markerId: ForumId;
     })
   | (ForumReplayEventBase & {
-      type: "worker.add";
-      worker: ForumWorker;
+      type: "commis.add";
+      commis: ForumCommis;
     })
   | (ForumReplayEventBase & {
-      type: "worker.update";
-      workerId: ForumId;
-      status?: ForumWorkerStatus;
+      type: "commis.update";
+      commisId: ForumId;
+      status?: ForumCommisStatus;
       entityId?: ForumId;
     });
 
@@ -233,7 +233,7 @@ export type ForumReplayConfig = {
   roomCount?: number;
   unitsPerRoom?: number;
   tasksPerRoom?: number;
-  workersPerRoom?: number;
+  commissPerRoom?: number;
   repoGroupsPerWorkspace?: number;
   workspaceCount?: number;
 };

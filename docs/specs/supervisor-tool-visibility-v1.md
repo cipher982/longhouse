@@ -23,7 +23,7 @@ User: "where am I?"
 
 [2 seconds of nothing...]
 
-Jarvis: "You're at Central Park West, near 81st Street..."
+Oikos: "You're at Central Park West, near 81st Street..."
 ```
 
 User has no idea that `get_current_location` was called, what data was returned, or how long it took.
@@ -53,7 +53,7 @@ User: "where am I?"
 │ 📍 get_current_location                              ✓ 0.2s │
 └─────────────────────────────────────────────────────────────┘
 
-Jarvis: "You're at Central Park West, near 81st Street..."
+Oikos: "You're at Central Park West, near 81st Street..."
 ```
 
 Click card to expand:
@@ -150,12 +150,12 @@ interface SupervisorToolCall {
 
 | Component | Status | Location |
 |-----------|--------|----------|
-| EventBus events | ✅ Done | `apps/zerg/frontend-web/src/jarvis/lib/event-bus.ts` |
-| SSE handlers | ✅ Done | `apps/zerg/frontend-web/src/jarvis/lib/supervisor-chat-controller.ts:687-749` |
-| Tool store | ✅ Done | `apps/zerg/frontend-web/src/jarvis/lib/supervisor-tool-store.ts` |
-| ToolCard component | ✅ Done | `apps/zerg/frontend-web/src/jarvis/app/components/ToolCard.tsx` |
-| ActivityStream | ✅ Done | `apps/zerg/frontend-web/src/jarvis/app/components/ActivityStream.tsx` |
-| Chat integration | ✅ Done | `apps/zerg/frontend-web/src/jarvis/app/components/ChatContainer.tsx` |
+| EventBus events | ✅ Done | `apps/zerg/frontend-web/src/oikos/lib/event-bus.ts` |
+| SSE handlers | ✅ Done | `apps/zerg/frontend-web/src/oikos/lib/supervisor-chat-controller.ts:687-749` |
+| Tool store | ✅ Done | `apps/zerg/frontend-web/src/oikos/lib/supervisor-tool-store.ts` |
+| ToolCard component | ✅ Done | `apps/zerg/frontend-web/src/oikos/app/components/ToolCard.tsx` |
+| ActivityStream | ✅ Done | `apps/zerg/frontend-web/src/oikos/app/components/ActivityStream.tsx` |
+| Chat integration | ✅ Done | `apps/zerg/frontend-web/src/oikos/app/components/ChatContainer.tsx` |
 
 ### Phase 3: Persistence (Pending)
 
@@ -250,7 +250,7 @@ Three-level progressive disclosure:
 ### Manual Test Cases
 
 1. **Basic tool display**
-   - Send "where am I?" to Jarvis
+   - Send "where am I?" to Oikos
    - Verify ToolCard appears with `get_current_location`
    - Verify duration updates live while running
    - Verify checkmark appears on completion
@@ -273,7 +273,7 @@ Three-level progressive disclosure:
 
 ### E2E Tests
 
-E2E spec exists at `apps/zerg/e2e/tests/supervisor-tool-visibility.spec.ts`, but is currently skipped because it relies on dev-only event injection (`window.__jarvis.eventBus`). Unit tests cover the store and UI components.
+E2E spec exists at `apps/zerg/e2e/tests/supervisor-tool-visibility.spec.ts`, but is currently skipped because it relies on dev-only event injection (`window.__oikos.eventBus`). Unit tests cover the store and UI components.
 
 ---
 

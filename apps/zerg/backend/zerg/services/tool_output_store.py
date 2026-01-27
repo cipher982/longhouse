@@ -1,4 +1,4 @@
-"""Tool Output Store – persistence for large supervisor tool outputs.
+"""Tool Output Store – persistence for large oikos tool outputs.
 
 Stores large tool outputs on disk and returns lightweight markers for LLM context.
 Each artifact is scoped to an owner_id for access control.
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class ToolOutputStore:
-    """Manages filesystem storage for supervisor tool outputs."""
+    """Manages filesystem storage for oikos tool outputs."""
 
     def __init__(self, base_path: str | None = None):
         if base_path:

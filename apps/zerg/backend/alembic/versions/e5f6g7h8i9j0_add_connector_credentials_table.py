@@ -19,7 +19,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Create connector_credentials table for agent-scoped tool credentials."""
+    """Create connector_credentials table for fiche-scoped tool credentials."""
     # Check if table already exists (may have been created by schema init)
     conn = op.get_bind()
     inspector = sa.inspect(conn)
@@ -30,7 +30,7 @@ def upgrade() -> None:
     op.create_table(
         'connector_credentials',
         sa.Column('id', sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column('agent_id', sa.Integer(), sa.ForeignKey('agents.id', ondelete='CASCADE'), nullable=False, index=True),
+        sa.Column('fiche_id', sa.Integer(), sa.ForeignKey('fiches.id', ondelete='CASCADE'), nullable=False, index=True),
         sa.Column('connector_type', sa.String(50), nullable=False),
         sa.Column('encrypted_value', sa.Text(), nullable=False),
         sa.Column('display_name', sa.String(255), nullable=True),
@@ -41,15 +41,15 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.DateTime(), server_default=sa.func.now(), onupdate=sa.func.now(), nullable=False),
     )
 
-    # Add unique constraint on (agent_id, connector_type)
+    # Add unique constraint on (fiche_id, connector_type)
     op.create_unique_constraint(
-        'uix_agent_connector',
+        'uix_fiche_connector',
         'connector_credentials',
-        ['agent_id', 'connector_type']
+        ['fiche_id', 'connector_type']
     )
 
 
 def downgrade() -> None:
     """Drop connector_credentials table."""
-    op.drop_constraint('uix_agent_connector', 'connector_credentials', type_='unique')
+    op.drop_constraint('uix_fiche_connector', 'connector_credentials', type_='unique')
     op.drop_table('connector_credentials')

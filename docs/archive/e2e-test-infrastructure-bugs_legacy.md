@@ -12,7 +12,7 @@
 
 ## Executive Summary
 
-The Jarvis E2E test infrastructure (`apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml`) is currently broken. Tests cannot run because:
+The Oikos E2E test infrastructure (`apps/zerg/frontend-web/src/oikos/docker-compose.test.yml`) is currently broken. Tests cannot run because:
 
 1. Database tables don't get created on fresh test DB
 2. Chat session never connects (input stays disabled)
@@ -55,7 +55,7 @@ This assumes tables already exist (created via `create_all()` or admin reset), b
 ### Workaround Found
 
 ```bash
-docker compose -f apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml exec -T backend python -c "
+docker compose -f apps/zerg/frontend-web/src/oikos/docker-compose.test.yml exec -T backend python -c "
 from zerg.database import initialize_database
 initialize_database()
 "
@@ -93,11 +93,11 @@ Page shows "System Ready" and "Tap the microphone or type a message to begin" bu
 
 ### Root Cause
 
-The Jarvis frontend waits for a session to be established before enabling input. The session establishment is failing silently.
+The Oikos frontend waits for a session to be established before enabling input. The session establishment is failing silently.
 
 Possible causes:
 
-1. API endpoint `/api/jarvis/session` failing
+1. API endpoint `/api/oikos/session` failing
 2. SSE connection not establishing
 3. Auth/cookie issues in test environment
 4. Frontend not receiving expected response format
@@ -112,7 +112,7 @@ Possible causes:
 
 1. Check browser console logs for errors
 2. Check network tab for failed API calls
-3. Verify `/api/jarvis/session` endpoint works
+3. Verify `/api/oikos/session` endpoint works
 4. Check if cookies are being set properly
 
 ---
@@ -134,7 +134,7 @@ Backend logs show events firing but no subscribers:
 
 ### Root Cause
 
-The SSE stream endpoint (`/api/jarvis/chat`) subscribes to these events when a client connects. Since no client is successfully connecting (Bug 2), there are no subscribers.
+The SSE stream endpoint (`/api/oikos/chat`) subscribes to these events when a client connects. Since no client is successfully connecting (Bug 2), there are no subscribers.
 
 This is a symptom of Bug 2, not a separate bug.
 
@@ -184,8 +184,8 @@ The `docker-compose.test.yml` mounts source files as volumes:
 
 ```yaml
 volumes:
-  - ../../apps/zerg/frontend-web/src/jarvis/src:/app/apps/web/src:ro
-  - ../../apps/zerg/frontend-web/src/jarvis/lib:/app/apps/web/lib:ro
+  - ../../apps/zerg/frontend-web/src/oikos/src:/app/apps/web/src:ro
+  - ../../apps/zerg/frontend-web/src/oikos/lib:/app/apps/web/lib:ro
 ```
 
 However, if the built assets inside the container don't include the new code (because the image was built before the changes), the mounts won't help for compiled output.
@@ -206,23 +206,23 @@ Either:
 cd /Users/davidrose/git/zerg
 
 # Start test environment
-docker compose -f apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml up -d
+docker compose -f apps/zerg/frontend-web/src/oikos/docker-compose.test.yml up -d
 
 # Wait for healthy
-docker compose -f apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml ps
+docker compose -f apps/zerg/frontend-web/src/oikos/docker-compose.test.yml ps
 
 # Check backend logs - will show migration failures
-docker compose -f apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml logs backend
+docker compose -f apps/zerg/frontend-web/src/oikos/docker-compose.test.yml logs backend
 
 # Run tests - all will fail
-docker compose -f apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml run --rm playwright \
+docker compose -f apps/zerg/frontend-web/src/oikos/docker-compose.test.yml run --rm playwright \
   npx playwright test supervisor-progress-indicator.e2e.spec.ts
 
 # Check test results
-cat apps/zerg/frontend-web/src/jarvis/test-results/*/error-context.md
+cat apps/zerg/frontend-web/src/oikos/test-results/*/error-context.md
 
 # Cleanup
-docker compose -f apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml down -v
+docker compose -f apps/zerg/frontend-web/src/oikos/docker-compose.test.yml down -v
 ```
 
 ---
@@ -245,7 +245,7 @@ if not inspector.has_table("users"):
 ### P1: Debug Session Connection
 
 1. Add more logging to frontend session initialization
-2. Check `/api/jarvis/session` response in test environment
+2. Check `/api/oikos/session` response in test environment
 3. Verify CORS and cookie settings for test domain
 
 ### P2: Fix LangGraph Checkpointer
@@ -264,9 +264,9 @@ Consider using Vite dev server inside container for hot reload of TypeScript cha
 | ---------------------------------------------------------------------------- | ------------------------------ |
 | `apps/zerg/backend/alembic/versions/458f9a6a8779_initial_schema_baseline.py` | No-op migration                |
 | `apps/zerg/backend/start.sh`                                                 | Continues on migration failure |
-| `apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml`                                        | Test environment config        |
-| `apps/zerg/frontend-web/src/jarvis/lib/supervisor-chat-controller.ts`                     | Session/SSE connection         |
-| `apps/zerg/backend/zerg/routers/jarvis.py`                                   | SSE endpoint                   |
+| `apps/zerg/frontend-web/src/oikos/docker-compose.test.yml`                                        | Test environment config        |
+| `apps/zerg/frontend-web/src/oikos/lib/supervisor-chat-controller.ts`                     | Session/SSE connection         |
+| `apps/zerg/backend/zerg/routers/oikos.py`                                   | SSE endpoint                   |
 
 ---
 
@@ -276,19 +276,19 @@ To run tests after manually fixing the database:
 
 ```bash
 # Start services
-docker compose -f apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml up -d
+docker compose -f apps/zerg/frontend-web/src/oikos/docker-compose.test.yml up -d
 
 # Wait for healthy
 sleep 15
 
 # Initialize database manually
-docker compose -f apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml exec -T backend python -c "
+docker compose -f apps/zerg/frontend-web/src/oikos/docker-compose.test.yml exec -T backend python -c "
 from zerg.database import initialize_database
 initialize_database()
 "
 
 # Run tests (still fails due to session connection issue)
-docker compose -f apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml run --rm playwright \
+docker compose -f apps/zerg/frontend-web/src/oikos/docker-compose.test.yml run --rm playwright \
   npx playwright test --reporter=list
 ```
 

@@ -30,13 +30,13 @@ from zerg.core.test_implementations import TestAuthProvider
 class BaseTestConfig(AppConfig):
     """Base class for all test configurations with common test functionality."""
 
-    worker_id: str
+    commis_id: str
     db_path: Optional[str] = None
 
     @classmethod
-    def for_worker(cls, worker_id: str) -> BaseTestConfig:
-        """Create test configuration for specific worker."""
-        return cls(worker_id=worker_id)
+    def for_commis(cls, commis_id: str) -> BaseTestConfig:
+        """Create test configuration for specific commis."""
+        return cls(commis_id=commis_id)
 
     def create_auth_provider(self) -> AuthProvider:
         """All test configs use test authentication."""
@@ -57,7 +57,7 @@ class UnitTestConfig(BaseTestConfig):
     def create_database(self) -> Database:
         """Create isolated in-memory database for unit tests."""
         # For unit tests, keep using IsolatedSQLiteDatabase since they don't use the middleware
-        return IsolatedSQLiteDatabase(self.worker_id, ":memory:")
+        return IsolatedSQLiteDatabase(self.commis_id, ":memory:")
 
     def create_model_registry(self) -> ModelRegistry:
         """Create mock model registry for unit tests."""
@@ -82,7 +82,7 @@ class IntegrationTestConfig(BaseTestConfig):
     def create_database(self) -> Database:
         """Create real file-based database for integration tests."""
         # Use SQLAlchemyDatabase which will use get_session_factory()
-        # This picks up the worker context from the middleware dynamically
+        # This picks up the commis context from the middleware dynamically
         from zerg.core.implementations import SQLAlchemyDatabase
 
         return SQLAlchemyDatabase()
@@ -112,7 +112,7 @@ class E2ETestConfig(BaseTestConfig):
     def create_database(self) -> Database:
         """Create isolated database for E2E tests."""
         # Use SQLAlchemyDatabase which will use get_session_factory()
-        # This picks up the worker context from the middleware dynamically
+        # This picks up the commis context from the middleware dynamically
         from zerg.core.implementations import SQLAlchemyDatabase
 
         return SQLAlchemyDatabase()
@@ -127,16 +127,16 @@ class E2ETestConfig(BaseTestConfig):
 
 
 # Factory functions for convenience
-def create_unit_test_config(worker_id: str = "0") -> UnitTestConfig:
+def create_unit_test_config(commis_id: str = "0") -> UnitTestConfig:
     """Create unit test configuration."""
-    return UnitTestConfig.for_worker(worker_id)
+    return UnitTestConfig.for_commis(commis_id)
 
 
-def create_integration_test_config(worker_id: str = "0") -> IntegrationTestConfig:
+def create_integration_test_config(commis_id: str = "0") -> IntegrationTestConfig:
     """Create integration test configuration."""
-    return IntegrationTestConfig.for_worker(worker_id)
+    return IntegrationTestConfig.for_commis(commis_id)
 
 
-def create_e2e_test_config(worker_id: str = "0") -> E2ETestConfig:
+def create_e2e_test_config(commis_id: str = "0") -> E2ETestConfig:
     """Create E2E test configuration."""
-    return E2ETestConfig.for_worker(worker_id)
+    return E2ETestConfig.for_commis(commis_id)

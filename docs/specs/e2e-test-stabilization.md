@@ -53,7 +53,7 @@ await safeClick(page, '[data-testid="foo"]');
 - `agent_settings_autosave.spec.ts:52`
 
 ### 4. Backend 500 Error
-`/api/admin/debug/db-schema` returns 500 when called with `X-Test-Worker: guardrail_a`:
+`/api/admin/debug/db-schema` returns 500 when called with `X-Test-Commis: guardrail_a`:
 - Endpoint: `routers/admin.py:629`
 - Test: `worker_isolation_guardrail.spec.ts:46`
 
@@ -97,9 +97,9 @@ await safeClick(page, '[data-testid="foo"]');
 **Changes to commit:**
 - `apps/zerg/backend/zerg/database.py` - engine leak fix
 - `apps/zerg/backend/zerg/routers/admin.py` - reset timeout fix
-- `apps/zerg/backend/zerg/routers/jarvis_chat.py` - SSE session fix
-- `apps/zerg/backend/zerg/routers/jarvis_runs.py` - SSE session fix
-- `apps/zerg/backend/zerg/routers/jarvis_supervisor.py` - SSE session fix
+- `apps/zerg/backend/zerg/routers/oikos_chat.py` - SSE session fix
+- `apps/zerg/backend/zerg/routers/oikos_runs.py` - SSE session fix
+- `apps/zerg/backend/zerg/routers/oikos_supervisor.py` - SSE session fix
 - `apps/zerg/backend/zerg/routers/stream.py` - SSE session fix
 
 **Acceptance criteria:**

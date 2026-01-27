@@ -1,21 +1,21 @@
-"""Tests for the SupervisorService - manages supervisor agent and thread lifecycle."""
+"""Tests for the OikosService - manages oikos fiche and thread lifecycle."""
 
 import tempfile
 
 import pytest
 
-from tests.conftest import TEST_WORKER_MODEL
+from tests.conftest import TEST_COMMIS_MODEL
 from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
 from zerg.models.enums import RunStatus
-from zerg.models.models import AgentRun
-from zerg.services.supervisor_context import get_next_seq
-from zerg.services.supervisor_context import get_supervisor_context
-from zerg.services.supervisor_context import reset_seq
-from zerg.services.supervisor_context import reset_supervisor_context
-from zerg.services.supervisor_context import set_supervisor_context
-from zerg.services.supervisor_service import SUPERVISOR_THREAD_TYPE
-from zerg.services.supervisor_service import SupervisorService
+from zerg.models.models import Run
+from zerg.services.oikos_context import get_next_seq
+from zerg.services.oikos_context import get_oikos_context
+from zerg.services.oikos_context import reset_seq
+from zerg.services.oikos_context import reset_oikos_context
+from zerg.services.oikos_context import set_oikos_context
+from zerg.services.oikos_service import OIKOS_THREAD_TYPE
+from zerg.services.oikos_service import OikosService
 
 
 @pytest.fixture
@@ -29,174 +29,174 @@ def temp_artifact_path(monkeypatch):
 @pytest.fixture
 def credential_context(db_session, test_user):
     """Set up credential resolver context for tools."""
-    resolver = CredentialResolver(agent_id=1, db=db_session, owner_id=test_user.id)
+    resolver = CredentialResolver(fiche_id=1, db=db_session, owner_id=test_user.id)
     token = set_credential_resolver(resolver)
     yield resolver
     set_credential_resolver(None)
 
 
-class TestSupervisorService:
-    """Test suite for SupervisorService."""
+class TestOikosService:
+    """Test suite for OikosService."""
 
-    def test_get_or_create_supervisor_agent_creates_new(self, db_session, test_user):
-        """Test that a new supervisor agent is created when none exists."""
-        service = SupervisorService(db_session)
+    def test_get_or_create_oikos_fiche_creates_new(self, db_session, test_user):
+        """Test that a new oikos fiche is created when none exists."""
+        service = OikosService(db_session)
 
-        agent = service.get_or_create_supervisor_agent(test_user.id)
+        fiche = service.get_or_create_oikos_fiche(test_user.id)
 
-        assert agent is not None
-        assert agent.name == "Supervisor"
-        assert agent.owner_id == test_user.id
-        assert agent.config.get("is_supervisor") is True
-        assert "spawn_worker" in agent.allowed_tools
-        assert "list_workers" in agent.allowed_tools
-        # V1.1: knowledge_search should be available to supervisor
-        assert "knowledge_search" in agent.allowed_tools
-        # V1.2: web research tools should be available to supervisor
-        assert "web_search" in agent.allowed_tools
-        assert "web_fetch" in agent.allowed_tools
+        assert fiche is not None
+        assert fiche.name == "Oikos"
+        assert fiche.owner_id == test_user.id
+        assert fiche.config.get("is_oikos") is True
+        assert "spawn_commis" in fiche.allowed_tools
+        assert "list_commiss" in fiche.allowed_tools
+        # V1.1: knowledge_search should be available to oikos
+        assert "knowledge_search" in fiche.allowed_tools
+        # V1.2: web research tools should be available to oikos
+        assert "web_search" in fiche.allowed_tools
+        assert "web_fetch" in fiche.allowed_tools
 
-    def test_get_or_create_supervisor_agent_returns_existing(self, db_session, test_user):
-        """Test that existing supervisor agent is returned on subsequent calls."""
-        service = SupervisorService(db_session)
+    def test_get_or_create_oikos_fiche_returns_existing(self, db_session, test_user):
+        """Test that existing oikos fiche is returned on subsequent calls."""
+        service = OikosService(db_session)
 
         # Create first time
-        agent1 = service.get_or_create_supervisor_agent(test_user.id)
+        agent1 = service.get_or_create_oikos_fiche(test_user.id)
         agent1_id = agent1.id
 
-        # Get again - should return same agent
-        agent2 = service.get_or_create_supervisor_agent(test_user.id)
+        # Get again - should return same fiche
+        agent2 = service.get_or_create_oikos_fiche(test_user.id)
 
         assert agent2.id == agent1_id
 
-    def test_get_or_create_supervisor_thread_creates_new(self, db_session, test_user):
-        """Test that a new supervisor thread is created when none exists."""
-        service = SupervisorService(db_session)
+    def test_get_or_create_oikos_thread_creates_new(self, db_session, test_user):
+        """Test that a new oikos thread is created when none exists."""
+        service = OikosService(db_session)
 
-        agent = service.get_or_create_supervisor_agent(test_user.id)
-        thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+        fiche = service.get_or_create_oikos_fiche(test_user.id)
+        thread = service.get_or_create_oikos_thread(test_user.id, fiche)
 
         assert thread is not None
-        assert thread.thread_type == SUPERVISOR_THREAD_TYPE
-        assert thread.agent_id == agent.id
-        assert thread.title == "Supervisor"
+        assert thread.thread_type == OIKOS_THREAD_TYPE
+        assert thread.fiche_id == fiche.id
+        assert thread.title == "Oikos"
 
-    def test_get_or_create_supervisor_thread_returns_existing(self, db_session, test_user):
-        """Test that existing supervisor thread is returned on subsequent calls."""
-        service = SupervisorService(db_session)
+    def test_get_or_create_oikos_thread_returns_existing(self, db_session, test_user):
+        """Test that existing oikos thread is returned on subsequent calls."""
+        service = OikosService(db_session)
 
-        agent = service.get_or_create_supervisor_agent(test_user.id)
+        fiche = service.get_or_create_oikos_fiche(test_user.id)
 
         # Create first time
-        thread1 = service.get_or_create_supervisor_thread(test_user.id, agent)
+        thread1 = service.get_or_create_oikos_thread(test_user.id, fiche)
         thread1_id = thread1.id
 
         # Get again - should return same thread (one brain per user)
-        thread2 = service.get_or_create_supervisor_thread(test_user.id, agent)
+        thread2 = service.get_or_create_oikos_thread(test_user.id, fiche)
 
         assert thread2.id == thread1_id
 
-    def test_supervisor_per_user_isolation(self, db_session, test_user, other_user):
-        """Test that each user gets their own supervisor agent and thread."""
-        service = SupervisorService(db_session)
+    def test_oikos_per_user_isolation(self, db_session, test_user, other_user):
+        """Test that each user gets their own oikos fiche and thread."""
+        service = OikosService(db_session)
 
-        # Get supervisor for test_user
-        agent1 = service.get_or_create_supervisor_agent(test_user.id)
-        thread1 = service.get_or_create_supervisor_thread(test_user.id, agent1)
+        # Get oikos for test_user
+        fiche1 = service.get_or_create_oikos_fiche(test_user.id)
+        thread1 = service.get_or_create_oikos_thread(test_user.id, fiche1)
 
-        # Get supervisor for other_user
-        agent2 = service.get_or_create_supervisor_agent(other_user.id)
-        thread2 = service.get_or_create_supervisor_thread(other_user.id, agent2)
+        # Get oikos for other_user
+        fiche2 = service.get_or_create_oikos_fiche(other_user.id)
+        thread2 = service.get_or_create_oikos_thread(other_user.id, fiche2)
 
-        # Should be different agents and threads
-        assert agent1.id != agent2.id
+        # Should be different fiches and threads
+        assert fiche1.id != fiche2.id
         assert thread1.id != thread2.id
 
         # Each owned by their respective user
-        assert agent1.owner_id == test_user.id
-        assert agent2.owner_id == other_user.id
+        assert fiche1.owner_id == test_user.id
+        assert fiche2.owner_id == other_user.id
 
-    def test_supervisor_agent_has_correct_tools(self, db_session, test_user):
-        """Test that supervisor agent is configured with correct tools."""
-        service = SupervisorService(db_session)
+    def test_oikos_fiche_has_correct_tools(self, db_session, test_user):
+        """Test that oikos fiche is configured with correct tools."""
+        service = OikosService(db_session)
 
-        agent = service.get_or_create_supervisor_agent(test_user.id)
+        fiche = service.get_or_create_oikos_fiche(test_user.id)
 
         expected_tools = [
-            "spawn_worker",
-            "list_workers",
-            "read_worker_result",
-            "read_worker_file",
-            "grep_workers",
-            "get_worker_metadata",
+            "spawn_commis",
+            "list_commiss",
+            "read_commis_result",
+            "read_commis_file",
+            "grep_commiss",
+            "get_commis_metadata",
             "get_current_time",
             "http_request",
             "send_email",
         ]
 
         for tool in expected_tools:
-            assert tool in agent.allowed_tools, f"Missing tool: {tool}"
+            assert tool in fiche.allowed_tools, f"Missing tool: {tool}"
 
-    def test_get_or_create_supervisor_thread_creates_agent_if_needed(self, db_session, test_user):
-        """Test that thread creation also creates agent if not provided."""
-        service = SupervisorService(db_session)
+    def test_get_or_create_oikos_thread_creates_fiche_if_needed(self, db_session, test_user):
+        """Test that thread creation also creates fiche if not provided."""
+        service = OikosService(db_session)
 
-        # Call without providing agent - should create both
-        thread = service.get_or_create_supervisor_thread(test_user.id, agent=None)
+        # Call without providing fiche - should create both
+        thread = service.get_or_create_oikos_thread(test_user.id, fiche=None)
 
         assert thread is not None
-        assert thread.thread_type == SUPERVISOR_THREAD_TYPE
+        assert thread.thread_type == OIKOS_THREAD_TYPE
 
-        # Verify agent was created
-        agent = service.get_or_create_supervisor_agent(test_user.id)
-        assert thread.agent_id == agent.id
+        # Verify fiche was created
+        fiche = service.get_or_create_oikos_fiche(test_user.id)
+        assert thread.fiche_id == fiche.id
 
 
-class TestSupervisorContext:
-    """Tests for supervisor context (run_id threading)."""
+class TestOikosContext:
+    """Tests for oikos context (run_id threading)."""
 
-    def test_supervisor_context_default_is_none(self):
-        """Test that supervisor context defaults to None."""
-        assert get_supervisor_context() is None
+    def test_oikos_context_default_is_none(self):
+        """Test that oikos context defaults to None."""
+        assert get_oikos_context() is None
 
-    def test_supervisor_context_set_and_get(self):
-        """Test setting and getting supervisor context."""
-        token = set_supervisor_context(run_id=123, owner_id=1, message_id="test-msg-1")
+    def test_oikos_context_set_and_get(self):
+        """Test setting and getting oikos context."""
+        token = set_oikos_context(run_id=123, owner_id=1, message_id="test-msg-1")
         try:
-            ctx = get_supervisor_context()
+            ctx = get_oikos_context()
             assert ctx is not None
             assert ctx.run_id == 123
             assert ctx.owner_id == 1
             assert ctx.message_id == "test-msg-1"
         finally:
-            reset_supervisor_context(token)
+            reset_oikos_context(token)
 
         # After reset, should be back to default
-        assert get_supervisor_context() is None
+        assert get_oikos_context() is None
 
-    def test_supervisor_context_reset_restores_previous(self):
+    def test_oikos_context_reset_restores_previous(self):
         """Test that reset restores previous value."""
         # Set first value
-        token1 = set_supervisor_context(run_id=100, owner_id=1, message_id="msg-100")
-        ctx1 = get_supervisor_context()
+        token1 = set_oikos_context(run_id=100, owner_id=1, message_id="msg-100")
+        ctx1 = get_oikos_context()
         assert ctx1 is not None
         assert ctx1.run_id == 100
 
         # Set second value
-        token2 = set_supervisor_context(run_id=200, owner_id=1, message_id="msg-200")
-        ctx2 = get_supervisor_context()
+        token2 = set_oikos_context(run_id=200, owner_id=1, message_id="msg-200")
+        ctx2 = get_oikos_context()
         assert ctx2 is not None
         assert ctx2.run_id == 200
 
         # Reset second - should restore first
-        reset_supervisor_context(token2)
-        ctx_after = get_supervisor_context()
+        reset_oikos_context(token2)
+        ctx_after = get_oikos_context()
         assert ctx_after is not None
         assert ctx_after.run_id == 100
 
         # Reset first - should restore None
-        reset_supervisor_context(token1)
-        assert get_supervisor_context() is None
+        reset_oikos_context(token1)
+        assert get_oikos_context() is None
 
     def test_seq_counter_starts_at_one(self):
         """Test that seq counter starts at 1 for a new run_id."""
@@ -246,25 +246,25 @@ class TestSupervisorContext:
             reset_seq(run_id)
 
 
-class TestWorkerSupervisorCorrelation:
-    """Tests for worker-supervisor correlation via run_id."""
+class TestCommisOikosCorrelation:
+    """Tests for commis-oikos correlation via run_id."""
 
-    def test_spawn_worker_stores_supervisor_run_id(self, db_session, test_user, credential_context, temp_artifact_path):
-        """Test that spawn_worker stores supervisor_run_id from context."""
-        from tests.conftest import TEST_WORKER_MODEL
-        from zerg.models.models import WorkerJob
-        from zerg.tools.builtin.supervisor_tools import spawn_worker
+    def test_spawn_commis_stores_oikos_run_id(self, db_session, test_user, credential_context, temp_artifact_path):
+        """Test that spawn_commis stores oikos_run_id from context."""
+        from tests.conftest import TEST_COMMIS_MODEL
+        from zerg.models.models import CommisJob
+        from zerg.tools.builtin.oikos_tools import spawn_commis
 
-        # Create a real supervisor agent and run for FK constraint
-        service = SupervisorService(db_session)
-        agent = service.get_or_create_supervisor_agent(test_user.id)
-        thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+        # Create a real oikos fiche and run for FK constraint
+        service = OikosService(db_session)
+        fiche = service.get_or_create_oikos_fiche(test_user.id)
+        thread = service.get_or_create_oikos_thread(test_user.id, fiche)
 
         # Create a run
         from zerg.models.enums import RunTrigger
 
-        run = AgentRun(
-            agent_id=agent.id,
+        run = Run(
+            fiche_id=fiche.id,
             thread_id=thread.id,
             status=RunStatus.RUNNING,
             trigger=RunTrigger.API,
@@ -273,70 +273,70 @@ class TestWorkerSupervisorCorrelation:
         db_session.commit()
         db_session.refresh(run)
 
-        # Set supervisor context with real run_id
-        token = set_supervisor_context(run_id=run.id, owner_id=test_user.id, message_id="test-message-id")
+        # Set oikos context with real run_id
+        token = set_oikos_context(run_id=run.id, owner_id=test_user.id, message_id="test-message-id")
         try:
-            result = spawn_worker(task="Test task", model=TEST_WORKER_MODEL)
+            result = spawn_commis(task="Test task", model=TEST_COMMIS_MODEL)
             assert "queued successfully" in result
 
             # Find the created job
-            job = db_session.query(WorkerJob).filter(WorkerJob.task == "Test task").first()
+            job = db_session.query(CommisJob).filter(CommisJob.task == "Test task").first()
             assert job is not None
-            assert job.supervisor_run_id == run.id
+            assert job.oikos_run_id == run.id
         finally:
-            reset_supervisor_context(token)
+            reset_oikos_context(token)
 
-    def test_spawn_worker_without_context_has_null_supervisor_run_id(
+    def test_spawn_commis_without_context_has_null_oikos_run_id(
         self, db_session, test_user, credential_context, temp_artifact_path
     ):
-        """Test that spawn_worker without context sets supervisor_run_id to None."""
-        from tests.conftest import TEST_WORKER_MODEL
-        from zerg.models.models import WorkerJob
-        from zerg.tools.builtin.supervisor_tools import spawn_worker
+        """Test that spawn_commis without context sets oikos_run_id to None."""
+        from tests.conftest import TEST_COMMIS_MODEL
+        from zerg.models.models import CommisJob
+        from zerg.tools.builtin.oikos_tools import spawn_commis
 
-        # Ensure no supervisor context
-        assert get_supervisor_context() is None
+        # Ensure no oikos context
+        assert get_oikos_context() is None
 
-        result = spawn_worker(task="Standalone task", model=TEST_WORKER_MODEL)
+        result = spawn_commis(task="Standalone task", model=TEST_COMMIS_MODEL)
         assert "queued successfully" in result
 
         # Find the created job
-        job = db_session.query(WorkerJob).filter(WorkerJob.task == "Standalone task").first()
+        job = db_session.query(CommisJob).filter(CommisJob.task == "Standalone task").first()
         assert job is not None
-        assert job.supervisor_run_id is None
+        assert job.oikos_run_id is None
 
-    # NOTE: test_run_continuation_inherits_model was removed during the supervisor
+    # NOTE: test_run_continuation_inherits_model was removed during the oikos
     # resume refactor (Jan 2026). The continuation pattern now uses
-    # AgentInterrupted + AgentRunner.run_continuation instead of separate runs.
-    # See: docs/work/supervisor-continuation-refactor.md
+    # FicheInterrupted + FicheRunner.run_continuation instead of separate runs.
+    # See: docs/work/oikos-continuation-refactor.md
 
 
-class TestRecentWorkerHistoryInjection:
-    """Tests for v2.0 recent worker history auto-injection.
+class TestRecentCommisHistoryInjection:
+    """Tests for v2.0 recent commis history auto-injection.
 
-    This feature injects recent worker results into supervisor context
-    to prevent redundant worker spawns.
+    This feature injects recent commis results into oikos context
+    to prevent redundant commis spawns.
     """
 
-    def test_build_recent_worker_context_no_workers(self, db_session, test_user):
-        """Should return None when no recent workers exist."""
-        service = SupervisorService(db_session)
-        context, jobs_to_ack = service._build_recent_worker_context(test_user.id)
+    def test_build_recent_commis_context_no_commis(self, db_session, test_user):
+        """Should return None when no recent commis exist."""
+        service = OikosService(db_session)
+        context, jobs_to_ack = service._build_recent_commis_context(test_user.id)
         assert context is None
         assert jobs_to_ack == []
 
-    def test_build_recent_worker_context_with_workers(self, db_session, test_user, temp_artifact_path):
-        """Should return formatted context when recent workers exist."""
+    def test_build_recent_commis_context_with_commis(self, db_session, test_user, temp_artifact_path):
+        """Should return formatted context when recent commis exist."""
         from datetime import datetime
         from datetime import timezone
 
-        from zerg.models.models import WorkerJob
+        from zerg.models.models import CommisJob
 
-        # Create a recent worker job
-        job = WorkerJob(
+        # Create a recent commis job
+        job = CommisJob(
             owner_id=test_user.id,
             task="Check disk usage on cube",
-            model=TEST_WORKER_MODEL,
+            model=TEST_COMMIS_MODEL,
             status="success",
             created_at=datetime.now(timezone.utc),
         )
@@ -344,66 +344,66 @@ class TestRecentWorkerHistoryInjection:
         db_session.commit()
         db_session.refresh(job)
 
-        service = SupervisorService(db_session)
-        context, jobs_to_ack = service._build_recent_worker_context(test_user.id)
+        service = OikosService(db_session)
+        context, jobs_to_ack = service._build_recent_commis_context(test_user.id)
 
         assert context is not None
-        assert "Worker Inbox" in context
+        assert "Commis Inbox" in context
         assert f"Job {job.id}" in context
         assert "SUCCESS" in context
         assert "Check disk usage" in context
         # Unacknowledged job should be in the list to acknowledge
         assert job.id in jobs_to_ack
 
-    def test_build_recent_worker_context_respects_limit(self, db_session, test_user, temp_artifact_path):
-        """Should only return up to RECENT_WORKER_HISTORY_LIMIT workers."""
+    def test_build_recent_commis_context_respects_limit(self, db_session, test_user, temp_artifact_path):
+        """Should only return up to RECENT_COMMIS_HISTORY_LIMIT commis."""
         from datetime import datetime
         from datetime import timezone
 
-        from zerg.models.models import WorkerJob
-        from zerg.services.supervisor_service import RECENT_WORKER_HISTORY_LIMIT
+        from zerg.models.models import CommisJob
+        from zerg.services.oikos_service import RECENT_COMMIS_HISTORY_LIMIT
 
-        # Create more workers than the limit
-        for i in range(RECENT_WORKER_HISTORY_LIMIT + 3):
-            job = WorkerJob(
+        # Create more commis than the limit
+        for i in range(RECENT_COMMIS_HISTORY_LIMIT + 3):
+            job = CommisJob(
                 owner_id=test_user.id,
                 task=f"Task {i}",
-                model=TEST_WORKER_MODEL,
+                model=TEST_COMMIS_MODEL,
                 status="success",
                 created_at=datetime.now(timezone.utc),
             )
             db_session.add(job)
         db_session.commit()
 
-        service = SupervisorService(db_session)
-        context, jobs_to_ack = service._build_recent_worker_context(test_user.id)
+        service = OikosService(db_session)
+        context, jobs_to_ack = service._build_recent_commis_context(test_user.id)
 
         assert context is not None
         # Count how many "Job X" entries
         job_count = context.count("Job ")
-        assert job_count == RECENT_WORKER_HISTORY_LIMIT
-        # Should have RECENT_WORKER_HISTORY_LIMIT jobs to acknowledge
-        assert len(jobs_to_ack) == RECENT_WORKER_HISTORY_LIMIT
+        assert job_count == RECENT_COMMIS_HISTORY_LIMIT
+        # Should have RECENT_COMMIS_HISTORY_LIMIT jobs to acknowledge
+        assert len(jobs_to_ack) == RECENT_COMMIS_HISTORY_LIMIT
 
-    def test_build_recent_worker_context_includes_running(self, db_session, test_user, temp_artifact_path):
-        """Should include running workers in context."""
+    def test_build_recent_commis_context_includes_running(self, db_session, test_user, temp_artifact_path):
+        """Should include running commis in context."""
         from datetime import datetime
         from datetime import timezone
 
-        from zerg.models.models import WorkerJob
+        from zerg.models.models import CommisJob
 
-        job = WorkerJob(
+        job = CommisJob(
             owner_id=test_user.id,
             task="Long running investigation",
-            model=TEST_WORKER_MODEL,
+            model=TEST_COMMIS_MODEL,
             status="running",
             created_at=datetime.now(timezone.utc),
         )
         db_session.add(job)
         db_session.commit()
 
-        service = SupervisorService(db_session)
-        context, jobs_to_ack = service._build_recent_worker_context(test_user.id)
+        service = OikosService(db_session)
+        context, jobs_to_ack = service._build_recent_commis_context(test_user.id)
 
         assert context is not None
         assert "RUNNING" in context
@@ -411,49 +411,49 @@ class TestRecentWorkerHistoryInjection:
         # Running jobs are not acknowledged (only completed jobs)
         assert jobs_to_ack == []
 
-    def test_build_recent_worker_context_includes_marker(self, db_session, test_user, temp_artifact_path):
+    def test_build_recent_commis_context_includes_marker(self, db_session, test_user, temp_artifact_path):
         """Context should include marker for cleanup identification."""
         from datetime import datetime
         from datetime import timezone
 
-        from zerg.models.models import WorkerJob
-        from zerg.services.supervisor_service import RECENT_WORKER_CONTEXT_MARKER
+        from zerg.models.models import CommisJob
+        from zerg.services.oikos_service import RECENT_COMMIS_CONTEXT_MARKER
 
-        job = WorkerJob(
+        job = CommisJob(
             owner_id=test_user.id,
             task="Test task",
-            model=TEST_WORKER_MODEL,
+            model=TEST_COMMIS_MODEL,
             status="success",
             created_at=datetime.now(timezone.utc),
         )
         db_session.add(job)
         db_session.commit()
 
-        service = SupervisorService(db_session)
-        context, jobs_to_ack = service._build_recent_worker_context(test_user.id)
+        service = OikosService(db_session)
+        context, jobs_to_ack = service._build_recent_commis_context(test_user.id)
 
         assert context is not None
-        assert RECENT_WORKER_CONTEXT_MARKER in context
+        assert RECENT_COMMIS_CONTEXT_MARKER in context
         # Completed job should be in acknowledgement list
         assert job.id in jobs_to_ack
 
-    def test_cleanup_stale_worker_context(self, db_session, test_user, temp_artifact_path):
+    def test_cleanup_stale_commis_context(self, db_session, test_user, temp_artifact_path):
         """Should delete messages containing the marker (older than min_age)."""
         from zerg.crud import crud
         from zerg.models.models import ThreadMessage
-        from zerg.services.supervisor_service import RECENT_WORKER_CONTEXT_MARKER
+        from zerg.services.oikos_service import RECENT_COMMIS_CONTEXT_MARKER
 
-        # Create supervisor agent and thread
-        service = SupervisorService(db_session)
-        agent = service.get_or_create_supervisor_agent(test_user.id)
-        thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+        # Create oikos fiche and thread
+        service = OikosService(db_session)
+        fiche = service.get_or_create_oikos_fiche(test_user.id)
+        thread = service.get_or_create_oikos_thread(test_user.id, fiche)
 
         # Add a stale context message
         crud.create_thread_message(
             db=db_session,
             thread_id=thread.id,
             role="system",
-            content=f"{RECENT_WORKER_CONTEXT_MARKER}\n## Stale context",
+            content=f"{RECENT_COMMIS_CONTEXT_MARKER}\n## Stale context",
             processed=True,
         )
         db_session.commit()
@@ -463,14 +463,14 @@ class TestRecentWorkerHistoryInjection:
             db_session.query(ThreadMessage)
             .filter(
                 ThreadMessage.thread_id == thread.id,
-                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+                ThreadMessage.content.contains(RECENT_COMMIS_CONTEXT_MARKER),
             )
             .all()
         )
         assert len(messages_before) == 1
 
         # Cleanup with min_age_seconds=0 to delete immediately (for testing)
-        deleted_count = service._cleanup_stale_worker_context(thread.id, min_age_seconds=0)
+        deleted_count = service._cleanup_stale_commis_context(thread.id, min_age_seconds=0)
         db_session.commit()
 
         assert deleted_count == 1
@@ -480,7 +480,7 @@ class TestRecentWorkerHistoryInjection:
             db_session.query(ThreadMessage)
             .filter(
                 ThreadMessage.thread_id == thread.id,
-                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+                ThreadMessage.content.contains(RECENT_COMMIS_CONTEXT_MARKER),
             )
             .all()
         )
@@ -490,12 +490,12 @@ class TestRecentWorkerHistoryInjection:
         """Cleanup should only delete messages with the marker."""
         from zerg.crud import crud
         from zerg.models.models import ThreadMessage
-        from zerg.services.supervisor_service import RECENT_WORKER_CONTEXT_MARKER
+        from zerg.services.oikos_service import RECENT_COMMIS_CONTEXT_MARKER
 
-        # Create supervisor agent and thread
-        service = SupervisorService(db_session)
-        agent = service.get_or_create_supervisor_agent(test_user.id)
-        thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+        # Create oikos fiche and thread
+        service = OikosService(db_session)
+        fiche = service.get_or_create_oikos_fiche(test_user.id)
+        thread = service.get_or_create_oikos_thread(test_user.id, fiche)
 
         # Count existing messages (thread may have a system prompt)
         initial_count = (
@@ -519,7 +519,7 @@ class TestRecentWorkerHistoryInjection:
             db=db_session,
             thread_id=thread.id,
             role="system",
-            content=f"{RECENT_WORKER_CONTEXT_MARKER}\n## Stale context",
+            content=f"{RECENT_COMMIS_CONTEXT_MARKER}\n## Stale context",
             processed=True,
         )
         db_session.commit()
@@ -529,14 +529,14 @@ class TestRecentWorkerHistoryInjection:
             db_session.query(ThreadMessage)
             .filter(
                 ThreadMessage.thread_id == thread.id,
-                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+                ThreadMessage.content.contains(RECENT_COMMIS_CONTEXT_MARKER),
             )
             .all()
         )
         assert len(marker_messages) == 1
 
         # Cleanup with min_age_seconds=0 to delete immediately (for testing)
-        deleted_count = service._cleanup_stale_worker_context(thread.id, min_age_seconds=0)
+        deleted_count = service._cleanup_stale_commis_context(thread.id, min_age_seconds=0)
         db_session.commit()
 
         assert deleted_count == 1
@@ -546,7 +546,7 @@ class TestRecentWorkerHistoryInjection:
             db_session.query(ThreadMessage)
             .filter(
                 ThreadMessage.thread_id == thread.id,
-                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+                ThreadMessage.content.contains(RECENT_COMMIS_CONTEXT_MARKER),
             )
             .all()
         )
@@ -571,26 +571,26 @@ class TestRecentWorkerHistoryInjection:
         """
         from zerg.crud import crud
         from zerg.models.models import ThreadMessage
-        from zerg.services.supervisor_service import RECENT_WORKER_CONTEXT_MARKER
+        from zerg.services.oikos_service import RECENT_COMMIS_CONTEXT_MARKER
 
-        # Create supervisor agent and thread
-        service = SupervisorService(db_session)
-        agent = service.get_or_create_supervisor_agent(test_user.id)
-        thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+        # Create oikos fiche and thread
+        service = OikosService(db_session)
+        fiche = service.get_or_create_oikos_fiche(test_user.id)
+        thread = service.get_or_create_oikos_thread(test_user.id, fiche)
 
         # Add a context message (just created, so fresh)
         crud.create_thread_message(
             db=db_session,
             thread_id=thread.id,
             role="system",
-            content=f"{RECENT_WORKER_CONTEXT_MARKER}\n## Fresh context",
+            content=f"{RECENT_COMMIS_CONTEXT_MARKER}\n## Fresh context",
             processed=True,
         )
         db_session.commit()
 
         # Cleanup with default min_age_seconds=5.0
         # Message was just created, so it should NOT be deleted
-        deleted_count = service._cleanup_stale_worker_context(thread.id)
+        deleted_count = service._cleanup_stale_commis_context(thread.id)
         db_session.commit()
 
         # Should not delete fresh messages (race condition protection)
@@ -601,7 +601,7 @@ class TestRecentWorkerHistoryInjection:
             db_session.query(ThreadMessage)
             .filter(
                 ThreadMessage.thread_id == thread.id,
-                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+                ThreadMessage.content.contains(RECENT_COMMIS_CONTEXT_MARKER),
             )
             .all()
         )
@@ -615,12 +615,12 @@ class TestRecentWorkerHistoryInjection:
         """
         from zerg.crud import crud
         from zerg.models.models import ThreadMessage
-        from zerg.services.supervisor_service import RECENT_WORKER_CONTEXT_MARKER
+        from zerg.services.oikos_service import RECENT_COMMIS_CONTEXT_MARKER
 
-        # Create supervisor agent and thread
-        service = SupervisorService(db_session)
-        agent = service.get_or_create_supervisor_agent(test_user.id)
-        thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+        # Create oikos fiche and thread
+        service = OikosService(db_session)
+        fiche = service.get_or_create_oikos_fiche(test_user.id)
+        thread = service.get_or_create_oikos_thread(test_user.id, fiche)
 
         # Simulate back-to-back requests by adding multiple context messages
         # First message (older)
@@ -628,7 +628,7 @@ class TestRecentWorkerHistoryInjection:
             db=db_session,
             thread_id=thread.id,
             role="system",
-            content=f"{RECENT_WORKER_CONTEXT_MARKER}\n## Old context 1",
+            content=f"{RECENT_COMMIS_CONTEXT_MARKER}\n## Old context 1",
             processed=True,
         )
         # Second message (newer, fresh - should be kept)
@@ -636,7 +636,7 @@ class TestRecentWorkerHistoryInjection:
             db=db_session,
             thread_id=thread.id,
             role="system",
-            content=f"{RECENT_WORKER_CONTEXT_MARKER}\n## Fresh context 2",
+            content=f"{RECENT_COMMIS_CONTEXT_MARKER}\n## Fresh context 2",
             processed=True,
         )
         db_session.commit()
@@ -646,14 +646,14 @@ class TestRecentWorkerHistoryInjection:
             db_session.query(ThreadMessage)
             .filter(
                 ThreadMessage.thread_id == thread.id,
-                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+                ThreadMessage.content.contains(RECENT_COMMIS_CONTEXT_MARKER),
             )
             .all()
         )
         assert len(before) == 2
 
         # Cleanup with default min_age - newest is fresh so kept, older deleted
-        deleted_count = service._cleanup_stale_worker_context(thread.id)
+        deleted_count = service._cleanup_stale_commis_context(thread.id)
         db_session.commit()
 
         # Should have deleted the older one
@@ -664,7 +664,7 @@ class TestRecentWorkerHistoryInjection:
             db_session.query(ThreadMessage)
             .filter(
                 ThreadMessage.thread_id == thread.id,
-                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+                ThreadMessage.content.contains(RECENT_COMMIS_CONTEXT_MARKER),
             )
             .all()
         )

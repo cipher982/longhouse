@@ -17,5 +17,5 @@ This file originally tracked cleanup work around legacy Bun workspace Docker hac
 
 ## Still Worth Double-Checking
 
-- `.gitignore` does not exclude source under `apps/zerg/frontend-web/src/jarvis/` (avoid broad patterns like `data/`; use `/data/` for repo-root-only).
+- `.gitignore` does not exclude source under `apps/zerg/frontend-web/src/oikos/` (avoid broad patterns like `data/`; use `/data/` for repo-root-only).
 - Coolify env vars: `VITE_*` are **build-time**; changing them requires a rebuild/deploy (not just a restart).

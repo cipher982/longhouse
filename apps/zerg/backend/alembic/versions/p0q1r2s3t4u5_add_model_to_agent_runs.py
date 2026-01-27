@@ -1,4 +1,4 @@
-"""add model to agent_runs
+"""add model to runs
 
 Revision ID: p0q1r2s3t4u5
 Revises: o9p0q1r2s3t4
@@ -18,7 +18,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Add model column to agent_runs for continuation model inheritance
+    # Add model column to runs for continuation model inheritance
     # When a continuation run is created, it inherits the model from the original run
     # This is critical for gpt-scripted tests and consistent model usage
     conn = op.get_bind()
@@ -27,15 +27,15 @@ def upgrade() -> None:
     result = conn.execute(
         sa.text(
             "SELECT column_name FROM information_schema.columns "
-            "WHERE table_name = 'agent_runs' AND column_name = 'model'"
+            "WHERE table_name = 'runs' AND column_name = 'model'"
         )
     )
     if result.fetchone() is None:
         op.add_column(
-            "agent_runs",
+            "runs",
             sa.Column("model", sa.String(100), nullable=True),
         )
 
 
 def downgrade() -> None:
-    op.drop_column("agent_runs", "model")
+    op.drop_column("runs", "model")

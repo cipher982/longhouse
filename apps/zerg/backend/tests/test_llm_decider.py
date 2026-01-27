@@ -143,7 +143,7 @@ class TestBuildDecisionPayload:
         """Helper to create a DecisionContext with defaults."""
         defaults = {
             "job_id": 1,
-            "worker_id": "test-worker-123",
+            "commis_id": "test-commis-123",
             "task": "Test task",
             "status": "running",
             "elapsed_seconds": 10.0,
@@ -445,7 +445,7 @@ class TestDecideRoundaboutAction:
         """Helper to create a DecisionContext with defaults."""
         defaults = {
             "job_id": 1,
-            "worker_id": "test-worker-123",
+            "commis_id": "test-commis-123",
             "task": "Test task",
             "status": "running",
             "elapsed_seconds": 10.0,

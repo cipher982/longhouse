@@ -5,7 +5,7 @@ individual **assistant tokens** over the existing topic-based WebSocket layer.
 
 The handler is *stateless* apart from a reference to the global
 ``topic_manager`` instance.  The thread context is passed via a
-``contextvars.ContextVar`` so callers (namely ``AgentRunner``) can set/reset
+``contextvars.ContextVar`` so callers (namely ``FicheRunner``) can set/reset
 the value immediately before invoking the LLM without having to
 re-instantiate the LLM for each thread.
 """
@@ -67,7 +67,7 @@ class WsTokenCallback(AsyncCallbackHandler):
     # ------------------------------------------------------------------
 
     # We *only* care about individual LLM tokens.  All other event categories
-    # (chains, agents, chat-model lifecycle, etc.) can be safely ignored to
+    # (chains, fiches, chat-model lifecycle, etc.) can be safely ignored to
     # avoid unnecessary method dispatch and the corresponding "method not
     # implemented" errors that were cluttering the logs.  The
     # ``BaseCallbackHandler`` contract allows us to opt-out on a per-category
@@ -108,24 +108,24 @@ class WsTokenCallback(AsyncCallbackHandler):
 
         if thread_id is None or user_id is None:
             # If no context is set we skip – this can happen if the LLM is
-            # called outside an ``AgentRunner`` (unit-tests, workers, etc.).
+            # called outside an ``FicheRunner`` (unit-tests, commis, etc.).
             # Only warn once per callback instance to prevent log spam.
             if not self._warned_no_context:
                 logger.debug("WsTokenCallback: thread_id or user_id context not set – skipping token dispatch")
                 self._warned_no_context = True
             return
 
-        # Get supervisor context for SSE correlation (may be None for non-supervisor calls)
-        from zerg.services.supervisor_context import get_supervisor_context
+        # Get oikos context for SSE correlation (may be None for non-oikos calls)
+        from zerg.services.oikos_context import get_oikos_context
 
-        ctx = get_supervisor_context()
+        ctx = get_oikos_context()
         run_id = ctx.run_id if ctx else None
         message_id = ctx.message_id if ctx else None
 
-        # Publish to event bus for SSE consumers (Jarvis chat)
+        # Publish to event bus for SSE consumers (Oikos chat)
         # NOTE: Tokens are NOT persisted to DB - only published to live subscribers.
         # Persisting every token caused 3x slowdown (blocking commit per token).
-        # Lifecycle events (supervisor_started, supervisor_complete) are still persisted
+        # Lifecycle events (oikos_started, oikos_complete) are still persisted
         # for resumability - clients can replay from last lifecycle event.
         if run_id is not None:
             try:
@@ -133,7 +133,7 @@ class WsTokenCallback(AsyncCallbackHandler):
                 from zerg.events import event_bus
 
                 payload = {
-                    "event_type": EventType.SUPERVISOR_TOKEN,
+                    "event_type": EventType.OIKOS_TOKEN,
                     "run_id": run_id,
                     "thread_id": thread_id,
                     "token": token,
@@ -142,15 +142,15 @@ class WsTokenCallback(AsyncCallbackHandler):
                 if message_id:
                     payload["message_id"] = message_id
 
-                await event_bus.publish(EventType.SUPERVISOR_TOKEN, payload)
+                await event_bus.publish(EventType.OIKOS_TOKEN, payload)
             except Exception:  # noqa: BLE001 – token streaming is best-effort
                 logger.exception("Error publishing token to event bus for run %s", run_id)
-            # For supervisor runs, SSE is the primary delivery path - skip WS broadcast
+            # For oikos runs, SSE is the primary delivery path - skip WS broadcast
             # to avoid redundant Pydantic serialization + lock contention overhead.
             return
 
-        # WebSocket broadcast for non-supervisor contexts (dashboard thread view)
-        # Only runs when there's no supervisor run_id - keeps this path for legacy compat.
+        # WebSocket broadcast for non-oikos contexts (dashboard thread view)
+        # Only runs when there's no oikos run_id - keeps this path for legacy compat.
         topic = f"user:{user_id}"
 
         try:
@@ -172,7 +172,7 @@ class WsTokenCallback(AsyncCallbackHandler):
 
 
 # ---------------------------------------------------------------------------
-# Convenience helpers used by AgentRunner
+# Convenience helpers used by FicheRunner
 # ---------------------------------------------------------------------------
 
 

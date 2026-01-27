@@ -12,8 +12,8 @@ from tests.conftest import TEST_MODEL
 from zerg.crud import crud
 from zerg.crud import crud as _crud
 
-# Import the SQLAlchemy Agent model, not the Pydantic schema
-from zerg.models.models import Agent
+# Import the SQLAlchemy Fiche model, not the Pydantic schema
+from zerg.models.models import Fiche
 
 
 @pytest.mark.db_isolation
@@ -26,29 +26,29 @@ def test_api_db_isolation(client: TestClient, db_session: Session):
     If this test fails, it likely means there's an issue with database isolation or
     early binding of SQLAlchemy metadata.
     """
-    # Create an agent directly using the test session and SQLAlchemy model
+    # Create an fiche directly using the test session and SQLAlchemy model
     owner = _crud.get_user_by_email(db_session, "dev@local") or _crud.create_user(
         db_session, email="dev@local", provider=None, role="ADMIN"
     )
 
-    direct_agent = Agent(
+    direct_fiche = Fiche(
         owner_id=owner.id,
-        name="DB Isolation Test Agent",
+        name="DB Isolation Test Fiche",
         system_instructions="System instructions for isolation test",
         task_instructions="Task instructions for isolation test",
         model=TEST_MODEL,
         status="idle",
     )
-    db_session.add(direct_agent)
+    db_session.add(direct_fiche)
     db_session.commit()
-    db_session.refresh(direct_agent)
+    db_session.refresh(direct_fiche)
 
-    # Verify we can get this agent via direct session access
-    agent_db = crud.get_agent(db_session, direct_agent.id)
-    assert agent_db is not None, "Agent should exist in test database session"
+    # Verify we can get this fiche via direct session access
+    fiche_db = crud.get_fiche(db_session, direct_fiche.id)
+    assert fiche_db is not None, "Fiche should exist in test database session"
 
     # Now try to access it via the API
-    response = client.get(f"/api/agents/{direct_agent.id}")
+    response = client.get(f"/api/fiches/{direct_fiche.id}")
 
     # If this fails, it means the API is using a different database than our test
     assert response.status_code == 200, (
@@ -58,24 +58,24 @@ def test_api_db_isolation(client: TestClient, db_session: Session):
     )
 
     # Verify the content matches what we created
-    api_agent = response.json()
-    assert api_agent["id"] == direct_agent.id
-    assert api_agent["name"] == direct_agent.name
+    api_fiche = response.json()
+    assert api_fiche["id"] == direct_fiche.id
+    assert api_fiche["name"] == direct_fiche.name
 
     # Cleanup - although pytest will rollback the transaction anyway
-    db_session.delete(direct_agent)
+    db_session.delete(direct_fiche)
     db_session.commit()
 
 
 @pytest.mark.db_isolation
-def test_non_existent_agent_404(client: TestClient):
+def test_non_existent_fiche_404(client: TestClient):
     """
     Test that non-existent resources return 404, not connection errors.
 
     This ensures that API routes work correctly for negative cases too.
     """
-    # Try to access a non-existent agent ID (using a very high number to avoid conflicts)
-    response = client.get("/api/agents/999999")
+    # Try to access a non-existent fiche ID (using a very high number to avoid conflicts)
+    response = client.get("/api/fiches/999999")
 
     # Should get a 404, not a connection error or 500
     assert response.status_code == 404, (

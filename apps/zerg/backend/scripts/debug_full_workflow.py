@@ -21,14 +21,14 @@ async def debug_full_workflow():
     print("🐛 Debugging Full LangGraph Workflow")
     print("=" * 60)
 
-    # Simulate canvas_data with single agent node
+    # Simulate canvas_data with single fiche node
     canvas_data = {
         "nodes": [
             {
                 "node_id": "node_0",
-                "node_type": "AgentIdentity",
-                "agent_id": 3,
-                "text": "New Agent 81",
+                "node_type": "ficheidentity",
+                "fiche_id": 3,
+                "text": "New Fiche 81",
                 "message": "Hello, please execute this task",
                 "x": 280.0,
                 "y": 178.0,

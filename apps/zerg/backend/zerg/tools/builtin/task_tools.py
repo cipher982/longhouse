@@ -1,7 +1,7 @@
-"""Task management tools for agents.
+"""Task management tools for fiches.
 
-These tools allow agents to create and manage tasks for their users.
-Tasks provide a lightweight way for agents to track to-do items without
+These tools allow fiches to create and manage tasks for their users.
+Tasks provide a lightweight way for fiches to track to-do items without
 requiring external integrations.
 """
 
@@ -16,7 +16,7 @@ from pydantic import Field
 from sqlalchemy import desc
 
 from zerg.connectors.context import get_credential_resolver
-from zerg.context import get_worker_context
+from zerg.context import get_commis_context
 from zerg.database import db_session
 from zerg.models.models import UserTask
 from zerg.tools.error_envelope import ErrorType
@@ -30,16 +30,16 @@ def _get_user_id() -> int | None:
     """Get user_id from context.
 
     Try multiple sources:
-    1. Worker context (for background workers)
-    2. Credential resolver (for agent execution)
+    1. Commis context (for background commis)
+    2. Credential resolver (for fiche execution)
 
     Returns:
         User ID if found, None otherwise
     """
-    # Try worker context first
-    worker_ctx = get_worker_context()
-    if worker_ctx and worker_ctx.owner_id:
-        return worker_ctx.owner_id
+    # Try commis context first
+    commis_ctx = get_commis_context()
+    if commis_ctx and commis_ctx.owner_id:
+        return commis_ctx.owner_id
 
     # Try credential resolver
     resolver = get_credential_resolver()
@@ -113,7 +113,7 @@ def task_create(
         if not user_id:
             return tool_error(
                 error_type=ErrorType.EXECUTION_ERROR,
-                user_message="No user context available. This tool can only be used within an agent execution.",
+                user_message="No user context available. This tool can only be used within an fiche execution.",
             )
 
         # Validate title
@@ -201,7 +201,7 @@ def task_list(
         if not user_id:
             return tool_error(
                 error_type=ErrorType.EXECUTION_ERROR,
-                user_message="No user context available. This tool can only be used within an agent execution.",
+                user_message="No user context available. This tool can only be used within an fiche execution.",
             )
 
         # Validate status
@@ -316,7 +316,7 @@ def task_update(
         if not user_id:
             return tool_error(
                 error_type=ErrorType.EXECUTION_ERROR,
-                user_message="No user context available. This tool can only be used within an agent execution.",
+                user_message="No user context available. This tool can only be used within an fiche execution.",
             )
 
         # Validate at least one field is being updated
@@ -428,7 +428,7 @@ def task_delete(task_id: int) -> Dict[str, Any]:
         if not user_id:
             return tool_error(
                 error_type=ErrorType.EXECUTION_ERROR,
-                user_message="No user context available. This tool can only be used within an agent execution.",
+                user_message="No user context available. This tool can only be used within an fiche execution.",
             )
 
         # Delete task

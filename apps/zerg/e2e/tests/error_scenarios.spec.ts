@@ -1,7 +1,7 @@
 import { test } from './fixtures';
 
 test('Offline mode behavior placeholder', async ({ page }) => {
-  test.skip(true, 'Offline mode requires service worker');
+  test.skip(true, 'Offline mode requires service commis');
 });
 
 test('Network timeout handling placeholder', async () => { test.skip(); });

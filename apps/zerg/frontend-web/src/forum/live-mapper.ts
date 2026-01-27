@@ -1,4 +1,4 @@
-import type { EventMap } from "../jarvis/lib/event-bus";
+import type { EventMap } from "../oikos/lib/event-bus";
 import type { ForumMapState } from "./state";
 import type {
   ForumAlert,
@@ -43,9 +43,9 @@ const ensureTaskEntity = (
   return { entityId, events: [{ t: 0, type: "entity.add", entity }] };
 };
 
-export function mapSupervisorStarted(
+export function mapOikosStarted(
   state: ForumMapState,
-  payload: EventMap["supervisor:started"],
+  payload: EventMap["oikos:started"],
 ): ForumReplayEventInput[] {
   const room = getDefaultRoom(state);
   if (!room) return [];
@@ -72,36 +72,36 @@ export function mapSupervisorStarted(
   return events.map((event) => ({ ...event, t: payload.timestamp }));
 }
 
-export function mapWorkerSpawned(
+export function mapCommisSpawned(
   state: ForumMapState,
-  payload: EventMap["supervisor:worker_spawned"],
+  payload: EventMap["oikos:commis_spawned"],
 ): ForumReplayEventInput[] {
   const room = getDefaultRoom(state);
   if (!room) return [];
 
-  const workerId = `worker-${payload.jobId}`;
-  const entityId = `worker-entity-${payload.jobId}`;
+  const commisId = `commis-${payload.jobId}`;
+  const entityId = `commis-entity-${payload.jobId}`;
   const events: ForumReplayEventInput[] = [];
 
   if (!state.entities.has(entityId)) {
     const entity: ForumEntity = {
       id: entityId,
-      type: "worker",
+      type: "commis",
       roomId: room.id,
       position: positionForId(entityId, room.bounds),
       status: "working",
-      label: `Worker ${payload.jobId}`,
+      label: `Commis ${payload.jobId}`,
     };
     events.push({ t: payload.timestamp, type: "entity.add", entity });
   }
 
-  if (!state.workers.has(workerId)) {
+  if (!state.commiss.has(commisId)) {
     events.push({
       t: payload.timestamp,
-      type: "worker.add",
-      worker: {
-        id: workerId,
-        name: `Worker ${payload.jobId}`,
+      type: "commis.add",
+      commis: {
+        id: commisId,
+        name: `Commis ${payload.jobId}`,
         status: "busy",
         roomId: room.id,
         entityId,
@@ -117,7 +117,7 @@ export function mapWorkerSpawned(
       status: "running",
       roomId: room.id,
       entityId,
-      workerId,
+      commisId,
       progress: 0,
       createdAt: payload.timestamp,
       updatedAt: payload.timestamp,
@@ -128,38 +128,38 @@ export function mapWorkerSpawned(
   return events;
 }
 
-export function mapWorkerComplete(
+export function mapCommisComplete(
   state: ForumMapState,
-  payload: EventMap["supervisor:worker_complete"],
+  payload: EventMap["oikos:commis_complete"],
 ): ForumReplayEventInput[] {
   const room = getDefaultRoom(state);
   if (!room) return [];
 
   const events: ForumReplayEventInput[] = [];
-  const workerId = `worker-${payload.jobId}`;
-  const entityId = `worker-entity-${payload.jobId}`;
+  const commisId = `commis-${payload.jobId}`;
+  const entityId = `commis-entity-${payload.jobId}`;
   const taskId = `job-${payload.jobId}`;
 
-  // Create worker and entity if missing (handles out-of-order or missed spawn events)
+  // Create commis and entity if missing (handles out-of-order or missed spawn events)
   if (!state.entities.has(entityId)) {
     const entity: ForumEntity = {
       id: entityId,
-      type: "worker",
+      type: "commis",
       roomId: room.id,
       position: positionForId(entityId, room.bounds),
       status: payload.status === "success" ? "idle" : "disabled",
-      label: `Worker ${payload.jobId}`,
+      label: `Commis ${payload.jobId}`,
     };
     events.push({ t: payload.timestamp, type: "entity.add", entity });
   }
 
-  if (!state.workers.has(workerId)) {
+  if (!state.commiss.has(commisId)) {
     events.push({
       t: payload.timestamp,
-      type: "worker.add",
-      worker: {
-        id: workerId,
-        name: `Worker ${payload.jobId}`,
+      type: "commis.add",
+      commis: {
+        id: commisId,
+        name: `Commis ${payload.jobId}`,
         status: payload.status === "success" ? "idle" : "offline",
         roomId: room.id,
         entityId,
@@ -168,8 +168,8 @@ export function mapWorkerComplete(
   } else {
     events.push({
       t: payload.timestamp,
-      type: "worker.update",
-      workerId,
+      type: "commis.update",
+      commisId,
       status: payload.status === "success" ? "idle" : "offline",
     });
   }
@@ -178,11 +178,11 @@ export function mapWorkerComplete(
   if (!state.tasks.has(taskId)) {
     const task: ForumTask = {
       id: taskId,
-      title: `Worker Job ${payload.jobId}`,
+      title: `Commis Job ${payload.jobId}`,
       status: payload.status === "success" ? "success" : "failed",
       roomId: room.id,
       entityId,
-      workerId,
+      commisId,
       progress: 1,
       createdAt: payload.timestamp,
       updatedAt: payload.timestamp,
@@ -201,9 +201,9 @@ export function mapWorkerComplete(
 
   if (payload.status !== "success") {
     const alert: ForumAlert = {
-      id: `alert-worker-${payload.jobId}-${payload.timestamp}`,
+      id: `alert-commis-${payload.jobId}-${payload.timestamp}`,
       level: "L2",
-      message: `Worker ${payload.jobId} failed`,
+      message: `Commis ${payload.jobId} failed`,
       roomId: room.id,
       createdAt: payload.timestamp,
     };
@@ -213,9 +213,9 @@ export function mapWorkerComplete(
   return events;
 }
 
-export function mapSupervisorComplete(
+export function mapOikosComplete(
   state: ForumMapState,
-  payload: EventMap["supervisor:complete"],
+  payload: EventMap["oikos:complete"],
 ): ForumReplayEventInput[] {
   const room = getDefaultRoom(state);
   if (!room) return [];
@@ -253,9 +253,9 @@ export function mapSupervisorComplete(
   return events;
 }
 
-export function mapWorkerToolFailed(
+export function mapCommisToolFailed(
   state: ForumMapState,
-  payload: EventMap["worker:tool_failed"],
+  payload: EventMap["commis:tool_failed"],
 ): ForumReplayEventInput[] {
   const room = getDefaultRoom(state);
   if (!room) return [];

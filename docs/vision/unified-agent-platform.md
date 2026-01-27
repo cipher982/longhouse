@@ -151,7 +151,7 @@ Both are threads. Both persist. Both resumable.
 
 > "Single DB is full truth" is useful but dangerous as single failure domain. Make it canonical ledger with local caches and eventual consistency.
 
-> "Jarvis in cloud, laptop is tool" works until offline/latency kills productivity. Want hybrid: local-first execution, cloud-first oversight.
+> "Oikos in cloud, laptop is tool" works until offline/latency kills productivity. Want hybrid: local-first execution, cloud-first oversight.
 
 ---
 
@@ -222,7 +222,7 @@ What's the 80/20 that proves delegation works?
 │                                                         │
 │  ┌─────────────┐    ┌─────────────┐    ┌────────────┐  │
 │  │ Zerg Backend│───▶│ Agent runs  │───▶│ Git repos  │  │
-│  │ (Jarvis)    │    │ HERE        │    │ (cloned)   │  │
+│  │ (Oikos)    │    │ HERE        │    │ (cloned)   │  │
 │  └─────────────┘    └──────┬──────┘    └────────────┘  │
 │                            │                            │
 │                            │ needs local resource?      │
@@ -238,7 +238,7 @@ What's the 80/20 that proves delegation works?
 
 - Supervisor/worker ReAct loop, durable runs
 - Session history + task tracking in Postgres
-- Jarvis UI entrypoint
+- Oikos UI entrypoint
 - Laptop runner + WebSocket (now used as "reach out to laptop" not "dispatch work to laptop")
 
 ### True MVP (3 Things)
@@ -246,7 +246,7 @@ What's the 80/20 that proves delegation works?
 | Change | Purpose |
 |--------|---------|
 | **Local agent execution** | `subprocess.Popen("agent-run ...")` directly on zerg-vps. No WebSocket to self. No 30s timeout. |
-| **Workspace management** | Clone repo, create `jarvis/<run_id>` branch, capture `git diff` on completion. |
+| **Workspace management** | Clone repo, create `oikos/<run_id>` branch, capture `git diff` on completion. |
 | **Notification** | Webhook or email when done. Simple POST with status + link. |
 
 **That's it.** Laptop runner already exists for the "reach out" case. Review UI can use existing run detail page initially.
@@ -257,9 +257,9 @@ What's the 80/20 that proves delegation works?
 
 ```
 1. User: "fix the auth bug in zerg"
-2. Jarvis creates work.task, spawns cloud worker
+2. Oikos creates work.task, spawns cloud worker
 3. Cloud worker (on zerg-vps):
-   - git fetch origin && git checkout -b jarvis/<run_id>
+   - git fetch origin && git checkout -b oikos/<run_id>
    - subprocess: agent-run -m bedrock/claude-sonnet "<instruction>"
    - On completion: git diff > artifact, summarize
    - If needs laptop resource: runner_exec() to laptop (if online)
@@ -283,7 +283,7 @@ These are Phase 2+. MVP proves: **delegate task → close laptop → get notifie
 1. ~~What's the smallest change that enables "delegate and walk away"?~~ → **Answered: 3 things (local exec, workspace mgmt, notification)**
 2. ~~Where does the remote runner live?~~ → **Answered: No remote runner. Direct subprocess on zerg-vps.**
 3. **Git auth on server** - SSH key on zerg-vps that can pull your repos. One-time setup.
-4. **Workspace location** - `/var/jarvis/workspaces/<run_id>/`? Cleanup policy?
+4. **Workspace location** - `/var/oikos/workspaces/<run_id>/`? Cleanup policy?
 5. **Which repos to start?** - MVP: just `zerg` repo. Multi-repo is Phase 2.
 6. **Notification mechanism** - Discord webhook? Email? Both?
 
@@ -341,11 +341,11 @@ if notification_webhook := getattr(run.agent.owner, 'notification_webhook', None
 
 ```bash
 # On zerg-vps
-mkdir -p /var/jarvis/workspaces
-chmod 755 /var/jarvis/workspaces
+mkdir -p /var/oikos/workspaces
+chmod 755 /var/oikos/workspaces
 
 # SSH key for git access (use existing or generate)
-ssh-keygen -t ed25519 -f ~/.ssh/jarvis_deploy -N ""
+ssh-keygen -t ed25519 -f ~/.ssh/oikos_deploy -N ""
 # Add public key to GitHub as deploy key
 
 # Install agent-run

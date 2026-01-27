@@ -6,7 +6,7 @@
 
 ## Overview
 
-This guide covers deploying the Swarm Platform (Jarvis + Zerg) to production environments.
+This guide covers deploying the Swarm Platform (Oikos + Zerg) to production environments.
 V2.2 introduces **Durable Runs**, allowing executions to survive client disconnects and timeouts.
 
 ## Architecture
@@ -92,8 +92,8 @@ GOOGLE_CLIENT_SECRET="<google-secret>"
 # Comma-separated list. Example: "https://swarm.example.com,https://dashboard.swarm.example.com"
 ALLOWED_CORS_ORIGINS="https://your-domain.com"
 
-# Jarvis Integration
-JARVIS_DEVICE_SECRET="<32-char-random-string>"
+# Oikos Integration
+OIKOS_DEVICE_SECRET="<32-char-random-string>"
 
 # Security
 FERNET_SECRET="<32-byte-base64-encoded-key>"
@@ -176,7 +176,7 @@ DATABASE_URL="postgresql://zerg:secure-password@localhost:5432/zerg_prod" \
 
 # 3. Verify
 psql -U zerg -d zerg_prod -c "\dt"
-# Should show: users, agents, agent_runs, agent_threads, etc.
+# Should show: users, fiches, runs, threads, etc.
 ```
 
 ### SQLite (Development/Small Deployments)
@@ -190,7 +190,7 @@ cd apps/zerg/backend
 uv run alembic upgrade head
 
 # 3. Verify
-sqlite3 swarm.db ".schema agent_runs"
+sqlite3 swarm.db ".schema runs"
 ```
 
 ## Systemd Services
@@ -332,9 +332,12 @@ If you want `/metrics` publicly reachable, add an explicit nginx route (and prot
 
 Key metrics:
 
-- `agent_runs_total` - Total agent executions
-- `agent_runs_duration_seconds` - Execution time
-- `agent_runs_cost_usd` - Cost per run
+- `dashboard_snapshot_requests_total` - Dashboard snapshot requests
+- `dashboard_snapshot_latency_seconds` - Snapshot latency
+- `dashboard_snapshot_fiches_returned` - Fiches returned per snapshot
+- `dashboard_snapshot_runs_returned` - Runs returned per snapshot
+- `websocket_run_updates_total` - Run update broadcasts
+- `websocket_run_update_latency_seconds` - Run update latency
 - `websocket_connections` - Active connections
 
 ### Alerts
@@ -394,7 +397,7 @@ Use Let's Encrypt for free SSL certificates:
 
 ```bash
 sudo apt install certbot python3-certbot-nginx
-sudo certbot --nginx -d jarvis.yourdomain.com
+sudo certbot --nginx -d oikos.yourdomain.com
 sudo certbot --nginx -d api.yourdomain.com
 ```
 
@@ -555,7 +558,7 @@ psql -U zerg -d zerg_prod -c "\l+"
 
 # Archive old runs (older than 90 days)
 psql -U zerg -d zerg_prod << EOF
-DELETE FROM agent_runs
+DELETE FROM runs
 WHERE created_at < NOW() - INTERVAL '90 days';
 EOF
 ```
@@ -591,15 +594,15 @@ Before going live:
 ### Testing
 
 - [ ] Run smoke tests: `./scripts/smoke-prod.sh`
-- [ ] Test Jarvis authentication
+- [ ] Test Oikos authentication
 - [ ] Verify SSE streaming works
-- [ ] Test agent dispatch
-- [ ] Confirm scheduled agents run
+- [ ] Test fiche dispatch
+- [ ] Confirm scheduled fiches run
 
 ### Deployment
 
 - [ ] Database migrations applied
-- [ ] Baseline agents seeded
+- [ ] Baseline fiches seeded
 - [ ] Systemd services enabled
 - [ ] Nginx configuration tested
 - [ ] DNS records configured
@@ -609,7 +612,7 @@ Before going live:
 For issues or questions:
 
 - Check logs: `sudo journalctl -u zerg-backend -f`
-- Review documentation: `docs/completed/jarvis_integration.md`
+- Review documentation: `docs/completed/oikos_integration.md`
 - Run smoke tests: `./scripts/smoke-prod.sh`
 
 ## Rollback Procedure
@@ -641,9 +644,9 @@ Ensure critical queries are fast:
 
 ```sql
 -- Already created by migrations, verify:
-CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id ON agent_runs(agent_id);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_created_at ON agent_runs(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
+CREATE INDEX IF NOT EXISTS idx_runs_fiche_id ON runs(fiche_id);
+CREATE INDEX IF NOT EXISTS idx_runs_created_at ON runs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
 ```
 
 ### Connection Pooling
@@ -667,12 +670,12 @@ Avoid adding Redis by default. Add caching only after measuring real hotspots.
 After deployment:
 
 1. Validate endpoints with `./scripts/smoke-prod.sh`
-2. Seed agents with `make seed-agents` (idempotent)
+2. Seed fiches with `make seed-fiches` (idempotent)
 3. Review logs and error rates
 4. Ensure backups are configured
 5. Document any custom configuration
 
 For ongoing development:
 
-- See `docs/completed/jarvis_integration.md` for Jarvis API details
-- Tools are defined in backend code (built-ins + allowlists); Jarvis uses `/api/jarvis/bootstrap` as the authoritative tool list
+- See `docs/completed/oikos_integration.md` for Oikos API details
+- Tools are defined in backend code (built-ins + allowlists); Oikos uses `/api/oikos/bootstrap` as the authoritative tool list

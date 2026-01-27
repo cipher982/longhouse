@@ -22,8 +22,8 @@ test.describe('Data Persistence and Recovery', () => {
   test('Data persistence across sessions', async ({ page, context, request }) => {
     console.log('🚀 Starting data persistence test...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
-    console.log('📊 Worker ID:', workerId);
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
+    console.log('📊 Commis ID:', commisId);
 
     // Reset database to ensure clean state
     console.log('📊 Step 0: Resetting database...');
@@ -36,34 +36,34 @@ test.describe('Data Persistence and Recovery', () => {
 
     // Test 1: Create data and verify persistence
     console.log('📊 Test 1: Creating persistent data...');
-    const testAgentName = `Persistence Test Agent ${Date.now()}`;
+    const testFicheName = `Persistence Test Fiche ${Date.now()}`;
 
-    // Create an agent
-    const agentResponse = await request.post('/api/agents', {
+    // Create an fiche
+    const ficheResponse = await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {
-        name: testAgentName,
-        system_instructions: 'This agent tests data persistence',
+        name: testFicheName,
+        system_instructions: 'This fiche tests data persistence',
         task_instructions: 'Persist across sessions',
         model: 'gpt-mock',
       }
     });
 
-    expect(agentResponse.status()).toBe(201);
-    const createdAgent = await agentResponse.json();
-    console.log('📊 Created agent ID:', createdAgent.id);
+    expect(ficheResponse.status()).toBe(201);
+    const createdFiche = await ficheResponse.json();
+    console.log('📊 Created fiche ID:', createdFiche.id);
 
-    // Navigate to UI and verify agent appears
+    // Navigate to UI and verify fiche appears
     await page.goto('/');
     await page.waitForTimeout(1000);
     await page.locator('.header-nav').click();
     await page.waitForTimeout(1000);
 
     // Wait for dashboard to load and force a refresh of data
-    await page.waitForSelector('#agents-table-body');
+    await page.waitForSelector('#fiches-table-body');
 
     // Refresh the page to ensure UI fetches latest data
     await page.reload();
@@ -73,26 +73,26 @@ test.describe('Data Persistence and Recovery', () => {
     await page.locator('.header-nav').click();
     await page.waitForTimeout(2000);
 
-    // Wait for the agents table to load
-    await page.waitForSelector('#agents-table-body', { timeout: 10000 });
+    // Wait for the fiches table to load
+    await page.waitForSelector('#fiches-table-body', { timeout: 10000 });
 
-    // Look for agent in the table using multiple selectors for better reliability
-    const agentRowVisible = await page.locator(`tr[data-agent-id="${createdAgent.id}"]`).isVisible();
-    console.log('📊 Agent row visible in UI:', agentRowVisible);
+    // Look for fiche in the table using multiple selectors for better reliability
+    const ficheRowVisible = await page.locator(`tr[data-fiche-id="${createdFiche.id}"]`).isVisible();
+    console.log('📊 Fiche row visible in UI:', ficheRowVisible);
 
-    // Also check if agent name is visible anywhere in the table
-    const agentNameVisible = await page.locator(`text="${testAgentName}"`).isVisible();
-    console.log('📊 Agent name visible in UI:', agentNameVisible);
+    // Also check if fiche name is visible anywhere in the table
+    const ficheNameVisible = await page.locator(`text="${testFicheName}"`).isVisible();
+    console.log('📊 Fiche name visible in UI:', ficheNameVisible);
 
-    // Alternative: Check if any agent with the created ID appears in table
-    const agentInTable = await page.locator('tbody tr').filter({ hasText: testAgentName }).isVisible();
-    console.log('📊 Agent in table by name:', agentInTable);
+    // Alternative: Check if any fiche with the created ID appears in table
+    const ficheInTable = await page.locator('tbody tr').filter({ hasText: testFicheName }).isVisible();
+    console.log('📊 Fiche in table by name:', ficheInTable);
 
-    // Final fallback: Check if ANY agents are visible (proves UI is working)
-    const anyAgentsVisible = await page.locator('tbody tr').count() > 0;
-    console.log('📊 Any agents visible in table:', anyAgentsVisible);
+    // Final fallback: Check if ANY fiches are visible (proves UI is working)
+    const anyFichesVisible = await page.locator('tbody tr').count() > 0;
+    console.log('📊 Any fiches visible in table:', anyFichesVisible);
 
-    expect(agentRowVisible || agentNameVisible || agentInTable || anyAgentsVisible).toBe(true);
+    expect(ficheRowVisible || ficheNameVisible || ficheInTable || anyFichesVisible).toBe(true);
 
     // Test 2: Simulate session termination and restart
     console.log('📊 Test 2: Simulating session restart...');
@@ -111,36 +111,36 @@ test.describe('Data Persistence and Recovery', () => {
     // Wait a bit for the page to load completely
     await newPage.waitForTimeout(3000);
 
-    // First check via API to ensure agent exists in database
-    const persistedResponse = await request.get('/api/agents', {
-      headers: { 'X-Test-Worker': workerId }
+    // First check via API to ensure fiche exists in database
+    const persistedResponse = await request.get('/api/fiches', {
+      headers: { 'X-Test-Commis': commisId }
     });
 
-    let agentExistsInDb = false;
+    let ficheExistsInDb = false;
     if (persistedResponse.ok()) {
-      const agents = await persistedResponse.json();
-      const persistedAgent = agents.find(a => a.name === testAgentName);
-      agentExistsInDb = !!persistedAgent;
-      console.log('📊 Agent persisted in database:', agentExistsInDb);
-      console.log('📊 Total agents in database:', agents.length);
+      const fiches = await persistedResponse.json();
+      const persistedFiche = fiches.find(a => a.name === testFicheName);
+      ficheExistsInDb = !!persistedFiche;
+      console.log('📊 Fiche persisted in database:', ficheExistsInDb);
+      console.log('📊 Total fiches in database:', fiches.length);
     }
 
-    // Only check UI visibility if agent exists in database
-    if (agentExistsInDb) {
-      const agentStillVisible = await newPage.locator(`text=${testAgentName}`).isVisible();
-      console.log('📊 Agent visible after restart:', agentStillVisible);
+    // Only check UI visibility if fiche exists in database
+    if (ficheExistsInDb) {
+      const ficheStillVisible = await newPage.locator(`text=${testFicheName}`).isVisible();
+      console.log('📊 Fiche visible after restart:', ficheStillVisible);
       // UI visibility test is more lenient - if data is in DB, that's the main success
-      if (!agentStillVisible) {
-        console.log('⚠️  Agent exists in DB but not visible in UI - checking table rows...');
+      if (!ficheStillVisible) {
+        console.log('⚠️  Fiche exists in DB but not visible in UI - checking table rows...');
         const tableRows = await newPage.locator('tbody tr').count();
         console.log('📊 Table rows count:', tableRows);
       }
     } else {
-      console.log('❌ Agent not found in database - data was not persisted');
+      console.log('❌ Fiche not found in database - data was not persisted');
     }
 
     // The main test is whether data persisted in the database
-    expect(agentExistsInDb).toBe(true);
+    expect(ficheExistsInDb).toBe(true);
 
     console.log('✅ Data persistence test completed');
   });
@@ -148,7 +148,7 @@ test.describe('Data Persistence and Recovery', () => {
   test('Auto-save and draft recovery', async ({ page, request }) => {
     console.log('🚀 Starting auto-save test...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
     try {
       // Navigate to application with shorter timeout
@@ -221,34 +221,34 @@ test.describe('Data Persistence and Recovery', () => {
   test('Data consistency and integrity', async ({ page, request }) => {
     console.log('🚀 Starting data consistency test...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Test 1: Create multiple related entities and verify relationships
     console.log('📊 Test 1: Testing data relationships...');
 
-    // Create an agent first
-    const agentResponse = await request.post('/api/agents', {
+    // Create an fiche first
+    const ficheResponse = await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {
-        name: `Consistency Test Agent ${Date.now()}`,
-        system_instructions: 'Agent for consistency testing',
+        name: `Consistency Test Fiche ${Date.now()}`,
+        system_instructions: 'Fiche for consistency testing',
         task_instructions: 'Test data relationships',
         model: 'gpt-mock',
       }
     });
 
-    expect(agentResponse.status()).toBe(201);
-    const agent = await agentResponse.json();
-    console.log('📊 Created agent for consistency test:', agent.id);
+    expect(ficheResponse.status()).toBe(201);
+    const fiche = await ficheResponse.json();
+    console.log('📊 Created fiche for consistency test:', fiche.id);
 
-    // Try to create a workflow that references this agent
+    // Try to create a workflow that references this fiche
     try {
       const workflowResponse = await request.post('/api/workflows', {
         headers: {
-          'X-Test-Worker': workerId,
+          'X-Test-Commis': commisId,
           'Content-Type': 'application/json',
         },
         data: {
@@ -256,9 +256,9 @@ test.describe('Data Persistence and Recovery', () => {
           description: 'Workflow for testing data consistency',
           canvas_data: {
             nodes: [{
-              id: 'agent-node',
-              type: 'agent',
-              agent_id: agent.id,
+              id: 'fiche-node',
+              type: 'fiche',
+              fiche_id: fiche.id,
               position: { x: 100, y: 100 }
             }],
             edges: []
@@ -268,19 +268,19 @@ test.describe('Data Persistence and Recovery', () => {
 
       if (workflowResponse.ok()) {
         const workflow = await workflowResponse.json();
-        console.log('📊 Created workflow with agent reference:', workflow.id);
+        console.log('📊 Created workflow with fiche reference:', workflow.id);
 
         // Verify the relationship is maintained
         const workflowCheck = await request.get(`/api/workflows/${workflow.id}`, {
-          headers: { 'X-Test-Worker': workerId }
+          headers: { 'X-Test-Commis': commisId }
         });
 
         if (workflowCheck.ok()) {
           const workflowData = await workflowCheck.json();
-          const hasAgentReference = JSON.stringify(workflowData.canvas_data).includes(agent.id.toString());
-          console.log('📊 Agent reference maintained in workflow:', hasAgentReference);
+          const hasFicheReference = JSON.stringify(workflowData.canvas_data).includes(fiche.id.toString());
+          console.log('📊 Fiche reference maintained in workflow:', hasFicheReference);
 
-          if (hasAgentReference) {
+          if (hasFicheReference) {
             console.log('✅ Data relationships maintained');
           }
         }
@@ -292,40 +292,40 @@ test.describe('Data Persistence and Recovery', () => {
     // Test 2: Verify data integrity after operations
     console.log('📊 Test 2: Testing data integrity...');
 
-    // Get initial agent count
-    const initialResponse = await request.get('/api/agents', {
-      headers: { 'X-Test-Worker': workerId }
+    // Get initial fiche count
+    const initialResponse = await request.get('/api/fiches', {
+      headers: { 'X-Test-Commis': commisId }
     });
 
     if (initialResponse.ok()) {
-      const initialAgents = await initialResponse.json();
-      const initialCount = initialAgents.length;
-      console.log('📊 Initial agent count:', initialCount);
+      const initialFiches = await initialResponse.json();
+      const initialCount = initialFiches.length;
+      console.log('📊 Initial fiche count:', initialCount);
 
-      // Create another agent
-      const newAgentResponse = await request.post('/api/agents', {
+      // Create another fiche
+      const newFicheResponse = await request.post('/api/fiches', {
         headers: {
-          'X-Test-Worker': workerId,
+          'X-Test-Commis': commisId,
           'Content-Type': 'application/json',
         },
         data: {
-          name: `Integrity Test Agent ${Date.now()}`,
-          system_instructions: 'Agent for integrity testing',
+          name: `Integrity Test Fiche ${Date.now()}`,
+          system_instructions: 'Fiche for integrity testing',
           task_instructions: 'Test data integrity',
           model: 'gpt-mock',
         }
       });
 
-      if (newAgentResponse.ok()) {
+      if (newFicheResponse.ok()) {
         // Verify count increased
-        const afterResponse = await request.get('/api/agents', {
-          headers: { 'X-Test-Worker': workerId }
+        const afterResponse = await request.get('/api/fiches', {
+          headers: { 'X-Test-Commis': commisId }
         });
 
         if (afterResponse.ok()) {
-          const afterAgents = await afterResponse.json();
-          const afterCount = afterAgents.length;
-          console.log('📊 After creation agent count:', afterCount);
+          const afterFiches = await afterResponse.json();
+          const afterCount = afterFiches.length;
+          console.log('📊 After creation fiche count:', afterCount);
 
           if (afterCount === initialCount + 1) {
             console.log('✅ Data integrity maintained during operations');
@@ -342,7 +342,7 @@ test.describe('Data Persistence and Recovery', () => {
   test('Data export and import integrity', async ({ page, request }) => {
     console.log('🚀 Starting export/import test...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Test 1: Check for export functionality
     console.log('📊 Test 1: Looking for export functionality...');
@@ -386,37 +386,37 @@ test.describe('Data Persistence and Recovery', () => {
     console.log('📊 Test 3: API data integrity verification...');
 
     // Create test data
-    const testAgentResponse = await request.post('/api/agents', {
+    const testFicheResponse = await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {
-        name: `Export Test Agent ${Date.now()}`,
-        system_instructions: 'Agent for export testing',
+        name: `Export Test Fiche ${Date.now()}`,
+        system_instructions: 'Fiche for export testing',
         task_instructions: 'Test data export integrity',
         model: 'gpt-mock',
       }
     });
 
-    if (testAgentResponse.ok()) {
-      const testAgent = await testAgentResponse.json();
-      console.log('📊 Created test agent for export:', testAgent.id);
+    if (testFicheResponse.ok()) {
+      const testFiche = await testFicheResponse.json();
+      console.log('📊 Created test fiche for export:', testFiche.id);
 
-      // Retrieve the same agent to verify data integrity
-      const retrieveResponse = await request.get(`/api/agents/${testAgent.id}`, {
-        headers: { 'X-Test-Worker': workerId }
+      // Retrieve the same fiche to verify data integrity
+      const retrieveResponse = await request.get(`/api/fiches/${testFiche.id}`, {
+        headers: { 'X-Test-Commis': commisId }
       });
 
       if (retrieveResponse.ok()) {
-        const retrievedAgent = await retrieveResponse.json();
+        const retrievedFiche = await retrieveResponse.json();
 
         // Verify all fields match
         const fieldsMatch = (
-          retrievedAgent.name === testAgent.name &&
-          retrievedAgent.system_instructions === testAgent.system_instructions &&
-          retrievedAgent.task_instructions === testAgent.task_instructions &&
-          retrievedAgent.model === testAgent.model
+          retrievedFiche.name === testFiche.name &&
+          retrievedFiche.system_instructions === testFiche.system_instructions &&
+          retrievedFiche.task_instructions === testFiche.task_instructions &&
+          retrievedFiche.model === testFiche.model
         );
 
         console.log('📊 Data integrity on retrieval:', fieldsMatch);
@@ -432,16 +432,16 @@ test.describe('Data Persistence and Recovery', () => {
   test('Recovery from data corruption scenarios', async ({ page, request }) => {
     console.log('🚀 Starting data corruption recovery test...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Test 1: Invalid data format handling
     console.log('📊 Test 1: Invalid data format recovery...');
 
     try {
-      // Try to create agent with invalid/corrupted data
-      const corruptResponse = await request.post('/api/agents', {
+      // Try to create fiche with invalid/corrupted data
+      const corruptResponse = await request.post('/api/fiches', {
         headers: {
-          'X-Test-Worker': workerId,
+          'X-Test-Commis': commisId,
           'Content-Type': 'application/json',
         },
         data: {
@@ -468,14 +468,14 @@ test.describe('Data Persistence and Recovery', () => {
     // Test 2: System state recovery after errors
     console.log('📊 Test 2: System state recovery...');
 
-    // Create valid agent after corruption attempt
-    const recoveryResponse = await request.post('/api/agents', {
+    // Create valid fiche after corruption attempt
+    const recoveryResponse = await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {
-        name: `Recovery Test Agent ${Date.now()}`,
+        name: `Recovery Test Fiche ${Date.now()}`,
         system_instructions: 'Valid recovery data',
         task_instructions: 'Test system recovery',
         model: 'gpt-mock',

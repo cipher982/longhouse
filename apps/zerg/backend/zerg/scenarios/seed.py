@@ -15,15 +15,15 @@ from typing import Optional
 import yaml
 from sqlalchemy.orm import Session
 
-from zerg.models.agent_run_event import AgentRunEvent
 from zerg.models.enums import RunStatus
 from zerg.models.enums import RunTrigger
 from zerg.models.enums import ThreadType
-from zerg.models.models import AgentRun
+from zerg.models.models import CommisJob
+from zerg.models.models import Run
 from zerg.models.models import Thread
 from zerg.models.models import ThreadMessage
-from zerg.models.models import WorkerJob
-from zerg.services.supervisor_service import SupervisorService
+from zerg.models.run_event import RunEvent
+from zerg.services.oikos_service import OikosService
 from zerg.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -71,7 +71,7 @@ def seed_scenario(
     if clean:
         cleanup_scenario(db, scenario_name)
 
-    supervisor_agent = SupervisorService(db).get_or_create_supervisor_agent(owner_id)
+    oikos_fiche = OikosService(db).get_or_create_oikos_fiche(owner_id)
 
     base_time = utc_now()
     timebase_value = scenario.get("timebase")
@@ -80,7 +80,7 @@ def seed_scenario(
         if parsed_base is not None:
             base_time = parsed_base
 
-    counts = {"runs": 0, "messages": 0, "events": 0, "worker_jobs": 0}
+    counts = {"runs": 0, "messages": 0, "events": 0, "commis_jobs": 0}
 
     for index, run_data in enumerate(runs, start=1):
         if not isinstance(run_data, dict):
@@ -90,11 +90,11 @@ def seed_scenario(
         title = run_data.get("title") or run_data.get("thread_title") or run_ref
         thread_type = _coerce_enum(ThreadType, run_data.get("thread_type", ThreadType.CHAT.value)).value
         thread = Thread(
-            agent_id=supervisor_agent.id,
+            fiche_id=oikos_fiche.id,
             title=_scenario_title(scenario_name, title),
             active=False,
             thread_type=thread_type,
-            agent_state={"scenario": scenario_name, "scenario_run": run_ref},
+            fiche_state={"scenario": scenario_name, "scenario_run": run_ref},
         )
         db.add(thread)
         db.flush()
@@ -107,8 +107,8 @@ def seed_scenario(
         status = _coerce_enum(RunStatus, run_data.get("status", RunStatus.RUNNING.value))
         trigger = _coerce_enum(RunTrigger, run_data.get("trigger", RunTrigger.MANUAL.value))
 
-        run = AgentRun(
-            agent_id=supervisor_agent.id,
+        run = Run(
+            fiche_id=oikos_fiche.id,
             thread_id=thread.id,
             status=status,
             trigger=trigger,
@@ -137,7 +137,7 @@ def seed_scenario(
             if message:
                 payload.setdefault("message", message)
             db.add(
-                AgentRunEvent(
+                RunEvent(
                     run_id=run.id,
                     event_type=str(event_type),
                     payload=payload,
@@ -166,27 +166,27 @@ def seed_scenario(
             )
             counts["messages"] += 1
 
-        for job_data in _as_list(run_data.get("worker_jobs")):
+        for job_data in _as_list(run_data.get("commis_jobs")):
             if not isinstance(job_data, dict):
-                raise ScenarioError("Worker job must be a mapping")
+                raise ScenarioError("Commis job must be a mapping")
             task = job_data.get("task")
             if not task:
-                raise ScenarioError("Worker job requires 'task'")
+                raise ScenarioError("Commis job requires 'task'")
             job_status = job_data.get("status", "queued")
             job_started_at = _parse_time(job_data.get("started_at"), base_time)
             job_finished_at = _parse_time(job_data.get("finished_at"), base_time)
             job_created_at = _parse_time(job_data.get("created_at"), base_time) or job_started_at or base_time
             job_updated_at = _parse_time(job_data.get("updated_at"), base_time) or job_finished_at or job_created_at
             db.add(
-                WorkerJob(
+                CommisJob(
                     owner_id=owner_id,
-                    supervisor_run_id=run.id,
+                    oikos_run_id=run.id,
                     task=str(task),
                     status=str(job_status),
                     model=str(job_data.get("model") or "gpt-5-mini"),
                     reasoning_effort=job_data.get("reasoning_effort"),
                     config=dict(job_data.get("config") or {}),
-                    worker_id=job_data.get("worker_id"),
+                    commis_id=job_data.get("commis_id"),
                     error=job_data.get("error"),
                     acknowledged=bool(job_data.get("acknowledged", False)),
                     created_at=_to_naive(job_created_at),
@@ -195,7 +195,7 @@ def seed_scenario(
                     finished_at=_to_naive(job_finished_at),
                 )
             )
-            counts["worker_jobs"] += 1
+            counts["commis_jobs"] += 1
 
         counts["runs"] += 1
 
@@ -210,32 +210,32 @@ def cleanup_scenario(db: Session, scenario_name: Optional[str]) -> dict[str, int
     thread_ids = [row[0] for row in thread_rows]
 
     if not thread_ids:
-        return {"runs": 0, "threads": 0, "messages": 0, "worker_jobs": 0}
+        return {"runs": 0, "threads": 0, "messages": 0, "commis_jobs": 0}
 
-    run_ids = [row[0] for row in db.query(AgentRun.id).filter(AgentRun.thread_id.in_(thread_ids)).all()]
+    run_ids = [row[0] for row in db.query(Run.id).filter(Run.thread_id.in_(thread_ids)).all()]
 
-    worker_jobs_deleted = 0
+    commis_jobs_deleted = 0
     if run_ids:
-        worker_jobs_deleted = db.query(WorkerJob).filter(WorkerJob.supervisor_run_id.in_(run_ids)).delete(synchronize_session=False)
+        commis_jobs_deleted = db.query(CommisJob).filter(CommisJob.oikos_run_id.in_(run_ids)).delete(synchronize_session=False)
 
-    runs_deleted = db.query(AgentRun).filter(AgentRun.thread_id.in_(thread_ids)).delete(synchronize_session=False)
+    runs_deleted = db.query(Run).filter(Run.thread_id.in_(thread_ids)).delete(synchronize_session=False)
     messages_deleted = db.query(ThreadMessage).filter(ThreadMessage.thread_id.in_(thread_ids)).delete(synchronize_session=False)
     threads_deleted = db.query(Thread).filter(Thread.id.in_(thread_ids)).delete(synchronize_session=False)
 
     logger.info(
-        "Scenario cleanup %s: %s runs, %s messages, %s threads, %s worker jobs",
+        "Scenario cleanup %s: %s runs, %s messages, %s threads, %s commis jobs",
         prefix,
         runs_deleted,
         messages_deleted,
         threads_deleted,
-        worker_jobs_deleted,
+        commis_jobs_deleted,
     )
 
     return {
         "runs": runs_deleted,
         "threads": threads_deleted,
         "messages": messages_deleted,
-        "worker_jobs": worker_jobs_deleted,
+        "commis_jobs": commis_jobs_deleted,
     }
 
 

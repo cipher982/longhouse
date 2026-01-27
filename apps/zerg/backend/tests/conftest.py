@@ -61,8 +61,8 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.events import EventType
 from zerg.events import event_bus
-from zerg.models.models import Agent
-from zerg.models.models import AgentMessage
+from zerg.models.models import Fiche
+from zerg.models.models import FicheMessage
 from zerg.models.models import Thread
 from zerg.models.models import ThreadMessage
 from zerg.services.scheduler_service import scheduler_service
@@ -375,34 +375,34 @@ class _StubLlm:
                     user_content = content
                     break
 
-        # Only return tool calls for tool integration tests (agents with ALL supervisor tools)
-        # This prevents e2e tests from accidentally triggering background workers
+        # Only return tool calls for tool integration tests (fiches with ALL oikos tools)
+        # This prevents e2e tests from accidentally triggering background commis
         if self._tools:
             import re
 
             tool_names = [t.name if hasattr(t, "name") else str(t) for t in self._tools]
-            supervisor_tools = {"spawn_worker", "list_workers", "read_worker_result"}
+            oikos_tools = {"spawn_commis", "list_commiss", "read_commis_result"}
 
-            # Only make tool calls if agent has ALL supervisor tools (tool integration tests)
-            if supervisor_tools.issubset(set(tool_names)) and user_content:
+            # Only make tool calls if fiche has ALL oikos tools (tool integration tests)
+            if oikos_tools.issubset(set(tool_names)) and user_content:
                 user_lower = user_content.lower()
 
                 # Select tool based on keywords in user message
                 tool_name = None
                 if any(kw in user_lower for kw in ["list", "show", "recent"]):
-                    tool_name = "list_workers"
+                    tool_name = "list_commiss"
                 elif any(kw in user_lower for kw in ["read", "result", "job"]):
-                    tool_name = "read_worker_result"
+                    tool_name = "read_commis_result"
                 elif any(kw in user_lower for kw in ["spawn", "calculate", "delegate", "create"]):
-                    tool_name = "spawn_worker"
+                    tool_name = "spawn_commis"
 
                 if tool_name:
                     tool_args = {}
-                    if tool_name == "spawn_worker":
+                    if tool_name == "spawn_commis":
                         tool_args = {"task": user_content, "model": "gpt-5-mini"}
-                    elif tool_name == "list_workers":
+                    elif tool_name == "list_commiss":
                         tool_args = {"limit": 10}
-                    elif tool_name == "read_worker_result":
+                    elif tool_name == "read_commis_result":
                         match = re.search(r"job (\d+)", user_lower)
                         tool_args = {"job_id": int(match.group(1)) if match else 1}
 
@@ -456,7 +456,7 @@ class _FakeStateGraph(MagicMock):
     """Replacement for ``langgraph.graph.StateGraph`` used in tests.
 
     We inherit from MagicMock so existing attribute access patterns in the
-    agent definition code still work (``add_node``, ``add_edge``, etc.), but
+    fiche definition code still work (``add_node``, ``add_edge``, etc.), but
     we override ``compile`` to return our deterministic runnable instead of a
     plain MagicMock.  This removes the need for *any* fallback logic in
     production code.
@@ -467,7 +467,7 @@ class _FakeStateGraph(MagicMock):
 
 
 # Patch the modules
-# We now run the *real* LangGraph StateGraph implementation so the agent
+# We now run the *real* LangGraph StateGraph implementation so the fiche
 # definition code executes unmodified.  We only patch *ChatOpenAI* because it
 # performs an external network call.  ``add_messages`` is a pure helper; no
 # need to mock it.
@@ -484,7 +484,7 @@ except Exception:  # pragma: no cover – defensive; tests still proceed
     pass
 
 # Don't stub LangGraph StateGraph - let it execute real workflows
-# We'll stub only the LLM calls within AgentRunner instead
+# We'll stub only the LLM calls within FicheRunner instead
 
 # Patch ChatOpenAI so no external network call happens
 # Replace with async-friendly stub so that code under test can *await* LLM responses.
@@ -496,15 +496,15 @@ _eval_mode = _os.environ.get("EVAL_MODE", "hermetic")
 if _eval_mode != "live":
     langchain_openai.ChatOpenAI = _StubChatOpenAI  # type: ignore[attr-defined]
 
-    # Ensure already-imported supervisor engine uses the stub as well.
+    # Ensure already-imported oikos engine uses the stub as well.
     # We overwrite it here defensively so no test ever triggers an external network call.
     import sys as _sys
 
-    _sre_module = _sys.modules.get("zerg.services.supervisor_react_engine")
+    _sre_module = _sys.modules.get("zerg.services.oikos_react_engine")
     if _sre_module is not None:  # pragma: no cover – depends on import order
         _sre_module.ChatOpenAI = _StubChatOpenAI  # type: ignore[attr-defined]
 
-# Don't mock AgentRunner globally - let individual tests mock it if needed
+# Don't mock FicheRunner globally - let individual tests mock it if needed
 
 # Import app after all engine setup and mocks are in place
 from zerg.main import app  # noqa: E402
@@ -582,9 +582,9 @@ def cleanup_global_resources(request):
     #    handlers on a potentially partially garbage-collected topic_manager.
     #    Assuming event_bus.unsubscribe is synchronous.
     try:
-        event_bus.unsubscribe(EventType.AGENT_CREATED, topic_manager._handle_agent_event)
-        event_bus.unsubscribe(EventType.AGENT_UPDATED, topic_manager._handle_agent_event)
-        event_bus.unsubscribe(EventType.AGENT_DELETED, topic_manager._handle_agent_event)
+        event_bus.unsubscribe(EventType.FICHE_CREATED, topic_manager._handle_fiche_event)
+        event_bus.unsubscribe(EventType.FICHE_UPDATED, topic_manager._handle_fiche_event)
+        event_bus.unsubscribe(EventType.FICHE_DELETED, topic_manager._handle_fiche_event)
         event_bus.unsubscribe(EventType.THREAD_CREATED, topic_manager._handle_thread_event)
         event_bus.unsubscribe(EventType.THREAD_UPDATED, topic_manager._handle_thread_event)
         event_bus.unsubscribe(EventType.THREAD_DELETED, topic_manager._handle_thread_event)
@@ -812,24 +812,24 @@ from zerg.models_config import TEST_MODEL_ID
 
 # Re-export as module-level constants for tests that need direct import
 TEST_MODEL = DEFAULT_MODEL_ID  # "gpt-5.2" - for tests needing best quality
-TEST_WORKER_MODEL = TEST_MODEL_ID  # "gpt-5-nano" - distinct model for allowlist tests
+TEST_COMMIS_MODEL = TEST_MODEL_ID  # "gpt-5-nano" - distinct model for allowlist tests
 TEST_MODEL_CHEAP = TEST_MODEL_ID  # "gpt-5-nano" - for CI tests needing speed/cost
 
 
 @pytest.fixture
 def test_model():
-    """Default model for test agents."""
+    """Default model for test fiches."""
     return DEFAULT_MODEL_ID
 
 
 @pytest.fixture
-def test_worker_model():
-    """Default model for test workers (lighter weight)."""
-    return DEFAULT_WORKER_MODEL_ID
+def test_commis_model():
+    """Default model for test commis (lighter weight)."""
+    return DEFAULT_COMMIS_MODEL_ID
 
 
 # ---------------------------------------------------------------------------
-# Fixtures – generic user + agent helpers
+# Fixtures – generic user + fiche helpers
 # ---------------------------------------------------------------------------
 
 
@@ -846,33 +846,35 @@ def _dev_user(db_session):
 
 
 @pytest.fixture
-def sample_agent(db_session, _dev_user):
+def sample_fiche(db_session, _dev_user):
     """
-    Create a sample agent in the database
+    Create a sample fiche in the database
     """
-    agent = Agent(
+    fiche = Fiche(
         owner_id=_dev_user.id,
-        name="Test Agent",
-        system_instructions="System instructions for test agent",
-        task_instructions="This is a test agent",
+        name="Test Fiche",
+        system_instructions="System instructions for test fiche",
+        task_instructions="This is a test fiche",
         model=DEFAULT_MODEL_ID,
         status="idle",
     )
-    db_session.add(agent)
+    db_session.add(fiche)
     db_session.commit()
-    db_session.refresh(agent)
-    return agent
+    db_session.refresh(fiche)
+    return fiche
+
+
 
 
 @pytest.fixture
-def sample_messages(db_session, sample_agent):
+def sample_messages(db_session, sample_fiche):
     """
-    Create sample messages for the sample agent
+    Create sample messages for the sample fiche
     """
     messages = [
-        AgentMessage(agent_id=sample_agent.id, role="system", content="You are a test assistant"),
-        AgentMessage(agent_id=sample_agent.id, role="user", content="Hello, test assistant"),
-        AgentMessage(agent_id=sample_agent.id, role="assistant", content="Hello, I'm the test assistant"),
+        FicheMessage(fiche_id=sample_fiche.id, role="system", content="You are a test assistant"),
+        FicheMessage(fiche_id=sample_fiche.id, role="user", content="Hello, test assistant"),
+        FicheMessage(fiche_id=sample_fiche.id, role="assistant", content="Hello, I'm the test assistant"),
     ]
 
     for message in messages:
@@ -884,15 +886,15 @@ def sample_messages(db_session, sample_agent):
 
 
 @pytest.fixture
-def sample_thread(db_session, sample_agent):
+def sample_thread(db_session, sample_fiche):
     """
     Create a sample thread in the database
     """
     thread = Thread(
-        agent_id=sample_agent.id,
+        fiche_id=sample_fiche.id,
         title="Test Thread",
         active=True,
-        agent_state={"test_key": "test_value"},
+        fiche_state={"test_key": "test_value"},
         memory_strategy="buffer",
     )
     db_session.add(thread)
@@ -957,28 +959,16 @@ def auth_headers():  # noqa: D401 – pytest fixture naming
     return {"Authorization": "Bearer test-token"}
 
 
-# Alias *db* fixture used in a handful of newer test files.  Internally we
-# already expose a fully configured ``db_session`` fixture that yields a
-# transactional SQLAlchemy session bound to the in-memory SQLite engine, so
-# we simply return that reference for backwards compatibility.
-
-
 @pytest.fixture()
 def db(db_session):  # noqa: D401 – passthrough alias
-    """Backward-compatibility shim – provide ``db`` as alias for *db_session*."""
+    """Provide a short alias for the shared test database session."""
 
     return db_session
 
 
-# ---------------------------------------------------------------------------
-# *test_user* – alias for legacy fixture name expected by a handful of new
-# test modules.  Reuses the deterministic ``_dev_user`` helper.
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture()
 def test_user(_dev_user):  # noqa: D401 – passthrough alias
-    """Provide ``test_user`` as backwards-compatible alias for *_dev_user*."""
+    """Return the deterministic dev user for tests."""
 
     return _dev_user
 
@@ -999,7 +989,7 @@ def mock_langgraph_state_graph():
     """
     Mock the StateGraph class from LangGraph directly.
 
-    Note: Previously mocked from zerg.agents which has been removed.
+    Note: Previously mocked from zerg.fiches which has been removed.
     Now mocks langgraph.graph.StateGraph directly.
     """
     with patch("langgraph.graph.StateGraph") as mock_state_graph:

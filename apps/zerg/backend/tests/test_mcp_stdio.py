@@ -263,7 +263,7 @@ class TestMCPAPIStdioEndpoints:
     def test_add_stdio_server_validation(self, client, auth_headers, test_agent):
         """Test adding a stdio MCP server via API."""
         response = client.post(
-            f"/api/agents/{test_agent.id}/mcp-servers/",
+            f"/api/fiches/{test_agent.id}/mcp-servers/",
             headers=auth_headers,
             json={
                 "transport": "stdio",
@@ -277,7 +277,7 @@ class TestMCPAPIStdioEndpoints:
     def test_add_stdio_server_missing_command(self, client, auth_headers, test_agent):
         """Test adding stdio server without command fails validation."""
         response = client.post(
-            f"/api/agents/{test_agent.id}/mcp-servers/",
+            f"/api/fiches/{test_agent.id}/mcp-servers/",
             headers=auth_headers,
             json={
                 "transport": "stdio",
@@ -290,7 +290,7 @@ class TestMCPAPIStdioEndpoints:
     def test_add_stdio_server_missing_name(self, client, auth_headers, test_agent):
         """Test adding stdio server without name fails validation."""
         response = client.post(
-            f"/api/agents/{test_agent.id}/mcp-servers/",
+            f"/api/fiches/{test_agent.id}/mcp-servers/",
             headers=auth_headers,
             json={
                 "transport": "stdio",
@@ -303,7 +303,7 @@ class TestMCPAPIStdioEndpoints:
     def test_add_stdio_server_with_env(self, client, auth_headers, test_agent):
         """Test adding stdio server with environment variables."""
         response = client.post(
-            f"/api/agents/{test_agent.id}/mcp-servers/",
+            f"/api/fiches/{test_agent.id}/mcp-servers/",
             headers=auth_headers,
             json={
                 "transport": "stdio",
@@ -318,7 +318,7 @@ class TestMCPAPIStdioEndpoints:
     def test_cannot_mix_stdio_and_url(self, client, auth_headers, test_agent):
         """Test that providing both command and url fails validation."""
         response = client.post(
-            f"/api/agents/{test_agent.id}/mcp-servers/",
+            f"/api/fiches/{test_agent.id}/mcp-servers/",
             headers=auth_headers,
             json={
                 "transport": "stdio",
@@ -332,7 +332,7 @@ class TestMCPAPIStdioEndpoints:
     def test_test_stdio_server(self, client, auth_headers, test_agent):
         """Test MCP stdio server using the /test endpoint."""
         response = client.post(
-            f"/api/agents/{test_agent.id}/mcp-servers/test",
+            f"/api/fiches/{test_agent.id}/mcp-servers/test",
             headers=auth_headers,
             json={
                 "transport": "stdio",
@@ -350,9 +350,9 @@ class TestMCPAPIStdioEndpoints:
         from zerg.tools.mcp_adapter import MCPManager
         from zerg.utils.json_helpers import set_json_field
 
-        agent = crud.get_agent(db, agent_id=test_agent.id)
+        fiche = crud.get_fiche(db, fiche_id=test_agent.id)
         set_json_field(
-            agent,
+            fiche,
             "config",
             {
                 "mcp_servers": [
@@ -375,7 +375,7 @@ class TestMCPAPIStdioEndpoints:
         monkeypatch.setattr(MCPManager, "shutdown_stdio_process_for_config_sync", fake_shutdown)
 
         response = client.delete(
-            f"/api/agents/{test_agent.id}/mcp-servers/local_stdio",
+            f"/api/fiches/{test_agent.id}/mcp-servers/local_stdio",
             headers=auth_headers,
         )
         assert response.status_code == 204
@@ -385,18 +385,18 @@ class TestMCPAPIStdioEndpoints:
 # Import the fixture from conftest - needed for API tests
 @pytest.fixture
 def test_agent(db, test_user):
-    """Create a test agent for MCP tests."""
-    from tests.conftest import TEST_WORKER_MODEL
+    """Create a test fiche for MCP tests."""
+    from tests.conftest import TEST_COMMIS_MODEL
     from zerg.crud import crud
 
-    agent = crud.create_agent(
+    fiche = crud.create_fiche(
         db=db,
         owner_id=test_user.id,
-        name="Test Agent for MCP Stdio",
-        system_instructions="You are a test agent",
+        name="Test Fiche for MCP Stdio",
+        system_instructions="You are a test fiche",
         task_instructions="Test MCP stdio functionality",
-        model=TEST_WORKER_MODEL,
+        model=TEST_COMMIS_MODEL,
         schedule=None,
         config=None,
     )
-    return agent
+    return fiche

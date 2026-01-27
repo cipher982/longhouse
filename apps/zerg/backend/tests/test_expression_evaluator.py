@@ -272,11 +272,11 @@ class TestRealWorldUseCases:
         assert self.evaluator.evaluate("score >= 80", {"score": 85}) is True
         assert self.evaluator.evaluate("score < 100", {"score": 85}) is True
 
-    def test_agent_status_check(self):
-        """Test agent status checking."""
-        variables = {"agent_status": "completed", "message_count": 3, "success": True}
+    def test_fiche_status_check(self):
+        """Test fiche status checking."""
+        variables = {"fiche_status": "completed", "message_count": 3, "success": True}
 
-        assert self.evaluator.evaluate("agent_status == 'completed'", variables) is True
+        assert self.evaluator.evaluate("fiche_status == 'completed'", variables) is True
         assert self.evaluator.evaluate("message_count > 0", variables) is True
         assert self.evaluator.evaluate("success and (message_count > 0)", variables) is True
 

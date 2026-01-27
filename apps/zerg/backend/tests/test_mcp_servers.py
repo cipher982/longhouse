@@ -4,26 +4,26 @@ import pytest
 from fastapi import status
 from sqlalchemy.orm import Session
 
-from tests.conftest import TEST_WORKER_MODEL
+from tests.conftest import TEST_COMMIS_MODEL
 from zerg.crud import crud
-from zerg.models.models import Agent
+from zerg.models.models import Fiche
 from zerg.models.models import User
 
 
 @pytest.fixture
-def test_agent(db: Session, test_user: User) -> Agent:
-    """Create a test agent for MCP tests."""
-    agent = crud.create_agent(
+def test_agent(db: Session, test_user: User) -> Fiche:
+    """Create a test fiche for MCP tests."""
+    fiche = crud.create_fiche(
         db=db,
         owner_id=test_user.id,
-        name="Test Agent for MCP",
-        system_instructions="You are a test agent",
+        name="Test Fiche for MCP",
+        system_instructions="You are a test fiche",
         task_instructions="Test MCP functionality",
-        model=TEST_WORKER_MODEL,
+        model=TEST_COMMIS_MODEL,
         schedule=None,
         config=None,
     )
-    return agent
+    return fiche
 
 
 class TestMCPServers:
@@ -32,7 +32,7 @@ class TestMCPServers:
     def test_list_mcp_servers_empty(self, client, auth_headers, test_agent):
         """Test listing MCP servers when none are configured."""
         response = client.get(
-            f"/api/agents/{test_agent.id}/mcp-servers/",
+            f"/api/fiches/{test_agent.id}/mcp-servers/",
             headers=auth_headers,
         )
         assert response.status_code == status.HTTP_200_OK
@@ -41,7 +41,7 @@ class TestMCPServers:
     def test_add_preset_mcp_server(self, client, auth_headers, test_agent, db):
         """Test adding a preset MCP server."""
         response = client.post(
-            f"/api/agents/{test_agent.id}/mcp-servers/",
+            f"/api/fiches/{test_agent.id}/mcp-servers/",
             headers=auth_headers,
             json={
                 "preset": "github",
@@ -50,15 +50,15 @@ class TestMCPServers:
         )
         assert response.status_code == status.HTTP_201_CREATED
 
-        # Verify the agent's config was updated
-        updated_agent = response.json()
-        assert "config" in updated_agent
-        assert "mcp_servers" in updated_agent["config"]
-        assert len(updated_agent["config"]["mcp_servers"]) == 1
-        assert updated_agent["config"]["mcp_servers"][0]["preset"] == "github"
+        # Verify the fiche's config was updated
+        updated_fiche = response.json()
+        assert "config" in updated_fiche
+        assert "mcp_servers" in updated_fiche["config"]
+        assert len(updated_fiche["config"]["mcp_servers"]) == 1
+        assert updated_fiche["config"]["mcp_servers"][0]["preset"] == "github"
 
         # Token should be encrypted
-        encrypted_token = updated_agent["config"]["mcp_servers"][0]["auth_token"]
+        encrypted_token = updated_fiche["config"]["mcp_servers"][0]["auth_token"]
         assert encrypted_token != "ghp_test_token"
 
         from zerg.utils import crypto
@@ -68,7 +68,7 @@ class TestMCPServers:
     def test_add_custom_mcp_server(self, client, auth_headers, test_agent, db):
         """Test adding a custom MCP server."""
         response = client.post(
-            f"/api/agents/{test_agent.id}/mcp-servers/",
+            f"/api/fiches/{test_agent.id}/mcp-servers/",
             headers=auth_headers,
             json={
                 "url": "https://custom.example.com/mcp",
@@ -79,13 +79,13 @@ class TestMCPServers:
         )
         assert response.status_code == status.HTTP_201_CREATED
 
-        # Verify the agent's config was updated
-        updated_agent = response.json()
-        assert "config" in updated_agent
-        assert "mcp_servers" in updated_agent["config"]
-        assert len(updated_agent["config"]["mcp_servers"]) == 1
+        # Verify the fiche's config was updated
+        updated_fiche = response.json()
+        assert "config" in updated_fiche
+        assert "mcp_servers" in updated_fiche["config"]
+        assert len(updated_fiche["config"]["mcp_servers"]) == 1
 
-        server_config = updated_agent["config"]["mcp_servers"][0]
+        server_config = updated_fiche["config"]["mcp_servers"][0]
         assert server_config["url"] == "https://custom.example.com/mcp"
         assert server_config["name"] == "custom"
 
@@ -102,7 +102,7 @@ class TestMCPServers:
     def test_add_mcp_server_invalid_request(self, client, auth_headers, test_agent):
         """Test adding MCP server with invalid request (missing required fields)."""
         response = client.post(
-            f"/api/agents/{test_agent.id}/mcp-servers/",
+            f"/api/fiches/{test_agent.id}/mcp-servers/",
             headers=auth_headers,
             json={
                 # Missing both preset and url/name
@@ -115,7 +115,7 @@ class TestMCPServers:
         """Test adding duplicate preset MCP server."""
         # Add first time
         response = client.post(
-            f"/api/agents/{test_agent.id}/mcp-servers/",
+            f"/api/fiches/{test_agent.id}/mcp-servers/",
             headers=auth_headers,
             json={
                 "preset": "github",
@@ -126,7 +126,7 @@ class TestMCPServers:
 
         # Try to add again
         response = client.post(
-            f"/api/agents/{test_agent.id}/mcp-servers/",
+            f"/api/fiches/{test_agent.id}/mcp-servers/",
             headers=auth_headers,
             json={
                 "preset": "github",
@@ -140,7 +140,7 @@ class TestMCPServers:
         """Test removing an MCP server."""
         # First add a server
         response = client.post(
-            f"/api/agents/{test_agent.id}/mcp-servers/",
+            f"/api/fiches/{test_agent.id}/mcp-servers/",
             headers=auth_headers,
             json={
                 "preset": "github",
@@ -151,14 +151,14 @@ class TestMCPServers:
 
         # Remove it
         response = client.delete(
-            f"/api/agents/{test_agent.id}/mcp-servers/github",
+            f"/api/fiches/{test_agent.id}/mcp-servers/github",
             headers=auth_headers,
         )
         assert response.status_code == status.HTTP_204_NO_CONTENT
 
         # Verify it's gone
         response = client.get(
-            f"/api/agents/{test_agent.id}/mcp-servers/",
+            f"/api/fiches/{test_agent.id}/mcp-servers/",
             headers=auth_headers,
         )
         assert response.status_code == status.HTTP_200_OK
@@ -167,7 +167,7 @@ class TestMCPServers:
     def test_remove_nonexistent_mcp_server(self, client, auth_headers, test_agent):
         """Test removing a non-existent MCP server."""
         response = client.delete(
-            f"/api/agents/{test_agent.id}/mcp-servers/nonexistent",
+            f"/api/fiches/{test_agent.id}/mcp-servers/nonexistent",
             headers=auth_headers,
         )
         assert response.status_code == status.HTTP_404_NOT_FOUND
@@ -175,7 +175,7 @@ class TestMCPServers:
     def test_test_mcp_connection(self, client, auth_headers, test_agent):
         """Test the connection test endpoint."""
         response = client.post(
-            f"/api/agents/{test_agent.id}/mcp-servers/test",
+            f"/api/fiches/{test_agent.id}/mcp-servers/test",
             headers=auth_headers,
             json={
                 "preset": "github",
@@ -189,9 +189,9 @@ class TestMCPServers:
         assert "tools" in result
 
     def test_get_available_tools(self, client, auth_headers, test_agent):
-        """Test getting available tools for an agent."""
+        """Test getting available tools for an fiche."""
         response = client.get(
-            f"/api/agents/{test_agent.id}/mcp-servers/available-tools",
+            f"/api/fiches/{test_agent.id}/mcp-servers/available-tools",
             headers=auth_headers,
         )
         assert response.status_code == status.HTTP_200_OK
@@ -206,35 +206,35 @@ class TestMCPServers:
         # Temporarily enable auth for this test
         monkeypatch.setattr("zerg.dependencies.auth.AUTH_DISABLED", False)
 
-        response = unauthenticated_client.get(f"/api/agents/{test_agent.id}/mcp-servers/")
+        response = unauthenticated_client.get(f"/api/fiches/{test_agent.id}/mcp-servers/")
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
         # Restore the original value
         monkeypatch.setattr("zerg.dependencies.auth.AUTH_DISABLED", True)
 
     def test_access_other_users_agent(self, client, auth_headers, test_agent, db):
-        """Test accessing another user's agent MCP servers."""
-        # Create another user and their agent
+        """Test accessing another user's fiche MCP servers."""
+        # Create another user and their fiche
         other_user = crud.create_user(
             db=db,
             email="other@example.com",
             provider="google",
             provider_user_id="other123",
         )
-        other_agent = crud.create_agent(
+        other_agent = crud.create_fiche(
             db=db,
             owner_id=other_user.id,
-            name="Other Agent",
-            system_instructions="Other agent",
+            name="Other Fiche",
+            system_instructions="Other fiche",
             task_instructions="Other task",
-            model=TEST_WORKER_MODEL,
+            model=TEST_COMMIS_MODEL,
             schedule=None,
             config=None,
         )
 
-        # Try to access other user's agent
+        # Try to access other user's fiche
         response = client.get(
-            f"/api/agents/{other_agent.id}/mcp-servers/",
+            f"/api/fiches/{other_agent.id}/mcp-servers/",
             headers=auth_headers,
         )
         assert response.status_code == status.HTTP_403_FORBIDDEN
@@ -250,7 +250,7 @@ class TestMCPServers:
 
         for server in servers:
             response = client.post(
-                f"/api/agents/{test_agent.id}/mcp-servers/",
+                f"/api/fiches/{test_agent.id}/mcp-servers/",
                 headers=auth_headers,
                 json=server,
             )
@@ -258,7 +258,7 @@ class TestMCPServers:
 
         # List all servers
         response = client.get(
-            f"/api/agents/{test_agent.id}/mcp-servers/",
+            f"/api/fiches/{test_agent.id}/mcp-servers/",
             headers=auth_headers,
         )
         assert response.status_code == status.HTTP_200_OK

@@ -2,9 +2,9 @@
 
 ## Problem
 
-When running E2E tests in parallel with multiple workers, tests were failing due to:
+When running E2E tests in parallel with multiple commis, tests were failing due to:
 
-- Shared database state between workers
+- Shared database state between commis
 - Race conditions when multiple tests modify data simultaneously
 - Tests expecting exact row counts that varied due to concurrent operations
 
@@ -13,7 +13,7 @@ When running E2E tests in parallel with multiple workers, tests were failing due
 We've implemented serial execution as a quick fix by modifying `playwright.config.js`:
 
 - Set `fullyParallel: false`
-- Set `workers: 1`
+- Set `commis: 1`
 
 This ensures tests run one at a time, avoiding database conflicts.
 
@@ -24,16 +24,16 @@ This ensures tests run one at a time, avoiding database conflicts.
 
 ## Future Improvements
 
-### Option 1: Worker-Isolated Databases (Recommended for true parallelism)
+### Option 1: Commis-Isolated Databases (Recommended for true parallelism)
 
-1. Modify backend to accept worker ID via environment variable
-2. Create separate SQLite database per worker
-3. Clean up worker databases after test run
+1. Modify backend to accept commis ID via environment variable
+2. Create separate SQLite database per commis
+3. Clean up commis databases after test run
 
 ### Option 2: Test Data Namespacing
 
 1. Generate unique identifiers for all test data
-2. Filter assertions by worker-specific data
+2. Filter assertions by commis-specific data
 3. Avoid exact count assertions
 
 ### Option 3: Hybrid Approach
@@ -44,8 +44,8 @@ This ensures tests run one at a time, avoiding database conflicts.
 
 ## Remaining Test Issues (Not parallelization-related)
 
-1. **Edit agent name** - WebSocket update timing issue
-2. **Dashboard empty state** - Text mismatch ("Create New Agent" vs "Create Agent")
+1. **Edit fiche name** - WebSocket update timing issue
+2. **Dashboard empty state** - Text mismatch ("Create New Fiche" vs "Create Fiche")
 3. **Canvas operations** - Feature not fully implemented
 4. **Thread chat persistence** - Message history not persisting correctly
 5. **Webhook triggers** - UI elements not found

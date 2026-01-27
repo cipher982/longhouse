@@ -5,41 +5,41 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from zerg.crud import crud as _crud
-from zerg.models.agent_run_event import AgentRunEvent
-from zerg.models.run import AgentRun
+from zerg.models.run_event import RunEvent
+from zerg.models.run import Run
 from zerg.models.enums import RunStatus, RunTrigger
 from zerg.services.event_store import emit_run_event, EventStore
 
 
 @pytest.fixture
 def test_run(db_session: Session):
-    """Create a test agent run for event storage tests."""
+    """Create a test run for event storage tests."""
     # Get or create test user
     owner = _crud.get_user_by_email(db_session, "dev@local") or _crud.create_user(
         db_session, email="dev@local", provider=None, role="ADMIN"
     )
 
-    # Create a test agent
+    # Create a test fiche
     from tests.conftest import TEST_MODEL
-    from zerg.models.models import Agent
+    from zerg.models.models import Fiche
 
-    agent = Agent(
+    fiche = Fiche(
         owner_id=owner.id,
-        name="Test Event Agent",
+        name="Test Event Fiche",
         system_instructions="Test system instructions",
         task_instructions="Test task instructions",
         model=TEST_MODEL,
         status="idle",
     )
-    db_session.add(agent)
+    db_session.add(fiche)
     db_session.commit()
-    db_session.refresh(agent)
+    db_session.refresh(fiche)
 
     # Create a test thread
     from zerg.models.thread import Thread
 
     thread = Thread(
-        agent_id=agent.id,
+        fiche_id=fiche.id,
         title="Test Thread",
         active=True,
     )
@@ -48,8 +48,8 @@ def test_run(db_session: Session):
     db_session.refresh(thread)
 
     # Create a test run
-    run = AgentRun(
-        agent_id=agent.id,
+    run = Run(
+        fiche_id=fiche.id,
         thread_id=thread.id,
         status=RunStatus.RUNNING,
         trigger=RunTrigger.MANUAL,
@@ -62,10 +62,10 @@ def test_run(db_session: Session):
 
 
 @pytest.mark.asyncio
-async def test_emit_run_event_persists_to_db(db_session: Session, test_run: AgentRun):
+async def test_emit_run_event_persists_to_db(db_session: Session, test_run: Run):
     """Test that emit_run_event persists events to the database."""
     payload = {
-        "event_type": "supervisor_started",
+        "event_type": "oikos_started",
         "run_id": test_run.id,
         "task": "Test task",
         "owner_id": 1,
@@ -74,7 +74,7 @@ async def test_emit_run_event_persists_to_db(db_session: Session, test_run: Agen
     event_id = await emit_run_event(
         db=db_session,
         run_id=test_run.id,
-        event_type="supervisor_started",
+        event_type="oikos_started",
         payload=payload,
     )
 
@@ -82,10 +82,10 @@ async def test_emit_run_event_persists_to_db(db_session: Session, test_run: Agen
     assert event_id > 0
 
     # Query the event from database
-    event = db_session.query(AgentRunEvent).filter(AgentRunEvent.id == event_id).first()
+    event = db_session.query(RunEvent).filter(RunEvent.id == event_id).first()
     assert event is not None
     assert event.run_id == test_run.id
-    assert event.event_type == "supervisor_started"
+    assert event.event_type == "oikos_started"
     assert event.id == event_id  # Verify ID matches returned value
     assert event.payload == payload
     assert event.created_at is not None
@@ -93,9 +93,9 @@ async def test_emit_run_event_persists_to_db(db_session: Session, test_run: Agen
 
 
 @pytest.mark.asyncio
-async def test_event_ids_are_monotonic(db_session: Session, test_run: AgentRun):
+async def test_event_ids_are_monotonic(db_session: Session, test_run: Run):
     """Test that event IDs are monotonically increasing (ordering mechanism)."""
-    event_types = ["supervisor_started", "worker_spawned", "worker_complete", "supervisor_complete"]
+    event_types = ["oikos_started", "commis_spawned", "commis_complete", "oikos_complete"]
 
     event_ids = []
     for event_type in event_types:
@@ -109,9 +109,9 @@ async def test_event_ids_are_monotonic(db_session: Session, test_run: AgentRun):
         event_ids.append(event_id)
 
     # Query all events and verify IDs are monotonically increasing
-    events = db_session.query(AgentRunEvent).filter(
-        AgentRunEvent.run_id == test_run.id
-    ).order_by(AgentRunEvent.id).all()
+    events = db_session.query(RunEvent).filter(
+        RunEvent.run_id == test_run.id
+    ).order_by(RunEvent.id).all()
 
     assert len(events) == 4
     for i, event in enumerate(events):
@@ -123,7 +123,7 @@ async def test_event_ids_are_monotonic(db_session: Session, test_run: AgentRun):
 
 
 @pytest.mark.asyncio
-async def test_invalid_payload_raises_valueerror(db_session: Session, test_run: AgentRun):
+async def test_invalid_payload_raises_valueerror(db_session: Session, test_run: Run):
     """Test that non-JSON-serializable payloads raise ValueError."""
     import json
 
@@ -133,7 +133,7 @@ async def test_invalid_payload_raises_valueerror(db_session: Session, test_run: 
     circular['self'] = circular
 
     payload = {
-        "event_type": "supervisor_started",
+        "event_type": "oikos_started",
         "circular": circular,
     }
 
@@ -142,13 +142,13 @@ async def test_invalid_payload_raises_valueerror(db_session: Session, test_run: 
         await emit_run_event(
             db=db_session,
             run_id=test_run.id,
-            event_type="supervisor_started",
+            event_type="oikos_started",
             payload=payload,
         )
 
 
 @pytest.mark.asyncio
-async def test_get_events_after_returns_correct_events(db_session: Session, test_run: AgentRun):
+async def test_get_events_after_returns_correct_events(db_session: Session, test_run: Run):
     """Test that get_events_after returns events after a specific ID."""
     # Create several events
     event_ids = []
@@ -177,14 +177,14 @@ async def test_get_events_after_returns_correct_events(db_session: Session, test
 
 
 @pytest.mark.asyncio
-async def test_get_events_after_filters_tokens(db_session: Session, test_run: AgentRun):
+async def test_get_events_after_filters_tokens(db_session: Session, test_run: Run):
     """Test that get_events_after can filter out token events."""
     # Create mixed events including tokens
-    event_types = ["supervisor_started", "supervisor_token", "supervisor_token", "supervisor_complete"]
+    event_types = ["oikos_started", "oikos_token", "oikos_token", "oikos_complete"]
 
     for event_type in event_types:
         payload = {"event_type": event_type, "run_id": test_run.id}
-        if event_type == "supervisor_token":
+        if event_type == "oikos_token":
             payload["token"] = "test token"
         await emit_run_event(
             db=db_session,
@@ -202,12 +202,12 @@ async def test_get_events_after_filters_tokens(db_session: Session, test_run: Ag
     )
 
     assert len(events) == 2
-    assert events[0].event_type == "supervisor_started"
-    assert events[1].event_type == "supervisor_complete"
+    assert events[0].event_type == "oikos_started"
+    assert events[1].event_type == "oikos_complete"
 
 
 @pytest.mark.asyncio
-async def test_cascade_delete_works(db_session: Session, test_run: AgentRun):
+async def test_cascade_delete_works(db_session: Session, test_run: Run):
     """Test that deleting a run cascades to delete its events."""
     run_id = test_run.id
 
@@ -222,25 +222,25 @@ async def test_cascade_delete_works(db_session: Session, test_run: AgentRun):
         )
 
     # Verify events exist
-    events_before = db_session.query(AgentRunEvent).filter(
-        AgentRunEvent.run_id == run_id
+    events_before = db_session.query(RunEvent).filter(
+        RunEvent.run_id == run_id
     ).count()
     assert events_before == 3
 
     # Delete the run - expunge first to avoid stale state issues
     db_session.expunge(test_run)
-    db_session.query(AgentRun).filter(AgentRun.id == run_id).delete()
+    db_session.query(Run).filter(Run.id == run_id).delete()
     db_session.commit()
 
     # Verify events were cascade deleted
-    events_after = db_session.query(AgentRunEvent).filter(
-        AgentRunEvent.run_id == run_id
+    events_after = db_session.query(RunEvent).filter(
+        RunEvent.run_id == run_id
     ).count()
     assert events_after == 0
 
 
 @pytest.mark.asyncio
-async def test_get_latest_event_id(db_session: Session, test_run: AgentRun):
+async def test_get_latest_event_id(db_session: Session, test_run: Run):
     """Test getting the latest event ID for a run."""
     # No events yet
     latest = EventStore.get_latest_event_id(db_session, test_run.id)
@@ -265,13 +265,13 @@ async def test_get_latest_event_id(db_session: Session, test_run: AgentRun):
 
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Removed get_latest_sequence method (use get_latest_event_id instead)")
-async def test_get_latest_sequence(db_session: Session, test_run: AgentRun):
+async def test_get_latest_sequence(db_session: Session, test_run: Run):
     """Test removed - sequence column no longer exists."""
     pass
 
 
 @pytest.mark.asyncio
-async def test_delete_events_for_run(db_session: Session, test_run: AgentRun):
+async def test_delete_events_for_run(db_session: Session, test_run: Run):
     """Test deleting all events for a run."""
     # Create events
     for i in range(3):
@@ -284,8 +284,8 @@ async def test_delete_events_for_run(db_session: Session, test_run: AgentRun):
         )
 
     # Verify events exist
-    count_before = db_session.query(AgentRunEvent).filter(
-        AgentRunEvent.run_id == test_run.id
+    count_before = db_session.query(RunEvent).filter(
+        RunEvent.run_id == test_run.id
     ).count()
     assert count_before == 3
 
@@ -294,17 +294,17 @@ async def test_delete_events_for_run(db_session: Session, test_run: AgentRun):
     assert deleted_count == 3
 
     # Verify events were deleted
-    count_after = db_session.query(AgentRunEvent).filter(
-        AgentRunEvent.run_id == test_run.id
+    count_after = db_session.query(RunEvent).filter(
+        RunEvent.run_id == test_run.id
     ).count()
     assert count_after == 0
 
 
 @pytest.mark.asyncio
-async def test_get_event_count(db_session: Session, test_run: AgentRun):
+async def test_get_event_count(db_session: Session, test_run: Run):
     """Test getting event count with optional type filter."""
     # Create mixed event types
-    event_types = ["supervisor_started", "worker_spawned", "worker_complete", "supervisor_complete"]
+    event_types = ["oikos_started", "commis_spawned", "commis_complete", "oikos_complete"]
 
     for event_type in event_types:
         payload = {"event_type": event_type, "run_id": test_run.id}
@@ -320,26 +320,26 @@ async def test_get_event_count(db_session: Session, test_run: AgentRun):
     assert total == 4
 
     # Count by type
-    supervisor_count = EventStore.get_event_count(db_session, test_run.id, event_type="supervisor_started")
-    assert supervisor_count == 1
+    oikos_count = EventStore.get_event_count(db_session, test_run.id, event_type="oikos_started")
+    assert oikos_count == 1
 
-    worker_count = EventStore.get_event_count(db_session, test_run.id, event_type="worker_spawned")
-    assert worker_count == 1
+    commis_count = EventStore.get_event_count(db_session, test_run.id, event_type="commis_spawned")
+    assert commis_count == 1
 
 
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Removed get_events_after_sequence method (use get_events_after with event ID)")
-async def test_get_events_after_sequence(db_session: Session, test_run: AgentRun):
+async def test_get_events_after_sequence(db_session: Session, test_run: Run):
     """Test removed - sequence-based filtering no longer supported."""
     pass
 
 
 @pytest.mark.asyncio
-async def test_datetime_serialization(db_session: Session, test_run: AgentRun):
+async def test_datetime_serialization(db_session: Session, test_run: Run):
     """Test that datetime objects in payloads are serialized correctly."""
     from datetime import timezone
     payload = {
-        "event_type": "supervisor_started",
+        "event_type": "oikos_started",
         "run_id": test_run.id,
         "timestamp": datetime.now(timezone.utc),
     }
@@ -348,12 +348,12 @@ async def test_datetime_serialization(db_session: Session, test_run: AgentRun):
     event_id = await emit_run_event(
         db=db_session,
         run_id=test_run.id,
-        event_type="supervisor_started",
+        event_type="oikos_started",
         payload=payload,
     )
 
     # Verify event was persisted and datetime was serialized
-    event = db_session.query(AgentRunEvent).filter(AgentRunEvent.id == event_id).first()
+    event = db_session.query(RunEvent).filter(RunEvent.id == event_id).first()
     assert event is not None
     assert "timestamp" in event.payload
     # Datetime should be serialized as ISO string
@@ -361,11 +361,11 @@ async def test_datetime_serialization(db_session: Session, test_run: AgentRun):
 
 
 @pytest.mark.asyncio
-async def test_multiple_runs_isolated_events(db_session: Session, test_run: AgentRun):
+async def test_multiple_runs_isolated_events(db_session: Session, test_run: Run):
     """Test that events are properly isolated per run."""
     # Create a second run
-    run2 = AgentRun(
-        agent_id=test_run.agent_id,
+    run2 = Run(
+        fiche_id=test_run.fiche_id,
         thread_id=test_run.thread_id,
         status=RunStatus.RUNNING,
         trigger=RunTrigger.MANUAL,

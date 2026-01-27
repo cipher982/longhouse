@@ -1,6 +1,6 @@
 """Trace debugging service for unified trace timeline analysis.
 
-Provides trace_id-based debugging across agent_runs, worker_jobs, and llm_audit_log tables.
+Provides trace_id-based debugging across runs, commis_jobs, and llm_audit_log tables.
 This service extracts the logic from scripts/debug_trace.py into a reusable service class
 for API exposure.
 """
@@ -31,7 +31,7 @@ class TimelineEvent:
 
     timestamp: datetime
     event_type: str
-    source: str  # 'run', 'worker', 'llm'
+    source: str  # 'run', 'commis', 'llm'
     details: dict[str, Any]
     is_error: bool = False
     duration_ms: int | None = None
@@ -57,15 +57,15 @@ class TraceDebugger:
     def _get_trace_data(self, trace_id: uuid.UUID, max_items: int = 100) -> dict:
         """Query all tables for a given trace_id with limits to prevent memory issues."""
         from zerg.models.llm_audit import LLMAuditLog
-        from zerg.models.models import AgentRun
-        from zerg.models.models import WorkerJob
+        from zerg.models.models import CommisJob
+        from zerg.models.models import Run
 
         # Get runs with this trace, ordered by created_at desc to get most recent on long traces
-        runs = self.db.query(AgentRun).filter(AgentRun.trace_id == trace_id).order_by(AgentRun.created_at.desc()).limit(max_items).all()
+        runs = self.db.query(Run).filter(Run.trace_id == trace_id).order_by(Run.created_at.desc()).limit(max_items).all()
 
-        # Get worker jobs with this trace, ordered by created_at desc
-        workers = (
-            self.db.query(WorkerJob).filter(WorkerJob.trace_id == trace_id).order_by(WorkerJob.created_at.desc()).limit(max_items).all()
+        # Get commis jobs with this trace, ordered by created_at desc
+        commis = (
+            self.db.query(CommisJob).filter(CommisJob.trace_id == trace_id).order_by(CommisJob.created_at.desc()).limit(max_items).all()
         )
 
         # Get LLM audit logs with this trace, ordered by created_at desc
@@ -79,7 +79,7 @@ class TraceDebugger:
 
         return {
             "runs": runs,
-            "workers": workers,
+            "commis": commis,
             "llm_logs": llm_logs,
         }
 
@@ -95,11 +95,11 @@ class TraceDebugger:
                 events.append(
                     TimelineEvent(
                         timestamp=ts,
-                        event_type="supervisor.run.started",
+                        event_type="oikos.run.started",
                         source="run",
                         details={
                             "run_id": run.id,
-                            "agent_id": run.agent_id,
+                            "fiche_id": run.fiche_id,
                             "thread_id": run.thread_id,
                             "model": run.model,
                             "status": run.status.value if run.status else None,
@@ -114,7 +114,7 @@ class TraceDebugger:
                 events.append(
                     TimelineEvent(
                         timestamp=ts,
-                        event_type=f"supervisor.run.{run.status.value if run.status else 'finished'}",
+                        event_type=f"oikos.run.{run.status.value if run.status else 'finished'}",
                         source="run",
                         details={
                             "run_id": run.id,
@@ -127,60 +127,60 @@ class TraceDebugger:
                     )
                 )
 
-        # Add worker events
-        for worker in data["workers"]:
-            # Worker created/queued
-            if worker.created_at:
-                ts = worker.created_at.replace(tzinfo=timezone.utc) if worker.created_at.tzinfo is None else worker.created_at
+        # Add commis events
+        for commis in data["commis"]:
+            # Commis created/queued
+            if commis.created_at:
+                ts = commis.created_at.replace(tzinfo=timezone.utc) if commis.created_at.tzinfo is None else commis.created_at
                 events.append(
                     TimelineEvent(
                         timestamp=ts,
-                        event_type="worker.spawned",
-                        source="worker",
+                        event_type="commis.spawned",
+                        source="commis",
                         details={
-                            "job_id": worker.id,
-                            "task": worker.task[:50] if worker.task else None,
-                            "model": worker.model,
-                            "status": worker.status,
+                            "job_id": commis.id,
+                            "task": commis.task[:50] if commis.task else None,
+                            "model": commis.model,
+                            "status": commis.status,
                         },
                     )
                 )
 
-            # Worker started
-            if worker.started_at:
-                ts = worker.started_at.replace(tzinfo=timezone.utc) if worker.started_at.tzinfo is None else worker.started_at
+            # Commis started
+            if commis.started_at:
+                ts = commis.started_at.replace(tzinfo=timezone.utc) if commis.started_at.tzinfo is None else commis.started_at
                 events.append(
                     TimelineEvent(
                         timestamp=ts,
-                        event_type="worker.started",
-                        source="worker",
+                        event_type="commis.started",
+                        source="commis",
                         details={
-                            "job_id": worker.id,
-                            "worker_id": worker.worker_id,
+                            "job_id": commis.id,
+                            "commis_id": commis.commis_id,
                         },
                     )
                 )
 
-            # Worker completed
-            if worker.finished_at:
-                ts = worker.finished_at.replace(tzinfo=timezone.utc) if worker.finished_at.tzinfo is None else worker.finished_at
-                is_error = worker.status in ("failed", "error")
+            # Commis completed
+            if commis.finished_at:
+                ts = commis.finished_at.replace(tzinfo=timezone.utc) if commis.finished_at.tzinfo is None else commis.finished_at
+                is_error = commis.status in ("failed", "error")
                 # Compute duration from timestamps (normalize both to UTC to avoid mixed tz issues)
                 duration_ms = None
-                if worker.started_at and worker.finished_at:
-                    started = worker.started_at.replace(tzinfo=timezone.utc) if worker.started_at.tzinfo is None else worker.started_at
-                    finished = worker.finished_at.replace(tzinfo=timezone.utc) if worker.finished_at.tzinfo is None else worker.finished_at
+                if commis.started_at and commis.finished_at:
+                    started = commis.started_at.replace(tzinfo=timezone.utc) if commis.started_at.tzinfo is None else commis.started_at
+                    finished = commis.finished_at.replace(tzinfo=timezone.utc) if commis.finished_at.tzinfo is None else commis.finished_at
                     delta = finished - started
                     duration_ms = int(delta.total_seconds() * 1000)
                 events.append(
                     TimelineEvent(
                         timestamp=ts,
-                        event_type=f"worker.{worker.status}" if worker.status else "worker.finished",
-                        source="worker",
+                        event_type=f"commis.{commis.status}" if commis.status else "commis.finished",
+                        source="commis",
                         details={
-                            "job_id": worker.id,
+                            "job_id": commis.id,
                             "duration_ms": duration_ms,
-                            "error": worker.error[:100] if worker.error else None,
+                            "error": commis.error[:100] if commis.error else None,
                         },
                         is_error=is_error,
                         duration_ms=duration_ms,
@@ -224,20 +224,20 @@ class TraceDebugger:
             if run.status and run.status.value == "failed":
                 anomalies.append(f"Run {run.id} FAILED: {run.error or 'no error message'}")
 
-        # Check for failed workers
-        for worker in data["workers"]:
-            if worker.status == "failed":
-                anomalies.append(f"Worker {worker.id} FAILED: {worker.error or 'no error message'}")
+        # Check for failed commis
+        for commis in data["commis"]:
+            if commis.status == "failed":
+                anomalies.append(f"Commis {commis.id} FAILED: {commis.error or 'no error message'}")
 
         # Check for LLM errors
         for log in data["llm_logs"]:
             if log.error:
                 anomalies.append(f"LLM error in {log.phase}: {log.error}")
 
-        # Check for stuck workers (created but never started)
-        for worker in data["workers"]:
-            if worker.created_at and not worker.started_at and worker.status not in ("cancelled", "failed"):
-                anomalies.append(f"Worker {worker.id} never started (status: {worker.status})")
+        # Check for stuck commis (created but never started)
+        for commis in data["commis"]:
+            if commis.created_at and not commis.started_at and commis.status not in ("cancelled", "failed"):
+                anomalies.append(f"Commis {commis.id} never started (status: {commis.status})")
 
         # Check for very long LLM calls (>60s)
         for log in data["llm_logs"]:
@@ -292,7 +292,7 @@ class TraceDebugger:
         query_limit = max(max_events, max_items)
         data = self._get_trace_data(trace_uuid, max_items=query_limit)
 
-        if not data["runs"] and not data["workers"] and not data["llm_logs"]:
+        if not data["runs"] and not data["commis"] and not data["llm_logs"]:
             return None
 
         # Build timeline
@@ -327,7 +327,7 @@ class TraceDebugger:
             "duration_seconds": duration,
             "counts": {
                 "runs": len(data["runs"]),
-                "workers": len(data["workers"]),
+                "commis": len(data["commis"]),
                 "llm_calls": len(data["llm_logs"]),
             },
             "anomalies": anomalies,
@@ -365,17 +365,10 @@ class TraceDebugger:
         Returns:
             List of recent traces with basic info
         """
-        from zerg.models.models import AgentRun
+        from zerg.models.models import Run
 
         # Get recent runs with trace_id set
-        runs = (
-            self.db.query(AgentRun)
-            .filter(AgentRun.trace_id.isnot(None))
-            .order_by(AgentRun.created_at.desc())
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
+        runs = self.db.query(Run).filter(Run.trace_id.isnot(None)).order_by(Run.created_at.desc()).offset(offset).limit(limit).all()
 
         traces = []
         for run in runs:

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Debug script: Capture and display EXACT LLM input during supervisor resume.
+"""Debug script: Capture and display EXACT LLM input during oikos resume.
 
-This script helps postmortem why the LLM might spawn a second worker after resume.
+This script helps postmortem why the LLM might spawn a second commis after resume.
 It shows the raw messages that would be sent to OpenAI so we can diagnose:
 - Is the tool result missing or malformed?
 - Is the message history corrupted?
@@ -86,38 +86,38 @@ async def simulate_bug_scenario():
     print("SIMULATING: The exact bug scenario from 2026-01-13 01:58")
     print("="*80)
 
-    # This is what the LLM SHOULD see after worker completes:
-    print("\n--- EXPECTED message history (after worker completes) ---")
+    # This is what the LLM SHOULD see after commis completes:
+    print("\n--- EXPECTED message history (after commis completes) ---")
 
-    system_prompt = """You are Jarvis, a helpful AI assistant with access to various tools.
+    system_prompt = """You are Oikos, a helpful AI assistant with access to various tools.
 
 When a user asks for something, you can:
 1. Answer directly if you know the answer
 2. Use tools to help accomplish tasks
-3. Spawn workers for complex tasks that need tool access
+3. Spawn commis for complex tasks that need tool access
 
-When you call spawn_worker, it will create a background worker to handle the task.
-Once the worker completes, you'll receive the result and should synthesize it for the user.
+When you call spawn_commis, it will create a background commis to handle the task.
+Once the commis completes, you'll receive the result and should synthesize it for the user.
 
-IMPORTANT: When you see a tool result that says "Worker job N completed:", that means
-the task is DONE. You should summarize the result for the user, NOT spawn another worker."""
+IMPORTANT: When you see a tool result that says "Commis job N completed:", that means
+the task is DONE. You should summarize the result for the user, NOT spawn another commis."""
 
     user_message = "check disk space on cube real quick"
 
-    # The AI's first response - called spawn_worker
+    # The AI's first response - called spawn_commis
     first_ai_response = AIMessage(
         content="",
         tool_calls=[{
             "id": "call_abc123",
-            "name": "spawn_worker",
+            "name": "spawn_commis",
             "args": {"task": "Check disk space on cube"}
         }]
     )
 
-    # The tool result from spawn_worker AFTER worker completed
-    # This is what interrupt() returns after Command(resume=worker_result)
+    # The tool result from spawn_commis AFTER commis completed
+    # This is what interrupt() returns after Command(resume=commis_result)
     tool_result = ToolMessage(
-        content="""Worker job 41 completed:
+        content="""Commis job 41 completed:
 
 Cube is at 45% disk usage. Docker images and volumes are the largest consumers.
 
@@ -128,7 +128,7 @@ Details:
   - /home: 42GB
   - /var/log: 8GB""",
         tool_call_id="call_abc123",
-        name="spawn_worker"
+        name="spawn_commis"
     )
 
     # This is what the LLM should see on resume
@@ -159,10 +159,10 @@ Possible causes for the double-spawn bug:
    requires for function calling.
 
 4. REPLAY BEHAVIOR: LangGraph might be replaying the tool calls from checkpoint
-   before continuing, causing spawn_worker to be called twice.
+   before continuing, causing spawn_commis to be called twice.
 
 5. PROMPT CONFUSION: The LLM might see "check disk space on cube" in the user
-   message but "Check disk space on cube" (capitalized) in the spawn_worker args,
+   message but "Check disk space on cube" (capitalized) in the spawn_commis args,
    and decide the original request wasn't fully addressed.
 
 TO DIAGNOSE:
@@ -178,7 +178,7 @@ async def analyze_run(run_id: int):
     from sqlalchemy.orm import sessionmaker
 
     from zerg.config import settings
-    from zerg.models.models import AgentRun, WorkerJob
+    from zerg.models.models import Run, CommisJob
     from zerg.services.thread_service import ThreadService
 
     engine = create_engine(settings.database_url)
@@ -186,7 +186,7 @@ async def analyze_run(run_id: int):
     db = SessionLocal()
 
     try:
-        run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
+        run = db.query(Run).filter(Run.id == run_id).first()
         if not run:
             print(f"Run {run_id} not found")
             return
@@ -199,13 +199,13 @@ async def analyze_run(run_id: int):
         print(f"Started: {run.started_at}")
         print(f"Finished: {run.finished_at}")
 
-        # Get workers for this run
-        workers = db.query(WorkerJob).filter(
-            WorkerJob.supervisor_run_id == run_id
-        ).order_by(WorkerJob.created_at).all()
+        # Get commis for this run
+        commis = db.query(CommisJob).filter(
+            CommisJob.oikos_run_id == run_id
+        ).order_by(CommisJob.created_at).all()
 
-        print(f"\nWorkers spawned: {len(workers)}")
-        for w in workers:
+        print(f"\nCommis spawned: {len(commis)}")
+        for w in commis:
             print(f"  - Job {w.id}: '{w.task}' ({w.status})")
 
         # Get thread messages
@@ -249,7 +249,7 @@ async def check_llm_logs():
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="Debug LLM input during supervisor resume")
+    parser = argparse.ArgumentParser(description="Debug LLM input during oikos resume")
     parser.add_argument("--run-id", type=int, help="Analyze a specific run from database")
     parser.add_argument("--simulate", action="store_true", help="Simulate the bug scenario")
     parser.add_argument("--check-logs", action="store_true", help="Check LLM request logs")

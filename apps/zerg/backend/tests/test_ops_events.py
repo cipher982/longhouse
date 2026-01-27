@@ -31,7 +31,7 @@ async def test_ops_events_bridge_run_success_broadcast(db_session):
             EventType.RUN_UPDATED,
             {
                 "event_type": "run_updated",
-                "agent_id": 123,
+                "fiche_id": 123,
                 "run_id": 456,
                 "status": "success",
             },

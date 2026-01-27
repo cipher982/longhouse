@@ -16,7 +16,7 @@ from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.connectors.registry import ConnectorType
-from zerg.context import get_worker_context
+from zerg.context import get_commis_context
 from zerg.database import db_session
 from zerg.models.models import User
 from zerg.models.models import UserDailySmsCounter
@@ -37,16 +37,16 @@ def _get_user_id() -> int | None:
     """Get user_id from context.
 
     Try multiple sources:
-    1. Worker context (for background workers)
-    2. Credential resolver (for agent execution)
+    1. Commis context (for background commis)
+    2. Credential resolver (for fiche execution)
 
     Returns:
         User ID if found, None otherwise
     """
-    # Try worker context first
-    worker_ctx = get_worker_context()
-    if worker_ctx and worker_ctx.owner_id:
-        return worker_ctx.owner_id
+    # Try commis context first
+    commis_ctx = get_commis_context()
+    if commis_ctx and commis_ctx.owner_id:
+        return commis_ctx.owner_id
 
     # Try credential resolver
     resolver = get_credential_resolver()
@@ -177,15 +177,15 @@ def send_sms(
     This tool uses the Twilio Programmable Messaging API to send SMS messages.
     Phone numbers must be in E.164 format (+[country code][number], e.g., +14155552671).
 
-    Credentials can be provided as parameters or configured in Agent Settings -> Connectors.
+    Credentials can be provided as parameters or configured in Fiche Settings -> Connectors.
     If configured, the tool will automatically use those credentials.
 
     Args:
         to_number: Recipient phone number in E.164 format
         message: SMS message body (max 1600 characters)
-        account_sid: Twilio Account SID (optional if configured in Agent Settings)
-        auth_token: Twilio Auth Token (optional if configured in Agent Settings)
-        from_number: Sender phone number in E.164 format (optional if configured in Agent Settings)
+        account_sid: Twilio Account SID (optional if configured in Fiche Settings)
+        auth_token: Twilio Auth Token (optional if configured in Fiche Settings)
+        from_number: Sender phone number in E.164 format (optional if configured in Fiche Settings)
         status_callback: Optional webhook URL to receive delivery status updates
 
     Returns:
@@ -362,7 +362,7 @@ def send_sms(
         headers = {
             "Authorization": f"Basic {encoded_credentials}",
             "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": "Zerg-Agent/1.0",
+            "User-Fiche": "Zerg-Fiche/1.0",
         }
 
         # Make the API request

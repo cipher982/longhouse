@@ -14,7 +14,7 @@
 
 Current architecture spec (v2.2): **[specs/durable-runs-v2.2.md](./specs/durable-runs-v2.2.md)**
 
-Previous (v2.1): [specs/jarvis-supervisor-unification-v2.1.md](./specs/jarvis-supervisor-unification-v2.1.md)
+Previous (v2.1): [specs/oikos-supervisor-unification-v2.1.md](./specs/oikos-supervisor-unification-v2.1.md)
 
 Historical (superseded v2.0): [archive/super-siri-architecture.md](./archive/super-siri-architecture.md)
 

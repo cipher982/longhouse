@@ -79,7 +79,7 @@ class ReplayService:
             conversation_id: ID of the conversation from scenario
 
         Returns:
-            Conversation dict with messages, worker_result, final_message,
+            Conversation dict with messages, commis_result, final_message,
             or None if not found
         """
         return self.conversations.get(conversation_id)
@@ -116,12 +116,12 @@ class ReplayService:
     ) -> None:
         """Emit SSE events for a golden conversation.
 
-        This simulates the real supervisor flow by emitting events
+        This simulates the real oikos flow by emitting events
         with the correct timing and data.
 
         Args:
             conversation_id: ID of the golden conversation
-            run_id: The agent run ID
+            run_id: The oikos run ID
             thread_id: The thread ID
             owner_id: User ID
             message_id: Client message ID
@@ -135,11 +135,11 @@ class ReplayService:
             logger.error(f"Conversation not found: {conversation_id}")
             return
 
-        # Emit supervisor_started
+        # Emit oikos_started
         await event_bus.publish(
-            EventType.SUPERVISOR_STARTED,
+            EventType.OIKOS_STARTED,
             {
-                "event_type": "supervisor_started",
+                "event_type": "oikos_started",
                 "run_id": run_id,
                 "thread_id": thread_id,
                 "owner_id": owner_id,
@@ -151,9 +151,9 @@ class ReplayService:
 
         # Emit thinking
         await event_bus.publish(
-            EventType.SUPERVISOR_THINKING,
+            EventType.OIKOS_THINKING,
             {
-                "event_type": "supervisor_thinking",
+                "event_type": "oikos_thinking",
                 "run_id": run_id,
                 "owner_id": owner_id,
                 "message": "Analyzing your request...",
@@ -182,12 +182,12 @@ class ReplayService:
                 tool_name = msg.get("name", "")
                 tool_input = msg.get("input", {})
 
-                if tool_name == "spawn_worker":
-                    # Emit worker spawned event
+                if tool_name == "spawn_commis":
+                    # Emit commis spawned event
                     await event_bus.publish(
-                        EventType.WORKER_SPAWNED,
+                        EventType.COMMIS_SPAWNED,
                         {
-                            "event_type": "worker_spawned",
+                            "event_type": "commis_spawned",
                             "run_id": run_id,
                             "owner_id": owner_id,
                             "job_id": 999,  # Fake job ID
@@ -197,22 +197,22 @@ class ReplayService:
                         },
                     )
 
-        # Simulate worker completion if present
-        if worker_result := conv.get("worker_result"):
-            delay_ms = worker_result.get("delay_ms", 2000)
+        # Simulate commis completion if present
+        if commis_result := conv.get("commis_result"):
+            delay_ms = commis_result.get("delay_ms", 2000)
             await asyncio.sleep(delay_ms / 1000)
 
-            # Emit worker complete
+            # Emit commis complete
             await event_bus.publish(
-                EventType.WORKER_COMPLETE,
+                EventType.COMMIS_COMPLETE,
                 {
-                    "event_type": "worker_complete",
+                    "event_type": "commis_complete",
                     "run_id": run_id,
                     "owner_id": owner_id,
                     "job_id": 999,
                     "tool_call_id": f"call_{run_id}_spawn",
                     "status": "success",
-                    "result": worker_result.get("result", ""),
+                    "result": commis_result.get("result", ""),
                     "trace_id": trace_id,
                 },
             )
@@ -233,9 +233,9 @@ class ReplayService:
 
         # Emit completion
         await event_bus.publish(
-            EventType.SUPERVISOR_COMPLETE,
+            EventType.OIKOS_COMPLETE,
             {
-                "event_type": "supervisor_complete",
+                "event_type": "oikos_complete",
                 "run_id": run_id,
                 "thread_id": thread_id,
                 "owner_id": owner_id,
@@ -277,9 +277,9 @@ class ReplayService:
 
         for chunk in chunks:
             await event_bus.publish(
-                EventType.SUPERVISOR_TOKEN,
+                EventType.OIKOS_TOKEN,
                 {
-                    "event_type": "supervisor_token",
+                    "event_type": "oikos_token",
                     "run_id": run_id,
                     "owner_id": owner_id,
                     "message_id": message_id,
@@ -309,7 +309,7 @@ async def run_replay_conversation(
     Args:
         scenario_name: Name of the scenario
         user_message: User's message
-        run_id: Agent run ID
+        run_id: Fiche run ID
         thread_id: Thread ID
         owner_id: User ID
         message_id: Client message ID

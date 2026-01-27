@@ -14,7 +14,7 @@ from zerg.schemas.workflow import WorkflowNode
 from zerg.services.workflow_engine import workflow_engine
 
 
-def create_conditional_workflow_data(agent_id: int) -> WorkflowData:
+def create_conditional_workflow_data(fiche_id: int) -> WorkflowData:
     """Create a test workflow with conditional logic."""
     return WorkflowData(
         nodes=[
@@ -32,34 +32,34 @@ def create_conditional_workflow_data(agent_id: int) -> WorkflowData:
                 position=Position(x=300, y=100),
                 config={"condition": "${tool-1} > 50", "condition_type": "expression"},
             ),
-            # Agent node for "high" branch (true)
+            # Fiche node for "high" branch (true)
             WorkflowNode(
-                id="agent-high",
-                type="agent",
+                id="fiche-high",
+                type="fiche",
                 position=Position(x=500, y=50),
-                config={"agent_id": agent_id, "message": "The number ${tool-1} is greater than 50!"},
+                config={"fiche_id": fiche_id, "message": "The number ${tool-1} is greater than 50!"},
             ),
-            # Agent node for "low" branch (false)
+            # Fiche node for "low" branch (false)
             WorkflowNode(
-                id="agent-low",
-                type="agent",
+                id="fiche-low",
+                type="fiche",
                 position=Position(x=500, y=150),
-                config={"agent_id": agent_id, "message": "The number ${tool-1} is 50 or less."},
+                config={"fiche_id": fiche_id, "message": "The number ${tool-1} is 50 or less."},
             ),
         ],
         edges=[
             # Tool -> Conditional
             WorkflowEdge(**{"from_node_id": "tool-1", "to_node_id": "conditional-1"}),
             # Conditional -> High branch (true)
-            WorkflowEdge(**{"from_node_id": "conditional-1", "to_node_id": "agent-high", "config": {"branch": "true"}}),
+            WorkflowEdge(**{"from_node_id": "conditional-1", "to_node_id": "fiche-high", "config": {"branch": "true"}}),
             # Conditional -> Low branch (false)
-            WorkflowEdge(**{"from_node_id": "conditional-1", "to_node_id": "agent-low", "config": {"branch": "false"}}),
+            WorkflowEdge(**{"from_node_id": "conditional-1", "to_node_id": "fiche-low", "config": {"branch": "false"}}),
         ],
     )
 
 
 @pytest.mark.asyncio
-async def test_conditional_workflow_high_branch(db, test_user, sample_agent):
+async def test_conditional_workflow_high_branch(db, test_user, sample_fiche):
     """Test conditional workflow routing to high branch when condition is true."""
 
     # Mock the random_number tool to return a high value (> 50)
@@ -71,7 +71,7 @@ async def test_conditional_workflow_high_branch(db, test_user, sample_agent):
         mock_resolver_instance.get_tool = lambda name: mock_tool if name == "random_number" else None
         mock_resolver.return_value = mock_resolver_instance
 
-        # Mock AgentRunner to avoid actual LLM calls
+        # Mock FicheRunner to avoid actual LLM calls
         async def mock_run_thread(db, thread):
             from datetime import datetime
             from datetime import timezone
@@ -89,13 +89,13 @@ async def test_conditional_workflow_high_branch(db, test_user, sample_agent):
             )
             return [mock_msg]
 
-        with patch("zerg.services.node_executors.AgentRunner") as mock_agent_runner:
+        with patch("zerg.services.node_executors.FicheRunner") as mock_fiche_runner:
             mock_runner_instance = type("MockRunner", (), {})()
             mock_runner_instance.run_thread = mock_run_thread
-            mock_agent_runner.return_value = mock_runner_instance
+            mock_fiche_runner.return_value = mock_runner_instance
 
             # Create workflow
-            workflow_data = create_conditional_workflow_data(sample_agent.id)
+            workflow_data = create_conditional_workflow_data(sample_fiche.id)
             workflow = Workflow(
                 owner_id=test_user.id,
                 name="Test Conditional Workflow",
@@ -125,16 +125,16 @@ async def test_conditional_workflow_high_branch(db, test_user, sample_agent):
 
             node_states = db.query(NodeExecutionState).filter_by(workflow_execution_id=execution_id).all()
 
-            # Should have executed: tool-1, conditional-1, agent-high
+            # Should have executed: tool-1, conditional-1, fiche-high
             executed_nodes = {state.node_id for state in node_states}
             assert "tool-1" in executed_nodes
             assert "conditional-1" in executed_nodes
-            assert "agent-high" in executed_nodes
-            assert "agent-low" not in executed_nodes  # Should NOT execute low branch
+            assert "fiche-high" in executed_nodes
+            assert "fiche-low" not in executed_nodes  # Should NOT execute low branch
 
 
 @pytest.mark.asyncio
-async def test_conditional_workflow_low_branch(db, test_user, sample_agent):
+async def test_conditional_workflow_low_branch(db, test_user, sample_fiche):
     """Test conditional workflow routing to low branch when condition is false."""
 
     # Mock the random_number tool to return a low value (<= 50)
@@ -146,7 +146,7 @@ async def test_conditional_workflow_low_branch(db, test_user, sample_agent):
         mock_resolver_instance.get_tool = lambda name: mock_tool if name == "random_number" else None
         mock_resolver.return_value = mock_resolver_instance
 
-        # Mock AgentRunner to avoid actual LLM calls
+        # Mock FicheRunner to avoid actual LLM calls
         async def mock_run_thread(db, thread):
             from datetime import datetime
             from datetime import timezone
@@ -164,13 +164,13 @@ async def test_conditional_workflow_low_branch(db, test_user, sample_agent):
             )
             return [mock_msg]
 
-        with patch("zerg.services.node_executors.AgentRunner") as mock_agent_runner:
+        with patch("zerg.services.node_executors.FicheRunner") as mock_fiche_runner:
             mock_runner_instance = type("MockRunner", (), {})()
             mock_runner_instance.run_thread = mock_run_thread
-            mock_agent_runner.return_value = mock_runner_instance
+            mock_fiche_runner.return_value = mock_runner_instance
 
             # Create workflow
-            workflow_data = create_conditional_workflow_data(sample_agent.id)
+            workflow_data = create_conditional_workflow_data(sample_fiche.id)
             workflow = Workflow(
                 owner_id=test_user.id,
                 name="Test Conditional Workflow Low",
@@ -200,16 +200,16 @@ async def test_conditional_workflow_low_branch(db, test_user, sample_agent):
 
             node_states = db.query(NodeExecutionState).filter_by(workflow_execution_id=execution_id).all()
 
-            # Should have executed: tool-1, conditional-1, agent-low
+            # Should have executed: tool-1, conditional-1, fiche-low
             executed_nodes = {state.node_id for state in node_states}
             assert "tool-1" in executed_nodes
             assert "conditional-1" in executed_nodes
-            assert "agent-low" in executed_nodes
-            assert "agent-high" not in executed_nodes  # Should NOT execute high branch
+            assert "fiche-low" in executed_nodes
+            assert "fiche-high" not in executed_nodes  # Should NOT execute high branch
 
 
 @pytest.mark.asyncio
-async def test_conditional_node_variable_resolution(db, test_user, sample_agent):
+async def test_conditional_node_variable_resolution(db, test_user, sample_fiche):
     """Test that conditional nodes properly resolve variables from previous node outputs."""
 
     # Mock the tool to return a specific value we can test
@@ -221,14 +221,14 @@ async def test_conditional_node_variable_resolution(db, test_user, sample_agent)
         mock_resolver_instance.get_tool = lambda name: mock_tool if name == "data_processor" else None
         mock_resolver.return_value = mock_resolver_instance
 
-        # Mock AgentRunner
+        # Mock FicheRunner
         async def mock_run_thread(db, thread):
             return [{"role": "assistant", "content": "Variable resolved correctly"}]
 
-        with patch("zerg.services.node_executors.AgentRunner") as mock_agent_runner:
+        with patch("zerg.services.node_executors.FicheRunner") as mock_fiche_runner:
             mock_runner_instance = type("MockRunner", (), {})()
             mock_runner_instance.run_thread = mock_run_thread
-            mock_agent_runner.return_value = mock_runner_instance
+            mock_fiche_runner.return_value = mock_runner_instance
 
             # Create workflow with complex variable resolution
             workflow_data = WorkflowData(
@@ -249,11 +249,11 @@ async def test_conditional_node_variable_resolution(db, test_user, sample_agent)
                         },
                     ),
                     WorkflowNode(
-                        id="agent-success",
-                        type="agent",
+                        id="fiche-success",
+                        type="fiche",
                         position=Position(x=500, y=100),
                         config={
-                            "agent_id": sample_agent.id,
+                            "fiche_id": sample_fiche.id,
                             "message": "Processing result ${tool-1.result} with phase ${tool-1.meta.phase} and result ${tool-1.meta.result}",
                         },
                     ),
@@ -261,7 +261,7 @@ async def test_conditional_node_variable_resolution(db, test_user, sample_agent)
                 edges=[
                     WorkflowEdge(**{"from_node_id": "tool-1", "to_node_id": "conditional-1"}),
                     WorkflowEdge(
-                        **{"from_node_id": "conditional-1", "to_node_id": "agent-success", "config": {"branch": "true"}}
+                        **{"from_node_id": "conditional-1", "to_node_id": "fiche-success", "config": {"branch": "true"}}
                     ),
                 ],
             )
