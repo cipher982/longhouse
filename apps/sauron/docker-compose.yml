@@ -2,7 +2,7 @@
 # Deployed to clifford VPS via Coolify
 #
 # This compose file is designed for Coolify deployment.
-# Build context is the monorepo root (../.. from this file).
+# Coolify sets --project-directory to repo root, so context is "."
 
 networks:
   life-hub-shared:
@@ -11,7 +11,7 @@ networks:
 services:
   sauron:
     build:
-      context: ../..  # Monorepo root
+      context: .  # Repo root (Coolify sets --project-directory here)
       dockerfile: apps/sauron/Dockerfile
     container_name: sauron
     restart: unless-stopped
