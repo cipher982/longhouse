@@ -238,3 +238,4 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-27) [gotcha] Sauron /sync reloads manifest but scheduler doesn’t reschedule jobs; changes/new jobs won’t run until restart or explicit re-schedule.
 - (2026-01-27) [gotcha] ScriptedLLM treats any ToolMessage as a successful workspace worker completion; tool error strings can still yield “Workspace worker completed successfully,” masking spawn failures in E2E.
 - (2026-01-27) [gotcha] If Zerg backend has `JOB_QUEUE_ENABLED=1` and `JOBS_GIT_*` set, it will schedule external sauron-jobs too; remove/disable those vars when Sauron is the sole scheduler.
+- (2026-01-27) [gotcha] `sauron-jobs` worklog job uses `GITHUB_TOKEN` (GitHub API via gh); don’t remove it from scheduler envs if worklog is enabled.
