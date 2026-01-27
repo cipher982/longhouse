@@ -7,10 +7,10 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
-# Cancel previous runs for the same PR
+# Never cancel main pushes (each commit gets its own run), only cancel duplicate PR runs
 concurrency:
-  group: quality-${{ github.ref }}
-  cancel-in-progress: true
+  group: quality-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lighthouse:

@@ -14,9 +14,10 @@ permissions:
   contents: read
   packages: write
 
+# Never cancel - each build should complete
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   build-and-push:
