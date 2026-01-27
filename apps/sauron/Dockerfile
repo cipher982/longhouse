@@ -33,6 +33,7 @@ COPY apps/zerg/backend/zerg /app/zerg_pkg/zerg
 
 # Create pyproject.toml for zerg package with deps for scheduler + builtin jobs
 # Builtin jobs need: openai (backup_sentinel), pydantic, boto3 (email)
+# External jobs (sauron-jobs) need: pymongo (llm-benchmarks), google-ads-api
 RUN cat > /app/zerg_pkg/pyproject.toml << 'EOF'
 [project]
 name = "zerg"
@@ -46,6 +47,8 @@ dependencies = [
     "openai>=1.0.0",
     "pydantic>=2.0.0",
     "boto3>=1.34.0",
+    "pymongo>=4.6.0",
+    "google-ads>=25.0.0",
 ]
 
 [build-system]

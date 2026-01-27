@@ -107,6 +107,17 @@ services:
       TRACCAR_STALE_THRESHOLD_MINUTES: ${TRACCAR_STALE_THRESHOLD_MINUTES:-1440}
       TRACCAR_ALERT_COOLDOWN_HOURS: ${TRACCAR_ALERT_COOLDOWN_HOURS:-24}
 
+      # === sauron-jobs specific env vars ===
+      # Jobs use LIFE_HUB_DB_URL (different name from DATABASE_URL)
+      LIFE_HUB_DB_URL: ${LIFE_HUB_DB_URL}
+
+      # AI Tools catalog (MinIO)
+      AITOOLS_MINIO_ENDPOINT: ${AITOOLS_MINIO_ENDPOINT}
+      AITOOLS_MINIO_ACCESS_KEY: ${AITOOLS_MINIO_ACCESS_KEY}
+      AITOOLS_MINIO_SECRET_KEY: ${AITOOLS_MINIO_SECRET_KEY}
+      AITOOLS_MINIO_BUCKET: ${AITOOLS_MINIO_BUCKET}
+      AITOOLS_MINIO_SECURE: ${AITOOLS_MINIO_SECURE:-true}
+
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 60s
