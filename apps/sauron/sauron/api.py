@@ -212,8 +212,9 @@ async def trigger_job(job_id: str) -> TriggerResponse:
 
 @app.post("/sync", response_model=SyncResponse)
 async def force_sync() -> SyncResponse:
-    """Force git sync of the jobs repo."""
+    """Force git sync of the jobs repo and reload manifest."""
     from zerg.jobs import get_git_sync_service
+    from zerg.jobs.loader import load_jobs_manifest
 
     git_service = get_git_sync_service()
     if not git_service:
@@ -225,9 +226,12 @@ async def force_sync() -> SyncResponse:
 
     try:
         result = await git_service.refresh()
+        # Reload manifest after sync to pick up new/changed jobs
+        await load_jobs_manifest()
+        logger.info(f"Git sync + manifest reload: {git_service.current_sha}")
         return SyncResponse(
             success=True,
-            message=result.get("message", "Sync completed"),
+            message=result.get("message", "Synced and reloaded"),
             sha=git_service.current_sha,
         )
     except Exception as e:

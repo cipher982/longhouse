@@ -32,10 +32,29 @@ app = typer.Typer(help="Sauron - Centralized ops scheduler CLI")
 def _init_jobs() -> int:
     """Initialize job registry (without scheduler).
 
+    Initializes GitSyncService for external jobs and registers all jobs.
     Returns count of registered jobs.
     """
     async def _load():
-        from zerg.jobs import register_all_jobs
+        from pathlib import Path
+
+        from zerg.jobs import GitSyncService, register_all_jobs, set_git_sync_service
+
+        from sauron.config import get_settings
+
+        settings = get_settings()
+
+        # Initialize git sync for external jobs
+        if settings.jobs_git_repo_url:
+            git_service = GitSyncService(
+                repo_url=settings.jobs_git_repo_url,
+                local_path=Path(settings.jobs_dir),
+                branch=settings.jobs_git_branch,
+                token=settings.jobs_git_token,
+            )
+            await git_service.ensure_cloned()
+            set_git_sync_service(git_service)
+            logger.info(f"Git sync initialized: {git_service.current_sha}")
 
         return await register_all_jobs(scheduler=None, use_queue=False)
 
