@@ -302,8 +302,8 @@ export default function ForumPage() {
             <Button variant={isLive ? "primary" : "ghost"} size="sm" onClick={() => setMode(isLive ? "replay" : "live")}>
               {isLive ? "Live Signals" : "Replay Mode"}
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => navigate("/swarm/ops")}>
-              Ops List
+            <Button variant="ghost" size="sm" onClick={() => navigate("/runs")}>
+              Runs
             </Button>
           </div>
         }
