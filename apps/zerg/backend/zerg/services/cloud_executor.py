@@ -33,6 +33,11 @@ DEFAULT_TIMEOUT_SECONDS = 3600
 # Using z.ai to avoid AWS SSO credential complexity
 DEFAULT_CLOUD_MODEL = "zai/glm-4.7"
 
+CLAUDE_BACKENDS = {"zai", "bedrock"}
+CLAUDE_OUTPUT_FORMAT_ENV = "HATCH_CLAUDE_OUTPUT_FORMAT"
+CLAUDE_INCLUDE_PARTIAL_ENV = "HATCH_CLAUDE_INCLUDE_PARTIAL_MESSAGES"
+ALLOWED_CLAUDE_OUTPUT_FORMATS = {"text", "json", "stream-json"}
+
 # Model ID mapping from Zerg model IDs to hatch backend/model format
 MODEL_MAPPING = {
     # OpenAI models -> codex backend
@@ -50,6 +55,15 @@ MODEL_MAPPING = {
     # Gemini models
     "gemini-pro": "gemini/gemini-pro",
 }
+
+
+def _coerce_bool(value: str | bool | None) -> bool:
+    """Coerce common string/bool values to bool."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def normalize_model_id(model: str) -> tuple[str, str]:
@@ -92,6 +106,8 @@ class CloudExecutor:
         self,
         hatch_path: str | None = None,
         default_model: str = DEFAULT_CLOUD_MODEL,
+        claude_output_format: str | None = None,
+        include_partial_messages: bool | None = None,
     ):
         """Initialize the cloud executor.
 
@@ -101,9 +117,28 @@ class CloudExecutor:
             Path to hatch executable. If None, uses 'hatch' from PATH.
         default_model
             Default model to use if not specified in run_commis().
+        claude_output_format
+            Optional Claude output format override (text/json/stream-json).
+            Defaults to env var HATCH_CLAUDE_OUTPUT_FORMAT when unset.
+        include_partial_messages
+            Include partial Claude messages (env: HATCH_CLAUDE_INCLUDE_PARTIAL_MESSAGES).
         """
         self.hatch_path = hatch_path or "hatch"
         self.default_model = default_model
+        env_output_format = claude_output_format or os.environ.get(CLAUDE_OUTPUT_FORMAT_ENV)
+        if env_output_format:
+            env_output_format = env_output_format.strip()
+            if env_output_format not in ALLOWED_CLAUDE_OUTPUT_FORMATS:
+                logger.warning(
+                    "Invalid Claude output format '%s' (allowed: %s). Ignoring.",
+                    env_output_format,
+                    ", ".join(sorted(ALLOWED_CLAUDE_OUTPUT_FORMATS)),
+                )
+                env_output_format = None
+        self.claude_output_format = env_output_format
+        self.include_partial_messages = _coerce_bool(
+            include_partial_messages if include_partial_messages is not None else os.environ.get(CLAUDE_INCLUDE_PARTIAL_ENV)
+        )
 
     async def run_commis(
         self,
@@ -168,6 +203,12 @@ class CloudExecutor:
             "-C",
             str(workspace),
         ]
+
+        if self.claude_output_format and backend in CLAUDE_BACKENDS:
+            cmd.extend(["--output-format", self.claude_output_format])
+
+        if self.include_partial_messages and backend in CLAUDE_BACKENDS:
+            cmd.append("--include-partial-messages")
 
         # Add resume flag for session continuity (Claude backends only)
         if resume_session_id:

@@ -326,18 +326,33 @@ async def test_read_commis_result_includes_duration(oikos_fiche, db_session, tes
 
         result_text = await read_commis_result_async(str(job_id))
 
-        # Verify the result includes duration_ms
+        # Verify the result includes a formatted execution time
         assert "Execution time:" in result_text, f"Result should include execution time. Got: {result_text}"
-        assert "ms" in result_text, "Result should include milliseconds unit"
 
-        # Verify the duration_ms is actually a number
-        # Extract the duration using a simple pattern
         import re
 
-        duration_match = re.search(r"Execution time: (\d+)ms", result_text)
-        assert duration_match is not None, "Should find duration in result"
-        duration_value = int(duration_match.group(1))
-        assert duration_value > 0, "Duration should be greater than 0ms"
+        duration_ms: float | None = None
+
+        # Formats: "123ms" or "1.3s"
+        match = re.search(r"Execution time: (\d+)(ms|s)\b", result_text)
+        if match:
+            value = float(match.group(1))
+            unit = match.group(2)
+            duration_ms = value if unit == "ms" else value * 1000
+        else:
+            match = re.search(r"Execution time: (\d+\.\d+)s\b", result_text)
+            if match:
+                duration_ms = float(match.group(1)) * 1000
+            else:
+                # Format: "2m 15s"
+                match = re.search(r"Execution time: (\d+)m (\d+)s\b", result_text)
+                if match:
+                    minutes = int(match.group(1))
+                    seconds = int(match.group(2))
+                    duration_ms = (minutes * 60 + seconds) * 1000
+
+        assert duration_ms is not None, "Should find duration in result"
+        assert duration_ms > 0, "Duration should be greater than 0ms"
 
         # Verify we still get the actual result text
         assert "42" in result_text or "result" in result_text.lower(), "Result should include actual commis output"

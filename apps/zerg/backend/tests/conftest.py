@@ -21,11 +21,34 @@ from fastapi.testclient import TestClient
 
 
 # ---------------------------------------------------------------------------
-# Register custom CLI options for live integration tests
+# Register custom CLI options for live integration tests and DB mode
 # ---------------------------------------------------------------------------
 def pytest_addoption(parser):
     parser.addoption("--live-url", action="store", default="http://localhost:30080", help="Base URL for live server")
     parser.addoption("--live-token", action="store", help="JWT Token for live server (optional)")
+    # Explicit database mode selection
+    parser.addoption(
+        "--db-mode",
+        choices=["docker", "external"],
+        default=None,
+        help="Database strategy: docker=testcontainers (local), external=provided URL (CI)"
+    )
+    parser.addoption(
+        "--db-url-env",
+        default="DATABASE_URL",
+        help="Env var name containing DATABASE_URL (for external mode)"
+    )
+    parser.addoption(
+        "--db-schema",
+        default=None,
+        help="Schema name to use (for external mode, required)"
+    )
+    parser.addoption(
+        "--db-cleanup",
+        choices=["drop", "keep"],
+        default="drop",
+        help="Schema cleanup strategy after tests (for external mode)"
+    )
 
 
 import zerg.database as _db_mod
@@ -106,67 +129,164 @@ else:
     dotenv.load_dotenv()
 
 
-# Ensure docker-py can reach Docker Desktop on macOS where the socket lives
-# under ~/.docker/run/docker.sock when /var/run/docker.sock is absent.
-if not os.environ.get("DOCKER_HOST"):
-    _sock = Path.home() / ".docker/run/docker.sock"
-    if _sock.exists():
-        os.environ["DOCKER_HOST"] = f"unix://{_sock}"
+# ---------------------------------------------------------------------------
+# Database mode detection and setup
+# ---------------------------------------------------------------------------
+# Explicit mode (--db-mode) takes precedence over environment detection.
+# Default: auto-detect based on CI_TEST_SCHEMA env var presence.
+#
+# IMPORTANT: This runs at import time (before pytest_configure), so we need
+# to detect the mode early. The CLI options are validated later in a fixture.
 
-# Create a test database - always use ephemeral PostgreSQL via Testcontainers
-from docker import from_env as _docker_from_env
-from testcontainers.postgres import PostgresContainer
+def _detect_db_mode():
+    """Detect database mode from CLI args or environment."""
+    # Check for explicit --db-mode in sys.argv (early detection before pytest parses)
+    if "--db-mode=external" in sys.argv or any(a.startswith("--db-mode") and "external" in a for a in sys.argv):
+        return "external"
+    if "--db-mode=docker" in sys.argv or any(a.startswith("--db-mode") and "docker" in a for a in sys.argv):
+        return "docker"
 
-# Start a single Postgres container for the entire test session early so
-# subsequent imports (e.g. routers) see the correct session factory.
-try:
-    _docker_from_env().ping()
-except Exception as _e:
-    raise RuntimeError(
-        "Docker is required to run tests against PostgreSQL. Please install and start Docker Desktop (or provide a running Docker daemon)."
-    ) from _e
+    # Auto-detect: if CI_TEST_SCHEMA is set, use external mode
+    if os.environ.get("CI_TEST_SCHEMA"):
+        return "external"
 
-# Configure Postgres for maximum test speed (unsafe for production!)
-# These settings reduce durability guarantees in exchange for speed.
-_pg_container = PostgresContainer(
-    "postgres:16-alpine",
-    driver="psycopg",
-).with_command(
-    "postgres "
-    "-c fsync=off "                    # Don't sync to disk (huge speedup)
-    "-c synchronous_commit=off "       # Don't wait for WAL write
-    "-c full_page_writes=off "         # Skip full page writes after checkpoint
-    "-c random_page_cost=1.1 "         # Assume fast storage (SSD/RAM)
-    "-c effective_io_concurrency=200 " # Allow more parallel I/O
-)
-_pg_container.start()
+    # Default to docker (testcontainers) for local development
+    return "docker"
 
+_DB_MODE = _detect_db_mode()
 
-# Register cleanup at interpreter exit - handles Ctrl+C, crashes, etc.
-def _cleanup_pg_container():
+# Placeholders for test database setup
+_pg_container = None
+SQLALCHEMY_DATABASE_URL = None
+test_engine = None
+TestingSessionLocal = None
+_CI_TEST_SCHEMA = None
+
+if _DB_MODE == "docker":
+    # ---------------------------------------------------------------------------
+    # Docker mode: Use testcontainers for ephemeral PostgreSQL
+    # ---------------------------------------------------------------------------
+    # Ensure docker-py can reach Docker Desktop on macOS where the socket lives
+    # under ~/.docker/run/docker.sock when /var/run/docker.sock is absent.
+    if not os.environ.get("DOCKER_HOST"):
+        _sock = Path.home() / ".docker/run/docker.sock"
+        if _sock.exists():
+            os.environ["DOCKER_HOST"] = f"unix://{_sock}"
+
+    from docker import from_env as _docker_from_env
+    from testcontainers.postgres import PostgresContainer
+
+    # Start a single Postgres container for the entire test session early so
+    # subsequent imports (e.g. routers) see the correct session factory.
     try:
-        _pg_container.stop()
-    except Exception:
-        pass
+        _docker_from_env().ping()
+    except Exception as _e:
+        raise RuntimeError(
+            "Docker is required to run tests with --db-mode=docker. "
+            "Either start Docker Desktop, or use --db-mode=external with CI_TEST_SCHEMA and DATABASE_URL."
+        ) from _e
 
+    # Configure Postgres for maximum test speed (unsafe for production!)
+    _pg_container = PostgresContainer(
+        "postgres:16-alpine",
+        driver="psycopg",
+    ).with_command(
+        "postgres "
+        "-c fsync=off "                    # Don't sync to disk (huge speedup)
+        "-c synchronous_commit=off "       # Don't wait for WAL write
+        "-c full_page_writes=off "         # Skip full page writes after checkpoint
+        "-c random_page_cost=1.1 "         # Assume fast storage (SSD/RAM)
+        "-c effective_io_concurrency=200 " # Allow more parallel I/O
+    )
+    _pg_container.start()
 
-atexit.register(_cleanup_pg_container)
+    # Register cleanup at interpreter exit - handles Ctrl+C, crashes, etc.
+    def _cleanup_pg_container():
+        try:
+            if _pg_container:
+                _pg_container.stop()
+        except Exception:
+            pass
 
-# Prefer psycopg v3 driver in SQLAlchemy URL
-SQLALCHEMY_DATABASE_URL = _pg_container.get_connection_url().replace("psycopg2", "psycopg")
-# Ensure unqualified SQL (TRUNCATE, SELECT, etc.) hits the zerg schema.
-SQLALCHEMY_DATABASE_URL = _apply_search_path(SQLALCHEMY_DATABASE_URL, DB_SCHEMA)
+    atexit.register(_cleanup_pg_container)
 
-# Create test engine and session factory bound to Postgres
-from sqlalchemy.pool import NullPool
+    # Prefer psycopg v3 driver in SQLAlchemy URL
+    SQLALCHEMY_DATABASE_URL = _pg_container.get_connection_url().replace("psycopg2", "psycopg")
+    # Ensure unqualified SQL (TRUNCATE, SELECT, etc.) hits the zerg schema.
+    SQLALCHEMY_DATABASE_URL = _apply_search_path(SQLALCHEMY_DATABASE_URL, DB_SCHEMA)
 
-test_engine = make_engine(
-    SQLALCHEMY_DATABASE_URL,
-    pool_pre_ping=True,
-    poolclass=NullPool,
-)
+    # Create test engine and session factory bound to Postgres
+    from sqlalchemy.pool import NullPool
 
-TestingSessionLocal = make_sessionmaker(test_engine)
+    test_engine = make_engine(
+        SQLALCHEMY_DATABASE_URL,
+        pool_pre_ping=True,
+        poolclass=NullPool,
+    )
+
+    TestingSessionLocal = make_sessionmaker(test_engine)
+
+elif _DB_MODE == "external":
+    # ---------------------------------------------------------------------------
+    # External mode: Use provided DATABASE_URL with per-run schema isolation
+    # ---------------------------------------------------------------------------
+    # NOTE: When using pytest-xdist, each worker is a separate process.
+    # We append the worker ID to the schema name to avoid collisions.
+    # The PYTEST_XDIST_WORKER env var is set by xdist (e.g., "gw0", "gw1").
+    _xdist_worker = os.environ.get("PYTEST_XDIST_WORKER", "")
+    _CI_TEST_SCHEMA_BASE = os.environ.get("CI_TEST_SCHEMA")
+    if not _CI_TEST_SCHEMA_BASE:
+        raise RuntimeError(
+            "External DB mode requires CI_TEST_SCHEMA environment variable. "
+            "Set CI_TEST_SCHEMA=zerg_ci_<unique_id> to isolate this test run."
+        )
+
+    # Append worker ID for parallel test isolation
+    if _xdist_worker:
+        _CI_TEST_SCHEMA = f"{_CI_TEST_SCHEMA_BASE}_{_xdist_worker}"
+    else:
+        _CI_TEST_SCHEMA = _CI_TEST_SCHEMA_BASE
+
+    # Safety check: only allow ci_, test_, or zerg_ci_ prefixed schemas
+    if not _CI_TEST_SCHEMA.startswith(("ci_", "test_", "zerg_ci_")):
+        raise RuntimeError(
+            f"Unsafe schema name: {_CI_TEST_SCHEMA}. "
+            "Schema must start with ci_, test_, or zerg_ci_ to prevent accidental production data loss."
+        )
+
+    _db_url_env = os.environ.get("DB_URL_ENV", "DATABASE_URL")
+    SQLALCHEMY_DATABASE_URL = os.environ.get(_db_url_env)
+    if not SQLALCHEMY_DATABASE_URL:
+        raise RuntimeError(
+            f"External DB mode requires {_db_url_env} environment variable. "
+            f"Set {_db_url_env}=postgresql://... to connect to the CI database."
+        )
+
+    # Apply the CI schema to the connection URL for search_path
+    SQLALCHEMY_DATABASE_URL = _apply_search_path(SQLALCHEMY_DATABASE_URL, _CI_TEST_SCHEMA)
+
+    from sqlalchemy.pool import NullPool
+    from sqlalchemy import text
+
+    # Create base engine first (without schema translation) to create the schema
+    _base_engine = make_engine(
+        SQLALCHEMY_DATABASE_URL,
+        pool_pre_ping=True,
+        poolclass=NullPool,
+    )
+
+    # Create the schema if it doesn't exist
+    with _base_engine.connect() as conn:
+        conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {_CI_TEST_SCHEMA}"))
+        conn.commit()
+
+    # Now create the actual test engine with schema_translate_map
+    # This translates "zerg" schema references in ORM models to our per-worker schema
+    test_engine = _base_engine.execution_options(
+        schema_translate_map={DB_SCHEMA: _CI_TEST_SCHEMA}
+    )
+
+    TestingSessionLocal = make_sessionmaker(test_engine)
 
 # Override default engine/factory so all app code uses Postgres in tests
 _db_mod.default_engine = test_engine
@@ -390,14 +510,26 @@ if _eval_mode != "live":
 from zerg.main import app  # noqa: E402
 
 
-# Stop the Postgres container after the entire test session completes
+# Stop the Postgres container after the entire test session completes (docker mode only)
 @pytest.fixture(scope="session", autouse=True)
 def _shutdown_pg_container():
     yield
-    try:
-        _pg_container.stop()
-    except Exception:
-        pass
+    if _DB_MODE == "docker" and _pg_container:
+        try:
+            _pg_container.stop()
+        except Exception:
+            pass
+    elif _DB_MODE == "external" and _CI_TEST_SCHEMA:
+        # Clean up this worker's schema after tests complete
+        cleanup_mode = os.environ.get("CI_DB_CLEANUP", "drop")
+        if cleanup_mode == "drop":
+            try:
+                from sqlalchemy import text
+                with test_engine.connect() as conn:
+                    conn.execute(text(f"DROP SCHEMA IF EXISTS {_CI_TEST_SCHEMA} CASCADE"))
+                    conn.commit()
+            except Exception:
+                pass  # Best effort cleanup
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -500,15 +632,28 @@ def cleanup_global_resources(request):
 @pytest.fixture(scope="session")
 def _db_schema():
     """Create database schema once for the entire test session."""
+    # Use CI schema in external mode, otherwise use default DB_SCHEMA
+    schema_name = _CI_TEST_SCHEMA if _DB_MODE == "external" else DB_SCHEMA
+
     if test_engine.dialect.name == "postgresql":
         from sqlalchemy import text
 
         with test_engine.connect() as conn:
-            conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {DB_SCHEMA}"))
+            conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_name}"))
             conn.commit()
-    Base.metadata.create_all(bind=test_engine)
+
+    # In external mode, use schema_translate_map to create tables in CI schema
+    if _DB_MODE == "external" and _CI_TEST_SCHEMA:
+        ddl_conn = test_engine.execution_options(schema_translate_map={DB_SCHEMA: _CI_TEST_SCHEMA})
+        Base.metadata.create_all(bind=ddl_conn)
+    else:
+        Base.metadata.create_all(bind=test_engine)
+
     yield
-    Base.metadata.drop_all(bind=test_engine)
+
+    # Cleanup (docker mode drops entire container, external mode drops schema)
+    if _DB_MODE == "docker":
+        Base.metadata.drop_all(bind=test_engine)
 
 
 def _truncate_all_tables(connection):

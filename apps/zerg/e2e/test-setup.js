@@ -77,30 +77,38 @@ async function globalSetup(config) {
 
     // Call Python to drop stale schemas and pre-create fresh ones
     // This ensures all schemas exist before any tests run
+    //
+    // E2E_SCHEMA_PREFIX controls schema naming:
+    //   - Local dev: e2e_commis_ (default)
+    //   - CI: e2e_{run_id}_{attempt}_ (per-run isolation)
+    const schemaPrefix = process.env.E2E_SCHEMA_PREFIX || 'e2e_commis_';
+
     const cleanup = spawn('uv', ['run', 'python', '-c', `
 import os
 import sys
 # TESTING=1 bypasses validation that requires OPENAI_API_KEY etc.
 os.environ['TESTING'] = '1'
 os.environ['E2E_USE_POSTGRES_SCHEMAS'] = '1'
+# Pass through schema prefix for per-CI-run isolation
+os.environ['E2E_SCHEMA_PREFIX'] = '${schemaPrefix}'
 
 from zerg.database import default_engine
-from zerg.e2e_schema_manager import drop_all_e2e_schemas, ensure_commis_schema
+from zerg.e2e_schema_manager import drop_all_e2e_schemas, ensure_commis_schema, SCHEMA_PREFIX
 
-# Clean slate - drop any stale schemas from previous runs
+# Clean slate - drop any stale schemas matching our prefix
 dropped = drop_all_e2e_schemas(default_engine)
 if dropped > 0:
-    print(f"  Dropped {dropped} stale schemas", file=sys.stderr)
+    print(f"  Dropped {dropped} stale schemas (prefix: {SCHEMA_PREFIX})", file=sys.stderr)
 
 # Pre-create one schema per Playwright commis id (0..commis-1).
 for i in range(${schemaCount}):
     ensure_commis_schema(default_engine, str(i))
 
-print(f"  {${schemaCount}} commis schemas ready")
+print(f"  {${schemaCount}} commis schemas ready (prefix: {SCHEMA_PREFIX})")
     `], {
       cwd: backendDir,
       stdio: 'inherit',
-      env: { ...process.env, E2E_USE_POSTGRES_SCHEMAS: '1', TESTING: '1' }
+      env: { ...process.env, E2E_USE_POSTGRES_SCHEMAS: '1', TESTING: '1', E2E_SCHEMA_PREFIX: schemaPrefix }
     });
 
     await new Promise((resolve, reject) => {

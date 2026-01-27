@@ -323,6 +323,7 @@ async def _replay_and_stream(
     event_bus.subscribe(EventType.OIKOS_TOOL_STARTED, event_handler)
     event_bus.subscribe(EventType.OIKOS_TOOL_COMPLETED, event_handler)
     event_bus.subscribe(EventType.OIKOS_TOOL_FAILED, event_handler)
+    event_bus.subscribe(EventType.SHOW_SESSION_PICKER, event_handler)
     # Stream lifecycle control
     event_bus.subscribe(EventType.STREAM_CONTROL, event_handler)
 
@@ -519,6 +520,7 @@ async def _replay_and_stream(
         event_bus.unsubscribe(EventType.OIKOS_TOOL_STARTED, event_handler)
         event_bus.unsubscribe(EventType.OIKOS_TOOL_COMPLETED, event_handler)
         event_bus.unsubscribe(EventType.OIKOS_TOOL_FAILED, event_handler)
+        event_bus.unsubscribe(EventType.SHOW_SESSION_PICKER, event_handler)
         event_bus.unsubscribe(EventType.STREAM_CONTROL, event_handler)
 
 

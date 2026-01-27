@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures';
 
 /**
- * WORKER ISOLATION SMOKE TEST
+ * COMMIS ISOLATION SMOKE TEST
  *
  * This test validates the FOUNDATION of the entire E2E testing infrastructure:
  * the X-Test-Commis header routing system that gives each Playwright commis
@@ -70,7 +70,7 @@ test.describe('Commis Database Isolation', () => {
     // will only see its own fiches, never fiches from other commis.
     console.log('');
     console.log('✅ ============================================');
-    console.log('✅ WORKER ISOLATION VERIFIED');
+    console.log('✅ COMMIS ISOLATION VERIFIED');
     console.log('✅ Each commis has isolated database');
     console.log('✅ UI shows correct commis-specific data');
     console.log('✅ ============================================');

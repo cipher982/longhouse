@@ -2,6 +2,7 @@ import React from "react";
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, waitFor, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import ForumPage from "../ForumPage";
 import { TestRouter } from "../../test/test-utils";
 import { eventBus } from "../../oikos/lib/event-bus";
@@ -9,6 +10,23 @@ import { eventBus } from "../../oikos/lib/event-bus";
 vi.mock("../../forum/ForumCanvas", () => ({
   ForumCanvas: () => <div data-testid="forum-canvas" />,
 }));
+
+vi.mock("../../hooks/useActiveSessions", () => ({
+  useActiveSessions: () => ({
+    data: null,
+    isLoading: false,
+    error: null,
+  }),
+}));
+
+const createTestQueryClient = () =>
+  new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
 
 describe("ForumPage", () => {
   afterEach(() => {
@@ -18,11 +36,14 @@ describe("ForumPage", () => {
 
   it("renders live events into the task list", async () => {
     const user = userEvent.setup();
+    const queryClient = createTestQueryClient();
 
     render(
-      <TestRouter initialEntries={["/forum"]}>
-        <ForumPage />
-      </TestRouter>,
+      <QueryClientProvider client={queryClient}>
+        <TestRouter initialEntries={["/forum"]}>
+          <ForumPage />
+        </TestRouter>
+      </QueryClientProvider>,
     );
 
     expect(await screen.findByTestId("forum-canvas")).toBeInTheDocument();
@@ -32,7 +53,7 @@ describe("ForumPage", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Live")).toBeInTheDocument();
-      expect(screen.getByText(/No tasks yet/i)).toBeInTheDocument();
+      expect(screen.getByText(/No active sessions found/i)).toBeInTheDocument();
     });
 
     eventBus.emit("oikos:started", {

@@ -1,0 +1,62 @@
+name: Debug E2E
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/debug-e2e.yml'
+
+jobs:
+  debug:
+    runs-on: cube
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Setup uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: '1.2.20'
+
+    - name: Install JS deps
+      run: bun install --frozen-lockfile
+
+    - name: Pre-install backend deps
+      run: |
+        cd apps/zerg/backend
+        echo "=== Installing backend dependencies ==="
+        time uv sync
+        echo "=== Done ==="
+
+    - name: Test uvicorn startup time
+      run: |
+        cd apps/zerg/backend
+        echo "=== Starting uvicorn and timing to health ==="
+        TESTING=1 AUTH_DISABLED=1 DATABASE_URL="${DATABASE_URL}" \
+          .venv/bin/python -m uvicorn zerg.main:app --host 127.0.0.1 --port 8001 --workers 1 --log-level info &
+        PID=$!
+
+        # Poll for health every 2 seconds, up to 120 seconds
+        for i in $(seq 1 60); do
+          sleep 2
+          echo "Check $i ($(($i * 2)) seconds)..."
+          if curl -sf http://127.0.0.1:8001/health > /dev/null 2>&1; then
+            echo "✓ Health check passed after $(($i * 2)) seconds!"
+            kill $PID 2>/dev/null
+            exit 0
+          fi
+        done
+        echo "❌ Health check failed after 120 seconds"
+        kill $PID 2>/dev/null
+        exit 1
+      env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        FERNET_SECRET: ${{ secrets.FERNET_SECRET }}

@@ -712,7 +712,7 @@ async def wait_for_commis_async(
             return f"Commis job {job_id} completed."
 
         # Job is still queued or running - raise interrupt to wait
-        logger.info(f"[WAIT-FOR-WORKER] Blocking for job {job_id} (status: {job.status})")
+        logger.info(f"[WAIT-FOR-COMMIS] Blocking for job {job_id} (status: {job.status})")
 
         # Raise FicheInterrupted to pause oikos
         raise FicheInterrupted(
@@ -1344,6 +1344,7 @@ async def request_session_selection_async(
             event_type="show_session_picker",
             payload={
                 "filters": filters if filters else None,
+                "owner_id": ctx.owner_id,
                 "trace_id": ctx.trace_id,
             },
         )

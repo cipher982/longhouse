@@ -239,3 +239,65 @@ class TestCloudExecutor:
         assert captured_cmd is not None
         cmd_list = list(captured_cmd)
         assert "--resume" not in cmd_list
+
+    @pytest.mark.asyncio
+    async def test_run_agent_includes_output_format_flag_from_env(self, tmp_path, monkeypatch):
+        """Verify --output-format flag is included when env var is set."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        monkeypatch.setenv("HATCH_CLAUDE_OUTPUT_FORMAT", "stream-json")
+
+        executor = CloudExecutor()
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_process.communicate = AsyncMock(return_value=(b"output", b""))
+        mock_process.pid = 12345
+
+        captured_cmd = None
+
+        async def capture_exec(*args, **kwargs):
+            nonlocal captured_cmd
+            captured_cmd = args
+            return mock_process
+
+        with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
+            await executor.run_agent(
+                task="test task",
+                workspace_path=workspace,
+            )
+
+        assert captured_cmd is not None
+        cmd_list = list(captured_cmd)
+        assert "--output-format" in cmd_list
+        fmt_idx = cmd_list.index("--output-format")
+        assert cmd_list[fmt_idx + 1] == "stream-json"
+
+    @pytest.mark.asyncio
+    async def test_run_agent_includes_partial_messages_flag_from_env(self, tmp_path, monkeypatch):
+        """Verify --include-partial-messages flag is included when env var is set."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        monkeypatch.setenv("HATCH_CLAUDE_INCLUDE_PARTIAL_MESSAGES", "true")
+
+        executor = CloudExecutor()
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_process.communicate = AsyncMock(return_value=(b"output", b""))
+        mock_process.pid = 12345
+
+        captured_cmd = None
+
+        async def capture_exec(*args, **kwargs):
+            nonlocal captured_cmd
+            captured_cmd = args
+            return mock_process
+
+        with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
+            await executor.run_agent(
+                task="test task",
+                workspace_path=workspace,
+            )
+
+        assert captured_cmd is not None
+        cmd_list = list(captured_cmd)
+        assert "--include-partial-messages" in cmd_list

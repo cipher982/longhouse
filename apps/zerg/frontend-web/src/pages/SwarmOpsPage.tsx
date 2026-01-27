@@ -270,7 +270,7 @@ export default function SwarmOpsPage() {
     return (
       <div className="swarm-ops-loading">
         <Spinner size="lg" />
-        <span>Loading run activity...</span>
+        <span>Loading runs...</span>
       </div>
     );
   }
@@ -291,8 +291,8 @@ export default function SwarmOpsPage() {
     <PageShell size="wide" className="swarm-ops-shell">
       <div className="swarm-ops-page">
         <SectionHeader
-          title="Swarm Ops"
-          description="Triage active runs, jump to context, and keep the swarm flowing."
+          title="Runs"
+          description="Triage active runs and jump to context."
           actions={
             <div className="swarm-ops-actions">
               <Button

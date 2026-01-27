@@ -7,10 +7,10 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
-# Cancel previous runs for the same PR
+# Never cancel runs
 concurrency:
-  group: quality-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   lighthouse:

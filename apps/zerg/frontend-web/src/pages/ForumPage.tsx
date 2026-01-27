@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Badge, Button, Card, PageShell, SectionHeader } from "../components/ui";
+import { Badge, Button, Card, PageShell, SectionHeader, Spinner } from "../components/ui";
 import { generateForumReplay } from "../forum/replay";
 import { ForumCanvas } from "../forum/ForumCanvas";
 import { useForumReplayPlayer } from "../forum/useForumReplay";
@@ -18,6 +18,13 @@ import {
   mapCommisSpawned,
   mapCommisToolFailed,
 } from "../forum/live-mapper";
+import { useActiveSessions } from "../hooks/useActiveSessions";
+import {
+  createAttentionMarkers,
+  createRoomsFromSessions,
+  mapSessionsToEntities,
+  mapSessionsToTasks,
+} from "../forum/session-mapper";
 import "../styles/forum.css";
 
 const DEFAULT_SEED = "forum-demo";
@@ -33,6 +40,25 @@ export default function ForumPage() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [mode, setMode] = useState<"replay" | "live">("replay");
   const isLive = mode === "live";
+
+  // Fetch real sessions for live mode
+  const { data: sessionsData, isLoading: sessionsLoading } = useActiveSessions({
+    pollInterval: 5000,
+    enabled: isLive,
+    limit: 50,
+  });
+
+  // Build state from real sessions
+  const liveSessionState = useMemo(() => {
+    if (!sessionsData?.sessions?.length) return null;
+
+    const rooms = createRoomsFromSessions(sessionsData.sessions);
+    const entities = mapSessionsToEntities(sessionsData.sessions, rooms);
+    const tasks = mapSessionsToTasks(sessionsData.sessions, rooms);
+    const markers = createAttentionMarkers(sessionsData.sessions, entities);
+
+    return { rooms, entities, tasks, markers, sessions: sessionsData.sessions };
+  }, [sessionsData]);
 
   const replayScenario = useMemo(
     () =>
@@ -84,13 +110,35 @@ export default function ForumPage() {
   });
 
   // Use stateVersion instead of state.tasks directly since Map reference doesn't change on mutation
+  // In live mode, prefer real session data over replay state
   const tasks = useMemo(() => {
+    if (isLive && liveSessionState) {
+      const list = Array.from(liveSessionState.tasks.values());
+      return list.sort((a, b) => b.updatedAt - a.updatedAt);
+    }
     const list = Array.from(state.tasks.values());
     return list.sort((a, b) => b.updatedAt - a.updatedAt);
-  }, [state.tasks, stateVersion]);
+  }, [state.tasks, stateVersion, isLive, liveSessionState]);
 
-  const selectedEntity = selectedEntityId ? state.entities.get(selectedEntityId) : null;
-  const selectedTask = selectedTaskId ? state.tasks.get(selectedTaskId) : null;
+  // Merged state for canvas: combine replay state with live session data
+  const canvasState = useMemo(() => {
+    if (isLive && liveSessionState) {
+      return {
+        ...state,
+        rooms: liveSessionState.rooms,
+        entities: liveSessionState.entities,
+        tasks: liveSessionState.tasks,
+        markers: liveSessionState.markers,
+      };
+    }
+    return state;
+  }, [state, isLive, liveSessionState]);
+
+  const selectedEntity = selectedEntityId ? canvasState.entities.get(selectedEntityId) : null;
+  const selectedTask = selectedTaskId ? canvasState.tasks.get(selectedTaskId) : null;
+  const selectedSession = isLive && selectedEntityId
+    ? liveSessionState?.sessions?.find(s => s.id === selectedEntityId)
+    : null;
 
   // Use ref for synchronous access in event handlers
   // Updated synchronously after dispatchEvents to handle fast back-to-back events
@@ -254,8 +302,8 @@ export default function ForumPage() {
             <Button variant={isLive ? "primary" : "ghost"} size="sm" onClick={() => setMode(isLive ? "replay" : "live")}>
               {isLive ? "Live Signals" : "Replay Mode"}
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => navigate("/swarm/ops")}>
-              Ops List
+            <Button variant="ghost" size="sm" onClick={() => navigate("/runs")}>
+              Runs
             </Button>
           </div>
         }
@@ -272,7 +320,13 @@ export default function ForumPage() {
           </div>
           <div className="forum-task-list">
             {tasks.length === 0 ? (
-              <div className="forum-task-empty">No tasks yet. Awaiting live signals or replay ticks.</div>
+              <div className="forum-task-empty">
+                {isLive && sessionsLoading
+                  ? "Loading sessions..."
+                  : isLive
+                    ? "No active sessions found in the last 7 days."
+                    : "No tasks yet. Awaiting replay ticks."}
+              </div>
             ) : (
               tasks.map((task) => (
                 <button
@@ -296,13 +350,20 @@ export default function ForumPage() {
         </Card>
 
         <Card className="forum-map-panel forum-map-panel--center">
-          <ForumCanvas
-            state={state}
-            timeMs={timeMs}
-            selectedEntityId={selectedEntityId}
-            focusEntityId={focusEntityId}
-            onSelectEntity={setSelectedEntityId}
-          />
+          {isLive && sessionsLoading ? (
+            <div className="forum-canvas-loading">
+              <Spinner size="lg" />
+              <span>Loading sessions...</span>
+            </div>
+          ) : (
+            <ForumCanvas
+              state={canvasState}
+              timeMs={timeMs}
+              selectedEntityId={selectedEntityId}
+              focusEntityId={focusEntityId}
+              onSelectEntity={setSelectedEntityId}
+            />
+          )}
         </Card>
 
         <Card className="forum-map-panel forum-map-panel--right">
@@ -314,7 +375,27 @@ export default function ForumPage() {
             {selectedEntity || selectedTask ? <Badge variant="success">Active</Badge> : <Badge variant="neutral">Idle</Badge>}
           </div>
           <div className="forum-selection">
-            {selectedEntity ? (
+            {selectedSession ? (
+              <>
+                <div className="forum-selection-title">{selectedSession.project || "Session"}</div>
+                <div className="forum-selection-meta">Provider: {selectedSession.provider}</div>
+                <div className="forum-selection-meta">Status: {selectedSession.status}</div>
+                <div className="forum-selection-meta">Attention: {selectedSession.attention}</div>
+                <div className="forum-selection-meta">Duration: {Math.round(selectedSession.duration_minutes)}m</div>
+                <div className="forum-selection-meta">Messages: {selectedSession.message_count}</div>
+                {selectedSession.last_assistant_message && (
+                  <div className="forum-selection-preview">
+                    <div className="forum-selection-preview-label">Last message:</div>
+                    <div className="forum-selection-preview-text">{selectedSession.last_assistant_message}</div>
+                  </div>
+                )}
+                <div className="forum-selection-actions">
+                  <Button size="sm" variant="primary" onClick={handleFocus}>
+                    {focusEntityId === selectedEntity?.id ? "Unfocus" : "Focus"}
+                  </Button>
+                </div>
+              </>
+            ) : selectedEntity ? (
               <>
                 <div className="forum-selection-title">{selectedEntity.label ?? selectedEntity.id}</div>
                 <div className="forum-selection-meta">Type: {selectedEntity.type}</div>
@@ -328,7 +409,7 @@ export default function ForumPage() {
               </>
             ) : null}
 
-            {selectedTask ? (
+            {selectedTask && !selectedSession ? (
               <div className="forum-selection-task">
                 <div className="forum-selection-title">Task: {selectedTask.title}</div>
                 <div className="forum-selection-meta">Status: {selectedTask.status}</div>
@@ -341,8 +422,8 @@ export default function ForumPage() {
               </div>
             ) : null}
 
-            {!selectedEntity && !selectedTask ? (
-              <div className="forum-selection-empty">Select a unit or task to inspect.</div>
+            {!selectedEntity && !selectedTask && !selectedSession ? (
+              <div className="forum-selection-empty">Select a commis or task to inspect.</div>
             ) : null}
           </div>
           <div className="forum-legend">

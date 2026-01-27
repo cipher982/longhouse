@@ -102,6 +102,36 @@ This waits for health, runs API checks (auth, LLM, voice, CRUD), then browser te
 4. ✅ Run `make verify-prod` (~80s)
 5. ✅ Report result to user
 
+## apps/sauron - Standalone Scheduler
+
+Sauron is the centralized ops scheduler, deployed as a standalone service on clifford VPS. It reuses `zerg.jobs` infrastructure.
+
+**Location:** `apps/sauron/`
+
+**Key files:**
+- `main.py` - APScheduler + worker loop
+- `api.py` - FastAPI for Jarvis control
+- `cli.py` - CLI for manual operations
+- `Dockerfile` - Builds from monorepo root
+- `docker-compose.yml` - Coolify deployment config
+
+**How it works:**
+1. On startup, clones `cipher982/sauron-jobs` repo via `GitSyncService`
+2. Loads jobs from `manifest.py` using `zerg.jobs.loader`
+3. Schedules jobs with APScheduler
+4. Executes via durable queue (same as Zerg backend)
+
+**API endpoints:**
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/health` | GET | Health check |
+| `/status` | GET | Scheduler + git sync status |
+| `/jobs` | GET | List all jobs |
+| `/jobs/{id}/trigger` | POST | Manual trigger |
+| `/sync` | POST | Force git sync |
+
+**Deploy:** Coolify on clifford, separate from main Zerg deployment.
+
 ## Deep Dives
 
 | Topic | Guide |
@@ -113,6 +143,8 @@ This waits for health, runs API checks (auth, LLM, voice, CRUD), then browser te
 | Database | `docs/DATABASE.md` |
 | Coolify | `docs/COOLIFY_DEBUGGING.md` |
 | Architecture spec | `docs/specs/durable-runs-v2.2.md` |
+| Jobs infrastructure | `docs/specs/runtime-git-jobs.md` |
+| Sauron scheduler | `apps/sauron/README.md` |
 
 ## Misc
 - GH actions use runners on Cube
@@ -197,6 +229,10 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-26) [gotcha] Resumable SSE closed on `oikos_complete` with pending commiss, dropping commis output/continuations; keep stream open until commiss drain (with a short grace window).
 - (2026-01-26) [gotcha] Timestamp prefixes on assistant messages leaked into model outputs; only prefix user messages for temporal context.
 - (2026-01-26) [gotcha] New SSE event types must be added to `EventType` enum or `append_run_event()` won't publish live (modal won't open until reconnect).
+- (2026-01-26) [pattern] CI debugging: run commands directly, no `&` background, no `|| echo` swallowing. Let it crash, read the first error. Don't add debug steps before reading failure output.
 - (2026-01-26) [gotcha] Skills platform exists under `apps/zerg/backend/zerg/skills/` but isn't wired into oikos/commis prompts or tool registry (no SkillIntegration usage yet).
 - (2026-01-26) [gotcha] Playwright E2E can time out at webServer startup (0 tests) if the backend fails to boot; ensure repo `.env` (DATABASE_URL) and backend deps are present before running.
+- (2026-01-26) [gotcha] Live SSE stream only forwards subscribed events; `show_session_picker` missing in `apps/zerg/backend/zerg/routers/stream.py` means the session picker modal never opens on live Oikos streams.
+- (2026-01-26) [gotcha] CI runner "cube" pods lack a Docker daemon; testcontainers-backed tests fail unless using an external Postgres or non-Docker DB setup.
+- (2026-01-27) [pattern] CI backend tests use `--db-mode=external` with per-xdist-worker schemas (`CI_TEST_SCHEMA + _gw0`). SQLAlchemy `schema_translate_map` redirects ORM `zerg.table` references to worker schemas. Dedicated CI Postgres runs in k3s `ci` namespace.
 - (2026-01-27) [pattern] Rebrand work: remove backward-compat shims; use only Oikos/Commis/Fiche names (no supervisor/worker/agent aliases).
