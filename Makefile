@@ -282,18 +282,16 @@ test-backend-docker: ## Backend tests with Docker/testcontainers (local dev)
 	@echo "🐳 Running backend tests with testcontainers (Docker mode)..."
 	cd apps/zerg/backend && ./run_backend_tests.sh --db-mode=docker
 
-test-backend-ci: ## Backend tests with external Postgres (CI mode)
+# CI-only target (hidden from make help) - uses external Postgres, no Docker needed
+test-backend-ci:
 	@if [ -z "$(CI_TEST_SCHEMA)" ]; then \
 		echo "❌ CI_TEST_SCHEMA required for CI mode"; \
-		echo "   Usage: CI_TEST_SCHEMA=zerg_ci_123 DATABASE_URL=... make test-backend-ci"; \
 		exit 1; \
 	fi
 	@if [ -z "$(DATABASE_URL)" ] && [ -z "$(CI_DATABASE_URL)" ]; then \
 		echo "❌ DATABASE_URL or CI_DATABASE_URL required for CI mode"; \
 		exit 1; \
 	fi
-	@echo "🔧 Running backend tests with external Postgres (CI mode)..."
-	@echo "   Schema: $(CI_TEST_SCHEMA)"
 	cd apps/zerg/backend && \
 		CI_TEST_SCHEMA="$(CI_TEST_SCHEMA)" \
 		DATABASE_URL="$${CI_DATABASE_URL:-$(DATABASE_URL)}" \
