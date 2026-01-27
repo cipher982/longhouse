@@ -22,6 +22,11 @@ _pool: Any = None
 _runs_columns: list[str] | None = None
 
 
+def get_scheduler_name() -> str:
+    """Resolve scheduler name for ops.runs job_key prefix."""
+    return os.getenv("JOB_SCHEDULER_NAME", "zerg")
+
+
 def get_job_queue_db_url() -> str | None:
     """Get the database URL for the job queue (uses DATABASE_URL)."""
     from zerg.config import get_settings

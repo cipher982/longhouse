@@ -49,6 +49,7 @@ services:
       # Same as life-hub DB - uses ops.* and jobs.* schemas
       DATABASE_URL: ${DATABASE_URL}
       JOB_QUEUE_ENABLED: "1"
+      JOB_SCHEDULER_NAME: ${JOB_SCHEDULER_NAME:-sauron}
 
       # === AWS SES (email) ===
       AWS_SES_ACCESS_KEY_ID: ${AWS_SES_ACCESS_KEY_ID}

@@ -215,6 +215,7 @@ async def force_sync() -> SyncResponse:
     """Force git sync of the jobs repo and reload manifest."""
     from zerg.jobs import get_git_sync_service
     from zerg.jobs.loader import load_jobs_manifest
+    from sauron.job_definitions import publish_job_definitions
 
     git_service = get_git_sync_service()
     if not git_service:
@@ -228,6 +229,8 @@ async def force_sync() -> SyncResponse:
         result = await git_service.refresh()
         # Reload manifest after sync to pick up new/changed jobs
         await load_jobs_manifest()
+        # Publish updated definitions to Life-Hub
+        await asyncio.to_thread(publish_job_definitions)
         logger.info(f"Git sync + manifest reload: {git_service.current_sha}")
         return SyncResponse(
             success=True,
