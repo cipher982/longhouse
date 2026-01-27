@@ -110,12 +110,13 @@ def _execute_manifest(manifest_path: Path, repo_root: Path, git_sha: str | None)
         new_jobs = jobs_after - jobs_before
 
         # Store metadata for manifest jobs
+        # Use "git" as script_source (valid for ops.jobs check constraint)
         loaded_at = datetime.now(UTC).isoformat()
         for job_id in new_jobs:
             set_manifest_metadata(
                 job_id,
                 {
-                    "script_source": "manifest",
+                    "script_source": "git",
                     "git_sha": git_sha,
                     "loaded_at": loaded_at,
                     "manifest_path": str(manifest_path),

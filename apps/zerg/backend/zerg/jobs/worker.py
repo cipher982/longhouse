@@ -211,9 +211,9 @@ async def _run_job(queue_job: QueueJob, owner: QueueOwner) -> None:
     # Build metadata - include git SHA for manifest jobs
     manifest_meta = get_manifest_metadata(queue_job.job_id)
     if manifest_meta:
-        # Manifest job - include git SHA and loaded_at
+        # Git-loaded job - include git SHA and loaded_at
         script_metadata = {
-            "script_source": "manifest",
+            "script_source": "git",
             "entrypoint": f"{job_def.func.__module__}.{job_def.func.__name__}",
             "git_sha": manifest_meta.get("git_sha"),
             "loaded_at": manifest_meta.get("loaded_at"),
