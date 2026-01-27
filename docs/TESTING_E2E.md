@@ -152,6 +152,12 @@ For test authorship:
 - Avoid `waitForTimeout` unless you’re explicitly testing time-based behavior.
 - Prefer `await expect(locator).toBeVisible({ timeout: ... })` and `await expect.poll(...)`.
 
+## Operational Notes (Live/Prod)
+
+- **Prod verification**: use scripted prod E2E with `auth/service-login` + Playwright instead of manual browser-hub checks.
+- **Live voice stability**: generate audio via `/voice/tts` and transcribe that in live E2E (silent WAVs are flaky).
+- **Web server timeouts / 0 tests**: if Playwright reports 0 tests or the webServer times out, check backend boot (missing `.env` / `DATABASE_URL` or backend deps not installed).
+
 ## Known Buckets (what was skipped/deleted and why)
 
 From `bb9b506` message:

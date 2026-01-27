@@ -116,6 +116,7 @@ uv run python -m sauron.cli list
 4. **Queueing**: When cron fires, job is enqueued to `jobs.queue` table
 5. **Execution**: Worker claims job, executes, records to `ops.runs`
 6. **Git Sync**: Background loop pulls repo updates every 5 minutes
+7. **Definitions**: Publish job definitions directly to `ops.jobs` for the ops dashboard (avoids Life Hub API)
 
 ## Jarvis Integration
 
