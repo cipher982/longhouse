@@ -1,0 +1,117 @@
+# CI Postgres - Dedicated database for GitHub Actions CI tests
+# Deployed to cube's k3s cluster in the 'ci' namespace
+#
+# Usage:
+#   kubectl create namespace ci
+#   kubectl create secret generic ci-postgres-secret \
+#     --namespace ci \
+#     --from-literal=password=$(openssl rand -base64 32)
+#   kubectl apply -f k8s/ci-postgres.yaml
+#
+# Connection from runners:
+#   postgresql://ci_zerg:PASSWORD@ci-postgres.ci.svc.cluster.local:5432/ci_zerg
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ci-postgres-pvc
+  namespace: ci
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ci-postgres
+  namespace: ci
+  labels:
+    app: ci-postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ci-postgres
+  template:
+    metadata:
+      labels:
+        app: ci-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - name: POSTGRES_DB
+              value: ci_zerg
+            - name: POSTGRES_USER
+              value: ci_zerg
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ci-postgres-secret
+                  key: password
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          # Speed over durability for CI (unsafe for production!)
+          args:
+            - postgres
+            - -c
+            - fsync=off
+            - -c
+            - synchronous_commit=off
+            - -c
+            - full_page_writes=off
+            - -c
+            - random_page_cost=1.1
+            - -c
+            - effective_io_concurrency=200
+            - -c
+            - max_connections=200
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "2000m"
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - ci_zerg
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - ci_zerg
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ci-postgres-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ci-postgres
+  namespace: ci
+  labels:
+    app: ci-postgres
+spec:
+  selector:
+    app: ci-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+  type: ClusterIP

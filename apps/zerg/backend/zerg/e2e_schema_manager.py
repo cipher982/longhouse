@@ -1,9 +1,15 @@
 """
 Postgres schema management for E2E test isolation.
 Each Playwright worker gets its own schema with full table isolation.
+
+Schema prefix can be customized via E2E_SCHEMA_PREFIX env var for CI isolation:
+  E2E_SCHEMA_PREFIX=e2e_12345_  → schemas like e2e_12345_0, e2e_12345_1, etc.
+
+This enables concurrent CI runs to use different schema prefixes, preventing collisions.
 """
 
 import logging
+import os
 import zlib
 
 from sqlalchemy import text
@@ -11,7 +17,9 @@ from sqlalchemy.engine import Engine
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_PREFIX = "e2e_worker_"
+# Default prefix for local development, can be overridden for CI isolation
+# CI sets E2E_SCHEMA_PREFIX=e2e_{run_id}_{attempt}_ for per-run uniqueness
+SCHEMA_PREFIX = os.environ.get("E2E_SCHEMA_PREFIX", "e2e_worker_")
 
 
 def get_schema_name(worker_id: str) -> str:
@@ -119,19 +127,29 @@ def drop_schema(engine: Engine, worker_id: str) -> None:
     logger.debug(f"Dropped schema: {schema_name}")
 
 
-def drop_all_e2e_schemas(engine: Engine) -> int:
-    """Drop all E2E test schemas. Returns count of schemas dropped.
+def drop_all_e2e_schemas(engine: Engine, prefix: str | None = None) -> int:
+    """Drop all E2E test schemas matching the given prefix. Returns count dropped.
+
+    Args:
+        engine: SQLAlchemy engine
+        prefix: Schema prefix to match (defaults to SCHEMA_PREFIX from env).
+                Pass explicitly to clean up schemas from a specific CI run.
 
     Drops each schema in a separate transaction to avoid exceeding
     max_locks_per_transaction when there are many schemas with many tables.
     """
+    prefix = prefix or SCHEMA_PREFIX
+    # Escape % for SQL LIKE pattern
+    like_pattern = prefix.replace("%", "\\%") + "%"
+
     with engine.connect() as conn:
         result = conn.execute(
             text("""
             SELECT schema_name
             FROM information_schema.schemata
-            WHERE schema_name LIKE 'e2e_worker_%'
-        """)
+            WHERE schema_name LIKE :pattern
+        """),
+            {"pattern": like_pattern},
         )
         schemas = [row[0] for row in result]
         conn.commit()  # Commit the SELECT before starting drops
@@ -143,7 +161,7 @@ def drop_all_e2e_schemas(engine: Engine) -> int:
             conn.commit()
 
     # Keep at INFO - this is rare and useful for debugging E2E infra issues
-    logger.info(f"Dropped {len(schemas)} E2E schemas")
+    logger.info(f"Dropped {len(schemas)} E2E schemas with prefix '{prefix}'")
     return len(schemas)
 
 
