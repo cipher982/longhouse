@@ -208,9 +208,9 @@ class TestCommisResultWithSummary:
 
 
 class TestListCommisWithSummaries:
-    """Tests for list_commis returning summaries."""
+    """Tests for list_commiss returning summaries."""
 
-    def test_list_commis_index_has_summary(self, temp_store):
+    def test_list_commiss_index_has_summary(self, temp_store):
         """Commis in index include summary after update."""
         # Create and complete a commis
         commis_id = temp_store.create_commis("Check disk space")
@@ -226,18 +226,18 @@ class TestListCommisWithSummaries:
         )
 
         # List commis and verify summary in index
-        commis = temp_store.list_commis(limit=10)
+        commis = temp_store.list_commiss(limit=10)
         assert len(commis) == 1
         assert commis[0]["summary"] == "Disk at 45% capacity (225GB used)"
 
-    def test_list_commis_without_summary_fallback(self, temp_store):
+    def test_list_commiss_without_summary_fallback(self, temp_store):
         """Commis without summary use task in index (no summary field)."""
         # Create commis without summary
         commis_id = temp_store.create_commis("Old commis without summary")
         temp_store.start_commis(commis_id)
         temp_store.complete_commis(commis_id, status="success")
 
-        commis = temp_store.list_commis(limit=10)
+        commis = temp_store.list_commiss(limit=10)
         assert len(commis) == 1
         # No summary field in index entry
         assert "summary" not in commis[0] or commis[0].get("summary") is None

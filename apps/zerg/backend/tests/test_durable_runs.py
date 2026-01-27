@@ -9,7 +9,7 @@ Tests verify:
 6. Heartbeat events reset no-progress counter
 
 NOTE: The continuation pattern was replaced by the LangGraph-free oikos
-resume path in Jan 2026 (RunInterrupted + FicheRunner.run_continuation).
+resume path in Jan 2026 (FicheInterrupted + FicheRunner.run_continuation).
 See: docs/work/oikos-continuation-refactor.md
 """
 

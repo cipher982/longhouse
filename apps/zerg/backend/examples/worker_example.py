@@ -74,7 +74,7 @@ async def main():
 
         # Example 3: Oikos queries commis results
         print("\n=== Example 3: Query Commis Results ===")
-        commis = artifact_store.list_commis(status="success", limit=10)
+        commis = artifact_store.list_commiss(status="success", limit=10)
         print(f"Found {len(commis)} successful commis")
 
         for commis in commis[:3]:  # Show first 3

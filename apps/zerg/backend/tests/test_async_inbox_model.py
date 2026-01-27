@@ -1,7 +1,7 @@
 """Tests for the async inbox model (non-blocking spawn_commis, wait_for_commis, acknowledgements).
 
 These tests verify the critical bugs fixed in the async inbox model implementation:
-1. wait_for_commis properly raises RunInterrupted (not swallowed by asyncio.gather)
+1. wait_for_commis properly raises FicheInterrupted (not swallowed by asyncio.gather)
 2. pending_tool_call_id is used for resume before falling back to CommisJob lookup
 3. Inbox acknowledgements are only committed after system message is persisted
 """
@@ -25,13 +25,13 @@ def temp_artifact_path(monkeypatch):
 
 
 class TestWaitForCommisInterrupt:
-    """Tests that wait_for_commis properly propagates RunInterrupted."""
+    """Tests that wait_for_commis properly propagates FicheInterrupted."""
 
     @pytest.mark.asyncio
     async def test_wait_for_commis_raises_interrupt_for_running_job(self, db_session, test_user):
-        """wait_for_commis should raise RunInterrupted when job is still running."""
+        """wait_for_commis should raise FicheInterrupted when job is still running."""
         from zerg.models.models import CommisJob
-        from zerg.managers.fiche_runner import RunInterrupted
+        from zerg.managers.fiche_runner import FicheInterrupted
         from zerg.tools.builtin.oikos_tools import wait_for_commis_async
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
@@ -54,8 +54,8 @@ class TestWaitForCommisInterrupt:
         set_credential_resolver(resolver)
 
         try:
-            # Call wait_for_commis - should raise RunInterrupted
-            with pytest.raises(RunInterrupted) as exc_info:
+            # Call wait_for_commis - should raise FicheInterrupted
+            with pytest.raises(FicheInterrupted) as exc_info:
                 await wait_for_commis_async(str(job.id), _tool_call_id="test-tool-call-123")
 
             # Verify interrupt payload
@@ -115,9 +115,9 @@ class TestWaitForCommisInterrupt:
 
     @pytest.mark.asyncio
     async def test_wait_for_commis_interrupt_propagates_through_gather(self, db_session, test_user):
-        """RunInterrupted from wait_for_commis should propagate through asyncio.gather."""
+        """FicheInterrupted from wait_for_commis should propagate through asyncio.gather."""
         from zerg.models.models import CommisJob
-        from zerg.managers.fiche_runner import RunInterrupted
+        from zerg.managers.fiche_runner import FicheInterrupted
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
 
@@ -148,9 +148,9 @@ class TestWaitForCommisInterrupt:
             # asyncio.gather with return_exceptions=True converts exceptions to results
             results = await asyncio.gather(execute_tool(), return_exceptions=True)
 
-            # The result should be an RunInterrupted exception
+            # The result should be an FicheInterrupted exception
             assert len(results) == 1
-            assert isinstance(results[0], RunInterrupted)
+            assert isinstance(results[0], FicheInterrupted)
 
             # The fix in oikos_react_engine checks for this and re-raises it
             # Let's verify the interrupt value is correct
@@ -168,7 +168,6 @@ class TestPendingToolCallIdResume:
     async def test_pending_tool_call_id_takes_priority_over_commis_job(self, db_session, test_user):
         """pending_tool_call_id should be used before CommisJob.tool_call_id lookup."""
         from zerg.models.models import Run, CommisJob
-        from zerg.models.run import Run as AgentRunModel
         from zerg.models.enums import RunStatus, RunTrigger
         from zerg.crud import crud
 
@@ -341,7 +340,7 @@ class TestAsyncInboxModelIntegration:
 
     @pytest.mark.asyncio
     async def test_spawn_commis_non_blocking(self, db_session, test_user):
-        """spawn_commis should return immediately (not raise RunInterrupted)."""
+        """spawn_commis should return immediately (not raise FicheInterrupted)."""
         from zerg.models.models import CommisJob
         from zerg.tools.builtin.oikos_tools import spawn_standard_commis_async
         from zerg.connectors.context import set_credential_resolver

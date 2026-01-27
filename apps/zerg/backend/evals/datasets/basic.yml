@@ -39,16 +39,16 @@ cases:
     tags: [quick, conversational]
 
   # 2. Oikos tool usage - list commis
-  - id: list_commis
+  - id: list_commiss
     category: tool_usage
-    description: Oikos should call list_commis tool (hermetic mode)
+    description: Oikos should call list_commiss tool (hermetic mode)
     input: "List recent commis jobs"
     timeout: 30
     assert:
       - type: status
         value: success
       - type: tool_called
-        value: "list_commis"
+        value: "list_commiss"
       - type: commis_spawned
         count: 0
       - type: latency_ms

@@ -264,7 +264,7 @@ class TestCommisSpawning:
         runner = CommisRunner(artifact_store=store)
 
         # Create a temporary fiche to check its tools
-        temp_agent = await runner._create_temporary_agent(
+        temp_agent = await runner._create_temporary_fiche(
             db=db_session,
             task="test infrastructure tools",
             config={"owner_id": test_user.id, "model": TEST_COMMIS_MODEL},

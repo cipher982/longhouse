@@ -319,7 +319,7 @@ class TestBatchReinterrupt:
     @pytest.mark.asyncio
     async def test_barrier_reused_on_reinterrupt(self, db_session, sample_barrier_setup):
         """Existing barrier should be reused when batch continuation spawns more commis."""
-        from zerg.managers.fiche_runner import RunInterrupted
+        from zerg.managers.fiche_runner import FicheInterrupted
         from zerg.services.commis_resume import resume_oikos_batch
 
         run = sample_barrier_setup["run"]
@@ -353,7 +353,7 @@ class TestBatchReinterrupt:
             new_jobs.append(job)
         db_session.commit()
 
-        # Mock batch continuation to raise RunInterrupted with new commis
+        # Mock batch continuation to raise FicheInterrupted with new commis
         interrupt_value = {
             "type": "commis_pending",
             "job_ids": [j.id for j in new_jobs],
@@ -363,7 +363,7 @@ class TestBatchReinterrupt:
         with patch("zerg.managers.fiche_runner.FicheRunner") as mock_runner:
             mock_instance = MagicMock()
             mock_instance.run_batch_continuation = AsyncMock(
-                side_effect=RunInterrupted(interrupt_value)
+                side_effect=FicheInterrupted(interrupt_value)
             )
             mock_instance.usage_total_tokens = 100
             mock_runner.return_value = mock_instance

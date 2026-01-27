@@ -21,7 +21,7 @@ from zerg.models_config import TIER_3  # Use cheapest model for demo
 from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.tools.builtin.oikos_tools import (
     get_commis_metadata,
-    list_commis,
+    list_commiss,
     read_commis_result,
     spawn_commis,
 )
@@ -74,7 +74,7 @@ async def main():
 
             # 3. List all commis
             print("\n3. Listing all commis...")
-            commis_list = list_commis(limit=10)
+            commis_list = list_commiss(limit=10)
             print(commis_list)
 
             # 4. Read commis result
@@ -89,7 +89,7 @@ async def main():
 
             # 6. List only successful commis
             print("\n6. Listing only successful commis...")
-            success_commis = list_commis(status="success", limit=5)
+            success_commis = list_commiss(status="success", limit=5)
             print(success_commis)
 
             print("\n" + "=" * 60)

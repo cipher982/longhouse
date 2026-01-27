@@ -261,7 +261,7 @@ class _StubLlm:
             import re
 
             tool_names = [t.name if hasattr(t, "name") else str(t) for t in self._tools]
-            oikos_tools = {"spawn_commis", "list_commis", "read_commis_result"}
+            oikos_tools = {"spawn_commis", "list_commiss", "read_commis_result"}
 
             # Only make tool calls if fiche has ALL oikos tools (tool integration tests)
             if oikos_tools.issubset(set(tool_names)) and user_content:
@@ -270,7 +270,7 @@ class _StubLlm:
                 # Select tool based on keywords in user message
                 tool_name = None
                 if any(kw in user_lower for kw in ["list", "show", "recent"]):
-                    tool_name = "list_commis"
+                    tool_name = "list_commiss"
                 elif any(kw in user_lower for kw in ["read", "result", "job"]):
                     tool_name = "read_commis_result"
                 elif any(kw in user_lower for kw in ["spawn", "calculate", "delegate", "create"]):
@@ -280,7 +280,7 @@ class _StubLlm:
                     tool_args = {}
                     if tool_name == "spawn_commis":
                         tool_args = {"task": user_content, "model": "gpt-5-mini"}
-                    elif tool_name == "list_commis":
+                    elif tool_name == "list_commiss":
                         tool_args = {"limit": 10}
                     elif tool_name == "read_commis_result":
                         match = re.search(r"job (\d+)", user_lower)
@@ -719,6 +719,8 @@ def sample_fiche(db_session, _dev_user):
     return fiche
 
 
+
+
 @pytest.fixture
 def sample_messages(db_session, sample_fiche):
     """
@@ -812,28 +814,16 @@ def auth_headers():  # noqa: D401 – pytest fixture naming
     return {"Authorization": "Bearer test-token"}
 
 
-# Alias *db* fixture used in a handful of newer test files.  Internally we
-# already expose a fully configured ``db_session`` fixture that yields a
-# transactional SQLAlchemy session bound to the in-memory SQLite engine, so
-# we simply return that reference for backwards compatibility.
-
-
 @pytest.fixture()
 def db(db_session):  # noqa: D401 – passthrough alias
-    """Backward-compatibility shim – provide ``db`` as alias for *db_session*."""
+    """Provide a short alias for the shared test database session."""
 
     return db_session
 
 
-# ---------------------------------------------------------------------------
-# *test_user* – alias for legacy fixture name expected by a handful of new
-# test modules.  Reuses the deterministic ``_dev_user`` helper.
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture()
 def test_user(_dev_user):  # noqa: D401 – passthrough alias
-    """Provide ``test_user`` as backwards-compatible alias for *_dev_user*."""
+    """Return the deterministic dev user for tests."""
 
     return _dev_user
 

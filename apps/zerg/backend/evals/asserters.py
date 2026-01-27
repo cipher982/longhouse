@@ -331,7 +331,7 @@ def assert_commis_tool_called(
     if not job.commis_id:
         return False, f"Commis {commis_id} has no commis_id (not started yet)"
 
-    # Commis tool calls are emitted as AgentRunEvents on the *oikos run*.
+    # Commis tool calls are emitted as RunEvents on the *oikos run*.
     # See oikos_react_engine._call_tool_async: it uses ctx.run_id (oikos run_id)
     # and includes commis_id + tool_name in the payload.
     events = db_session.query(RunEvent).filter(RunEvent.run_id == metrics.run_id).all()

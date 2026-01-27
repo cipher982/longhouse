@@ -401,7 +401,7 @@ class TestServiceLoginRaceConditions:
                 )
 
         # Run multiple concurrent requests
-        with ThreadPoolExecutor(max_commis=5) as executor:
+        with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [executor.submit(make_request) for _ in range(5)]
             results = [f.result() for f in futures]
 

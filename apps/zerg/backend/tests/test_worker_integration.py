@@ -71,7 +71,7 @@ async def test_full_commis_lifecycle(db_session, test_user):
         assert len(assistant_messages) >= 1
 
         # 6. List commis - should include our commis
-        commis = artifact_store.list_commis(limit=10)
+        commis = artifact_store.list_commiss(limit=10)
         commis_ids = [w["commis_id"] for w in commis]
         assert commis_id in commis_ids
 
@@ -107,7 +107,7 @@ async def test_multiple_commis(db_session, test_user):
             commis_ids.append(result.commis_id)
 
         # Verify all commis are in index
-        commis = artifact_store.list_commis(limit=10)
+        commis = artifact_store.list_commiss(limit=10)
         found_ids = [w["commis_id"] for w in commis]
 
         for commis_id in commis_ids:
@@ -185,7 +185,7 @@ async def test_oikos_can_read_commis_results(db_session, test_user):
                 completed_commis.append(result.commis_id)
 
         # Oikos queries completed commis
-        commis = artifact_store.list_commis(status="success", limit=10)
+        commis = artifact_store.list_commiss(status="success", limit=10)
         assert len(commis) >= len(completed_commis)
 
         # Oikos reads each commis's result

@@ -49,7 +49,7 @@ class TestOikosService:
         assert fiche.owner_id == test_user.id
         assert fiche.config.get("is_oikos") is True
         assert "spawn_commis" in fiche.allowed_tools
-        assert "list_commis" in fiche.allowed_tools
+        assert "list_commiss" in fiche.allowed_tools
         # V1.1: knowledge_search should be available to oikos
         assert "knowledge_search" in fiche.allowed_tools
         # V1.2: web research tools should be available to oikos
@@ -124,10 +124,10 @@ class TestOikosService:
 
         expected_tools = [
             "spawn_commis",
-            "list_commis",
+            "list_commiss",
             "read_commis_result",
             "read_commis_file",
-            "grep_commis",
+            "grep_commiss",
             "get_commis_metadata",
             "get_current_time",
             "http_request",
@@ -307,7 +307,7 @@ class TestCommisOikosCorrelation:
 
     # NOTE: test_run_continuation_inherits_model was removed during the oikos
     # resume refactor (Jan 2026). The continuation pattern now uses
-    # RunInterrupted + FicheRunner.run_continuation instead of separate runs.
+    # FicheInterrupted + FicheRunner.run_continuation instead of separate runs.
     # See: docs/work/oikos-continuation-refactor.md
 
 

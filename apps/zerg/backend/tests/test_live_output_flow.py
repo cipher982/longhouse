@@ -1,4 +1,4 @@
-"""Integration tests for live worker output flow.
+"""Integration tests for live commis output flow.
 
 Tests the full path from runner exec_chunk (WebSocket) -> OutputBuffer -> EventBus (SSE).
 """
@@ -13,14 +13,14 @@ from zerg.events import EventType
 from zerg.events.event_bus import event_bus
 from zerg.models.models import Runner
 from zerg.models.models import User
-from zerg.models.models import WorkerJob
-from zerg.services.worker_output_buffer import get_worker_output_buffer
-from zerg.tools.builtin.supervisor_tools import peek_worker_output
+from zerg.models.models import CommisJob
+from zerg.services.commis_output_buffer import get_commis_output_buffer
+from zerg.tools.builtin.oikos_tools import peek_commis_output
 
 
 @pytest.fixture
-def test_runner_and_worker(db: Session, test_user: User) -> tuple[Runner, str, WorkerJob]:
-    """Create a test runner and a worker job linked to it."""
+def test_runner_and_commis(db: Session, test_user: User) -> tuple[Runner, str, CommisJob]:
+    """Create a test runner and a commis job linked to it."""
     secret = runner_crud.generate_token()
     runner = runner_crud.create_runner(
         db=db,
@@ -29,32 +29,32 @@ def test_runner_and_worker(db: Session, test_user: User) -> tuple[Runner, str, W
         auth_secret=secret,
     )
 
-    worker_id = "test-worker-live-123"
-    worker_job = WorkerJob(
+    commis_id = "test-commis-live-123"
+    commis_job = CommisJob(
         owner_id=test_user.id,
         task="Test live output",
         status="running",
-        worker_id=worker_id,
+        commis_id=commis_id,
     )
-    db.add(worker_job)
+    db.add(commis_job)
     db.commit()
-    db.refresh(worker_job)
+    db.refresh(commis_job)
 
-    return runner, secret, worker_job
+    return runner, secret, commis_job
 
 
 @pytest.mark.asyncio
-async def test_live_output_flow_ws_to_sse(client: TestClient, db: Session, test_runner_and_worker):
+async def test_live_output_flow_ws_to_sse(client: TestClient, db: Session, test_runner_and_commis):
     """Test that runner exec_chunk updates buffer and publishes SSE."""
-    runner, secret, worker_job = test_runner_and_worker
-    worker_id = worker_job.worker_id
+    runner, secret, commis_job = test_runner_and_commis
+    commis_id = commis_job.commis_id
 
-    # Create a runner job linked to the worker
+    # Create a runner job linked to the commis
     runner_job = runner_crud.create_runner_job(
         db=db,
         runner_id=runner.id,
         owner_id=runner.owner_id,
-        worker_id=worker_id,
+        commis_id=commis_id,
         run_id="1",
         command="echo hello",
         timeout_secs=60,
@@ -65,7 +65,7 @@ async def test_live_output_flow_ws_to_sse(client: TestClient, db: Session, test_
     async def sse_listener(payload):
         received_sse.append(payload)
 
-    event_bus.subscribe(EventType.WORKER_OUTPUT_CHUNK, sse_listener)
+    event_bus.subscribe(EventType.COMMIS_OUTPUT_CHUNK, sse_listener)
 
     try:
         with client.websocket_connect("/api/runners/ws") as ws:
@@ -88,49 +88,49 @@ async def test_live_output_flow_ws_to_sse(client: TestClient, db: Session, test_
             await asyncio.sleep(0.2)
 
             # 3. Verify buffer
-            buffer = get_worker_output_buffer()
-            tail = buffer.get_tail(worker_id)
+            buffer = get_commis_output_buffer()
+            tail = buffer.get_tail(commis_id)
             assert chunk_data in tail
 
             # 4. Verify SSE event
             assert len(received_sse) == 1
             payload = received_sse[0]
-            assert payload["worker_id"] == worker_id
-            assert payload["job_id"] == worker_job.id
+            assert payload["commis_id"] == commis_id
+            assert payload["job_id"] == commis_job.id
             assert payload["data"] == chunk_data
             assert payload["stream"] == "stdout"
             assert payload["run_id"] == 1
 
             # 5. Verify peek tool works (using the job ID)
-            # Need to mock credential context for peek_worker_output
+            # Need to mock credential context for peek_commis_output
             from zerg.connectors.resolver import CredentialResolver
             from zerg.connectors.context import set_credential_resolver, reset_credential_resolver
 
-            resolver = CredentialResolver(agent_id=1, db=db, owner_id=runner.owner_id)
+            resolver = CredentialResolver(fiche_id=1, db=db, owner_id=runner.owner_id)
             token = set_credential_resolver(resolver)
 
             try:
-                peek_result = peek_worker_output(str(worker_job.id))
-                assert "Live worker output" in peek_result
+                peek_result = peek_commis_output(str(commis_job.id))
+                assert "Live commis output" in peek_result
                 assert chunk_data in peek_result
             finally:
                 reset_credential_resolver(token)
 
     finally:
-        event_bus.unsubscribe(EventType.WORKER_OUTPUT_CHUNK, sse_listener)
+        event_bus.unsubscribe(EventType.COMMIS_OUTPUT_CHUNK, sse_listener)
 
 
 @pytest.mark.asyncio
-async def test_live_output_chunk_truncation_sse(client: TestClient, db: Session, test_runner_and_worker):
+async def test_live_output_chunk_truncation_sse(client: TestClient, db: Session, test_runner_and_commis):
     """Test that massive chunks are truncated in the SSE payload but fully added to buffer."""
-    runner, secret, worker_job = test_runner_and_worker
-    worker_id = worker_job.worker_id
+    runner, secret, commis_job = test_runner_and_commis
+    commis_id = commis_job.commis_id
 
     runner_job = runner_crud.create_runner_job(
         db=db,
         runner_id=runner.id,
         owner_id=runner.owner_id,
-        worker_id=worker_id,
+        commis_id=commis_id,
         run_id="1",
         command="large output",
         timeout_secs=60,
@@ -140,7 +140,7 @@ async def test_live_output_chunk_truncation_sse(client: TestClient, db: Session,
     async def sse_listener(payload):
         received_sse.append(payload)
 
-    event_bus.subscribe(EventType.WORKER_OUTPUT_CHUNK, sse_listener)
+    event_bus.subscribe(EventType.COMMIS_OUTPUT_CHUNK, sse_listener)
 
     try:
         with client.websocket_connect("/api/runners/ws") as ws:
@@ -158,8 +158,8 @@ async def test_live_output_chunk_truncation_sse(client: TestClient, db: Session,
             await asyncio.sleep(0.2)
 
             # Buffer should have full 5000
-            buffer = get_worker_output_buffer()
-            tail = buffer.get_tail(worker_id)
+            buffer = get_commis_output_buffer()
+            tail = buffer.get_tail(commis_id)
             assert len(tail) >= 5000
 
             # SSE should have truncated 4000 (tail of it)
@@ -169,4 +169,4 @@ async def test_live_output_chunk_truncation_sse(client: TestClient, db: Session,
             assert payload["data"] == "A" * 4000
 
     finally:
-        event_bus.unsubscribe(EventType.WORKER_OUTPUT_CHUNK, sse_listener)
+        event_bus.unsubscribe(EventType.COMMIS_OUTPUT_CHUNK, sse_listener)

@@ -238,7 +238,7 @@ def test_read_commis_file_security(temp_store):
         temp_store.read_commis_file(commis_id, "/etc/passwd")
 
 
-def test_list_commis(temp_store):
+def test_list_commiss(temp_store):
     """Test listing commis."""
     # Create multiple commis
     commis_ids = []
@@ -247,7 +247,7 @@ def test_list_commis(temp_store):
         commis_ids.append(commis_id)
 
     # List all commis
-    commis = temp_store.list_commis(limit=10)
+    commis = temp_store.list_commiss(limit=10)
     assert len(commis) == 5
 
     # Verify sorted by created_at descending (newest first)
@@ -255,18 +255,18 @@ def test_list_commis(temp_store):
         assert commis[i]["created_at"] >= commis[i + 1]["created_at"]
 
 
-def test_list_commis_with_limit(temp_store):
+def test_list_commiss_with_limit(temp_store):
     """Test listing commis with limit."""
     # Create multiple commis
     for i in range(5):
         temp_store.create_commis(f"Task {i}")
 
     # List with limit
-    commis = temp_store.list_commis(limit=3)
+    commis = temp_store.list_commiss(limit=3)
     assert len(commis) == 3
 
 
-def test_list_commis_filter_by_status(temp_store):
+def test_list_commiss_filter_by_status(temp_store):
     """Test filtering commis by status."""
     # Create commis with different statuses
     commis1 = temp_store.create_commis("Task 1")
@@ -281,22 +281,22 @@ def test_list_commis_filter_by_status(temp_store):
     temp_store.start_commis(commis3)
 
     # Filter by success
-    success_commis = temp_store.list_commis(status="success")
+    success_commis = temp_store.list_commiss(status="success")
     assert len(success_commis) == 1
     assert success_commis[0]["commis_id"] == commis1
 
     # Filter by failed
-    failed_commis = temp_store.list_commis(status="failed")
+    failed_commis = temp_store.list_commiss(status="failed")
     assert len(failed_commis) == 1
     assert failed_commis[0]["commis_id"] == commis2
 
     # Filter by running
-    running_commis = temp_store.list_commis(status="running")
+    running_commis = temp_store.list_commiss(status="running")
     assert len(running_commis) == 1
     assert running_commis[0]["commis_id"] == commis3
 
 
-def test_list_commis_filter_by_since(temp_store):
+def test_list_commiss_filter_by_since(temp_store):
     """Test filtering commis by creation time."""
     # Create commis at different times
     commis1 = temp_store.create_commis("Task 1")
@@ -309,7 +309,7 @@ def test_list_commis_filter_by_since(temp_store):
     commis3 = temp_store.create_commis("Task 3")
 
     # Filter by since
-    recent_commis = temp_store.list_commis(since=cutoff_time)
+    recent_commis = temp_store.list_commiss(since=cutoff_time)
     commis_ids = [w["commis_id"] for w in recent_commis]
 
     # Should only include commis2 and commis3 (created after cutoff)
@@ -481,7 +481,7 @@ def test_multiple_stores_same_path():
         assert result == "Result from store1"
 
         # List commis from second instance
-        commis = store2.list_commis()
+        commis = store2.list_commiss()
         assert len(commis) == 1
         assert commis[0]["commis_id"] == commis_id
 

@@ -6,7 +6,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 from langchain_core.messages import ToolMessage
 
-from tests.conftest import TEST_WORKER_MODEL
+from tests.conftest import TEST_COMMIS_MODEL
 from zerg.crud import crud as _crud
 from zerg.models.models import Fiche
 from zerg.services.thread_service import ThreadService
@@ -20,12 +20,12 @@ def _create_test_agent(db_session):
         db_session, email="dev@local", provider=None, role="ADMIN"
     )
 
-    return Agent(
+    return Fiche(
         owner_id=owner.id,
         name="TestAgent",
         system_instructions="You are helpful.",
         task_instructions="",
-        model=TEST_WORKER_MODEL,
+        model=TEST_COMMIS_MODEL,
     )
 
 

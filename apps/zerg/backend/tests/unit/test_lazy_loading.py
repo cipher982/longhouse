@@ -182,13 +182,13 @@ class TestSearchContext:
 
 
 class TestSearchToolsFiltering:
-    """Test that search_tools_for_agent respects context filtering."""
+    """Test that search_tools_for_fiche respects context filtering."""
 
     @pytest.mark.asyncio
     async def test_search_results_filtered_by_allowlist(self):
-        """search_tools_for_agent should filter results by allowlist."""
+        """search_tools_for_fiche should filter results by allowlist."""
         from zerg.tools.tool_search import clear_search_context
-        from zerg.tools.tool_search import search_tools_for_agent
+        from zerg.tools.tool_search import search_tools_for_fiche
         from zerg.tools.tool_search import set_search_context
 
         # Mock the search index to return predictable results
@@ -209,7 +209,7 @@ class TestSearchToolsFiltering:
             # Set context to only allow github tools
             set_search_context(allowed_tools=["github_*"], max_results=10)
 
-            result = await search_tools_for_agent("list issues", max_results=10)
+            result = await search_tools_for_fiche("list issues", max_results=10)
 
             # Only github_list_issues should be in results
             tool_names = [t["name"] for t in result["tools"]]
@@ -221,9 +221,9 @@ class TestSearchToolsFiltering:
 
     @pytest.mark.asyncio
     async def test_search_results_capped_by_context_max(self):
-        """search_tools_for_agent should respect context max_results cap."""
+        """search_tools_for_fiche should respect context max_results cap."""
         from zerg.tools.tool_search import clear_search_context
-        from zerg.tools.tool_search import search_tools_for_agent
+        from zerg.tools.tool_search import search_tools_for_fiche
         from zerg.tools.tool_search import set_search_context
 
         # Create many mock results
@@ -245,7 +245,7 @@ class TestSearchToolsFiltering:
             set_search_context(allowed_tools=None, max_results=5)
 
             # Request 10, but context cap is 5
-            result = await search_tools_for_agent("test", max_results=10)
+            result = await search_tools_for_fiche("test", max_results=10)
 
             # Should be capped at 5
             assert len(result["tools"]) <= 5

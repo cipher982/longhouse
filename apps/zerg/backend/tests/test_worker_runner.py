@@ -337,7 +337,7 @@ async def test_commis_artifacts_readable(commis_runner, temp_store, db_session, 
     assert len(thread_content) > 0
 
     # List should include this commis
-    commis = temp_store.list_commis(limit=10)
+    commis = temp_store.list_commiss(limit=10)
     commis_ids = [w["commis_id"] for w in commis]
     assert commis_id in commis_ids
 

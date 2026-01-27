@@ -292,10 +292,10 @@ class ToolMocker:
 
 SAFE_DEFAULT_TOOLS = {
     # Oikos/commis inspection (read-only)
-    "list_commis",
+    "list_commiss",
     "read_commis_result",
     "read_commis_file",
-    "grep_commis",
+    "grep_commiss",
     "get_commis_metadata",
     "get_current_time",
     # Runner inspection (read-only)

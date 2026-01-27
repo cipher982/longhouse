@@ -43,10 +43,10 @@ def oikos_fiche(db_session, test_user):
     # Set allowed_tools - required for tools to be passed to the LLM
     fiche.allowed_tools = [
         "spawn_commis",
-        "list_commis",
+        "list_commiss",
         "read_commis_result",
         "read_commis_file",
-        "grep_commis",
+        "grep_commiss",
         "get_commis_metadata",
     ]
     db_session.commit()
@@ -107,8 +107,8 @@ async def test_oikos_spawns_commis_via_tool(oikos_fiche, db_session, test_user, 
 
 
 @pytest.mark.asyncio
-async def test_oikos_can_list_commis(oikos_fiche, db_session, test_user, temp_artifact_path):
-    """Test that a oikos can use list_commis tool."""
+async def test_oikos_can_list_commiss(oikos_fiche, db_session, test_user, temp_artifact_path):
+    """Test that a oikos can use list_commiss tool."""
     from datetime import datetime
     from datetime import timezone
 
@@ -139,7 +139,7 @@ async def test_oikos_can_list_commis(oikos_fiche, db_session, test_user, temp_ar
         db=db_session,
         thread_id=thread.id,
         role="user",
-        content="Use the list_commis tool to show me all recent commis",
+        content="Use the list_commiss tool to show me all recent commis",
         processed=False,
     )
 
@@ -152,17 +152,17 @@ async def test_oikos_can_list_commis(oikos_fiche, db_session, test_user, temp_ar
         fiche_runner = FicheRunner(oikos_fiche)
         messages = await fiche_runner.run_thread(db_session, thread)
 
-        # Verify the oikos called list_commis
-        list_commis_called = False
+        # Verify the oikos called list_commiss
+        list_commiss_called = False
 
         for msg in messages:
             if msg.role == "assistant" and msg.tool_calls:
                 for tool_call in msg.tool_calls:
-                    if tool_call.get("name") == "list_commis":
-                        list_commis_called = True
+                    if tool_call.get("name") == "list_commiss":
+                        list_commiss_called = True
                         break
 
-        assert list_commis_called, "Oikos should have called list_commis"
+        assert list_commiss_called, "Oikos should have called list_commiss"
 
         # Check that the response mentions the commis
         final_message = messages[-1]
@@ -264,10 +264,10 @@ async def test_tools_registered_in_builtin(db_session):
 
     # Verify all oikos tools are registered
     assert registry.get("spawn_commis") is not None
-    assert registry.get("list_commis") is not None
+    assert registry.get("list_commiss") is not None
     assert registry.get("read_commis_result") is not None
     assert registry.get("read_commis_file") is not None
-    assert registry.get("grep_commis") is not None
+    assert registry.get("grep_commiss") is not None
     assert registry.get("get_commis_metadata") is not None
 
     # Verify tool descriptions

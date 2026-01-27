@@ -50,10 +50,10 @@ class TestOikosConfiguration:
         """Test that oikos has all required delegation tools."""
         required_oikos_tools = [
             "spawn_commis",
-            "list_commis",
+            "list_commiss",
             "read_commis_result",
             "read_commis_file",
-            "grep_commis",
+            "grep_commiss",
             "get_commis_metadata",
         ]
 
@@ -93,7 +93,7 @@ class TestOikosConfiguration:
         # Verify key concepts are present
         assert "Oikos" in prompt
         assert "spawn_commis" in prompt
-        assert "list_commis" in prompt
+        assert "list_commiss" in prompt
         assert "commis" in prompt.lower()
 
         # Verify guidance sections
@@ -190,14 +190,14 @@ class TestOikosDelegation:
         assert "Error" in result or "error" in result.lower()
         assert "credential context" in result.lower() or "context" in result.lower()
 
-    def test_list_commis_tool_basic(self, db_session, test_user):
-        """Test list_commis tool is callable and validates context."""
+    def test_list_commiss_tool_basic(self, db_session, test_user):
+        """Test list_commiss tool is callable and validates context."""
         from zerg.connectors.context import set_credential_resolver
-        from zerg.tools.builtin.oikos_tools import list_commis
+        from zerg.tools.builtin.oikos_tools import list_commiss
 
         # Without context, should return error
         set_credential_resolver(None)
-        result = list_commis(limit=10)
+        result = list_commiss(limit=10)
         assert "Error" in result or "error" in result.lower()
         assert "credential context" in result.lower() or "context" in result.lower()
 

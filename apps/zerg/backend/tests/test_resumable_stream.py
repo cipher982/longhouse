@@ -31,8 +31,8 @@ from zerg.services.event_store import emit_run_event
 def test_run(db_session, test_user):
     """Create a test agent and run for streaming tests."""
     # Create agent
-    agent = Agent(
-        name="Test Agent",
+    agent = Fiche(
+        name="Test Fiche",
         owner_id=test_user.id,
         system_instructions="You are a helpful assistant.",
         task_instructions="Complete the given task.",

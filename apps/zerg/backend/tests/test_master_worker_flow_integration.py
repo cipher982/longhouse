@@ -1,14 +1,14 @@
 """Integration test: oikos → spawn_commis → interrupt → commis_complete → resume → final response.
 
 This covers the master/commis flow used by Oikos chat using the LangGraph-free resume pattern:
-- Oikos calls spawn_commis and raises RunInterrupted
+- Oikos calls spawn_commis and raises FicheInterrupted
 - Run is marked WAITING (interrupted waiting for commis completion)
 - Commis completes, triggers resume via FicheRunner.run_continuation
 - Oikos continues and generates final response
 
 NOTE: This was rewritten during the oikos refactor (Jan 2026). The old
 continuation pattern (DEFERRED + run_continuation) was replaced with
-interrupt/resume via RunInterrupted + DB-based continuation.
+interrupt/resume via FicheInterrupted + DB-based continuation.
 
 See: docs/work/oikos-continuation-refactor.md
 """
@@ -26,7 +26,7 @@ import pytest
 from tests.conftest import TEST_COMMIS_MODEL
 from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
-from zerg.managers.fiche_runner import RunInterrupted
+from zerg.managers.fiche_runner import FicheInterrupted
 from zerg.models.enums import RunStatus
 from zerg.models.enums import RunTrigger
 from zerg.models.models import Run
@@ -65,7 +65,7 @@ async def test_oikos_commis_interrupt_resume_flow(
     """Test the interrupt/resume flow for oikos → commis → final response.
 
     This test verifies:
-    1. Oikos run becomes WAITING when spawn_commis triggers RunInterrupted
+    1. Oikos run becomes WAITING when spawn_commis triggers FicheInterrupted
     2. Commis job is created and correlated to the oikos run
     3. Resume completes the oikos run with final response
     """
@@ -108,10 +108,10 @@ async def test_oikos_commis_interrupt_resume_flow(
     db_session.refresh(commis_job)
 
     async def fake_run_thread_with_interrupt(_self, _db, _thread):
-        """Simulate oikos calling spawn_commis which triggers RunInterrupted."""
-        # Raise RunInterrupted to simulate the interrupt path inside spawn_commis
+        """Simulate oikos calling spawn_commis which triggers FicheInterrupted."""
+        # Raise FicheInterrupted to simulate the interrupt path inside spawn_commis
         # Note: No "message" field - frontend shows typing indicator, commis card shows task
-        raise RunInterrupted(
+        raise FicheInterrupted(
             {
                 "type": "commis_pending",
                 "job_id": commis_job.id,
@@ -263,7 +263,7 @@ async def test_spawn_commis_fallback_when_outside_runnable_context(
 
     try:
         # Call spawn_commis directly (outside oikos loop context)
-        # This should trigger the fallback path since no RunInterrupted handling exists
+        # This should trigger the fallback path since no FicheInterrupted handling exists
         result = await spawn_commis_async(task="Test fallback task", model=TEST_COMMIS_MODEL)
 
         # Should return "queued successfully" (fallback pattern)
