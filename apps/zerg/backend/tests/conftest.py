@@ -230,12 +230,22 @@ elif _DB_MODE == "external":
     # ---------------------------------------------------------------------------
     # External mode: Use provided DATABASE_URL with per-run schema isolation
     # ---------------------------------------------------------------------------
-    _CI_TEST_SCHEMA = os.environ.get("CI_TEST_SCHEMA")
-    if not _CI_TEST_SCHEMA:
+    # NOTE: When using pytest-xdist, each worker is a separate process.
+    # We append the worker ID to the schema name to avoid collisions.
+    # The PYTEST_XDIST_WORKER env var is set by xdist (e.g., "gw0", "gw1").
+    _xdist_worker = os.environ.get("PYTEST_XDIST_WORKER", "")
+    _CI_TEST_SCHEMA_BASE = os.environ.get("CI_TEST_SCHEMA")
+    if not _CI_TEST_SCHEMA_BASE:
         raise RuntimeError(
             "External DB mode requires CI_TEST_SCHEMA environment variable. "
             "Set CI_TEST_SCHEMA=zerg_ci_<unique_id> to isolate this test run."
         )
+
+    # Append worker ID for parallel test isolation
+    if _xdist_worker:
+        _CI_TEST_SCHEMA = f"{_CI_TEST_SCHEMA_BASE}_{_xdist_worker}"
+    else:
+        _CI_TEST_SCHEMA = _CI_TEST_SCHEMA_BASE
 
     # Safety check: only allow ci_, test_, or zerg_ci_ prefixed schemas
     if not _CI_TEST_SCHEMA.startswith(("ci_", "test_", "zerg_ci_")):
@@ -503,7 +513,7 @@ def _shutdown_pg_container():
         except Exception:
             pass
     elif _DB_MODE == "external" and _CI_TEST_SCHEMA:
-        # Clean up the CI schema after tests complete
+        # Clean up this worker's schema after tests complete
         cleanup_mode = os.environ.get("CI_DB_CLEANUP", "drop")
         if cleanup_mode == "drop":
             try:
