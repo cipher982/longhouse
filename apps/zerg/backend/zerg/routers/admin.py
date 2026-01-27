@@ -14,12 +14,10 @@ from fastapi import HTTPException
 from fastapi import Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 # Centralised settings
 from zerg.config import get_settings
-from zerg.crud import crud
 from zerg.database import DB_SCHEMA
 
 # Database helpers
@@ -47,13 +45,13 @@ router = APIRouter(
 logger = logging.getLogger(__name__)
 
 try:
-    # When E2E_USE_POSTGRES_SCHEMAS=1, WorkerDBMiddleware populates this
+    # When E2E_USE_POSTGRES_SCHEMAS=1, CommisDBMiddleware populates this
     # contextvar so zerg.database.get_session_factory can route to the correct
-    # worker schema. We explicitly set it inside threadpool work to avoid
+    # commis schema. We explicitly set it inside threadpool work to avoid
     # relying on contextvar propagation implementation details.
-    from zerg.middleware.worker_db import current_worker_id as _current_worker_id
+    from zerg.middleware.commis_db import current_commis_id as _current_commis_id
 except Exception:  # pragma: no cover - middleware not present in some contexts
-    _current_worker_id = None  # type: ignore[assignment]
+    _current_commis_id = None  # type: ignore[assignment]
 
 
 class ResetType(str, Enum):
@@ -75,14 +73,6 @@ class ScenarioSeedRequest(BaseModel):
 
     name: str
     clean: bool = True
-    owner_email: str | None = None
-
-
-class DemoUserCreateRequest(BaseModel):
-    """Request model for creating or marking demo users."""
-
-    email: str | None = None
-    display_name: str | None = None
 
 
 class SuperAdminStatusResponse(BaseModel):
@@ -245,7 +235,7 @@ def full_schema_rebuild(engine, settings, is_production, diagnostics) -> dict[st
 @router.post("/reset-database")
 async def reset_database(
     request: DatabaseResetRequest,
-    x_test_worker: str | None = Header(default=None, alias="X-Test-Worker"),
+    x_test_commis: str | None = Header(default=None, alias="X-Test-Commis"),
     current_user=Depends(require_super_admin),
 ):
     """Reset the database by dropping all tables and recreating them.
@@ -254,7 +244,7 @@ async def reset_database(
     In production environments, requires additional password confirmation.
     """
     # Run synchronously so the HTTP response reflects a completed commit.
-    return _reset_database_sync(request, current_user, x_test_worker)
+    return _reset_database_sync(request, current_user, x_test_commis)
 
 
 @router.post("/seed-scenario")
@@ -265,256 +255,16 @@ async def seed_scenario_data(
 ):
     """Seed deterministic scenario data for demos and E2E tests."""
     settings = get_settings()
-    target_user = current_user
-
-    if request.owner_email:
-        target_user = crud.get_user_by_email(db, request.owner_email)
-        if target_user is None:
-            raise HTTPException(status_code=404, detail="Owner email not found")
-
     if settings.environment and settings.environment.lower() == "production":
-        prefs = getattr(target_user, "prefs", None) or {}
-        is_demo = bool(prefs.get("demo") or prefs.get("is_demo"))
-        if not is_demo:
-            raise HTTPException(status_code=403, detail="Scenario seeding is restricted to demo users in production")
+        raise HTTPException(status_code=403, detail="Scenario seeding is disabled in production")
 
     from zerg.scenarios.seed import seed_scenario
 
-    result = seed_scenario(db, request.name, owner_id=target_user.id, clean=request.clean)
+    result = seed_scenario(db, request.name, owner_id=current_user.id, clean=request.clean)
     return JSONResponse(content=result)
 
 
-@router.post("/demo-users")
-async def create_demo_user(
-    request: DemoUserCreateRequest,
-    db: Session = Depends(get_db),
-    current_user=Depends(require_super_admin),
-):
-    """Create (or mark) a demo user account."""
-    import uuid
-
-    email = (request.email or "").strip().lower()
-    if not email:
-        email = f"demo+{uuid.uuid4().hex[:8]}@swarmlet.demo"
-
-    user = crud.get_user_by_email(db, email)
-    if user is not None:
-        prefs = getattr(user, "prefs", None) or {}
-        is_demo = bool(prefs.get("demo") or prefs.get("is_demo"))
-        if not is_demo:
-            raise HTTPException(status_code=409, detail="User already exists and is not marked as demo")
-        if request.display_name:
-            user.display_name = request.display_name
-        prefs["demo"] = True
-        user.prefs = prefs
-        db.commit()
-        db.refresh(user)
-        return JSONResponse(
-            content={
-                "id": user.id,
-                "email": user.email,
-                "display_name": user.display_name,
-                "is_demo": True,
-            }
-        )
-
-    from zerg.models.models import User
-    from zerg.utils.time import utc_now_naive
-
-    user = User(
-        email=email,
-        provider="demo",
-        provider_user_id=email,
-        role="USER",
-        is_active=True,
-        display_name=request.display_name or "Demo User",
-        prefs={"demo": True},
-        created_at=utc_now_naive(),
-        updated_at=utc_now_naive(),
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-
-    return JSONResponse(
-        content={
-            "id": user.id,
-            "email": user.email,
-            "display_name": user.display_name,
-            "is_demo": True,
-        }
-    )
-
-
-def reset_demo_user_data(db: Session, user_id: int) -> dict[str, int]:
-    """Remove demo-user-owned data while preserving the user row."""
-    from zerg.models.agent import Agent
-    from zerg.models.agent import AgentMessage
-    from zerg.models.agent_run_event import AgentRunEvent
-    from zerg.models.connector import Connector
-    from zerg.models.llm_audit import LLMAuditLog
-    from zerg.models.models import AccountConnectorCredential
-    from zerg.models.models import AgentMemoryKV
-    from zerg.models.models import CanvasLayout
-    from zerg.models.models import ConnectorCredential
-    from zerg.models.models import EmailSendLog
-    from zerg.models.models import KnowledgeDocument
-    from zerg.models.models import KnowledgeSource
-    from zerg.models.models import MemoryEmbedding
-    from zerg.models.models import MemoryFile
-    from zerg.models.models import NodeExecutionState
-    from zerg.models.models import Runner
-    from zerg.models.models import RunnerEnrollToken
-    from zerg.models.models import RunnerJob
-    from zerg.models.models import UserDailyEmailCounter
-    from zerg.models.models import UserDailySmsCounter
-    from zerg.models.models import UserEmailContact
-    from zerg.models.models import UserPhoneContact
-    from zerg.models.models import UserTask
-    from zerg.models.models import WorkerJob
-    from zerg.models.models import Workflow
-    from zerg.models.models import WorkflowExecution
-    from zerg.models.models import WorkflowTemplate
-    from zerg.models.run import AgentRun
-    from zerg.models.sync import SyncOperation
-    from zerg.models.thread import Thread
-    from zerg.models.thread import ThreadMessage
-    from zerg.models.trigger import Trigger
-    from zerg.models.worker_barrier import BarrierJob
-    from zerg.models.worker_barrier import WorkerBarrier
-
-    counts: dict[str, int] = {}
-
-    def _delete(query, label: str) -> int:
-        deleted = query.delete(synchronize_session=False)
-        if deleted:
-            counts[label] = deleted
-        return deleted
-
-    agent_ids = [row[0] for row in db.query(Agent.id).filter(Agent.owner_id == user_id).all()]
-    thread_ids: list[int] = []
-    run_ids: list[int] = []
-    if agent_ids:
-        thread_ids = [row[0] for row in db.query(Thread.id).filter(Thread.agent_id.in_(agent_ids)).all()]
-        run_ids = [row[0] for row in db.query(AgentRun.id).filter(AgentRun.agent_id.in_(agent_ids)).all()]
-
-    worker_job_ids = [row[0] for row in db.query(WorkerJob.id).filter(WorkerJob.owner_id == user_id).all()]
-    barrier_ids: list[int] = []
-    if run_ids:
-        barrier_ids = [row[0] for row in db.query(WorkerBarrier.id).filter(WorkerBarrier.run_id.in_(run_ids)).all()]
-
-    if barrier_ids or worker_job_ids:
-        barrier_query = db.query(BarrierJob)
-        if barrier_ids and worker_job_ids:
-            barrier_query = barrier_query.filter(
-                or_(
-                    BarrierJob.barrier_id.in_(barrier_ids),
-                    BarrierJob.job_id.in_(worker_job_ids),
-                )
-            )
-        elif barrier_ids:
-            barrier_query = barrier_query.filter(BarrierJob.barrier_id.in_(barrier_ids))
-        else:
-            barrier_query = barrier_query.filter(BarrierJob.job_id.in_(worker_job_ids))
-        _delete(barrier_query, "barrier_jobs")
-
-    if run_ids:
-        _delete(db.query(WorkerBarrier).filter(WorkerBarrier.run_id.in_(run_ids)), "worker_barriers")
-        _delete(db.query(AgentRunEvent).filter(AgentRunEvent.run_id.in_(run_ids)), "agent_run_events")
-
-    if thread_ids:
-        _delete(db.query(ThreadMessage).filter(ThreadMessage.thread_id.in_(thread_ids)), "thread_messages")
-
-    _delete(db.query(LLMAuditLog).filter(LLMAuditLog.owner_id == user_id), "llm_audit_log")
-
-    if run_ids:
-        _delete(db.query(AgentRun).filter(AgentRun.id.in_(run_ids)), "agent_runs")
-
-    _delete(db.query(WorkerJob).filter(WorkerJob.owner_id == user_id), "worker_jobs")
-
-    if agent_ids:
-        _delete(db.query(ConnectorCredential).filter(ConnectorCredential.agent_id.in_(agent_ids)), "connector_credentials")
-        _delete(db.query(Trigger).filter(Trigger.agent_id.in_(agent_ids)), "triggers")
-        _delete(db.query(AgentMessage).filter(AgentMessage.agent_id.in_(agent_ids)), "agent_messages")
-        if thread_ids:
-            _delete(db.query(Thread).filter(Thread.id.in_(thread_ids)), "threads")
-        _delete(db.query(Agent).filter(Agent.id.in_(agent_ids)), "agents")
-
-    # CanvasLayout.workflow_id FK references Workflow - delete canvas layouts first
-    _delete(db.query(CanvasLayout).filter(CanvasLayout.user_id == user_id), "canvas_layouts")
-
-    workflow_ids = [row[0] for row in db.query(Workflow.id).filter(Workflow.owner_id == user_id).all()]
-    if workflow_ids:
-        execution_ids = [row[0] for row in db.query(WorkflowExecution.id).filter(WorkflowExecution.workflow_id.in_(workflow_ids)).all()]
-        if execution_ids:
-            _delete(
-                db.query(NodeExecutionState).filter(NodeExecutionState.workflow_execution_id.in_(execution_ids)),
-                "node_execution_states",
-            )
-            _delete(
-                db.query(WorkflowExecution).filter(WorkflowExecution.id.in_(execution_ids)),
-                "workflow_executions",
-            )
-        _delete(db.query(Workflow).filter(Workflow.id.in_(workflow_ids)), "workflows")
-
-    _delete(db.query(WorkflowTemplate).filter(WorkflowTemplate.created_by == user_id), "workflow_templates")
-
-    _delete(db.query(Connector).filter(Connector.owner_id == user_id), "connectors")
-    _delete(
-        db.query(AccountConnectorCredential).filter(AccountConnectorCredential.owner_id == user_id),
-        "account_connector_credentials",
-    )
-
-    _delete(db.query(RunnerJob).filter(RunnerJob.owner_id == user_id), "runner_jobs")
-    _delete(db.query(RunnerEnrollToken).filter(RunnerEnrollToken.owner_id == user_id), "runner_enroll_tokens")
-    _delete(db.query(Runner).filter(Runner.owner_id == user_id), "runners")
-
-    _delete(db.query(KnowledgeDocument).filter(KnowledgeDocument.owner_id == user_id), "knowledge_documents")
-    _delete(db.query(KnowledgeSource).filter(KnowledgeSource.owner_id == user_id), "knowledge_sources")
-
-    _delete(db.query(MemoryEmbedding).filter(MemoryEmbedding.owner_id == user_id), "memory_embeddings")
-    _delete(db.query(MemoryFile).filter(MemoryFile.owner_id == user_id), "memory_files")
-    _delete(db.query(AgentMemoryKV).filter(AgentMemoryKV.user_id == user_id), "agent_memory_kv")
-
-    _delete(db.query(UserTask).filter(UserTask.user_id == user_id), "user_tasks")
-    _delete(db.query(UserEmailContact).filter(UserEmailContact.owner_id == user_id), "user_email_contacts")
-    _delete(db.query(UserPhoneContact).filter(UserPhoneContact.owner_id == user_id), "user_phone_contacts")
-    _delete(db.query(UserDailyEmailCounter).filter(UserDailyEmailCounter.user_id == user_id), "user_daily_email_counter")
-    _delete(db.query(UserDailySmsCounter).filter(UserDailySmsCounter.user_id == user_id), "user_daily_sms_counter")
-    _delete(db.query(EmailSendLog).filter(EmailSendLog.user_id == user_id), "email_send_log")
-    _delete(db.query(SyncOperation).filter(SyncOperation.user_id == user_id), "sync_operations")
-
-    db.commit()
-    return counts
-
-
-@router.post("/demo-users/{user_id}/reset")
-async def reset_demo_user(
-    user_id: int,
-    db: Session = Depends(get_db),
-    current_user=Depends(require_super_admin),
-):
-    """Reset a demo user's data while keeping the user account."""
-    user = crud.get_user(db, user_id)
-    if user is None:
-        raise HTTPException(status_code=404, detail="Demo user not found")
-
-    prefs = getattr(user, "prefs", None) or {}
-    is_demo = bool(prefs.get("demo") or prefs.get("is_demo"))
-    if not is_demo:
-        raise HTTPException(status_code=403, detail="Reset is restricted to demo users")
-
-    cleared = reset_demo_user_data(db, user_id)
-    return JSONResponse(
-        content={
-            "user_id": user_id,
-            "email": user.email,
-            "cleared": cleared,
-        }
-    )
-
-
-def _reset_database_sync(request: DatabaseResetRequest, current_user, worker_id: str | None):
+def _reset_database_sync(request: DatabaseResetRequest, current_user, commis_id: str | None):
     settings = get_settings()
 
     # Log the reset attempt for audit purposes
@@ -544,11 +294,11 @@ def _reset_database_sync(request: DatabaseResetRequest, current_user, worker_id:
         raise HTTPException(status_code=403, detail="Database reset is only available in development and production environments")
 
     token = None
-    if _current_worker_id is not None and worker_id is not None:
-        token = _current_worker_id.set(worker_id)
+    if _current_commis_id is not None and commis_id is not None:
+        token = _current_commis_id.set(commis_id)
 
     try:
-        # Obtain the *current* engine – respects Playwright worker isolation
+        # Obtain the *current* engine – respects Playwright commis isolation
         session_factory = get_session_factory()
 
         # SQLAlchemy 2.0 removed the ``bind`` attribute from ``sessionmaker``.
@@ -630,18 +380,18 @@ def _reset_database_sync(request: DatabaseResetRequest, current_user, worker_id:
         # ------------------------------------------------------------------
         # SQLAlchemy's *global* ``close_all_sessions()`` helper invalidates
         # **every** Session that exists in the current process – even the
-        # ones that belong to a *different* Playwright worker using another
-        # database file.  When multiple E2E workers run in parallel this
+        # ones that belong to a *different* Playwright commis using another
+        # database file.  When multiple E2E commis run in parallel this
         # leads to race-conditions where an ongoing request suddenly loses
         # its Session mid-flight and subsequent ORM access explodes with
         # ``InvalidRequestError: Instance … is not persistent within this
         # Session``.
         #
-        # Because each Playwright worker is already fully isolated via its
-        # *own* SQLite engine (handled by WorkerDBMiddleware &
+        # Because each Playwright commis is already fully isolated via its
+        # *own* SQLite engine (handled by CommisDBMiddleware &
         # zerg.database) it is safe – and *necessary* – to avoid closing
         # foreign Sessions.  Instead we:
-        #   1. Dispose the *current* worker's engine after we are done.  This
+        #   1. Dispose the *current* commis's engine after we are done.  This
         #      releases connections that *belong to this engine only*.
         #   2. Rely on the fact that every incoming HTTP request obtains a
         #      **fresh** Session, so no stale identity maps can leak across
@@ -842,8 +592,8 @@ def _reset_database_sync(request: DatabaseResetRequest, current_user, worker_id:
             return {"message": "Database reset successfully (existing user)"}
         return JSONResponse(status_code=500, content={"detail": f"Failed to reset database: {str(e)}"})
     finally:
-        if token is not None and _current_worker_id is not None:
-            _current_worker_id.reset(token)
+        if token is not None and _current_commis_id is not None:
+            _current_commis_id.reset(token)
 
 
 # ---------------------------------------------------------------------------
@@ -965,11 +715,11 @@ class ConfigureTestModelRequest(BaseModel):
 @router.get("/debug/db-schema")
 async def debug_db_schema(
     db: Session = Depends(get_db),
-    x_test_worker: str | None = Header(default=None, alias="X-Test-Worker"),
+    x_test_commis: str | None = Header(default=None, alias="X-Test-Commis"),
 ):
     """Debug endpoint: returns current_schema + search_path for this request.
 
-    TESTING-only. Useful to validate Postgres schema routing (X-Test-Worker).
+    TESTING-only. Useful to validate Postgres schema routing (X-Test-Commis).
     """
     settings = get_settings()
     if not settings.testing:
@@ -979,18 +729,18 @@ async def debug_db_schema(
 
     current_schema = db.execute(text("SELECT current_schema()")).scalar()
     search_path = db.execute(text("SHOW search_path")).scalar()
-    agents_unqualified = db.execute(text("SELECT to_regclass('agents')")).scalar()
-    agents_public = db.execute(text("SELECT to_regclass('public.agents')")).scalar()
-    agents_count = db.execute(text("SELECT COUNT(*) FROM agents")).scalar()
-    agents_public_count = db.execute(text("SELECT COUNT(*) FROM public.agents")).scalar()
+    fiches_unqualified = db.execute(text("SELECT to_regclass('fiches')")).scalar()
+    fiches_public = db.execute(text("SELECT to_regclass('public.fiches')")).scalar()
+    fiches_count = db.execute(text("SELECT COUNT(*) FROM fiches")).scalar() if fiches_unqualified else None
+    fiches_public_count = db.execute(text("SELECT COUNT(*) FROM public.fiches")).scalar() if fiches_public else None
     return {
         "current_schema": current_schema,
         "search_path": search_path,
-        "agents_unqualified": agents_unqualified,
-        "agents_public": agents_public,
-        "agents_count": agents_count,
-        "agents_public_count": agents_public_count,
-        "x_test_worker": x_test_worker,
+        "fiches_unqualified": fiches_unqualified,
+        "fiches_public": fiches_public,
+        "fiches_count": fiches_count,
+        "fiches_public_count": fiches_public_count,
+        "x_test_commis": x_test_commis,
     }
 
 
@@ -1000,7 +750,7 @@ async def configure_test_model(
     db: Session = Depends(get_db),
     current_user=Depends(require_admin),
 ):
-    """Configure the supervisor agent to use a test model.
+    """Configure the oikos fiche to use a test model.
 
     This is a TEST-ONLY endpoint for E2E tests that need deterministic LLM behavior.
     Only available when TESTING=1 is set.
@@ -1009,7 +759,7 @@ async def configure_test_model(
         request: Contains the model to use (default: gpt-scripted)
 
     Returns:
-        Success message with agent ID
+        Success message with fiche ID
     """
     settings = get_settings()
 
@@ -1032,20 +782,20 @@ async def configure_test_model(
         )
 
     try:
-        from zerg.services.supervisor_service import SupervisorService
+        from zerg.services.oikos_service import OikosService
 
-        supervisor_service = SupervisorService(db)
-        agent = supervisor_service.get_or_create_supervisor_agent(current_user.id)
+        oikos_service = OikosService(db)
+        fiche = oikos_service.get_or_create_oikos_fiche(current_user.id)
 
-        # Update agent model
-        agent.model = request.model
+        # Update fiche model
+        fiche.model = request.model
         db.commit()
 
-        logger.info(f"Configured supervisor agent {agent.id} to use model: {request.model}")
+        logger.info(f"Configured oikos fiche {fiche.id} to use model: {request.model}")
 
         return {
-            "message": f"Supervisor agent configured to use {request.model}",
-            "agent_id": agent.id,
+            "message": f"Oikos fiche configured to use {request.model}",
+            "fiche_id": fiche.id,
             "model": request.model,
         }
     except Exception as e:
@@ -1091,7 +841,7 @@ async def get_user_usage_details(
     Returns:
     - User info with usage summary for all periods
     - Daily breakdown for the specified period
-    - Top agents by cost for the specified period
+    - Top fiches by cost for the specified period
 
     Admin-only endpoint.
     """
@@ -1104,10 +854,10 @@ async def get_user_usage_details(
 @_legacy_router.post("/reset-database")
 async def _legacy_reset_database(
     request: DatabaseResetRequest,
-    x_test_worker: str | None = Header(default=None, alias="X-Test-Worker"),
+    x_test_commis: str | None = Header(default=None, alias="X-Test-Commis"),
     current_user=Depends(require_super_admin),
 ):  # noqa: D401 – thin wrapper
-    return _reset_database_sync(request, current_user, x_test_worker)  # noqa: WPS110 – re-use logic
+    return _reset_database_sync(request, current_user, x_test_commis)  # noqa: WPS110 – re-use logic
 
 
 # mount the legacy router without the global /api prefix

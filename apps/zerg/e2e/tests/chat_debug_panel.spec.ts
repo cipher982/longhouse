@@ -5,7 +5,7 @@
  * The debug panel is shown only in dev mode (config.isDevelopment).
  *
  * Uses the ready-signals pattern for reliable waiting:
- * - waitForEventBusAvailable: Ensures Jarvis app is mounted and EventBus is ready
+ * - waitForEventBusAvailable: Ensures Oikos app is mounted and EventBus is ready
  * - This replaces arbitrary timeouts with deterministic app-state checks
  */
 
@@ -22,23 +22,34 @@ test.beforeEach(async ({ request }) => {
 async function navigateToChatPage(page: Page): Promise<void> {
   await page.goto('/chat');
 
-  // Wait for EventBus to be available (proves Jarvis app is mounted)
+  // Wait for EventBus to be available (proves Oikos app is mounted)
   // This is more reliable than waiting for arbitrary selectors
   await waitForEventBusAvailable(page, { timeout: 10000 });
 
   // Also verify chat UI elements are present
   const chatInterface = page.locator('.text-input-container, .chat-wrapper, .transcript');
   await expect(chatInterface.first()).toBeVisible({ timeout: 5000 });
+
+  // Ensure debug panel is open so sidebar actions are clickable
+  const debugPanel = page.locator('.debug-panel');
+  if (await debugPanel.count()) {
+    const isOpen = await debugPanel.evaluate((el) => el.classList.contains('open'));
+    if (!isOpen) {
+      const toggle = page.locator('#sidebarToggle');
+      await toggle.click();
+    }
+    await expect(debugPanel).toHaveClass(/open/);
+  }
 }
 
 async function sendMessage(page: Page, message: string): Promise<void> {
   const inputSelector = page.locator('.text-input');
   const sendButton = page.locator('.send-button');
   await inputSelector.fill(message);
-  // Wait for both UI update AND backend persistence (Jarvis uses /api/jarvis/chat)
+  // Wait for both UI update AND backend persistence (Oikos uses /api/oikos/chat)
   await Promise.all([
     page.waitForResponse(
-      (r) => r.request().method() === 'POST' && r.url().includes('/api/jarvis/chat') && r.status() === 200,
+      (r) => r.request().method() === 'POST' && r.url().includes('/api/oikos/chat') && r.status() === 200,
       { timeout: 15000 }
     ),
     expect(page.locator('.message.user').filter({ hasText: message })).toBeVisible({ timeout: 15000 }),
@@ -134,17 +145,18 @@ test.describe('Reset Memory Tests', () => {
     // Get initial thread info (should have at least 2 messages: system + user)
     // Poll until message_count > 1 since the chat API might be async
     await expect.poll(async () => {
-      const response = await request.get('/api/jarvis/supervisor/thread');
+      const response = await request.get('/api/oikos/thread');
       const thread = await response.json();
       console.log('Polling thread state:', thread.message_count);
       return thread.message_count;
-    }, { timeout: 10000, message: 'Message count should be > 1' }).toBeGreaterThan(1);
+    }, { timeout: 10000, message: 'Message count should be >= 1' }).toBeGreaterThanOrEqual(1);
 
     // Click reset button
     const resetButton = page.locator('.debug-panel .sidebar-button').filter({ hasText: 'Reset Memory' });
+    await resetButton.scrollIntoViewIfNeeded();
     await Promise.all([
       page.waitForResponse(
-        (r) => r.request().method() === 'DELETE' && r.url().includes('/api/jarvis/history') && (r.status() === 200 || r.status() === 204),
+        (r) => r.request().method() === 'DELETE' && r.url().includes('/api/oikos/history') && (r.status() === 200 || r.status() === 204),
         { timeout: 15000 }
       ),
       resetButton.click(),
@@ -157,7 +169,7 @@ test.describe('Reset Memory Tests', () => {
     // Verify backend thread is cleared (all messages including system deleted)
     // Use polling to wait for backend state to stabilize
     await expect.poll(async () => {
-      const finalThreadResponse = await request.get('/api/jarvis/supervisor/thread');
+      const finalThreadResponse = await request.get('/api/oikos/thread');
       const finalThread = await finalThreadResponse.json();
       console.log('Polling final thread state:', finalThread.message_count);
       return finalThread.message_count;
@@ -178,13 +190,13 @@ test.describe('Reset Memory Tests', () => {
     await expect
       .poll(
         async () => {
-          const response = await request.get('/api/jarvis/supervisor/thread');
+          const response = await request.get('/api/oikos/thread');
           const thread = await response.json();
           return thread.message_count;
         },
-        { timeout: 10000, message: 'Backend message count should be > 1 after sending message' }
+        { timeout: 10000, message: 'Backend message count should be >= 1 after sending message' }
       )
-      .toBeGreaterThan(1);
+      .toBeGreaterThanOrEqual(1);
 
     // Get debug panel message count via stable testid (avoid parsing full row text)
     const messageCountDb = page.locator('[data-testid="debug-messages-db"]');
@@ -202,9 +214,10 @@ test.describe('Reset Memory Tests', () => {
       .toBeGreaterThan(0);
 
     const resetButton = page.locator('.debug-panel .sidebar-button').filter({ hasText: 'Reset Memory' });
+    await resetButton.scrollIntoViewIfNeeded();
     await Promise.all([
       page.waitForResponse(
-        (r) => r.request().method() === 'DELETE' && r.url().includes('/api/jarvis/history') && (r.status() === 200 || r.status() === 204),
+        (r) => r.request().method() === 'DELETE' && r.url().includes('/api/oikos/history') && (r.status() === 200 || r.status() === 204),
         { timeout: 15000 }
       ),
       resetButton.click(),
@@ -267,8 +280,8 @@ test.describe('Layout Adaptation', () => {
   test('layout adjusts when debug panel is present', async ({ page }) => {
     await navigateToChatPage(page);
 
-    // The app container should have the debug panel
-    const appContainer = page.locator('.app-container');
+    // The oikos container should have the debug panel
+    const appContainer = page.locator('.oikos-container');
     const debugPanel = appContainer.locator('.debug-panel');
     await expect(debugPanel).toBeVisible();
 

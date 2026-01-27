@@ -24,21 +24,21 @@ const tabs: TabConfig[] = [
     label: "Chat",
     description: "Talk to your AI assistant naturally. It understands context, calls tools, and gets things done.",
     image: "/images/landing/chat-preview.png",
-    alt: "Jarvis chat interface showing a conversation with AI assistant",
+    alt: "Oikos chat interface showing a conversation with AI assistant",
   },
   {
     id: "dashboard",
     label: "Dashboard",
-    description: "Monitor all your agents in one place. See status, runs, and success rates at a glance.",
+    description: "Monitor all your fiches in one place. See status, runs, and success rates at a glance.",
     image: "/images/landing/dashboard-preview.png",
-    alt: "Dashboard showing agent status, runs, and monitoring",
+    alt: "Dashboard showing fiche status, runs, and monitoring",
   },
   {
     id: "canvas",
     label: "Workflow Builder",
-    description: "Drag and drop to build workflows. Connect triggers, agents, and actions visually.",
+    description: "Drag and drop to build workflows. Connect triggers, fiches, and actions visually.",
     image: "/images/landing/canvas-preview.png",
-    alt: "Visual workflow canvas with connected agent nodes",
+    alt: "Visual workflow canvas with connected fiche nodes",
   },
 ];
 

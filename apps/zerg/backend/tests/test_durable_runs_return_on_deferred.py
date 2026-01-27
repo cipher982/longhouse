@@ -14,8 +14,8 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from zerg.events import EventType, event_bus
 from zerg.models.enums import RunStatus
-from zerg.models.models import AgentRun
-from zerg.services.supervisor_service import SupervisorService
+from zerg.models.models import Run
+from zerg.services.oikos_service import OikosService
 
 
 class TestReturnOnDeferred:
@@ -29,14 +29,14 @@ class TestReturnOnDeferred:
         async def capture(event_data):
             events.append((event_data.get("event_type") or "event", event_data))
 
-        event_bus.subscribe(EventType.SUPERVISOR_DEFERRED, capture)
-        event_bus.subscribe(EventType.SUPERVISOR_COMPLETE, capture)
+        event_bus.subscribe(EventType.OIKOS_DEFERRED, capture)
+        event_bus.subscribe(EventType.OIKOS_COMPLETE, capture)
         event_bus.subscribe(EventType.ERROR, capture)
 
         yield events
 
-        event_bus.unsubscribe(EventType.SUPERVISOR_DEFERRED, capture)
-        event_bus.unsubscribe(EventType.SUPERVISOR_COMPLETE, capture)
+        event_bus.unsubscribe(EventType.OIKOS_DEFERRED, capture)
+        event_bus.unsubscribe(EventType.OIKOS_COMPLETE, capture)
         event_bus.unsubscribe(EventType.ERROR, capture)
 
     @pytest.mark.asyncio
@@ -49,13 +49,13 @@ class TestReturnOnDeferred:
             await asyncio.sleep(0.5)
             return [SimpleNamespace(role="assistant", content="completed")]
 
-        service = SupervisorService(db_session)
+        service = OikosService(db_session)
 
         with (
             patch("zerg.services.checkpointer.get_checkpointer", return_value=MemorySaver()),
-            patch("zerg.managers.agent_runner.AgentRunner.run_thread", new=AsyncMock(side_effect=slow_success)),
+            patch("zerg.managers.fiche_runner.FicheRunner.run_thread", new=AsyncMock(side_effect=slow_success)),
         ):
-            result = await service.run_supervisor(
+            result = await service.run_oikos(
                 owner_id=test_user.id,
                 task="slow task",
                 timeout=0.1,  # Short timeout to trigger deferred
@@ -66,12 +66,12 @@ class TestReturnOnDeferred:
         assert result.status == "deferred"
 
         # DB status should be DEFERRED
-        run = db_session.query(AgentRun).filter(AgentRun.id == result.run_id).first()
+        run = db_session.query(Run).filter(Run.id == result.run_id).first()
         assert run.status == RunStatus.DEFERRED
 
-        # Should have emitted SUPERVISOR_DEFERRED event
+        # Should have emitted OIKOS_DEFERRED event
         event_types = [e[0] for e in captured_events]
-        assert EventType.SUPERVISOR_DEFERRED in event_types
+        assert EventType.OIKOS_DEFERRED in event_types
 
     @pytest.mark.asyncio
     async def test_return_on_deferred_false_continues_to_success(
@@ -83,13 +83,13 @@ class TestReturnOnDeferred:
             await asyncio.sleep(0.3)
             return [SimpleNamespace(role="assistant", content="completed after timeout")]
 
-        service = SupervisorService(db_session)
+        service = OikosService(db_session)
 
         with (
             patch("zerg.services.checkpointer.get_checkpointer", return_value=MemorySaver()),
-            patch("zerg.managers.agent_runner.AgentRunner.run_thread", new=AsyncMock(side_effect=slow_success)),
+            patch("zerg.managers.fiche_runner.FicheRunner.run_thread", new=AsyncMock(side_effect=slow_success)),
         ):
-            result = await service.run_supervisor(
+            result = await service.run_oikos(
                 owner_id=test_user.id,
                 task="slow task that completes",
                 timeout=0.1,  # Short timeout
@@ -100,13 +100,13 @@ class TestReturnOnDeferred:
         assert result.status == "success"
 
         # DB status should be SUCCESS
-        run = db_session.query(AgentRun).filter(AgentRun.id == result.run_id).first()
+        run = db_session.query(Run).filter(Run.id == result.run_id).first()
         assert run.status == RunStatus.SUCCESS
 
         # Should have both DEFERRED and COMPLETE events
         event_types = [e[0] for e in captured_events]
-        assert EventType.SUPERVISOR_DEFERRED in event_types
-        assert EventType.SUPERVISOR_COMPLETE in event_types
+        assert EventType.OIKOS_DEFERRED in event_types
+        assert EventType.OIKOS_COMPLETE in event_types
 
     @pytest.mark.asyncio
     async def test_return_on_deferred_false_continues_to_failure(
@@ -118,13 +118,13 @@ class TestReturnOnDeferred:
             await asyncio.sleep(0.3)
             raise RuntimeError("simulated failure")
 
-        service = SupervisorService(db_session)
+        service = OikosService(db_session)
 
         with (
             patch("zerg.services.checkpointer.get_checkpointer", return_value=MemorySaver()),
-            patch("zerg.managers.agent_runner.AgentRunner.run_thread", new=AsyncMock(side_effect=slow_fail)),
+            patch("zerg.managers.fiche_runner.FicheRunner.run_thread", new=AsyncMock(side_effect=slow_fail)),
         ):
-            result = await service.run_supervisor(
+            result = await service.run_oikos(
                 owner_id=test_user.id,
                 task="slow task that fails",
                 timeout=0.1,
@@ -136,12 +136,12 @@ class TestReturnOnDeferred:
         assert "simulated failure" in result.error
 
         # DB status should be FAILED
-        run = db_session.query(AgentRun).filter(AgentRun.id == result.run_id).first()
+        run = db_session.query(Run).filter(Run.id == result.run_id).first()
         assert run.status == RunStatus.FAILED
 
         # Should have DEFERRED and ERROR events
         event_types = [e[0] for e in captured_events]
-        assert EventType.SUPERVISOR_DEFERRED in event_types
+        assert EventType.OIKOS_DEFERRED in event_types
         assert EventType.ERROR in event_types
 
     @pytest.mark.asyncio
@@ -153,13 +153,13 @@ class TestReturnOnDeferred:
         async def fast_success(*_args, **_kwargs):
             return [SimpleNamespace(role="assistant", content="quick result")]
 
-        service = SupervisorService(db_session)
+        service = OikosService(db_session)
 
         with (
             patch("zerg.services.checkpointer.get_checkpointer", return_value=MemorySaver()),
-            patch("zerg.managers.agent_runner.AgentRunner.run_thread", new=AsyncMock(side_effect=fast_success)),
+            patch("zerg.managers.fiche_runner.FicheRunner.run_thread", new=AsyncMock(side_effect=fast_success)),
         ):
-            result = await service.run_supervisor(
+            result = await service.run_oikos(
                 owner_id=test_user.id,
                 task="fast task",
                 timeout=10,  # Long timeout - won't trigger
@@ -169,5 +169,5 @@ class TestReturnOnDeferred:
 
         # Should NOT have DEFERRED event
         event_types = [e[0] for e in captured_events]
-        assert EventType.SUPERVISOR_DEFERRED not in event_types
-        assert EventType.SUPERVISOR_COMPLETE in event_types
+        assert EventType.OIKOS_DEFERRED not in event_types
+        assert EventType.OIKOS_COMPLETE in event_types

@@ -42,7 +42,7 @@ const CRITICAL_ENDPOINTS = [
   '/api/ops/top',
   '/api/workflow-executions/{execution_id}/status',
   '/api/users/me',
-  '/api/agents',
+  '/api/fiches',
   '/api/workflows/current',
 ];
 

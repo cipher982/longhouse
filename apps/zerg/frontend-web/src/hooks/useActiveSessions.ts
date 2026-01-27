@@ -54,7 +54,7 @@ export function useActiveSessions(options: UseActiveSessionsOptions = {}) {
       params.set("limit", String(limit));
 
       const queryString = params.toString();
-      const url = queryString ? `/jarvis/life-hub/sessions/active?${queryString}` : "/jarvis/life-hub/sessions/active";
+      const url = queryString ? `/oikos/life-hub/sessions/active?${queryString}` : "/oikos/life-hub/sessions/active";
 
       return request<ActiveSessionsResponse>(url);
     },
@@ -70,7 +70,7 @@ export function useActiveSessions(options: UseActiveSessionsOptions = {}) {
 export function useRefreshSessions() {
   return useQuery({
     queryKey: ["refresh-sessions"],
-    queryFn: () => request<{ status: string; timestamp: string }>("/jarvis/life-hub/sessions/refresh", { method: "POST" }),
+    queryFn: () => request<{ status: string; timestamp: string }>("/oikos/life-hub/sessions/refresh", { method: "POST" }),
     enabled: false, // Only run when manually triggered
   });
 }

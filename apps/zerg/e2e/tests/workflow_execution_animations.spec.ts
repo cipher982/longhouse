@@ -25,15 +25,15 @@ async function createConnectedWorkflow(page) {
     await page.waitForSelector('#canvas-container', { timeout: 10_000 });
 
     // Add trigger node
-    const triggerPill = page.locator('#agent-shelf .agent-pill').first();
+    const triggerPill = page.locator('#fiche-shelf .fiche-pill').first();
     await expect(triggerPill).toBeVisible();
     const canvasArea = page.locator('#canvas-container canvas');
     await triggerPill.dragTo(canvasArea, { targetPosition: { x: 100, y: 100 } });
 
-    // Add agent node
-    const agentPill = page.locator('#agent-shelf .agent-pill').nth(1);
-    if (await agentPill.count() > 0) {
-        await agentPill.dragTo(canvasArea, { targetPosition: { x: 300, y: 100 } });
+    // Add fiche node
+    const fichePill = page.locator('#fiche-shelf .fiche-pill').nth(1);
+    if (await fichePill.count() > 0) {
+        await fichePill.dragTo(canvasArea, { targetPosition: { x: 300, y: 100 } });
 
         // Connect nodes by dragging from first to second
         const firstNode = page.locator('.canvas-node, .generic-node').first();
@@ -57,7 +57,7 @@ test.describe('Workflow Execution Animations', () => {
 
     test('Connection lines should animate during workflow execution', async ({ page }) => {
         const hasConnectedNodes = await createConnectedWorkflow(page);
-        test.skip(!hasConnectedNodes, 'Not enough agents for connected workflow test');
+        test.skip(!hasConnectedNodes, 'Not enough fiches for connected workflow test');
 
         // Find run button
         const runBtn = page.locator('#run-workflow-btn');
@@ -103,7 +103,7 @@ test.describe('Workflow Execution Animations', () => {
 
     test('Nodes should show visual feedback during execution', async ({ page }) => {
         const hasConnectedNodes = await createConnectedWorkflow(page);
-        test.skip(!hasConnectedNodes, 'Not enough agents for connected workflow test');
+        test.skip(!hasConnectedNodes, 'Not enough fiches for connected workflow test');
 
         const runBtn = page.locator('#run-workflow-btn');
         await runBtn.click();
@@ -149,7 +149,7 @@ test.describe('Workflow Execution Animations', () => {
 
     test('Connection animations should return to idle after execution', async ({ page }) => {
         const hasConnectedNodes = await createConnectedWorkflow(page);
-        test.skip(!hasConnectedNodes, 'Not enough agents for connected workflow test');
+        test.skip(!hasConnectedNodes, 'Not enough fiches for connected workflow test');
 
         const runBtn = page.locator('#run-workflow-btn');
         const connectionLine = page.locator('.canvas-edge, path.edge').first();
@@ -182,7 +182,7 @@ test.describe('Workflow Execution Animations', () => {
         await page.waitForSelector('#canvas-container', { timeout: 10_000 });
 
         const canvasArea = page.locator('#canvas-container canvas');
-        const availablePills = page.locator('#agent-shelf .agent-pill');
+        const availablePills = page.locator('#fiche-shelf .fiche-pill');
         const pillCount = await availablePills.count();
 
         if (pillCount >= 3) {
@@ -228,7 +228,7 @@ test.describe('Workflow Execution Animations', () => {
             // Verify connections are still visible
             await expect(page.locator('.canvas-edge, path.edge')).toHaveCount(2);
         } else {
-            test.skip(true, 'Need at least 3 agents for multi-node animation test');
+            test.skip(true, 'Need at least 3 fiches for multi-node animation test');
         }
     });
 });

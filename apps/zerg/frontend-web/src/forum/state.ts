@@ -7,7 +7,7 @@ import type {
   ForumReplayEvent,
   ForumRoom,
   ForumTask,
-  ForumWorker,
+  ForumCommis,
   ForumWorkspace,
 } from "./types";
 
@@ -18,7 +18,7 @@ export type ForumMapState = {
   rooms: Map<string, ForumRoom>;
   entities: Map<string, ForumEntity>;
   tasks: Map<string, ForumTask>;
-  workers: Map<string, ForumWorker>;
+  commiss: Map<string, ForumCommis>;
   alerts: Map<string, ForumAlert>;
   markers: Map<string, ForumMarker>;
   appliedEvents: Set<string>;
@@ -54,7 +54,7 @@ export function createForumState(base: {
     rooms,
     entities: new Map(),
     tasks: new Map(),
-    workers: new Map(),
+    commiss: new Map(),
     alerts: new Map(),
     markers: new Map(),
     appliedEvents: new Set(),
@@ -120,7 +120,7 @@ export function applyForumEvent(state: ForumMapState, event: ForumReplayEvent): 
         ...existing,
         status: event.status ?? existing.status,
         progress: event.progress ?? existing.progress,
-        workerId: event.workerId ?? existing.workerId,
+        commisId: event.commisId ?? existing.commisId,
         entityId: event.entityId ?? existing.entityId,
         title: event.title ?? existing.title,
         updatedAt: event.updatedAt,
@@ -154,14 +154,14 @@ export function applyForumEvent(state: ForumMapState, event: ForumReplayEvent): 
       state.markers.delete(event.markerId);
       return;
     }
-    case "worker.add": {
-      state.workers.set(event.worker.id, event.worker);
+    case "commis.add": {
+      state.commiss.set(event.commis.id, event.commis);
       return;
     }
-    case "worker.update": {
-      const existing = state.workers.get(event.workerId);
+    case "commis.update": {
+      const existing = state.commiss.get(event.commisId);
       if (!existing) return;
-      state.workers.set(event.workerId, {
+      state.commiss.set(event.commisId, {
         ...existing,
         status: event.status ?? existing.status,
         entityId: event.entityId ?? existing.entityId,

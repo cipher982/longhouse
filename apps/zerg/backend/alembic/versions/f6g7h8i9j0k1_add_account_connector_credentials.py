@@ -1,8 +1,8 @@
 """add_account_connector_credentials
 
 Account-level connector credentials for built-in tools.
-Enables users to configure credentials once and share across all agents.
-Agents can still override with per-agent credentials.
+Enables users to configure credentials once and share across all fiches.
+Fiches can still override with per-fiche credentials.
 
 Revision ID: f6g7h8i9j0k1
 Revises: e5f6g7h8i9j0

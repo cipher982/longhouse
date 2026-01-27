@@ -1,0 +1,238 @@
+/* Sidebar - Fixed Overlay (DevTools pattern) */
+
+.oikos-container .sidebar {
+  /* Fixed positioning - slides in from left */
+  position: fixed;
+  left: 0;
+  top: 72px; /* Below header */
+  bottom: 28px; /* Above status bar */
+  width: 280px;
+
+  /* Glass panel styling */
+  background: rgb(10 10 15 / 85%);
+  backdrop-filter: blur(24px);
+  border-right: 1px solid var(--color-border-muted);
+
+  /* Layout */
+  display: flex;
+  flex-direction: column;
+  z-index: 50;
+
+  /* Hidden by default - slides in when open */
+  transform: translateX(-100%);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.oikos-container .sidebar.open {
+  transform: translateX(0);
+}
+
+.oikos-container .sidebar-header {
+  padding: var(--space-4) var(--space-5);
+  height: 72px;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--color-border-muted);
+  background: rgb(255 255 255 / 1%);
+}
+
+.oikos-container .sidebar-header h2 {
+  font-weight: 600;
+  color: var(--color-text-primary);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+.oikos-container .sidebar-content {
+  padding: var(--space-4);
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0; /* Required for flex child to scroll */
+}
+
+/* Conversation Items */
+.oikos-container .conversation-item {
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+  /* Staggered entrance animation */
+  animation: slide-in-left 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+.oikos-container .conversation-item.empty {
+  cursor: default;
+  pointer-events: none;
+  animation: none;
+}
+
+/* Stagger delays for up to 10 items */
+.oikos-container .conversation-item:nth-child(1) {
+  animation-delay: 0.1s;
+}
+.oikos-container .conversation-item:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.oikos-container .conversation-item:nth-child(3) {
+  animation-delay: 0.2s;
+}
+.oikos-container .conversation-item:nth-child(4) {
+  animation-delay: 0.25s;
+}
+.oikos-container .conversation-item:nth-child(5) {
+  animation-delay: 0.3s;
+}
+.oikos-container .conversation-item:nth-child(6) {
+  animation-delay: 0.35s;
+}
+.oikos-container .conversation-item:nth-child(7) {
+  animation-delay: 0.4s;
+}
+.oikos-container .conversation-item:nth-child(8) {
+  animation-delay: 0.45s;
+}
+.oikos-container .conversation-item:nth-child(9) {
+  animation-delay: 0.5s;
+}
+.oikos-container .conversation-item:nth-child(10) {
+  animation-delay: 0.55s;
+}
+
+/* Hover Effect: Subtle glow border */
+.oikos-container .conversation-item:hover {
+  background: rgb(255 255 255 / 3%);
+  border-color: rgb(255 255 255 / 10%);
+}
+
+.oikos-container .conversation-item.empty:hover {
+  background: transparent;
+  border-color: transparent;
+}
+
+/* Active State: Neon marker */
+.oikos-container .conversation-item.active {
+  background: linear-gradient(
+    90deg,
+    rgb(99 102 241 / 10%) 0%,
+    transparent 100%
+  );
+  border-color: rgb(99 102 241 / 30%);
+}
+
+.oikos-container .conversation-item.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10%;
+  bottom: 10%;
+  width: 3px;
+  background: var(--color-neon-primary);
+  border-radius: 0 2px 2px 0;
+  box-shadow: 0 0 10px var(--color-neon-primary);
+}
+
+.oikos-container .conversation-name {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  transition: color 0.2s;
+}
+
+.oikos-container .conversation-item.active .conversation-name,
+.oikos-container .conversation-item:hover .conversation-name {
+  color: var(--color-text-primary);
+}
+
+.oikos-container .conversation-meta {
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+
+/* Sidebar Buttons */
+.oikos-container .sidebar-button {
+  width: 100%;
+  padding: var(--space-3);
+  background: rgb(255 255 255 / 3%);
+  border: 1px solid var(--color-border-muted);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  font-weight: 500;
+}
+
+.oikos-container .sidebar-button:hover {
+  background: rgb(255 255 255 / 7%);
+  border-color: rgb(255 255 255 / 20%);
+  color: var(--color-text-primary);
+}
+
+.oikos-container .sidebar-button.primary {
+  background: rgb(99 102 241 / 10%);
+  border-color: rgb(99 102 241 / 30%);
+  color: var(--color-neon-primary);
+}
+
+.oikos-container .sidebar-button.primary:hover {
+  background: rgb(99 102 241 / 20%);
+  box-shadow: 0 0 15px rgb(99 102 241 / 15%);
+}
+
+.oikos-container .sidebar-button.danger {
+  border-color: rgb(239 68 68 / 20%);
+  color: var(--color-intent-error);
+}
+
+.oikos-container .sidebar-button.danger:hover {
+  background: rgb(239 68 68 / 10%);
+  border-color: var(--color-intent-error);
+}
+
+/* Sidebar Toggle Button - always visible (overlay pattern) */
+.oikos-container #sidebarToggle {
+  position: fixed;
+  left: 16px;
+  top: 88px; /* Below header (72px + 16px) */
+  z-index: 200;
+  background: rgb(10 10 20 / 80%);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--color-border-muted);
+  border-radius: 8px;
+  width: 40px;
+  height: 40px;
+  color: var(--color-text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.oikos-container #sidebarToggle:hover {
+  background: rgb(10 10 20 / 95%);
+  border-color: var(--color-neon-primary);
+}
+
+/* Adjust toggle position on mobile (smaller header) */
+@media (width <= 768px) {
+  .oikos-container #sidebarToggle {
+    top: 76px; /* Below smaller header (60px + 16px) */
+  }
+
+  .oikos-container .sidebar {
+    top: 60px; /* Match mobile header height */
+  }
+}

@@ -1,4 +1,4 @@
-"""Checkpointer factory for LangGraph agent state persistence.
+"""Checkpointer factory for LangGraph fiche state persistence.
 
 This module provides a factory function that returns the appropriate checkpointer
 based on the database configuration:
@@ -157,7 +157,7 @@ def get_checkpointer(engine: Engine = None) -> BaseCheckpointSaver:
     """Get the appropriate checkpointer based on database configuration.
 
     For PostgreSQL connections, returns an AsyncPostgresSaver that persists checkpoints
-    to the database, enabling agent interrupt/resume patterns with full async support.
+    to the database, enabling fiche interrupt/resume patterns with full async support.
 
     For SQLite connections (typically tests), returns a MemorySaver for fast
     in-memory checkpointing without database overhead.

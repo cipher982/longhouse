@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Clean up worker-specific test database files created during E2E tests."""
+"""Clean up commis-specific test database files created during E2E tests."""
 
 import glob
 import os
@@ -11,8 +11,8 @@ def cleanup_test_databases():
     # Get the directory where this script is located
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    # Find all test database files (both worker and e2e patterns)
-    patterns = [os.path.join(script_dir, "test_worker_*.db"), os.path.join(script_dir, "test_e2e_*.db")]
+    # Find all test database files (both commis and e2e patterns)
+    patterns = [os.path.join(script_dir, "test_commis_*.db"), os.path.join(script_dir, "test_e2e_*.db")]
 
     db_files = []
     for pattern in patterns:

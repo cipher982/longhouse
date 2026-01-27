@@ -16,7 +16,7 @@ from typing import List
 
 from langchain_core.tools import StructuredTool
 
-from zerg.context import get_worker_context
+from zerg.context import get_commis_context
 from zerg.crud import runner_crud
 from zerg.database import get_db
 from zerg.services.command_validator import CommandValidator
@@ -88,7 +88,7 @@ def runner_exec(
 ) -> Dict[str, Any]:
     """Execute a command on a user-owned runner.
 
-    This tool enables worker agents to execute commands on user-managed compute
+    This tool enables commis fiches to execute commands on user-managed compute
     infrastructure (laptops, servers, containers) without the backend needing
     SSH keys or direct access.
 
@@ -141,16 +141,16 @@ def runner_exec(
     Note: Non-zero exit codes are NOT errors - they indicate the command ran
     but returned a failure code. Only connection/timeout failures are errors.
     """
-    # Get worker context for owner_id
-    ctx = get_worker_context()
+    # Get commis context for owner_id
+    ctx = get_commis_context()
     if not ctx or ctx.owner_id is None:
         return tool_error(
             ErrorType.VALIDATION_ERROR,
-            "runner_exec requires worker context with owner_id",
+            "runner_exec requires commis context with owner_id",
         )
 
     owner_id = ctx.owner_id
-    worker_id = ctx.worker_id
+    commis_id = ctx.commis_id
     run_id = ctx.run_id
 
     # Validate parameters
@@ -223,7 +223,7 @@ def runner_exec(
                 runner_id=runner_id,
                 command=command,
                 timeout_secs=timeout_secs,
-                worker_id=worker_id,
+                commis_id=commis_id,
                 run_id=run_id,
             )
         )

@@ -34,20 +34,20 @@ class TestDatabaseManager:
     Manages isolated test databases with automatic cleanup.
 
     Key features:
-    - Database per test worker/session
+    - Database per test commis/session
     - Automatic cleanup on process exit
     - Temporary directory isolation
     - Optional in-memory databases for speed
 
-    IMPORTANT: Database paths are DETERMINISTIC based only on worker_id.
+    IMPORTANT: Database paths are DETERMINISTIC based only on commis_id.
     This allows multiple Uvicorn processes to share the same DB file for
-    a given Playwright worker, enabling parallel E2E tests with parallel
-    backend workers.
+    a given Playwright commis, enabling parallel E2E tests with parallel
+    backend commis.
     """
 
     # Deterministic temp directory - shared across all Uvicorn processes
     # Uses /tmp/zerg-e2e-<pid> where pid is the process group leader (parent)
-    # so child Uvicorn workers inherit the same path.
+    # so child Uvicorn commis inherit the same path.
     _SHARED_TEMP_DIR: Path | None = None
 
     def __init__(self):
@@ -59,7 +59,7 @@ class TestDatabaseManager:
     def _get_shared_temp_dir(cls) -> Path:
         """Get or create the shared temp directory for this process group."""
         if cls._SHARED_TEMP_DIR is None:
-            # Use process group ID for stability across Uvicorn workers
+            # Use process group ID for stability across Uvicorn commis
             # Or fall back to a simple /tmp/zerg-e2e directory
             pgid = os.getenv("ZERG_E2E_TEMP_DIR")
             if pgid:
@@ -71,15 +71,15 @@ class TestDatabaseManager:
             logger.info(f"Using E2E test database directory: {cls._SHARED_TEMP_DIR}")
         return cls._SHARED_TEMP_DIR
 
-    def get_test_database_url(self, worker_id: str = "0", use_memory: bool = False) -> str:
+    def get_test_database_url(self, commis_id: str = "0", use_memory: bool = False) -> str:
         """
-        Get a DETERMINISTIC database URL for this Playwright worker.
+        Get a DETERMINISTIC database URL for this Playwright commis.
 
-        The path is based ONLY on worker_id, so multiple Uvicorn processes
+        The path is based ONLY on commis_id, so multiple Uvicorn processes
         can share the same DB file. This enables parallel E2E tests.
 
         Args:
-            worker_id: Test worker identifier (from Playwright X-Test-Worker header)
+            commis_id: Test commis identifier (from Playwright X-Test-Commis header)
             use_memory: If True, use in-memory SQLite (can't share across processes)
 
         Returns:
@@ -88,12 +88,12 @@ class TestDatabaseManager:
         if use_memory:
             # In-memory database - fastest option but can't be shared between processes
             db_url = "sqlite:///:memory:"
-            logger.info(f"Using in-memory database for worker {worker_id}")
+            logger.info(f"Using in-memory database for commis {commis_id}")
             return db_url
 
         # File-based database with DETERMINISTIC path (no random UUID!)
         temp_dir = self._get_shared_temp_dir()
-        db_name = f"worker_{worker_id}.db"
+        db_name = f"commis_{commis_id}.db"
         db_path = temp_dir / db_name
 
         db_url = f"sqlite:///{db_path}"
@@ -142,17 +142,17 @@ class TestDatabaseManager:
         logger.info("Test database cleanup completed")
 
     @contextmanager
-    def test_database_session(self, worker_id: str = "0", use_memory: bool = False) -> Generator[str, None, None]:
+    def test_database_session(self, commis_id: str = "0", use_memory: bool = False) -> Generator[str, None, None]:
         """
         Context manager for test database lifecycle.
 
         Usage:
-            with test_db_manager.test_database_session("worker_1") as db_url:
+            with test_db_manager.test_database_session("commis_1") as db_url:
                 # Use db_url for your test
                 pass
             # Database is automatically cleaned up
         """
-        db_url = self.get_test_database_url(worker_id, use_memory)
+        db_url = self.get_test_database_url(commis_id, use_memory)
 
         # Extract file path for cleanup (if not in-memory)
         db_path = None
@@ -175,13 +175,13 @@ def get_test_database_url() -> str:
     Get database URL for current test environment.
 
     Reads configuration from environment variables:
-    - WORKER_ID: Test worker identifier (from Playwright)
+    - COMMIS_ID: Test commis identifier (from Playwright)
     - USE_MEMORY_DB: Use in-memory database for speed
     """
-    worker_id = os.getenv("WORKER_ID", "0")
+    commis_id = os.getenv("COMMIS_ID", "0")
     use_memory = os.getenv("USE_MEMORY_DB", "false").lower() == "true"
 
-    return test_db_manager.get_test_database_url(worker_id, use_memory)
+    return test_db_manager.get_test_database_url(commis_id, use_memory)
 
 
 def cleanup_test_databases():

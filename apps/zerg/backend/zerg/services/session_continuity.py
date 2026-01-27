@@ -1,9 +1,9 @@
 """Session continuity service for cross-environment Claude Code session resumption.
 
 This service enables seamless --resume of Claude Code sessions across environments:
-- Laptop terminal -> Zerg worker
-- Zerg worker -> Laptop terminal
-- Zerg worker -> Zerg worker
+- Laptop terminal -> Zerg commis
+- Zerg commis -> Laptop terminal
+- Zerg commis -> Zerg commis
 
 Sessions are archived in Life Hub and can be fetched/shipped via its API.
 
@@ -93,6 +93,7 @@ async def fetch_session_from_life_hub(session_id: str) -> tuple[bytes, str, str]
     if not LIFE_HUB_API_KEY:
         raise ValueError("LIFE_HUB_API_KEY not configured")
 
+    # Life Hub API currently exposes agent-session endpoints.
     url = f"{LIFE_HUB_URL}/query/agents/sessions/{session_id}/export"
 
     async with httpx.AsyncClient(timeout=60.0) as client:
@@ -169,7 +170,7 @@ async def prepare_session_for_resume(
 
 async def ship_session_to_life_hub(
     workspace_path: Path,
-    worker_id: str,
+    commis_id: str,
     claude_config_dir: Path | None = None,
 ) -> str | None:
     """Ship a Claude Code session from workspace to Life Hub.
@@ -179,7 +180,7 @@ async def ship_session_to_life_hub(
 
     Args:
         workspace_path: The workspace directory where Claude Code ran
-        worker_id: Worker ID for logging/tracking
+        commis_id: Commis ID for logging/tracking
         claude_config_dir: Override for Claude config dir (default: from CLAUDE_CONFIG_DIR or ~/.claude)
 
     Returns:
@@ -210,14 +211,15 @@ async def ship_session_to_life_hub(
     session_file = session_files[0]
     provider_session_id = session_file.stem
 
-    logger.info(f"Shipping session {provider_session_id} for worker {worker_id}")
+    logger.info(f"Shipping session {provider_session_id} for commis {commis_id}")
 
     # Read session content
     session_content = session_file.read_bytes()
 
-    # Ship to Life Hub ingest endpoint
+    # Ship to Life Hub ingest endpoint.
+    # Life Hub currently ingests agent events at /ingest/agents/events.
     # Note: The shipper service handles the full event ingestion format,
-    # but for immediate shipping we use a simplified approach
+    # but for immediate shipping we use a simplified approach.
     url = f"{LIFE_HUB_URL}/ingest/agents/events"
 
     try:
@@ -235,7 +237,7 @@ async def ship_session_to_life_hub(
                         events.append({"raw_text": line})
 
             # Build device_id for Life Hub (required field)
-            device_id = f"zerg-worker-{platform.node()}"
+            device_id = f"zerg-commis-{platform.node()}"
 
             payload = {
                 "device_id": device_id,

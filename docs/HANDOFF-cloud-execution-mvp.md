@@ -3,20 +3,20 @@
 **Created:** 2026-01-23
 **Updated:** 2026-01-24
 **Status:** Implementation complete, server setup done, pending deployment verification
-**Context:** Enables Jarvis to run coding tasks 24/7 via git workspaces, independent of laptop connectivity.
+**Context:** Enables Oikos to run coding tasks 24/7 via git workspaces, independent of laptop connectivity.
 
 ## Background
 
 ### The Mental Model
 
-**Jarvis = Foreman** (orchestrator)
+**Oikos = Foreman** (orchestrator)
 - Personal assistant that receives user requests
 - Stays responsive - never blocks on long-running work
 - Spawns workers to do actual tasks
 - Runs on zerg-vps 24/7
 
 **Workers = Contractors** (0 to many in parallel)
-- Do the actual work delegated by Jarvis
+- Do the actual work delegated by Oikos
 - Can run up to 5 concurrent jobs per processor
 - Two execution paths depending on task type
 
@@ -109,7 +109,7 @@ Pattern: `^(?![-.]|.*\.\.)[a-zA-Z0-9/_.-]+(?<!\.lock)$`
 ## Goals
 
 ### Completed
-1. ✅ Set up workspace directory on zerg-vps (`/var/jarvis/workspaces`)
+1. ✅ Set up workspace directory on zerg-vps (`/var/oikos/workspaces`)
 2. ✅ Configure SSH deploy key for GitHub access
 3. ✅ Install `hatch` CLI on zerg-vps
 4. ✅ Rename `local` → `standard`, `cloud` → `workspace` (with backward compat)
@@ -131,11 +131,11 @@ See `docs/HANDOFF-github-app-integration.md` for:
 
 ```bash
 # On zerg-vps - already done
-sudo mkdir -p /var/jarvis/workspaces
-sudo chown $(whoami):$(whoami) /var/jarvis/workspaces
+sudo mkdir -p /var/oikos/workspaces
+sudo chown $(whoami):$(whoami) /var/oikos/workspaces
 
 # SSH key for GitHub access - already done
-ssh-keygen -t ed25519 -f ~/.ssh/jarvis_deploy -N "" -C "jarvis@zerg-vps"
+ssh-keygen -t ed25519 -f ~/.ssh/oikos_deploy -N "" -C "oikos@zerg-vps"
 # Deploy key added to cipher982/zerg and cipher982/hatch repos
 
 # hatch CLI - already done
@@ -145,8 +145,8 @@ uv tool install -e ~/git/hatch  # Provides 'hatch' command
 ### Container Setup (✅ Completed)
 
 Added to `docker-compose.prod.backend.yml`:
-- `JARVIS_WORKSPACE_PATH=/var/jarvis/workspaces` env var
-- `/var/jarvis/workspaces` volume mount
+- `OIKOS_WORKSPACE_PATH=/var/oikos/workspaces` env var
+- `/var/oikos/workspaces` volume mount
 - `hatch-agent` added to `pyproject.toml` as git dependency (auto-installed via `uv sync`)
 
 No manual PATH config needed - hatch is in the venv at `/app/.venv/bin/hatch`.
@@ -164,8 +164,8 @@ cd apps/zerg/backend && uv run pytest tests -k "cloud_executor or workspace_mana
 
 # E2E test (manual, after deployment)
 # 1. Start Zerg: make dev
-# 2. In Jarvis: "Fix the typo in README.md" with execution_mode=workspace
-# 3. Verify branch jarvis/<run_id> created
+# 2. In Oikos: "Fix the typo in README.md" with execution_mode=workspace
+# 3. Verify branch oikos/<run_id> created
 # 4. Verify diff artifact captured
 # 5. Check Discord notification (if configured)
 ```
@@ -178,7 +178,7 @@ User: "Fix the auth bug in zerg"
          ▼
 ┌─────────────────────┐
 │ SupervisorService   │
-│ (Jarvis/Foreman)    │
+│ (Oikos/Foreman)    │
 └─────────┬───────────┘
           │ spawn_worker(task, execution_mode="workspace", git_repo="...")
           ▼
@@ -192,7 +192,7 @@ User: "Fix the auth bug in zerg"
 │ WorkspaceManager    │
 │ - Clone repo        │
 │ - Create branch     │
-│   jarvis/<run_id>   │
+│   oikos/<run_id>   │
 └─────────┬───────────┘
           │
           ▼

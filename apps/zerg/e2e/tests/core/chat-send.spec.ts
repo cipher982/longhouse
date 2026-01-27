@@ -7,6 +7,7 @@
  */
 
 import { test, expect, type Page } from '../fixtures';
+import { waitForPageReady } from '../helpers/ready-signals';
 import { resetDatabase } from '../test-utils';
 
 // Reset DB before each test for clean state
@@ -16,48 +17,50 @@ test.beforeEach(async ({ request }) => {
 });
 
 /**
- * Create an agent via UI and return its ID.
+ * Create an fiche via UI and return its ID.
  * CRITICAL: Gets ID from API response, NOT from DOM query (.first() is racy in parallel tests)
  */
-async function createAgentViaUI(page: Page): Promise<string> {
+async function createFicheViaUI(page: Page): Promise<string> {
   await page.goto('/');
+  await waitForPageReady(page, { timeout: 20000 });
 
-  const createBtn = page.locator('[data-testid="create-agent-btn"]');
-  await expect(createBtn).toBeVisible({ timeout: 10000 });
-  await expect(createBtn).toBeEnabled({ timeout: 5000 });
+  const createBtn = page.locator('[data-testid="create-fiche-btn"]');
+  await expect(createBtn).toBeVisible({ timeout: 20000 });
+  await expect(createBtn).toBeEnabled({ timeout: 20000 });
 
   const [response] = await Promise.all([
     page.waitForResponse(
-      (r) => r.url().includes('/api/agents') && r.request().method() === 'POST' && r.status() === 201,
-      { timeout: 10000 }
+      (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
+      { timeout: 20000 }
     ),
     createBtn.click(),
   ]);
 
   const body = await response.json();
-  const agentId = String(body.id);
+  const ficheId = String(body.id);
 
-  if (!agentId || agentId === 'undefined') {
-    throw new Error(`Failed to get agent ID from API response: ${JSON.stringify(body)}`);
+  if (!ficheId || ficheId === 'undefined') {
+    throw new Error(`Failed to get fiche ID from API response: ${JSON.stringify(body)}`);
   }
 
-  const row = page.locator(`tr[data-agent-id="${agentId}"]`);
-  await expect(row).toBeVisible({ timeout: 10000 });
+  const row = page.locator(`tr[data-fiche-id="${ficheId}"]`);
+  await expect(row).toBeVisible({ timeout: 20000 });
 
-  return agentId;
+  return ficheId;
 }
 
 /**
- * Navigate to chat for an agent.
+ * Navigate to chat for an fiche.
  */
-async function navigateToChat(page: Page, agentId: string): Promise<void> {
-  const chatBtn = page.locator(`[data-testid="chat-agent-${agentId}"]`);
-  await expect(chatBtn).toBeVisible({ timeout: 5000 });
+async function navigateToChat(page: Page, ficheId: string): Promise<void> {
+  const chatBtn = page.locator(`[data-testid="chat-fiche-${ficheId}"]`);
+  await expect(chatBtn).toBeVisible({ timeout: 10000 });
   await chatBtn.click();
 
-  await page.waitForURL((url) => url.pathname.includes(`/agent/${agentId}/thread`), { timeout: 10000 });
-  await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
-  await expect(page.locator('[data-testid="chat-input"]')).toBeEnabled({ timeout: 5000 });
+  await page.waitForURL((url) => url.pathname.includes(`/fiche/${ficheId}/thread`), { timeout: 20000 });
+  await expect(page.locator('[data-testid="chat-page"]')).toBeVisible({ timeout: 20000 });
+  await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 20000 });
+  await expect(page.locator('[data-testid="chat-input"]')).toBeEnabled({ timeout: 20000 });
 }
 
 /**
@@ -78,7 +81,7 @@ async function sendMessage(page: Page, message: string): Promise<void> {
         r.url().includes('/messages') &&
         r.request().method() === 'POST' &&
         (r.status() === 200 || r.status() === 201),
-      { timeout: 15000 }
+      { timeout: 20000 }
     ),
     sendBtn.click(),
   ]);
@@ -86,8 +89,8 @@ async function sendMessage(page: Page, message: string): Promise<void> {
 
 test.describe('Chat Send - Core', () => {
   test('send message - message appears in chat', async ({ page }) => {
-    const agentId = await createAgentViaUI(page);
-    await navigateToChat(page, agentId);
+    const ficheId = await createFicheViaUI(page);
+    await navigateToChat(page, ficheId);
 
     const testMessage = 'Hello, this is a core test message';
     await sendMessage(page, testMessage);
@@ -97,8 +100,8 @@ test.describe('Chat Send - Core', () => {
   });
 
   test('input clears after sending message', async ({ page }) => {
-    const agentId = await createAgentViaUI(page);
-    await navigateToChat(page, agentId);
+    const ficheId = await createFicheViaUI(page);
+    await navigateToChat(page, ficheId);
 
     const testMessage = 'Message to test input clearing';
     await sendMessage(page, testMessage);
@@ -108,11 +111,12 @@ test.describe('Chat Send - Core', () => {
   });
 
   test('navigate to chat - URL is valid', async ({ page }) => {
-    const agentId = await createAgentViaUI(page);
+    const ficheId = await createFicheViaUI(page);
 
-    await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
-    await page.waitForURL((url) => url.pathname.includes(`/agent/${agentId}/thread`), { timeout: 10000 });
-    await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
+    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
+    await page.waitForURL((url) => url.pathname.includes(`/fiche/${ficheId}/thread`), { timeout: 20000 });
+    await expect(page.locator('[data-testid="chat-page"]')).toBeVisible({ timeout: 20000 });
+    await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 20000 });
 
     const url = page.url();
 

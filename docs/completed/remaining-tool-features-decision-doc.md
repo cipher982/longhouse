@@ -110,7 +110,7 @@ KV-only in Postgres. No SQL execution. No per-user schemas. No allowlist/blockli
 ### Minimal data model
 
 ```sql
-CREATE TABLE agent_memory_kv (
+CREATE TABLE fiche_memory_kv (
   user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   key TEXT NOT NULL,
   value JSONB NOT NULL,
@@ -120,16 +120,16 @@ CREATE TABLE agent_memory_kv (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (user_id, key)
 );
-CREATE INDEX agent_memory_kv_tags_idx ON agent_memory_kv USING GIN(tags);
-CREATE INDEX agent_memory_kv_expires_idx ON agent_memory_kv(expires_at) WHERE expires_at IS NOT NULL;
+CREATE INDEX fiche_memory_kv_tags_idx ON fiche_memory_kv USING GIN(tags);
+CREATE INDEX fiche_memory_kv_expires_idx ON fiche_memory_kv(expires_at) WHERE expires_at IS NOT NULL;
 ```
 
 ### Tools (MVP)
 
-- `agent_memory_set(key, value, tags?, expires_at?)`
-- `agent_memory_get(key?, tags?, limit=100)`
-- `agent_memory_delete(key?, tags?)`
-- `agent_memory_export()` (size-limited)
+- `fiche_memory_set(key, value, tags?, expires_at?)`
+- `fiche_memory_get(key?, tags?, limit=100)`
+- `fiche_memory_delete(key?, tags?)`
+- `fiche_memory_export()` (size-limited)
 
 ### Security rule
 
@@ -137,7 +137,7 @@ Every operation must scope by `user_id == current_user.id`.
 
 ### Suggested repo locations
 
-- Tool module: `apps/zerg/backend/zerg/tools/builtin/agent_memory_tools.py`
+- Tool module: `apps/zerg/backend/zerg/tools/builtin/fiche_memory_tools.py`
 - Tests: `apps/zerg/backend/tests/`
 
 ---

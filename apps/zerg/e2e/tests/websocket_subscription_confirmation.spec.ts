@@ -178,28 +178,28 @@ test.describe('WebSocket Subscription Confirmation', () => {
   test('should handle multiple rapid subscribe/unsubscribe cycles', async ({ page, request }) => {
     console.log('🚀 Testing rapid subscription changes...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
-    // Create multiple agents to trigger subscriptions
-    const agentIds: number[] = [];
+    // Create multiple fiches to trigger subscriptions
+    const ficheIds: number[] = [];
     for (let i = 0; i < 5; i++) {
-      const response = await request.post('/api/agents', {
+      const response = await request.post('/api/fiches', {
         headers: {
-          'X-Test-Worker': workerId,
+          'X-Test-Commis': commisId,
           'Content-Type': 'application/json',
         },
         data: {
-          name: `Test Agent ${i}`,
-          system_instructions: 'Test agent',
+          name: `Test Fiche ${i}`,
+          system_instructions: 'Test fiche',
           task_instructions: 'Test task',
           model: 'gpt-mock',
         }
       });
-      const agent = await response.json();
-      agentIds.push(agent.id);
+      const fiche = await response.json();
+      ficheIds.push(fiche.id);
     }
 
-    console.log('✅ Created 5 test agents:', agentIds);
+    console.log('✅ Created 5 test fiches:', ficheIds);
 
     // Navigate to dashboard (triggers subscriptions)
     await page.goto('/');
@@ -221,8 +221,8 @@ test.describe('WebSocket Subscription Confirmation', () => {
     await page.waitForTimeout(2000);
 
     // Verify dashboard still works after rapid changes
-    const agentsTable = page.locator('#agents-table');
-    await expect(agentsTable).toBeVisible();
+    const fichesTable = page.locator('#fiches-table');
+    await expect(fichesTable).toBeVisible();
     console.log('✅ Dashboard remains functional after rapid subscription changes');
   });
 
@@ -269,25 +269,25 @@ test.describe('WebSocket Subscription Confirmation', () => {
   test('should re-subscribe after timeout allows retry', async ({ page, request }) => {
     console.log('🚀 Testing retry mechanism after timeout...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
-    // Create an agent
-    const response = await request.post('/api/agents', {
+    // Create an fiche
+    const response = await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {
-        name: 'Retry Test Agent',
+        name: 'Retry Test Fiche',
         system_instructions: 'Test',
         task_instructions: 'Test',
         model: 'gpt-mock',
       }
     });
-    const agent = await response.json();
-    const agentId = agent.id;
+    const fiche = await response.json();
+    const ficheId = fiche.id;
 
-    console.log('✅ Created test agent:', agentId);
+    console.log('✅ Created test fiche:', ficheId);
 
     const subscribeAttempts: number[] = [];
 
@@ -297,8 +297,8 @@ test.describe('WebSocket Subscription Confirmation', () => {
         try {
           const message = JSON.parse(event.payload);
           if (message.type === 'subscribe') {
-            const agentTopic = message.topics.find((t: string) => t.startsWith('agent:'));
-            if (agentTopic) {
+            const ficheTopic = message.topics.find((t: string) => t.startsWith('fiche:'));
+            if (ficheTopic) {
               subscribeAttempts.push(Date.now());
               console.log('📤 Subscribe attempt at:', new Date().toISOString());
             }
@@ -322,7 +322,7 @@ test.describe('WebSocket Subscription Confirmation', () => {
     await page.waitForTimeout(7000);
 
     // Check if retry occurred
-    // NOTE: After timeout, the agent should be removed from subscribed set
+    // NOTE: After timeout, the fiche should be removed from subscribed set
     // On next useEffect cycle, it should attempt to resubscribe
 
     console.log('📊 Total subscribe attempts:', subscribeAttempts.length);
@@ -336,16 +336,16 @@ test.describe('WebSocket Subscription Confirmation', () => {
   test('should cleanup timeouts on component unmount', async ({ page, request }) => {
     console.log('🚀 Testing timeout cleanup on unmount...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
-    // Create an agent
-    const response = await request.post('/api/agents', {
+    // Create an fiche
+    const response = await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {
-        name: 'Unmount Test Agent',
+        name: 'Unmount Test Fiche',
         system_instructions: 'Test',
         task_instructions: 'Test',
         model: 'gpt-mock',
@@ -374,7 +374,7 @@ test.describe('WebSocket Subscription Confirmation', () => {
   test('should handle subscription ack when backend implements it', async ({ page, request }) => {
     console.log('🚀 Testing subscription acknowledgment (future behavior)...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
     const ackMessages: any[] = [];
     let subscribeMessageId: string | null = null;
@@ -406,14 +406,14 @@ test.describe('WebSocket Subscription Confirmation', () => {
       });
     });
 
-    // Create an agent to trigger subscription
-    const response = await request.post('/api/agents', {
+    // Create an fiche to trigger subscription
+    const response = await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {
-        name: 'ACK Test Agent',
+        name: 'ACK Test Fiche',
         system_instructions: 'Test',
         task_instructions: 'Test',
         model: 'gpt-mock',
@@ -446,22 +446,22 @@ test.describe('WebSocket Subscription Edge Cases', () => {
   test('should handle duplicate subscription attempts', async ({ page, request }) => {
     console.log('🚀 Testing duplicate subscription handling...');
 
-    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
-    // Create an agent
-    const response = await request.post('/api/agents', {
+    // Create an fiche
+    const response = await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {
-        name: 'Duplicate Test Agent',
+        name: 'Duplicate Test Fiche',
         system_instructions: 'Test',
         task_instructions: 'Test',
         model: 'gpt-mock',
       }
     });
-    const agent = await response.json();
+    const fiche = await response.json();
 
     const subscribeMessages: any[] = [];
 
@@ -483,20 +483,20 @@ test.describe('WebSocket Subscription Edge Cases', () => {
     await page.locator('.header-nav').click();
     await page.waitForTimeout(2000);
 
-    // Check subscribedAgentIdsRef prevents duplicates
-    const agentTopics = subscribeMessages
+    // Check subscribedFicheIdsRef prevents duplicates
+    const ficheTopics = subscribeMessages
       .flatMap(m => m.topics)
-      .filter(t => t.startsWith(`agent:${agent.id}`));
+      .filter(t => t.startsWith(`fiche:${fiche.id}`));
 
-    console.log('📊 Subscriptions to test agent:', agentTopics.length);
+    console.log('📊 Subscriptions to test fiche:', ficheTopics.length);
 
-    // Should only subscribe once per agent (controlled by subscribedAgentIdsRef)
-    expect(agentTopics.length).toBeLessThanOrEqual(2); // Allow for potential retry
+    // Should only subscribe once per fiche (controlled by subscribedFicheIdsRef)
+    expect(ficheTopics.length).toBeLessThanOrEqual(2); // Allow for potential retry
     console.log('✅ Duplicate subscription prevention working');
   });
 
-  test('should handle subscription to non-existent agent', async ({ page }) => {
-    console.log('🚀 Testing subscription to invalid agent...');
+  test('should handle subscription to non-existent fiche', async ({ page }) => {
+    console.log('🚀 Testing subscription to invalid fiche...');
 
     const errorMessages: any[] = [];
 
@@ -514,31 +514,31 @@ test.describe('WebSocket Subscription Edge Cases', () => {
       });
     });
 
-    // Try to subscribe to non-existent agent by injecting a bad subscription
+    // Try to subscribe to non-existent fiche by injecting a bad subscription
     await page.goto('/');
     await page.waitForTimeout(2000);
 
     await page.evaluate(() => {
-      // Manually trigger a subscribe to invalid agent
+      // Manually trigger a subscribe to invalid fiche
       const ws = (window as any).__ws;
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
           type: 'subscribe',
-          topics: ['agent:99999'],
-          message_id: 'test-invalid-agent',
+          topics: ['fiche:99999'],
+          message_id: 'test-invalid-fiche',
         }));
       }
     });
 
     await page.waitForTimeout(2000);
 
-    // Backend should send error for non-existent agent
-    const agentErrors = errorMessages.filter(m =>
+    // Backend should send error for non-existent fiche
+    const ficheErrors = errorMessages.filter(m =>
       m.data?.error?.includes('not found') || m.error?.includes('not found')
     );
 
-    console.log('📊 Agent not found errors:', agentErrors.length);
-    if (agentErrors.length > 0) {
+    console.log('📊 Fiche not found errors:', ficheErrors.length);
+    if (ficheErrors.length > 0) {
       console.log('✅ Server properly rejects invalid subscriptions');
     }
   });

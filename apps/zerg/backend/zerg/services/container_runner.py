@@ -10,7 +10,7 @@ Notes:
 - Timeouts, CPU and memory limits are supported via Docker options
 
 This module is intentionally self-contained so we can evolve the wiring
-without touching agent/workflow code paths until we flip the integration flag.
+without touching fiche/workflow code paths until we flip the integration flag.
 """
 
 from __future__ import annotations

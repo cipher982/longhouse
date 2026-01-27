@@ -17,9 +17,9 @@ from sqlalchemy.orm import Session
 from zerg.database import get_db
 from zerg.dependencies.auth import require_admin
 from zerg.models.enums import RunStatus
-from zerg.models.models import AgentRun
+from zerg.models.models import CommisJob
+from zerg.models.models import Run
 from zerg.models.models import Runner
-from zerg.models.models import WorkerJob
 
 # Secret patterns to redact (same as trace_debugger)
 SECRET_PATTERNS = [
@@ -52,32 +52,32 @@ async def system_health(
 ):
     """Aggregated system health status (admin only).
 
-    Returns worker pool status, recent error counts, and overall health indicator.
+    Returns commis pool status, recent error counts, and overall health indicator.
     """
     now = datetime.now(timezone.utc)
     hour_ago = now - timedelta(hours=1)
 
-    # Worker pool: count runners by status
+    # Commis pool: count runners by status
     runner_counts = db.query(Runner.status, func.count(Runner.id)).group_by(Runner.status).all()
-    worker_pool = {status: count for status, count in runner_counts}
+    commis_pool = {status: count for status, count in runner_counts}
 
     # Recent errors: count failed runs in last hour
     error_count = (
-        db.query(func.count(AgentRun.id))
+        db.query(func.count(Run.id))
         .filter(
-            AgentRun.status == RunStatus.FAILED,
-            AgentRun.created_at >= hour_ago,
+            Run.status == RunStatus.FAILED,
+            Run.created_at >= hour_ago,
         )
         .scalar()
         or 0
     )
 
-    # Recent worker failures
-    worker_error_count = (
-        db.query(func.count(WorkerJob.id))
+    # Recent commis failures
+    commis_error_count = (
+        db.query(func.count(CommisJob.id))
         .filter(
-            WorkerJob.status == "failed",  # WorkerJob.status is a string column, not enum
-            WorkerJob.created_at >= hour_ago,
+            CommisJob.status == "failed",  # CommisJob.status is a string column, not enum
+            CommisJob.created_at >= hour_ago,
         )
         .scalar()
         or 0
@@ -85,15 +85,15 @@ async def system_health(
 
     # Determine overall status
     # Logic:
-    # - unhealthy: Many errors (>10) in both run and worker categories
+    # - unhealthy: Many errors (>10) in both run and commis categories
     # - degraded: Some errors (>5), or all registered runners are offline
     # - healthy: Low errors and at least some runners online (or no runners registered)
     status = "healthy"
 
-    total_runners = sum(worker_pool.values())
-    online_runners = worker_pool.get("online", 0)
-    has_high_errors = error_count > 10 or worker_error_count > 10
-    has_some_errors = error_count > 5 or worker_error_count > 5
+    total_runners = sum(commis_pool.values())
+    online_runners = commis_pool.get("online", 0)
+    has_high_errors = error_count > 10 or commis_error_count > 10
+    has_some_errors = error_count > 5 or commis_error_count > 5
     all_runners_offline = total_runners > 0 and online_runners == 0
 
     if has_high_errors and all_runners_offline:
@@ -104,9 +104,9 @@ async def system_health(
         status = "degraded"
 
     return {
-        "workers": worker_pool,
+        "commis": commis_pool,
         "recent_run_errors": error_count,
-        "recent_worker_errors": worker_error_count,
+        "recent_commis_errors": commis_error_count,
         "status": status,
         "checked_at": now.isoformat(),
     }
@@ -127,24 +127,24 @@ async def error_analysis(
 
     # Get failed runs
     run_errors = (
-        db.query(AgentRun)
+        db.query(Run)
         .filter(
-            AgentRun.status == RunStatus.FAILED,
-            AgentRun.created_at >= since,
+            Run.status == RunStatus.FAILED,
+            Run.created_at >= since,
         )
-        .order_by(AgentRun.created_at.desc())
+        .order_by(Run.created_at.desc())
         .limit(limit)
         .all()
     )
 
-    # Get failed workers
-    worker_errors = (
-        db.query(WorkerJob)
+    # Get failed commis
+    commis_errors = (
+        db.query(CommisJob)
         .filter(
-            WorkerJob.status == "failed",  # WorkerJob.status is a string column
-            WorkerJob.created_at >= since,
+            CommisJob.status == "failed",  # CommisJob.status is a string column
+            CommisJob.created_at >= since,
         )
-        .order_by(WorkerJob.created_at.desc())
+        .order_by(CommisJob.created_at.desc())
         .limit(limit)
         .all()
     )
@@ -159,7 +159,7 @@ async def error_analysis(
             }
             for e in run_errors
         ],
-        "worker_errors": [
+        "commis_errors": [
             {
                 "id": e.id,
                 "error": _redact_string(e.error[:200] if e.error else None),
@@ -167,10 +167,10 @@ async def error_analysis(
                 "task_preview": _redact_string(e.task[:100] if e.task else None),
                 "trace_id": str(e.trace_id) if e.trace_id else None,
             }
-            for e in worker_errors
+            for e in commis_errors
         ],
         "total_run_errors": len(run_errors),
-        "total_worker_errors": len(worker_errors),
+        "total_commis_errors": len(commis_errors),
         "hours": hours,
     }
 
@@ -183,19 +183,19 @@ async def performance_metrics(
 ):
     """P50/P95 latency metrics (admin only).
 
-    Returns latency percentiles for supervisor runs.
+    Returns latency percentiles for oikos runs.
     Limited to 10000 samples to prevent memory issues.
     """
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
 
     # Get durations for completed runs, limited and ordered for consistent sampling
     runs = (
-        db.query(AgentRun.duration_ms)
+        db.query(Run.duration_ms)
         .filter(
-            AgentRun.created_at >= since,
-            AgentRun.duration_ms.isnot(None),
+            Run.created_at >= since,
+            Run.duration_ms.isnot(None),
         )
-        .order_by(AgentRun.created_at.desc())
+        .order_by(Run.created_at.desc())
         .limit(10000)  # Cap to prevent memory issues
         .all()
     )
@@ -220,24 +220,24 @@ async def performance_metrics(
     }
 
 
-@router.get("/workers/stuck")
-async def stuck_workers(
+@router.get("/commis/stuck")
+async def stuck_commis(
     threshold_mins: int = Query(10, le=60, description="Threshold in minutes"),
     db: Session = Depends(get_db),
     _user=Depends(require_admin),  # Admin only
 ):
-    """Workers in running state beyond threshold (admin only).
+    """Commis in running state beyond threshold (admin only).
 
-    Returns workers that have been running longer than the threshold,
+    Returns commis that have been running longer than the threshold,
     which may indicate stuck or failed processes.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=threshold_mins)
 
     stuck = (
-        db.query(WorkerJob)
+        db.query(CommisJob)
         .filter(
-            WorkerJob.status == "running",
-            WorkerJob.started_at < cutoff,
+            CommisJob.status == "running",
+            CommisJob.started_at < cutoff,
         )
         .limit(50)
         .all()
@@ -246,12 +246,12 @@ async def stuck_workers(
     return {
         "stuck_count": len(stuck),
         "threshold_mins": threshold_mins,
-        "workers": [
+        "commis": [
             {
                 "id": w.id,
                 "task": w.task[:100] if w.task else None,
                 "started_at": w.started_at.isoformat() if w.started_at else None,
-                "worker_id": w.worker_id,
+                "commis_id": w.commis_id,
                 "trace_id": str(w.trace_id) if w.trace_id else None,
             }
             for w in stuck

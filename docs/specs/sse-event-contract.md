@@ -6,11 +6,11 @@
 
 ## Executive Summary
 
-Add a typed contract system for Server-Sent Events (SSE) between the Jarvis backend and frontend, mirroring the existing WebSocket contract system. This eliminates runtime mismatches (like the `id=null` issue) by making schema violations compile-time errors.
+Add a typed contract system for Server-Sent Events (SSE) between the Oikos backend and frontend, mirroring the existing WebSocket contract system. This eliminates runtime mismatches (like the `id=null` issue) by making schema violations compile-time errors.
 
 ### Problem
 
-SSE events between backend (`jarvis_sse.py`) and frontend (`supervisor-chat-controller.ts`) are defined ad-hoc in two separate codebases with no shared schema. This leads to:
+SSE events between backend (`oikos_sse.py`) and frontend (`supervisor-chat-controller.ts`) are defined ad-hoc in two separate codebases with no shared schema. This leads to:
 
 1. **Silent drift** - Backend adds fields frontend doesn't expect (or vice versa)
 2. **Missing fields** - Backend omits fields frontend expects (e.g., SSE `id:` field)
@@ -61,7 +61,7 @@ Create `schemas/sse-events.asyncapi.yml` as the single source of truth, then gen
 ```
 Backend (Python)                    Frontend (TypeScript)
 ─────────────────                   ────────────────────
-jarvis_sse.py                       supervisor-chat-controller.ts
+oikos_sse.py                       supervisor-chat-controller.ts
   yield {                             if (eventType === 'supervisor_started') {
     "event": "supervisor_started",      // Expects payload.run_id
     "data": json.dumps({...})           // But what if backend changes it?
@@ -89,7 +89,7 @@ backend/zerg/generated/sse_events.py    frontend/src/generated/sse-events.ts
   - emit_sse_event() typed emitter        - SSEEventMap discriminated union
           │                                         │
           ▼                                         ▼
-jarvis_sse.py                           supervisor-chat-controller.ts
+oikos_sse.py                           supervisor-chat-controller.ts
   from zerg.generated.sse_events          import { SupervisorStartedPayload }
   emit_sse_event(                         const payload: SupervisorStartedPayload
     "supervisor_started",                 // TypeScript error if wrong type
@@ -230,7 +230,7 @@ SSEEnvelope:
 **Goal:** Backend uses generated types for SSE emission
 
 **Acceptance Criteria:**
-- [x] `jarvis_sse.py` imports from `zerg.generated.sse_events`
+- [x] `oikos_sse.py` imports from `zerg.generated.sse_events`
 - [x] All `yield` statements use typed payloads
 - [x] `emit_run_event()` uses generated types (already had event_id injection)
 - [x] SSE `id:` field populated from `event_id`
@@ -240,7 +240,7 @@ SSEEnvelope:
 **Test:** `make test` passes (1261 passed, 27 skipped) ✅
 
 **Implementation Notes:**
-- Updated both SSE generators: `jarvis_sse.py` (chat events) and `jarvis_supervisor.py` (supervisor events)
+- Updated both SSE generators: `oikos_sse.py` (chat events) and `oikos_supervisor.py` (supervisor events)
 - Imported `SSEEventType` enum from `zerg.generated.sse_events`
 - Used enum values for heartbeat and connected events (SSEEventType.HEARTBEAT.value, SSEEventType.CONNECTED.value)
 - Extract `event_id` from event payload before filtering internal fields
@@ -311,9 +311,9 @@ SSEEnvelope:
 | `scripts/regen-sse-code.sh` | **NEW** - Shell wrapper |
 | `apps/zerg/backend/zerg/generated/sse_events.py` | **NEW** - Generated Python |
 | `apps/zerg/frontend-web/src/generated/sse-events.ts` | **NEW** - Generated TypeScript |
-| `apps/zerg/backend/zerg/routers/jarvis_sse.py` | MODIFY - Use generated types |
+| `apps/zerg/backend/zerg/routers/oikos_sse.py` | MODIFY - Use generated types |
 | `apps/zerg/backend/zerg/services/event_store.py` | MODIFY - Use generated types |
-| `apps/zerg/frontend-web/src/jarvis/lib/supervisor-chat-controller.ts` | MODIFY - Use generated types |
+| `apps/zerg/frontend-web/src/oikos/lib/supervisor-chat-controller.ts` | MODIFY - Use generated types |
 | `Makefile` | MODIFY - Add `regen-sse`, `validate-sse` |
 | `.pre-commit-config.yaml` | MODIFY - Add SSE drift check |
 | `AGENTS.md` | MODIFY - Document new commands |

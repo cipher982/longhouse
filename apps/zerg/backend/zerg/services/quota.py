@@ -17,8 +17,8 @@ from sqlalchemy.orm import Session
 from zerg.config import get_settings
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
-from zerg.models.models import Agent as AgentModel
-from zerg.models.models import AgentRun as AgentRunModel
+from zerg.models.models import Fiche as FicheModel
+from zerg.models.models import Run as RunModel
 from zerg.models.models import User as UserModel
 from zerg.services.ops_discord import send_budget_alert
 
@@ -47,12 +47,12 @@ def assert_can_start_run(db: Session, *, user: UserModel) -> None:
     if limit > 0:
         today_utc = datetime.now(timezone.utc).date()
         count_q = (
-            db.query(func.count(AgentRunModel.id))
-            .join(AgentModel, AgentModel.id == AgentRunModel.agent_id)
+            db.query(func.count(RunModel.id))
+            .join(FicheModel, FicheModel.id == RunModel.fiche_id)
             .filter(
-                AgentModel.owner_id == user.id,
-                AgentRunModel.started_at.isnot(None),
-                func.date(AgentRunModel.started_at) == today_utc,
+                FicheModel.owner_id == user.id,
+                RunModel.started_at.isnot(None),
+                func.date(RunModel.started_at) == today_utc,
             )
         )
         used = int(count_q.scalar() or 0)
@@ -66,7 +66,7 @@ def assert_can_start_run(db: Session, *, user: UserModel) -> None:
     # --------------------------------------------------------------
     # Budget thresholds (user + global) – optional, admins exempt
     # --------------------------------------------------------------
-    # Costs are stored in USD on AgentRun.total_cost_usd. Unknown costs
+    # Costs are stored in USD on Run.total_cost_usd. Unknown costs
     # are left NULL and ignored by SUM().
     try:
         user_budget_cents = int(getattr(settings, "daily_cost_per_user_cents", 0))
@@ -85,12 +85,12 @@ def assert_can_start_run(db: Session, *, user: UserModel) -> None:
 
     # Sum today's user cost
     user_cost_q = (
-        db.query(func.coalesce(func.sum(AgentRunModel.total_cost_usd), 0.0))
-        .join(AgentModel, AgentModel.id == AgentRunModel.agent_id)
+        db.query(func.coalesce(func.sum(RunModel.total_cost_usd), 0.0))
+        .join(FicheModel, FicheModel.id == RunModel.fiche_id)
         .filter(
-            AgentModel.owner_id == user.id,
-            AgentRunModel.finished_at.isnot(None),
-            func.date(AgentRunModel.finished_at) == today_utc,
+            FicheModel.owner_id == user.id,
+            RunModel.finished_at.isnot(None),
+            func.date(RunModel.finished_at) == today_utc,
         )
     )
     user_cost_usd = float(user_cost_q.scalar() or 0.0)
@@ -98,9 +98,9 @@ def assert_can_start_run(db: Session, *, user: UserModel) -> None:
     # Sum today's global cost
     global_cost_usd = 0.0
     if global_budget_cents > 0:
-        global_cost_q = db.query(func.coalesce(func.sum(AgentRunModel.total_cost_usd), 0.0)).filter(
-            AgentRunModel.finished_at.isnot(None),
-            func.date(AgentRunModel.finished_at) == today_utc,
+        global_cost_q = db.query(func.coalesce(func.sum(RunModel.total_cost_usd), 0.0)).filter(
+            RunModel.finished_at.isnot(None),
+            func.date(RunModel.finished_at) == today_utc,
         )
         global_cost_usd = float(global_cost_q.scalar() or 0.0)
 

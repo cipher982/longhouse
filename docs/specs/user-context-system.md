@@ -5,14 +5,14 @@
 **Status:** Implemented core; prompt sections being revised for v2.1
 
 > **Note:** The user context storage model (JSONB on `users.context`) remains the source of truth.
-> The Jarvis “two modes” / `route_to_supervisor` prompt language in this doc is **superseded** by:
-> `docs/specs/jarvis-supervisor-unification-v2.1.md`
+> The Oikos “two modes” / `route_to_supervisor` prompt language in this doc is **superseded** by:
+> `docs/specs/oikos-supervisor-unification-v2.1.md`
 
 ---
 
 ## Overview
 
-This document specifies how user-specific context (servers, preferences, integrations) is stored and injected into AI prompts. The goal is to separate generic prompt logic (what Jarvis/Supervisor/Worker ARE) from user-specific context (WHO they serve and WHAT infrastructure they have).
+This document specifies how user-specific context (servers, preferences, integrations) is stored and injected into AI prompts. The goal is to separate generic prompt logic (what Oikos/Supervisor/Worker ARE) from user-specific context (WHO they serve and WHAT infrastructure they have).
 
 ### Design Principles
 
@@ -155,7 +155,7 @@ BASE_SUPERVISOR_PROMPT = '''You are the Supervisor - an AI that coordinates comp
 
 ## Your Role
 
-You're the "brain" that coordinates work. Jarvis (voice interface) routes complex tasks to you. You decide:
+You're the "brain" that coordinates work. Oikos (voice interface) routes complex tasks to you. You decide:
 1. Can I answer this from memory/context? → Answer directly
 2. Does this need server access or investigation? → Spawn a worker
 3. Have we checked this recently? → Query past workers first
@@ -274,7 +274,7 @@ If a command fails, note it, try an alternative if reasonable, report what worke
 '''
 
 
-BASE_JARVIS_PROMPT = '''You are Jarvis, a personal AI assistant. You're conversational, concise, and actually useful.
+BASE_OIKOS_PROMPT = '''You are Oikos, a personal AI assistant. You're conversational, concise, and actually useful.
 
 ## Who You Serve
 
@@ -333,7 +333,7 @@ Location: `apps/zerg/backend/zerg/prompts/composer.py`
 from zerg.prompts.templates import (
     BASE_SUPERVISOR_PROMPT,
     BASE_WORKER_PROMPT,
-    BASE_JARVIS_PROMPT,
+    BASE_OIKOS_PROMPT,
 )
 
 def format_user_context(ctx: dict) -> str:
@@ -423,8 +423,8 @@ def build_worker_prompt(user) -> str:
     )
 
 
-def build_jarvis_prompt(user, enabled_tools: list[dict]) -> str:
-    """Build complete Jarvis prompt with user context and tools."""
+def build_oikos_prompt(user, enabled_tools: list[dict]) -> str:
+    """Build complete Oikos prompt with user context and tools."""
     ctx = user.context or {}
 
     # Format direct tools
@@ -442,7 +442,7 @@ def build_jarvis_prompt(user, enabled_tools: list[dict]) -> str:
         limitations.append("- Smart home control (no tool configured)")
     limitations_str = "\n".join(limitations) if limitations else "None currently"
 
-    return BASE_JARVIS_PROMPT.format(
+    return BASE_OIKOS_PROMPT.format(
         user_context=format_user_context(ctx),
         direct_tools=direct_tools,
         server_names=format_server_names(ctx.get('servers', [])),
@@ -527,17 +527,17 @@ from zerg.prompts.composer import build_worker_prompt
 # With: build_worker_prompt(user)
 ```
 
-**Jarvis Session** (`routers/jarvis.py` or session handler):
+**Oikos Session** (`routers/oikos.py` or session handler):
 
 ```python
-from zerg.prompts.composer import build_jarvis_prompt
+from zerg.prompts.composer import build_oikos_prompt
 
 # Pass user and enabled tools to build the prompt
 ```
 
 ---
 
-## Jarvis Frontend
+## Oikos Frontend
 
 ### Option: Backend-Composed Prompts
 
@@ -546,7 +546,7 @@ The cleanest approach: backend composes all prompts, frontend just receives them
 Update the session/token endpoint to return the composed prompt:
 
 ```python
-@router.post("/api/jarvis/session")
+@router.post("/api/oikos/session")
 async def create_session(
     current_user: User = Depends(get_current_user),
 ):
@@ -554,7 +554,7 @@ async def create_session(
     enabled_tools = get_enabled_tools(current_user)
 
     # Build the prompt server-side
-    instructions = build_jarvis_prompt(current_user, enabled_tools)
+    instructions = build_oikos_prompt(current_user, enabled_tools)
 
     # Return token + instructions
     return {
@@ -655,7 +655,7 @@ db.commit()
    - `test_format_servers_empty` - No servers
    - `test_build_supervisor_prompt` - Full composition
    - `test_build_worker_prompt` - Full composition
-   - `test_build_jarvis_prompt` - Full composition with tools
+   - `test_build_oikos_prompt` - Full composition with tools
 
 2. **API Tests** (`tests/test_user_context_api.py`):
    - `test_get_context` - Returns current context
@@ -672,7 +672,7 @@ db.commit()
    - Verify prompt includes user's servers
    - Verify worker can SSH to user's servers
 
-2. **Jarvis Session**:
+2. **Oikos Session**:
    - Create session for user
    - Verify returned instructions include user context
    - Verify tools list matches user's enabled tools
@@ -685,7 +685,7 @@ Before merging:
 2. Start dev environment: `make dev`
 3. Create a test user with context via API
 4. Trigger a supervisor task, verify logs show correct prompt
-5. Connect Jarvis, verify it references user's servers
+5. Connect Oikos, verify it references user's servers
 6. Spawn a worker, verify it has correct server list
 
 ---

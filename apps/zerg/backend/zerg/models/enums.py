@@ -17,7 +17,7 @@ class UserRole(str, Enum):
     ADMIN = "ADMIN"
 
 
-class AgentStatus(str, Enum):
+class FicheStatus(str, Enum):
     IDLE = "idle"
     RUNNING = "running"
     ERROR = "error"
@@ -27,7 +27,7 @@ class AgentStatus(str, Enum):
 class RunStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
-    WAITING = "waiting"  # Interrupted waiting for worker completion (supervisor resume)
+    WAITING = "waiting"  # Interrupted waiting for commis completion (oikos resume)
     DEFERRED = "deferred"  # Timeout migration: still executing, but caller stopped waiting
     SUCCESS = "success"
     FAILED = "failed"
@@ -40,14 +40,14 @@ class RunTrigger(str, Enum):
     CHAT = "chat"
     WEBHOOK = "webhook"
     API = "api"  # Generic fallback for other API calls
-    CONTINUATION = "continuation"  # Triggered by worker completion (durable runs v2.2)
+    CONTINUATION = "continuation"  # Triggered by commis completion (durable runs v2.2)
 
 
 class ThreadType(str, Enum):
     CHAT = "chat"
     SCHEDULED = "scheduled"
     MANUAL = "manual"
-    SUPER = "super"  # Supervisor thread (Super Siri architecture)
+    SUPER = "super"  # Oikos thread (Super Siri architecture)
 
 
 # New Phase/Result enums for execution state architecture refactor
@@ -98,7 +98,7 @@ class RunnerJobStatus(str, Enum):
 
 __all__ = [
     "UserRole",
-    "AgentStatus",
+    "FicheStatus",
     "RunStatus",
     "RunTrigger",
     "ThreadType",

@@ -47,7 +47,7 @@ Reduce cognitive load and improve testability by:
 
 Test model validation scattered across:
 1. `config/models.json` - Lists gpt-mock/gpt-scripted as real models
-2. `jarvis_chat.py:161-175` - Bans gpt-mock, allows gpt-scripted if ZERG_TOOL_STUBS_PATH
+2. `oikos_chat.py:161-175` - Bans gpt-mock, allows gpt-scripted if ZERG_TOOL_STUBS_PATH
 3. `zerg_react_agent.py:309-311` - Requires TESTING=1 or ZERG_TOOL_STUBS_PATH
 
 Result: API can accept a model that runtime rejects.
@@ -73,7 +73,7 @@ Result: API can accept a model that runtime rejects.
            )
    ```
 
-2. Update `jarvis_chat.py`:
+2. Update `oikos_chat.py`:
    - Import from `zerg.testing.test_models`
    - Replace inline checks with `require_testing_mode()`
    - Remove ZERG_TOOL_STUBS_PATH check
@@ -88,7 +88,7 @@ Result: API can accept a model that runtime rejects.
 
 ### Additional Changes (discovered during implementation)
 
-5. Update `jarvis.py`:
+5. Update `oikos.py`:
    - Use `is_test_model()` to filter models from bootstrap endpoint
    - Use `is_test_model()` in preferences validation
 
@@ -107,7 +107,7 @@ Result: API can accept a model that runtime rejects.
 ### Acceptance Criteria
 
 - [x] Single source of truth for test models in `zerg/testing/test_models.py`
-- [x] `jarvis_chat.py` uses consolidated check
+- [x] `oikos_chat.py` uses consolidated check
 - [x] `zerg_react_agent.py` uses consolidated check
 - [x] No ZERG_TOOL_STUBS_PATH checks remain for model gating
 - [x] `make test` passes (1311 passed, 30 skipped)
@@ -269,7 +269,7 @@ make test-e2e       # Full suite (retries allowed)
 Different pages use different readiness signals:
 - Dashboard/Canvas: `data-ready="true"` = interactive
 - Chat: `data-ready="true"` = messages loaded (NOT interactive)
-- Chat: `window.__jarvis.ready.chatReady` = actually interactive
+- Chat: `window.__oikos.ready.chatReady` = actually interactive
 
 ### Implementation
 

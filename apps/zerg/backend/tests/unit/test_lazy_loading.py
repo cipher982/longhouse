@@ -32,19 +32,19 @@ class TestLazyToolBinderAllowlist:
         # Create a mock resolver that returns mock tools
         mock_resolver = MagicMock()
         mock_tool = MagicMock()
-        mock_tool.name = "spawn_worker"
+        mock_tool.name = "spawn_commis"
         mock_resolver.get_tool.return_value = mock_tool
 
-        # Only allow spawn_worker, not other core tools
-        allowed = ["spawn_worker"]
+        # Only allow spawn_commis, not other core tools
+        allowed = ["spawn_commis"]
         binder = LazyToolBinder(mock_resolver, allowed_tools=allowed)
 
-        # Should only have spawn_worker loaded
+        # Should only have spawn_commis loaded
         loaded_names = binder.loaded_tool_names
-        assert "spawn_worker" in loaded_names
+        assert "spawn_commis" in loaded_names
         # Other core tools should NOT be loaded
         for name in CORE_TOOLS:
-            if name != "spawn_worker":
+            if name != "spawn_commis":
                 assert name not in loaded_names, f"{name} should not be loaded"
 
     def test_wildcard_allowlist(self):
@@ -60,12 +60,12 @@ class TestLazyToolBinderAllowlist:
 
         mock_resolver.get_tool.side_effect = mock_get_tool
 
-        # Allow all github_* tools and spawn_worker
-        allowed = ["spawn_worker", "github_*"]
+        # Allow all github_* tools and spawn_commis
+        allowed = ["spawn_commis", "github_*"]
         binder = LazyToolBinder(mock_resolver, allowed_tools=allowed)
 
-        # spawn_worker should be loaded (it's a core tool)
-        assert binder.is_loaded("spawn_worker")
+        # spawn_commis should be loaded (it's a core tool)
+        assert binder.is_loaded("spawn_commis")
 
         # Try to load a github tool - should succeed
         tool = binder.get_tool("github_list_issues")
@@ -109,12 +109,12 @@ class TestLazyToolBinderAllowlist:
 
         mock_resolver.get_tool.side_effect = mock_get_tool
 
-        allowed = ["spawn_worker", "contact_user"]
+        allowed = ["spawn_commis", "contact_user"]
         binder = LazyToolBinder(mock_resolver, allowed_tools=allowed)
 
         names = binder.loaded_tool_names
         assert isinstance(names, frozenset)
-        assert "spawn_worker" in names
+        assert "spawn_commis" in names
         assert "contact_user" in names
 
 
@@ -182,13 +182,13 @@ class TestSearchContext:
 
 
 class TestSearchToolsFiltering:
-    """Test that search_tools_for_agent respects context filtering."""
+    """Test that search_tools_for_fiche respects context filtering."""
 
     @pytest.mark.asyncio
     async def test_search_results_filtered_by_allowlist(self):
-        """search_tools_for_agent should filter results by allowlist."""
+        """search_tools_for_fiche should filter results by allowlist."""
         from zerg.tools.tool_search import clear_search_context
-        from zerg.tools.tool_search import search_tools_for_agent
+        from zerg.tools.tool_search import search_tools_for_fiche
         from zerg.tools.tool_search import set_search_context
 
         # Mock the search index to return predictable results
@@ -209,7 +209,7 @@ class TestSearchToolsFiltering:
             # Set context to only allow github tools
             set_search_context(allowed_tools=["github_*"], max_results=10)
 
-            result = await search_tools_for_agent("list issues", max_results=10)
+            result = await search_tools_for_fiche("list issues", max_results=10)
 
             # Only github_list_issues should be in results
             tool_names = [t["name"] for t in result["tools"]]
@@ -221,9 +221,9 @@ class TestSearchToolsFiltering:
 
     @pytest.mark.asyncio
     async def test_search_results_capped_by_context_max(self):
-        """search_tools_for_agent should respect context max_results cap."""
+        """search_tools_for_fiche should respect context max_results cap."""
         from zerg.tools.tool_search import clear_search_context
-        from zerg.tools.tool_search import search_tools_for_agent
+        from zerg.tools.tool_search import search_tools_for_fiche
         from zerg.tools.tool_search import set_search_context
 
         # Create many mock results
@@ -245,7 +245,7 @@ class TestSearchToolsFiltering:
             set_search_context(allowed_tools=None, max_results=5)
 
             # Request 10, but context cap is 5
-            result = await search_tools_for_agent("test", max_results=10)
+            result = await search_tools_for_fiche("test", max_results=10)
 
             # Should be capped at 5
             assert len(result["tools"]) <= 5
@@ -331,13 +331,13 @@ class TestRebindMechanism:
 
         mock_resolver.get_tool.side_effect = mock_get_tool
 
-        allowed = ["spawn_worker", "contact_user", "custom_tool"]
+        allowed = ["spawn_commis", "contact_user", "custom_tool"]
         binder = LazyToolBinder(mock_resolver, allowed_tools=allowed)
 
         # Initially only core tools that are allowed
         initial_tools = binder.get_bound_tools()
         initial_names = {t.name for t in initial_tools}
-        assert "spawn_worker" in initial_names
+        assert "spawn_commis" in initial_names
         assert "contact_user" in initial_names
 
         # Load custom_tool
@@ -371,17 +371,17 @@ class TestCatalogPromptIntegration:
         mock_resolver.get_tool.side_effect = mock_get_tool
 
         # Restrict to only 2 core tools
-        allowed = ["spawn_worker", "contact_user"]
+        allowed = ["spawn_commis", "contact_user"]
         binder = LazyToolBinder(mock_resolver, allowed_tools=allowed)
 
         # The loaded_tool_names should only have the allowed core tools
         loaded_names = sorted(binder.loaded_tool_names)
 
-        # Build the catalog header string (simulating what supervisor does)
+        # Build the catalog header string (simulating what oikos does)
         catalog_header = f"### Core Tools (always loaded): {', '.join(loaded_names)}"
 
         # Should NOT contain tools that aren't allowed
-        assert "spawn_worker" in catalog_header
+        assert "spawn_commis" in catalog_header
         assert "contact_user" in catalog_header
         assert "web_search" not in catalog_header
         assert "http_request" not in catalog_header

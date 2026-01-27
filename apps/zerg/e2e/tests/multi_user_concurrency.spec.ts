@@ -22,7 +22,7 @@ test.describe('Multi-User and Concurrency', () => {
   test('Multiple user sessions with data isolation', async ({ browser, request }) => {
     console.log('🚀 Starting multi-user data isolation test...');
 
-    const baseWorkerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const baseCommisId = process.env.TEST_PARALLEL_INDEX || '0';
     const userCount = 3;
 
     // Create multiple user contexts
@@ -30,7 +30,7 @@ test.describe('Multi-User and Concurrency', () => {
       Array.from({ length: userCount }, async (_, index) => {
         const context = await browser.newContext();
         const page = await context.newPage();
-        const userId = `${baseWorkerId}_user_${index}`;
+        const userId = `${baseCommisId}_user_${index}`;
 
         return { context, page, userId, index };
       })
@@ -41,44 +41,44 @@ test.describe('Multi-User and Concurrency', () => {
     // Test 1: Each user creates isolated data
     console.log('📊 Test 1: Creating isolated data per user...');
 
-    const userAgents = await Promise.all(
+    const userFiches = await Promise.all(
       userSessions.map(async (session) => {
         try {
           // Navigate to application
           await session.page.goto('/');
           await session.page.waitForTimeout(1000);
 
-          // Create agent specific to this user
-          const agentResponse = await request.post('/api/agents', {
+          // Create fiche specific to this user
+          const ficheResponse = await request.post('/api/fiches', {
             headers: {
-              'X-Test-Worker': session.userId,
+              'X-Test-Commis': session.userId,
               'Content-Type': 'application/json',
             },
             data: {
-              name: `User ${session.index} Agent ${Date.now()}`,
-              system_instructions: `Agent belonging to user ${session.index}`,
+              name: `User ${session.index} Fiche ${Date.now()}`,
+              system_instructions: `Fiche belonging to user ${session.index}`,
               task_instructions: `Handle tasks for user ${session.index}`,
               model: 'gpt-mock',
             }
           });
 
-          if (agentResponse.ok()) {
-            const agent = await agentResponse.json();
-            console.log(`📊 User ${session.index} created agent:`, agent.id);
-            return { userId: session.userId, agent, success: true };
+          if (ficheResponse.ok()) {
+            const fiche = await ficheResponse.json();
+            console.log(`📊 User ${session.index} created fiche:`, fiche.id);
+            return { userId: session.userId, fiche, success: true };
           } else {
-            console.log(`❌ User ${session.index} agent creation failed:`, agentResponse.status());
-            return { userId: session.userId, agent: null, success: false };
+            console.log(`❌ User ${session.index} fiche creation failed:`, ficheResponse.status());
+            return { userId: session.userId, fiche: null, success: false };
           }
         } catch (error) {
           console.log(`❌ User ${session.index} error:`, error.message);
-          return { userId: session.userId, agent: null, success: false, error: error.message };
+          return { userId: session.userId, fiche: null, success: false, error: error.message };
         }
       })
     );
 
-    const successfulCreations = userAgents.filter(ua => ua.success).length;
-    console.log('📊 Successful agent creations:', successfulCreations, '/', userCount);
+    const successfulCreations = userFiches.filter(ua => ua.success).length;
+    console.log('📊 Successful fiche creations:', successfulCreations, '/', userCount);
 
     // Test 2: Verify data isolation - each user only sees their own data
     console.log('📊 Test 2: Verifying data isolation...');
@@ -86,29 +86,29 @@ test.describe('Multi-User and Concurrency', () => {
     const isolationResults = await Promise.all(
       userSessions.map(async (session, index) => {
         try {
-          const response = await session.request.get('/api/agents', {
-            headers: { 'X-Test-Worker': session.userId }
+          const response = await session.request.get('/api/fiches', {
+            headers: { 'X-Test-Commis': session.userId }
           });
 
           if (response.ok()) {
-            const agents = await response.json();
-            const userAgent = userAgents[index];
+            const fiches = await response.json();
+            const userFiche = userFiches[index];
 
-            // Check if user sees only their own agent
-            const hasOwnAgent = userAgent.success && agents.some(a => a.id === userAgent.agent.id);
-            const seeOtherAgents = agents.some(a =>
-              userAgents.some(ua => ua.success && ua.userId !== session.userId && ua.agent.id === a.id)
+            // Check if user sees only their own fiche
+            const hasOwnFiche = userFiche.success && fiches.some(a => a.id === userFiche.fiche.id);
+            const seeOtherFiches = fiches.some(a =>
+              userFiches.some(ua => ua.success && ua.userId !== session.userId && ua.fiche.id === a.id)
             );
 
-            console.log(`📊 User ${index} sees own agent:`, hasOwnAgent);
-            console.log(`📊 User ${index} sees other users' agents:`, seeOtherAgents);
+            console.log(`📊 User ${index} sees own fiche:`, hasOwnFiche);
+            console.log(`📊 User ${index} sees other users' fiches:`, seeOtherFiches);
 
             return {
               userId: session.userId,
               index,
-              hasOwnAgent,
-              seeOtherAgents,
-              totalAgents: agents.length,
+              hasOwnFiche,
+              seeOtherFiches,
+              totalFiches: fiches.length,
               success: true
             };
           } else {
@@ -121,7 +121,7 @@ test.describe('Multi-User and Concurrency', () => {
     );
 
     const properIsolation = isolationResults.filter(r =>
-      r.success && r.hasOwnAgent && !r.seeOtherAgents
+      r.success && r.hasOwnFiche && !r.seeOtherFiches
     ).length;
 
     console.log('📊 Users with proper data isolation:', properIsolation, '/', userCount);
@@ -141,7 +141,7 @@ test.describe('Multi-User and Concurrency', () => {
   test('Concurrent workflow execution', async ({ browser, request }) => {
     console.log('🚀 Starting concurrent workflow execution test...');
 
-    const baseWorkerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const baseCommisId = process.env.TEST_PARALLEL_INDEX || '0';
     const concurrentUsers = 3;
 
     // Create users and their workflows
@@ -149,28 +149,28 @@ test.describe('Multi-User and Concurrency', () => {
       Array.from({ length: concurrentUsers }, async (_, index) => {
         const context = await browser.newContext();
         const page = await context.newPage();
-        const userId = `${baseWorkerId}_workflow_${index}`;
+        const userId = `${baseCommisId}_workflow_${index}`;
 
-        // Create agent for this user
-        const agentResponse = await request.post('/api/agents', {
+        // Create fiche for this user
+        const ficheResponse = await request.post('/api/fiches', {
           headers: {
-            'X-Test-Worker': userId,
+            'X-Test-Commis': userId,
             'Content-Type': 'application/json',
           },
           data: {
-            name: `Concurrent Agent ${index} ${Date.now()}`,
-            system_instructions: `Concurrent execution agent ${index}`,
+            name: `Concurrent Fiche ${index} ${Date.now()}`,
+            system_instructions: `Concurrent execution fiche ${index}`,
             task_instructions: `Handle concurrent workflow ${index}`,
             model: 'gpt-mock',
           }
         });
 
-        let agent = null;
-        if (agentResponse.ok()) {
-          agent = await agentResponse.json();
+        let fiche = null;
+        if (ficheResponse.ok()) {
+          fiche = await ficheResponse.json();
         }
 
-        return { context, page, userId, index, agent };
+        return { context, page, userId, index, fiche };
       })
     );
 
@@ -182,12 +182,12 @@ test.describe('Multi-User and Concurrency', () => {
     const workflowCreationStart = Date.now();
     const workflowCreations = await Promise.all(
       workflowSessions.map(async (session) => {
-        if (!session.agent) return { success: false, reason: 'No agent' };
+        if (!session.fiche) return { success: false, reason: 'No fiche' };
 
         try {
           const workflowResponse = await session.request.post('/api/workflows', {
             headers: {
-              'X-Test-Worker': session.userId,
+              'X-Test-Commis': session.userId,
               'Content-Type': 'application/json',
             },
             data: {
@@ -202,9 +202,9 @@ test.describe('Multi-User and Concurrency', () => {
                     config: { trigger: { type: 'manual', config: { enabled: true, params: {}, filters: [] } } }
                   },
                   {
-                    id: 'agent-1',
-                    type: 'agent',
-                    agent_id: session.agent.id,
+                    id: 'fiche-1',
+                    type: 'fiche',
+                    fiche_id: session.fiche.id,
                     position: { x: 200, y: 150 }
                   },
                   {
@@ -219,8 +219,8 @@ test.describe('Multi-User and Concurrency', () => {
                   }
                 ],
                 edges: [
-                  { id: 'edge-1', source: 'trigger-1', target: 'agent-1', type: 'default' },
-                  { id: 'edge-2', source: 'agent-1', target: 'http-tool-1', type: 'default' }
+                  { id: 'edge-1', source: 'trigger-1', target: 'fiche-1', type: 'default' },
+                  { id: 'edge-2', source: 'fiche-1', target: 'http-tool-1', type: 'default' }
                 ]
               }
             }
@@ -261,7 +261,7 @@ test.describe('Multi-User and Concurrency', () => {
 
             const executionResponse = await session.request.post(`/api/workflow-executions/${wf.workflow.id}/start`, {
               headers: {
-                'X-Test-Worker': wf.userId,
+                'X-Test-Commis': wf.userId,
                 'Content-Type': 'application/json',
               },
               data: {
@@ -308,7 +308,7 @@ test.describe('Multi-User and Concurrency', () => {
               await session.page.waitForTimeout(1000);
 
               const statusResponse = await session.request.get(`/api/workflow-executions/${exec.execution.id}`, {
-                headers: { 'X-Test-Worker': exec.userId }
+                headers: { 'X-Test-Commis': exec.userId }
               });
 
               if (statusResponse.ok()) {
@@ -355,7 +355,7 @@ test.describe('Multi-User and Concurrency', () => {
   test('WebSocket message broadcasting and isolation', async ({ browser, request }) => {
     console.log('🚀 Starting WebSocket broadcasting test...');
 
-    const baseWorkerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const baseCommisId = process.env.TEST_PARALLEL_INDEX || '0';
     const wsUsers = 2;
 
     // Create user sessions with WebSocket monitoring
@@ -363,7 +363,7 @@ test.describe('Multi-User and Concurrency', () => {
       Array.from({ length: wsUsers }, async (_, index) => {
         const context = await browser.newContext();
         const page = await context.newPage();
-        const userId = `${baseWorkerId}_ws_${index}`;
+        const userId = `${baseCommisId}_ws_${index}`;
 
         const wsMessages = [];
 
@@ -404,23 +404,23 @@ test.describe('Multi-User and Concurrency', () => {
     const primarySession = wsSessions[0];
     const secondarySession = wsSessions[1];
 
-    // Create agent in primary session
-    const agentResponse = await primarySession.request.post('/api/agents', {
+    // Create fiche in primary session
+    const ficheResponse = await primarySession.request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': primarySession.userId,
+        'X-Test-Commis': primarySession.userId,
         'Content-Type': 'application/json',
       },
       data: {
-        name: `WebSocket Test Agent ${Date.now()}`,
-        system_instructions: 'Agent for WebSocket testing',
+        name: `WebSocket Test Fiche ${Date.now()}`,
+        system_instructions: 'Fiche for WebSocket testing',
         task_instructions: 'Test WebSocket message broadcasting',
         model: 'gpt-mock',
       }
     });
 
-    if (agentResponse.ok()) {
-      const agent = await agentResponse.json();
-      console.log('📊 Created agent in primary session:', agent.id);
+    if (ficheResponse.ok()) {
+      const fiche = await ficheResponse.json();
+      console.log('📊 Created fiche in primary session:', fiche.id);
 
       // Wait for potential WebSocket messages
       await Promise.all(wsSessions.map(s => s.page.waitForTimeout(2000)));
@@ -428,12 +428,12 @@ test.describe('Multi-User and Concurrency', () => {
       // Check messages received by each session
       wsSessions.forEach((session, index) => {
         const relevantMessages = session.wsMessages.filter(msg =>
-          msg.event_type === 'agent_state' ||
-          msg.event_type === 'agent_created' ||
-          (msg.data && JSON.stringify(msg.data).includes(agent.id.toString()))
+          msg.event_type === 'fiche_state' ||
+          msg.event_type === 'fiche_created' ||
+          (msg.data && JSON.stringify(msg.data).includes(fiche.id.toString()))
         );
 
-        console.log(`📊 User ${index} received ${relevantMessages.length} agent-related messages`);
+        console.log(`📊 User ${index} received ${relevantMessages.length} fiche-related messages`);
 
         if (relevantMessages.length > 0) {
           console.log(`✅ User ${index} received WebSocket notifications`);
@@ -451,7 +451,7 @@ test.describe('Multi-User and Concurrency', () => {
 
       // Check if secondary session receives messages about primary session's data
       const crossSessionMessages = secondaryMessages.filter(msg =>
-        msg.data && JSON.stringify(msg.data).includes(agent.id.toString())
+        msg.data && JSON.stringify(msg.data).includes(fiche.id.toString())
       );
 
       console.log('📊 Cross-session messages in secondary:', crossSessionMessages.length);
@@ -467,14 +467,14 @@ test.describe('Multi-User and Concurrency', () => {
     console.log('📊 Test 4: Testing high-frequency message handling...');
 
     const rapidOperations = Array.from({ length: 5 }, (_, i) =>
-      primarySession.request.post('/api/agents', {
+      primarySession.request.post('/api/fiches', {
         headers: {
-          'X-Test-Worker': primarySession.userId,
+          'X-Test-Commis': primarySession.userId,
           'Content-Type': 'application/json',
         },
         data: {
-          name: `Rapid Agent ${i} ${Date.now()}`,
-          system_instructions: `Rapid test agent ${i}`,
+          name: `Rapid Fiche ${i} ${Date.now()}`,
+          system_instructions: `Rapid test fiche ${i}`,
           task_instructions: `Test rapid operations ${i}`,
           model: 'gpt-mock',
         }
@@ -515,7 +515,7 @@ test.describe('Multi-User and Concurrency', () => {
   test('Resource sharing and conflict resolution', async ({ browser, request }) => {
     console.log('🚀 Starting resource sharing and conflict resolution test...');
 
-    const baseWorkerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const baseCommisId = process.env.TEST_PARALLEL_INDEX || '0';
     const conflictUsers = 2;
 
     // Create sessions for conflict testing
@@ -523,7 +523,7 @@ test.describe('Multi-User and Concurrency', () => {
       Array.from({ length: conflictUsers }, async (_, index) => {
         const context = await browser.newContext();
         const page = await context.newPage();
-        const userId = `${baseWorkerId}_conflict_${index}`;
+        const userId = `${baseCommisId}_conflict_${index}`;
 
         return { context, page, userId, index };
       })
@@ -534,18 +534,18 @@ test.describe('Multi-User and Concurrency', () => {
     // Test 1: Attempt concurrent modifications
     console.log('📊 Test 1: Testing concurrent modifications...');
 
-    // Both users create agents with similar names to test conflict handling
+    // Both users create fiches with similar names to test conflict handling
     const conflictStart = Date.now();
     const conflictOperations = await Promise.all(
       conflictSessions.map(async (session) => {
         try {
-          const agentResponse = await session.request.post('/api/agents', {
+          const ficheResponse = await session.request.post('/api/fiches', {
             headers: {
-              'X-Test-Worker': session.userId,
+              'X-Test-Commis': session.userId,
               'Content-Type': 'application/json',
             },
             data: {
-              name: `Conflict Test Agent ${Date.now()}`, // Same name pattern
+              name: `Conflict Test Fiche ${Date.now()}`, // Same name pattern
               system_instructions: `Conflict resolution test from user ${session.index}`,
               task_instructions: `Handle conflicts for user ${session.index}`,
               model: 'gpt-mock',
@@ -554,13 +554,13 @@ test.describe('Multi-User and Concurrency', () => {
 
           const responseTime = Date.now() - conflictStart;
 
-          if (agentResponse.ok()) {
-            const agent = await agentResponse.json();
-            console.log(`📊 User ${session.index} created agent:`, agent.id, `(${responseTime}ms)`);
-            return { success: true, agent, userId: session.userId, responseTime };
+          if (ficheResponse.ok()) {
+            const fiche = await ficheResponse.json();
+            console.log(`📊 User ${session.index} created fiche:`, fiche.id, `(${responseTime}ms)`);
+            return { success: true, fiche, userId: session.userId, responseTime };
           } else {
-            console.log(`❌ User ${session.index} creation failed:`, agentResponse.status());
-            return { success: false, userId: session.userId, status: agentResponse.status() };
+            console.log(`❌ User ${session.index} creation failed:`, ficheResponse.status());
+            return { success: false, userId: session.userId, status: ficheResponse.status() };
           }
         } catch (error) {
           console.log(`❌ User ${session.index} error:`, error.message);
@@ -594,13 +594,13 @@ test.describe('Multi-User and Concurrency', () => {
 
     await Promise.all(
       conflictSessions.map(async (session) => {
-        const listResponse = await session.request.get('/api/agents', {
-          headers: { 'X-Test-Worker': session.userId }
+        const listResponse = await session.request.get('/api/fiches', {
+          headers: { 'X-Test-Commis': session.userId }
         });
 
         if (listResponse.ok()) {
-          const agents = await listResponse.json();
-          console.log(`📊 User ${session.index} sees ${agents.length} agents`);
+          const fiches = await listResponse.json();
+          console.log(`📊 User ${session.index} sees ${fiches.length} fiches`);
         }
       })
     );
@@ -609,18 +609,18 @@ test.describe('Multi-User and Concurrency', () => {
     console.log('📊 Test 3: Testing resource contention...');
 
     if (successfulConflictOps.length >= 1) {
-      const sharedAgent = successfulConflictOps[0].agent;
+      const sharedFiche = successfulConflictOps[0].fiche;
 
-      // Both users try to update the same agent simultaneously
+      // Both users try to update the same fiche simultaneously
       const updateOperations = await Promise.all(
         conflictSessions.map(async (session) => {
           try {
             // Note: This would require an update endpoint
-            // For now, we'll test by trying to create workflows referencing the same agent
+            // For now, we'll test by trying to create workflows referencing the same fiche
 
             const workflowResponse = await session.request.post('/api/workflows', {
               headers: {
-                'X-Test-Worker': session.userId,
+                'X-Test-Commis': session.userId,
                 'Content-Type': 'application/json',
               },
               data: {
@@ -628,9 +628,9 @@ test.describe('Multi-User and Concurrency', () => {
                 description: `Workflow testing resource contention from user ${session.index}`,
                 canvas_data: {
                   nodes: [{
-                    id: 'agent-1',
-                    type: 'agent',
-                    agent_id: sharedAgent.id, // Same agent referenced by both
+                    id: 'fiche-1',
+                    type: 'fiche',
+                    fiche_id: sharedFiche.id, // Same fiche referenced by both
                     position: { x: 100, y: 100 }
                   }],
                   edges: []
@@ -640,7 +640,7 @@ test.describe('Multi-User and Concurrency', () => {
 
             if (workflowResponse.ok()) {
               const workflow = await workflowResponse.json();
-              console.log(`📊 User ${session.index} created workflow referencing shared agent:`, workflow.id);
+              console.log(`📊 User ${session.index} created workflow referencing shared fiche:`, workflow.id);
               return { success: true, workflow, userId: session.userId };
             } else {
               console.log(`❌ User ${session.index} workflow creation failed:`, workflowResponse.status());
@@ -670,36 +670,36 @@ test.describe('Multi-User and Concurrency', () => {
   test('Session management and cleanup', async ({ browser, request }) => {
     console.log('🚀 Starting session management test...');
 
-    const baseWorkerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const baseCommisId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Test 1: Session lifecycle management
     console.log('📊 Test 1: Testing session lifecycle...');
 
     const context1 = await browser.newContext();
     const page1 = await context1.newPage();
-    const userId1 = `${baseWorkerId}_session_1`;
+    const userId1 = `${baseCommisId}_session_1`;
 
     // Create data in session
     await page1.goto('/');
     await page1.waitForTimeout(1000);
 
-    const agentResponse = await request.post('/api/agents', {
+    const ficheResponse = await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': userId1,
+        'X-Test-Commis': userId1,
         'Content-Type': 'application/json',
       },
       data: {
-        name: `Session Test Agent ${Date.now()}`,
-        system_instructions: 'Agent for session testing',
+        name: `Session Test Fiche ${Date.now()}`,
+        system_instructions: 'Fiche for session testing',
         task_instructions: 'Test session management',
         model: 'gpt-mock',
       }
     });
 
-    let sessionAgent = null;
-    if (agentResponse.ok()) {
-      sessionAgent = await agentResponse.json();
-      console.log('📊 Created agent in session 1:', sessionAgent.id);
+    let sessionFiche = null;
+    if (ficheResponse.ok()) {
+      sessionFiche = await ficheResponse.json();
+      console.log('📊 Created fiche in session 1:', sessionFiche.id);
     }
 
     // Close session 1
@@ -711,21 +711,21 @@ test.describe('Multi-User and Concurrency', () => {
 
     const context2 = await browser.newContext();
     const page2 = await context2.newPage();
-    const userId2 = `${baseWorkerId}_session_2`;
+    const userId2 = `${baseCommisId}_session_2`;
 
-    if (sessionAgent) {
-      // Try to access the agent from a new session with same worker ID
-      const persistenceResponse = await request.get('/api/agents', {
-        headers: { 'X-Test-Worker': userId1 } // Use same worker ID as closed session
+    if (sessionFiche) {
+      // Try to access the fiche from a new session with same commis ID
+      const persistenceResponse = await request.get('/api/fiches', {
+        headers: { 'X-Test-Commis': userId1 } // Use same commis ID as closed session
       });
 
       if (persistenceResponse.ok()) {
-        const agents = await persistenceResponse.json();
-        const persistedAgent = agents.find(a => a.id === sessionAgent.id);
+        const fiches = await persistenceResponse.json();
+        const persistedFiche = fiches.find(a => a.id === sessionFiche.id);
 
-        console.log('📊 Agent persisted after session closure:', !!persistedAgent);
+        console.log('📊 Fiche persisted after session closure:', !!persistedFiche);
 
-        if (persistedAgent) {
+        if (persistedFiche) {
           console.log('✅ Data persists correctly after session closure');
         }
       }
@@ -734,33 +734,33 @@ test.describe('Multi-User and Concurrency', () => {
     // Test 3: Session isolation verification
     console.log('📊 Test 3: Verifying session isolation...');
 
-    // Create data in session 2 with different worker ID
-    const session2Response = await request.post('/api/agents', {
+    // Create data in session 2 with different commis ID
+    const session2Response = await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': userId2,
+        'X-Test-Commis': userId2,
         'Content-Type': 'application/json',
       },
       data: {
-        name: `Session 2 Agent ${Date.now()}`,
-        system_instructions: 'Agent for session 2',
+        name: `Session 2 Fiche ${Date.now()}`,
+        system_instructions: 'Fiche for session 2',
         task_instructions: 'Test session isolation',
         model: 'gpt-mock',
       }
     });
 
     if (session2Response.ok()) {
-      const session2Agent = await session2Response.json();
-      console.log('📊 Created agent in session 2:', session2Agent.id);
+      const session2Fiche = await session2Response.json();
+      console.log('📊 Created fiche in session 2:', session2Fiche.id);
 
       // Check isolation: session 2 should not see session 1 data by default
-      const isolationResponse = await request.get('/api/agents', {
-        headers: { 'X-Test-Worker': userId2 }
+      const isolationResponse = await request.get('/api/fiches', {
+        headers: { 'X-Test-Commis': userId2 }
       });
 
       if (isolationResponse.ok()) {
-        const session2Agents = await isolationResponse.json();
-        const hasSession1Data = sessionAgent && session2Agents.some(a => a.id === sessionAgent.id);
-        const hasSession2Data = session2Agents.some(a => a.id === session2Agent.id);
+        const session2Fiches = await isolationResponse.json();
+        const hasSession1Data = sessionFiche && session2Fiches.some(a => a.id === sessionFiche.id);
+        const hasSession2Data = session2Fiches.some(a => a.id === session2Fiche.id);
 
         console.log('📊 Session 2 sees session 1 data:', hasSession1Data);
         console.log('📊 Session 2 sees own data:', hasSession2Data);
@@ -781,25 +781,25 @@ test.describe('Multi-User and Concurrency', () => {
     // Create a temporary session to test cleanup
     const tempContext = await browser.newContext();
     const tempPage = await tempContext.newPage();
-    const tempUserId = `${baseWorkerId}_temp_${Date.now()}`;
+    const tempUserId = `${baseCommisId}_temp_${Date.now()}`;
 
     // Create temporary data
-    const tempResponse = await request.post('/api/agents', {
+    const tempResponse = await request.post('/api/fiches', {
       headers: {
-        'X-Test-Worker': tempUserId,
+        'X-Test-Commis': tempUserId,
         'Content-Type': 'application/json',
       },
       data: {
-        name: `Temp Agent ${Date.now()}`,
-        system_instructions: 'Temporary agent for cleanup testing',
+        name: `Temp Fiche ${Date.now()}`,
+        system_instructions: 'Temporary fiche for cleanup testing',
         task_instructions: 'Test cleanup',
         model: 'gpt-mock',
       }
     });
 
     if (tempResponse.ok()) {
-      const tempAgent = await tempResponse.json();
-      console.log('📊 Created temporary agent:', tempAgent.id);
+      const tempFiche = await tempResponse.json();
+      console.log('📊 Created temporary fiche:', tempFiche.id);
 
       // Close context immediately
       await tempContext.close();

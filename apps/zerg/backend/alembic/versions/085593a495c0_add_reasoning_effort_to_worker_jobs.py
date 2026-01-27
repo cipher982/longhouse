@@ -1,4 +1,4 @@
-"""add reasoning_effort to worker_jobs
+"""add reasoning_effort to commis_jobs
 
 Revision ID: 085593a495c0
 Revises: u5v6w7x8y9z0
@@ -18,10 +18,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Add reasoning_effort column to worker_jobs table."""
-    op.add_column('worker_jobs', sa.Column('reasoning_effort', sa.String(length=20), nullable=True))
+    """Add reasoning_effort column to commis_jobs table."""
+    op.add_column('commis_jobs', sa.Column('reasoning_effort', sa.String(length=20), nullable=True))
 
 
 def downgrade() -> None:
-    """Remove reasoning_effort column from worker_jobs table."""
-    op.drop_column('worker_jobs', 'reasoning_effort')
+    """Remove reasoning_effort column from commis_jobs table."""
+    op.drop_column('commis_jobs', 'reasoning_effort')

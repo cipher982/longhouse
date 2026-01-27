@@ -1,10 +1,10 @@
 openapi: 3.0.3
 
 info:
-  title: Zerg Agent Platform API
+  title: Zerg Fiche Platform API
   version: 1.0.0
   description: |
-    Complete REST API schema for the Zerg Agent Platform.
+    Complete REST API schema for the Zerg Fiche Platform.
     Single source of truth for all HTTP endpoints.
 
 servers:
@@ -100,9 +100,9 @@ components:
           type: string
           format: date-time
 
-    Agent:
+    Fiche:
       type: object
-      required: [id, name, system_instructions]
+      required: [id, name, system_instructions, task_instructions, model]
       properties:
         id:
           type: integer
@@ -125,7 +125,7 @@ components:
 
     Thread:
       type: object
-      required: [id, title, agent_id]
+      required: [id, title, fiche_id]
       properties:
         id:
           type: integer
@@ -133,7 +133,7 @@ components:
         title:
           type: string
           minLength: 1
-        agent_id:
+        fiche_id:
           type: integer
           minimum: 1
         created_at:
@@ -177,13 +177,10 @@ components:
       allOf:
         - $ref: '#/components/schemas/WorkflowCanvas'
 
-    CreateAgentRequest:
+    CreateFicheRequest:
       type: object
-      required: [name, system_instructions]
+      required: [system_instructions, task_instructions, model]
       properties:
-        name:
-          type: string
-          minLength: 1
         system_instructions:
           type: string
           minLength: 1
@@ -362,12 +359,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
 
   # -------------------------------------------------------------------------
-  # Agent Operations
+  # Fiche Operations
   # -------------------------------------------------------------------------
 
-  /api/agents:
+  /api/fiches:
     get:
-      summary: List agents
+      summary: List fiches
       parameters:
         - name: scope
           in: query
@@ -375,33 +372,33 @@ paths:
             type: string
       responses:
         '200':
-          description: List of agents
+          description: List of fiches
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/Agent'
+                  $ref: '#/components/schemas/Fiche'
 
     post:
-      summary: Create agent
+      summary: Create fiche
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateAgentRequest'
+              $ref: '#/components/schemas/CreateFicheRequest'
       responses:
         '201':
-          description: Agent created
+          description: Fiche created
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Agent'
+                $ref: '#/components/schemas/Fiche'
 
-  /api/agents/{agent_id}:
+  /api/fiches/{fiche_id}:
     parameters:
-      - name: agent_id
+      - name: fiche_id
         in: path
         required: true
         schema:
@@ -409,36 +406,36 @@ paths:
           minimum: 1
 
     get:
-      summary: Get agent by ID
+      summary: Get fiche by ID
       responses:
         '200':
-          description: Agent details
+          description: Fiche details
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Agent'
+                $ref: '#/components/schemas/Fiche'
 
     put:
-      summary: Update agent
+      summary: Update fiche
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateAgentRequest'
+              $ref: '#/components/schemas/CreateFicheRequest'
       responses:
         '200':
-          description: Agent updated
+          description: Fiche updated
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Agent'
+                $ref: '#/components/schemas/Fiche'
 
     delete:
-      summary: Delete agent
+      summary: Delete fiche
       responses:
         '204':
-          description: Agent deleted
+          description: Fiche deleted
 
   # -------------------------------------------------------------------------
   # Thread Operations
@@ -448,7 +445,7 @@ paths:
     get:
       summary: List threads
       parameters:
-        - name: agent_id
+        - name: fiche_id
           in: query
           schema:
             type: integer

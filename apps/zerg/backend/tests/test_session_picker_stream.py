@@ -1,4 +1,4 @@
-"""Tests for session picker SSE events in live Jarvis streams."""
+"""Tests for session picker SSE events in live Oikos streams."""
 
 from __future__ import annotations
 
@@ -10,24 +10,24 @@ import pytest
 
 from zerg.models.enums import RunStatus
 from zerg.models.enums import RunTrigger
-from zerg.models.models import AgentRun
-from zerg.routers.jarvis_sse import stream_run_events
-from zerg.services.supervisor_context import reset_supervisor_context
-from zerg.services.supervisor_context import set_supervisor_context
-from zerg.services.supervisor_service import SupervisorService
-from zerg.tools.builtin.supervisor_tools import request_session_selection_async
+from zerg.models.models import Run
+from zerg.routers.oikos_sse import stream_run_events
+from zerg.services.oikos_context import reset_oikos_context
+from zerg.services.oikos_context import set_oikos_context
+from zerg.services.oikos_service import OikosService
+from zerg.tools.builtin.oikos_tools import request_session_selection_async
 
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(10)
 async def test_request_session_selection_streams_show_session_picker(db_session, test_user):
-    """Ensure show_session_picker is delivered on live Jarvis streams."""
-    service = SupervisorService(db_session)
-    agent = service.get_or_create_supervisor_agent(test_user.id)
-    thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+    """Ensure show_session_picker is delivered on live Oikos streams."""
+    service = OikosService(db_session)
+    fiche = service.get_or_create_oikos_fiche(test_user.id)
+    thread = service.get_or_create_oikos_thread(test_user.id, fiche)
 
-    run = AgentRun(
-        agent_id=agent.id,
+    run = Run(
+        fiche_id=fiche.id,
         thread_id=thread.id,
         status=RunStatus.RUNNING,
         trigger=RunTrigger.API,
@@ -48,7 +48,7 @@ async def test_request_session_selection_streams_show_session_picker(db_session,
                 break
 
     consumer_task = asyncio.create_task(consume_stream())
-    token = set_supervisor_context(
+    token = set_oikos_context(
         run_id=run.id,
         owner_id=test_user.id,
         message_id="test-message-id",
@@ -61,7 +61,7 @@ async def test_request_session_selection_streams_show_session_picker(db_session,
         assert "Session picker opened" in result
         await asyncio.wait_for(consumer_task, timeout=5)
     finally:
-        reset_supervisor_context(token)
+        reset_oikos_context(token)
         if not consumer_task.done():
             consumer_task.cancel()
             with suppress(asyncio.CancelledError):

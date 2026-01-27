@@ -21,7 +21,7 @@ test.describe('Swarm Ops - Core', () => {
 
     expect(seedResponse.ok()).toBeTruthy();
 
-    await page.goto('/swarm');
+    await page.goto('/runs');
 
     await page.getByRole('button', { name: 'All' }).click();
 

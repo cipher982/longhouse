@@ -16,7 +16,7 @@ class TestRefreshConnectorStatus:
     """Tests for refresh_connector_status tool."""
 
     def test_returns_error_when_no_resolver_context(self):
-        """Should return error when called outside agent context."""
+        """Should return error when called outside fiche context."""
         with patch("zerg.tools.builtin.connector_tools.get_credential_resolver", return_value=None):
             result = refresh_connector_status()
 
@@ -28,7 +28,7 @@ class TestRefreshConnectorStatus:
         """Should return connector status when resolver context is available."""
         mock_resolver = MagicMock()
         mock_resolver.owner_id = 1
-        mock_resolver.agent_id = 42
+        mock_resolver.fiche_id = 42
 
         mock_status = {
             "github": {"status": "connected", "tools": ["github_create_issue"]},
@@ -49,7 +49,7 @@ class TestRefreshConnectorStatus:
         """Should return error if build_connector_status raises exception."""
         mock_resolver = MagicMock()
         mock_resolver.owner_id = 1
-        mock_resolver.agent_id = 42
+        mock_resolver.fiche_id = 42
 
         with patch("zerg.tools.builtin.connector_tools.get_credential_resolver", return_value=mock_resolver):
             with patch("zerg.tools.builtin.connector_tools.db_session", _fake_db_session):

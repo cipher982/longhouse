@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Debug script to trace supervisor behavior for infrastructure requests.
+"""Debug script to trace oikos behavior for infrastructure requests.
 
-Run with: cd apps/zerg/backend && uv run python scripts/debug_supervisor_spawn.py
+Run with: cd apps/zerg/backend && uv run python scripts/debug_oikos_spawn.py
 """
 
 import sys
@@ -11,8 +11,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from zerg.database import default_session_factory
 from zerg.crud import crud
-from zerg.prompts.composer import build_supervisor_prompt
-from zerg.services.supervisor_service import SupervisorService
+from zerg.prompts.composer import build_oikos_prompt
+from zerg.services.oikos_service import OikosService
 
 
 def main():
@@ -32,29 +32,29 @@ def main():
     else:
         print("⚠️  NO USER CONTEXT - servers won't be in prompt!")
 
-    # Check supervisor agent
+    # Check oikos fiche
     print("\n" + "=" * 60)
-    print("SUPERVISOR AGENT")
+    print("OIKOS AGENT")
     print("=" * 60)
 
-    svc = SupervisorService(db)
-    result = svc.get_or_create_supervisor_agent(user.id)
+    svc = OikosService(db)
+    result = svc.get_or_create_oikos_fiche(user.id)
     # Handle both return types
     if isinstance(result, tuple):
-        agent, thread = result
+        fiche, thread = result
     else:
-        agent = result
+        fiche = result
         thread = None
 
-    print(f"Agent ID: {agent.id}")
-    print(f"Agent name: {agent.name}")
-    print(f"Allowed tools: {agent.allowed_tools}")
+    print(f"Fiche ID: {fiche.id}")
+    print(f"Fiche name: {fiche.name}")
+    print(f"Allowed tools: {fiche.allowed_tools}")
 
-    # Check if spawn_worker is in tools
-    if "spawn_worker" in (agent.allowed_tools or []):
-        print("✅ spawn_worker is in allowed_tools")
+    # Check if spawn_commis is in tools
+    if "spawn_commis" in (fiche.allowed_tools or []):
+        print("✅ spawn_commis is in allowed_tools")
     else:
-        print("❌ spawn_worker NOT in allowed_tools!")
+        print("❌ spawn_commis NOT in allowed_tools!")
 
     # Check ACTUAL thread messages (runtime state, not just config)
     print("\n" + "=" * 60)
@@ -62,7 +62,7 @@ def main():
     print("=" * 60)
 
     from sqlalchemy import text
-    thread_id = 1  # Supervisor thread
+    thread_id = 1  # Oikos thread
     messages = db.execute(text(
         f"SELECT id, role, LEFT(content, 80), sent_at FROM thread_messages WHERE thread_id = {thread_id} ORDER BY sent_at"
     )).fetchall()
@@ -88,13 +88,13 @@ def main():
     print("PROMPT ANALYSIS (CONFIGURED)")
     print("=" * 60)
 
-    prompt = agent.system_instructions or ""
+    prompt = fiche.system_instructions or ""
 
     # Check for key phrases
     checks = [
         ("Available Servers", "Available Servers" in prompt),
         ("cube server", "cube" in prompt.lower()),
-        ("Spawn a worker immediately", "Spawn a worker immediately" in prompt),
+        ("Spawn a commis immediately", "Spawn a commis immediately" in prompt),
         ("Don't preemptively", "Don't preemptively" in prompt),
         ("runner_list", "runner_list" in prompt),
     ]
@@ -141,11 +141,11 @@ def main():
     issues = []
     if not user.context:
         issues.append("User context is empty - run auto-seed")
-    if "spawn_worker" not in (agent.allowed_tools or []):
-        issues.append("spawn_worker not in allowed_tools")
+    if "spawn_commis" not in (fiche.allowed_tools or []):
+        issues.append("spawn_commis not in allowed_tools")
     if "cube" not in prompt.lower():
         issues.append("'cube' not in prompt - user context not injected")
-    if "Spawn a worker immediately" not in prompt:
+    if "Spawn a commis immediately" not in prompt:
         issues.append("New prompt not loaded - restart backend?")
 
     if issues:
@@ -154,7 +154,7 @@ def main():
             print(f"  ❌ {issue}")
     else:
         print("✅ Everything looks correct. Model may just be ignoring instructions.")
-        print("   Try a more direct prompt: 'spawn a worker to check disk on cube'")
+        print("   Try a more direct prompt: 'spawn a commis to check disk on cube'")
 
 
 if __name__ == "__main__":

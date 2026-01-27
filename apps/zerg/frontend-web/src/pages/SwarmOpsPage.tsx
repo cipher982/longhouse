@@ -9,11 +9,11 @@ import "../styles/swarm-ops.css";
 type AttentionLevel = "auto" | "soft" | "needs" | "hard";
 type RunFilter = "all" | "attention" | "active" | "done";
 
-type JarvisRunSummary = {
+type RunSummary = {
   id: number;
-  agent_id: number;
+  fiche_id: number;
   thread_id?: number;
-  agent_name: string;
+  fiche_name: string;
   status: string;
   summary?: string | null;
   signal?: string | null;
@@ -28,7 +28,7 @@ type JarvisRunSummary = {
   completed_at?: string | null;
 };
 
-type RunWithAttention = JarvisRunSummary & { attention: AttentionLevel };
+type RunWithAttention = RunSummary & { attention: AttentionLevel };
 
 type RunEvent = {
   id: number;
@@ -93,7 +93,7 @@ function formatRelativeTime(timestamp: string): string {
   return `${diffDays}d ago`;
 }
 
-function classifyAttention(run: JarvisRunSummary): AttentionLevel {
+function classifyAttention(run: RunSummary): AttentionLevel {
   const status = (run.status || "").toLowerCase();
   const signalText = (run.signal || run.summary || "").toLowerCase();
 
@@ -151,7 +151,7 @@ export default function SwarmOpsPage() {
 
   const runsQuery = useQuery({
     queryKey: ["swarm-ops", "runs", RUN_LIMIT],
-    queryFn: () => request<JarvisRunSummary[]>(`/jarvis/runs?limit=${RUN_LIMIT}`),
+    queryFn: () => request<RunSummary[]>(`/oikos/runs?limit=${RUN_LIMIT}`),
     refetchInterval: 5000,
   });
 
@@ -173,7 +173,7 @@ export default function SwarmOpsPage() {
 
     const seedScenario = async () => {
       try {
-        await request(`/scenarios/seed`, {
+        await request(`/admin/seed-scenario`, {
           method: "POST",
           body: JSON.stringify({ name: demoScenario, clean: true }),
         });
@@ -242,7 +242,7 @@ export default function SwarmOpsPage() {
   const runEventsQuery = useQuery({
     queryKey: ["swarm-ops", "events", selectedRunId],
     enabled: selectedRunId != null,
-    queryFn: () => request<RunEventsResponse>(`/jarvis/runs/${selectedRunId}/events?limit=120`),
+    queryFn: () => request<RunEventsResponse>(`/oikos/runs/${selectedRunId}/events?limit=120`),
     refetchInterval: shouldPollEvents ? 5000 : false,
   });
 
@@ -349,7 +349,7 @@ export default function SwarmOpsPage() {
         {runs.length === 0 ? (
           <EmptyState
             title="No runs yet"
-            description="Kick off a task in Jarvis and it will show up here for triage."
+            description="Kick off a task with the Oikos and it will show up here for triage."
           />
         ) : (
           <div className="swarm-ops-layout">
@@ -384,7 +384,7 @@ export default function SwarmOpsPage() {
                     >
                       <div className="swarm-ops-item-main">
                         <div className="swarm-ops-item-title-row">
-                          <span className="swarm-ops-item-title">{run.agent_name}</span>
+                          <span className="swarm-ops-item-title">{run.fiche_name}</span>
                           <Badge variant={statusVariant}>{run.status}</Badge>
                         </div>
                         <div className="swarm-ops-item-summary">
@@ -414,7 +414,7 @@ export default function SwarmOpsPage() {
                 <Card className="swarm-ops-detail-card">
                   <Card.Header className="swarm-ops-detail-header">
                     <div>
-                      <div className="swarm-ops-detail-title">{selectedRun.agent_name}</div>
+                      <div className="swarm-ops-detail-title">{selectedRun.fiche_name}</div>
                       <div className="swarm-ops-detail-subtitle">
                         Run #{selectedRun.id} · {selectedRun.status} · {formatRelativeTime(selectedRun.created_at)}
                       </div>
@@ -464,7 +464,7 @@ export default function SwarmOpsPage() {
                         disabled={!selectedRun.thread_id}
                         onClick={() => {
                           if (selectedRun.thread_id) {
-                            navigate(`/agent/${selectedRun.agent_id}/thread/${selectedRun.thread_id}`);
+                            navigate(`/fiche/${selectedRun.fiche_id}/thread/${selectedRun.thread_id}`);
                           }
                         }}
                       >

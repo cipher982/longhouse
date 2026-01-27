@@ -445,7 +445,7 @@ def test_concurrent_token_consumption(client: TestClient, db_session: Session, t
     errors = []
 
     def register_runner(name: str):
-        """Thread worker to attempt registration."""
+        """Thread commis to attempt registration."""
         try:
             response = client.post(
                 "/api/runners/register",

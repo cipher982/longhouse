@@ -21,8 +21,8 @@ class UsageData(BaseModel):
     total_tokens: Optional[int] = Field(default=None, ge=0, description='')
     reasoning_tokens: Optional[int] = Field(default=None, ge=0, description='Reasoning tokens (OpenAI o1/o3 models)')
 
-class WorkerStatus(str, Enum):
-    """Worker execution result"""
+class CommisStatus(str, Enum):
+    """Commis execution result"""
 
     SUCCESS = "success"
     FAILED = "failed"
@@ -40,8 +40,8 @@ class HeartbeatPayload(BaseModel):
     message: Optional[str] = Field(default=None, description='Optional heartbeat message')
     timestamp: Optional[str] = Field(default=None, description='ISO 8601 timestamp')
 
-class SupervisorStartedPayload(BaseModel):
-    """Payload for SupervisorStartedPayload"""
+class OikosStartedPayload(BaseModel):
+    """Payload for OikosStartedPayload"""
 
     run_id: Optional[int] = Field(default=None, ge=1, description='Run ID (may be omitted in legacy events)')
     thread_id: int = Field(ge=1, description='Thread ID for this conversation')
@@ -50,15 +50,15 @@ class SupervisorStartedPayload(BaseModel):
     continuation_of_message_id: Optional[str] = Field(default=None, description='For continuation runs, the message_id of the original run\'s message')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging (copy from UI for agent debugging)')
 
-class SupervisorThinkingPayload(BaseModel):
-    """Payload for SupervisorThinkingPayload"""
+class OikosThinkingPayload(BaseModel):
+    """Payload for OikosThinkingPayload"""
 
     message: str = Field(min_length=1, description='Thinking status message')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class SupervisorTokenPayload(BaseModel):
-    """Payload for SupervisorTokenPayload"""
+class OikosTokenPayload(BaseModel):
+    """Payload for OikosTokenPayload"""
 
     token: str = Field(description='LLM token (may be empty string)')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
@@ -66,49 +66,49 @@ class SupervisorTokenPayload(BaseModel):
     message_id: Optional[str] = Field(default=None, description='Unique identifier for the assistant message')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class SupervisorCompletePayload(BaseModel):
-    """Payload for SupervisorCompletePayload"""
+class OikosCompletePayload(BaseModel):
+    """Payload for OikosCompletePayload"""
 
-    result: str = Field(description='Final supervisor result')
+    result: str = Field(description='Final oikos result')
     status: Literal['success', 'cancelled'] = Field(description='Completion status (\'success\' for normal completion, \'cancelled\' for user-initiated cancellation)')
     duration_ms: Optional[int] = Field(default=None, ge=0, description='Execution duration in milliseconds')
     usage: Optional[UsageData] = Field(default=None)
     run_id: Optional[int] = Field(default=None, ge=1, description='')
-    agent_id: Optional[int] = Field(default=None, ge=1, description='')
+    fiche_id: Optional[int] = Field(default=None, ge=1, description='')
     thread_id: Optional[int] = Field(default=None, ge=1, description='')
     debug_url: Optional[str] = Field(default=None, description='URL for debug/inspection')
     message_id: Optional[str] = Field(default=None, description='Unique identifier for the assistant message')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class SupervisorDeferredPayload(BaseModel):
-    """Payload for SupervisorDeferredPayload"""
+class OikosDeferredPayload(BaseModel):
+    """Payload for OikosDeferredPayload"""
 
     message: str = Field(min_length=1, description='Deferred status message')
     attach_url: Optional[str] = Field(default=None, description='URL to re-attach to the running execution')
     timeout_seconds: Optional[float] = Field(default=None, ge=0, description='Timeout that triggered deferral')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
-    agent_id: Optional[int] = Field(default=None, ge=1, description='')
+    fiche_id: Optional[int] = Field(default=None, ge=1, description='')
     thread_id: Optional[int] = Field(default=None, ge=1, description='')
     message_id: Optional[str] = Field(default=None, description='Unique identifier for the assistant message')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class SupervisorWaitingPayload(BaseModel):
-    """Payload for SupervisorWaitingPayload"""
+class OikosWaitingPayload(BaseModel):
+    """Payload for OikosWaitingPayload"""
 
-    message: str = Field(min_length=1, description='Waiting status message (e.g., worker spawned)')
-    job_id: Optional[int] = Field(default=None, ge=1, description='Worker job ID (if applicable)')
+    message: str = Field(min_length=1, description='Waiting status message (e.g., commis spawned)')
+    job_id: Optional[int] = Field(default=None, ge=1, description='Commis job ID (if applicable)')
     close_stream: Optional[bool] = Field(default=None, description='If false, keep SSE stream open while waiting')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
-    agent_id: Optional[int] = Field(default=None, ge=1, description='')
+    fiche_id: Optional[int] = Field(default=None, ge=1, description='')
     thread_id: Optional[int] = Field(default=None, ge=1, description='')
     message_id: Optional[str] = Field(default=None, description='Unique identifier for the assistant message')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class SupervisorResumedPayload(BaseModel):
-    """Payload for SupervisorResumedPayload"""
+class OikosResumedPayload(BaseModel):
+    """Payload for OikosResumedPayload"""
 
     run_id: Optional[int] = Field(default=None, ge=1, description='')
-    agent_id: Optional[int] = Field(default=None, ge=1, description='')
+    fiche_id: Optional[int] = Field(default=None, ge=1, description='')
     thread_id: int = Field(ge=1, description='')
     message_id: str = Field(description='Unique identifier for the assistant message')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
@@ -121,59 +121,59 @@ class ErrorPayload(BaseModel):
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class WorkerSpawnedPayload(BaseModel):
-    """Payload for WorkerSpawnedPayload"""
+class CommisSpawnedPayload(BaseModel):
+    """Payload for CommisSpawnedPayload"""
 
-    job_id: int = Field(ge=1, description='Worker job ID')
-    tool_call_id: Optional[str] = Field(default=None, description='Tool call ID for the spawn_worker invocation')
-    task: str = Field(min_length=1, description='Worker task (may be truncated to 100 chars)')
-    model: Optional[str] = Field(default=None, description='LLM model for worker')
+    job_id: int = Field(ge=1, description='Commis job ID')
+    tool_call_id: Optional[str] = Field(default=None, description='Tool call ID for the spawn_commis invocation')
+    task: str = Field(min_length=1, description='Commis task (may be truncated to 100 chars)')
+    model: Optional[str] = Field(default=None, description='LLM model for commis')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class WorkerStartedPayload(BaseModel):
-    """Payload for WorkerStartedPayload"""
+class CommisStartedPayload(BaseModel):
+    """Payload for CommisStartedPayload"""
 
     job_id: int = Field(ge=1, description='')
-    worker_id: str = Field(min_length=1, description='Worker execution ID')
+    commis_id: str = Field(min_length=1, description='Commis execution ID')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
-    task: Optional[str] = Field(default=None, description='Worker task (may be truncated)')
+    task: Optional[str] = Field(default=None, description='Commis task (may be truncated)')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class WorkerCompletePayload(BaseModel):
-    """Payload for WorkerCompletePayload"""
+class CommisCompletePayload(BaseModel):
+    """Payload for CommisCompletePayload"""
 
     job_id: int = Field(ge=1, description='')
-    worker_id: Optional[str] = Field(default=None, description='Worker execution ID')
-    status: WorkerStatus
+    commis_id: Optional[str] = Field(default=None, description='Commis execution ID')
+    status: CommisStatus
     duration_ms: Optional[int] = Field(default=None, ge=0, description='')
     error: Optional[str] = Field(default=None, description='Error message (only present if status=failed)')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class WorkerSummaryReadyPayload(BaseModel):
-    """Payload for WorkerSummaryReadyPayload"""
+class CommisSummaryReadyPayload(BaseModel):
+    """Payload for CommisSummaryReadyPayload"""
 
     job_id: int = Field(ge=1, description='')
-    worker_id: Optional[str] = Field(default=None, description='Worker execution ID')
-    summary: str = Field(min_length=1, description='Extracted worker summary')
+    commis_id: Optional[str] = Field(default=None, description='Commis execution ID')
+    summary: str = Field(min_length=1, description='Extracted commis summary')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class WorkerToolStartedPayload(BaseModel):
-    """Payload for WorkerToolStartedPayload"""
+class CommisToolStartedPayload(BaseModel):
+    """Payload for CommisToolStartedPayload"""
 
-    worker_id: str = Field(min_length=1, description='')
+    commis_id: str = Field(min_length=1, description='')
     tool_name: str = Field(min_length=1, description='')
     tool_call_id: str = Field(min_length=1, description='LangChain tool call ID')
     tool_args_preview: Optional[str] = Field(default=None, description='Preview of tool arguments (may be truncated)')
     run_id: Optional[int] = Field(default=None, ge=1, description='Required for security (prevents cross-run leakage)')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class WorkerToolCompletedPayload(BaseModel):
-    """Payload for WorkerToolCompletedPayload"""
+class CommisToolCompletedPayload(BaseModel):
+    """Payload for CommisToolCompletedPayload"""
 
-    worker_id: str = Field(min_length=1, description='')
+    commis_id: str = Field(min_length=1, description='')
     tool_name: str = Field(min_length=1, description='')
     tool_call_id: str = Field(min_length=1, description='')
     duration_ms: int = Field(ge=0, description='')
@@ -181,10 +181,10 @@ class WorkerToolCompletedPayload(BaseModel):
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class WorkerToolFailedPayload(BaseModel):
-    """Payload for WorkerToolFailedPayload"""
+class CommisToolFailedPayload(BaseModel):
+    """Payload for CommisToolFailedPayload"""
 
-    worker_id: str = Field(min_length=1, description='')
+    commis_id: str = Field(min_length=1, description='')
     tool_name: str = Field(min_length=1, description='')
     tool_call_id: str = Field(min_length=1, description='')
     duration_ms: int = Field(ge=0, description='')
@@ -192,29 +192,29 @@ class WorkerToolFailedPayload(BaseModel):
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class WorkerOutputChunkPayload(BaseModel):
-    """Payload for WorkerOutputChunkPayload"""
+class CommisOutputChunkPayload(BaseModel):
+    """Payload for CommisOutputChunkPayload"""
 
-    job_id: Optional[int] = Field(default=None, ge=1, description='Worker job ID (spawn_worker job)')
-    worker_id: str = Field(min_length=1, description='')
+    job_id: Optional[int] = Field(default=None, ge=1, description='Commis job ID (spawn_commis job)')
+    commis_id: str = Field(min_length=1, description='')
     runner_job_id: Optional[str] = Field(default=None, min_length=1, description='Runner exec job UUID')
     stream: Literal['stdout', 'stderr'] = Field(description='Output stream for this chunk')
     data: str = Field(min_length=1, description='Output chunk (may be truncated)')
     run_id: int = Field(ge=1, description='Required for security (prevents cross-run leakage)')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class SupervisorToolStartedPayload(BaseModel):
-    """Payload for SupervisorToolStartedPayload"""
+class OikosToolStartedPayload(BaseModel):
+    """Payload for OikosToolStartedPayload"""
 
     tool_name: str = Field(min_length=1, description='')
     tool_call_id: str = Field(min_length=1, description='Stable ID linking all events for this tool call')
     tool_args_preview: Optional[str] = Field(default=None, description='Preview of tool arguments (may be truncated)')
     tool_args: Optional[Dict[str, Any]] = Field(default=None, description='Full tool arguments (for persistence/raw view)')
-    run_id: Optional[int] = Field(default=None, ge=1, description='Supervisor run ID for correlation')
+    run_id: Optional[int] = Field(default=None, ge=1, description='Oikos run ID for correlation')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class SupervisorToolProgressPayload(BaseModel):
-    """Payload for SupervisorToolProgressPayload"""
+class OikosToolProgressPayload(BaseModel):
+    """Payload for OikosToolProgressPayload"""
 
     tool_call_id: str = Field(min_length=1, description='')
     message: str = Field(description='Progress message (log line)')
@@ -224,8 +224,8 @@ class SupervisorToolProgressPayload(BaseModel):
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class SupervisorToolCompletedPayload(BaseModel):
-    """Payload for SupervisorToolCompletedPayload"""
+class OikosToolCompletedPayload(BaseModel):
+    """Payload for OikosToolCompletedPayload"""
 
     tool_name: str = Field(min_length=1, description='')
     tool_call_id: str = Field(min_length=1, description='')
@@ -235,8 +235,8 @@ class SupervisorToolCompletedPayload(BaseModel):
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
-class SupervisorToolFailedPayload(BaseModel):
-    """Payload for SupervisorToolFailedPayload"""
+class OikosToolFailedPayload(BaseModel):
+    """Payload for OikosToolFailedPayload"""
 
     tool_name: str = Field(min_length=1, description='')
     tool_call_id: str = Field(min_length=1, description='')
@@ -249,7 +249,7 @@ class SupervisorToolFailedPayload(BaseModel):
 class ShowSessionPickerPayload(BaseModel):
     """Trigger session picker modal in frontend"""
 
-    run_id: Optional[int] = Field(default=None, ge=1, description='Current supervisor run ID')
+    run_id: Optional[int] = Field(default=None, ge=1, description='Current oikos run ID')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
     filters: Optional[Dict[str, Any]] = Field(default=None, description='Optional filters to pre-populate the picker')
 
@@ -257,37 +257,37 @@ class StreamControlPayload(BaseModel):
     """Explicit stream lifecycle control - keep_open extends lease, close is terminal end-marker"""
 
     action: Literal['keep_open', 'close'] = Field(description='keep_open extends stream lease; close is terminal end-marker')
-    reason: str = Field(description='Why this action (workers_pending, continuation_start, all_complete, timeout, error)')
+    reason: str = Field(description='Why this action (commiss_pending, continuation_start, all_complete, timeout, error)')
     ttl_ms: Optional[int] = Field(default=None, ge=0, le=300000, description='Lease time in ms (max 5 min); stream closes if no activity/renewal')
     run_id: int = Field(ge=1, description='Run ID this control applies to')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
-    pending_workers: Optional[int] = Field(default=None, ge=0, description='Current pending worker count (for debugging)')
+    pending_commiss: Optional[int] = Field(default=None, ge=0, description='Current pending commis count (for debugging)')
 
 class SSEEventType(str, Enum):
     """Enumeration of all SSE event types."""
 
     CONNECTED = "connected"
     HEARTBEAT = "heartbeat"
-    SUPERVISOR_STARTED = "supervisor_started"
-    SUPERVISOR_THINKING = "supervisor_thinking"
-    SUPERVISOR_TOKEN = "supervisor_token"
-    SUPERVISOR_COMPLETE = "supervisor_complete"
-    SUPERVISOR_DEFERRED = "supervisor_deferred"
-    SUPERVISOR_WAITING = "supervisor_waiting"
-    SUPERVISOR_RESUMED = "supervisor_resumed"
+    OIKOS_STARTED = "oikos_started"
+    OIKOS_THINKING = "oikos_thinking"
+    OIKOS_TOKEN = "oikos_token"
+    OIKOS_COMPLETE = "oikos_complete"
+    OIKOS_DEFERRED = "oikos_deferred"
+    OIKOS_WAITING = "oikos_waiting"
+    OIKOS_RESUMED = "oikos_resumed"
     ERROR = "error"
-    WORKER_SPAWNED = "worker_spawned"
-    WORKER_STARTED = "worker_started"
-    WORKER_COMPLETE = "worker_complete"
-    WORKER_SUMMARY_READY = "worker_summary_ready"
-    WORKER_TOOL_STARTED = "worker_tool_started"
-    WORKER_TOOL_COMPLETED = "worker_tool_completed"
-    WORKER_TOOL_FAILED = "worker_tool_failed"
-    WORKER_OUTPUT_CHUNK = "worker_output_chunk"
-    SUPERVISOR_TOOL_STARTED = "supervisor_tool_started"
-    SUPERVISOR_TOOL_PROGRESS = "supervisor_tool_progress"
-    SUPERVISOR_TOOL_COMPLETED = "supervisor_tool_completed"
-    SUPERVISOR_TOOL_FAILED = "supervisor_tool_failed"
+    COMMIS_SPAWNED = "commis_spawned"
+    COMMIS_STARTED = "commis_started"
+    COMMIS_COMPLETE = "commis_complete"
+    COMMIS_SUMMARY_READY = "commis_summary_ready"
+    COMMIS_TOOL_STARTED = "commis_tool_started"
+    COMMIS_TOOL_COMPLETED = "commis_tool_completed"
+    COMMIS_TOOL_FAILED = "commis_tool_failed"
+    COMMIS_OUTPUT_CHUNK = "commis_output_chunk"
+    OIKOS_TOOL_STARTED = "oikos_tool_started"
+    OIKOS_TOOL_PROGRESS = "oikos_tool_progress"
+    OIKOS_TOOL_COMPLETED = "oikos_tool_completed"
+    OIKOS_TOOL_FAILED = "oikos_tool_failed"
     SHOW_SESSION_PICKER = "show_session_picker"
     STREAM_CONTROL = "stream_control"
 

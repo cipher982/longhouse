@@ -1,4 +1,4 @@
-"""Tests for large tool output storage in supervisor engine."""
+"""Tests for large tool output storage in oikos engine."""
 
 import re
 
@@ -17,15 +17,15 @@ class DummyTool:
 
 @pytest.mark.asyncio
 async def test_execute_tool_stores_large_output(monkeypatch, tmp_path):
-    from zerg.services import supervisor_react_engine as engine
+    from zerg.services import oikos_react_engine as engine
 
     class TestStore(store_module.ToolOutputStore):
         def __init__(self):
             super().__init__(base_path=str(tmp_path))
 
     monkeypatch.setattr(store_module, "ToolOutputStore", TestStore)
-    monkeypatch.setenv("SUPERVISOR_TOOL_OUTPUT_MAX_CHARS", "100")
-    monkeypatch.setenv("SUPERVISOR_TOOL_OUTPUT_PREVIEW_CHARS", "40")
+    monkeypatch.setenv("OIKOS_TOOL_OUTPUT_MAX_CHARS", "100")
+    monkeypatch.setenv("OIKOS_TOOL_OUTPUT_PREVIEW_CHARS", "40")
 
     payload = "x" * 500
     tool_call = {"name": "dummy_tool", "args": {}, "id": "tool-1"}

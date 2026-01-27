@@ -22,8 +22,8 @@ function findDotEnv(startDir: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Shared Playwright *test* object that injects the `X-Test-Worker` header *and*
-// appends `worker=<id>` to every WebSocket URL opened by the front-end.  All
+// Shared Playwright *test* object that injects the `X-Test-Commis` header *and*
+// appends `commis=<id>` to every WebSocket URL opened by the front-end.  All
 // existing spec files can simply switch their import to:
 //
 //   import { test, expect } from './fixtures';
@@ -58,6 +58,7 @@ type TestFixtures = {
   context: BrowserContext;
   request: import('@playwright/test').APIRequestContext;
   backendUrl: string;
+  commisId: string;
 };
 
 export const test = base.extend<TestFixtures>({
@@ -66,15 +67,19 @@ export const test = base.extend<TestFixtures>({
     await use(`http://127.0.0.1:${basePort}`);
   },
 
+  commisId: async ({}, use, testInfo) => {
+    await use(String(testInfo.parallelIndex));
+  },
+
   request: async ({ playwright, backendUrl }, use, testInfo) => {
-    // Use parallelIndex (0 to workers-1) instead of workerIndex.
-    // workerIndex can exceed the configured worker count when Playwright
-    // restarts workers after test failures/timeouts.
-    const workerId = String(testInfo.parallelIndex);
+    // Use parallelIndex (0 to commis-1) instead of commisIndex.
+    // commisIndex can exceed the configured commis count when Playwright
+    // restarts commis after test failures/timeouts.
+    const commisId = String(testInfo.parallelIndex);
     const request = await playwright.request.newContext({
       baseURL: backendUrl, // Use dynamic backend URL
       extraHTTPHeaders: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
       },
       // Increase timeout for API requests - reset-database can be slow under parallel load
       timeout: 30_000,
@@ -84,38 +89,37 @@ export const test = base.extend<TestFixtures>({
   },
 
   context: async ({ browser }, use, testInfo) => {
-    const workerId = String(testInfo.parallelIndex);
+    const commisId = String(testInfo.parallelIndex);
 
     const context = await browser.newContext({
       extraHTTPHeaders: {
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
       },
     });
 
     const reactBaseUrl = process.env.PLAYWRIGHT_FRONTEND_BASE || 'http://localhost:3000';
 
-    await context.addInitScript((config: { baseUrl: string, workerId: string }) => {
+    await context.addInitScript((config: { baseUrl: string, commisId: string }) => {
+      (window as any).__TEST_COMMIS_ID__ = config.commisId;
       try {
         const normalized = config.baseUrl.replace(/\/$/, '');
         window.localStorage.setItem('zerg_use_react_dashboard', '1');
         window.localStorage.setItem('zerg_use_react_chat', '1');
         window.localStorage.setItem('zerg_react_dashboard_url', `${normalized}/dashboard`);
-        window.localStorage.setItem('zerg_react_chat_base', `${normalized}/agent`);
+        window.localStorage.setItem('zerg_react_chat_base', `${normalized}/fiche`);
 
         // Add test JWT token for React authentication
         window.localStorage.setItem('zerg_jwt', 'test-jwt-token-for-e2e-tests');
 
-        // Inject test worker ID for API request headers
-        (window as any).__TEST_WORKER_ID__ = config.workerId;
         } catch (error) {
           // If localStorage is unavailable (unlikely), continue without failing tests.
           console.warn('Playwright init: unable to seed React flags', error);
         }
-      }, { baseUrl: reactBaseUrl, workerId });
+      }, { baseUrl: reactBaseUrl, commisId });
 
     // -------------------------------------------------------------------
     // Monkey-patch *browser.newContext* so ad-hoc contexts created **inside**
-    // a spec inherit the worker header automatically (see realtime_updates
+    // a spec inherit the commis header automatically (see realtime_updates
     // tests that open multiple tabs).
     // -------------------------------------------------------------------
     const originalNewContext = browser.newContext.bind(browser);
@@ -123,13 +127,13 @@ export const test = base.extend<TestFixtures>({
     browser.newContext = (async (options: any = {}) => {
       options.extraHTTPHeaders = {
         ...(options.extraHTTPHeaders || {}),
-        'X-Test-Worker': workerId,
+        'X-Test-Commis': commisId,
       };
       return originalNewContext(options);
     }) as any;
 
     // ---------------------------------------------------------------------
-    // runtime patch – prepend `worker=<id>` to every WebSocket URL so the
+    // runtime patch – prepend `commis=<id>` to every WebSocket URL so the
     // backend can correlate the upgrade request to the correct database.
     // ---------------------------------------------------------------------
     await context.addInitScript((wid: string) => {
@@ -141,7 +145,7 @@ export const test = base.extend<TestFixtures>({
         try {
           const hasQuery = url.includes('?');
           const sep = hasQuery ? '&' : '?';
-          url = `${url}${sep}worker=${wid}`;
+          url = `${url}${sep}commis=${wid}`;
         } catch {
           /* ignore – defensive */
         }
@@ -155,7 +159,7 @@ export const test = base.extend<TestFixtures>({
         (window.WebSocket as any)[key] = (OriginalWebSocket as any)[key];
       }
       (window.WebSocket as any).prototype = OriginalWebSocket.prototype;
-    }, workerId);
+    }, commisId);
 
     await use(context);
 
@@ -168,23 +172,23 @@ export const test = base.extend<TestFixtures>({
 });
 
 // ---------------------------------------------------------------------------
-// Jarvis chat thread isolation:
-// The Supervisor thread is long-lived in normal usage, and per-worker DBs mean
-// it can persist across tests within the same Playwright worker. Clearing it
+// Oikos chat thread isolation:
+// The Oikos thread is long-lived in normal usage, and per-commis DBs mean
+// it can persist across tests within the same Playwright commis. Clearing it
 // here keeps tests and perf assertions deterministic without requiring every
 // spec to remember to do it.
 // ---------------------------------------------------------------------------
 
 test.beforeEach(async ({ request }, testInfo) => {
   try {
-    const response = await request.delete('/api/jarvis/history');
+    const response = await request.delete('/api/oikos/history');
     if (!response.ok()) {
-      // Avoid failing the entire suite if Jarvis endpoints are temporarily
+      // Avoid failing the entire suite if Oikos endpoints are temporarily
       // unavailable; individual chat specs should still assert correctness.
       // Note: Suppress this warning by default - it's noisy during parallel tests
     }
   } catch {
-    // Silently ignore - Jarvis history cleanup is best-effort, not critical
+    // Silently ignore - Oikos history cleanup is best-effort, not critical
     // Individual chat specs should still assert correctness
   }
 });

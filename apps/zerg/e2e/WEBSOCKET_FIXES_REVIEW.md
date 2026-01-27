@@ -62,10 +62,10 @@ This document provides a comprehensive code review and test analysis of the WebS
          if (message.type === "subscribe_error") {
            // Remove from subscribed set to allow retry
            pending.topics.forEach((topic) => {
-             const [, agentIdRaw] = topic.split(":");
-             const agentId = Number.parseInt(agentIdRaw ?? "", 10);
-             if (Number.isFinite(agentId)) {
-               subscribedAgentIdsRef.current.delete(agentId);
+             const [, ficheIdRaw] = topic.split(":");
+             const ficheId = Number.parseInt(ficheIdRaw ?? "", 10);
+             if (Number.isFinite(ficheId)) {
+               subscribedFicheIdsRef.current.delete(ficheId);
              }
            });
          }
@@ -90,10 +90,10 @@ This document provides a comprehensive code review and test analysis of the WebS
        pendingSubscriptionsRef.current.delete(messageId);
        // Remove from subscribed set so we can retry
        topicsToSubscribe.forEach((topic) => {
-         const [, agentIdRaw] = topic.split(":");
-         const agentId = Number.parseInt(agentIdRaw ?? "", 10);
-         if (Number.isFinite(agentId)) {
-           subscribedAgentIdsRef.current.delete(agentId);
+         const [, ficheIdRaw] = topic.split(":");
+         const ficheId = Number.parseInt(ficheIdRaw ?? "", 10);
+         if (Number.isFinite(ficheId)) {
+           subscribedFicheIdsRef.current.delete(ficheId);
          }
        });
      }
@@ -120,7 +120,7 @@ This document provides a comprehensive code review and test analysis of the WebS
 
    ```typescript
    onConnect: () => {
-     subscribedAgentIdsRef.current.clear();
+     subscribedFicheIdsRef.current.clear();
      // Clear any pending subscriptions from previous connection
      pendingSubscriptionsRef.current.forEach((pending) => {
        clearTimeout(pending.timeoutId);
@@ -160,25 +160,25 @@ This document provides a comprehensive code review and test analysis of the WebS
 **Current Behavior:**
 
 - `handle_subscribe` function (lines 425-473) processes subscriptions
-- Calls topic-specific handlers like `_subscribe_agent` which send **initial state** but not **acknowledgment**
+- Calls topic-specific handlers like `handle_fiche_subscription` which send **initial state** but not **acknowledgment**
 - Only sends errors via `send_error()` which creates generic error envelopes, not `subscribe_error` type
 
 **Evidence from Backend Code:**
 
 ```python
-# handlers.py:215-263 (_subscribe_agent example)
-async def _subscribe_agent(client_id: str, agent_id: int, message_id: str, db: Session) -> None:
+# handlers.py: (handle_fiche_subscription example)
+async def handle_fiche_subscription(client_id: str, fiche_id: int, message_id: str, db: Session) -> None:
     # ... validation ...
 
-    # Subscribe to agent topic
-    topic = f"agent:{agent_id}"
+    # Subscribe to fiche topic
+    topic = f"fiche:{fiche_id}"
     await topic_manager.subscribe_to_topic(client_id, topic)
 
-    # Send initial agent state
+    # Send initial fiche state
     envelope = Envelope.create(
-        message_type="agent_state",  # ❌ Not "subscribe_ack"
+        message_type="fiche_state",  # ❌ Not "subscribe_ack"
         topic=topic,
-        data=agent_data.model_dump(),
+        data=fiche_data.model_dump(),
         req_id=message_id,
     )
     await send_to_client(client_id, envelope.model_dump())
@@ -188,7 +188,7 @@ async def _subscribe_agent(client_id: str, agent_id: int, message_id: str, db: S
 **Impact:**
 
 - All subscriptions timeout after 5 seconds
-- Subscriptions are removed from `subscribedAgentIdsRef`
+- Subscriptions are removed from `subscribedFicheIdsRef`
 - Next useEffect cycle attempts to re-subscribe (subscription churn)
 - WebSocket traffic is 2-3x higher than necessary
 - Unnecessary console warnings
@@ -199,7 +199,7 @@ async def _subscribe_agent(client_id: str, agent_id: int, message_id: str, db: S
 
 **Change 1: Add subscribe_ack after successful subscription**
 
-Add to each subscription handler (`_subscribe_agent`, `_subscribe_user`, etc.):
+Add to each subscription handler (`handle_fiche_subscription`, `handle_user_subscription`, etc.):
 
 ```python
 # After successful subscription and initial state send
@@ -219,13 +219,13 @@ Replace `send_error()` calls with structured `subscribe_error` messages:
 
 ```python
 # Instead of:
-await send_error(client_id, f"Agent {agent_id} not found", message_id)
+await send_error(client_id, f"Fiche {fiche_id} not found", message_id)
 
 # Use:
 error_data = {
     "message_id": message_id,
-    "topics": [f"agent:{agent_id}"],
-    "error": f"Agent {agent_id} not found"
+    "topics": [f"fiche:{fiche_id}"],
+    "error": f"Fiche {fiche_id} not found"
 }
 error_envelope = Envelope.create(
     message_type="subscribe_error",
@@ -398,7 +398,7 @@ class SubscribeErrorData(BaseModel):
 6. ✅ Should cleanup timeouts on component unmount
 7. ✅ Should handle subscription ack when backend implements it (documents expected behavior)
 8. ✅ Should handle duplicate subscription attempts
-9. ✅ Should handle subscription to non-existent agent
+9. ✅ Should handle subscription to non-existent fiche
 
 **Failed Test:**
 
@@ -412,7 +412,7 @@ class SubscribeErrorData(BaseModel):
 - Message IDs are unique and properly formatted: `dashboard-{timestamp}-{counter}`
 - Timeouts fire correctly after 5 seconds when backend doesn't respond
 - Cleanup on unmount prevents memory leaks
-- Duplicate subscriptions are prevented by `subscribedAgentIdsRef`
+- Duplicate subscriptions are prevented by `subscribedFicheIdsRef`
 - Currently receives **0 subscribe_ack messages** (confirms backend gap)
 
 #### Bounded Message Queue Tests
@@ -518,10 +518,10 @@ class SubscribeErrorData(BaseModel):
 3. **Topic Parsing Safety** (DashboardPage.tsx:92-96)
 
    ```typescript
-   const [, agentIdRaw] = topic.split(":");
-   const agentId = Number.parseInt(agentIdRaw ?? "", 10);
-   if (Number.isFinite(agentId)) {
-     subscribedAgentIdsRef.current.delete(agentId);
+   const [, ficheIdRaw] = topic.split(":");
+   const ficheId = Number.parseInt(ficheIdRaw ?? "", 10);
+   if (Number.isFinite(ficheId)) {
+     subscribedFicheIdsRef.current.delete(ficheId);
    }
    ```
 
@@ -688,8 +688,8 @@ class SubscribeErrorData(BaseModel):
 
 **Estimated Impact:**
 
-- Per agent subscription: +1 timeout, +2 messages (unsub + resub) every 5s
-- Dashboard with 50 agents: +50 timeouts, +100 messages every 5s
+- Per fiche subscription: +1 timeout, +2 messages (unsub + resub) every 5s
+- Dashboard with 50 fiches: +50 timeouts, +100 messages every 5s
 - **Traffic overhead:** ~200% increase
 
 ### Expected Performance (With Backend Acks)
@@ -773,13 +773,13 @@ class SubscribeErrorData(BaseModel):
 
    ```python
    async def test_subscription_error_handling():
-       # Subscribe to non-existent agent
+       # Subscribe to non-existent fiche
        # Verify subscribe_error sent
-       # Verify error message contains agent_id
+       # Verify error message contains fiche_id
    ```
 
 3. **Load Testing** (Future)
-   - 100+ agents on dashboard
+   - 100+ fiches on dashboard
    - Verify all subscriptions succeed
    - Measure ack latency
 

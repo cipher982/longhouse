@@ -1,4 +1,4 @@
-"""CRUD operations for Agent Runs."""
+"""CRUD operations for Runs."""
 
 import uuid
 from datetime import datetime
@@ -6,24 +6,24 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from zerg.models import Agent
-from zerg.models import AgentRun
+from zerg.models import Fiche
+from zerg.models import Run
 from zerg.models import ThreadMessage
 from zerg.models.enums import RunStatus
-from zerg.schemas.schemas import RunTrigger
+from zerg.models.enums import RunTrigger
 from zerg.utils.time import utc_now_naive
 
 
 def create_run(
     db: Session,
     *,
-    agent_id: int,
+    fiche_id: int,
     thread_id: int,
     trigger: str = "manual",
     status: str = "queued",
     trace_id: str | uuid.UUID | None = None,
-) -> AgentRun:
-    """Insert a new *AgentRun* row.
+) -> Run:
+    """Insert a new *Run* row.
 
     Minimal helper to keep service layers free from SQLAlchemy internals.
     """
@@ -43,8 +43,8 @@ def create_run(
     elif isinstance(resolved_trace_id, str):
         resolved_trace_id = uuid.UUID(resolved_trace_id)
 
-    run_row = AgentRun(
-        agent_id=agent_id,
+    run_row = Run(
+        fiche_id=fiche_id,
         thread_id=thread_id,
         trigger=trigger_enum,
         status=status_enum,
@@ -56,8 +56,8 @@ def create_run(
     return run_row
 
 
-def mark_running(db: Session, run_id: int, *, started_at: Optional[datetime] = None) -> Optional[AgentRun]:
-    row = db.query(AgentRun).filter(AgentRun.id == run_id).first()
+def mark_run_running(db: Session, run_id: int, *, started_at: Optional[datetime] = None) -> Optional[Run]:
+    row = db.query(Run).filter(Run.id == run_id).first()
     if row is None:
         return None
 
@@ -70,7 +70,7 @@ def mark_running(db: Session, run_id: int, *, started_at: Optional[datetime] = N
     return row
 
 
-def mark_finished(
+def mark_run_finished(
     db: Session,
     run_id: int,
     *,
@@ -79,8 +79,8 @@ def mark_finished(
     total_tokens: Optional[int] = None,
     total_cost_usd: Optional[float] = None,
     summary: Optional[str] = None,
-) -> Optional[AgentRun]:
-    row = db.query(AgentRun).filter(AgentRun.id == run_id).first()
+) -> Optional[Run]:
+    row = db.query(Run).filter(Run.id == run_id).first()
     if row is None:
         return None
 
@@ -164,15 +164,15 @@ def _extract_run_summary(db: Session, thread_id: int, max_length: int = 500) -> 
     return text.strip()
 
 
-def mark_failed(
+def mark_run_failed(
     db: Session,
     run_id: int,
     *,
     finished_at: Optional[datetime] = None,
     duration_ms: Optional[int] = None,
     error: Optional[str] = None,
-) -> Optional[AgentRun]:
-    row = db.query(AgentRun).filter(AgentRun.id == run_id).first()
+) -> Optional[Run]:
+    row = db.query(Run).filter(Run.id == run_id).first()
     if row is None:
         return None
 
@@ -191,12 +191,12 @@ def mark_failed(
     return row
 
 
-def list_runs(db: Session, agent_id: int, *, limit: int = 20, owner_id: Optional[int] = None):
-    """Return the most recent runs for *agent_id* ordered DESC by id.
+def list_runs(db: Session, fiche_id: int, *, limit: int = 20, owner_id: Optional[int] = None):
+    """Return the most recent runs for *fiche_id* ordered DESC by id.
 
-    If *owner_id* is provided, the agent must be owned by that user.
+    If *owner_id* is provided, the fiche must be owned by that user.
     """
-    query = db.query(AgentRun).filter(AgentRun.agent_id == agent_id)
+    query = db.query(Run).filter(Run.fiche_id == fiche_id)
     if owner_id is not None:
-        query = query.join(Agent, Agent.id == AgentRun.agent_id).filter(Agent.owner_id == owner_id)
-    return query.order_by(AgentRun.id.desc()).limit(limit).all()
+        query = query.join(Fiche, Fiche.id == Run.fiche_id).filter(Fiche.owner_id == owner_id)
+    return query.order_by(Run.id.desc()).limit(limit).all()

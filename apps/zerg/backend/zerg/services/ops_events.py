@@ -1,6 +1,6 @@
 """Ops events bridge: normalize EventBus events to an `ops:events` ticker.
 
-Subscribes to core domain events (runs, agents, threads) and broadcasts
+Subscribes to core domain events (runs, fiches, threads) and broadcasts
 compact, color-codable frames to the `ops:events` WebSocket topic.
 """
 
@@ -34,9 +34,9 @@ class OpsEventsBridge:
     async def _handle_run_event(self, data: Dict[str, Any]) -> None:
         # Normalize RUN_* events into run_started/run_success/run_failed
         status = data.get("status")
-        agent_id = data.get("agent_id")
+        fiche_id = data.get("fiche_id")
         run_id = data.get("run_id") or data.get("id")
-        if not agent_id or not run_id:
+        if not fiche_id or not run_id:
             return
 
         if status == "running":
@@ -51,7 +51,7 @@ class OpsEventsBridge:
 
         payload = OpsEventData(
             type=msg_type,
-            agent_id=agent_id,
+            fiche_id=fiche_id,
             run_id=run_id,
             thread_id=data.get("thread_id"),
             duration_ms=data.get("duration_ms"),
@@ -59,18 +59,18 @@ class OpsEventsBridge:
         )
         await typed_emitter.send_typed(OPS_TOPIC, MessageType.OPS_EVENT, payload)
 
-    async def _handle_agent_event(self, data: Dict[str, Any]) -> None:
-        agent_id = data.get("id")
-        if not agent_id:
+    async def _handle_fiche_event(self, data: Dict[str, Any]) -> None:
+        fiche_id = data.get("id")
+        if not fiche_id:
             return
-        event_type = "agent_updated"
+        event_type = "fiche_updated"
         # Try to infer created
-        if data.get("event_type") == "agent_created":
-            event_type = "agent_created"
+        if data.get("event_type") == "fiche_created":
+            event_type = "fiche_created"
         payload = OpsEventData(
             type=event_type,
-            agent_id=agent_id,
-            agent_name=data.get("name"),
+            fiche_id=fiche_id,
+            fiche_name=data.get("name"),
             status=data.get("status"),
         )
         await typed_emitter.send_typed(OPS_TOPIC, MessageType.OPS_EVENT, payload)
@@ -102,8 +102,8 @@ class OpsEventsBridge:
             return
         event_bus.subscribe(EventType.RUN_CREATED, self._handle_run_event)
         event_bus.subscribe(EventType.RUN_UPDATED, self._handle_run_event)
-        event_bus.subscribe(EventType.AGENT_CREATED, self._handle_agent_event)
-        event_bus.subscribe(EventType.AGENT_UPDATED, self._handle_agent_event)
+        event_bus.subscribe(EventType.FICHE_CREATED, self._handle_fiche_event)
+        event_bus.subscribe(EventType.FICHE_UPDATED, self._handle_fiche_event)
         event_bus.subscribe(EventType.THREAD_MESSAGE_CREATED, self._handle_thread_message)
         event_bus.subscribe(EventType.BUDGET_DENIED, self._handle_budget_denied)
         self._started = True
@@ -115,8 +115,8 @@ class OpsEventsBridge:
         try:
             event_bus.unsubscribe(EventType.RUN_CREATED, self._handle_run_event)
             event_bus.unsubscribe(EventType.RUN_UPDATED, self._handle_run_event)
-            event_bus.unsubscribe(EventType.AGENT_CREATED, self._handle_agent_event)
-            event_bus.unsubscribe(EventType.AGENT_UPDATED, self._handle_agent_event)
+            event_bus.unsubscribe(EventType.FICHE_CREATED, self._handle_fiche_event)
+            event_bus.unsubscribe(EventType.FICHE_UPDATED, self._handle_fiche_event)
             event_bus.unsubscribe(EventType.THREAD_MESSAGE_CREATED, self._handle_thread_message)
             event_bus.unsubscribe(EventType.BUDGET_DENIED, self._handle_budget_denied)
         finally:

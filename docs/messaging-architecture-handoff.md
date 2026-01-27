@@ -183,7 +183,7 @@ These are the highest-leverage changes to cut off recurring bug sources:
 
 1) **Bound streaming queues**:
    - `apps/zerg/backend/zerg/routers/stream.py` uses `asyncio.Queue()` unbounded; add bounds + drop/coalesce policy.
-   - Audit `apps/zerg/backend/zerg/routers/jarvis_sse.py` for similar.
+   - Audit `apps/zerg/backend/zerg/routers/oikos_sse.py` for similar.
 2) **Design out Sessions from context-transported objects**:
    - Remove `Session` from `WorkerContext`, `SupervisorContext`, and emitter objects.
    - Replace “pass session everywhere” with “open short-lived session at the IO boundary”.

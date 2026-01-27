@@ -13,8 +13,7 @@ const PUBLIC_PAGES = [
 
 async function captureBaseline(page: Page, path: string, name: string) {
   await page.goto(path);
-  // Use 'load' state which waits for all resources (images, fonts, stylesheets)
-  await page.waitForLoadState('load');
+  await page.waitForLoadState('networkidle');
   await expect(page).toHaveScreenshot(`${name}.png`, {
     fullPage: true,
     animations: 'disabled',

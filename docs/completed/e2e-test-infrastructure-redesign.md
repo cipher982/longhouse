@@ -39,7 +39,7 @@ Postgres default max_connections = 100
 
 ### 5. Stale/Broken Code (from review)
 - `test-setup.js` still imports deprecated SQLite cleanup (`zerg.test_db_manager`)
-- `ApiClient` helper doesn't set `X-Test-Worker` header
+- `ApiClient` helper doesn't set `X-Test-Commis` header
 - Background tasks without `current_worker_id` hit default engine
 
 ---
@@ -67,7 +67,7 @@ Postgres default max_connections = 100
 
 | Task | File | Change |
 |------|------|--------|
-| 3.1 | `tests/helpers/api-client.ts` | Add `X-Test-Worker` header to all requests |
+| 3.1 | `tests/helpers/api-client.ts` | Add `X-Test-Commis` header to all requests |
 | 3.2 | Audit | Check for background tasks hitting default engine |
 
 ### Phase 4: Cleanup & Verification
@@ -183,7 +183,7 @@ export class ApiClient {
       ...options,
       headers: {
         ...options.headers,
-        'X-Test-Worker': this.workerId,  // Always include!
+        'X-Test-Commis': this.workerId,  // Always include!
       },
     });
   }

@@ -4,7 +4,7 @@ This module provides tools for managing Linear issues, teams, and comments
 via the Linear GraphQL API. All tools require a Linear API key for authentication.
 
 Configuration:
-    Agents should be configured with a Linear connector that provides:
+    Fiches should be configured with a Linear connector that provides:
     - api_key: Linear Personal API Key
 
 Rate Limits:
@@ -86,7 +86,7 @@ def _make_linear_request(
         headers = {
             "Authorization": api_key,  # Personal API keys don't use Bearer prefix
             "Content-Type": "application/json",
-            "User-Agent": "Zerg-Agent/1.0",
+            "User-Fiche": "Zerg-Fiche/1.0",
         }
 
         payload = {"query": query}
@@ -172,7 +172,7 @@ def linear_create_issue(
         state_id: ID of the workflow state (optional)
         assignee_id: ID of the user to assign to (optional)
         label_ids: List of label IDs to apply (optional)
-        api_key: Linear Personal API Key (optional, uses agent context if not provided)
+        api_key: Linear Personal API Key (optional, uses fiche context if not provided)
 
     Returns:
         Dictionary containing:
@@ -260,7 +260,7 @@ def linear_create_issue(
     variables = {"input": input_data}
     result = _make_linear_request(resolved_api_key, mutation, variables)
 
-    # Simplify response for agent consumption
+    # Simplify response for fiche consumption
     if result.get("ok") and "data" in result:
         issue_create = result["data"].get("issueCreate", {})
         if issue_create.get("success"):
@@ -295,7 +295,7 @@ def linear_list_issues(
         team_id: Filter by team ID (optional)
         state: Filter by workflow state name (e.g., "In Progress", "Done") (optional)
         first: Number of results to return, max 250 (default: 50)
-        api_key: Linear Personal API Key (optional, uses agent context if not provided)
+        api_key: Linear Personal API Key (optional, uses fiche context if not provided)
 
     Returns:
         Dictionary containing:
@@ -366,7 +366,7 @@ def linear_list_issues(
 
     result = _make_linear_request(resolved_api_key, query, variables)
 
-    # Simplify response for agent consumption
+    # Simplify response for fiche consumption
     if result.get("ok") and "data" in result:
         raw_data = result["data"]
         issues_data = raw_data.get("issues", {}).get("nodes", [])
@@ -409,7 +409,7 @@ def linear_get_issue(
 
     Args:
         issue_id: Issue ID (not identifier - use the UUID, not "ENG-42")
-        api_key: Linear Personal API Key (optional, uses agent context if not provided)
+        api_key: Linear Personal API Key (optional, uses fiche context if not provided)
 
     Returns:
         Dictionary containing:
@@ -482,7 +482,7 @@ def linear_get_issue(
     variables = {"id": issue_id.strip()}
     result = _make_linear_request(resolved_api_key, query, variables)
 
-    # Simplify response for agent consumption
+    # Simplify response for fiche consumption
     if result.get("ok") and "data" in result:
         issue_data = result["data"].get("issue", {})
         if issue_data:
@@ -533,7 +533,7 @@ def linear_update_issue(
         description: New issue description (optional)
         state_id: New workflow state ID (optional)
         priority: New priority level: 0=None, 1=Urgent, 2=High, 3=Medium, 4=Low (optional)
-        api_key: Linear Personal API Key (optional, uses agent context if not provided)
+        api_key: Linear Personal API Key (optional, uses fiche context if not provided)
 
     Returns:
         Dictionary containing:
@@ -610,7 +610,7 @@ def linear_update_issue(
 
     result = _make_linear_request(resolved_api_key, mutation, variables)
 
-    # Simplify response for agent consumption
+    # Simplify response for fiche consumption
     if result.get("ok") and "data" in result:
         issue_update = result["data"].get("issueUpdate", {})
         if issue_update.get("success"):
@@ -642,7 +642,7 @@ def linear_add_comment(
     Args:
         issue_id: Issue ID to comment on (UUID, not identifier)
         body: Comment text (required)
-        api_key: Linear Personal API Key (optional, uses agent context if not provided)
+        api_key: Linear Personal API Key (optional, uses fiche context if not provided)
 
     Returns:
         Dictionary containing:
@@ -702,7 +702,7 @@ def linear_add_comment(
 
     result = _make_linear_request(resolved_api_key, mutation, variables)
 
-    # Simplify response for agent consumption
+    # Simplify response for fiche consumption
     if result.get("ok") and "data" in result:
         comment_create = result["data"].get("commentCreate", {})
         if comment_create.get("success"):
@@ -729,7 +729,7 @@ def linear_list_teams(
     """List all teams accessible to the API key.
 
     Args:
-        api_key: Linear Personal API Key (optional, uses agent context if not provided)
+        api_key: Linear Personal API Key (optional, uses fiche context if not provided)
 
     Returns:
         Dictionary containing:
@@ -762,7 +762,7 @@ def linear_list_teams(
 
     result = _make_linear_request(resolved_api_key, query)
 
-    # Simplify response for agent consumption
+    # Simplify response for fiche consumption
     if result.get("ok") and "data" in result:
         teams_data = result["data"].get("teams", {}).get("nodes", [])
         return tool_success(
@@ -788,31 +788,31 @@ TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
         func=linear_create_issue,
         name="linear_create_issue",
-        description="Create a new issue in Linear. Returns the issue identifier and URL. Requires team_id. API key can be provided or uses agent's configured Linear connector.",
+        description="Create a new issue in Linear. Returns the issue identifier and URL. Requires team_id. API key can be provided or uses fiche's configured Linear connector.",
     ),
     StructuredTool.from_function(
         func=linear_list_issues,
         name="linear_list_issues",
-        description="List issues in Linear with optional filtering by team and state. API key can be provided or uses agent's configured Linear connector.",
+        description="List issues in Linear with optional filtering by team and state. API key can be provided or uses fiche's configured Linear connector.",
     ),
     StructuredTool.from_function(
         func=linear_get_issue,
         name="linear_get_issue",
-        description="Get detailed information about a specific Linear issue by ID including comments. API key can be provided or uses agent's configured Linear connector.",
+        description="Get detailed information about a specific Linear issue by ID including comments. API key can be provided or uses fiche's configured Linear connector.",
     ),
     StructuredTool.from_function(
         func=linear_update_issue,
         name="linear_update_issue",
-        description="Update an existing Linear issue's title, description, state, or priority. API key can be provided or uses agent's configured Linear connector.",
+        description="Update an existing Linear issue's title, description, state, or priority. API key can be provided or uses fiche's configured Linear connector.",
     ),
     StructuredTool.from_function(
         func=linear_add_comment,
         name="linear_add_comment",
-        description="Add a comment to an existing Linear issue. API key can be provided or uses agent's configured Linear connector.",
+        description="Add a comment to an existing Linear issue. API key can be provided or uses fiche's configured Linear connector.",
     ),
     StructuredTool.from_function(
         func=linear_list_teams,
         name="linear_list_teams",
-        description="List all teams accessible to the API key. Use this to find team IDs for creating issues. API key can be provided or uses agent's configured Linear connector.",
+        description="List all teams accessible to the API key. Use this to find team IDs for creating issues. API key can be provided or uses fiche's configured Linear connector.",
     ),
 ]

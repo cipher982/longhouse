@@ -34,7 +34,7 @@ test.describe('Prod Live Voice SSE', () => {
     const messageId = `live-voice-${Date.now()}`;
 
     // Use TTS to generate real speech audio for reliable STT in prod.
-    const ttsResponse = await request.post('/api/jarvis/voice/tts', {
+    const ttsResponse = await request.post('/api/oikos/voice/tts', {
       data: {
         text: 'Hello from the live voice test.',
         message_id: messageId,
@@ -50,7 +50,7 @@ test.describe('Prod Live Voice SSE', () => {
     const ttsContentType = ttsData.tts?.content_type || 'audio/mpeg';
     const audioBuffer = Buffer.from(ttsData.tts.audio_base64, 'base64');
 
-    const transcribeResponse = await request.post('/api/jarvis/voice/transcribe', {
+    const transcribeResponse = await request.post('/api/oikos/voice/transcribe', {
       multipart: {
         audio: {
           name: 'sample.mp3',
@@ -67,7 +67,7 @@ test.describe('Prod Live Voice SSE', () => {
     expect(transcribeData.message_id).toBe(messageId);
     expect(transcribeData.transcript?.length).toBeGreaterThan(0);
 
-    const chatResponse = await request.post('/api/jarvis/chat', {
+    const chatResponse = await request.post('/api/oikos/chat', {
       data: {
         message: transcribeData.transcript,
         message_id: messageId,
@@ -76,7 +76,7 @@ test.describe('Prod Live Voice SSE', () => {
 
     expect(chatResponse.ok()).toBeTruthy();
     const sseText = await chatResponse.text();
-    expect(sseText).toContain('supervisor_complete');
+    expect(sseText).toContain('oikos_complete');
     expect(sseText).toContain(messageId);
 
     // No extra TTS step needed here; we already validated TTS output above.

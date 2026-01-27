@@ -1,4 +1,4 @@
-import type { AgentSummary, AgentRun } from "../../services/api";
+import type { FicheSummary, Run } from "../../services/api";
 import { formatDateTimeShort } from "./formatters";
 
 export type SortKey = "name" | "status" | "created_at" | "last_run" | "next_run" | "success";
@@ -8,7 +8,7 @@ export type SortConfig = {
   ascending: boolean;
 };
 
-export type AgentRunsState = Record<number, AgentRun[]>;
+export type FicheRunsState = Record<number, Run[]>;
 
 const STATUS_ORDER: Record<string, number> = {
   running: 0,
@@ -50,10 +50,10 @@ export function persistSortConfig(config: SortConfig) {
   window.localStorage.setItem(STORAGE_KEY_ASC, config.ascending ? "1" : "0");
 }
 
-export function sortAgents(agents: AgentSummary[], runsByAgent: AgentRunsState, sortConfig: SortConfig): AgentSummary[] {
-  const sorted = [...agents];
+export function sortFiches(fiches: FicheSummary[], runsByFiche: FicheRunsState, sortConfig: SortConfig): FicheSummary[] {
+  const sorted = [...fiches];
   sorted.sort((left, right) => {
-    const comparison = compareAgents(left, right, runsByAgent, sortConfig.key);
+    const comparison = compareFiches(left, right, runsByFiche, sortConfig.key);
     if (comparison !== 0) {
       return sortConfig.ascending ? comparison : -comparison;
     }
@@ -63,10 +63,10 @@ export function sortAgents(agents: AgentSummary[], runsByAgent: AgentRunsState, 
   return sorted;
 }
 
-function compareAgents(
-  left: AgentSummary,
-  right: AgentSummary,
-  runsByAgent: AgentRunsState,
+function compareFiches(
+  left: FicheSummary,
+  right: FicheSummary,
+  runsByFiche: FicheRunsState,
   sortKey: SortKey
 ): number {
   switch (sortKey) {
@@ -87,8 +87,8 @@ function compareAgents(
         formatDateTimeShort(right.next_run_at ?? null)
       );
     case "success": {
-      const leftStats = computeSuccessStats(runsByAgent[left.id]);
-      const rightStats = computeSuccessStats(runsByAgent[right.id]);
+      const leftStats = computeRunSuccessStats(runsByFiche[left.id]);
+      const rightStats = computeRunSuccessStats(runsByFiche[right.id]);
       if (leftStats.rate === rightStats.rate) {
         return leftStats.count - rightStats.count;
       }
@@ -99,7 +99,7 @@ function compareAgents(
   }
 }
 
-export function computeSuccessStats(runs?: AgentRun[]): { display: string; rate: number; count: number } {
+export function computeRunSuccessStats(runs?: Run[]): { display: string; rate: number; count: number } {
   if (!runs || runs.length === 0) {
     return { display: "0.0% (0)", rate: 0, count: 0 };
   }
@@ -113,7 +113,7 @@ export function computeSuccessStats(runs?: AgentRun[]): { display: string; rate:
   };
 }
 
-export function determineLastRunIndicator(runs?: AgentRun[]): boolean | null {
+export function determineLastRunIndicator(runs?: Run[]): boolean | null {
   if (!runs || runs.length === 0) {
     return null;
   }

@@ -5,27 +5,27 @@
 
 console.log('🔧 Manual Canvas Data Persistence Test');
 
-// Step 1: Simulate creating agents
-async function createTestAgent() {
-    const response = await fetch('http://localhost:8001/api/agents', {
+// Step 1: Simulate creating fiches
+async function createTestFiche() {
+    const response = await fetch('http://localhost:8001/api/fiches', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${localStorage.getItem('jwt')}`
         },
         body: JSON.stringify({
-            name: 'Test Agent',
-            system_instructions: 'You are a test agent',
+            name: 'Test Fiche',
+            system_instructions: 'You are a test fiche',
             task_instructions: 'Perform test tasks'
         })
     });
 
     if (response.ok) {
-        const agent = await response.json();
-        console.log('✅ Created test agent:', agent);
-        return agent;
+        const fiche = await response.json();
+        console.log('✅ Created test fiche:', fiche);
+        return fiche;
     } else {
-        console.error('❌ Failed to create agent:', response.statusText);
+        console.error('❌ Failed to create fiche:', response.statusText);
         return null;
     }
 }
@@ -36,14 +36,14 @@ async function testCanvasDataUpdate() {
         nodes: [
             {
                 node_id: 'test-node-1',
-                agent_id: 1,
+                fiche_id: 1,
                 x: 100,
                 y: 100,
                 width: 200,
                 height: 80,
                 color: '#2ecc71',
-                text: 'Test Agent',
-                node_type: 'AgentIdentity',
+                text: 'Test Fiche',
+                node_type: 'FicheIdentity',
                 parent_id: null,
                 is_selected: false,
                 is_dragging: false,

@@ -35,7 +35,7 @@ async def run_test():
     """Run the lazy loading validation test."""
     from zerg.tools import get_registry
     from zerg.tools.catalog import CORE_TOOLS, build_catalog
-    from zerg.services.supervisor_react_engine import run_supervisor_loop
+    from zerg.services.oikos_react_engine import run_oikos_loop
 
     print("=" * 70)
     print("LAZY LOADING VALIDATION TEST")
@@ -69,14 +69,14 @@ async def run_test():
     all_tools = list(registry.all_tools())
     print(f"\nTotal tools in registry: {len(all_tools)}")
 
-    # Create minimal agent mock with explicit attributes
+    # Create minimal fiche mock with explicit attributes
     class AgentMock:
         model = "gpt-5-mini"
         system_prompt = "You are a helpful assistant."
         reasoning_effort = None
         context_stuffing_strategy = None
 
-    agent_mock = AgentMock()
+    fiche_mock = AgentMock()
 
     # Create test messages with system prompt (required for catalog injection)
     messages = [
@@ -85,16 +85,16 @@ async def run_test():
     ]
 
     print("\n" + "-" * 70)
-    print("TEST: Running supervisor with lazy_loading=True")
+    print("TEST: Running oikos with lazy_loading=True")
     print("-" * 70)
     print(f"User message: '{messages[0].content}'")
     print(f"Expected: LLM should need 'get_current_location' (non-core tool)")
     print()
 
     try:
-        result = await run_supervisor_loop(
+        result = await run_oikos_loop(
             messages=messages,
-            agent_row=agent_mock,
+            fiche_row=fiche_mock,
             tools=all_tools,
             lazy_loading=True,  # KEY: Enable lazy loading
             run_id=None,

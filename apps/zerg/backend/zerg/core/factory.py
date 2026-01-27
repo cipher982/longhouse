@@ -19,7 +19,7 @@ from zerg.core.interfaces import AuthProvider
 from zerg.core.interfaces import Database
 from zerg.core.interfaces import EventBus
 from zerg.core.interfaces import ModelRegistry
-from zerg.core.services import AgentService
+from zerg.core.services import FicheService
 from zerg.core.services import ThreadService
 from zerg.core.services import UserService
 
@@ -55,14 +55,14 @@ def get_event_bus() -> EventBus:
     return get_app_config().create_event_bus()
 
 
-def get_agent_service(
+def get_fiche_service(
     database: Database = Depends(get_database),
     auth_provider: AuthProvider = Depends(get_auth_provider),
     model_registry: ModelRegistry = Depends(get_model_registry),
     event_bus: EventBus = Depends(get_event_bus),
-) -> AgentService:
-    """Dependency provider for AgentService."""
-    return AgentService(database, auth_provider, model_registry, event_bus)
+) -> FicheService:
+    """Dependency provider for FicheService."""
+    return FicheService(database, auth_provider, model_registry, event_bus)
 
 
 def get_thread_service(
@@ -89,7 +89,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Cleanup any existing test databases if in test mode
     config = get_app_config()
-    if hasattr(config, "worker_id"):
+    if hasattr(config, "commis_id"):
         # Test mode - ensure clean database
         database = config.create_database()
         if hasattr(database, "cleanup"):
@@ -111,8 +111,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
     # Create FastAPI app
     app = FastAPI(
-        title="Agent Platform API",
-        description="AI Agent Platform with clean architecture",
+        title="Fiche Platform API",
+        description="AI Fiche Platform with clean architecture",
         version="2.0.0",
         lifespan=lifespan,
     )
@@ -127,11 +127,11 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     )
 
     # Import and include routers
-    from zerg.core.routers import agent_router
+    from zerg.core.routers import fiche_router
     from zerg.core.routers import thread_router
     from zerg.core.routers import user_router
 
-    app.include_router(agent_router, prefix="/api/agents", tags=["agents"])
+    app.include_router(fiche_router, prefix="/api/fiches", tags=["fiches"])
     app.include_router(thread_router, prefix="/api/threads", tags=["threads"])
     app.include_router(user_router, prefix="/api/users", tags=["users"])
 
@@ -155,11 +155,11 @@ def create_production_app() -> FastAPI:
     return create_app(ProductionConfig.from_env())
 
 
-def create_test_app(worker_id: str) -> FastAPI:
-    """Create test application for specific worker."""
+def create_test_app(commis_id: str) -> FastAPI:
+    """Create test application for specific commis."""
     from zerg.core.config import TestConfig
 
-    return create_app(TestConfig.for_worker(worker_id))
+    return create_app(TestConfig.for_commis(commis_id))
 
 
 def create_development_app() -> FastAPI:

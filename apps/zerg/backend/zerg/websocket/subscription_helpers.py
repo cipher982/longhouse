@@ -93,7 +93,7 @@ async def subscribe_and_send_state(
         topic: Topic to subscribe to
         message_id: Message ID for correlation
         initial_state: Pydantic model with initial state
-        message_type: Message type for initial state (e.g., "agent_state")
+        message_type: Message type for initial state (e.g., "fiche_state")
         send_to_client_func: Function to send message
     """
     # Subscribe

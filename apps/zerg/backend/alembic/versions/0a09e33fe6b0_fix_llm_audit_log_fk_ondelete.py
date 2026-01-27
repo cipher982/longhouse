@@ -27,11 +27,11 @@ def upgrade() -> None:
 
     # Recreate with ON DELETE SET NULL
     op.create_foreign_key(
-        'llm_audit_log_run_id_fkey', 'llm_audit_log', 'agent_runs',
+        'llm_audit_log_run_id_fkey', 'llm_audit_log', 'runs',
         ['run_id'], ['id'], ondelete='SET NULL'
     )
     op.create_foreign_key(
-        'llm_audit_log_thread_id_fkey', 'llm_audit_log', 'agent_threads',
+        'llm_audit_log_thread_id_fkey', 'llm_audit_log', 'threads',
         ['thread_id'], ['id'], ondelete='SET NULL'
     )
     op.create_foreign_key(
@@ -47,11 +47,11 @@ def downgrade() -> None:
     op.drop_constraint('llm_audit_log_owner_id_fkey', 'llm_audit_log', type_='foreignkey')
 
     op.create_foreign_key(
-        'llm_audit_log_run_id_fkey', 'llm_audit_log', 'agent_runs',
+        'llm_audit_log_run_id_fkey', 'llm_audit_log', 'runs',
         ['run_id'], ['id']
     )
     op.create_foreign_key(
-        'llm_audit_log_thread_id_fkey', 'llm_audit_log', 'agent_threads',
+        'llm_audit_log_thread_id_fkey', 'llm_audit_log', 'threads',
         ['thread_id'], ['id']
     )
     op.create_foreign_key(

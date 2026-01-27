@@ -102,10 +102,10 @@ docker compose -f docker/docker-compose.prod.yml build
 ### 3. Check What's In Git
 ```bash
 # Verify files exist in repo
-git ls-files apps/zerg/frontend-web/src/jarvis/data/
+git ls-files apps/zerg/frontend-web/src/oikos/data/
 
 # Check .gitignore isn't excluding source
-git check-ignore -v apps/zerg/frontend-web/src/jarvis/data/
+git check-ignore -v apps/zerg/frontend-web/src/oikos/data/
 ```
 
 ### 4. Test On Target Server
@@ -147,7 +147,7 @@ Upgrade to CPX31+ (8GB) when:
 
 ## Root Cause This Session
 
-**The bug:** `.gitignore` had `data/` which excluded `apps/zerg/frontend-web/src/jarvis/data/*.ts`
+**The bug:** `.gitignore` had `data/` which excluded `apps/zerg/frontend-web/src/oikos/data/*.ts`
 
 **Why it was hard to find:**
 1. Files existed locally (Docker cache worked)

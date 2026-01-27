@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from zerg.events.event_bus import EventType
 from zerg.events.event_bus import event_bus
-from zerg.models.agent_run_event import AgentRunEvent
+from zerg.models.run_event import RunEvent
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ async def append_run_event(
 
     Args:
         run_id: Run identifier
-        event_type: Event type (supervisor_started, worker_complete, etc.)
+        event_type: Event type (oikos_started, commis_complete, etc.)
         payload: Event data (must be JSON-serializable)
 
     Returns:
@@ -77,7 +77,7 @@ async def append_run_event(
     # 2. Insert into database using a SHORT-LIVED session
     event_id: int
     with db_session() as db:
-        event = AgentRunEvent(
+        event = RunEvent(
             run_id=run_id,
             event_type=event_type,
             payload=json_payload,
@@ -95,7 +95,7 @@ async def append_run_event(
     except ValueError:
         logger.warning(f"Event type {event_type} not in EventType enum, skipping event_bus publish")
 
-    if event_type != "supervisor_token":
+    if event_type != "oikos_token":
         logger.debug(f"Emitted {event_type} (id={event_id}) for run {run_id}")
 
     return event_id
@@ -107,15 +107,12 @@ async def emit_run_event(
     event_type: str,
     payload: Dict[str, Any],
 ) -> int:
-    """Emit a run event with durable storage (legacy - uses provided session).
-
-    DEPRECATED: Prefer append_run_event() which manages its own DB session.
-    This function is kept for backwards compatibility during migration.
+    """Emit a run event with durable storage using the provided session.
 
     Args:
         db: Database session (DEPRECATED - will be removed)
         run_id: Run identifier
-        event_type: Event type (supervisor_started, worker_complete, etc.)
+        event_type: Event type (oikos_started, commis_complete, etc.)
         payload: Event data (must be JSON-serializable)
 
     Returns:
@@ -135,7 +132,7 @@ async def emit_run_event(
         raise ValueError(f"Invalid event payload for {event_type}: {e}") from e
 
     # 2. Insert into database (id auto-increments, no sequence needed)
-    event = AgentRunEvent(
+    event = RunEvent(
         run_id=run_id,
         event_type=event_type,
         payload=json_payload,
@@ -156,7 +153,7 @@ async def emit_run_event(
         logger.warning(f"Event type {event_type} not in EventType enum, skipping event_bus publish")
 
     # Only log non-token events to avoid spam
-    if event_type != "supervisor_token":
+    if event_type != "oikos_token":
         logger.debug(f"Emitted {event_type} (id={event.id}) for run {run_id}")
 
     return event.id
@@ -171,27 +168,27 @@ class EventStore:
         run_id: int,
         after_id: int = 0,
         include_tokens: bool = True,
-    ) -> List[AgentRunEvent]:
+    ) -> List[RunEvent]:
         """Get events for a run after a specific event ID.
 
         Args:
             db: Database session
-            run_id: Run identifier
+        run_id: Run identifier
             after_id: Return events with ID > this value (0 = all events)
-            include_tokens: Whether to include SUPERVISOR_TOKEN events
+            include_tokens: Whether to include OIKOS_TOKEN events
 
         Returns:
             List of events ordered by id
         """
-        query = db.query(AgentRunEvent).filter(AgentRunEvent.run_id == run_id)
+        query = db.query(RunEvent).filter(RunEvent.run_id == run_id)
 
         if after_id > 0:
-            query = query.filter(AgentRunEvent.id > after_id)
+            query = query.filter(RunEvent.id > after_id)
 
         if not include_tokens:
-            query = query.filter(AgentRunEvent.event_type != "supervisor_token")
+            query = query.filter(RunEvent.event_type != "oikos_token")
 
-        return query.order_by(AgentRunEvent.id).all()
+        return query.order_by(RunEvent.id).all()
 
     @staticmethod
     def get_latest_event_id(db: Session, run_id: int) -> Optional[int]:
@@ -204,7 +201,7 @@ class EventStore:
         Returns:
             Latest event ID or None if no events exist
         """
-        result = db.query(func.max(AgentRunEvent.id)).filter(AgentRunEvent.run_id == run_id).scalar()
+        result = db.query(func.max(RunEvent.id)).filter(RunEvent.run_id == run_id).scalar()
 
         return result
 
@@ -219,7 +216,7 @@ class EventStore:
         Returns:
             Number of events deleted
         """
-        count = db.query(AgentRunEvent).filter(AgentRunEvent.run_id == run_id).delete()
+        count = db.query(RunEvent).filter(RunEvent.run_id == run_id).delete()
         db.commit()
         return count
 
@@ -235,9 +232,9 @@ class EventStore:
         Returns:
             Number of events matching criteria
         """
-        query = db.query(func.count(AgentRunEvent.id)).filter(AgentRunEvent.run_id == run_id)
+        query = db.query(func.count(RunEvent.id)).filter(RunEvent.run_id == run_id)
 
         if event_type:
-            query = query.filter(AgentRunEvent.event_type == event_type)
+            query = query.filter(RunEvent.event_type == event_type)
 
         return query.scalar() or 0

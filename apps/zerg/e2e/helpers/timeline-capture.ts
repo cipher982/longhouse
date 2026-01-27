@@ -1,7 +1,7 @@
 /**
  * TimelineCapture - Helper for capturing timeline events during E2E tests
  *
- * Intercepts SSE events from Jarvis chat to build timeline data structure
+ * Intercepts SSE events from Oikos chat to build timeline data structure
  * similar to frontend TimelineLogger. Exports metrics to JSON for analysis.
  *
  * Usage:
@@ -43,8 +43,8 @@ interface TimelineMetrics {
   timeline: TimelineData;
   summary: {
     totalDurationMs: number;
-    supervisorThinkingMs?: number;
-    workerExecutionMs?: number;
+    oikosThinkingMs?: number;
+    commisExecutionMs?: number;
     toolExecutionMs?: number;
   };
 }
@@ -240,22 +240,22 @@ export class TimelineCapture {
    */
   private calculateSummary(timeline: TimelineData): {
     totalDurationMs: number;
-    supervisorThinkingMs?: number;
-    workerExecutionMs?: number;
+    oikosThinkingMs?: number;
+    commisExecutionMs?: number;
     toolExecutionMs?: number;
   } {
     const { phases, totalDurationMs } = timeline;
 
-    // Calculate supervisor thinking time (supervisor_started → worker_spawned)
-    let supervisorThinkingMs: number | undefined = undefined;
-    if (phases.supervisor_started && phases.worker_spawned) {
-      supervisorThinkingMs = phases.worker_spawned.offsetMs - phases.supervisor_started.offsetMs;
+    // Calculate oikos thinking time (oikos_started → commis_spawned)
+    let oikosThinkingMs: number | undefined = undefined;
+    if (phases.oikos_started && phases.commis_spawned) {
+      oikosThinkingMs = phases.commis_spawned.offsetMs - phases.oikos_started.offsetMs;
     }
 
-    // Calculate worker execution time (worker_spawned → worker_complete)
-    let workerExecutionMs: number | undefined = undefined;
-    if (phases.worker_spawned && phases.worker_complete) {
-      workerExecutionMs = phases.worker_complete.offsetMs - phases.worker_spawned.offsetMs;
+    // Calculate commis execution time (commis_spawned → commis_complete)
+    let commisExecutionMs: number | undefined = undefined;
+    if (phases.commis_spawned && phases.commis_complete) {
+      commisExecutionMs = phases.commis_complete.offsetMs - phases.commis_spawned.offsetMs;
     }
 
     // Calculate tool execution time (first tool_started → last tool_completed/tool_failed)
@@ -269,8 +269,8 @@ export class TimelineCapture {
 
     return {
       totalDurationMs,
-      supervisorThinkingMs,
-      workerExecutionMs,
+      oikosThinkingMs,
+      commisExecutionMs,
       toolExecutionMs,
     };
   }

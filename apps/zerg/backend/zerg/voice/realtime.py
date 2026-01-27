@@ -1,9 +1,9 @@
 """OpenAI Realtime API client for session token minting.
 
 This module provides direct access to OpenAI's Realtime API for minting
-ephemeral session tokens used by the Jarvis voice interface.
+ephemeral session tokens used by the Oikos voice interface.
 
-Replaces the jarvis-server proxy layer.
+Replaces the oikos-server proxy layer.
 """
 
 from __future__ import annotations
@@ -46,14 +46,14 @@ def _get_models_config() -> dict[str, Any]:
 def get_realtime_model() -> str:
     """Get the configured realtime model.
 
-    Can be overridden via JARVIS_REALTIME_MODEL env var.
+    Can be overridden via OIKOS_REALTIME_MODEL env var.
     """
-    override = os.getenv("JARVIS_REALTIME_MODEL")
+    override = os.getenv("OIKOS_REALTIME_MODEL")
     if override:
         return override
 
     # Check for mini model preference
-    if os.getenv("JARVIS_USE_MINI_MODEL") in ("1", "true", "yes"):
+    if os.getenv("OIKOS_USE_MINI_MODEL") in ("1", "true", "yes"):
         config = _get_models_config()
         return config.get("realtime", {}).get("tiers", {}).get("TIER_2", "gpt-4o-mini-realtime-preview")
 
@@ -64,9 +64,9 @@ def get_realtime_model() -> str:
 def get_default_voice() -> str:
     """Get the configured default voice.
 
-    Can be overridden via JARVIS_VOICE env var.
+    Can be overridden via OIKOS_VOICE env var.
     """
-    override = os.getenv("JARVIS_VOICE")
+    override = os.getenv("OIKOS_VOICE")
     if override:
         return override
 

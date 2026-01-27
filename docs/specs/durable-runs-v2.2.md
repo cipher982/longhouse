@@ -222,19 +222,19 @@ Streams are **views** of durable runs, not the runs themselves.
 
 ```
 # Start run (returns run_id)
-POST /api/jarvis/chat
+POST /api/oikos/chat
 → {run_id: 42, status: "running"}
 
 # Attach to stream (can connect/reconnect anytime)
-GET /api/jarvis/runs/42/stream
+GET /api/oikos/runs/42/stream
 → SSE stream (replays recent events if reconnecting)
 
 # Check status without streaming
-GET /api/jarvis/runs/42
+GET /api/oikos/runs/42
 → {status: "completed", result: "...", duration_ms: 12345}
 
 # List active runs
-GET /api/jarvis/runs?status=running
+GET /api/oikos/runs?status=running
 → [{run_id: 42, task: "check disk...", elapsed_ms: 45000}]
 ```
 
@@ -312,7 +312,7 @@ except asyncio.TimeoutError:
         {
             "run_id": run.id,
             "message": f"Still working... I'll notify you when complete.",
-            "attach_url": f"/api/jarvis/runs/{run.id}/stream",
+            "attach_url": f"/api/oikos/runs/{run.id}/stream",
         }
     )
 
@@ -341,7 +341,7 @@ class RunStatus(str, Enum):
 
 #### Task 1.3: Handle deferred event in frontend
 
-**File**: `apps/zerg/frontend-web/src/jarvis/lib/supervisor-chat-controller.ts`
+**File**: `apps/zerg/frontend-web/src/oikos/lib/supervisor-chat-controller.ts`
 
 ```typescript
 case "supervisor_deferred":
@@ -353,7 +353,7 @@ case "supervisor_deferred":
 
 #### Task 1.4: Increase default timeout
 
-**File**: `apps/zerg/backend/zerg/routers/jarvis_chat.py`
+**File**: `apps/zerg/backend/zerg/routers/oikos_chat.py`
 
 ```python
 # Line ~91: Change timeout from 120 to 600 (10 min safety net)
@@ -386,7 +386,7 @@ if ctx.polls_without_progress >= ROUNDABOUT_NO_PROGRESS_POLLS:
 
 #### Task 2.2: Fix frontend watchdog timeout
 
-**File**: `apps/zerg/frontend-web/src/jarvis/lib/supervisor-chat-controller.ts`
+**File**: `apps/zerg/frontend-web/src/oikos/lib/supervisor-chat-controller.ts`
 
 The frontend has a 60s watchdog (`WATCHDOG_TIMEOUT_MS = 60000`) that calls `cancel()` and aborts the stream. This is another "timeout kills work" bug.
 
@@ -484,30 +484,30 @@ def handle_heartbeat(payload):
 
 **Goal**: Allow clients to check the status and result of a deferred run.
 
-Implemented via `apps/zerg/backend/zerg/routers/jarvis_runs.py`:
-- `GET /api/jarvis/runs/{run_id}`: Returns status, duration, and final result if complete.
-- `GET /api/jarvis/runs/{run_id}/stream`: Re-attaches to the SSE stream of an in-progress run.
+Implemented via `apps/zerg/backend/zerg/routers/oikos_runs.py`:
+- `GET /api/oikos/runs/{run_id}`: Returns status, duration, and final result if complete.
+- `GET /api/oikos/runs/{run_id}/stream`: Re-attaches to the SSE stream of an in-progress run.
 
 ### Phase 5: SSE Re-attach & Decoupling (Complete)
 
 **Goal**: Streams are views, runs are durable.
 
-Implemented in `apps/zerg/backend/zerg/routers/jarvis_chat.py`:
+Implemented in `apps/zerg/backend/zerg/routers/oikos_chat.py`:
 - SSE disconnect (`asyncio.CancelledError`) no longer cancels the supervisor task.
 - Background task is registered in a central registry to prevent orphan tracking issues.
 
 #### Task 5.1: Add run status endpoint
 
-**File**: `apps/zerg/backend/zerg/routers/jarvis_runs.py` (new file)
+**File**: `apps/zerg/backend/zerg/routers/oikos_runs.py` (new file)
 
 ```python
-router = APIRouter(prefix="/runs", tags=["jarvis"])
+router = APIRouter(prefix="/runs", tags=["oikos"])
 
 @router.get("/{run_id}")
 async def get_run_status(
     run_id: int,
     db: Session = Depends(get_db),
-    current_user = Depends(get_current_jarvis_user),
+    current_user = Depends(get_current_oikos_user),
 ):
     """Get current status of a run."""
     run = db.query(AgentRun).filter(
@@ -532,7 +532,7 @@ async def get_run_status(
 async def attach_to_run_stream(
     run_id: int,
     db: Session = Depends(get_db),
-    current_user = Depends(get_current_jarvis_user),
+    current_user = Depends(get_current_oikos_user),
 ):
     """Attach to an existing run's event stream.
 
@@ -563,7 +563,7 @@ async def attach_to_run_stream(
 
 #### Task 5.2: Decouple run from SSE connection
 
-**File**: `apps/zerg/backend/zerg/routers/jarvis_chat.py`
+**File**: `apps/zerg/backend/zerg/routers/oikos_chat.py`
 
 ```python
 # Current: run is cancelled if SSE disconnects
@@ -587,7 +587,7 @@ async def _chat_stream_generator(...):
 
 #### Task 6.1: Handle deferred state
 
-**File**: `apps/zerg/frontend-web/src/jarvis/lib/supervisor-chat-controller.ts`
+**File**: `apps/zerg/frontend-web/src/oikos/lib/supervisor-chat-controller.ts`
 
 ```typescript
 private handleSSEEvent(event: SSEEvent) {
@@ -619,8 +619,8 @@ private handleSSEEvent(event: SSEEvent) {
 - `attach_url` is plumbed through the controller/event payload for future UI work.
 
 **Files**:
-- `apps/zerg/frontend-web/src/jarvis/lib/supervisor-chat-controller.ts`
-- `apps/zerg/frontend-web/src/jarvis/lib/worker-progress-store.ts`
+- `apps/zerg/frontend-web/src/oikos/lib/supervisor-chat-controller.ts`
+- `apps/zerg/frontend-web/src/oikos/lib/worker-progress-store.ts`
 
 ---
 

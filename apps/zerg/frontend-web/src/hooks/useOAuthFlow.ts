@@ -1,6 +1,6 @@
 /**
  * Custom hook for handling OAuth popup flow.
- * Used by both agent-level and account-level connector pages.
+ * Used by both fiche-level and account-level connector pages.
  */
 
 import { useState, useEffect, useCallback } from "react";

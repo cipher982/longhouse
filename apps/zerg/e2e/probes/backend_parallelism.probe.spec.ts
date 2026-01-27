@@ -3,8 +3,8 @@ import { test, expect } from "../tests/fixtures";
 const testCount = Number.parseInt(process.env.PROBE_TEST_COUNT ?? "64", 10);
 const holdMs = Number.parseInt(process.env.PROBE_HOLD_MS ?? "250", 10);
 
-// Module-scope state is per-Playwright-worker-process.
-let firstAgentIdSeen: number | null = null;
+// Module-scope state is per-Playwright-commis-process.
+let firstFicheIdSeen: number | null = null;
 
 test.describe("Backend Parallelism Probe", () => {
   test("probe config sanity", async ({ request }) => {
@@ -15,10 +15,10 @@ test.describe("Backend Parallelism Probe", () => {
   });
 
   for (let i = 0; i < testCount; i++) {
-    test(`create agent ${i}`, async ({ request }, testInfo) => {
-      const res = await request.post("/api/agents", {
+    test(`create fiche ${i}`, async ({ request }, testInfo) => {
+      const res = await request.post("/api/fiches", {
         data: {
-          name: `Probe Agent ${testInfo.workerIndex}-${i}`,
+          name: `Probe Fiche ${testInfo.commisIndex}-${i}`,
           system_instructions: "probe",
           task_instructions: "probe",
           model: "gpt-5-nano",
@@ -26,9 +26,9 @@ test.describe("Backend Parallelism Probe", () => {
       });
       expect(res.status()).toBe(201);
       const created = await res.json();
-      if (firstAgentIdSeen === null) {
-        firstAgentIdSeen = created.id;
-        // With per-worker SQLite isolation, each Playwright worker's first created agent should be ID=1.
+      if (firstFicheIdSeen === null) {
+        firstFicheIdSeen = created.id;
+        // With per-commis SQLite isolation, each Playwright commis's first created fiche should be ID=1.
         expect(created.id).toBe(1);
       }
       if (holdMs > 0) {

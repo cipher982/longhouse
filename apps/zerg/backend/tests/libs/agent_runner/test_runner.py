@@ -186,7 +186,7 @@ class TestRunner:
                 build_env=MagicMock(return_value={}),
             )
             # _run_subprocess returns (stdout, stderr, return_code, timed_out)
-            mock_subprocess.return_value = ("Agent output here", "", 0, False)
+            mock_subprocess.return_value = ("Fiche output here", "", 0, False)
 
             result = await run(
                 prompt="test",
@@ -195,7 +195,7 @@ class TestRunner:
             )
 
             assert result.ok is True
-            assert result.output == "Agent output here"
+            assert result.output == "Fiche output here"
             assert result.exit_code == 0
             assert result.status == "ok"
 

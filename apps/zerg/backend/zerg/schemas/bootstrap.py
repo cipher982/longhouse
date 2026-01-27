@@ -34,7 +34,7 @@ class ContextSeedRequest(BaseModel):
     display_name: str | None = Field(None, description="User's preferred display name")
     role: str | None = Field(None, description="User's job role or title")
     location: str | None = Field(None, description="User's primary location")
-    custom_instructions: str | None = Field(None, description="Custom instructions for agent behavior")
+    custom_instructions: str | None = Field(None, description="Custom instructions for fiche behavior")
 
     class Config:
         extra = "allow"  # Allow additional fields for flexibility

@@ -1,9 +1,9 @@
-"""Static protocol definitions for connector-aware agents.
+"""Static protocol definitions for connector-aware fiches.
 
-These protocols are injected into the agent system prompt (static, cacheable)
-to define how the agent should interpret dynamic connector status injected per-turn.
+These protocols are injected into the fiche system prompt (static, cacheable)
+to define how the fiche should interpret dynamic connector status injected per-turn.
 
-Per the connector-aware agents PRD, these protocols are:
+Per the connector-aware fiches PRD, these protocols are:
 - STATIC: Part of the system prompt, eligible for prompt caching
 - RULES: Define how to interpret dynamic data
 - SEPARATE from the dynamic <connector_status> which is injected per-turn
@@ -89,7 +89,7 @@ IMPORTANT: Do NOT add timestamps to your responses. Just respond naturally.
 def get_connector_protocols() -> str:
     """Return all connector protocols as a single string.
 
-    These protocols define how the agent should interpret the dynamic
+    These protocols define how the fiche should interpret the dynamic
     connector status that is injected per-turn. The protocols themselves
     are static and should be included in the system prompt for caching.
 

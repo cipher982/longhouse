@@ -7,7 +7,7 @@
 ## Goals
 
 - Public marketing remains accessible without login.
-- All “app” surfaces (Dashboard + Jarvis chat + agent threads) require authentication **at the server layer** (nginx).
+- All “app” surfaces (Dashboard + Oikos chat + agent threads) require authentication **at the server layer** (nginx).
 - API remains protected with JWT validation (**already true**), but migrates browsers to **cookie-based auth** (no localStorage tokens).
 - Auth state is represented by a **secure, server-set cookie** so nginx can enforce access.
 
@@ -51,7 +51,7 @@
 
 - `GET /dashboard` and any SPA deep-links under it
 - `GET /agent/*` (thread/chat UI routes)
-- `GET /chat/*` (Jarvis PWA)
+- `GET /chat/*` (Oikos PWA)
 
 **Behavior when unauthenticated**:
 
@@ -217,7 +217,7 @@ If you need a transition period:
 
 ---
 
-## Jarvis (PWA) Requirements
+## Oikos (PWA) Requirements
 
 ### Route gating
 
@@ -225,10 +225,10 @@ If you need a transition period:
 
 ### Auth mechanism
 
-Jarvis web must stop depending on `localStorage['zerg_jwt']`.
+Oikos web must stop depending on `localStorage['zerg_jwt']`.
 
-- API calls to `/api/jarvis/*` and other protected endpoints must work via cookie auth.
-- If any Jarvis components currently add `Authorization: Bearer <localStorage token>`, update to cookie-based auth.
+- API calls to `/api/oikos/*` and other protected endpoints must work via cookie auth.
+- If any Oikos components currently add `Authorization: Bearer <localStorage token>`, update to cookie-based auth.
 
 ---
 
@@ -301,11 +301,11 @@ Document which approach is used and keep production strictly `Secure`.
 - [ ] Update WebSocket client to connect without token query param (cookie handshake).
 - [ ] Update/adjust unit tests that mock `zerg_jwt` in localStorage.
 
-### E) Jarvis: remove localStorage JWT dependency
+### E) Oikos: remove localStorage JWT dependency
 
-- [ ] Update Jarvis web client code paths that read `localStorage['zerg_jwt']`.
-- [ ] Ensure Jarvis API calls work via cookie auth.
-- [ ] Remove/adjust Jarvis messaging/tooling paths that attach bearer from localStorage.
+- [ ] Update Oikos web client code paths that read `localStorage['zerg_jwt']`.
+- [ ] Ensure Oikos API calls work via cookie auth.
+- [ ] Remove/adjust Oikos messaging/tooling paths that attach bearer from localStorage.
 
 ### F) Nginx: server-layer gating
 

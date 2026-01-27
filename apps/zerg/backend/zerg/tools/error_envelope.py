@@ -1,7 +1,7 @@
 """Standardized error envelope for tool responses.
 
 All tools should use these helpers to return consistent error/success responses
-that the agent can interpret using the <error_handling> protocol.
+that the fiche can interpret using the <error_handling> protocol.
 """
 
 from enum import Enum

@@ -145,7 +145,7 @@ def get_unprocessed_messages(db: Session, thread_id: int):
     # (`not ThreadMessage.processed`) evaluates the *truthiness* of the
     # attribute **eagerly** which yields a plain ``False`` value instead of a
     # SQL expression.  The resulting ``WHERE false`` clause caused the query
-    # to **always** return an empty result set so the AgentRunner never saw
+    # to **always** return an empty result set so the FicheRunner never saw
     # any *unprocessed* user messages – the UI therefore stayed silent after
     # every prompt.
     #

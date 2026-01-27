@@ -18,7 +18,7 @@ class TestFindMatchingScenario:
     """Test scenario matching logic."""
 
     def test_matches_disk_space_check(self):
-        scenario = find_matching_scenario("check disk space on cube", "supervisor")
+        scenario = find_matching_scenario("check disk space on cube", "oikos")
         assert scenario is not None
         assert scenario.get("evidence_keyword") == "45%"
 
@@ -29,70 +29,70 @@ class TestFindMatchingScenario:
             "show me storage on cube",
         ]
         for prompt in prompts:
-            scenario = find_matching_scenario(prompt, "supervisor")
+            scenario = find_matching_scenario(prompt, "oikos")
             assert scenario is not None, f"Failed to match: {prompt}"
 
     def test_matches_parallel_disk_space(self):
-        scenario = find_matching_scenario("check disk space on cube, clifford, and zerg", "supervisor")
+        scenario = find_matching_scenario("check disk space on cube, clifford, and zerg", "oikos")
         assert scenario is not None
-        assert scenario.get("name") == "disk_space_parallel_supervisor"
+        assert scenario.get("name") == "disk_space_parallel_oikos"
 
     def test_matches_parallel_disk_space_without_cube(self):
-        scenario = find_matching_scenario("check disk space on clifford and zerg", "supervisor")
+        scenario = find_matching_scenario("check disk space on clifford and zerg", "oikos")
         assert scenario is not None
-        assert scenario.get("name") == "disk_space_parallel_supervisor"
+        assert scenario.get("name") == "disk_space_parallel_oikos"
 
-    def test_worker_matches_disk_task(self):
+    def test_commis_matches_disk_task(self):
         scenario = find_matching_scenario(
-            "Check disk space on cube server using df -h command", "worker"
+            "Check disk space on cube server using df -h command", "commis"
         )
         assert scenario is not None
-        assert scenario.get("role") == "worker"
+        assert scenario.get("role") == "commis"
 
-    def test_supervisor_fallback(self):
-        scenario = find_matching_scenario("do something random", "supervisor")
+    def test_oikos_fallback(self):
+        scenario = find_matching_scenario("do something random", "oikos")
         assert scenario is not None
         # Should get the generic fallback
 
-    def test_no_match_for_worker_random(self):
-        scenario = find_matching_scenario("do something completely unrelated", "worker")
+    def test_no_match_for_commis_random(self):
+        scenario = find_matching_scenario("do something completely unrelated", "commis")
         assert scenario is None
 
 
 class TestDetectRoleFromMessages:
     """Test role detection logic."""
 
-    def test_short_system_prompt_is_worker(self):
+    def test_short_system_prompt_is_commis(self):
         messages = [
-            SystemMessage(content="You are a worker. Execute this task."),
+            SystemMessage(content="You are a commis. Execute this task."),
             HumanMessage(content="Check disk space on cube"),
         ]
-        assert detect_role_from_messages(messages) == "worker"
+        assert detect_role_from_messages(messages) == "commis"
 
-    def test_long_system_prompt_is_supervisor(self):
+    def test_long_system_prompt_is_oikos(self):
         messages = [
-            SystemMessage(content="You are Jarvis. " + "x" * 2000),  # Long prompt
+            SystemMessage(content="You are Oikos. " + "x" * 2000),  # Long prompt
             HumanMessage(content="Hello"),
         ]
-        assert detect_role_from_messages(messages) == "supervisor"
+        assert detect_role_from_messages(messages) == "oikos"
 
-    def test_spawn_worker_call_indicates_supervisor(self):
+    def test_spawn_commis_call_indicates_oikos(self):
         messages = [
             HumanMessage(content="Check disk"),
-            AIMessage(content="", tool_calls=[{"id": "call_123", "name": "spawn_worker", "args": {}}]),
+            AIMessage(content="", tool_calls=[{"id": "call_123", "name": "spawn_commis", "args": {}}]),
         ]
-        assert detect_role_from_messages(messages) == "supervisor"
+        assert detect_role_from_messages(messages) == "oikos"
 
 
 class TestScriptedChatLLM:
     """Test the ScriptedChatLLM class."""
 
-    def test_supervisor_emits_spawn_worker(self):
+    def test_oikos_emits_spawn_commis(self):
         llm = ScriptedChatLLM()
         llm = llm.bind_tools([])  # Bind empty tools
 
         messages = [
-            SystemMessage(content="You are Jarvis. " + "x" * 2000),
+            SystemMessage(content="You are Oikos. " + "x" * 2000),
             HumanMessage(content="check disk space on cube"),
         ]
 
@@ -101,14 +101,14 @@ class TestScriptedChatLLM:
 
         assert isinstance(ai_msg, AIMessage)
         assert ai_msg.tool_calls
-        assert ai_msg.tool_calls[0]["name"] == "spawn_worker"
+        assert ai_msg.tool_calls[0]["name"] == "spawn_commis"
 
-    def test_supervisor_emits_parallel_spawn_workers(self):
+    def test_oikos_emits_parallel_spawn_commis(self):
         llm = ScriptedChatLLM()
         llm = llm.bind_tools([])  # Bind empty tools
 
         messages = [
-            SystemMessage(content="You are Jarvis. " + "x" * 2000),
+            SystemMessage(content="You are Oikos. " + "x" * 2000),
             HumanMessage(content="check disk space on cube, clifford, and zerg in parallel"),
         ]
 
@@ -118,14 +118,14 @@ class TestScriptedChatLLM:
         assert isinstance(ai_msg, AIMessage)
         assert ai_msg.tool_calls
         assert len(ai_msg.tool_calls) == 3
-        assert all(call["name"] == "spawn_worker" for call in ai_msg.tool_calls)
+        assert all(call["name"] == "spawn_commis" for call in ai_msg.tool_calls)
 
-    def test_worker_emits_ssh_exec(self):
+    def test_commis_emits_ssh_exec(self):
         llm = ScriptedChatLLM()
         llm = llm.bind_tools([])
 
         messages = [
-            SystemMessage(content="Execute task."),  # Short = worker
+            SystemMessage(content="Execute task."),  # Short = commis
             HumanMessage(content="Check disk space on cube server using df -h command"),
         ]
 
@@ -140,12 +140,12 @@ class TestScriptedChatLLM:
         llm = ScriptedChatLLM()
         llm = llm.bind_tools([])
 
-        # Supervisor messages with tool result
+        # Oikos messages with tool result
         messages = [
-            SystemMessage(content="You are Jarvis. " + "x" * 2000),
+            SystemMessage(content="You are Oikos. " + "x" * 2000),
             HumanMessage(content="check disk space on cube"),
-            AIMessage(content="", tool_calls=[{"id": "call_123", "name": "spawn_worker", "args": {}}]),
-            ToolMessage(content="Worker completed. /dev/sda1 45%", tool_call_id="call_123"),
+            AIMessage(content="", tool_calls=[{"id": "call_123", "name": "spawn_commis", "args": {}}]),
+            ToolMessage(content="Commis completed. /dev/sda1 45%", tool_call_id="call_123"),
         ]
 
         result = llm._generate(messages)
@@ -160,10 +160,10 @@ class TestScriptedChatLLM:
         llm = llm.bind_tools([])
 
         messages = [
-            SystemMessage(content="You are Jarvis. " + "x" * 2000),
+            SystemMessage(content="You are Oikos. " + "x" * 2000),
             HumanMessage(content="check disk space on cube"),
-            AIMessage(content="", tool_calls=[{"id": "call_123", "name": "spawn_worker", "args": {}}]),
-            ToolMessage(content="Worker completed.", tool_call_id="call_123"),
+            AIMessage(content="", tool_calls=[{"id": "call_123", "name": "spawn_commis", "args": {}}]),
+            ToolMessage(content="Commis completed.", tool_call_id="call_123"),
         ]
 
         result = llm._generate(messages)
@@ -186,11 +186,11 @@ class TestGetScenarioEvidenceKeyword:
     """Test the evidence keyword helper function."""
 
     def test_returns_keyword_for_disk_check(self):
-        keyword = get_scenario_evidence_keyword("check disk space on cube", "supervisor")
+        keyword = get_scenario_evidence_keyword("check disk space on cube", "oikos")
         assert keyword == "45%"
 
     def test_returns_none_for_generic(self):
-        keyword = get_scenario_evidence_keyword("random request", "supervisor")
+        keyword = get_scenario_evidence_keyword("random request", "oikos")
         assert keyword is None
 
 
@@ -201,7 +201,7 @@ async def test_async_generate():
     llm = llm.bind_tools([])
 
     messages = [
-        SystemMessage(content="You are Jarvis. " + "x" * 2000),
+        SystemMessage(content="You are Oikos. " + "x" * 2000),
         HumanMessage(content="check disk space on cube"),
     ]
 
@@ -213,7 +213,7 @@ async def test_async_generate():
 
 
 class TestSequencedResponses:
-    """Test sequenced response functionality for supervisor replay simulation."""
+    """Test sequenced response functionality for oikos replay simulation."""
 
     def test_sequenced_response_on_first_call(self):
         """Test that sequenced response is returned on first matching call."""
@@ -224,7 +224,7 @@ class TestSequencedResponses:
                     "call_number": 0,
                     "response": AIMessage(
                         content="",
-                        tool_calls=[{"id": "seq-call-1", "name": "spawn_worker", "args": {"task": "Check disk space"}}],
+                        tool_calls=[{"id": "seq-call-1", "name": "spawn_commis", "args": {"task": "Check disk space"}}],
                     ),
                 },
             ]
@@ -246,7 +246,7 @@ class TestSequencedResponses:
                     "call_number": 0,
                     "response": AIMessage(
                         content="",
-                        tool_calls=[{"id": "call-first", "name": "spawn_worker", "args": {"task": "Check disk space"}}],
+                        tool_calls=[{"id": "call-first", "name": "spawn_commis", "args": {"task": "Check disk space"}}],
                     ),
                 },
                 {
@@ -254,7 +254,7 @@ class TestSequencedResponses:
                     "call_number": 1,
                     "response": AIMessage(
                         content="",
-                        tool_calls=[{"id": "call-second", "name": "spawn_worker", "args": {"task": "Check disk usage"}}],
+                        tool_calls=[{"id": "call-second", "name": "spawn_commis", "args": {"task": "Check disk usage"}}],
                     ),
                 },
             ]
