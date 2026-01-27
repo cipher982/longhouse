@@ -320,8 +320,8 @@ def _get_postgres_schema_session(commis_id: str) -> sessionmaker:
     engine = engine.execution_options(schema_translate_map={DB_SCHEMA: schema_name})
 
     # Create test user for foreign key constraints (E2E tests need a user for fiche creation)
-    # Use ON CONFLICT (email) to handle the unique email constraint - this is what typically
-    # fails in race conditions when multiple processes initialize the same schema
+    # Use ON CONFLICT DO NOTHING to handle any unique constraint (email or id) under
+    # concurrent initialization or dev user creation in the same schema.
     with engine.connect() as conn:
         conn.execute(text(f"SET search_path TO {schema_name}, public"))
         logger.debug("Commis %s (Postgres schema) ensuring test user exists...", commis_id)
@@ -331,7 +331,7 @@ def _get_postgres_schema_session(commis_id: str) -> sessionmaker:
                                   display_name, context, created_at, updated_at)
                 VALUES (1, 'test@example.com', 'ADMIN', true, 'dev', 'test-user-1',
                        'Test User', '{}', NOW(), NOW())
-                ON CONFLICT (email) DO NOTHING
+                ON CONFLICT DO NOTHING
             """)
         )
         # Advance the sequence past id=1 to avoid conflicts with auto-generated IDs
@@ -532,6 +532,10 @@ def initialize_database(engine: Engine = None) -> None:
     Args:
         engine: Optional engine to use, defaults to default_engine
     """
+    if os.getenv("TESTING") == "1" and os.getenv("E2E_USE_POSTGRES_SCHEMAS") == "1":
+        logger.info("Skipping initialize_database for E2E schema isolation")
+        return
+
     # Import all models to ensure they are registered with Base
     # We need to import the models explicitly to ensure they're registered
     from zerg.models.models import CanvasLayout  # noqa: F401

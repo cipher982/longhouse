@@ -122,6 +122,7 @@ class SkillResponse(BaseModel):
     name: str
     description: str
     emoji: str = ""
+    tool_dispatch: Optional[str] = None
     source: str
     eligible: bool
     user_invocable: bool
@@ -136,6 +137,7 @@ class SkillDetailResponse(BaseModel):
     name: str
     description: str
     emoji: str = ""
+    tool_dispatch: Optional[str] = None
     source: str
     eligible: bool
     user_invocable: bool
@@ -194,6 +196,7 @@ def entry_to_response(entry: SkillEntry) -> SkillResponse:
         name=entry.skill.name,
         description=entry.skill.description,
         emoji=entry.skill.manifest.emoji,
+        tool_dispatch=entry.skill.manifest.tool_dispatch,
         source=entry.skill.source.value,
         eligible=entry.eligible,
         user_invocable=entry.skill.manifest.user_invocable,
@@ -214,6 +217,7 @@ def entry_to_detail_response(entry: SkillEntry) -> SkillDetailResponse:
         name=entry.skill.name,
         description=entry.skill.description,
         emoji=entry.skill.manifest.emoji,
+        tool_dispatch=entry.skill.manifest.tool_dispatch,
         source=entry.skill.source.value,
         eligible=entry.eligible,
         user_invocable=entry.skill.manifest.user_invocable,
