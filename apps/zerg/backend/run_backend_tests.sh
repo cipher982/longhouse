@@ -1,5 +1,15 @@
 #!/bin/bash
 
+# Zerg Backend Test Runner
+# ========================
+# Supports two database modes:
+#   --db-mode=docker   (default) Use testcontainers for ephemeral PostgreSQL
+#   --db-mode=external           Use external PostgreSQL with CI_TEST_SCHEMA
+#
+# Usage:
+#   ./run_backend_tests.sh                        # Docker mode (local dev)
+#   ./run_backend_tests.sh --db-mode=docker       # Explicit docker mode
+#   CI_TEST_SCHEMA=zerg_ci_123 DATABASE_URL=... ./run_backend_tests.sh --db-mode=external
 
 # Some CI environments leave stale or malformed files inside ~/.cache/uv
 # (e.g. a *file* named ".git" instead of a directory) which causes uv to
@@ -19,6 +29,23 @@ export UV_CACHE_DIR="$XDG_CACHE_HOME"
 mkdir -p "$XDG_CACHE_HOME" "$TMPDIR"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+
+# Validate external mode requirements
+for arg in "$@"; do
+    if [[ "$arg" == "--db-mode=external" ]]; then
+        if [ -z "$CI_TEST_SCHEMA" ]; then
+            echo "❌ External DB mode requires CI_TEST_SCHEMA environment variable"
+            echo "   Example: CI_TEST_SCHEMA=zerg_ci_123 DATABASE_URL=... $0 --db-mode=external"
+            exit 1
+        fi
+        if [ -z "$DATABASE_URL" ]; then
+            echo "❌ External DB mode requires DATABASE_URL environment variable"
+            exit 1
+        fi
+        echo "📊 Running tests with external Postgres (schema: $CI_TEST_SCHEMA)"
+        break
+    fi
+done
 
 # Run tests (excluding live connector tests which require real API credentials)
 # To run live connector tests: uv run pytest tests/integration/test_connectors_live.py -v

@@ -233,3 +233,4 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-26) [gotcha] Skills platform exists under `apps/zerg/backend/zerg/skills/` but isn't wired into supervisor/worker prompts or tool registry (no SkillIntegration usage yet).
 - (2026-01-26) [gotcha] Playwright E2E can time out at webServer startup (0 tests) if the backend fails to boot; ensure repo `.env` (DATABASE_URL) and backend deps are present before running.
 - (2026-01-26) [gotcha] Live SSE stream only forwards subscribed events; `show_session_picker` missing in `apps/zerg/backend/zerg/routers/stream.py` means the session picker modal never opens on live Jarvis streams.
+- (2026-01-26) [gotcha] CI runner "cube" pods lack a Docker daemon; testcontainers-backed tests fail unless using an external Postgres or non-Docker DB setup.
