@@ -50,6 +50,7 @@ dependencies = [
     "pymongo>=4.6.0",
     "google-ads>=25.0.0",
     "tiktoken>=0.5.0",
+    "minio>=7.2.0",
 ]
 
 [build-system]
