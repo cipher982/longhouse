@@ -217,7 +217,8 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-25) [gotcha] Voice uploads may send content-type params (e.g., `audio/webm;codecs=opus`); normalize before validation or browser uploads will 400.
 - (2026-01-25) [gotcha] Empty or too-short audio yields no transcription; return 422 and show a friendly “try speaking longer” prompt instead of 500.
 - (2026-01-25) [gotcha] Client-side min audio size gate prevents tiny blobs from hitting STT and returning empty transcription.
-- (2026-01-26) [gotcha] `spawn_commis` in `oikos_react_engine` parallel path does not raise `AgentInterrupted`, so runs finish SUCCESS and commis results only surface on a later user turn unless WAITING is triggered.
+- (2026-01-26) [gotcha] `spawn_commis` in `oikos_react_engine` parallel path does not raise `FicheInterrupted`, so runs finish SUCCESS and commis results only surface on a later user turn unless WAITING is triggered.
+- (2026-01-27) [gotcha] Sauron job definition publish via Life Hub API can 403/timeout from container; writing definitions directly to `ops.jobs` avoids empty "Scheduled jobs" in ops dashboard.
 - (2026-01-25) [pattern] Commis inbox continuation: `trigger_commis_inbox_run()` in commis_resume.py handles commiss completing after oikos SUCCESS. Creates continuation run with `RunTrigger.CONTINUATION`, SSE events alias back via `continuation_of_run_id`. Multiple commiss: first creates continuation, subsequent merge or chain.
 - (2026-01-25) [gotcha] FicheRunner filters out DB-stored system messages; injected `role="system"` thread messages are ignored by LLM context unless you change the filtering.
 - (2026-01-25) [gotcha] Legacy continuations may have null `root_run_id`; chain continuations will alias to the wrong run unless you backfill or fall back to `continuation_of_run_id`.
@@ -241,4 +242,5 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-27) [gotcha] Sauron /sync reloads manifest but scheduler doesn’t reschedule jobs; changes/new jobs won’t run until restart or explicit re-schedule.
 - (2026-01-27) [gotcha] ScriptedLLM treats any ToolMessage as a successful workspace worker completion; tool error strings can still yield “Workspace worker completed successfully,” masking spawn failures in E2E.
 - (2026-01-27) [gotcha] If Zerg backend has `JOB_QUEUE_ENABLED=1` and `JOBS_GIT_*` set, it will schedule external sauron-jobs too; remove/disable those vars when Sauron is the sole scheduler.
-- (2026-01-27) [gotcha] `sauron-jobs` worklog job uses `GITHUB_TOKEN` (GitHub API via gh); don’t remove it from scheduler envs if worklog is enabled.
+- (2026-01-27) [gotcha] `sauron-jobs` worklog job uses `GITHUB_TOKEN` (GitHub API via gh); don't remove it from scheduler envs if worklog is enabled.
+- (2026-01-27) [gotcha] `ops.jobs.script_source` has check constraint: only `builtin`, `git`, `http` allowed. Jobs from git manifest use `git` (not `manifest`). Fix at source (loader.py/worker.py), not downstream.

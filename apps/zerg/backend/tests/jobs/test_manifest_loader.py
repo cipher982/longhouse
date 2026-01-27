@@ -37,7 +37,7 @@ class TestManifestMetadata:
     def test_set_and_get_metadata(self):
         """Should store and retrieve metadata."""
         test_metadata = {
-            "script_source": "manifest",
+            "script_source": "git",
             "git_sha": "abc123",
             "loaded_at": "2026-01-24T00:00:00Z",
         }
@@ -205,7 +205,7 @@ job_registry.register(JobConfig(
         metadata = get_manifest_metadata(test_job_id)
         assert metadata is not None
         assert metadata["git_sha"] == "sha123"
-        assert metadata["script_source"] == "manifest"
+        assert metadata["script_source"] == "git"
         assert "loaded_at" in metadata
 
         # Cleanup
@@ -231,7 +231,7 @@ class TestCommisMetadataIntegration:
         set_manifest_metadata(
             "integration-test-job",
             {
-                "script_source": "manifest",
+                "script_source": "git",
                 "git_sha": "abc123def456",
                 "loaded_at": "2026-01-24T12:00:00Z",
                 "manifest_path": "/path/to/manifest.py",
@@ -244,7 +244,7 @@ class TestCommisMetadataIntegration:
         assert "script_source" in metadata
         assert "git_sha" in metadata
         assert "loaded_at" in metadata
-        assert metadata["script_source"] == "manifest"
+        assert metadata["script_source"] == "git"
 
         # Cleanup
         if "integration-test-job" in _manifest_metadata:
