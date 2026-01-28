@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useState, useCallback } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useSessionPicker } from '../components/SessionPickerProvider';
 import { eventBus } from '../oikos/lib/event-bus';
 
@@ -31,6 +31,7 @@ const DEMO_THREAD_TITLES: Record<string, string> = {
 
 export default function OikosChatPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const threadTitle = searchParams.get('thread');
   const demoScenario = searchParams.get('demo');
   const [initialMessages, setInitialMessages] = useState<ChatMessage[] | undefined>(undefined);
@@ -46,15 +47,11 @@ export default function OikosChatPage() {
       });
 
       if (result.sessionId) {
-        // User selected a session - send a message to resume it
-        // The oikos will receive this and spawn a workspace commis with the session
-        eventBus.emit('text_channel:send', {
-          text: `Resume session ${result.sessionId}`,
-          timestamp: Date.now(),
-        })
+        // Navigate to Forum with session selected and chat open
+        navigate(`/forum?session=${result.sessionId}&chat=true`);
       }
     },
-    [showSessionPicker]
+    [showSessionPicker, navigate]
   );
 
   // Subscribe to session picker event

@@ -35,11 +35,13 @@ export default function ForumPage() {
   const navigate = useNavigate();
   const params = new URLSearchParams(location.search);
   const seed = params.get("seed")?.trim() || DEFAULT_SEED;
+  const sessionParam = params.get("session");
+  const chatParam = params.get("chat") === "true";
 
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
   const [focusEntityId, setFocusEntityId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [mode, setMode] = useState<"replay" | "live">("replay");
+  const [mode, setMode] = useState<"replay" | "live">(sessionParam ? "live" : "replay");
   const [chatMode, setChatMode] = useState(false);
   const isLive = mode === "live";
 
@@ -164,6 +166,23 @@ export default function ForumPage() {
   useEffect(() => {
     setChatMode(false);
   }, [selectedEntityId]);
+
+  // Handle URL param: ?session={id}&chat=true
+  // Auto-select session and open chat when navigating from Oikos
+  useEffect(() => {
+    if (!sessionParam || !liveSessionState) return;
+
+    // Entity ID is the session UUID directly
+    if (liveSessionState.entities.has(sessionParam)) {
+      setSelectedEntityId(sessionParam);
+      setFocusEntityId(sessionParam);
+      if (chatParam) {
+        setChatMode(true);
+      }
+      // Clear URL params after handling to avoid re-triggering
+      navigate("/forum", { replace: true });
+    }
+  }, [sessionParam, chatParam, liveSessionState, navigate]);
 
   const handleFocus = () => {
     if (!selectedEntityId) return;
