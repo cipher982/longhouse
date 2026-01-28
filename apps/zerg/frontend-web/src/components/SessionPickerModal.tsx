@@ -201,16 +201,19 @@ function FilterSelect({ label, value, options, onChange }: FilterSelectProps) {
 
 export function SessionPickerModal({
   isOpen,
-  initialFilters = {},
+  initialFilters,
   onClose,
   onSelect,
   onStartNew,
 }: SessionPickerModalProps) {
+  // Normalize null/undefined to empty object (default param only handles undefined, not null)
+  const safeInitialFilters = initialFilters ?? {};
+
   // Search and filter state
-  const [searchQuery, setSearchQuery] = useState(initialFilters.query || "");
+  const [searchQuery, setSearchQuery] = useState(safeInitialFilters.query || "");
   const [debouncedQuery, setDebouncedQuery] = useState(searchQuery);
-  const [project, setProject] = useState(initialFilters.project || "");
-  const [provider, setProvider] = useState(initialFilters.provider || "");
+  const [project, setProject] = useState(safeInitialFilters.project || "");
+  const [provider, setProvider] = useState(safeInitialFilters.provider || "");
 
   // Selection state
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -258,16 +261,16 @@ export function SessionPickerModal({
   useEffect(() => {
     if (isOpen) {
       if (!wasOpenRef.current) {
-        setSearchQuery(initialFilters.query || "");
-        setProject(initialFilters.project || "");
-        setProvider(initialFilters.provider || "");
+        setSearchQuery(safeInitialFilters.query || "");
+        setProject(safeInitialFilters.project || "");
+        setProvider(safeInitialFilters.provider || "");
         setSelectedIndex(0);
         setSelectedSessionId(null);
       }
       setTimeout(() => searchInputRef.current?.focus(), 100);
     }
     wasOpenRef.current = isOpen;
-  }, [isOpen, initialFilters]);
+  }, [isOpen, safeInitialFilters]);
 
   // Keyboard navigation
   const handleKeyDown = useCallback(
@@ -334,13 +337,13 @@ export function SessionPickerModal({
   // Reset state when modal closes
   useEffect(() => {
     if (!isOpen) {
-      setSearchQuery(initialFilters.query || "");
-      setProject(initialFilters.project || "");
-      setProvider(initialFilters.provider || "");
+      setSearchQuery(safeInitialFilters.query || "");
+      setProject(safeInitialFilters.project || "");
+      setProvider(safeInitialFilters.provider || "");
       setSelectedIndex(0);
       setSelectedSessionId(null);
     }
-  }, [isOpen, initialFilters]);
+  }, [isOpen, safeInitialFilters]);
 
   if (!isOpen) return null;
 
