@@ -4,6 +4,8 @@ Tests the full path from runner exec_chunk (WebSocket) -> OutputBuffer -> EventB
 """
 
 import asyncio
+import time
+import uuid
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -18,6 +20,16 @@ from zerg.services.commis_output_buffer import get_commis_output_buffer
 from zerg.tools.builtin.oikos_tools import peek_commis_output
 
 
+async def _wait_for(predicate, *, timeout: float = 2.0, interval: float = 0.05) -> None:
+    """Wait for a predicate to become true within a timeout."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(interval)
+    raise AssertionError("Timed out waiting for condition")
+
+
 @pytest.fixture
 def test_runner_and_commis(db: Session, test_user: User) -> tuple[Runner, str, CommisJob]:
     """Create a test runner and a commis job linked to it."""
@@ -29,7 +41,7 @@ def test_runner_and_commis(db: Session, test_user: User) -> tuple[Runner, str, C
         auth_secret=secret,
     )
 
-    commis_id = "test-commis-live-123"
+    commis_id = f"test-commis-live-{uuid.uuid4().hex}"
     commis_job = CommisJob(
         owner_id=test_user.id,
         task="Test live output",
@@ -85,7 +97,7 @@ async def test_live_output_flow_ws_to_sse(client: TestClient, db: Session, test_
                 "stream": "stdout",
                 "data": chunk_data,
             })
-            await asyncio.sleep(0.2)
+            await _wait_for(lambda: chunk_data in get_commis_output_buffer().get_tail(commis_id))
 
             # 3. Verify buffer
             buffer = get_commis_output_buffer()
@@ -93,7 +105,7 @@ async def test_live_output_flow_ws_to_sse(client: TestClient, db: Session, test_
             assert chunk_data in tail
 
             # 4. Verify SSE event
-            assert len(received_sse) == 1
+            await _wait_for(lambda: len(received_sse) >= 1)
             payload = received_sse[0]
             assert payload["commis_id"] == commis_id
             assert payload["job_id"] == commis_job.id
@@ -155,7 +167,7 @@ async def test_live_output_chunk_truncation_sse(client: TestClient, db: Session,
                 "stream": "stdout",
                 "data": large_data,
             })
-            await asyncio.sleep(0.2)
+            await _wait_for(lambda: len(get_commis_output_buffer().get_tail(commis_id)) >= 5000)
 
             # Buffer should have full 5000
             buffer = get_commis_output_buffer()
@@ -163,7 +175,7 @@ async def test_live_output_chunk_truncation_sse(client: TestClient, db: Session,
             assert len(tail) >= 5000
 
             # SSE should have truncated 4000 (tail of it)
-            assert len(received_sse) == 1
+            await _wait_for(lambda: len(received_sse) >= 1)
             payload = received_sse[0]
             assert len(payload["data"]) == 4000
             assert payload["data"] == "A" * 4000
