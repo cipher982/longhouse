@@ -331,7 +331,7 @@ components:
 
     CommisStatus:
       type: string
-      enum: [success, failed]
+      enum: [success, failed, cancelled, timeout]
       description: Commis execution result
 
     # ---------------------------------------------------------------------------
@@ -659,6 +659,8 @@ components:
     CommisSummaryReadyPayload:
       type: object
       required: [job_id, summary]
+      description: |
+        Summary of a commis execution. For non-success, summary includes status prefix and error details.
       properties:
         job_id:
           type: integer
@@ -669,7 +671,13 @@ components:
         summary:
           type: string
           minLength: 1
-          description: Extracted commis summary
+          description: Extracted commis summary (includes [FAILED], [TIMEOUT], or [CANCELLED] prefix for non-success)
+        status:
+          $ref: '#/components/schemas/CommisStatus'
+        error:
+          type: string
+          description: Error message if status is failed/timeout/cancelled (null for success)
+          nullable: true
         run_id:
           type: integer
           minimum: 1

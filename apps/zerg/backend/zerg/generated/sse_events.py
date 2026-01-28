@@ -26,6 +26,8 @@ class CommisStatus(str, Enum):
 
     SUCCESS = "success"
     FAILED = "failed"
+    CANCELLED = "cancelled"
+    TIMEOUT = "timeout"
 
 class ConnectedPayload(BaseModel):
     """Payload for ConnectedPayload"""
@@ -152,11 +154,14 @@ class CommisCompletePayload(BaseModel):
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
 class CommisSummaryReadyPayload(BaseModel):
-    """Payload for CommisSummaryReadyPayload"""
+    """Summary of a commis execution. For non-success, summary includes status prefix and error details.
+"""
 
     job_id: int = Field(ge=1, description='')
     commis_id: Optional[str] = Field(default=None, description='Commis execution ID')
-    summary: str = Field(min_length=1, description='Extracted commis summary')
+    summary: str = Field(min_length=1, description='Extracted commis summary (includes [FAILED], [TIMEOUT], or [CANCELLED] prefix for non-success)')
+    status: Optional[CommisStatus] = Field(default=None)
+    error: Optional[str] = Field(default=None, description='Error message if status is failed/timeout/cancelled (null for success)')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
