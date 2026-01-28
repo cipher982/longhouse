@@ -434,7 +434,24 @@ class CommisJobProcessor:
                     logger.warning(f"Failed to prepare session for resume: {resume_error}")
                     # Continue without resume - treat as new session
 
-            # 4. Run commis in workspace (LONG-RUNNING - no DB session held!)
+            # 4. Emit commis_started event for UI (before long-running execution)
+            if oikos_run_id:
+                try:
+                    from zerg.services.event_store import append_run_event
+
+                    await append_run_event(
+                        run_id=oikos_run_id,
+                        event_type="commis_started",
+                        payload={
+                            "job_id": job_id,
+                            "commis_id": commis_id,
+                            "task": job_task[:100] if job_task else "",
+                        },
+                    )
+                except Exception as started_error:
+                    logger.warning(f"Failed to emit commis_started event for job {job_id}: {started_error}")
+
+            # 5. Run commis in workspace (LONG-RUNNING - no DB session held!)
             logger.info(f"Running workspace commis for job {job_id} in {workspace.path}")
             result = await cloud_executor.run_commis(
                 task=job_task,
