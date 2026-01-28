@@ -178,6 +178,8 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 
 <!-- Agents: append below this line. Human compacts weekly. -->
 
+- (2026-01-28) [pattern] Parallel patrol agents converge on the same ideas unless diversity is enforced; use explicit target partitioning + shared dedupe gate.
+- (2026-01-28) [pattern] Linear-only dedupe is insufficient; record recent targets including NO_FINDINGS to prevent re-scans.
 - (2026-01-22) [gotcha] Runner name+secret auth can collide across owners. If two owners seed runners with same name and secret, the first-created runner wins. Use unique secrets per environment.
 - (2026-01-22) [gotcha] Claude Code CLI with z.ai DOES work, but needs: 1) ANTHROPIC_AUTH_TOKEN not ANTHROPIC_API_KEY, 2) unset CLAUDE_CODE_USE_BEDROCK, 3) HOME=/tmp in read-only containers (CLI writes .claude.json config).
 - (2026-01-23) [gotcha] Sauron migration is partial: Zerg builtin jobs include backup_sentinel/disk_health/qa/gmail_sync; other scheduled jobs still live in sauron-jobs.
@@ -206,3 +208,4 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-27) [gotcha] Life Hub agent log API still uses /ingest/agents/events and /query/agents/sessions; session continuity must target those endpoints.
 - (2026-01-27) [gotcha] Sauron /sync reloads manifest but scheduler doesn't reschedule jobs; changes/new jobs won't run until restart or explicit re-schedule.
 - (2026-01-27) [gotcha] If Zerg backend has `JOB_QUEUE_ENABLED=1` and `JOBS_GIT_*` set, it will schedule external sauron-jobs too; remove/disable those vars when Sauron is the sole scheduler.
+- (2026-01-28) [pattern] Fix Scripted/Mock LLM tool-error handling before changing tool behavior so tests can signal real failures.

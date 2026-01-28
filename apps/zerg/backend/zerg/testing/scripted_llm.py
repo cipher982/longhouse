@@ -225,21 +225,27 @@ class ScriptedChatLLM(BaseChatModel):
         # If tool results are present, emit final synthesis (no more tool calls).
         tool_msg = next((m for m in reversed(messages) if isinstance(m, ToolMessage)), None)
         if tool_msg is not None:
-            content = str(tool_msg.content)
-            scenario = find_matching_scenario(prompt, role)
+            from zerg.tools.result_utils import check_tool_error
 
-            # Determine final text based on scenario type
-            if scenario and scenario.get("name") == "workspace_commis_oikos":
-                # Workspace commis completed - summarize the result
-                final_text = "Workspace commis completed successfully. Repository analyzed and changes captured."
-            elif "45%" in content:
-                # Disk space check with evidence in tool result
-                final_text = "Cube is at 45% disk usage; biggest usage is Docker images/volumes."
-            elif scenario and scenario.get("evidence_keyword") == "45%":
-                # Disk space scenario - inject evidence keyword even if not in tool result
-                final_text = "Cube is at 45% disk usage; biggest usage is Docker images/volumes."
+            content = str(tool_msg.content)
+            is_error, error_msg = check_tool_error(content)
+
+            if is_error:
+                final_text = f"Task failed due to tool error: {error_msg or content}"
             else:
-                final_text = "Task completed successfully."
+                scenario = find_matching_scenario(prompt, role)
+                # Determine final text based on scenario type
+                if scenario and scenario.get("name") == "workspace_commis_oikos":
+                    # Workspace commis completed - summarize the result
+                    final_text = "Workspace commis completed successfully. Repository analyzed and changes captured."
+                elif "45%" in content:
+                    # Disk space check with evidence in tool result
+                    final_text = "Cube is at 45% disk usage; biggest usage is Docker images/volumes."
+                elif scenario and scenario.get("evidence_keyword") == "45%":
+                    # Disk space scenario - inject evidence keyword even if not in tool result
+                    final_text = "Cube is at 45% disk usage; biggest usage is Docker images/volumes."
+                else:
+                    final_text = "Task completed successfully."
 
             ai_message = AIMessage(content=final_text, tool_calls=[])
             return ChatResult(generations=[ChatGeneration(message=ai_message)])

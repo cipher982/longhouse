@@ -44,9 +44,17 @@ class MockChatLLM(BaseChatModel):
         from langchain_core.messages import ToolMessage
 
         # Check for tool results first (continuation)
-        has_tool_result = any(isinstance(m, ToolMessage) for m in messages)
-        if has_tool_result:
-            ai_message = AIMessage(content="Task completed successfully via commis.")
+        tool_msg = next((m for m in reversed(messages) if isinstance(m, ToolMessage)), None)
+        if tool_msg:
+            from zerg.tools.result_utils import check_tool_error
+
+            content = str(tool_msg.content)
+            is_error, error_msg = check_tool_error(content)
+
+            if is_error:
+                ai_message = AIMessage(content=f"Task failed due to tool error: {error_msg or content}")
+            else:
+                ai_message = AIMessage(content="Task completed successfully via commis.")
             return ChatResult(generations=[ChatGeneration(message=ai_message)])
 
         # Check last user message for triggers
