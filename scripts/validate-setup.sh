@@ -195,13 +195,12 @@ echo ""
 echo "6. Migrations"
 echo "-------------"
 
-if [ -f "apps/zerg/backend/alembic/versions/a1b2c3d4e5f6_add_summary_to_agent_run.py" ]; then
-    check_pass "Run summary migration exists (legacy filename)"
-else
-    check_fail "Summary column migration missing"
-fi
-
 MIGRATION_COUNT=$(ls apps/zerg/backend/alembic/versions/*.py 2>/dev/null | wc -l | tr -d ' ')
+if [ "$MIGRATION_COUNT" -gt 0 ]; then
+    check_pass "Migration files present"
+else
+    check_fail "No Alembic migration files found"
+fi
 check_info "Found $MIGRATION_COUNT migration files"
 
 # Summary

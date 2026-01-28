@@ -85,10 +85,11 @@ User message → `OikosService` → `oikos_react_engine` → (spawn_commis) → 
 1. **`make dev` is interactive** — tails logs forever. Use `make dev-bg` for background.
 2. **Never use raw `docker compose`** — use Make targets (wrong project names, missing env vars).
 3. **Never run tests directly** — `make test` / `make test-e2e` only.
-4. **WebSocket/SSE code must sync** — run `make regen-ws` / `make regen-sse` after schema changes.
-5. **Auth disabled in dev** — `AUTH_DISABLED=1` set in compose.
-6. **Coolify env var changes need redeploy** — restart doesn't pick up new vars.
-7. **AGENTS.md is canonical** — `CLAUDE.md` is a symlink, edit AGENTS.md only.
+4. **DB routing differs by context** — Docker dev stack uses `postgres:5432` (compose override), host commands use `.env DATABASE_URL` (often cube).
+5. **WebSocket/SSE code must sync** — run `make regen-ws` / `make regen-sse` after schema changes.
+6. **Auth disabled in dev** — `AUTH_DISABLED=1` set in compose.
+7. **Coolify env var changes need redeploy** — restart doesn't pick up new vars.
+8. **AGENTS.md is canonical** — `CLAUDE.md` is a symlink, edit AGENTS.md only.
 
 ## Pushing Changes
 
@@ -195,6 +196,7 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 
 - (2026-01-28) [pattern] Parallel patrol agents converge on the same ideas unless diversity is enforced; use explicit target partitioning + shared dedupe gate.
 - (2026-01-28) [pattern] Linear-only dedupe is insufficient; record recent targets including NO_FINDINGS to prevent re-scans.
+- (2026-01-28) [gotcha] DB routing differs by context: Docker dev uses `postgres:5432` via compose override; host commands use `.env DATABASE_URL` (often cube) unless overridden.
 - (2026-01-22) [gotcha] Runner name+secret auth can collide across owners. If two owners seed runners with same name and secret, the first-created runner wins. Use unique secrets per environment.
 - (2026-01-22) [gotcha] Claude Code CLI with z.ai DOES work, but needs: 1) ANTHROPIC_AUTH_TOKEN not ANTHROPIC_API_KEY, 2) unset CLAUDE_CODE_USE_BEDROCK, 3) HOME=/tmp in read-only containers (CLI writes .claude.json config).
 - (2026-01-23) [gotcha] Sauron migration is partial: Zerg builtin jobs include backup_sentinel/disk_health/qa/gmail_sync; other scheduled jobs still live in sauron-jobs.
