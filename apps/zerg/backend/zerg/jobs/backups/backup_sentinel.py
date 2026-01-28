@@ -47,8 +47,8 @@ class BackupAssessmentResponse(BaseModel):
 
 # --- Configuration defaults (overridable via BACKUP_CONFIG_PATH) ---
 
-# Docker gateway IP to reach host SSH from inside container
-DOCKER_HOST_SSH = "172.29.0.1"
+# Docker gateway to reach host SSH from inside container
+DOCKER_HOST_SSH = "host.docker.internal"
 
 # Tailscale IPs (SSH config on hosts overrides hostnames to public IPs)
 CUBE_TAILSCALE_IP = "100.104.187.47"
