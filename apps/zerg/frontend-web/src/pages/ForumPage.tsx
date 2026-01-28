@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Badge, Button, Card, PageShell, SectionHeader, Spinner } from "../components/ui";
+import { SessionChat } from "../components/SessionChat";
 import { generateForumReplay } from "../forum/replay";
 import { ForumCanvas } from "../forum/ForumCanvas";
 import { useForumReplayPlayer } from "../forum/useForumReplay";
@@ -39,6 +40,7 @@ export default function ForumPage() {
   const [focusEntityId, setFocusEntityId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [mode, setMode] = useState<"replay" | "live">("replay");
+  const [chatMode, setChatMode] = useState(false);
   const isLive = mode === "live";
 
   // Fetch real sessions for live mode
@@ -148,6 +150,7 @@ export default function ForumPage() {
   useEffect(() => {
     if (selectedEntityId && !state.entities.has(selectedEntityId)) {
       setSelectedEntityId(null);
+      setChatMode(false);
     }
     if (selectedTaskId && !state.tasks.has(selectedTaskId)) {
       setSelectedTaskId(null);
@@ -156,6 +159,11 @@ export default function ForumPage() {
       setFocusEntityId(null);
     }
   }, [focusEntityId, selectedEntityId, selectedTaskId, state.entities, state.tasks, timeMs]);
+
+  // Reset chat mode when selection changes
+  useEffect(() => {
+    setChatMode(false);
+  }, [selectedEntityId]);
 
   const handleFocus = () => {
     if (!selectedEntityId) return;
@@ -367,94 +375,109 @@ export default function ForumPage() {
         </Card>
 
         <Card className="forum-map-panel forum-map-panel--right">
-          <div className="forum-panel-header">
-            <div>
-              <div className="forum-panel-title">Drop-In</div>
-              <div className="forum-panel-subtitle">Selection details</div>
-            </div>
-            {selectedEntity || selectedTask ? <Badge variant="success">Active</Badge> : <Badge variant="neutral">Idle</Badge>}
-          </div>
-          <div className="forum-selection">
-            {selectedSession ? (
-              <>
-                <div className="forum-selection-title">{selectedSession.project || "Session"}</div>
-                <div className="forum-selection-meta">Provider: {selectedSession.provider}</div>
-                <div className="forum-selection-meta">Status: {selectedSession.status}</div>
-                <div className="forum-selection-meta">Attention: {selectedSession.attention}</div>
-                <div className="forum-selection-meta">Duration: {Math.round(selectedSession.duration_minutes)}m</div>
-                <div className="forum-selection-meta">Messages: {selectedSession.message_count}</div>
-                {selectedSession.last_assistant_message && (
-                  <div className="forum-selection-preview">
-                    <div className="forum-selection-preview-label">Last message:</div>
-                    <div className="forum-selection-preview-text">{selectedSession.last_assistant_message}</div>
+          {/* Chat mode: Show SessionChat for selected Claude session */}
+          {chatMode && selectedSession && selectedSession.provider === "claude" ? (
+            <SessionChat
+              session={selectedSession}
+              onClose={() => setChatMode(false)}
+            />
+          ) : (
+            <>
+              <div className="forum-panel-header">
+                <div>
+                  <div className="forum-panel-title">Drop-In</div>
+                  <div className="forum-panel-subtitle">Selection details</div>
+                </div>
+                {selectedEntity || selectedTask ? <Badge variant="success">Active</Badge> : <Badge variant="neutral">Idle</Badge>}
+              </div>
+              <div className="forum-selection">
+                {selectedSession ? (
+                  <>
+                    <div className="forum-selection-title">{selectedSession.project || "Session"}</div>
+                    <div className="forum-selection-meta">Provider: {selectedSession.provider}</div>
+                    <div className="forum-selection-meta">Status: {selectedSession.status}</div>
+                    <div className="forum-selection-meta">Attention: {selectedSession.attention}</div>
+                    <div className="forum-selection-meta">Duration: {Math.round(selectedSession.duration_minutes)}m</div>
+                    <div className="forum-selection-meta">Messages: {selectedSession.message_count}</div>
+                    {selectedSession.last_assistant_message && (
+                      <div className="forum-selection-preview">
+                        <div className="forum-selection-preview-label">Last message:</div>
+                        <div className="forum-selection-preview-text">{selectedSession.last_assistant_message}</div>
+                      </div>
+                    )}
+                    <div className="forum-selection-actions">
+                      <Button size="sm" variant="primary" onClick={handleFocus}>
+                        {focusEntityId === selectedEntity?.id ? "Unfocus" : "Focus"}
+                      </Button>
+                      {selectedSession.provider === "claude" && (
+                        <Button size="sm" variant="secondary" onClick={() => setChatMode(true)}>
+                          Chat
+                        </Button>
+                      )}
+                    </div>
+                  </>
+                ) : selectedEntity ? (
+                  <>
+                    <div className="forum-selection-title">{selectedEntity.label ?? selectedEntity.id}</div>
+                    <div className="forum-selection-meta">Type: {selectedEntity.type}</div>
+                    <div className="forum-selection-meta">Room: {selectedEntity.roomId}</div>
+                    <div className="forum-selection-meta">Status: {selectedEntity.status}</div>
+                    <div className="forum-selection-actions">
+                      <Button size="sm" variant="primary" onClick={handleFocus}>
+                        {focusEntityId === selectedEntity.id ? "Unfocus" : "Focus"}
+                      </Button>
+                    </div>
+                  </>
+                ) : null}
+
+                {selectedTask && !selectedSession ? (
+                  <div className="forum-selection-task">
+                    <div className="forum-selection-title">Task: {selectedTask.title}</div>
+                    <div className="forum-selection-meta">Status: {selectedTask.status}</div>
+                    <div className="forum-selection-meta">Progress: {Math.round(selectedTask.progress * 100)}%</div>
+                    <div className="forum-selection-actions">
+                      <Button size="sm" variant="ghost" onClick={() => nudgeTask(selectedTask)}>
+                        Nudge Task
+                      </Button>
+                    </div>
                   </div>
-                )}
-                <div className="forum-selection-actions">
-                  <Button size="sm" variant="primary" onClick={handleFocus}>
-                    {focusEntityId === selectedEntity?.id ? "Unfocus" : "Focus"}
-                  </Button>
-                </div>
-              </>
-            ) : selectedEntity ? (
-              <>
-                <div className="forum-selection-title">{selectedEntity.label ?? selectedEntity.id}</div>
-                <div className="forum-selection-meta">Type: {selectedEntity.type}</div>
-                <div className="forum-selection-meta">Room: {selectedEntity.roomId}</div>
-                <div className="forum-selection-meta">Status: {selectedEntity.status}</div>
-                <div className="forum-selection-actions">
-                  <Button size="sm" variant="primary" onClick={handleFocus}>
-                    {focusEntityId === selectedEntity.id ? "Unfocus" : "Focus"}
-                  </Button>
-                </div>
-              </>
-            ) : null}
+                ) : null}
 
-            {selectedTask && !selectedSession ? (
-              <div className="forum-selection-task">
-                <div className="forum-selection-title">Task: {selectedTask.title}</div>
-                <div className="forum-selection-meta">Status: {selectedTask.status}</div>
-                <div className="forum-selection-meta">Progress: {Math.round(selectedTask.progress * 100)}%</div>
-                <div className="forum-selection-actions">
-                  <Button size="sm" variant="ghost" onClick={() => nudgeTask(selectedTask)}>
-                    Nudge Task
-                  </Button>
+                {!selectedEntity && !selectedTask && !selectedSession ? (
+                  <div className="forum-selection-empty">Select a commis or task to inspect.</div>
+                ) : null}
+              </div>
+              <div className="forum-legend">
+                <div className="forum-legend-title">Legend</div>
+                <div className="forum-legend-grid">
+                  <div className="forum-legend-item">
+                    <span className="forum-legend-swatch forum-legend-swatch--unit" />
+                    Unit
+                  </div>
+                  <div className="forum-legend-item">
+                    <span className="forum-legend-swatch forum-legend-swatch--structure" />
+                    Structure
+                  </div>
+                  <div className="forum-legend-item">
+                    <span className="forum-legend-swatch forum-legend-swatch--commis" />
+                    Commis
+                  </div>
+                  <div className="forum-legend-item">
+                    <span className="forum-legend-swatch forum-legend-swatch--task" />
+                    Task Node
+                  </div>
+                  <div className="forum-legend-item">
+                    <span className="forum-legend-swatch forum-legend-swatch--alert" />
+                    Alert Ring
+                  </div>
+                  <div className="forum-legend-item">
+                    <span className="forum-legend-swatch forum-legend-swatch--marker" />
+                    Marker Ping
+                  </div>
                 </div>
               </div>
-            ) : null}
-
-            {!selectedEntity && !selectedTask && !selectedSession ? (
-              <div className="forum-selection-empty">Select a commis or task to inspect.</div>
-            ) : null}
-          </div>
-          <div className="forum-legend">
-            <div className="forum-legend-title">Legend</div>
-            <div className="forum-legend-grid">
-              <div className="forum-legend-item">
-                <span className="forum-legend-swatch forum-legend-swatch--unit" />
-                Unit
-              </div>
-              <div className="forum-legend-item">
-                <span className="forum-legend-swatch forum-legend-swatch--structure" />
-                Structure
-              </div>
-              <div className="forum-legend-item">
-                <span className="forum-legend-swatch forum-legend-swatch--commis" />
-                Commis
-              </div>
-              <div className="forum-legend-item">
-                <span className="forum-legend-swatch forum-legend-swatch--task" />
-                Task Node
-              </div>
-              <div className="forum-legend-item">
-                <span className="forum-legend-swatch forum-legend-swatch--alert" />
-                Alert Ring
-              </div>
-              <div className="forum-legend-item">
-                <span className="forum-legend-swatch forum-legend-swatch--marker" />
-                Marker Ping
-              </div>
-            </div>
-          </div>
+            </>
+          )}
         </Card>
       </div>
     </PageShell>

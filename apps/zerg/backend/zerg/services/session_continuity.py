@@ -13,10 +13,16 @@ Key insight: Claude Code path encoding is deterministic:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import platform
 import re
+import shutil
+import tempfile
+import time
+from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
 
 import httpx
@@ -270,4 +276,307 @@ __all__ = [
     "fetch_session_from_life_hub",
     "prepare_session_for_resume",
     "ship_session_to_life_hub",
+    "SessionLockManager",
+    "SessionLock",
+    "WorkspaceResolver",
+    "ResolvedWorkspace",
+    "session_lock_manager",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Session Lock Manager
+# ---------------------------------------------------------------------------
+# In-memory async locks to prevent concurrent resumes of the same session.
+# Returns 409 if session is locked, with option to fork.
+
+
+@dataclass
+class SessionLock:
+    """Information about a held session lock."""
+
+    session_id: str
+    holder: str  # Who holds the lock (e.g., request ID or "web-chat")
+    acquired_at: float  # time.time()
+    ttl_seconds: int = 300  # 5 minute default TTL
+
+    @property
+    def is_expired(self) -> bool:
+        """Check if this lock has expired."""
+        return time.time() > (self.acquired_at + self.ttl_seconds)
+
+    @property
+    def time_remaining(self) -> float:
+        """Seconds remaining on this lock."""
+        remaining = (self.acquired_at + self.ttl_seconds) - time.time()
+        return max(0, remaining)
+
+
+class SessionLockManager:
+    """Manages per-session async locks to prevent concurrent resumes.
+
+    Features:
+    - Non-blocking acquisition (returns immediately if locked)
+    - TTL-based expiration for crash recovery
+    - Lock holder tracking for debugging
+    """
+
+    def __init__(self) -> None:
+        self._locks: dict[str, SessionLock] = {}
+        self._mutex = asyncio.Lock()
+
+    async def acquire(
+        self,
+        session_id: str,
+        holder: str = "web-chat",
+        ttl_seconds: int = 300,
+    ) -> SessionLock | None:
+        """Try to acquire lock for a session.
+
+        Args:
+            session_id: Life Hub session UUID
+            holder: Identifier for who's holding the lock
+            ttl_seconds: Lock TTL (default 5 minutes)
+
+        Returns:
+            SessionLock if acquired, None if already locked
+        """
+        async with self._mutex:
+            # Opportunistically cleanup expired locks to prevent memory leaks
+            self._cleanup_expired_unlocked()
+
+            # Check for existing lock
+            existing = self._locks.get(session_id)
+            if existing and not existing.is_expired:
+                return None
+
+            # Remove expired lock or acquire new
+            lock = SessionLock(
+                session_id=session_id,
+                holder=holder,
+                acquired_at=time.time(),
+                ttl_seconds=ttl_seconds,
+            )
+            self._locks[session_id] = lock
+            logger.debug(f"Acquired session lock: {session_id} by {holder}")
+            return lock
+
+    async def release(self, session_id: str, holder: str | None = None) -> bool:
+        """Release a session lock.
+
+        Args:
+            session_id: Life Hub session UUID
+            holder: If provided, only release if holder matches
+
+        Returns:
+            True if released, False if not found or holder mismatch
+        """
+        async with self._mutex:
+            existing = self._locks.get(session_id)
+            if not existing:
+                return False
+
+            if holder and existing.holder != holder:
+                logger.warning(f"Lock release rejected: {session_id} held by {existing.holder}, not {holder}")
+                return False
+
+            del self._locks[session_id]
+            logger.debug(f"Released session lock: {session_id}")
+            return True
+
+    async def get_lock_info(self, session_id: str) -> SessionLock | None:
+        """Get information about a lock if it exists and is not expired."""
+        async with self._mutex:
+            # Opportunistically cleanup expired locks to prevent memory leaks
+            self._cleanup_expired_unlocked()
+
+            existing = self._locks.get(session_id)
+            if existing and not existing.is_expired:
+                return existing
+            return None
+
+    async def is_locked(self, session_id: str) -> bool:
+        """Check if a session is currently locked."""
+        lock = await self.get_lock_info(session_id)
+        return lock is not None
+
+    def _cleanup_expired_unlocked(self) -> int:
+        """Remove expired locks without acquiring mutex. Must be called with mutex held.
+
+        Returns count of cleaned up locks.
+        """
+        expired = [sid for sid, lock in self._locks.items() if lock.is_expired]
+        for sid in expired:
+            del self._locks[sid]
+        if expired:
+            logger.debug(f"Cleaned up {len(expired)} expired session locks")
+        return len(expired)
+
+    async def cleanup_expired(self) -> int:
+        """Remove expired locks. Returns count of cleaned up locks."""
+        async with self._mutex:
+            return self._cleanup_expired_unlocked()
+
+
+# Global singleton
+session_lock_manager = SessionLockManager()
+
+
+# ---------------------------------------------------------------------------
+# Workspace Resolution
+# ---------------------------------------------------------------------------
+# Clone git repo to temp dir if workspace not available locally.
+
+
+@dataclass
+class ResolvedWorkspace:
+    """Result of workspace resolution."""
+
+    path: Path
+    is_temp: bool = False  # True if this is a temp clone
+    git_repo: str | None = None
+    git_branch: str | None = None
+    error: str | None = None
+
+    def cleanup(self) -> None:
+        """Remove temp workspace if created."""
+        if self.is_temp and self.path.exists():
+            try:
+                shutil.rmtree(self.path)
+                logger.debug(f"Cleaned up temp workspace: {self.path}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup temp workspace {self.path}: {e}")
+
+
+@dataclass
+class WorkspaceResolver:
+    """Resolves workspace paths for session resume.
+
+    If the original workspace path exists locally, uses it directly.
+    Otherwise, clones the git repo to a temp directory.
+    """
+
+    temp_base: Path = field(default_factory=lambda: Path(tempfile.gettempdir()) / "zerg-session-workspaces")
+
+    def __post_init__(self) -> None:
+        self.temp_base.mkdir(parents=True, exist_ok=True)
+
+    async def resolve(
+        self,
+        original_cwd: str | None,
+        git_repo: str | None = None,
+        git_branch: str | None = None,
+        session_id: str | None = None,
+    ) -> ResolvedWorkspace:
+        """Resolve a workspace for session resume.
+
+        Priority:
+        1. If original_cwd exists locally, use it
+        2. If git_repo provided, clone to temp
+        3. Return error if neither works
+
+        Args:
+            original_cwd: Original working directory from session
+            git_repo: Git repository URL (e.g., from session metadata)
+            git_branch: Git branch to checkout
+            session_id: Session ID for temp dir naming
+
+        Returns:
+            ResolvedWorkspace with path or error
+        """
+        # Try original path first
+        if original_cwd:
+            original_path = Path(original_cwd)
+            if original_path.exists() and original_path.is_dir():
+                logger.debug(f"Using original workspace: {original_path}")
+                return ResolvedWorkspace(
+                    path=original_path,
+                    is_temp=False,
+                    git_repo=git_repo,
+                    git_branch=git_branch,
+                )
+
+        # Try cloning git repo
+        if git_repo:
+            return await self._clone_repo(git_repo, git_branch, session_id)
+
+        # No workspace available
+        return ResolvedWorkspace(
+            path=Path("."),
+            error="No workspace available: original path not found and no git repo provided",
+        )
+
+    async def _clone_repo(
+        self,
+        git_repo: str,
+        git_branch: str | None,
+        session_id: str | None,
+    ) -> ResolvedWorkspace:
+        """Clone a git repo to a temp directory."""
+        # Create unique temp dir
+        suffix = session_id[:12] if session_id else str(int(time.time()))
+        temp_dir = self.temp_base / f"session-{suffix}"
+
+        try:
+            # Remove existing temp dir if present (inside try to handle permission errors)
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            # Build clone command
+            cmd = ["git", "clone", "--depth=1"]
+            if git_branch:
+                cmd.extend(["-b", git_branch])
+            cmd.extend([git_repo, str(temp_dir)])
+
+            logger.info(f"Cloning {git_repo} to {temp_dir}")
+
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+
+            if proc.returncode != 0:
+                error_msg = stderr.decode() if stderr else "Unknown error"
+                logger.error(f"Git clone failed: {error_msg}")
+                return ResolvedWorkspace(
+                    path=temp_dir,
+                    is_temp=True,
+                    error=f"Git clone failed: {error_msg[:200]}",
+                )
+
+            return ResolvedWorkspace(
+                path=temp_dir,
+                is_temp=True,
+                git_repo=git_repo,
+                git_branch=git_branch,
+            )
+
+        except Exception as e:
+            logger.exception(f"Error cloning repo {git_repo}")
+            return ResolvedWorkspace(
+                path=temp_dir,
+                is_temp=True,
+                error=f"Clone error: {str(e)[:200]}",
+            )
+
+    def cleanup_all(self) -> int:
+        """Clean up all temp workspaces. Returns count removed."""
+        if not self.temp_base.exists():
+            return 0
+
+        count = 0
+        for item in self.temp_base.iterdir():
+            if item.is_dir() and item.name.startswith("session-"):
+                try:
+                    shutil.rmtree(item)
+                    count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup {item}: {e}")
+
+        logger.info(f"Cleaned up {count} temp workspaces")
+        return count
+
+
+# Global workspace resolver
+workspace_resolver = WorkspaceResolver()

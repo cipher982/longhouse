@@ -78,6 +78,7 @@ from zerg.routers.ops import router as ops_router
 from zerg.routers.reliability import router as reliability_router
 from zerg.routers.runners import router as runners_router
 from zerg.routers.runs import router as runs_router
+from zerg.routers.session_chat import router as session_chat_router
 from zerg.routers.skills import router as skills_router
 from zerg.routers.stream import router as stream_router
 from zerg.routers.sync import router as sync_router
@@ -668,6 +669,7 @@ app.include_router(jobs_router, prefix=f"{API_PREFIX}")  # Scheduled jobs manage
 app.include_router(traces_router, prefix=f"{API_PREFIX}")  # Trace Explorer (admin only)
 app.include_router(reliability_router, prefix=f"{API_PREFIX}")  # Reliability Dashboard (admin only)
 app.include_router(skills_router, prefix=f"{API_PREFIX}")  # Skills Platform for workspace-scoped tools
+app.include_router(session_chat_router, prefix=f"{API_PREFIX}")  # Forum session chat (drop-in)
 
 # ---------------------------------------------------------------------------
 # Legacy admin routes without /api prefix – keep at very end so they override
