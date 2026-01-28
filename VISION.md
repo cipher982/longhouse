@@ -24,6 +24,7 @@ This is a living vision doc. It captures both the direction and the reasoning th
 - **Single-tenant core**: build fast, keep code simple, avoid multi-tenant security tax.
 - **Hosted = convenience**: premium support and "don't think about it" operations.
 - **Users bring their own API keys**. Zerg is orchestration + UI + data, not LLM compute billing.
+- **Hosted architecture = control plane + isolated runtimes**. Control plane is multi-tenant; Zerg app stays single-tenant.
 
 ---
 
@@ -125,6 +126,14 @@ zerg up
 - Shipper runs on the same machine (zero config)
 - Full end-to-end flow is visible locally
 
+**Local path diagram:**
+```
+Laptop
+  ├─ Zerg (UI + API)
+  ├─ Postgres/SQLite
+  └─ Shipper watches ~/.claude/...
+```
+
 ### Hosted (paid, always-on)
 ```
 Sign in with Google -> provision isolated instance -> always-on
@@ -133,6 +142,12 @@ Sign in with Google -> provision isolated instance -> always-on
 - Always-on background agents
 - Users bring their own API keys
 - Premium support + no-ops maintenance
+
+**Hosted path diagram:**
+```
+User -> Control Plane -> Provision Zerg instance (per-user)
+     -> user.swarmlet.com -> Zerg (UI+API) + DB
+```
 
 ### Free Trial
 - Optional: provisioned instance for a short trial
@@ -163,13 +178,14 @@ We do not do "one VM per user." We do:
 
 This preserves instant agents while keeping $5-10/month viable.
 
-**The control plane is not a second product**; it is a provisioning layer. The app remains single-tenant.
+**Decision:** the control plane is the *only* multi-tenant system. It provisions per-user Zerg instances. The app remains single-tenant.
 
 ---
 
 ## Control Plane Details
 
 The control plane is minimal infrastructure that provisions and routes to user instances.
+It is multi-tenant by necessity, but it stores only account + provisioning metadata (no agent data).
 
 **Signup flow:**
 ```
@@ -479,7 +495,7 @@ Single-tenant core + isolated hosted instances gives:
 - Security by default
 - Same OSS and hosted codebase
 
-Multi-tenant is a possible future, not a current requirement.
+Multi-tenant **inside the Zerg app** is a possible future, not a current requirement. Multi-tenant **in the control plane** is acceptable and minimal.
 
 ---
 

@@ -1,0 +1,11 @@
+[project]
+name = "session-resume-lab"
+version = "0.1.0"
+description = "Standalone lab for testing Claude Code session resume behavior"
+requires-python = ">=3.11"
+dependencies = [
+    "rich>=13.0",  # Optional but nice output
+]
+
+[project.scripts]
+lab = "lab:main"
