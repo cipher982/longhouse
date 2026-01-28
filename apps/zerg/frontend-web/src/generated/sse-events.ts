@@ -17,7 +17,7 @@ export interface UsageData {
 }
 
 /** Commis execution result */
-export type CommisStatus = "success" | "failed";
+export type CommisStatus = "success" | "failed" | "cancelled" | "timeout";
 
 export interface ConnectedPayload {
   /** Connection confirmation message */
@@ -178,12 +178,17 @@ export interface CommisCompletePayload {
   trace_id?: string;
 }
 
+/** Summary of a commis execution. For non-success, summary includes status prefix and error details.
+ */
 export interface CommisSummaryReadyPayload {
   job_id: number;
   /** Commis execution ID */
   commis_id?: string;
-  /** Extracted commis summary */
+  /** Extracted commis summary (includes [FAILED], [TIMEOUT], or [CANCELLED] prefix for non-success) */
   summary: string;
+  status?: CommisStatus;
+  /** Error message if status is failed/timeout/cancelled (null for success) */
+  error?: string;
   run_id?: number;
   /** End-to-end trace ID for debugging */
   trace_id?: string;

@@ -30,6 +30,81 @@ logger = logging.getLogger(__name__)
 # E2E test mode detection
 _is_e2e_mode = os.getenv("ENVIRONMENT") == "test:e2e"
 
+# Summary max length
+_SUMMARY_MAX_LENGTH = 150
+
+
+def _extract_summary_from_output(
+    output: Optional[str],
+    *,
+    status: str = "success",
+    error: Optional[str] = None,
+) -> str:
+    """Extract a concise summary from hatch output, with status context.
+
+    For failures/timeouts/cancellations, prioritizes error information over empty stdout.
+
+    Args:
+        output: Raw hatch output text (stdout)
+        status: Execution status ("success", "failed", "timeout")
+        error: Error message (stderr or exception message) for failures
+
+    Returns:
+        Summary text (max 150 chars) with status prefix for failures
+    """
+    # For failures/timeouts/cancellations, prioritize error information
+    if status in ("failed", "timeout", "cancelled"):
+        if status == "failed":
+            prefix = "[FAILED] "
+        elif status == "timeout":
+            prefix = "[TIMEOUT] "
+        else:
+            prefix = "[CANCELLED] "
+        prefix_len = len(prefix)
+        remaining_len = _SUMMARY_MAX_LENGTH - prefix_len
+
+        # Priority 1: Use error message if available
+        if error and error.strip():
+            error_text = error.strip().replace("\n", " ").replace("\r", " ")
+            if len(error_text) <= remaining_len:
+                return prefix + error_text
+            truncated = error_text[: remaining_len - 3]
+            last_space = truncated.rfind(" ")
+            if last_space > remaining_len // 2:
+                truncated = truncated[:last_space]
+            return prefix + truncated + "..."
+
+        # Priority 2: Use output if error is empty
+        if output and output.strip():
+            output_text = output.strip().replace("\n", " ").replace("\r", " ")
+            if len(output_text) <= remaining_len:
+                return prefix + output_text
+            truncated = output_text[: remaining_len - 3]
+            last_space = truncated.rfind(" ")
+            if last_space > remaining_len // 2:
+                truncated = truncated[:last_space]
+            return prefix + truncated + "..."
+
+        # Fallback for failures with no output or error
+        return prefix + "(No error details available)"
+
+    # Success case: just use output
+    if not output:
+        return "(No output)"
+
+    # Take first 150 chars, clean up newlines, truncate at word boundary
+    text = output.strip().replace("\n", " ").replace("\r", " ")
+    if len(text) <= _SUMMARY_MAX_LENGTH:
+        return text
+
+    # Find last space before limit to avoid cutting mid-word
+    truncated = text[:_SUMMARY_MAX_LENGTH]
+    last_space = truncated.rfind(" ")
+    if last_space > _SUMMARY_MAX_LENGTH // 2:
+        truncated = truncated[:last_space]
+
+    return truncated + "..."
+
 
 class CommisJobProcessor:
     """Service to process queued commis jobs in the background."""
@@ -460,7 +535,7 @@ class CommisJobProcessor:
                 resume_session_id=prepared_resume_id,
             )
 
-            # 5. Capture git diff (best-effort, don't fail job on diff errors)
+            # 6. Capture git diff (best-effort, don't fail job on diff errors)
             try:
                 diff = await workspace_manager.capture_diff(workspace)
                 if diff:
@@ -471,7 +546,7 @@ class CommisJobProcessor:
                 logger.warning(f"Failed to capture diff for job {job_id}: {diff_error}")
                 diff = ""  # Ensure diff is empty on error
 
-            # 6. Ship session to Life Hub (best-effort, for future resumption)
+            # 7. Ship session to Life Hub (best-effort, for future resumption)
             if result and result.status == "success":
                 try:
                     from zerg.services.session_continuity import ship_session_to_life_hub
@@ -570,23 +645,58 @@ class CommisJobProcessor:
                 except Exception as emit_error:
                     logger.warning(f"Failed to emit SSE event for job {job_id}: {emit_error}")
 
-            # Resume oikos if waiting (best-effort) - use another short session
-            with db_session() as resume_db:
+            # Generate and emit summary for UI (best-effort)
+            # Use _extract_summary_from_output to create informative summaries for failures
+            summary = _extract_summary_from_output(
+                result.output if result else None,
+                status=final_status,
+                error=final_error or (result.error if result else None),
+            )
+            with db_session() as summary_db:
                 try:
-                    from zerg.services.commis_resume import resume_oikos_with_commis_result
+                    # Save summary to artifact store
+                    if artifact_store:
+                        artifact_store.update_summary(commis_id, summary, {"source": "hatch_output"})
 
-                    summary = result.output[:500] if result and result.output else "(No output)"
-                    if diff:
-                        summary += f"\n\n[Git diff captured: {len(diff)} bytes]"
+                    # Emit summary ready event for UI with status context
+                    from zerg.services.event_store import emit_run_event
 
-                    await resume_oikos_with_commis_result(
-                        db=resume_db,
+                    await emit_run_event(
+                        db=summary_db,
                         run_id=oikos_run_id,
-                        commis_result=summary,
-                        job_id=job_id,
+                        event_type="commis_summary_ready",
+                        payload={
+                            "job_id": job_id,
+                            "commis_id": commis_id,
+                            "summary": summary,
+                            "status": final_status,
+                            "error": final_error,
+                        },
                     )
-                except Exception as resume_error:
-                    logger.warning(f"Failed to resume oikos for job {job_id}: {resume_error}")
+                except Exception as summary_error:
+                    logger.warning(f"Failed to emit summary for job {job_id}: {summary_error}")
+
+            # Resume oikos if waiting (best-effort) - use another short session
+            # Skip resume for cancelled jobs - user explicitly cancelled, don't continue workflow
+            if final_status != "cancelled":
+                with db_session() as resume_db:
+                    try:
+                        from zerg.services.commis_resume import resume_oikos_with_commis_result
+
+                        resume_summary = summary
+                        if diff:
+                            resume_summary += f"\n\n[Git diff captured: {len(diff)} bytes]"
+
+                        await resume_oikos_with_commis_result(
+                            db=resume_db,
+                            run_id=oikos_run_id,
+                            commis_result=resume_summary,
+                            job_id=job_id,
+                        )
+                    except Exception as resume_error:
+                        logger.warning(f"Failed to resume oikos for job {job_id}: {resume_error}")
+            else:
+                logger.info(f"Skipping oikos resume for cancelled job {job_id}")
 
     async def process_job_now(self, job_id: int) -> bool:
         """Process a specific job immediately (for testing/debugging).
