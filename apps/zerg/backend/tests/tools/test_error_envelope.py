@@ -18,6 +18,10 @@ class TestErrorType:
         assert ErrorType.PERMISSION_DENIED == "permission_denied"
         assert ErrorType.VALIDATION_ERROR == "validation_error"
         assert ErrorType.EXECUTION_ERROR == "execution_error"
+        # Oikos/commis specific
+        assert ErrorType.MISSING_CONTEXT == "missing_context"
+        assert ErrorType.NOT_FOUND == "not_found"
+        assert ErrorType.INVALID_STATE == "invalid_state"
 
 
 class TestToolError:
