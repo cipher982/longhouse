@@ -342,7 +342,7 @@ class TestAsyncInboxModelIntegration:
     async def test_spawn_commis_non_blocking(self, db_session, test_user):
         """spawn_commis should return immediately (not raise FicheInterrupted)."""
         from zerg.models.models import CommisJob
-        from zerg.tools.builtin.oikos_tools import spawn_standard_commis_async
+        from zerg.tools.builtin.oikos_tools import spawn_commis_async
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
         from zerg.services.oikos_context import set_oikos_context, reset_oikos_context
@@ -374,7 +374,7 @@ class TestAsyncInboxModelIntegration:
                 )
 
                 # spawn_commis should return a string (not raise)
-                result = await spawn_standard_commis_async(
+                result = await spawn_commis_async(
                     task="Test async spawn",
                     model=TEST_COMMIS_MODEL,
                     _tool_call_id="async-spawn-test-123",
@@ -548,4 +548,218 @@ class TestCheckCommisStatus:
             # Success job should not be listed as active
             # (it may appear in a different context, but not in Active Commis)
         finally:
+            set_credential_resolver(None)
+
+
+class TestParallelSpawnCommisConfig:
+    """Tests for spawn_commis with git_repo/resume_session_id in parallel execution path."""
+
+    @pytest.mark.asyncio
+    async def test_parallel_spawn_commis_preserves_git_repo_config(self, db_session, test_user):
+        """spawn_commis with git_repo in parallel path should preserve config in CommisJob.
+
+        Regression test for bug where _execute_tools_parallel dropped git_repo and
+        resume_session_id args when creating CommisJob, causing all commis to run
+        as scratch workspaces.
+        """
+        from zerg.models.models import CommisJob, Run
+        from zerg.models.enums import RunStatus, RunTrigger
+        from zerg.connectors.context import set_credential_resolver
+        from zerg.connectors.resolver import CredentialResolver
+        from zerg.services.oikos_context import set_oikos_context, reset_oikos_context
+        from zerg.services.oikos_react_engine import _execute_tools_parallel
+        from zerg.crud import crud
+        from zerg.services.thread_service import ThreadService
+
+        # Create fiche, thread, and run for the oikos context
+        fiche = crud.create_fiche(
+            db=db_session,
+            owner_id=test_user.id,
+            name="Test Oikos",
+            model=TEST_MODEL,
+            system_instructions="Test oikos",
+            task_instructions="",
+        )
+        thread = ThreadService.create_thread_with_system_message(
+            db_session,
+            fiche,
+            title="Test Thread",
+            thread_type="manual",
+            active=False,
+        )
+        run = Run(
+            fiche_id=fiche.id,
+            thread_id=thread.id,
+            status=RunStatus.RUNNING,
+            trigger=RunTrigger.API,
+            started_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            model=TEST_MODEL,
+        )
+        db_session.add(run)
+        db_session.commit()
+        db_session.refresh(run)
+
+        # Set up credential resolver context
+        resolver = CredentialResolver(fiche_id=fiche.id, db=db_session, owner_id=test_user.id)
+        set_credential_resolver(resolver)
+
+        # Set up oikos context with valid run_id
+        test_trace_id = str(uuid.uuid4())
+        token = set_oikos_context(
+            run_id=run.id,
+            owner_id=test_user.id,
+            message_id="test-msg-id",
+            trace_id=test_trace_id,
+            model=TEST_MODEL,
+            reasoning_effort="none",
+        )
+
+        try:
+            # Simulate parallel tool execution with spawn_commis including git_repo
+            tool_calls = [
+                {
+                    "id": "call_test_git_repo_123",
+                    "name": "spawn_commis",
+                    "args": {
+                        "task": "Fix bug in repository",
+                        "git_repo": "git@github.com:test/repo.git",
+                        "resume_session_id": "session-abc-123",
+                        "model": TEST_COMMIS_MODEL,
+                    },
+                }
+            ]
+
+            # Execute tools in parallel (this is the path we're testing)
+            tool_results, interrupt_value = await _execute_tools_parallel(
+                tool_calls,
+                tools_by_name={},  # Empty - spawn_commis is handled specially
+                run_id=run.id,
+                owner_id=test_user.id,
+            )
+
+            # Find the created CommisJob
+            job = (
+                db_session.query(CommisJob)
+                .filter(CommisJob.tool_call_id == "call_test_git_repo_123")
+                .first()
+            )
+
+            # Assert the job was created
+            assert job is not None, "CommisJob should have been created"
+
+            # THE CRITICAL FIX: config should contain git_repo, resume_session_id, and execution_mode
+            assert job.config is not None, "CommisJob.config should not be None"
+            assert job.config.get("execution_mode") == "workspace", (
+                f"execution_mode should be 'workspace', got: {job.config}"
+            )
+            assert job.config.get("git_repo") == "git@github.com:test/repo.git", (
+                f"git_repo should be in config, got: {job.config}"
+            )
+            assert job.config.get("resume_session_id") == "session-abc-123", (
+                f"resume_session_id should be in config, got: {job.config}"
+            )
+
+            # Also verify basic job properties
+            assert job.task == "Fix bug in repository"
+            assert job.model == TEST_COMMIS_MODEL
+
+        finally:
+            reset_oikos_context(token)
+            set_credential_resolver(None)
+
+    @pytest.mark.asyncio
+    async def test_parallel_spawn_commis_without_git_repo_has_no_config(self, db_session, test_user):
+        """spawn_commis without git_repo should have null config (scratch workspace)."""
+        from zerg.models.models import CommisJob, Run
+        from zerg.models.enums import RunStatus, RunTrigger
+        from zerg.connectors.context import set_credential_resolver
+        from zerg.connectors.resolver import CredentialResolver
+        from zerg.services.oikos_context import set_oikos_context, reset_oikos_context
+        from zerg.services.oikos_react_engine import _execute_tools_parallel
+        from zerg.crud import crud
+        from zerg.services.thread_service import ThreadService
+
+        # Create fiche, thread, and run for the oikos context
+        fiche = crud.create_fiche(
+            db=db_session,
+            owner_id=test_user.id,
+            name="Test Oikos 2",
+            model=TEST_MODEL,
+            system_instructions="Test oikos",
+            task_instructions="",
+        )
+        thread = ThreadService.create_thread_with_system_message(
+            db_session,
+            fiche,
+            title="Test Thread 2",
+            thread_type="manual",
+            active=False,
+        )
+        run = Run(
+            fiche_id=fiche.id,
+            thread_id=thread.id,
+            status=RunStatus.RUNNING,
+            trigger=RunTrigger.API,
+            started_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            model=TEST_MODEL,
+        )
+        db_session.add(run)
+        db_session.commit()
+        db_session.refresh(run)
+
+        # Set up credential resolver context
+        resolver = CredentialResolver(fiche_id=fiche.id, db=db_session, owner_id=test_user.id)
+        set_credential_resolver(resolver)
+
+        # Set up oikos context with valid run_id
+        test_trace_id = str(uuid.uuid4())
+        token = set_oikos_context(
+            run_id=run.id,
+            owner_id=test_user.id,
+            message_id="test-msg-id-2",
+            trace_id=test_trace_id,
+            model=TEST_MODEL,
+            reasoning_effort="none",
+        )
+
+        try:
+            # Simulate parallel tool execution with spawn_commis WITHOUT git_repo
+            tool_calls = [
+                {
+                    "id": "call_no_git_repo_456",
+                    "name": "spawn_commis",
+                    "args": {
+                        "task": "Research topic X",
+                        "model": TEST_COMMIS_MODEL,
+                    },
+                }
+            ]
+
+            # Execute tools in parallel
+            tool_results, interrupt_value = await _execute_tools_parallel(
+                tool_calls,
+                tools_by_name={},
+                run_id=run.id,
+                owner_id=test_user.id,
+            )
+
+            # Find the created CommisJob
+            job = (
+                db_session.query(CommisJob)
+                .filter(CommisJob.tool_call_id == "call_no_git_repo_456")
+                .first()
+            )
+
+            # Assert the job was created
+            assert job is not None, "CommisJob should have been created"
+
+            # Without git_repo, config should be None (scratch workspace)
+            assert job.config is None, f"CommisJob.config should be None for scratch workspace, got: {job.config}"
+
+            # Verify basic job properties
+            assert job.task == "Research topic X"
+            assert job.model == TEST_COMMIS_MODEL
+
+        finally:
+            reset_oikos_context(token)
             set_credential_resolver(None)

@@ -868,10 +868,29 @@ async def _execute_tools_parallel(
         created_jobs: list[dict] = []
 
         for tc in spawn_calls:
-            task = tc.get("args", {}).get("task", "")
-            model_override = tc.get("args", {}).get("model")
+            tool_args = tc.get("args", {})
+            task = tool_args.get("task", "")
+            model_override = tool_args.get("model")
+            git_repo = tool_args.get("git_repo")
+            resume_session_id = tool_args.get("resume_session_id")
             tool_call_id = tc.get("id", "")
             start_time = time.time()
+
+            # Build job config for workspace execution (git_repo, resume_session_id)
+            # This mirrors the logic in spawn_commis_async for consistency
+            job_config: dict | None = None
+            if git_repo:
+                # When git_repo is provided, use workspace execution mode
+                # This matches the behavior in spawn_commis_async
+                job_config = {
+                    "execution_mode": "workspace",
+                    "git_repo": git_repo,
+                }
+                if resume_session_id:
+                    job_config["resume_session_id"] = resume_session_id
+            elif resume_session_id:
+                # resume_session_id without git_repo - just store it
+                job_config = {"resume_session_id": resume_session_id}
 
             # Emit tool_started event for UI
             if emitter:
@@ -959,12 +978,16 @@ async def _execute_tools_parallel(
                     model=model_override or commis_model,
                     reasoning_effort=commis_reasoning_effort,
                     status="created",  # NOT 'queued' - two-phase commit pattern
+                    config=job_config,  # Workspace config (git_repo, resume_session_id)
                 )
                 db.add(commis_job)
                 db.commit()
                 db.refresh(commis_job)
 
-                logger.info(f"[PARALLEL-SPAWN] Created commis job {commis_job.id} with status='created'")
+                logger.info(
+                    f"[PARALLEL-SPAWN] Created commis job {commis_job.id} with status='created'"
+                    + (f", config={job_config}" if job_config else "")
+                )
 
                 created_jobs.append(
                     {
