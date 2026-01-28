@@ -462,13 +462,12 @@ async def _execute_tool(
                 from zerg.tools.builtin.oikos_tools import spawn_commis_async
 
                 # Call spawn_commis_async directly with tool_call_id for idempotency
-                # Pass _skip_interrupt=True because we handle interrupt ourselves
                 # Pass _return_structured=True to get job_id directly without regex
+                # Note: We handle interrupt ourselves via FicheInterrupted below
                 job_result = await spawn_commis_async(
                     task=tool_args.get("task", ""),
                     model=tool_args.get("model"),
                     _tool_call_id=tool_call_id,
-                    _skip_interrupt=True,  # LangGraph-free path
                     _return_structured=True,  # Get dict with job_id directly
                 )
 

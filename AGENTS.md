@@ -4,9 +4,11 @@ AI agent orchestration platform. Oikos = voice/text UI. Swarmlet = product name.
 
 **Owner**: david010@gmail.com (David Rose)
 
+Skills-Dir: .agents/skills
+
 ## Philosophy
 
-**"Trust the AI"** — Modern LLMs are smart enough to figure things out. Give them context and autonomy, not rigid decision trees. No keyword routing, no specialized commiss. Full spec: `docs/specs/durable-runs-v2.2.md`
+**"Trust the AI"** — Modern LLMs are smart enough to figure things out. Give them context and autonomy, not rigid decision trees. No keyword routing, no specialized commiss.
 
 ## Quick Reference
 
@@ -136,14 +138,10 @@ Sauron is the centralized ops scheduler, deployed as a standalone service on cli
 
 | Topic | Guide |
 |-------|-------|
-| Debugging | `docs/DEBUG.md` |
+| Development | `docs/DEVELOPMENT.md` |
 | Testing | `docs/TESTING.md` |
 | E2E Testing | `docs/TESTING_E2E.md` |
-| Credentials | `docs/CREDENTIALS.md` |
-| Database | `docs/DATABASE.md` |
-| Coolify | `docs/COOLIFY_DEBUGGING.md` |
-| Architecture spec | `docs/specs/durable-runs-v2.2.md` |
-| Jobs infrastructure | `docs/external-jobs.md` |
+| Oikos Tools | `apps/zerg/backend/docs/supervisor_tools.md` |
 | Sauron scheduler | `apps/sauron/README.md` |
 
 ## Misc
@@ -191,7 +189,6 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-23) [pattern] Repo tasks should be routed by tool/interface (separate tool or auto-routing); prompt-only enforcement leads to runner_exec misuse.
 - (2026-01-24) [gotcha] Tool contracts live in `schemas/tools.yml`; regenerate `apps/zerg/backend/zerg/tools/generated/tool_definitions.py` via `scripts/generate_tool_types.py` instead of editing the generated file.
 - (2026-01-24) [gotcha] Oikos tool registration is centralized: add tools in `oikos_tools.py`; `CORE_TOOLS` pulls `SUPERVISOR_TOOL_NAMES`; `oikos_service.py` uses `get_oikos_allowed_tools()`. Tests in `test_core_tools.py` catch drift.
-- (2026-01-24) [pattern] UX needs multi-level alerting: auto-ack obvious "continue?" prompts, hard-stop attention for risky/ambiguous states; keep "fun" vibe without sacrificing triage speed.
 - (2026-01-24) [gotcha] Repo policy: work only on main, no worktrees; confirm `git -C /Users/davidrose/git/zerg status -sb` before changes; no stashing unless explicitly requested.
 - (2026-01-24) [tool] Claude Code sessions are stored at `~/.claude/projects/{encoded-cwd}/{sessionId}.jsonl`; `--resume` requires the file locally.
 - (2026-01-24) [tool] `CLAUDE_CONFIG_DIR` overrides the entire `~/.claude/` location, enabling shared config/cache paths across machines.
@@ -203,17 +200,12 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-25) [pattern] OikosService enforces a single ThreadType.SUPER thread per user ("one brain"); each Oikos message creates an Run tied to that thread.
 - (2026-01-25) [gotcha] Voice uploads may send content-type params (e.g., `audio/webm;codecs=opus`); normalize before validation or browser uploads will 400.
 - (2026-01-25) [gotcha] Empty or too-short audio yields no transcription; return 422 and show a friendly "try speaking longer" prompt instead of 500.
-- (2026-01-25) [gotcha] Client-side min audio size gate prevents tiny blobs from hitting STT and returning empty transcription.
 - (2026-01-26) [gotcha] `spawn_commis` in `oikos_react_engine` parallel path does not raise `FicheInterrupted`, so runs finish SUCCESS and commis results only surface on a later user turn unless WAITING is triggered.
 - (2026-01-25) [gotcha] FicheRunner filters out DB-stored system messages; injected `role="system"` thread messages are ignored by LLM context unless you change the filtering.
 - (2026-01-25) [gotcha] Legacy continuations may have null `root_run_id`; chain continuations will alias to the wrong run unless you backfill or fall back to `continuation_of_run_id`.
 - (2026-01-26) [gotcha] Turn-based voice `/api/oikos/voice/turn` bypasses SSE, so commis/tool UI and streaming events never render; full parity requires routing transcripts through `/api/oikos/chat` (SSE) or emitting equivalent events.
-- (2026-01-26) [gotcha] Timestamp prefixes on assistant messages leaked into model outputs; only prefix user messages for temporal context.
 - (2026-01-26) [gotcha] New SSE event types must be added to `EventType` enum or `append_run_event()` won't publish live (modal won't open until reconnect).
 - (2026-01-26) [pattern] CI debugging: run commands directly, no `&` background, no `|| echo` swallowing. Let it crash, read the first error. Don't add debug steps before reading failure output.
-- (2026-01-27) [pattern] Rebrand work: remove backward-compat shims; use only Oikos/Commis/Fiche names (no supervisor/worker/agent aliases).
 - (2026-01-27) [gotcha] Life Hub agent log API still uses /ingest/agents/events and /query/agents/sessions; session continuity must target those endpoints.
 - (2026-01-27) [gotcha] Sauron /sync reloads manifest but scheduler doesn't reschedule jobs; changes/new jobs won't run until restart or explicit re-schedule.
-- (2026-01-27) [gotcha] ScriptedLLM treats any ToolMessage as a successful workspace worker completion; tool error strings can still yield "Workspace worker completed successfully," masking spawn failures in E2E.
 - (2026-01-27) [gotcha] If Zerg backend has `JOB_QUEUE_ENABLED=1` and `JOBS_GIT_*` set, it will schedule external sauron-jobs too; remove/disable those vars when Sauron is the sole scheduler.
-- (2026-01-27) [gotcha] `sauron-jobs` worklog job uses `GITHUB_TOKEN` (GitHub API via gh); don't remove it from scheduler envs if worklog is enabled.
