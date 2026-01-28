@@ -51,6 +51,7 @@ docker build -f apps/sauron/Dockerfile -t sauron:latest ../..
 | `JOBS_GIT_REPO_URL` | Yes | Git URL for sauron-jobs repo |
 | `JOBS_GIT_TOKEN` | Yes | GitHub PAT for private repo |
 | `SSH_PRIVATE_KEY_B64` | No | Base64-encoded SSH key for SSH jobs |
+| `GITHUB_TOKEN` | No | GitHub PAT for worklog job (gh API) |
 | `AWS_SES_*` | Yes | AWS SES credentials for email |
 | `*_EMAIL` | No | Email addresses for notifications |
 
