@@ -218,7 +218,7 @@ if [ $ERRORS -eq 0 ] && [ $WARNINGS -eq 0 ]; then
     echo "  1. Run migrations: cd apps/zerg/backend && uv run alembic upgrade head"
     echo "  2. Seed fiches: make seed-fiches"
     echo "  3. Start platform: make dev"
-    echo "  4. Run tests: make test-all"
+    echo "  4. Run tests: make test-full"
 elif [ $ERRORS -eq 0 ]; then
     echo -e "${YELLOW}⚠ Setup has $WARNINGS warning(s)${NC}"
     echo ""

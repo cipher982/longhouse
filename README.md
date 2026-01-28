@@ -48,7 +48,7 @@ Ports (dev): nginx 30080 external; service ports 47200 (frontend), 47300 (backen
 ## Commands
 
 - `make dev` – brings up unified stack with nginx front.
-- Tests: `make test` (unit), `make test-e2e`, `make test-all`, `make test-chat-e2e`, `make test-perf` (latency).
+- Tests: `make test` (unit), `make test-e2e` (core + a11y), `make test-full` (full suite), `make test-chat-e2e`, `make test-perf` (latency).
 - Prompt Iteration: `cd apps/zerg/backend && uv run python scripts/replay_run.py <run_id>`
 - Trace Debugging: `make debug-trace TRACE=<uuid>`
 - Video Pipeline: `make video-all` (audio -> record -> process)

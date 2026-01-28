@@ -165,7 +165,7 @@ const config = {
 
   projects: [
     // Core suite: Critical path tests only, no retries allowed
-    // Run with: make test-e2e-core or bunx playwright test --project=core
+    // Run with: make test-e2e (core + a11y) or make test-e2e-core (core-only) or bunx playwright test --project=core
     {
       name: 'core',
       testDir: './tests/core',
@@ -174,7 +174,7 @@ const config = {
       use: { ...devices['Desktop Chrome'] },
     },
     // Full suite: All non-core tests, with retries (core suite has its own project with retries=0)
-    // Run with: make test-e2e or bunx playwright test --project=chromium
+    // Run with: make test-zerg-e2e or bunx playwright test --project=chromium
     {
       name: 'chromium',
       testDir: './tests',
