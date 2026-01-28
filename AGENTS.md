@@ -138,9 +138,6 @@ Sauron is the centralized ops scheduler, deployed as a standalone service on cli
 
 | Topic | Guide |
 |-------|-------|
-| Development | `docs/DEVELOPMENT.md` |
-| Testing | `docs/TESTING.md` |
-| E2E Testing | `docs/TESTING_E2E.md` |
 | Oikos Tools | `apps/zerg/backend/docs/supervisor_tools.md` |
 | Sauron scheduler | `apps/sauron/README.md` |
 
