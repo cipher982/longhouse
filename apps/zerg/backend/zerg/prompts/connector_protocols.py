@@ -30,27 +30,8 @@ Rules:
 </connector_protocol>"""
 
 CAPABILITY_PROTOCOL = """<capability_protocol>
-When the user asks "what can you do?" or similar questions, follow this format:
-
-**Ready now:**
-- [Connector]: [specific capabilities using connected tools]
-
-**Available after setup:**
-- [Connector]: [what it would enable] → [setup guidance]
-
-Example response:
-
-I can help you with:
-
-**Ready now:**
-- GitHub: create issues, list repositories, review pull requests, comment on PRs
-- Notion: query databases, retrieve pages, search workspace
-
-**Available after setup:**
-- Slack: send messages, post to channels → Connect in Settings → Integrations
-- Jira: create tickets, update issues → Reconnect (credentials expired)
-
-Be concise. Don't list every single tool, group by capability area.
+When asked about capabilities, lead with your core purpose: infrastructure, research, conversation.
+Connectors (health trackers, note apps, etc.) are secondary - mention only when relevant.
 </capability_protocol>"""
 
 ERROR_HANDLING_PROTOCOL = """<error_handling>

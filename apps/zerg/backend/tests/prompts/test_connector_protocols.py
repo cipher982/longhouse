@@ -97,19 +97,17 @@ def test_capability_protocol_not_empty():
     """Test that CAPABILITY_PROTOCOL contains meaningful content."""
     content = CAPABILITY_PROTOCOL.replace("<capability_protocol>", "").replace("</capability_protocol>", "").strip()
 
-    assert len(content) > 100
+    assert len(content) > 50
     # Should provide guidance on capability responses
-    assert "what can you do" in content.lower() or "capabilities" in content.lower()
+    assert "capabilities" in content.lower()
 
 
-def test_capability_protocol_has_response_format():
-    """Test that CAPABILITY_PROTOCOL defines a response format."""
-    # Should show how to structure capability responses
-    assert "Ready now" in CAPABILITY_PROTOCOL or "ready now" in CAPABILITY_PROTOCOL.lower()
-    assert "Available after setup" in CAPABILITY_PROTOCOL or "available" in CAPABILITY_PROTOCOL.lower()
-
-    # Should include example
-    assert "Example" in CAPABILITY_PROTOCOL or "example" in CAPABILITY_PROTOCOL.lower()
+def test_capability_protocol_prioritizes_core_over_connectors():
+    """Test that CAPABILITY_PROTOCOL guides toward core capabilities first."""
+    # Should emphasize core purpose before connectors
+    assert "core" in CAPABILITY_PROTOCOL.lower() or "primary" in CAPABILITY_PROTOCOL.lower()
+    # Should de-emphasize connectors
+    assert "secondary" in CAPABILITY_PROTOCOL.lower()
 
 
 def test_error_handling_protocol_not_empty():
@@ -281,12 +279,12 @@ def test_protocols_use_consistent_terminology():
     assert "tool" in protocols.lower()
 
 
-def test_capability_protocol_example_well_formed():
-    """Test that the example in CAPABILITY_PROTOCOL looks realistic."""
-    # Should contain realistic connector names in example
-    example_connectors = ["github", "slack", "notion", "jira"]
-    matches = sum(1 for conn in example_connectors if conn in CAPABILITY_PROTOCOL.lower())
-    assert matches >= 2, "Example should mention at least 2 realistic connectors"
+def test_capability_protocol_mentions_connectors_as_secondary():
+    """Test that CAPABILITY_PROTOCOL positions connectors as secondary."""
+    # Should mention connectors exist but as secondary features
+    assert "connector" in CAPABILITY_PROTOCOL.lower()
+    # Should guide when to mention them
+    assert "relevant" in CAPABILITY_PROTOCOL.lower() or "when" in CAPABILITY_PROTOCOL.lower()
 
 
 def test_protocols_line_length_reasonable():
