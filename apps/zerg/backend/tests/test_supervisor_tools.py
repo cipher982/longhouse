@@ -1,6 +1,9 @@
 """Tests for oikos tools."""
 
 import tempfile
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
 
@@ -735,3 +738,139 @@ def test_list_commiss_limit(credential_context, temp_artifact_path, db_session):
 
     # Should only show 3 commiss
     assert "showing 3" in result or result.count("Job") == 3
+
+
+@pytest.mark.asyncio
+async def test_cancel_commis_status_not_overwritten(
+    credential_context, temp_artifact_path, db_session, test_user, tmp_path
+):
+    """Test that cancelled job status is not overwritten by processor completion.
+
+    This is a regression test for a bug where the commis_job_processor would
+    unconditionally set the final status to success/failed, overwriting any
+    'cancelled' status set during execution.
+    """
+    from datetime import datetime
+    from datetime import timezone
+
+    from zerg.database import db_session as get_db_session
+    from zerg.models.models import CommisJob
+    from zerg.services.commis_job_processor import CommisJobProcessor
+
+    processor = CommisJobProcessor()
+
+    # Create a commis job in 'running' state (simulating a job mid-execution)
+    job = CommisJob(
+        owner_id=test_user.id,
+        oikos_run_id=None,
+        task="Task that will be cancelled",
+        model=TEST_COMMIS_MODEL,
+        status="running",
+        config={
+            "execution_mode": "workspace",
+            "git_repo": "https://github.com/test/repo.git",
+        },
+        started_at=datetime.now(timezone.utc),
+    )
+    db_session.add(job)
+    db_session.commit()
+    job_id = job.id
+
+    # Mock workspace + executor to simulate cancellation during run
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    mock_ws = MagicMock()
+    mock_ws.path = workspace
+
+    async def run_commis_and_cancel(*_args, **_kwargs):
+        # Simulate user cancellation while the commis is running
+        with get_db_session() as cancel_db:
+            cancel_job = cancel_db.query(CommisJob).filter(CommisJob.id == job_id).first()
+            cancel_job.status = "cancelled"
+            cancel_job.error = "Cancelled by user"
+            cancel_job.finished_at = datetime.now(timezone.utc)
+            cancel_db.commit()
+
+        result = MagicMock()
+        result.status = "success"
+        result.output = "Task completed"
+        result.error = None
+        result.duration_ms = 1000
+        return result
+
+    mock_workspace_manager_class = MagicMock()
+    mock_workspace_manager_class.return_value.setup = AsyncMock(return_value=mock_ws)
+    mock_workspace_manager_class.return_value.capture_diff = AsyncMock(return_value="diff content")
+
+    mock_cloud_executor_class = MagicMock()
+    mock_cloud_executor_class.return_value.run_commis = AsyncMock(side_effect=run_commis_and_cancel)
+
+    with (
+        patch("zerg.services.workspace_manager.WorkspaceManager", mock_workspace_manager_class),
+        patch("zerg.services.cloud_executor.CloudExecutor", mock_cloud_executor_class),
+        patch("zerg.services.commis_artifact_store.CommisArtifactStore"),
+        patch("zerg.services.event_store.emit_run_event", AsyncMock(return_value=1)),
+        patch("zerg.services.event_store.append_run_event", AsyncMock(return_value=1)),
+    ):
+        await processor._process_workspace_job(job_id, oikos_run_id=None)
+
+    # Final status should remain cancelled (not overwritten by processor)
+    db_session.refresh(job)
+    assert job.status == "cancelled"
+    assert job.error == "Cancelled by user"
+
+
+def test_cancel_commis_already_cancelled(credential_context, temp_artifact_path, db_session, test_user):
+    """Test that cancelling an already-cancelled job returns appropriate message."""
+    from datetime import datetime
+    from datetime import timezone
+
+    from zerg.models.models import CommisJob
+    from zerg.tools.builtin.oikos_tools import cancel_commis
+
+    # Create an already-cancelled job
+    job = CommisJob(
+        owner_id=test_user.id,
+        oikos_run_id=None,
+        task="Already cancelled task",
+        model=TEST_COMMIS_MODEL,
+        status="cancelled",
+        finished_at=datetime.now(timezone.utc),
+        error="Cancelled by user",
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    # Try to cancel again
+    result = cancel_commis(str(job.id))
+
+    # Should indicate it's already cancelled
+    assert "already cancelled" in result
+
+
+def test_cancel_commis_completed_job(credential_context, temp_artifact_path, db_session, test_user):
+    """Test that cancelling a completed job returns appropriate message."""
+    from datetime import datetime
+    from datetime import timezone
+
+    from zerg.models.models import CommisJob
+    from zerg.tools.builtin.oikos_tools import cancel_commis
+
+    # Create a completed job
+    job = CommisJob(
+        owner_id=test_user.id,
+        oikos_run_id=None,
+        task="Completed task",
+        model=TEST_COMMIS_MODEL,
+        status="success",
+        finished_at=datetime.now(timezone.utc),
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    # Try to cancel
+    result = cancel_commis(str(job.id))
+
+    # Should indicate it's already completed
+    assert "already success" in result
