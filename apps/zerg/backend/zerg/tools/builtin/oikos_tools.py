@@ -26,6 +26,8 @@ from zerg.models_config import DEFAULT_COMMIS_MODEL_ID
 from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.services.oikos_context import get_oikos_context
 from zerg.services.tool_output_store import ToolOutputStore
+from zerg.tools.error_envelope import ErrorType
+from zerg.tools.error_envelope import tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -72,16 +74,25 @@ async def spawn_commis_async(
     # Accept both old names (local, cloud) and new names (standard, workspace) for backward compat
     valid_modes = {"local", "cloud", "standard", "workspace"}
     if execution_mode not in valid_modes:
-        return f"Error: execution_mode must be 'standard' or 'workspace', got '{execution_mode}'"
+        return tool_error(
+            ErrorType.VALIDATION_ERROR,
+            f"execution_mode must be 'standard' or 'workspace', got '{execution_mode}'",
+        )
 
     # Workspace mode (cloud is alias) requires git_repo
     if execution_mode in ("cloud", "workspace") and not git_repo:
-        return "Error: git_repo is required when execution_mode='workspace'"
+        return tool_error(
+            ErrorType.VALIDATION_ERROR,
+            "git_repo is required when execution_mode='workspace'",
+        )
 
     # Get database session from credential resolver context
     resolver = get_credential_resolver()
     if not resolver:
-        return "Error: Cannot spawn commis - no credential context available"
+        return tool_error(
+            ErrorType.MISSING_CONTEXT,
+            "Cannot spawn commis - no credential context available",
+        )
 
     db = resolver.db
     owner_id = resolver.owner_id
@@ -242,7 +253,7 @@ async def spawn_commis_async(
     except Exception as e:
         logger.exception(f"Failed to spawn commis for task: {task}")
         db.rollback()
-        return f"Error spawning commis: {e}"
+        return tool_error(ErrorType.EXECUTION_ERROR, f"Error spawning commis: {e}")
 
 
 async def spawn_standard_commis_async(
@@ -321,7 +332,7 @@ async def spawn_workspace_commis_async(
     try:
         validate_git_repo_url(git_repo)
     except ValueError as exc:
-        return f"Error: {exc}"
+        return tool_error(ErrorType.VALIDATION_ERROR, str(exc))
 
     # Delegate to the core implementation with workspace mode forced
     return await spawn_commis_async(
@@ -372,7 +383,10 @@ async def list_commiss_async(
     # Get owner_id from context for security filtering
     resolver = get_credential_resolver()
     if not resolver:
-        return "Error: Cannot list commiss - no credential context available"
+        return tool_error(
+            ErrorType.MISSING_CONTEXT,
+            "Cannot list commiss - no credential context available",
+        )
 
     db = resolver.db
 
@@ -423,7 +437,7 @@ async def list_commiss_async(
 
     except Exception as e:
         logger.exception("Failed to list commis jobs")
-        return f"Error listing commis jobs: {e}"
+        return tool_error(ErrorType.EXECUTION_ERROR, f"Error listing commis jobs: {e}")
 
 
 def list_commiss(
@@ -471,7 +485,10 @@ async def check_commis_status_async(job_id: str | None = None) -> str:
     # Get owner_id from context for security filtering
     resolver = get_credential_resolver()
     if not resolver:
-        return "Error: Cannot check commis status - no credential context available"
+        return tool_error(
+            ErrorType.MISSING_CONTEXT,
+            "Cannot check commis status - no credential context available",
+        )
 
     db = resolver.db
 
@@ -489,7 +506,7 @@ async def check_commis_status_async(job_id: str | None = None) -> str:
             )
 
             if not job:
-                return f"Error: Commis job {job_id} not found"
+                return tool_error(ErrorType.NOT_FOUND, f"Commis job {job_id} not found")
 
             # Calculate elapsed time
             from zerg.utils.time import utc_now_naive
@@ -554,10 +571,10 @@ async def check_commis_status_async(job_id: str | None = None) -> str:
             return "\n".join(lines)
 
     except ValueError:
-        return f"Error: Invalid job ID format: {job_id}"
+        return tool_error(ErrorType.VALIDATION_ERROR, f"Invalid job ID format: {job_id}")
     except Exception as e:
         logger.exception(f"Failed to check commis status: {job_id}")
-        return f"Error checking commis status: {e}"
+        return tool_error(ErrorType.EXECUTION_ERROR, f"Error checking commis status: {e}")
 
 
 def check_commis_status(job_id: str | None = None) -> str:
@@ -584,7 +601,10 @@ async def cancel_commis_async(job_id: str) -> str:
     # Get owner_id from context for security filtering
     resolver = get_credential_resolver()
     if not resolver:
-        return "Error: Cannot cancel commis - no credential context available"
+        return tool_error(
+            ErrorType.MISSING_CONTEXT,
+            "Cannot cancel commis - no credential context available",
+        )
 
     db = resolver.db
 
@@ -602,7 +622,7 @@ async def cancel_commis_async(job_id: str) -> str:
         )
 
         if not job:
-            return f"Error: Commis job {job_id} not found"
+            return tool_error(ErrorType.NOT_FOUND, f"Commis job {job_id} not found")
 
         if job.status in ["success", "failed", "cancelled"]:
             return f"Commis job {job_id} is already {job.status} and cannot be cancelled."
@@ -617,11 +637,11 @@ async def cancel_commis_async(job_id: str) -> str:
         return f"Commis job {job_id} has been cancelled. It may take a moment for the commis to stop."
 
     except ValueError:
-        return f"Error: Invalid job ID format: {job_id}"
+        return tool_error(ErrorType.VALIDATION_ERROR, f"Invalid job ID format: {job_id}")
     except Exception as e:
         logger.exception(f"Failed to cancel commis: {job_id}")
         db.rollback()
-        return f"Error cancelling commis: {e}"
+        return tool_error(ErrorType.EXECUTION_ERROR, f"Error cancelling commis: {e}")
 
 
 def cancel_commis(job_id: str) -> str:
@@ -656,7 +676,10 @@ async def wait_for_commis_async(
     # Get owner_id from context for security filtering
     resolver = get_credential_resolver()
     if not resolver:
-        return "Error: Cannot wait for commis - no credential context available"
+        return tool_error(
+            ErrorType.MISSING_CONTEXT,
+            "Cannot wait for commis - no credential context available",
+        )
 
     db = resolver.db
 
@@ -674,7 +697,7 @@ async def wait_for_commis_async(
         )
 
         if not job:
-            return f"Error: Commis job {job_id} not found"
+            return tool_error(ErrorType.NOT_FOUND, f"Commis job {job_id} not found")
 
         def _acknowledge_completed_job() -> None:
             """Mark a completed job as acknowledged (best-effort)."""
@@ -729,10 +752,10 @@ async def wait_for_commis_async(
         # Re-raise interrupt
         raise
     except ValueError:
-        return f"Error: Invalid job ID format: {job_id}"
+        return tool_error(ErrorType.VALIDATION_ERROR, f"Invalid job ID format: {job_id}")
     except Exception as e:
         logger.exception(f"Failed to wait for commis: {job_id}")
-        return f"Error waiting for commis: {e}"
+        return tool_error(ErrorType.EXECUTION_ERROR, f"Error waiting for commis: {e}")
 
 
 def wait_for_commis(job_id: str) -> str:
@@ -756,7 +779,10 @@ async def read_commis_result_async(job_id: str) -> str:
     # Get owner_id from context for security filtering
     resolver = get_credential_resolver()
     if not resolver:
-        return "Error: Cannot read commis result - no credential context available"
+        return tool_error(
+            ErrorType.MISSING_CONTEXT,
+            "Cannot read commis result - no credential context available",
+        )
 
     db = resolver.db
 
@@ -768,13 +794,13 @@ async def read_commis_result_async(job_id: str) -> str:
         job = db.query(crud.CommisJob).filter(crud.CommisJob.id == job_id_int, crud.CommisJob.owner_id == resolver.owner_id).first()
 
         if not job:
-            return f"Error: Commis job {job_id} not found"
+            return tool_error(ErrorType.NOT_FOUND, f"Commis job {job_id} not found")
 
         if not job.commis_id:
-            return f"Error: Commis job {job_id} has not started execution yet"
+            return tool_error(ErrorType.INVALID_STATE, f"Commis job {job_id} has not started execution yet")
 
         if job.status not in ["success", "failed"]:
-            return f"Error: Commis job {job_id} is not complete (status: {job.status})"
+            return tool_error(ErrorType.INVALID_STATE, f"Commis job {job_id} is not complete (status: {job.status})")
 
         # Get result and metadata from artifacts
         artifact_store = CommisArtifactStore()
@@ -788,14 +814,14 @@ async def read_commis_result_async(job_id: str) -> str:
         return f"Result from commis job {job_id} (commis {job.commis_id}):{duration_info}\n\n{result}"
 
     except ValueError:
-        return f"Error: Invalid job ID format: {job_id}"
+        return tool_error(ErrorType.VALIDATION_ERROR, f"Invalid job ID format: {job_id}")
     except PermissionError:
-        return f"Error: Access denied to commis job {job_id}"
+        return tool_error(ErrorType.PERMISSION_DENIED, f"Access denied to commis job {job_id}")
     except FileNotFoundError:
-        return f"Error: Commis job {job_id} not found or has no result yet"
+        return tool_error(ErrorType.NOT_FOUND, f"Commis job {job_id} not found or has no result yet")
     except Exception as e:
         logger.exception(f"Failed to read commis result: {job_id}")
-        return f"Error reading commis result: {e}"
+        return tool_error(ErrorType.EXECUTION_ERROR, f"Error reading commis result: {e}")
 
 
 def read_commis_result(job_id: str) -> str:
@@ -824,7 +850,10 @@ async def get_commis_evidence_async(job_id: str, budget_bytes: int = 32000) -> s
     # Get owner_id from context for security filtering
     resolver = get_credential_resolver()
     if not resolver:
-        return "Error: Cannot fetch evidence - no credential context available"
+        return tool_error(
+            ErrorType.MISSING_CONTEXT,
+            "Cannot fetch evidence - no credential context available",
+        )
 
     db = resolver.db
 
@@ -834,15 +863,15 @@ async def get_commis_evidence_async(job_id: str, budget_bytes: int = 32000) -> s
     try:
         job_id_int = int(job_id)
     except ValueError:
-        return f"Error: Invalid job ID format: {job_id}"
+        return tool_error(ErrorType.VALIDATION_ERROR, f"Invalid job ID format: {job_id}")
 
     try:
         job = db.query(crud.CommisJob).filter(crud.CommisJob.id == job_id_int, crud.CommisJob.owner_id == resolver.owner_id).first()
         if not job:
-            return f"Error: Commis job {job_id} not found"
+            return tool_error(ErrorType.NOT_FOUND, f"Commis job {job_id} not found")
 
         if not job.commis_id:
-            return f"Error: Commis job {job_id} has not started execution yet"
+            return tool_error(ErrorType.INVALID_STATE, f"Commis job {job_id} has not started execution yet")
 
         compiler = EvidenceCompiler(db=db)
         evidence = compiler.compile_for_job(
@@ -855,10 +884,10 @@ async def get_commis_evidence_async(job_id: str, budget_bytes: int = 32000) -> s
         return f"Evidence for commis job {job_id} (commis {job.commis_id}, budget={safe_budget}B):\n\n{evidence}"
 
     except PermissionError:
-        return f"Error: Access denied to commis job {job_id}"
+        return tool_error(ErrorType.PERMISSION_DENIED, f"Access denied to commis job {job_id}")
     except Exception as e:
         logger.exception(f"Failed to compile evidence for commis job: {job_id}")
-        return f"Error compiling evidence for commis job {job_id}: {e}"
+        return tool_error(ErrorType.EXECUTION_ERROR, f"Error compiling evidence for commis job {job_id}: {e}")
 
 
 def get_commis_evidence(job_id: str, budget_bytes: int = 32000) -> str:
@@ -928,7 +957,10 @@ async def get_tool_output_async(artifact_id: str, max_bytes: int = 32000) -> str
     """
     resolver = get_credential_resolver()
     if not resolver:
-        return "Error: Cannot fetch tool output - no credential context available"
+        return tool_error(
+            ErrorType.MISSING_CONTEXT,
+            "Cannot fetch tool output - no credential context available",
+        )
 
     try:
         store = ToolOutputStore()
@@ -966,12 +998,12 @@ async def get_tool_output_async(artifact_id: str, max_bytes: int = 32000) -> str
         return f"{header}:\n\n{content}"
 
     except ValueError:
-        return f"Error: Invalid artifact_id: {artifact_id}"
+        return tool_error(ErrorType.VALIDATION_ERROR, f"Invalid artifact_id: {artifact_id}")
     except FileNotFoundError:
-        return f"Error: Tool output {artifact_id} not found"
+        return tool_error(ErrorType.NOT_FOUND, f"Tool output {artifact_id} not found")
     except Exception as e:
         logger.exception("Failed to read tool output: %s", artifact_id)
-        return f"Error reading tool output {artifact_id}: {e}"
+        return tool_error(ErrorType.EXECUTION_ERROR, f"Error reading tool output {artifact_id}: {e}")
 
 
 def get_tool_output(artifact_id: str, max_bytes: int = 32000) -> str:
@@ -1004,7 +1036,10 @@ async def read_commis_file_async(job_id: str, file_path: str) -> str:
     # Get owner_id from context for security filtering
     resolver = get_credential_resolver()
     if not resolver:
-        return "Error: Cannot read commis file - no credential context available"
+        return tool_error(
+            ErrorType.MISSING_CONTEXT,
+            "Cannot read commis file - no credential context available",
+        )
 
     db = resolver.db
 
@@ -1016,10 +1051,10 @@ async def read_commis_file_async(job_id: str, file_path: str) -> str:
         job = db.query(crud.CommisJob).filter(crud.CommisJob.id == job_id_int, crud.CommisJob.owner_id == resolver.owner_id).first()
 
         if not job:
-            return f"Error: Commis job {job_id} not found"
+            return tool_error(ErrorType.NOT_FOUND, f"Commis job {job_id} not found")
 
         if not job.commis_id:
-            return f"Error: Commis job {job_id} has not started execution yet"
+            return tool_error(ErrorType.INVALID_STATE, f"Commis job {job_id} has not started execution yet")
 
         # Read file from artifacts
         artifact_store = CommisArtifactStore()
@@ -1030,16 +1065,14 @@ async def read_commis_file_async(job_id: str, file_path: str) -> str:
         return f"Contents of {file_path} from commis job {job_id} (commis {job.commis_id}):\n\n{content}"
 
     except ValueError:
-        return f"Error: Invalid job ID format: {job_id}"
+        return tool_error(ErrorType.VALIDATION_ERROR, f"Invalid job ID format: {job_id}")
     except PermissionError:
-        return f"Error: Access denied to commis job {job_id}"
+        return tool_error(ErrorType.PERMISSION_DENIED, f"Access denied to commis job {job_id}")
     except FileNotFoundError:
-        return f"Error: File {file_path} not found in commis job {job_id}"
-    except ValueError as e:
-        return f"Error: Invalid file path - {e}"
+        return tool_error(ErrorType.NOT_FOUND, f"File {file_path} not found in commis job {job_id}")
     except Exception as e:
         logger.exception(f"Failed to read commis file: {job_id}/{file_path}")
-        return f"Error reading commis file: {e}"
+        return tool_error(ErrorType.EXECUTION_ERROR, f"Error reading commis file: {e}")
 
 
 async def peek_commis_output_async(job_id: str, max_bytes: int = 4000) -> str:
@@ -1056,7 +1089,10 @@ async def peek_commis_output_async(job_id: str, max_bytes: int = 4000) -> str:
 
     resolver = get_credential_resolver()
     if not resolver:
-        return "Error: Cannot peek commis output - no credential context available"
+        return tool_error(
+            ErrorType.MISSING_CONTEXT,
+            "Cannot peek commis output - no credential context available",
+        )
 
     db = resolver.db
 
@@ -1072,7 +1108,7 @@ async def peek_commis_output_async(job_id: str, max_bytes: int = 4000) -> str:
         )
 
         if not job:
-            return f"Error: Commis job {job_id} not found"
+            return tool_error(ErrorType.NOT_FOUND, f"Commis job {job_id} not found")
 
         if not job.commis_id:
             return f"Commis job {job_id} has not started execution yet"
@@ -1118,10 +1154,10 @@ async def peek_commis_output_async(job_id: str, max_bytes: int = 4000) -> str:
 
         return "No live output yet. Try again soon."
     except ValueError:
-        return f"Error: Invalid job ID format: {job_id}"
+        return tool_error(ErrorType.VALIDATION_ERROR, f"Invalid job ID format: {job_id}")
     except Exception as e:
         logger.exception(f"Failed to peek commis output: {job_id}")
-        return f"Error peeking commis output: {e}"
+        return tool_error(ErrorType.EXECUTION_ERROR, f"Error peeking commis output: {e}")
 
 
 def read_commis_file(job_id: str, file_path: str) -> str:
@@ -1153,7 +1189,10 @@ async def grep_commiss_async(pattern: str, since_hours: int = 24) -> str:
     # Get owner_id from context for security filtering
     resolver = get_credential_resolver()
     if not resolver:
-        return "Error: Cannot grep commiss - no credential context available"
+        return tool_error(
+            ErrorType.MISSING_CONTEXT,
+            "Cannot grep commiss - no credential context available",
+        )
 
     db = resolver.db
     artifact_store = CommisArtifactStore()
@@ -1215,7 +1254,7 @@ async def grep_commiss_async(pattern: str, since_hours: int = 24) -> str:
 
     except Exception as e:
         logger.exception(f"Failed to grep commiss: {pattern}")
-        return f"Error searching commiss: {e}"
+        return tool_error(ErrorType.EXECUTION_ERROR, f"Error searching commiss: {e}")
 
 
 def grep_commiss(pattern: str, since_hours: int = 24) -> str:
@@ -1239,7 +1278,10 @@ async def get_commis_metadata_async(job_id: str) -> str:
     # Get owner_id from context for security filtering
     resolver = get_credential_resolver()
     if not resolver:
-        return "Error: Cannot get commis metadata - no credential context available"
+        return tool_error(
+            ErrorType.MISSING_CONTEXT,
+            "Cannot get commis metadata - no credential context available",
+        )
 
     db = resolver.db
 
@@ -1251,7 +1293,7 @@ async def get_commis_metadata_async(job_id: str) -> str:
         job = db.query(crud.CommisJob).filter(crud.CommisJob.id == job_id_int, crud.CommisJob.owner_id == resolver.owner_id).first()
 
         if not job:
-            return f"Error: Commis job {job_id} not found"
+            return tool_error(ErrorType.NOT_FOUND, f"Commis job {job_id} not found")
 
         # Format nicely
         lines = [
@@ -1288,10 +1330,10 @@ async def get_commis_metadata_async(job_id: str) -> str:
         return "\n".join(lines)
 
     except ValueError:
-        return f"Error: Invalid job ID format: {job_id}"
+        return tool_error(ErrorType.VALIDATION_ERROR, f"Invalid job ID format: {job_id}")
     except Exception as e:
         logger.exception(f"Failed to get commis metadata: {job_id}")
-        return f"Error getting commis metadata: {e}"
+        return tool_error(ErrorType.EXECUTION_ERROR, f"Error getting commis metadata: {e}")
 
 
 def get_commis_metadata(job_id: str) -> str:
@@ -1326,7 +1368,10 @@ async def request_session_selection_async(
     # Get oikos context for run_id and trace_id
     ctx = get_oikos_context()
     if not ctx:
-        return "Error: Cannot request session selection - no oikos context available"
+        return tool_error(
+            ErrorType.MISSING_CONTEXT,
+            "Cannot request session selection - no oikos context available",
+        )
 
     # Build filters
     filters = {}
