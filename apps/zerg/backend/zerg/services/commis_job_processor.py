@@ -65,7 +65,7 @@ def _extract_summary_from_output(
 
         # Priority 1: Use error message if available
         if error and error.strip():
-            error_text = error.strip().replace("\n", " ").replace("\r", " ")
+            error_text = " ".join(error.strip().replace("\n", " ").replace("\r", " ").split())
             if len(error_text) <= remaining_len:
                 return prefix + error_text
             truncated = error_text[: remaining_len - 3]
@@ -76,7 +76,7 @@ def _extract_summary_from_output(
 
         # Priority 2: Use output if error is empty
         if output and output.strip():
-            output_text = output.strip().replace("\n", " ").replace("\r", " ")
+            output_text = " ".join(output.strip().replace("\n", " ").replace("\r", " ").split())
             if len(output_text) <= remaining_len:
                 return prefix + output_text
             truncated = output_text[: remaining_len - 3]
@@ -89,11 +89,11 @@ def _extract_summary_from_output(
         return prefix + "(No error details available)"
 
     # Success case: just use output
-    if not output:
+    if not output or not output.strip():
         return "(No output)"
 
     # Take first 150 chars, clean up newlines, truncate at word boundary
-    text = output.strip().replace("\n", " ").replace("\r", " ")
+    text = " ".join(output.strip().replace("\n", " ").replace("\r", " ").split())
     if len(text) <= _SUMMARY_MAX_LENGTH:
         return text
 

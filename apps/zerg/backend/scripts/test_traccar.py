@@ -12,7 +12,7 @@ Usage:
     # Reads from personal_credentials.local.json
 
     # Or test with explicit credentials:
-    python test_traccar.py --url http://REDACTED_IP:5055 --username admin --password admin
+    python test_traccar.py --url http://192.0.2.1:5055 --username admin --password admin
 """
 
 import argparse
@@ -45,7 +45,7 @@ def test_traccar(url: str, username: str, password: str, device_id: str = None):
     """Test Traccar server connection and API.
 
     Args:
-        url: Traccar server URL (e.g. http://REDACTED_IP:5055)
+        url: Traccar server URL (e.g. http://192.0.2.1:5055)
         username: Traccar username
         password: Traccar password
         device_id: Optional device ID to check for

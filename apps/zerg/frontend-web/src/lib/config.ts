@@ -126,7 +126,7 @@ function loadConfig(): AppConfig {
     wsBaseUrl,
 
     // Authentication
-    googleClientId: import.meta.env.VITE_GOOGLE_CLIENT_ID || "REDACTED_OAUTH_CLIENT.apps.googleusercontent.com",
+    googleClientId: import.meta.env.VITE_GOOGLE_CLIENT_ID || "658453123272-gt664mlo8q3pra3u1h3oflbmrdi94lld.apps.googleusercontent.com",
     authEnabled: import.meta.env.VITE_AUTH_ENABLED !== 'false',
 
     // Environment

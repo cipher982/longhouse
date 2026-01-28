@@ -70,7 +70,7 @@ class TestPatchUserContext:
         update = {
             "context": {
                 "location": "San Francisco",
-                "servers": [{"name": "clifford", "ip": "REDACTED_IP"}],
+                "servers": [{"name": "clifford", "ip": "192.0.2.1"}],
             }
         }
 
@@ -469,7 +469,7 @@ class TestContextValidation:
                 "servers": [
                     {
                         "name": "clifford",
-                        "ip": "REDACTED_IP",
+                        "ip": "192.0.2.1",
                         "purpose": "Production VPS",
                         "platform": "Ubuntu",
                         "notes": "Hetzner server",
@@ -555,7 +555,7 @@ class TestContextValidation:
                 "servers": [
                     {
                         "name": "clifford",
-                        "ip": "REDACTED_IP",
+                        "ip": "192.0.2.1",
                         "purpose": "Production VPS",
                         "platform": "Ubuntu",
                     }
