@@ -300,18 +300,23 @@ class CommisJobProcessor:
                     logger.error(f"Job {job_id} not found when updating final status")
                     return
 
-                update_job.commis_id = result.commis_id
-                update_job.finished_at = datetime.now(timezone.utc)
-
-                if result.status == "success":
-                    update_job.status = "success"
-                    logger.info(f"Commis job {job_id} completed successfully")
+                # Check if job was cancelled while running - don't overwrite cancelled status
+                if update_job.status == "cancelled":
+                    logger.info(f"Commis job {job_id} was cancelled - preserving cancelled status")
+                    # Don't update anything, status is already correct
                 else:
-                    update_job.status = "failed"
-                    update_job.error = result.error or "Unknown error"
-                    logger.error(f"Commis job {job_id} failed: {update_job.error}")
+                    update_job.commis_id = result.commis_id
+                    update_job.finished_at = datetime.now(timezone.utc)
 
-                update_db.commit()
+                    if result.status == "success":
+                        update_job.status = "success"
+                        logger.info(f"Commis job {job_id} completed successfully")
+                    else:
+                        update_job.status = "failed"
+                        update_job.error = result.error or "Unknown error"
+                        logger.error(f"Commis job {job_id} failed: {update_job.error}")
+
+                    update_db.commit()
 
         except Exception as e:
             logger.exception(f"Failed to process local commis job {job_id}")
@@ -478,25 +483,33 @@ class CommisJobProcessor:
                 logger.error(f"Job {job_id} not found when updating final status")
                 return
 
-            update_job.finished_at = datetime.now(timezone.utc)
-
-            if execution_error:
-                update_job.status = "failed"
-                update_job.error = execution_error
-                logger.error(f"Workspace commis job {job_id} failed: {execution_error}")
-            elif result and result.status == "success":
-                update_job.status = "success"
-                logger.info(f"Workspace commis job {job_id} completed successfully")
+            # Check if job was cancelled while running - don't overwrite cancelled status
+            if update_job.status == "cancelled":
+                logger.info(f"Workspace commis job {job_id} was cancelled - preserving cancelled status")
+                final_status = "cancelled"
+                final_error = update_job.error
+                # Don't update anything, status is already correct
             else:
-                update_job.status = "failed"
-                update_job.error = result.error if result else "Unknown error"
-                logger.error(f"Workspace commis job {job_id} failed: {update_job.error}")
+                update_job.finished_at = datetime.now(timezone.utc)
 
-            final_status = update_job.status
-            final_error = update_job.error if update_job.status == "failed" else None
-            update_db.commit()
+                if execution_error:
+                    update_job.status = "failed"
+                    update_job.error = execution_error
+                    logger.error(f"Workspace commis job {job_id} failed: {execution_error}")
+                elif result and result.status == "success":
+                    update_job.status = "success"
+                    logger.info(f"Workspace commis job {job_id} completed successfully")
+                else:
+                    update_job.status = "failed"
+                    update_job.error = result.error if result else "Unknown error"
+                    logger.error(f"Workspace commis job {job_id} failed: {update_job.error}")
+
+                final_status = update_job.status
+                final_error = update_job.error if update_job.status == "failed" else None
+                update_db.commit()
 
         # 8. Save artifacts (best-effort - failures should NOT change job status)
+        # For cancelled jobs, still save partial results if available
         if result and artifact_store:
             try:
                 artifact_store.save_result(commis_id, result.output or "(No output)")
@@ -506,8 +519,8 @@ class CommisJobProcessor:
             try:
                 artifact_store.complete_commis(
                     commis_id,
-                    status="success" if result.status == "success" else "failed",
-                    error=result.error if result.status != "success" else None,
+                    status=final_status,  # Use final_status which respects cancelled state
+                    error=final_error,
                 )
             except Exception as complete_error:
                 logger.warning(f"Failed to complete artifact commis for job {job_id}: {complete_error}")
