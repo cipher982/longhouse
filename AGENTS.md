@@ -226,3 +226,6 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-27) [gotcha] Sauron /sync reloads manifest but scheduler doesn't reschedule jobs; changes/new jobs won't run until restart or explicit re-schedule.
 - (2026-01-27) [gotcha] If Zerg backend has `JOB_QUEUE_ENABLED=1` and `JOBS_GIT_*` set, it will schedule external sauron-jobs too; remove/disable those vars when Sauron is the sole scheduler.
 - (2026-01-28) [pattern] Fix Scripted/Mock LLM tool-error handling before changing tool behavior so tests can signal real failures.
+- (2026-01-28) [pattern] For UX/design work, start with a brief principles/structure pass (layout, hierarchy, density) before incremental tweaks.
+- (2026-01-28) [pattern] Cold-start/hibernation breaks background agents; hosted model needs always-on workers or a central scheduler to keep tasks instant.
+- (2026-01-28) [gotcha] Multi-tenant isolation is app-level only (owner_id filters), no DB RLS; container_runner is a Docker scaffold not wired into commis yet.
