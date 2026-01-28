@@ -484,7 +484,7 @@ export default function DashboardPage() {
         <EmptyState
           icon={<Spinner size="lg" />}
           title="Loading fiches..."
-          description="Fetching your autonomous workforce."
+          description="Fetching your fiches."
         />
       </div>
     );
@@ -514,49 +514,52 @@ export default function DashboardPage() {
   return (
     <div id="dashboard-container" className="dashboard-page">
       <SectionHeader
+        className="dashboard-hero"
         title={scope === "all" ? "All fiches" : "My fiches"}
-        description="Monitor and manage your autonomous commis."
+        description="Monitor and manage your fiches."
         actions={
-          <div className="button-container">
-            <div className="scope-wrapper">
-              <label className="scope-toggle">
-                <input
-                  type="checkbox"
-                  id="dashboard-scope-toggle"
-                  data-testid="dashboard-scope-toggle"
-                  aria-label="Toggle between my fiches and all fiches"
-                  checked={scope === "all"}
-                  onChange={(e) => {
-                    const newScope = e.target.checked ? "all" : "my";
-                    setScope(newScope);
-                  }}
-                />
-                <span className="slider"></span>
-              </label>
+          <div className="dashboard-actions">
+            <div className="dashboard-actions__stats">
+              <UsageWidget />
             </div>
-            <Button
-              variant="primary"
-              onClick={() => createFicheMutation.mutate()}
-              disabled={createFicheMutation.isPending}
-              data-testid="create-fiche-btn"
-            >
-              {createFicheMutation.isPending ? (
-                <Spinner size="sm" />
-              ) : (
-                <>
-                  <PlusIcon />
-                  Create Fiche
-                </>
-              )}
-            </Button>
+            <div className="dashboard-actions__controls">
+              <div className="scope-wrapper">
+                <label className="scope-toggle">
+                  <input
+                    type="checkbox"
+                    id="dashboard-scope-toggle"
+                    data-testid="dashboard-scope-toggle"
+                    aria-label="Toggle between my fiches and all fiches"
+                    checked={scope === "all"}
+                    onChange={(e) => {
+                      const newScope = e.target.checked ? "all" : "my";
+                      setScope(newScope);
+                    }}
+                  />
+                  <span className="slider"></span>
+                </label>
+              </div>
+              <Button
+                variant="primary"
+                onClick={() => createFicheMutation.mutate()}
+                disabled={createFicheMutation.isPending}
+                data-testid="create-fiche-btn"
+              >
+                {createFicheMutation.isPending ? (
+                  <Spinner size="sm" />
+                ) : (
+                  <>
+                    <PlusIcon />
+                    Create Fiche
+                  </>
+                )}
+              </Button>
+            </div>
           </div>
         }
       />
 
       <div className="dashboard-content">
-        {/* LLM Usage Widget */}
-        <UsageWidget />
-
         <Table className="fiches-table">
           <Table.Header>
             {renderHeaderCell("Name", "name", sortConfig, handleSort)}
@@ -597,8 +600,8 @@ export default function DashboardPage() {
               />
             ))}
             {sortedFiches.length === 0 && (
-              <Table.Row>
-                <Table.Cell isHeader colSpan={emptyColspan}>
+              <Table.Row className="fiches-empty-row">
+                <Table.Cell colSpan={emptyColspan} className="fiches-empty-cell">
                   <EmptyState
                     icon={<img src={appLogo} alt="Swarmlet Logo" className="dashboard-empty-logo" />}
                     title="No fiches found"
