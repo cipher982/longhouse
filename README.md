@@ -68,29 +68,26 @@ Ports (dev): nginx 30080 external; service ports 47200 (frontend), 47300 (backen
 
 ```
 apps/
-└── zerg/
-    ├── backend/        # FastAPI + LangGraph-free supervisor/worker
-    ├── frontend-web/   # React dashboard
-    └── e2e/            # Playwright unified tests
+├── zerg/
+│   ├── backend/        # FastAPI + supervisor/commis agents
+│   ├── frontend-web/   # React dashboard + Oikos chat
+│   └── e2e/            # Playwright tests
+├── runner/             # Remote execution daemon
+└── sauron/             # Standalone scheduler
 
-docker/                 # Compose files + nginx reverse-proxy configs
-docs/                   # Specs/PRDs (see below)
+docker/                 # Compose files + nginx configs
 scripts/                # Dev tools + generators
 ```
 
 ---
 
-## Docs to know
+## Documentation
 
-- `docs/specs/TRACE_FIRST_NORTH_STAR.md` – high-level architectural philosophy.
-- `docs/specs/durable-runs-v2.2.md` – durable runs (current core architecture).
-- `docs/agent-improvements-progress.md` – context management & progressive disclosure (phases 1-4 complete).
-- `docs/specs/worker-supervision-roundabout.md` – phases 1–6 complete, matches code.
-- `docs/specs/oikos-supervisor-unification-v2.1.md` – supervisor/Oikos unification (v2.1).
-- `apps/zerg/backend/docs/email_testing_guide.md` – guide for Gmail/Email integration testing.
-- `docs/archive/super-siri-architecture.md` – v2.0 overall vision (historical).
-- `docs/DEPLOYMENT.md` – production deployment guide (Coolify + `docker/docker-compose.prod.yml`).
-- `docs/DEVELOPMENT.md` – local dev guide (`make dev` + `docker/docker-compose.dev.yml` profile `dev`).
+- `AGENTS.md` – Main project guide (architecture, commands, conventions)
+- `apps/zerg/backend/DATABASE.md` – Database patterns
+- `apps/zerg/backend/TESTING_STRATEGY.md` – Testing philosophy
+- `apps/zerg/backend/evals/README.md` – Eval system
+- `apps/sauron/README.md` – Scheduler service
 
 ---
 
