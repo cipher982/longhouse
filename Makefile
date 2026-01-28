@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-reset-db reset test test-integration test-unit test-e2e test-e2e-core test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-runner-unit test-install-runner test-prompts test-ci test-backend-docker test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage
+.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-reset-db reset test test-integration test-unit test-e2e test-e2e-core test-all test-full test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-hatch-agent test-runner-unit test-install-runner test-prompts test-ci test-backend-docker test-backend-ci test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage
 
 
 # ---------------------------------------------------------------------------
@@ -19,7 +19,7 @@ help: ## Show this help message
 	@echo "\n🌐 Swarm Platform (Oikos + Zerg)"
 	@echo "=================================="
 	@echo ""
-	@grep -B0 '## ' Makefile | grep -E '^[a-zA-Z0-9_-]+:' | sed 's/:.*## /: /' | column -t -s ':' | awk '{printf "  %-24s %s\n", $$1":", substr($$0, index($$0,$$2))}' | sort
+	@grep -B0 '## ' Makefile | grep -E '^[a-zA-Z0-9_-]+:' | grep -v '## @internal' | sed 's/:.*## /: /' | column -t -s ':' | awk '{printf "  %-24s %s\n", $$1":", substr($$0, index($$0,$$2))}' | sort
 	@echo ""
 
 # ---------------------------------------------------------------------------
@@ -170,58 +170,92 @@ E2E_BACKEND_PORT ?= 8001
 E2E_FRONTEND_PORT ?= 8002
 SHIPPER_E2E_URL ?= http://localhost:47300
 
-test: ## Backend + frontend tests (no Playwright)
-	@echo "🧪 Running tests (no Playwright E2E)..."
-	$(MAKE) test-unit
+test: ## Run unit tests (backend + frontend + hatch-agent + runner)
+	@set -e; \
+	if [ "$(MINIMAL)" = "1" ]; then \
+		echo "🧪 Running unit tests (minimal)..."; \
+		if [ -n "$(CI_TEST_SCHEMA)" ] && { [ -n "$(DATABASE_URL)" ] || [ -n "$(CI_DATABASE_URL)" ]; }; then \
+			$(MAKE) test-backend-ci; \
+		else \
+			(cd apps/zerg/backend && ./run_backend_tests.sh -q --no-header); \
+		fi; \
+		$(MAKE) test-frontend-unit MINIMAL=1; \
+		$(MAKE) test-hatch-agent MINIMAL=1; \
+		$(MAKE) test-runner-unit; \
+		$(MAKE) test-install-runner; \
+	else \
+		echo "🧪 Running unit tests..."; \
+		if [ -n "$(CI_TEST_SCHEMA)" ] && { [ -n "$(DATABASE_URL)" ] || [ -n "$(CI_DATABASE_URL)" ]; }; then \
+			$(MAKE) test-backend-ci; \
+		else \
+			(cd apps/zerg/backend && ./run_backend_tests.sh); \
+		fi; \
+		$(MAKE) test-frontend-unit; \
+		$(MAKE) test-hatch-agent; \
+		$(MAKE) test-runner-unit; \
+		$(MAKE) test-install-runner; \
+	fi
 
-test-unit: ## Alias for test-zerg-unit
-	$(MAKE) test-zerg-unit
+test-unit: ## @internal Deprecated alias for test
+	$(MAKE) test
 
-test-e2e: ## Alias for test-zerg-e2e
-	$(MAKE) test-zerg-e2e
+test-zerg-unit: ## @internal Deprecated alias for test
+	$(MAKE) test
 
-test-e2e-core: ## Run core E2E tests only (no retries, must pass 100%)
+test-e2e: ## Run E2E tests (core + a11y)
+	@echo "🎭 Running E2E tests (core + a11y)..."
+	$(MAKE) test-e2e-core
+	$(MAKE) test-e2e-a11y
+
+test-e2e-core: ## @internal Run core E2E tests only (no retries, must pass 100%)
 	@echo "🔴 Running CORE E2E tests (no retries, must pass 100%)..."
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=core
 
-test-all: ## Full suite including Playwright E2E
-	@echo "🧪 Running full suite (unit + Playwright E2E)..."
-	$(MAKE) test-unit
-	$(MAKE) test-e2e
+test-full: ## Full suite (unit + full E2E + evals + visual baselines)
+	@echo "🧪 Running full suite (unit + full E2E + evals + visual baselines)..."
+	$(MAKE) test
+	$(MAKE) test-e2e-core
+	$(MAKE) test-zerg-e2e
+	$(MAKE) eval
+	$(MAKE) qa-ui-baseline
+	$(MAKE) qa-ui-baseline-mobile
+
+test-all: ## @internal Deprecated alias for test-full
+	$(MAKE) test-full
 
 test-chat-e2e: ## Run Oikos chat E2E tests (inside unified SPA)
 	@echo "🧪 Running chat E2E tests (unified SPA)..."
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/unified-frontend.spec.ts
 
-test-e2e-single: ## Run a single E2E test (usage: make test-e2e-single TEST=tests/unified-frontend.spec.ts)
+test-e2e-single: ## @internal Run a single E2E test (usage: make test-e2e-single TEST=tests/unified-frontend.spec.ts)
 	@test -n "$(TEST)" || (echo "❌ Usage: make test-e2e-single TEST=<spec-or-args>" && exit 1)
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test $(TEST)
 
-test-e2e-ui: ## Run Playwright E2E tests with interactive UI
+test-e2e-ui: ## @internal Run Playwright E2E tests with interactive UI
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium --ui
 
-test-e2e-verbose: ## Run E2E tests with full verbose output (for debugging)
+test-e2e-verbose: ## @internal Run E2E tests with full verbose output (for debugging)
 	cd apps/zerg/e2e && VERBOSE=1 BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium
 
-test-e2e-errors: ## Show detailed errors from last E2E run
+test-e2e-errors: ## @internal Show detailed errors from last E2E run
 	@if [ -f apps/zerg/e2e/test-results/errors.txt ]; then \
 		cat apps/zerg/e2e/test-results/errors.txt; \
 	else \
 		echo "No errors.txt found. Run 'make test-e2e' first."; \
 	fi
 
-test-e2e-query: ## Query last E2E results (usage: make test-e2e-query Q='.failed[]')
+test-e2e-query: ## @internal Query last E2E results (usage: make test-e2e-query Q='.failed[]')
 	@if [ -f apps/zerg/e2e/test-results/summary.json ]; then \
 		jq '$(Q)' apps/zerg/e2e/test-results/summary.json; \
 	else \
 		echo "No summary.json found. Run 'make test-e2e' first."; \
 	fi
 
-test-e2e-grep: ## Run E2E tests by name (usage: make test-e2e-grep GREP="test name")
+test-e2e-grep: ## @internal Run E2E tests by name (usage: make test-e2e-grep GREP="test name")
 	@test -n "$(GREP)" || (echo "❌ Usage: make test-e2e-grep GREP='test name'" && exit 1)
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium --grep "$(GREP)"
 
-test-e2e-a11y: ## Run accessibility UI/UX checks (axe + heuristics)
+test-e2e-a11y: ## @internal Run accessibility UI/UX checks (axe + heuristics)
 	@echo "🧪 Running accessibility UI/UX checks..."
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/accessibility.spec.ts tests/accessibility_ui_ux.spec.ts
 
@@ -234,14 +268,14 @@ qa-ui-visual: ## Visual UI analysis (screenshots + AI) (usage: make qa-ui-visual
 qa-ui-smoke: ## Visual smoke snapshots for core app pages (glass)
 	$(MAKE) test-e2e-single TEST="--project=chromium tests/visual_smoke_glass.spec.ts"
 
-qa-ui-smoke-update: ## Update visual smoke snapshots for core app pages (glass)
+qa-ui-smoke-update: ## @internal Update visual smoke snapshots for core app pages (glass)
 	$(MAKE) test-e2e-single TEST="--project=chromium --update-snapshots tests/visual_smoke_glass.spec.ts"
 
 qa-ui-baseline: ## Visual baselines for app + public pages
 	$(MAKE) test-e2e-single TEST=tests/ui_baseline_public.spec.ts
 	$(MAKE) test-e2e-single TEST=tests/ui_baseline_app.spec.ts
 
-qa-ui-baseline-update: ## Update visual baselines for app + public pages
+qa-ui-baseline-update: ## @internal Update visual baselines for app + public pages
 	PWUPDATE=1 $(MAKE) test-e2e-single TEST=tests/ui_baseline_public.spec.ts
 	PWUPDATE=1 $(MAKE) test-e2e-single TEST=tests/ui_baseline_app.spec.ts
 
@@ -249,7 +283,7 @@ qa-ui-baseline-mobile: ## Visual baselines for mobile viewport pages
 	$(MAKE) test-e2e-single TEST="--project=mobile tests/mobile/ui_baseline_mobile.spec.ts"
 	$(MAKE) test-e2e-single TEST="--project=mobile-small tests/mobile/ui_baseline_mobile.spec.ts"
 
-qa-ui-baseline-mobile-update: ## Update visual baselines for mobile viewport pages
+qa-ui-baseline-mobile-update: ## @internal Update visual baselines for mobile viewport pages
 	PWUPDATE=1 $(MAKE) test-e2e-single TEST="--project=mobile tests/mobile/ui_baseline_mobile.spec.ts"
 	PWUPDATE=1 $(MAKE) test-e2e-single TEST="--project=mobile-small tests/mobile/ui_baseline_mobile.spec.ts"
 
@@ -263,23 +297,11 @@ test-perf: ## Run performance evaluation tests (chat latency profiling)
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/chat_performance_eval.spec.ts
 	@echo "✅ Performance tests complete. Metrics exported to apps/zerg/e2e/metrics/"
 
-test-zerg-unit: ## Run Zerg unit tests (backend + frontend)
-	@if [ "$(MINIMAL)" = "1" ]; then \
-		echo "🧪 Running Zerg unit tests (minimal)..." && \
-		(cd apps/zerg/backend && ./run_backend_tests.sh -q --no-header) && \
-		(cd apps/zerg/frontend-web && bun run test -- --reporter=dot --silent); \
-	else \
-		echo "🧪 Running Zerg unit tests..." && \
-		(cd apps/zerg/backend && ./run_backend_tests.sh) && \
-		(cd apps/zerg/frontend-web && bun run test); \
-	fi
-
-test-backend-docker: ## Backend tests with Docker/testcontainers (local dev)
+test-backend-docker: ## @internal Backend tests with Docker/testcontainers (local dev)
 	@echo "🐳 Running backend tests with testcontainers (Docker mode)..."
 	cd apps/zerg/backend && ./run_backend_tests.sh --db-mode=docker
 
-# CI-only target (hidden from make help) - uses external Postgres, no Docker needed
-test-backend-ci:
+test-backend-ci: ## @internal Backend tests with external Postgres (CI only)
 	@if [ -z "$(CI_TEST_SCHEMA)" ]; then \
 		echo "❌ CI_TEST_SCHEMA required for CI mode"; \
 		exit 1; \
@@ -293,7 +315,7 @@ test-backend-ci:
 		DATABASE_URL="$${CI_DATABASE_URL:-$(DATABASE_URL)}" \
 		./run_backend_tests.sh --db-mode=external
 
-test-frontend-unit: ## Run frontend unit tests only
+test-frontend-unit: ## @internal Run frontend unit tests only
 	@if [ "$(MINIMAL)" = "1" ]; then \
 		echo "🧪 Running frontend unit tests (minimal)..."; \
 		cd apps/zerg/frontend-web && bun run test -- --reporter=dot --silent; \
@@ -302,15 +324,24 @@ test-frontend-unit: ## Run frontend unit tests only
 		cd apps/zerg/frontend-web && bun run test; \
 	fi
 
-test-runner-unit: ## Run runner unit tests
+test-hatch-agent: ## @internal Run hatch-agent package tests
+	@if [ "$(MINIMAL)" = "1" ]; then \
+		echo "🧪 Running hatch-agent tests (minimal)..."; \
+		cd packages/hatch-agent && uv run --extra dev pytest tests/ --ignore=tests/test_integration.py -q; \
+	else \
+		echo "🧪 Running hatch-agent tests..."; \
+		cd packages/hatch-agent && uv run --extra dev pytest tests/ --ignore=tests/test_integration.py; \
+	fi
+
+test-runner-unit: ## @internal Run runner unit tests
 	@echo "🧪 Running runner unit tests..."
 	cd apps/runner && bun test
 
-test-install-runner: ## Run install-runner script tests
+test-install-runner: ## @internal Run install-runner script tests
 	@echo "🧪 Running install-runner script tests..."
 	bash scripts/tests/install-runner.test.sh
 
-test-integration: ## Run integration tests (REAL API calls, requires API keys)
+test-integration: ## @internal Run integration tests (REAL API calls, requires API keys)
 	@echo "🧪 Running integration tests (real API calls)..."
 	@echo "   Note: Requires OPENAI_API_KEY and/or GROQ_API_KEY"
 	cd apps/zerg/backend && EVAL_MODE=live uv run pytest tests/integration/ -v -m integration
@@ -325,11 +356,11 @@ test-shipper-e2e: ## Run shipper E2E tests (requires backend running)
 shipper-smoke-test: ## Run shipper live smoke test script (requires backend running)
 	@./scripts/shipper-smoke-test.sh
 
-test-zerg-e2e: ## Run Zerg E2E tests (Playwright)
+test-zerg-e2e: ## @internal Run full Zerg E2E tests (Playwright)
 	@echo "🧪 Running Zerg E2E tests..."
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium
 
-test-prompts: ## Run live prompt quality tests (requires backend running + --live-token)
+test-prompts: ## @internal Run live prompt quality tests (requires backend running + --live-token)
 	@echo "🧪 Running prompt quality tests (requires backend running)..."
 	@echo "   Example: make test-prompts TOKEN=your-jwt-token"
 	@if [ -z "$(TOKEN)" ]; then \
@@ -360,7 +391,7 @@ eval: ## 🔴 Run AI evals (REAL LLM - costs $$$)
 	@sleep 2
 	cd apps/zerg/backend && env EVAL_MODE=live uv run pytest evals/ -v --variant=$(EVAL_VARIANT) --timeout=120
 
-eval-compare: ## Compare two eval result files (usage: make eval-compare BASELINE=file1 VARIANT=file2)
+eval-compare: ## @internal Compare two eval result files (usage: make eval-compare BASELINE=file1 VARIANT=file2)
 	@test -n "$(BASELINE)" || (echo "❌ Usage: make eval-compare BASELINE=<file> VARIANT=<file>" && exit 1)
 	@test -n "$(VARIANT)" || (echo "❌ Usage: make eval-compare BASELINE=<file> VARIANT=<file>" && exit 1)
 	@echo "📊 Comparing eval results..."
@@ -576,7 +607,7 @@ verify-prod: ## Full prod validation: API + browser tests (~80s, requires SMOKE_
 	@./scripts/run-prod-e2e.sh
 	@echo "✅ Production verified"
 
-test-ci: ## CI-ready tests (unit + build + contracts)
+test-ci: ## @internal CI-ready tests (unit + build + contracts)
 	@./scripts/run-ci-tests.sh
 
 # ---------------------------------------------------------------------------
@@ -631,22 +662,22 @@ perf-gpu-dashboard: ## Measure actual GPU utilization % for dashboard ui-effects
 # ---------------------------------------------------------------------------
 # LangGraph Debug Commands (AI-optimized, minimal tokens)
 # ---------------------------------------------------------------------------
-debug-thread: ## Inspect DB ThreadMessages (usage: make debug-thread THREAD_ID=1)
+debug-thread: ## @internal Inspect DB ThreadMessages (usage: make debug-thread THREAD_ID=1)
 	@test -n "$(THREAD_ID)" || (echo "❌ Usage: make debug-thread THREAD_ID=<id>" && exit 1)
 	@cd apps/zerg/backend && uv run python scripts/debug_langgraph.py thread $(THREAD_ID)
 
-debug-validate: ## Validate message integrity (usage: make debug-validate THREAD_ID=1)
+debug-validate: ## @internal Validate message integrity (usage: make debug-validate THREAD_ID=1)
 	@test -n "$(THREAD_ID)" || (echo "❌ Usage: make debug-validate THREAD_ID=<id>" && exit 1)
 	@cd apps/zerg/backend && uv run python scripts/debug_langgraph.py validate $(THREAD_ID)
 
-debug-inspect: ## Inspect LangGraph checkpoint state (usage: make debug-inspect THREAD_ID=1)
+debug-inspect: ## @internal Inspect LangGraph checkpoint state (usage: make debug-inspect THREAD_ID=1)
 	@test -n "$(THREAD_ID)" || (echo "❌ Usage: make debug-inspect THREAD_ID=<id>" && exit 1)
 	@cd apps/zerg/backend && uv run python scripts/debug_langgraph.py inspect $(THREAD_ID)
 
-debug-batch: ## Run batch queries from stdin JSON (usage: echo '{"queries":[...]}' | make debug-batch)
+debug-batch: ## @internal Run batch queries from stdin JSON (usage: echo '{"queries":[...]}' | make debug-batch)
 	@cd apps/zerg/backend && uv run python scripts/debug_langgraph.py batch --stdin
 
-debug-trace: ## Debug a trace end-to-end (usage: make debug-trace TRACE=abc-123 or make debug-trace RECENT=1)
+debug-trace: ## @internal Debug a trace end-to-end (usage: make debug-trace TRACE=abc-123 or make debug-trace RECENT=1)
 	@if [ -n "$(RECENT)" ]; then \
 		cd apps/zerg/backend && uv run python scripts/debug_trace.py --recent; \
 	elif [ -n "$(TRACE)" ]; then \
@@ -657,7 +688,7 @@ debug-trace: ## Debug a trace end-to-end (usage: make debug-trace TRACE=abc-123 
 		exit 1; \
 	fi
 
-trace-coverage: ## Trace coverage report (usage: make trace-coverage [SINCE_HOURS=24] [MIN=95] [MIN_EVENTS=90] [JSON=1])
+trace-coverage: ## @internal Trace coverage report (usage: make trace-coverage [SINCE_HOURS=24] [MIN=95] [MIN_EVENTS=90] [JSON=1])
 	@cd apps/zerg/backend && uv run python scripts/trace_coverage.py \
 		$(if $(SINCE_HOURS),--since-hours $(SINCE_HOURS),) \
 		$(if $(MIN),--min-percent $(MIN),) \

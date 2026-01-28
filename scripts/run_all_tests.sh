@@ -8,8 +8,8 @@
 #
 # Prefer the Make targets directly:
 #   make test        # unit only
-#   make test-e2e
-#   make test-all
+#   make test-e2e    # core + a11y
+#   make test-full   # full suite
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -36,8 +36,7 @@ run_test_suite() {
     fi
 }
 
-run_test_suite "Unit" "cd '$ROOT_DIR' && make test"
-run_test_suite "E2E" "cd '$ROOT_DIR' && make test-e2e"
+run_test_suite "Full" "cd '$ROOT_DIR' && make test-full"
 
 # Summary
 echo "" >&2
