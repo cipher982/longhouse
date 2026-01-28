@@ -119,7 +119,7 @@ class TestFormatServers:
         servers = [
             {
                 "name": "clifford",
-                "ip": "REDACTED_IP",
+                "ip": "192.0.2.1",
                 "purpose": "Production VPS",
                 "platform": "Ubuntu + Coolify",
                 "notes": "Hosts 90% of web apps",
@@ -147,7 +147,7 @@ class TestFormatServers:
         assert "zerg" in result
 
         # Check IPs are present
-        assert "REDACTED_IP" in result
+        assert "192.0.2.1" in result
         assert "100.70.237.79" in result
 
         # Check purposes
@@ -240,7 +240,7 @@ class TestFormatServerNames:
     def test_format_server_names_multiple(self):
         """Test formatting returns comma-separated list."""
         servers = [
-            {"name": "clifford", "ip": "REDACTED_IP"},
+            {"name": "clifford", "ip": "192.0.2.1"},
             {"name": "cube", "ip": "100.70.237.79"},
             {"name": "zerg", "ip": "5.161.92.127"},
         ]
@@ -328,7 +328,7 @@ class TestBuildOikosOrchestratorPrompt:
                 "display_name": "Alice",
                 "role": "engineer",
                 "servers": [
-                    {"name": "clifford", "ip": "REDACTED_IP", "purpose": "Production"},
+                    {"name": "clifford", "ip": "192.0.2.1", "purpose": "Production"},
                     {"name": "cube", "ip": "100.70.237.79", "purpose": "GPU workloads"},
                 ],
                 "integrations": {
@@ -348,7 +348,7 @@ class TestBuildOikosOrchestratorPrompt:
 
         # Check servers are injected
         assert "clifford" in prompt
-        assert "REDACTED_IP" in prompt
+        assert "192.0.2.1" in prompt
         assert "cube" in prompt
 
         # Check integrations are injected
@@ -415,7 +415,7 @@ class TestBuildCommisPrompt:
             context={
                 "display_name": "Charlie",
                 "servers": [
-                    {"name": "clifford", "ip": "REDACTED_IP", "purpose": "Production"},
+                    {"name": "clifford", "ip": "192.0.2.1", "purpose": "Production"},
                     {"name": "zerg", "ip": "5.161.92.127", "purpose": "Projects"},
                 ],
             }
@@ -425,7 +425,7 @@ class TestBuildCommisPrompt:
 
         # Check servers appear in prompt
         assert "clifford" in prompt
-        assert "REDACTED_IP" in prompt
+        assert "192.0.2.1" in prompt
         assert "zerg" in prompt
 
         # Check user context

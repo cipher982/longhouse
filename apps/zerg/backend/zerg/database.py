@@ -532,9 +532,13 @@ def initialize_database(engine: Engine = None) -> None:
     Args:
         engine: Optional engine to use, defaults to default_engine
     """
-    if os.getenv("TESTING") == "1" and os.getenv("E2E_USE_POSTGRES_SCHEMAS") == "1":
-        logger.info("Skipping initialize_database for E2E schema isolation")
-        return
+    if os.getenv("TESTING") == "1":
+        if os.getenv("E2E_USE_POSTGRES_SCHEMAS") == "1":
+            logger.info("Skipping initialize_database for E2E schema isolation")
+            return
+        if os.getenv("CI_TEST_SCHEMA"):
+            logger.info("Skipping initialize_database for external test schema")
+            return
 
     # Import all models to ensure they are registered with Base
     # We need to import the models explicitly to ensure they're registered

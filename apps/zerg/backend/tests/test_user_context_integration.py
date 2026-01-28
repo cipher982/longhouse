@@ -24,7 +24,7 @@ def test_user_context():
         "servers": [
             {
                 "name": "clifford",
-                "ip": "REDACTED_IP",
+                "ip": "192.0.2.1",
                 "purpose": "Production VPS",
                 "platform": "Ubuntu + Coolify",
             },
@@ -63,7 +63,7 @@ class TestOikosPromptIntegration:
 
         # Verify servers appear in prompt
         assert "clifford" in prompt
-        assert "REDACTED_IP" in prompt
+        assert "192.0.2.1" in prompt
         assert "cube" in prompt
         assert "100.70.237.79" in prompt
         assert "Production VPS" in prompt
@@ -161,7 +161,7 @@ class TestCommisPromptIntegration:
 
         # Verify servers appear in prompt
         assert "clifford" in prompt
-        assert "REDACTED_IP" in prompt
+        assert "192.0.2.1" in prompt
         assert "cube" in prompt
 
     def test_commis_prompt_includes_user_context(self, db_session, test_user, test_user_context):
@@ -190,7 +190,7 @@ class TestCommisPromptIntegration:
 
         # Verify user context appears in commis prompt
         assert "clifford" in commis_prompt
-        assert "REDACTED_IP" in commis_prompt
+        assert "192.0.2.1" in commis_prompt
         assert "Test User" in commis_prompt
         assert "developer" in commis_prompt
 
