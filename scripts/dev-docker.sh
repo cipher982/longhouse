@@ -116,6 +116,7 @@ fi
 
 # Start in background
 echo -e "${BLUE}📦 Starting containers (profile: $COMPOSE_PROFILE)...${NC}"
+compose_cmd down --remove-orphans >/dev/null 2>&1 || true
 compose_cmd up -d --build
 STARTED=true
 
