@@ -173,6 +173,29 @@ class TestScriptedChatLLM:
         assert not ai_msg.tool_calls
         assert "45%" in ai_msg.content
 
+    def test_spawn_commis_error_not_success(self):
+        """ScriptedLLM must not report success when tool result is an error."""
+        llm = ScriptedChatLLM()
+        llm = llm.bind_tools([])
+
+        messages = [
+            SystemMessage(content="You are Oikos. " + "x" * 2000),
+            HumanMessage(content="check disk space on cube"),
+            AIMessage(content="", tool_calls=[{"id": "call_123", "name": "spawn_commis", "args": {}}]),
+            ToolMessage(
+                content="Error: Cannot spawn commis - no credential context available",
+                tool_call_id="call_123",
+            ),
+        ]
+
+        result = llm._generate(messages)
+        ai_msg = result.generations[0].message
+
+        assert isinstance(ai_msg, AIMessage)
+        content_lower = ai_msg.content.lower()
+        assert "completed successfully" not in content_lower
+        assert "error" in content_lower or "failed" in content_lower
+
     def test_bind_tools_returns_new_instance(self):
         llm1 = ScriptedChatLLM()
         llm2 = llm1.bind_tools(["tool1", "tool2"])

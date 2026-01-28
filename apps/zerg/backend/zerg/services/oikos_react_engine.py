@@ -45,7 +45,9 @@ from langchain_core.messages import SystemMessage
 from langchain_core.messages import ToolMessage
 from langchain_openai import ChatOpenAI
 
+from zerg.context import get_commis_context
 from zerg.managers.fiche_runner import FicheInterrupted
+from zerg.tools.result_utils import is_critical_tool_error
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
@@ -634,6 +636,18 @@ async def _execute_tool(
 
     # Check for errors on the raw content (before any truncation)
     is_error, error_msg = check_tool_error(raw_result_content)
+
+    # If critical error detected, mark context and emitter for fail-fast
+    if is_error and is_critical_tool_error(raw_result_content, error_msg, tool_name=tool_name):
+        critical_msg = error_msg or raw_result_content
+        # Mark context (used by CommisRunner to flip status to failed)
+        ctx = get_commis_context()
+        if ctx:
+            ctx.mark_critical_error(critical_msg)
+        # Mark emitter (sets flag for SSE and activity tracking)
+        if emitter:
+            emitter.mark_critical_error(critical_msg)
+        logger.warning(f"Critical tool error detected in {tool_name}: {critical_msg}")
 
     # Optionally store large tool outputs out-of-band
     from zerg.config import get_settings
