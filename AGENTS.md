@@ -35,6 +35,21 @@ make regen-ws         # Regenerate WebSocket types
 make regen-sse        # Regenerate SSE types
 ```
 
+## Testing
+
+```bash
+make test          # Unit tests (~80s, 16 parallel workers)
+make test-e2e-core # Core E2E (must pass 100%)
+make test-e2e      # Full E2E suite
+```
+
+**How it works:** External Postgres on cube (configured in `.env`). pytest-xdist spawns 16 workers with isolated schemas. No Docker needed.
+
+**DO NOT:**
+- Set `PYTEST_XDIST_COMMIS=0` — kills parallelism, tests take 10x longer
+- Pass extra env vars — `DATABASE_URL` and `CI_TEST_SCHEMA` are already in `.env`
+- Run pytest directly — always use Make targets
+
 ## Architecture
 
 ```
@@ -188,7 +203,7 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-23) [pattern] Repo tasks should be routed by tool/interface (separate tool or auto-routing); prompt-only enforcement leads to runner_exec misuse.
 - (2026-01-24) [gotcha] Tool contracts live in `schemas/tools.yml`; regenerate `apps/zerg/backend/zerg/tools/generated/tool_definitions.py` via `scripts/generate_tool_types.py` instead of editing the generated file.
 - (2026-01-24) [gotcha] Oikos tool registration is centralized: add tools in `oikos_tools.py`; `CORE_TOOLS` pulls `SUPERVISOR_TOOL_NAMES`; `oikos_service.py` uses `get_oikos_allowed_tools()`. Tests in `test_core_tools.py` catch drift.
-- (2026-01-24) [gotcha] Repo policy: work only on main, no worktrees; confirm `git -C /Users/davidrose/git/zerg status -sb` before changes; no stashing unless explicitly requested.
+- (2026-01-24) [gotcha] Repo policy: confirm `git status -sb` before changes; no stashing unless explicitly requested. Worktrees encouraged for parallel agent work.
 - (2026-01-24) [tool] Claude Code sessions are stored at `~/.claude/projects/{encoded-cwd}/{sessionId}.jsonl`; `--resume` requires the file locally.
 - (2026-01-24) [tool] `CLAUDE_CONFIG_DIR` overrides the entire `~/.claude/` location, enabling shared config/cache paths across machines.
 - (2026-01-24) [pattern] Oikos UX: "Human PA" model - kick off tasks, move on, don't block. Commiss report back async. Input should re-enable on `oikos_complete`, not wait for commiss. See `AI-Sessions/2026-01-24-jarvis-worker-ux-design.md`.
