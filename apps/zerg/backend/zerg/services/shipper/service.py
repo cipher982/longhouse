@@ -27,6 +27,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -79,6 +80,25 @@ def detect_platform() -> Platform:
         return Platform.UNSUPPORTED
 
 
+def _resolve_claude_dir(claude_dir: str | None) -> Path:
+    """Resolve the Claude config directory for logs/state."""
+    if claude_dir:
+        return Path(claude_dir)
+    env_dir = os.getenv("CLAUDE_CONFIG_DIR")
+    if env_dir:
+        return Path(env_dir)
+    return Path.home() / ".claude"
+
+
+def _find_project_root() -> Path | None:
+    """Locate the project root containing pyproject.toml (dev installs)."""
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        if (parent / "pyproject.toml").exists():
+            return parent
+    return None
+
+
 def get_zerg_executable() -> str:
     """Get the path to the zerg CLI executable.
 
@@ -96,7 +116,9 @@ def get_zerg_executable() -> str:
     # Check if we're in a uv environment
     uv_path = shutil.which("uv")
     if uv_path:
-        # Return the uv run command
+        project_root = _find_project_root()
+        if project_root:
+            return f"{uv_path} run --project {project_root} zerg"
         return f"{uv_path} run zerg"
 
     # Fallback: assume zerg is installed
@@ -139,6 +161,7 @@ def _generate_launchd_plist(config: ServiceConfig) -> str:
         parts = [zerg_cmd] + args
 
     program_args = "\n".join(f"        <string>{arg}</string>" for arg in parts)
+    log_path = _resolve_claude_dir(config.claude_dir) / "shipper.log"
 
     # Build environment variables
     env_dict = ""
@@ -165,9 +188,9 @@ def _generate_launchd_plist(config: ServiceConfig) -> str:
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>{Path.home() / ".claude" / "shipper.log"}</string>
+    <string>{log_path}</string>
     <key>StandardErrorPath</key>
-    <string>{Path.home() / ".claude" / "shipper.log"}</string>
+    <string>{log_path}</string>
     <key>ProcessType</key>
     <string>Background</string>
 </dict>
@@ -200,6 +223,8 @@ def _generate_systemd_unit(config: ServiceConfig) -> str:
     if config.token:
         environment = f'Environment="AGENTS_API_TOKEN={config.token}"'
 
+    log_path = _resolve_claude_dir(config.claude_dir) / "shipper.log"
+
     return f"""[Unit]
 Description=Zerg Shipper - Claude Code Session Sync
 After=network-online.target
@@ -213,8 +238,8 @@ RestartSec=10
 {environment}
 
 # Logging
-StandardOutput=append:{Path.home() / ".claude" / "shipper.log"}
-StandardError=append:{Path.home() / ".claude" / "shipper.log"}
+StandardOutput=append:{log_path}
+StandardError=append:{log_path}
 
 [Install]
 WantedBy=default.target
@@ -306,7 +331,7 @@ def _install_launchd(config: ServiceConfig) -> dict:
         "platform": "macos",
         "service": LAUNCHD_LABEL,
         "plist_path": str(plist_path),
-        "message": "Service installed and started. Logs at ~/.claude/shipper.log",
+        "message": f"Service installed and started. Logs at {_resolve_claude_dir(config.claude_dir) / 'shipper.log'}",
     }
 
 
@@ -363,7 +388,7 @@ def _install_systemd(config: ServiceConfig) -> dict:
         "platform": "linux",
         "service": SYSTEMD_UNIT,
         "unit_path": str(unit_path),
-        "message": "Service installed and started. Logs at ~/.claude/shipper.log",
+        "message": f"Service installed and started. Logs at {_resolve_claude_dir(config.claude_dir) / 'shipper.log'}",
     }
 
 
@@ -561,7 +586,7 @@ def get_service_info() -> dict:
     info = {
         "platform": platform.value,
         "status": status,
-        "log_path": str(Path.home() / ".claude" / "shipper.log"),
+        "log_path": str(_resolve_claude_dir(None) / "shipper.log"),
     }
 
     if platform == Platform.MACOS:

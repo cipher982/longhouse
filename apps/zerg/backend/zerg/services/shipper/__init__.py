@@ -39,6 +39,7 @@ from zerg.services.shipper.spool import SpooledPayload
 from zerg.services.shipper.state import ShippedSession
 from zerg.services.shipper.state import ShipperState
 from zerg.services.shipper.token import clear_token
+from zerg.services.shipper.token import clear_zerg_url
 from zerg.services.shipper.token import get_token_path
 from zerg.services.shipper.token import get_zerg_url
 from zerg.services.shipper.token import load_token
@@ -48,6 +49,7 @@ from zerg.services.shipper.watcher import SessionWatcher
 
 __all__ = [
     "clear_token",
+    "clear_zerg_url",
     "get_service_info",
     "get_service_status",
     "get_token_path",

@@ -14,11 +14,12 @@ Authentication:
   2. Legacy AGENTS_API_TOKEN env var (for backwards compatibility)
 
 Rate Limiting:
-- Ingest endpoint enforces 1000 events/min per device_id (soft cap)
+- Ingest endpoint enforces 1000 events/min per device (token-derived when available)
 - Returns HTTP 429 with Retry-After header when exceeded
 """
 
 import gzip
+import hashlib
 import hmac
 import logging
 from collections import defaultdict
@@ -43,8 +44,10 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
+from zerg.crud import count_users
 from zerg.database import get_db
 from zerg.database import is_postgres
+from zerg.models.device_token import DeviceToken
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import SessionIngest
 
@@ -60,15 +63,16 @@ _settings = get_settings()
 # ---------------------------------------------------------------------------
 
 # In-memory rate limit tracking: device_id -> list of (timestamp, event_count)
+# Keyed by device token ID (preferred) or device_id (fallback)
 _rate_limits: dict[str, list[tuple[datetime, int]]] = defaultdict(list)
 RATE_LIMIT_EVENTS_PER_MIN = 1000  # Soft cap per device
 
 
-def check_rate_limit(device_id: str, event_count: int) -> tuple[bool, int]:
+def check_rate_limit(rate_key: str, event_count: int) -> tuple[bool, int]:
     """Check if request would exceed rate limit.
 
     Args:
-        device_id: The device making the request
+        rate_key: Stable key for the caller (device token or device_id)
         event_count: Number of events in this request
 
     Returns:
@@ -78,16 +82,16 @@ def check_rate_limit(device_id: str, event_count: int) -> tuple[bool, int]:
     cutoff = now - timedelta(minutes=1)
 
     # Clean old entries
-    _rate_limits[device_id] = [(ts, count) for ts, count in _rate_limits[device_id] if ts > cutoff]
+    _rate_limits[rate_key] = [(ts, count) for ts, count in _rate_limits[rate_key] if ts > cutoff]
 
     # Sum events in the last minute
-    current_events = sum(count for _, count in _rate_limits[device_id])
+    current_events = sum(count for _, count in _rate_limits[rate_key])
 
     # Check if this request would exceed the limit
     if current_events + event_count > RATE_LIMIT_EVENTS_PER_MIN:
         # Calculate retry-after based on oldest entry expiration
-        if _rate_limits[device_id]:
-            oldest_ts = min(ts for ts, _ in _rate_limits[device_id])
+        if _rate_limits[rate_key]:
+            oldest_ts = min(ts for ts, _ in _rate_limits[rate_key])
             retry_after = int((oldest_ts + timedelta(minutes=1) - now).total_seconds())
             retry_after = max(1, retry_after)  # At least 1 second
         else:
@@ -95,7 +99,7 @@ def check_rate_limit(device_id: str, event_count: int) -> tuple[bool, int]:
         return True, retry_after
 
     # Record this request
-    _rate_limits[device_id].append((now, event_count))
+    _rate_limits[rate_key].append((now, event_count))
     return False, 0
 
 
@@ -110,7 +114,7 @@ def reset_rate_limits() -> None:
 # ---------------------------------------------------------------------------
 
 
-def verify_agents_token(request: Request, db: Session = Depends(get_db)) -> None:
+def verify_agents_token(request: Request, db: Session = Depends(get_db)) -> DeviceToken | None:
     """Verify the agents API token.
 
     Accepts two types of tokens:
@@ -148,7 +152,8 @@ def verify_agents_token(request: Request, db: Session = Depends(get_db)) -> None
         if device_token:
             # Valid device token - auth successful
             logger.debug(f"Device token validated for device {device_token.device_id}")
-            return
+            request.state.agents_rate_key = f"device:{device_token.id}"
+            return device_token
 
         # Device token exists but is invalid/revoked
         raise HTTPException(
@@ -172,6 +177,9 @@ def verify_agents_token(request: Request, db: Session = Depends(get_db)) -> None
             detail="Invalid agents API token",
         )
 
+    token_hash = hashlib.sha256(provided_token.encode()).hexdigest()
+    request.state.agents_rate_key = f"token:{token_hash}"
+
 
 def require_postgres() -> None:
     """Ensure agents endpoints only work with PostgreSQL.
@@ -187,6 +195,30 @@ def require_postgres() -> None:
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Agents API requires PostgreSQL. SQLite is not supported for this feature.",
         )
+
+
+def require_single_tenant(db: Session = Depends(get_db)) -> None:
+    """Enforce single-tenant mode for agents endpoints.
+
+    Blocks access if more than one user exists in the instance. This prevents
+    data leakage because the agents schema is not owner-scoped.
+    """
+    settings = get_settings()
+    if not settings.single_tenant or settings.testing:
+        return
+
+    try:
+        total_users = count_users(db)
+    except Exception:
+        total_users = 0
+
+    if total_users <= 1:
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Single-tenant mode: multiple users detected. This instance supports a single user only.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -278,8 +310,9 @@ async def decompress_if_gzipped(request: Request) -> bytes:
 async def ingest_session(
     request: Request,
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    device_token: DeviceToken | None = Depends(verify_agents_token),
     _pg: None = Depends(require_postgres),
+    _single: None = Depends(require_single_tenant),
 ) -> IngestResponse:
     """Ingest a session with events.
 
@@ -317,10 +350,24 @@ async def ingest_session(
                 detail=f"Invalid payload: {e}",
             )
 
-        # Check rate limit
+        # Normalize device_id from token when available (prevents spoofing)
+        if device_token:
+            if data.device_id and data.device_id != device_token.device_id:
+                logger.debug(
+                    "Device ID mismatch: payload %s != token %s, using token device_id",
+                    data.device_id,
+                    device_token.device_id,
+                )
+            data.device_id = device_token.device_id
+
+        # Check rate limit (prefer token-derived key)
+        rate_key = getattr(request.state, "agents_rate_key", None)
         device_id = data.device_id or "unknown"
+        if not rate_key:
+            rate_key = f"device:{device_id}"
+
         event_count = len(data.events) if data.events else 0
-        exceeded, retry_after = check_rate_limit(device_id, event_count)
+        exceeded, retry_after = check_rate_limit(rate_key, event_count)
 
         if exceeded:
             logger.warning(f"Rate limit exceeded for device {device_id}: {event_count} events")
@@ -366,8 +413,9 @@ async def list_sessions(
     limit: int = Query(20, ge=1, le=100, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    _auth: DeviceToken | None = Depends(verify_agents_token),
     _pg: None = Depends(require_postgres),
+    _single: None = Depends(require_single_tenant),
 ) -> SessionsListResponse:
     """List sessions with optional filters.
 
@@ -420,8 +468,9 @@ async def list_sessions(
 async def get_session(
     session_id: UUID,
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    _auth: DeviceToken | None = Depends(verify_agents_token),
     _pg: None = Depends(require_postgres),
+    _single: None = Depends(require_single_tenant),
 ) -> SessionResponse:
     """Get a single session by ID."""
     store = AgentsStore(db)
@@ -456,8 +505,9 @@ async def get_session_events(
     limit: int = Query(100, ge=1, le=1000, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    _auth: DeviceToken | None = Depends(verify_agents_token),
     _pg: None = Depends(require_postgres),
+    _single: None = Depends(require_single_tenant),
 ) -> EventsListResponse:
     """Get events for a session."""
     store = AgentsStore(db)
@@ -504,8 +554,9 @@ async def get_session_events(
 async def export_session(
     session_id: UUID,
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    _auth: DeviceToken | None = Depends(verify_agents_token),
     _pg: None = Depends(require_postgres),
+    _single: None = Depends(require_single_tenant),
 ) -> Response:
     """Export session as JSONL for Claude Code --resume.
 

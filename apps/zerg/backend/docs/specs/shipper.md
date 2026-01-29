@@ -154,6 +154,21 @@ uv run pytest tests/services/shipper/ -v
 make test
 ```
 
+## E2E Validation (Demo Readiness)
+
+```bash
+# Prereqs (migrations + device_tokens table check)
+make shipper-e2e-prereqs
+
+# API + CLI + watcher E2E
+make test-shipper-e2e
+
+# Live smoke test (ship + revoke flow)
+make shipper-smoke-test
+```
+
+Status: E2E not yet run in a live dev stack.
+
 ---
 
 ## Files

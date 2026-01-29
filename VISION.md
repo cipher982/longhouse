@@ -21,7 +21,7 @@ This is a living vision doc. It captures both the direction and the reasoning th
 - **Always-on beats cold start** for paid users. Background agents are core; sleeping instances break the product.
 - **Lossless logs are sacred.** The agent session archive is not disposable.
 - **OSS-first story**: easy to explain on HN/Twitter without enterprise jargon.
-- **Single-tenant core**: build fast, keep code simple, avoid multi-tenant security tax.
+- **Single-tenant core (enforced)**: build fast, keep code simple, avoid multi-tenant security tax. Agents APIs reject instances with >1 user.
 - **Hosted = convenience**: premium support and "don't think about it" operations.
 - **Users bring their own API keys**. Zerg is orchestration + UI + data, not LLM compute billing.
 - **Hosted architecture = control plane + isolated runtimes**. Control plane is multi-tenant; Zerg app stays single-tenant.

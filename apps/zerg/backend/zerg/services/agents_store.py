@@ -170,6 +170,7 @@ class AgentsStore:
             if event_data.source_path:
                 stmt = stmt.on_conflict_do_nothing(
                     index_elements=["session_id", "source_path", "source_offset", "event_hash"],
+                    index_where=AgentEvent.source_path.isnot(None),
                 )
 
             result = self.db.execute(stmt)
