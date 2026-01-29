@@ -84,6 +84,19 @@ class TestShipperConfig:
         config = ShipperConfig(claude_config_dir=mock_projects_dir)
         assert config.projects_dir == mock_projects_dir / "projects"
 
+    def test_config_propagates_to_state_and_spool(self, tmp_path: Path):
+        """ShipperConfig's claude_config_dir propagates to state and spool."""
+        config_dir = tmp_path / "custom-claude"
+        config_dir.mkdir()
+        (config_dir / "projects").mkdir()
+
+        config = ShipperConfig(claude_config_dir=config_dir)
+        shipper = SessionShipper(config=config)
+
+        # State and spool should use the custom config dir
+        assert shipper.state.state_path == config_dir / "zerg-shipper-state.json"
+        assert shipper.spool.db_path == config_dir / "zerg-shipper-spool.db"
+
 
 class TestSessionShipper:
     """Tests for SessionShipper."""

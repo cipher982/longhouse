@@ -146,3 +146,24 @@ class TestShipperState:
         # Should not raise, just start with empty state
         state = ShipperState(state_path=state_path)
         assert state.list_sessions() == []
+
+    def test_claude_config_dir_parameter(self, tmp_path: Path):
+        """State uses claude_config_dir when provided."""
+        config_dir = tmp_path / "custom-claude"
+        config_dir.mkdir()
+
+        state = ShipperState(claude_config_dir=config_dir)
+
+        # State file should be in custom config dir
+        assert state.state_path == config_dir / "zerg-shipper-state.json"
+
+    def test_claude_config_dir_env_var(self, tmp_path: Path, monkeypatch):
+        """State uses CLAUDE_CONFIG_DIR env var when set."""
+        config_dir = tmp_path / "env-claude"
+        config_dir.mkdir()
+
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+
+        state = ShipperState()
+
+        assert state.state_path == config_dir / "zerg-shipper-state.json"
