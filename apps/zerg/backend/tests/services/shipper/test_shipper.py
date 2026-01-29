@@ -155,6 +155,16 @@ class TestSessionShipper:
         assert call_args["cwd"] == "/Users/test/project"
         assert call_args["git_branch"] == "main"
         assert len(call_args["events"]) == 2
+        # Verify provider_session_id is included (from filename)
+        assert call_args["provider_session_id"] == "test-session-123"
+        # Verify raw_json is included in events
+        for event in call_args["events"]:
+            assert "raw_json" in event
+            assert event["raw_json"] is not None
+            # Verify it's valid JSON
+            import json
+            parsed = json.loads(event["raw_json"])
+            assert "type" in parsed
 
     @pytest.mark.asyncio
     async def test_scan_and_ship(
@@ -254,3 +264,86 @@ class TestSessionShipper:
         assert result.sessions_shipped == 0
         assert len(result.errors) == 1
         assert "Connection refused" in result.errors[0]
+
+    @pytest.mark.asyncio
+    async def test_api_token_in_headers(
+        self,
+        mock_projects_dir: Path,
+        shipper_state: ShipperState,
+    ):
+        """API token is included in request headers when configured."""
+        config = ShipperConfig(
+            zerg_api_url="http://test:47300",
+            claude_config_dir=mock_projects_dir,
+            api_token="test-secret-token",
+        )
+        shipper = SessionShipper(config=config, state=shipper_state)
+
+        # Mock httpx.AsyncClient to capture headers
+        captured_headers = {}
+
+        async def mock_post(url, json, headers):
+            captured_headers.update(headers)
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {
+                "session_id": "zerg-session-abc",
+                "events_inserted": 2,
+                "events_skipped": 0,
+            }
+            return mock_resp
+
+        mock_client = AsyncMock()
+        mock_client.post = mock_post
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("zerg.services.shipper.shipper.httpx.AsyncClient", return_value=mock_client):
+            await shipper.scan_and_ship()
+
+        assert "X-Agents-Token" in captured_headers
+        assert captured_headers["X-Agents-Token"] == "test-secret-token"
+
+    @pytest.mark.asyncio
+    async def test_no_token_when_not_configured(
+        self,
+        mock_projects_dir: Path,
+        shipper_state: ShipperState,
+    ):
+        """No auth header when api_token is not configured."""
+        config = ShipperConfig(
+            zerg_api_url="http://test:47300",
+            claude_config_dir=mock_projects_dir,
+            api_token=None,  # Explicitly no token
+        )
+        shipper = SessionShipper(config=config, state=shipper_state)
+
+        # Mock httpx.AsyncClient to capture headers
+        captured_headers = {}
+
+        async def mock_post(url, json, headers):
+            captured_headers.update(headers)
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {
+                "session_id": "zerg-session-abc",
+                "events_inserted": 2,
+                "events_skipped": 0,
+            }
+            return mock_resp
+
+        mock_client = AsyncMock()
+        mock_client.post = mock_post
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("zerg.services.shipper.shipper.httpx.AsyncClient", return_value=mock_client):
+            with patch.dict("os.environ", {}, clear=False):
+                # Ensure AGENTS_API_TOKEN is not set in env for this test
+                import os
+                orig_token = os.environ.pop("AGENTS_API_TOKEN", None)
+                try:
+                    await shipper.scan_and_ship()
+                finally:
+                    if orig_token is not None:
+                        os.environ["AGENTS_API_TOKEN"] = orig_token
+
+        assert "X-Agents-Token" not in captured_headers

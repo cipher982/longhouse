@@ -245,6 +245,7 @@ async def ship_session_to_zerg(
                     "timestamp": event.get("timestamp", datetime.now(timezone.utc).isoformat()),
                     "source_path": str(session_file),
                     "source_offset": byte_offset,  # Byte offset for dedup
+                    "raw_json": line_stripped,  # Original line for lossless archiving
                 }
             )
         except json.JSONDecodeError:
@@ -265,6 +266,7 @@ async def ship_session_to_zerg(
     device_id = f"zerg-commis-{platform.node()}:{provider_session_id}"
     payload = {
         "provider": "claude",
+        "provider_session_id": provider_session_id,  # Claude Code session UUID from filename
         "project": workspace_path.name,  # Use directory name as project
         "device_id": device_id,
         "cwd": str(workspace_path.absolute()),

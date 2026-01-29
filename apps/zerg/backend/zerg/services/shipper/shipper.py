@@ -243,6 +243,7 @@ class SessionShipper:
             "git_branch": metadata.git_branch,
             "started_at": started_at.isoformat(),
             "ended_at": ended_at.isoformat() if ended_at else None,
+            "provider_session_id": metadata.session_id,
             "events": event_dicts,
         }
 

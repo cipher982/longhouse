@@ -45,6 +45,7 @@ class EventIngest(BaseModel):
     timestamp: datetime = Field(..., description="Event timestamp")
     source_path: Optional[str] = Field(None, description="Original source file path")
     source_offset: Optional[int] = Field(None, description="Byte offset in source file")
+    raw_json: Optional[str] = Field(None, description="Original JSONL line for lossless archiving")
 
 
 class SessionIngest(BaseModel):
@@ -59,6 +60,7 @@ class SessionIngest(BaseModel):
     git_branch: Optional[str] = Field(None, description="Git branch name")
     started_at: datetime = Field(..., description="Session start time")
     ended_at: Optional[datetime] = Field(None, description="Session end time")
+    provider_session_id: Optional[str] = Field(None, description="Provider-specific session ID (e.g., Claude Code session UUID)")
     events: List[EventIngest] = Field(default_factory=list, description="Session events")
 
 
@@ -129,6 +131,7 @@ class AgentsStore:
                 git_branch=data.git_branch,
                 started_at=data.started_at,
                 ended_at=data.ended_at,
+                provider_session_id=data.provider_session_id,
                 user_messages=0,
                 assistant_messages=0,
                 tool_calls=0,
@@ -159,6 +162,7 @@ class AgentsStore:
                 source_path=event_data.source_path,
                 source_offset=event_data.source_offset,
                 event_hash=event_hash,
+                raw_json=event_data.raw_json,
                 schema_version=1,
             )
 
@@ -268,6 +272,14 @@ class AgentsStore:
     def export_session_jsonl(self, session_id: UUID) -> Optional[tuple[bytes, AgentSession]]:
         """Export a session as JSONL bytes for Claude Code --resume.
 
+        If events have raw_json stored (original JSONL lines), those are returned
+        verbatim for lossless resume. Otherwise, falls back to synthesized JSONL
+        for legacy data.
+
+        Important: Multiple events can be parsed from a single JSONL line (e.g.,
+        an assistant message with text + tool_use). We dedupe by source_offset
+        to emit each original line only once, preserving the exact original format.
+
         Returns:
             Tuple of (jsonl_bytes, session) or None if not found.
         """
@@ -275,26 +287,59 @@ class AgentsStore:
         if not session:
             return None
 
-        events = self.get_session_events(session_id, limit=10000)
+        # Query events ordered by source_offset for correct file order
+        events = (
+            self.db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session_id)
+            .order_by(AgentEvent.source_offset.asc(), AgentEvent.timestamp.asc())
+            .limit(10000)
+            .all()
+        )
 
-        # Build JSONL
+        # Check if we have raw_json available (lossless path)
+        has_raw_json = any(event.raw_json for event in events)
+
         lines = []
-        for event in events:
-            line = {
-                "role": event.role,
-                "timestamp": event.timestamp.isoformat() if event.timestamp else None,
-            }
-            if event.content_text:
-                line["content"] = event.content_text
-            if event.tool_name:
-                line["tool_name"] = event.tool_name
-            if event.tool_input_json:
-                line["tool_input"] = event.tool_input_json
-            if event.tool_output_text:
-                line["tool_output"] = event.tool_output_text
-            lines.append(json.dumps(line))
+        if has_raw_json:
+            # Lossless path: dedupe by (source_path, source_offset)
+            # Multiple events from the same JSONL line share the same offset
+            seen_offsets: set[tuple[str | None, int | None]] = set()
+            for event in events:
+                if event.raw_json:
+                    key = (event.source_path, event.source_offset)
+                    if key not in seen_offsets:
+                        seen_offsets.add(key)
+                        lines.append(event.raw_json)
+                else:
+                    # Mixed case: some events have raw_json, some don't
+                    # Fall back to synthesized for this event
+                    lines.append(self._synthesize_event_jsonl(event))
+        else:
+            # Legacy path: synthesize JSONL from parsed columns
+            for event in events:
+                lines.append(self._synthesize_event_jsonl(event))
 
-        return "\n".join(lines).encode("utf-8"), session
+        content = "\n".join(lines) + "\n" if lines else ""
+        return content.encode("utf-8"), session
+
+    def _synthesize_event_jsonl(self, event: AgentEvent) -> str:
+        """Synthesize a JSONL line from parsed event columns.
+
+        Used for legacy data that doesn't have raw_json stored.
+        """
+        line = {
+            "role": event.role,
+            "timestamp": event.timestamp.isoformat() if event.timestamp else None,
+        }
+        if event.content_text:
+            line["content"] = event.content_text
+        if event.tool_name:
+            line["tool_name"] = event.tool_name
+        if event.tool_input_json:
+            line["tool_input"] = event.tool_input_json
+        if event.tool_output_text:
+            line["tool_output"] = event.tool_output_text
+        return json.dumps(line)
 
 
 def ensure_agents_schema(db: Session) -> None:

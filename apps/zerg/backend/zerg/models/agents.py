@@ -69,6 +69,9 @@ class AgentSession(AgentsBase):
     assistant_messages = Column(Integer, default=0)
     tool_calls = Column(Integer, default=0)
 
+    # Provider-specific session ID (e.g., Claude Code session UUID from filename)
+    provider_session_id = Column(String(255), nullable=True, index=True)
+
     # Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -125,6 +128,9 @@ class AgentEvent(AgentsBase):
 
     # Schema versioning for format evolution
     schema_version = Column(Integer, default=1)
+
+    # Raw storage for lossless archiving (original JSONL line)
+    raw_json = Column(Text, nullable=True)
 
     # Relationships
     session = relationship("AgentSession", back_populates="events")

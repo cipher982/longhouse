@@ -250,6 +250,75 @@ class TestParseSessionFile:
         assert ingest["source_path"] == "/path/to/file.jsonl"
         assert ingest["source_offset"] == 0
 
+    def test_raw_line_capture(self, tmp_path: Path):
+        """Test that raw JSONL line is captured for lossless archiving."""
+        session_file = tmp_path / "test-session.jsonl"
+        original_line = json.dumps(
+            {
+                "type": "user",
+                "uuid": "msg-raw",
+                "timestamp": "2026-01-28T10:00:00Z",
+                "message": {"content": "Raw line test"},
+                "extra_field": "preserved",
+            }
+        )
+        session_file.write_text(original_line + "\n")
+
+        events = list(parse_session_file(session_file))
+
+        assert len(events) == 1
+        assert events[0].raw_line == original_line
+        ingest = events[0].to_event_ingest("/path/to/file.jsonl")
+        assert ingest["raw_json"] == original_line
+
+    def test_raw_line_capture_assistant(self, tmp_path: Path):
+        """Test raw line capture for assistant messages."""
+        session_file = tmp_path / "test-session.jsonl"
+        original_line = json.dumps(
+            {
+                "type": "assistant",
+                "uuid": "msg-asst",
+                "timestamp": "2026-01-28T10:01:00Z",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Hello!"}],
+                },
+            }
+        )
+        session_file.write_text(original_line + "\n")
+
+        events = list(parse_session_file(session_file))
+
+        assert len(events) == 1
+        assert events[0].raw_line == original_line
+
+    def test_raw_line_capture_tool_result(self, tmp_path: Path):
+        """Test raw line capture for tool results."""
+        session_file = tmp_path / "test-session.jsonl"
+        original_line = json.dumps(
+            {
+                "type": "user",
+                "uuid": "msg-result",
+                "timestamp": "2026-01-28T10:02:00Z",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tool-abc",
+                            "content": "File contents",
+                        }
+                    ],
+                },
+            }
+        )
+        session_file.write_text(original_line + "\n")
+
+        events = list(parse_session_file(session_file))
+
+        assert len(events) == 1
+        assert events[0].raw_line == original_line
+
 
 class TestExtractSessionMetadata:
     """Tests for extract_session_metadata."""
