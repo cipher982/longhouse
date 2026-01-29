@@ -53,6 +53,9 @@ class AgentSession(AgentsBase):
     # Provider identification
     provider = Column(String(50), nullable=False, index=True)  # claude, codex, gemini, cursor, oikos
 
+    # Environment classification
+    environment = Column(String(20), nullable=False, default="production", index=True)  # production, development, test, e2e
+
     # Context
     project = Column(String(255), nullable=True, index=True)  # Project name (parsed from cwd)
     device_id = Column(String(255), nullable=True, index=True)  # Machine identifier

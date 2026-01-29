@@ -443,6 +443,8 @@ async def ingest_session(
 async def list_sessions(
     project: Optional[str] = Query(None, description="Filter by project"),
     provider: Optional[str] = Query(None, description="Filter by provider"),
+    environment: Optional[str] = Query(None, description="Filter by environment (production, development, test, e2e)"),
+    include_test: bool = Query(False, description="Include test/e2e sessions (default: False)"),
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
     query: Optional[str] = Query(None, description="Search query for content"),
@@ -456,6 +458,7 @@ async def list_sessions(
     """List sessions with optional filters.
 
     Returns sessions sorted by start time (most recent first).
+    By default, test and e2e sessions are excluded.
     """
     try:
         store = AgentsStore(db)
@@ -464,6 +467,8 @@ async def list_sessions(
         sessions, total = store.list_sessions(
             project=project,
             provider=provider,
+            environment=environment,
+            include_test=include_test,
             device_id=device_id,
             since=since,
             query=query,

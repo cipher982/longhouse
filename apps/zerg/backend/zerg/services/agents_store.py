@@ -53,6 +53,7 @@ class SessionIngest(BaseModel):
 
     id: Optional[UUID] = Field(None, description="Session UUID (generated if not provided)")
     provider: str = Field(..., description="AI provider: claude, codex, gemini, cursor, oikos")
+    environment: str = Field("production", description="Environment: production, development, test, e2e")
     project: Optional[str] = Field(None, description="Project name")
     device_id: Optional[str] = Field(None, description="Device/machine identifier")
     cwd: Optional[str] = Field(None, description="Working directory")
@@ -124,6 +125,7 @@ class AgentsStore:
             session = AgentSession(
                 id=session_id,
                 provider=data.provider,
+                environment=data.environment,
                 project=data.project,
                 device_id=data.device_id,
                 cwd=data.cwd,
@@ -213,6 +215,8 @@ class AgentsStore:
         *,
         project: Optional[str] = None,
         provider: Optional[str] = None,
+        environment: Optional[str] = None,
+        include_test: bool = False,
         device_id: Optional[str] = None,
         since: Optional[datetime] = None,
         until: Optional[datetime] = None,
@@ -222,10 +226,21 @@ class AgentsStore:
     ) -> tuple[List[AgentSession], int]:
         """List sessions with optional filters.
 
+        Args:
+            environment: Filter to specific environment (production, development, test, e2e)
+            include_test: If False (default), excludes test/e2e sessions unless environment is set
+
         Returns:
             Tuple of (sessions, total_count)
         """
         stmt = select(AgentSession)
+
+        # Environment filtering
+        if environment:
+            stmt = stmt.where(AgentSession.environment == environment)
+        elif not include_test:
+            # By default, exclude test and e2e sessions
+            stmt = stmt.where(AgentSession.environment.notin_(["test", "e2e"]))
 
         if project:
             stmt = stmt.where(AgentSession.project.ilike(f"%{project}%"))
