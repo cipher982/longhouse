@@ -95,6 +95,29 @@ function getProviderColor(provider: string): string {
   }
 }
 
+function isValidTitle(name: string | null | undefined): name is string {
+  if (!name) return false;
+  // Skip tmp folders, random hashes, and very short names
+  if (name.startsWith("tmp") || /^[a-z0-9]{8,}$/i.test(name) || name.length < 3) {
+    return false;
+  }
+  return true;
+}
+
+function getSessionTitle(session: AgentSession): string {
+  if (isValidTitle(session.project)) return session.project;
+  if (isValidTitle(session.git_branch)) return session.git_branch;
+
+  // Try cwd folder
+  if (session.cwd) {
+    const folder = session.cwd.split("/").pop();
+    if (isValidTitle(folder)) return folder;
+  }
+
+  // Fallback: "Claude session" (capitalized provider)
+  return `${session.provider.charAt(0).toUpperCase() + session.provider.slice(1)} session`;
+}
+
 function formatDuration(startedAt: string, endedAt: string | null): string {
   if (!endedAt) return "In progress";
   const start = new Date(startedAt);
@@ -175,8 +198,7 @@ function SessionCard({ session, onClick }: SessionCardProps) {
   const turnCount = session.user_messages + session.assistant_messages;
   const toolCount = session.tool_calls;
 
-  // Use git branch or project as title, fallback to cwd
-  const title = session.project || session.git_branch || session.cwd?.split("/").pop() || "Session";
+  const title = getSessionTitle(session);
 
   return (
     <Card className="session-card" onClick={onClick}>
@@ -203,9 +225,9 @@ function SessionCard({ session, onClick }: SessionCardProps) {
 
       <div className="session-card-footer">
         <div className="session-card-stats">
-          <span className="session-stat">{turnCount} turns</span>
+          <span className="session-stat">{turnCount} {turnCount === 1 ? 'turn' : 'turns'}</span>
           <span className="session-stat-separator">&middot;</span>
-          <span className="session-stat">{toolCount} tools</span>
+          <span className="session-stat">{toolCount} {toolCount === 1 ? 'tool' : 'tools'}</span>
           {session.ended_at && (
             <>
               <span className="session-stat-separator">&middot;</span>
