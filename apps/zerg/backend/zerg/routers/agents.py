@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
 from zerg.database import get_db
+from zerg.database import is_postgres
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import SessionIngest
 
@@ -93,6 +94,22 @@ def verify_agents_token(request: Request) -> None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid agents API token",
+        )
+
+
+def require_postgres() -> None:
+    """Ensure agents endpoints only work with PostgreSQL.
+
+    The agents schema uses PostgreSQL-specific features (UUID, JSONB, partial indexes).
+    This check provides a clear error message for OSS users running with SQLite.
+
+    Raises:
+        HTTPException(501): If the database is not PostgreSQL
+    """
+    if not is_postgres():
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Agents API requires PostgreSQL. SQLite is not supported for this feature.",
         )
 
 
@@ -163,6 +180,7 @@ async def ingest_session(
     data: SessionIngest,
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_token),
+    _pg: None = Depends(require_postgres),
 ) -> IngestResponse:
     """Ingest a session with events.
 
@@ -202,6 +220,7 @@ async def list_sessions(
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_token),
+    _pg: None = Depends(require_postgres),
 ) -> SessionsListResponse:
     """List sessions with optional filters.
 
@@ -255,6 +274,7 @@ async def get_session(
     session_id: UUID,
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_token),
+    _pg: None = Depends(require_postgres),
 ) -> SessionResponse:
     """Get a single session by ID."""
     store = AgentsStore(db)
@@ -290,6 +310,7 @@ async def get_session_events(
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_token),
+    _pg: None = Depends(require_postgres),
 ) -> EventsListResponse:
     """Get events for a session."""
     store = AgentsStore(db)
@@ -337,6 +358,7 @@ async def export_session(
     session_id: UUID,
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_token),
+    _pg: None = Depends(require_postgres),
 ) -> Response:
     """Export session as JSONL for Claude Code --resume.
 
@@ -354,10 +376,13 @@ async def export_session(
 
     jsonl_bytes, session = result
 
+    # Use provider_session_id for resume fidelity, fall back to Zerg session ID
+    provider_session_id = session.provider_session_id or str(session.id)
+
     headers = {
         "Content-Disposition": f"attachment; filename={session_id}.jsonl",
         "X-Session-CWD": session.cwd or "",
-        "X-Provider-Session-ID": str(session.id),
+        "X-Provider-Session-ID": provider_session_id,
         "X-Session-Provider": session.provider,
         "X-Session-Project": session.project or "",
     }

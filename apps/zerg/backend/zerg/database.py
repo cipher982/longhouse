@@ -524,6 +524,17 @@ def get_db_session(session_factory: Any = None):
     return db_session(session_factory)
 
 
+def is_postgres() -> bool:
+    """Check if the default database engine is PostgreSQL.
+
+    Returns:
+        True if PostgreSQL, False otherwise (SQLite, etc.)
+    """
+    if default_engine is None:
+        return False
+    return default_engine.dialect.name == "postgresql"
+
+
 def initialize_database(engine: Engine = None) -> None:
     """Initialize database tables using the given engine.
 

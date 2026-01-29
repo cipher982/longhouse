@@ -334,8 +334,15 @@ class TestShipSessionToZerg:
         # Verify the correct session was shipped (most recent)
         call_args = mock_client.post.call_args
         payload = call_args.kwargs["json"]
-        # provider_session_id is now embedded in device_id
+        # provider_session_id is now embedded in device_id AND as top-level field
         assert "new-session" in payload["device_id"]
+        assert payload["provider_session_id"] == "new-session"
+
+        # Verify events have proper offsets (not None) and raw_json
+        assert len(payload["events"]) == 1
+        event = payload["events"][0]
+        assert event["source_offset"] == 0  # First line starts at byte 0
+        assert event["raw_json"] == '{"event": "new"}'
 
     @pytest.mark.asyncio
     async def test_handles_shipping_failure_gracefully(self, tmp_path):

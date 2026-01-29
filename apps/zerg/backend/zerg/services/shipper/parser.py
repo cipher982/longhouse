@@ -42,6 +42,7 @@ class ParsedEvent:
     tool_output_text: str | None = None
     source_offset: int = 0  # byte offset in file
     raw_type: str = ""  # original type (user, assistant, summary, etc.)
+    raw_line: str = ""  # original JSONL line for lossless archiving
 
     def to_event_ingest(self, source_path: str) -> dict:
         """Convert to EventIngest format for the API."""
@@ -54,6 +55,7 @@ class ParsedEvent:
             "timestamp": self.timestamp.isoformat(),
             "source_path": source_path,
             "source_offset": self.source_offset,
+            "raw_json": self.raw_line if self.raw_line else None,
         }
 
 
@@ -111,6 +113,7 @@ def _extract_assistant_events(
     obj: dict,
     session_id: str,
     offset: int,
+    raw_line: str = "",
 ) -> Iterator[ParsedEvent]:
     """Extract events from an assistant message.
 
@@ -147,6 +150,7 @@ def _extract_assistant_events(
                     content_text=text,
                     source_offset=offset,
                     raw_type="assistant",
+                    raw_line=raw_line,
                 )
 
         elif item_type == "tool_use":
@@ -163,6 +167,7 @@ def _extract_assistant_events(
                 tool_input_json=tool_input if isinstance(tool_input, dict) else None,
                 source_offset=offset,
                 raw_type="assistant",
+                raw_line=raw_line,
             )
 
 
@@ -170,6 +175,7 @@ def _extract_tool_results(
     obj: dict,
     session_id: str,
     offset: int,
+    raw_line: str = "",
 ) -> Iterator[ParsedEvent]:
     """Extract tool results from user messages (responses to tool_use).
 
@@ -216,6 +222,7 @@ def _extract_tool_results(
                     tool_output_text=result_text,
                     source_offset=offset,
                     raw_type="tool_result",
+                    raw_line=raw_line,
                 )
 
 
@@ -276,7 +283,7 @@ def parse_session_file(path: Path, offset: int = 0) -> Iterator[ParsedEvent]:
 
                     if has_tool_result:
                         # Extract tool results
-                        yield from _extract_tool_results(obj, session_id, line_offset)
+                        yield from _extract_tool_results(obj, session_id, line_offset, raw_line=line_text)
                     else:
                         # Regular user message
                         text = _extract_user_content(message)
@@ -293,10 +300,11 @@ def parse_session_file(path: Path, offset: int = 0) -> Iterator[ParsedEvent]:
                                 content_text=text,
                                 source_offset=line_offset,
                                 raw_type="user",
+                                raw_line=line_text,
                             )
 
                 elif event_type == "assistant":
-                    yield from _extract_assistant_events(obj, session_id, line_offset)
+                    yield from _extract_assistant_events(obj, session_id, line_offset, raw_line=line_text)
 
     except Exception as e:
         logger.exception(f"Error parsing session file {path}: {e}")

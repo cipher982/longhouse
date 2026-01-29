@@ -26,6 +26,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
+from zerg.routers.agents import require_postgres
 from zerg.routers.oikos_auth import get_current_oikos_user
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,7 @@ async def list_sessions(
     limit: int = Query(20, ge=1, le=100, description="Max results to return"),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_oikos_user),
+    _pg: None = Depends(require_postgres),
 ) -> SessionsListResponse:
     """List past AI sessions.
 
@@ -227,6 +229,7 @@ async def preview_session(
     last_n: int = Query(6, ge=2, le=20, description="Number of messages to return"),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_oikos_user),
+    _pg: None = Depends(require_postgres),
 ) -> SessionPreview:
     """Get a preview of a session's recent messages.
 
