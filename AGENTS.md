@@ -7,6 +7,7 @@ AI agent orchestration platform. Oikos = voice/text UI. Swarmlet = product name.
 Skills-Dir: .agents/skills
 
 ## Philosophy
+- VISION.md is the guiding light right now, keep it in your thoughts during all work, ensure we stay on track despite the current task.
 
 **"Trust the AI"** — Modern LLMs are smart enough to figure things out. Give them context and autonomy, not rigid decision trees. No keyword routing, no specialized commiss.
 
