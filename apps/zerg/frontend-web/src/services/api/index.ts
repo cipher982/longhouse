@@ -12,3 +12,4 @@ export * from "./knowledge";
 export * from "./contacts";
 export * from "./voice";
 export * from "./lifeHub";
+export * from "./agents";

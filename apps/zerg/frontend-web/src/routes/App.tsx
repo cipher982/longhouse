@@ -18,6 +18,8 @@ import RunnersPage from "../pages/RunnersPage";
 import RunnerDetailPage from "../pages/RunnerDetailPage";
 import TraceExplorerPage from "../pages/TraceExplorerPage";
 import ReliabilityPage from "../pages/ReliabilityPage";
+import SessionsPage from "../pages/SessionsPage";
+import SessionDetailPage from "../pages/SessionDetailPage";
 import { Spinner } from "../components/ui";
 import { AuthGuard } from "../lib/auth";
 
@@ -277,6 +279,22 @@ export default function App() {
           element: (
             <ErrorBoundary>
               <ReliabilityPage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/sessions",
+          element: (
+            <ErrorBoundary>
+              <SessionsPage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/sessions/:sessionId",
+          element: (
+            <ErrorBoundary>
+              <SessionDetailPage />
             </ErrorBoundary>
           )
         },
