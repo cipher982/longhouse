@@ -1,6 +1,6 @@
 # Shipper: Real-Time Session Sync
 
-**Status:** Phase 2C in progress (fixes needed)
+**Status:** Phase 2C complete
 **Protocol:** SDP-1
 **Vision:** VISION.md lines 320-361
 
@@ -53,17 +53,17 @@ The shipper syncs Claude Code (and other CLI agent) sessions to Zerg in real-tim
 
 ---
 
-### Phase 2C: Offline Resilience ✅ COMPLETE (fixes needed)
+### Phase 2C: Offline Resilience ✅ COMPLETE
 - SQLite spool at ~/.claude/zerg-shipper-spool.db
 - Enqueue on API failure, replay on reconnect
 - Background replay every 30s
 
 **Files:** spool.py, shipper.py updates
 
-**Fixes needed:**
-1. [ ] Spool status transitions (mark_failed → status='failed')
-2. [ ] Config path consistency (respect CLAUDE_CONFIG_DIR)
-3. [ ] Auth error handling (don't spool 401/403)
+**Fixes completed:**
+1. [x] Spool status transitions (mark_failed → status='failed') - Already implemented
+2. [x] Config path consistency (respect CLAUDE_CONFIG_DIR) - 461f3d8c
+3. [x] Auth error handling (don't spool 401/403) - 0ffcbf7e
 
 **Test command:** `uv run pytest tests/services/shipper/ -v`
 
@@ -118,25 +118,6 @@ Per VISION.md lines 421-467:
 - [ ] Homebrew formula
 
 ---
-
-## Current Task: Phase 2C Fixes
-
-Three bugs identified in review:
-
-### Fix 1: Spool status transitions
-**Problem:** `mark_failed()` never sets status='failed'
-**Solution:** Set status='failed' when retry_count >= max_retries
-**File:** spool.py
-
-### Fix 2: Config path consistency
-**Problem:** Spool/state default to ~/.claude, ignoring CLAUDE_CONFIG_DIR
-**Solution:** Pass claude_config_dir from ShipperConfig to spool/state
-**Files:** spool.py, state.py, shipper.py
-
-### Fix 3: Auth error handling
-**Problem:** 401/403 errors get spooled (will never succeed)
-**Solution:** Only spool 5xx/timeout errors; hard-fail on auth errors
-**File:** shipper.py
 
 ---
 
