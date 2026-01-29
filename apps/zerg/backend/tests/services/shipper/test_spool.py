@@ -313,6 +313,82 @@ class TestShipperSpoolIntegration:
         assert temp_env["spool"].pending_count() == 1
 
     @pytest.mark.asyncio
+    async def test_ship_raises_on_auth_error(self, temp_env):
+        """ship_session should raise on 401/403 auth errors, not spool."""
+        shipper = SessionShipper(
+            config=temp_env["config"],
+            spool=temp_env["spool"],
+        )
+
+        async def mock_post_ingest(payload):
+            response = MagicMock()
+            response.status_code = 401
+            raise httpx.HTTPStatusError(
+                "Unauthorized",
+                request=MagicMock(),
+                response=response,
+            )
+
+        shipper._post_ingest = mock_post_ingest
+
+        # Should raise, not spool
+        with pytest.raises(httpx.HTTPStatusError):
+            await shipper.ship_session(temp_env["session_file"])
+
+        # Nothing should be spooled
+        assert temp_env["spool"].pending_count() == 0
+
+    @pytest.mark.asyncio
+    async def test_ship_spools_on_server_error(self, temp_env):
+        """ship_session should spool on 5xx server errors."""
+        shipper = SessionShipper(
+            config=temp_env["config"],
+            spool=temp_env["spool"],
+        )
+
+        async def mock_post_ingest(payload):
+            response = MagicMock()
+            response.status_code = 503
+            raise httpx.HTTPStatusError(
+                "Service unavailable",
+                request=MagicMock(),
+                response=response,
+            )
+
+        shipper._post_ingest = mock_post_ingest
+
+        result = await shipper.ship_session(temp_env["session_file"])
+
+        assert result["events_spooled"] == 1
+        assert temp_env["spool"].pending_count() == 1
+
+    @pytest.mark.asyncio
+    async def test_ship_skips_on_4xx_client_error(self, temp_env):
+        """ship_session should skip (not spool) on 4xx client errors."""
+        shipper = SessionShipper(
+            config=temp_env["config"],
+            spool=temp_env["spool"],
+        )
+
+        async def mock_post_ingest(payload):
+            response = MagicMock()
+            response.status_code = 400
+            raise httpx.HTTPStatusError(
+                "Bad request",
+                request=MagicMock(),
+                response=response,
+            )
+
+        shipper._post_ingest = mock_post_ingest
+
+        result = await shipper.ship_session(temp_env["session_file"])
+
+        # Should skip the events, not spool them
+        assert result["events_skipped"] == 1
+        assert result["events_spooled"] == 0
+        assert temp_env["spool"].pending_count() == 0
+
+    @pytest.mark.asyncio
     async def test_replay_spool_ships_pending(self, temp_env):
         """replay_spool should ship pending items."""
         shipper = SessionShipper(
@@ -365,21 +441,21 @@ class TestShipperSpoolIntegration:
         assert result["remaining"] == 2
 
     @pytest.mark.asyncio
-    async def test_replay_spool_marks_http_errors_failed(self, temp_env):
-        """replay_spool should mark HTTP errors as failed."""
+    async def test_replay_spool_marks_5xx_errors_failed_with_retry(self, temp_env):
+        """replay_spool should mark 5xx server errors as failed with retry."""
         shipper = SessionShipper(
             config=temp_env["config"],
             spool=temp_env["spool"],
         )
 
-        temp_env["spool"].enqueue({"id": "bad-payload", "events": []})
+        temp_env["spool"].enqueue({"id": "server-error", "events": []})
 
         async def mock_post_ingest(payload):
             response = MagicMock()
-            response.status_code = 400
-            response.text = "Bad request"
+            response.status_code = 500
+            response.text = "Server error"
             raise httpx.HTTPStatusError(
-                "Bad request",
+                "Server error",
                 request=MagicMock(),
                 response=response,
             )
@@ -390,7 +466,7 @@ class TestShipperSpoolIntegration:
         result = await shipper.replay_spool()
 
         assert result["failed"] == 1
-        assert result["remaining"] == 1  # Still in spool but marked failed
+        assert result["remaining"] == 1  # Still in spool, will retry
 
         # Verify retry count was incremented
         items = temp_env["spool"].dequeue_batch()
@@ -399,7 +475,7 @@ class TestShipperSpoolIntegration:
 
     @pytest.mark.asyncio
     async def test_replay_spool_permanently_fails_after_max_retries(self, temp_env):
-        """replay_spool should permanently fail items after max retries."""
+        """replay_spool should permanently fail items after max retries for 5xx errors."""
         shipper = SessionShipper(
             config=temp_env["config"],
             spool=temp_env["spool"],
@@ -413,10 +489,12 @@ class TestShipperSpoolIntegration:
         async def mock_post_ingest(payload):
             nonlocal call_count
             call_count += 1
+            response = MagicMock()
+            response.status_code = 500
             raise httpx.HTTPStatusError(
-                "Bad request",
+                "Server error",
                 request=MagicMock(),
-                response=MagicMock(status_code=400),
+                response=response,
             )
 
         shipper._post_ingest = mock_post_ingest
@@ -438,3 +516,69 @@ class TestShipperSpoolIntegration:
 
         # API was called 5 times (once per retry)
         assert call_count == 5
+
+    @pytest.mark.asyncio
+    async def test_replay_spool_auth_error_immediately_fails(self, temp_env):
+        """replay_spool should immediately fail items on 401/403 auth errors."""
+        shipper = SessionShipper(
+            config=temp_env["config"],
+            spool=temp_env["spool"],
+        )
+
+        temp_env["spool"].enqueue({"id": "auth-fail", "events": []})
+
+        call_count = 0
+
+        async def mock_post_ingest(payload):
+            nonlocal call_count
+            call_count += 1
+            response = MagicMock()
+            response.status_code = 401
+            raise httpx.HTTPStatusError(
+                "Unauthorized",
+                request=MagicMock(),
+                response=response,
+            )
+
+        shipper._post_ingest = mock_post_ingest
+
+        # Single replay should permanently fail the item
+        result = await shipper.replay_spool(max_retries=5)
+        assert result["failed"] == 1
+        assert temp_env["spool"].pending_count() == 0  # Immediately removed from pending
+
+        # API was called only once
+        assert call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_replay_spool_4xx_error_immediately_fails(self, temp_env):
+        """replay_spool should immediately fail items on other 4xx errors."""
+        shipper = SessionShipper(
+            config=temp_env["config"],
+            spool=temp_env["spool"],
+        )
+
+        temp_env["spool"].enqueue({"id": "bad-payload", "events": []})
+
+        call_count = 0
+
+        async def mock_post_ingest(payload):
+            nonlocal call_count
+            call_count += 1
+            response = MagicMock()
+            response.status_code = 400
+            raise httpx.HTTPStatusError(
+                "Bad request",
+                request=MagicMock(),
+                response=response,
+            )
+
+        shipper._post_ingest = mock_post_ingest
+
+        # Single replay should permanently fail the item
+        result = await shipper.replay_spool(max_retries=5)
+        assert result["failed"] == 1
+        assert temp_env["spool"].pending_count() == 0  # Immediately removed from pending
+
+        # API was called only once
+        assert call_count == 1
