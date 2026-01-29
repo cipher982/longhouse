@@ -138,15 +138,69 @@ else:
 # IMPORTANT: This runs at import time (before pytest_configure), so we need
 # to detect the mode early. The CLI options are validated later in a fixture.
 
+import hashlib
+
+def _get_worktree_id() -> str:
+    """Generate stable 8-char ID unique to this git worktree.
+
+    Uses hash of absolute repo path - deterministic per worktree location.
+    Moving a worktree changes its ID (acceptable tradeoff for simplicity).
+    """
+    repo_root = Path(__file__).resolve().parents[4]  # tests -> backend -> zerg -> apps -> repo
+    return hashlib.md5(str(repo_root).encode()).hexdigest()[:8]
+
+_WORKTREE_ID = _get_worktree_id()
+_XDIST_WORKER = os.environ.get("PYTEST_XDIST_WORKER", "")
+
+def _get_test_schema_name() -> str:
+    """Generate schema name: zerg_test_wt_{worktree8}__{gw}"""
+    base = f"zerg_test_wt_{_WORKTREE_ID}"
+    if _XDIST_WORKER:
+        return f"{base}__{_XDIST_WORKER}"
+    return base
+
+def _get_application_name() -> str:
+    """Generate application_name for connection tracking: zerg-tests:{worktree8}:{gw}"""
+    if _XDIST_WORKER:
+        return f"zerg-tests:{_WORKTREE_ID}:{_XDIST_WORKER}"
+    return f"zerg-tests:{_WORKTREE_ID}:main"
+
+def _get_connection_options(schema: str) -> str:
+    """PostgreSQL connection options for test safety.
+
+    Includes search_path to ensure unqualified SQL uses the correct schema.
+    """
+    return (
+        f"-c search_path={schema},public "
+        f"-c application_name={_get_application_name()} "
+        "-c idle_in_transaction_session_timeout=60s "
+        "-c lock_timeout=10s "
+        "-c statement_timeout=180s"
+    )
+
 def _detect_db_mode():
-    """Detect database mode from CLI args or environment."""
+    """Detect database mode from CLI args or environment.
+
+    Priority:
+    1. CLI flag: --db-mode=docker|external
+    2. Env var: ZERG_TEST_DB_MODE=docker|external
+    3. Legacy: CI_TEST_SCHEMA set → external (backwards compat)
+    4. Default: docker (testcontainers)
+    """
     # Check for explicit --db-mode in sys.argv (early detection before pytest parses)
     if "--db-mode=external" in sys.argv or any(a.startswith("--db-mode") and "external" in a for a in sys.argv):
         return "external"
     if "--db-mode=docker" in sys.argv or any(a.startswith("--db-mode") and "docker" in a for a in sys.argv):
         return "docker"
 
-    # Auto-detect: if CI_TEST_SCHEMA is set, use external mode
+    # Check env var
+    env_mode = os.environ.get("ZERG_TEST_DB_MODE", "").lower()
+    if env_mode == "external":
+        return "external"
+    if env_mode == "docker":
+        return "docker"
+
+    # Legacy: CI_TEST_SCHEMA triggers external mode (backwards compat for CI)
     if os.environ.get("CI_TEST_SCHEMA"):
         return "external"
 
@@ -164,8 +218,12 @@ _CI_TEST_SCHEMA = None
 
 if _DB_MODE == "docker":
     # ---------------------------------------------------------------------------
-    # Docker mode: Use testcontainers for ephemeral PostgreSQL
+    # Docker mode: Use testcontainers with reuse for fast local iteration
     # ---------------------------------------------------------------------------
+    # Container stays running between test runs for speed. Schema isolation
+    # prevents cross-worktree interference. Use `docker stop zerg-test-postgres`
+    # for a clean slate.
+
     # Ensure docker-py can reach Docker Desktop on macOS where the socket lives
     # under ~/.docker/run/docker.sock when /var/run/docker.sock is absent.
     if not os.environ.get("DOCKER_HOST"):
@@ -186,7 +244,13 @@ if _DB_MODE == "docker":
             "Either start Docker Desktop, or use --db-mode=external with CI_TEST_SCHEMA and DATABASE_URL."
         ) from _e
 
+    # Enable testcontainers reuse - keeps container running between test runs.
+    # First run: ~8s startup. Subsequent runs: instant.
+    # Set TESTCONTAINERS_REUSE_ENABLE=false to disable (CI should disable).
+    os.environ.setdefault("TESTCONTAINERS_REUSE_ENABLE", "true")
+
     # Configure Postgres for maximum test speed (unsafe for production!)
+    # Note: reuse is controlled by TESTCONTAINERS_REUSE_ENABLE env var (set above)
     _pg_container = PostgresContainer(
         "postgres:16-alpine",
         driver="psycopg",
@@ -200,58 +264,48 @@ if _DB_MODE == "docker":
     )
     _pg_container.start()
 
-    # Register cleanup at interpreter exit - handles Ctrl+C, crashes, etc.
-    def _cleanup_pg_container():
-        try:
-            if _pg_container:
-                _pg_container.stop()
-        except Exception:
-            pass
+    # DON'T register atexit cleanup when reusing - we want container to persist
+    # Container can be manually stopped with: docker stop <container_id>
 
-    atexit.register(_cleanup_pg_container)
+    # Schema for this worktree (isolates parallel worktrees)
+    _CI_TEST_SCHEMA = _get_test_schema_name()
 
     # Prefer psycopg v3 driver in SQLAlchemy URL
+    # Note: search_path is set in connect_args via _get_connection_options()
     SQLALCHEMY_DATABASE_URL = _pg_container.get_connection_url().replace("psycopg2", "psycopg")
-    # Ensure unqualified SQL (TRUNCATE, SELECT, etc.) hits the zerg schema.
-    SQLALCHEMY_DATABASE_URL = _apply_search_path(SQLALCHEMY_DATABASE_URL, DB_SCHEMA)
 
     # Create test engine and session factory bound to Postgres
     from sqlalchemy.pool import NullPool
 
-    test_engine = make_engine(
+    _base_engine = make_engine(
         SQLALCHEMY_DATABASE_URL,
         pool_pre_ping=True,
         poolclass=NullPool,
+        connect_args={"options": _get_connection_options(_CI_TEST_SCHEMA)},
+    )
+
+    # Apply schema_translate_map so ORM models (which use schema="zerg")
+    # correctly map to our worktree-scoped schema
+    test_engine = _base_engine.execution_options(
+        schema_translate_map={DB_SCHEMA: _CI_TEST_SCHEMA}
     )
 
     TestingSessionLocal = make_sessionmaker(test_engine)
 
 elif _DB_MODE == "external":
     # ---------------------------------------------------------------------------
-    # External mode: Use provided DATABASE_URL with per-run schema isolation
+    # External mode: Use provided DATABASE_URL with per-worktree schema isolation
     # ---------------------------------------------------------------------------
-    # NOTE: When using pytest-xdist, each worker is a separate process.
-    # We append the worker ID to the schema name to avoid collisions.
-    # The PYTEST_XDIST_WORKER env var is set by xdist (e.g., "gw0", "gw1").
-    _xdist_worker = os.environ.get("PYTEST_XDIST_WORKER", "")
-    _CI_TEST_SCHEMA_BASE = os.environ.get("CI_TEST_SCHEMA")
-    if not _CI_TEST_SCHEMA_BASE:
-        raise RuntimeError(
-            "External DB mode requires CI_TEST_SCHEMA environment variable. "
-            "Set CI_TEST_SCHEMA=zerg_ci_<unique_id> to isolate this test run."
-        )
+    # Schema naming: zerg_test_wt_{worktree8}__{gw}
+    # This allows multiple worktrees to run tests in parallel without collision.
 
-    # Append worker ID for parallel test isolation
-    if _xdist_worker:
-        _CI_TEST_SCHEMA = f"{_CI_TEST_SCHEMA_BASE}_{_xdist_worker}"
-    else:
-        _CI_TEST_SCHEMA = _CI_TEST_SCHEMA_BASE
+    _CI_TEST_SCHEMA = _get_test_schema_name()
 
-    # Safety check: only allow ci_, test_, or zerg_ci_ prefixed schemas
-    if not _CI_TEST_SCHEMA.startswith(("ci_", "test_", "zerg_ci_")):
+    # Safety check: only allow zerg_test_wt_ prefixed schemas (our naming convention)
+    if not _CI_TEST_SCHEMA.startswith("zerg_test_wt_"):
         raise RuntimeError(
             f"Unsafe schema name: {_CI_TEST_SCHEMA}. "
-            "Schema must start with ci_, test_, or zerg_ci_ to prevent accidental production data loss."
+            "Schema must start with zerg_test_wt_ to prevent accidental production data loss."
         )
 
     _db_url_env = os.environ.get("DB_URL_ENV", "DATABASE_URL")
@@ -262,23 +316,50 @@ elif _DB_MODE == "external":
             f"Set {_db_url_env}=postgresql://... to connect to the CI database."
         )
 
-    # Apply the CI schema to the connection URL for search_path
-    SQLALCHEMY_DATABASE_URL = _apply_search_path(SQLALCHEMY_DATABASE_URL, _CI_TEST_SCHEMA)
+    # Note: search_path is set in connect_args via _get_connection_options()
 
     from sqlalchemy.pool import NullPool
     from sqlalchemy import text
 
-    # Create base engine first (without schema translation) to create the schema
+    # Create base engine first (without schema translation) for bootstrap operations
     _base_engine = make_engine(
         SQLALCHEMY_DATABASE_URL,
         pool_pre_ping=True,
         poolclass=NullPool,
+        connect_args={"options": _get_connection_options(_CI_TEST_SCHEMA)},
     )
 
-    # Create the schema if it doesn't exist
+    # Preflight cleanup: terminate stale connections for THIS worktree only
+    # This prevents "idle in transaction" connections from old crashed runs
+    # from blocking TRUNCATE in new runs. Scoped to worktree to avoid killing
+    # active tests in other worktrees.
     with _base_engine.connect() as conn:
-        conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {_CI_TEST_SCHEMA}"))
+        conn.execute(text(f"""
+            SELECT pg_terminate_backend(pid)
+            FROM pg_stat_activity
+            WHERE application_name LIKE 'zerg-tests:{_WORKTREE_ID}:%'
+              AND state = 'idle in transaction'
+              AND now() - xact_start > interval '60 seconds'
+              AND pid != pg_backend_pid()
+        """))
         conn.commit()
+
+    # Advisory lock to serialize schema bootstrap across xdist workers
+    # This prevents races where multiple workers try to CREATE SCHEMA + migrate simultaneously
+    _schema_lock_id = int(hashlib.md5(f"zerg_test_wt_{_WORKTREE_ID}".encode()).hexdigest()[:8], 16)
+
+    with _base_engine.connect() as conn:
+        # Acquire advisory lock (blocks until available)
+        conn.execute(text(f"SELECT pg_advisory_lock({_schema_lock_id})"))
+
+        try:
+            # Create schema if it doesn't exist (first worker wins)
+            conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {_CI_TEST_SCHEMA}"))
+            conn.commit()
+        finally:
+            # Release advisory lock
+            conn.execute(text(f"SELECT pg_advisory_unlock({_schema_lock_id})"))
+            conn.commit()
 
     # Now create the actual test engine with schema_translate_map
     # This translates "zerg" schema references in ORM models to our per-worker schema
@@ -510,26 +591,20 @@ if _eval_mode != "live":
 from zerg.main import app  # noqa: E402
 
 
-# Stop the Postgres container after the entire test session completes (docker mode only)
+# Container lifecycle management
+# With reuse=True, we DON'T stop the container on session end - it persists for fast re-runs.
+# Schema cleanup is handled by _db_schema fixture (unless ZERG_KEEP_TEST_DB=1).
+# To fully reset: `docker stop $(docker ps -q --filter ancestor=postgres:16-alpine)`
 @pytest.fixture(scope="session", autouse=True)
 def _shutdown_pg_container():
     yield
-    if _DB_MODE == "docker" and _pg_container:
+    # Container cleanup is intentionally skipped when using reuse=True
+    # Schema cleanup happens in _db_schema fixture
+    if _DB_MODE == "docker" and _pg_container and not os.environ.get("TESTCONTAINERS_REUSE_ENABLE", "true").lower() == "true":
         try:
             _pg_container.stop()
         except Exception:
             pass
-    elif _DB_MODE == "external" and _CI_TEST_SCHEMA:
-        # Clean up this worker's schema after tests complete
-        cleanup_mode = os.environ.get("CI_DB_CLEANUP", "drop")
-        if cleanup_mode == "drop":
-            try:
-                from sqlalchemy import text
-                with test_engine.connect() as conn:
-                    conn.execute(text(f"DROP SCHEMA IF EXISTS {_CI_TEST_SCHEMA} CASCADE"))
-                    conn.commit()
-            except Exception:
-                pass  # Best effort cleanup
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -631,29 +706,53 @@ def cleanup_global_resources(request):
 
 @pytest.fixture(scope="session")
 def _db_schema():
-    """Create database schema once for the entire test session."""
-    # Use CI schema in external mode, otherwise use default DB_SCHEMA
-    schema_name = _CI_TEST_SCHEMA if _DB_MODE == "external" else DB_SCHEMA
+    """Create database schema once for the entire test session.
+
+    Schema naming: zerg_test_wt_{worktree8}__{gw}
+    - Isolates parallel worktrees from each other
+    - Isolates xdist workers within a worktree
+    - Advisory lock serializes schema bootstrap across workers
+    """
+    from sqlalchemy import text
+
+    # Both docker and external modes now use worktree-scoped schemas
+    schema_name = _CI_TEST_SCHEMA
+
+    # Advisory lock to prevent race conditions during schema creation + migration
+    _schema_lock_id = int(hashlib.md5(f"zerg_test_wt_{_WORKTREE_ID}".encode()).hexdigest()[:8], 16)
 
     if test_engine.dialect.name == "postgresql":
-        from sqlalchemy import text
-
         with test_engine.connect() as conn:
-            conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_name}"))
-            conn.commit()
+            # Acquire advisory lock (blocks until available)
+            conn.execute(text(f"SELECT pg_advisory_lock({_schema_lock_id})"))
 
-    # In external mode, use schema_translate_map to create tables in CI schema
-    if _DB_MODE == "external" and _CI_TEST_SCHEMA:
-        ddl_conn = test_engine.execution_options(schema_translate_map={DB_SCHEMA: _CI_TEST_SCHEMA})
-        Base.metadata.create_all(bind=ddl_conn)
+            try:
+                conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_name}"))
+                conn.commit()
+
+                # Create tables using test_engine (which already has schema_translate_map)
+                # This maps ORM's "zerg" schema references to our worktree schema
+                Base.metadata.create_all(bind=test_engine)
+            finally:
+                # Release advisory lock
+                conn.execute(text(f"SELECT pg_advisory_unlock({_schema_lock_id})"))
+                conn.commit()
     else:
+        # Non-Postgres (e.g., SQLite for quick local tests)
         Base.metadata.create_all(bind=test_engine)
 
     yield
 
-    # Cleanup (docker mode drops entire container, external mode drops schema)
-    if _DB_MODE == "docker":
-        Base.metadata.drop_all(bind=test_engine)
+    # Cleanup: drop schema unless ZERG_KEEP_TEST_DB=1 (useful for debugging)
+    if os.environ.get("ZERG_KEEP_TEST_DB") == "1":
+        print(f"\nZERG_KEEP_TEST_DB=1: keeping schema {schema_name} for inspection")
+    elif test_engine.dialect.name == "postgresql":
+        try:
+            with test_engine.connect() as conn:
+                conn.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE"))
+                conn.commit()
+        except Exception:
+            pass  # Best effort cleanup
 
 
 def _truncate_all_tables(connection):

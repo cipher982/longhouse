@@ -243,3 +243,4 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-29) [gotcha] `_execute_tools_parallel` had a local `FicheInterrupted` import that shadowed the global, causing `<tool-error>cannot access free variable 'FicheInterrupted'...`; remove the inner import.
 - (2026-01-29) [gotcha] Agents sessions are single-tenant enforced; if >1 users exist, agents/session picker endpoints return 409 unless SINGLE_TENANT=0.
 - (2026-01-29) [gotcha] Alembic revision IDs >32 chars break `alembic_version` (varchar(32)); ensure version_num is VARCHAR(64) before running migrations.
+- (2026-01-29) [gotcha] Orphaned "idle in transaction" DB connections from crashed E2E tests block TRUNCATE in unit tests; check `pg_stat_activity` and terminate stale connections before debugging test "timeouts".
