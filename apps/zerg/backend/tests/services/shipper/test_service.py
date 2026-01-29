@@ -266,26 +266,53 @@ class TestLaunchdStatus:
             assert _get_launchd_status() == "not-installed"
 
     def test_running(self, tmp_path: Path):
-        """Status is running when launchctl reports PID."""
+        """Status is running when launchctl print reports state = running."""
+        plist_path = tmp_path / "test.plist"
+        plist_path.write_text("<plist></plist>")
+
+        # launchctl print gui/<uid>/<label> output format
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = """com.swarmlet.shipper = {
+    active count = 1
+    path = /Users/user/Library/LaunchAgents/com.swarmlet.shipper.plist
+    state = running
+    pid = 12345
+}"""
+
+        with patch("zerg.services.shipper.service._get_launchd_plist_path", return_value=plist_path):
+            with patch("subprocess.run", return_value=mock_result):
+                assert _get_launchd_status() == "running"
+
+    def test_running_via_pid(self, tmp_path: Path):
+        """Status is running when launchctl print has pid but no state field."""
         plist_path = tmp_path / "test.plist"
         plist_path.write_text("<plist></plist>")
 
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_result.stdout = "12345\t0\tcom.swarmlet.shipper"
+        mock_result.stdout = """com.swarmlet.shipper = {
+    active count = 1
+    pid = 12345
+}"""
 
         with patch("zerg.services.shipper.service._get_launchd_plist_path", return_value=plist_path):
             with patch("subprocess.run", return_value=mock_result):
                 assert _get_launchd_status() == "running"
 
     def test_stopped(self, tmp_path: Path):
-        """Status is stopped when launchctl reports no PID."""
+        """Status is stopped when launchctl print shows no running state or PID."""
         plist_path = tmp_path / "test.plist"
         plist_path.write_text("<plist></plist>")
 
+        # launchctl print output when service is loaded but not running
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_result.stdout = "-\t0\tcom.swarmlet.shipper"
+        mock_result.stdout = """com.swarmlet.shipper = {
+    active count = 0
+    path = /Users/user/Library/LaunchAgents/com.swarmlet.shipper.plist
+    state = waiting
+}"""
 
         with patch("zerg.services.shipper.service._get_launchd_plist_path", return_value=plist_path):
             with patch("subprocess.run", return_value=mock_result):
@@ -494,7 +521,10 @@ class TestGetServiceStatus:
 
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_result.stdout = "12345\t0\tcom.swarmlet.shipper"
+        mock_result.stdout = """com.swarmlet.shipper = {
+    state = running
+    pid = 12345
+}"""
 
         with patch("zerg.services.shipper.service.detect_platform", return_value=Platform.MACOS):
             with patch("zerg.services.shipper.service._get_launchd_plist_path", return_value=plist_path):
@@ -531,7 +561,10 @@ class TestGetServiceInfo:
 
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_result.stdout = "12345\t0\tcom.swarmlet.shipper"
+        mock_result.stdout = """com.swarmlet.shipper = {
+    state = running
+    pid = 12345
+}"""
 
         with patch("zerg.services.shipper.service.detect_platform", return_value=Platform.MACOS):
             with patch("zerg.services.shipper.service._get_launchd_plist_path", return_value=plist_path):

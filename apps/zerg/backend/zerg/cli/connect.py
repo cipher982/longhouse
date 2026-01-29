@@ -181,7 +181,9 @@ def connect(
         return
 
     if install:
-        _handle_install(url=url, token=token, claude_dir=claude_dir, poll=poll, interval=interval)
+        # --interval implies --poll for install mode
+        use_poll = poll or interval != 30
+        _handle_install(url=url, token=token, claude_dir=claude_dir, poll=use_poll, interval=interval)
         return
 
     # Normal connect mode - run in foreground
