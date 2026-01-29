@@ -36,6 +36,12 @@ from zerg.services.shipper.state import ShipperState
 logger = logging.getLogger(__name__)
 
 
+class RateLimitExhaustedError(Exception):
+    """Raised when max 429 retries are exhausted."""
+
+    pass
+
+
 @dataclass
 class ShipperConfig:
     """Configuration for the session shipper."""
@@ -260,6 +266,27 @@ class SessionShipper:
                 "new_offset": new_offset,
             }
 
+        except RateLimitExhaustedError as e:
+            # Rate limit exhausted after max retries - spool for later retry
+            logger.warning(f"Rate limit exhausted, spooling {len(events)} events: {e}")
+            self.spool.enqueue(payload)
+
+            # Still update offset so we don't re-parse these events
+            new_offset = session_file.stat().st_size
+            self.state.set_offset(
+                file_path_str,
+                new_offset,
+                session_id,
+                metadata.session_id,
+            )
+
+            return {
+                "events_inserted": 0,
+                "events_skipped": 0,
+                "events_spooled": len(events),
+                "new_offset": new_offset,
+            }
+
         except httpx.HTTPStatusError as e:
             status_code = e.response.status_code
 
@@ -367,8 +394,8 @@ class SessionShipper:
                 # Handle 429 Too Many Requests
                 if response.status_code == 429:
                     if retries >= self.config.max_retries_429:
-                        logger.warning(f"Rate limited after {retries} retries, giving up")
-                        response.raise_for_status()
+                        logger.warning(f"Rate limited after {retries} retries, spooling for later")
+                        raise RateLimitExhaustedError(f"Rate limited after {retries} retries")
 
                     # Use Retry-After header if present, otherwise exponential backoff
                     retry_after = response.headers.get("Retry-After")
