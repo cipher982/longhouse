@@ -70,14 +70,20 @@ class ShipperState:
     State is persisted to a JSON file to survive restarts.
     """
 
-    def __init__(self, state_path: Path | None = None):
+    def __init__(self, state_path: Path | None = None, claude_config_dir: Path | None = None):
         """Initialize state tracker.
 
         Args:
-            state_path: Path to state file. Defaults to ~/.claude/zerg-shipper-state.json
+            state_path: Path to state file. Defaults to {claude_config_dir}/zerg-shipper-state.json
+            claude_config_dir: Base config directory. Defaults to ~/.claude or CLAUDE_CONFIG_DIR
         """
         if state_path is None:
-            state_path = Path.home() / ".claude" / "zerg-shipper-state.json"
+            if claude_config_dir is None:
+                import os
+
+                config_dir = os.getenv("CLAUDE_CONFIG_DIR")
+                claude_config_dir = Path(config_dir) if config_dir else Path.home() / ".claude"
+            state_path = claude_config_dir / "zerg-shipper-state.json"
 
         self.state_path = state_path
         self._sessions: dict[str, ShippedSession] = {}

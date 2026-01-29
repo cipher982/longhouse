@@ -97,8 +97,8 @@ class SessionShipper:
             spool: Offline spool for resilience (auto-created if None)
         """
         self.config = config or ShipperConfig()
-        self.state = state or ShipperState()
-        self.spool = spool or OfflineSpool()
+        self.state = state or ShipperState(claude_config_dir=self.config.claude_config_dir)
+        self.spool = spool or OfflineSpool(claude_config_dir=self.config.claude_config_dir)
 
     def _find_session_files(self) -> list[Path]:
         """Find all JSONL session files in projects directory."""

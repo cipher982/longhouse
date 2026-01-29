@@ -55,14 +55,20 @@ class OfflineSpool:
                 spool.mark_failed(item.id, str(e))
     """
 
-    def __init__(self, db_path: Path | None = None):
+    def __init__(self, db_path: Path | None = None, claude_config_dir: Path | None = None):
         """Initialize the spool.
 
         Args:
-            db_path: Path to SQLite database. Defaults to ~/.claude/zerg-shipper-spool.db
+            db_path: Path to SQLite database. Defaults to {claude_config_dir}/zerg-shipper-spool.db
+            claude_config_dir: Base config directory. Defaults to ~/.claude or CLAUDE_CONFIG_DIR
         """
         if db_path is None:
-            db_path = Path.home() / ".claude" / "zerg-shipper-spool.db"
+            if claude_config_dir is None:
+                import os
+
+                config_dir = os.getenv("CLAUDE_CONFIG_DIR")
+                claude_config_dir = Path(config_dir) if config_dir else Path.home() / ".claude"
+            db_path = claude_config_dir / "zerg-shipper-spool.db"
 
         self.db_path = db_path
         self._init_db()

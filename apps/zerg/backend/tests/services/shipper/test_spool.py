@@ -211,6 +211,29 @@ class TestOfflineSpool:
         items = temp_spool.dequeue_batch()
         assert len(items) == 0
 
+    def test_claude_config_dir_parameter(self):
+        """Spool uses claude_config_dir when provided."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_dir = Path(tmpdir) / "custom-claude"
+            config_dir.mkdir()
+
+            spool = OfflineSpool(claude_config_dir=config_dir)
+
+            # DB should be in custom config dir
+            assert spool.db_path == config_dir / "zerg-shipper-spool.db"
+
+    def test_claude_config_dir_env_var(self, monkeypatch):
+        """Spool uses CLAUDE_CONFIG_DIR env var when set."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_dir = Path(tmpdir) / "env-claude"
+            config_dir.mkdir()
+
+            monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+
+            spool = OfflineSpool()
+
+            assert spool.db_path == config_dir / "zerg-shipper-spool.db"
+
 
 class TestShipperSpoolIntegration:
     """Tests for shipper + spool integration."""
