@@ -103,6 +103,27 @@ def clear_token(claude_config_dir: Path | None = None) -> bool:
         return False
 
 
+def clear_zerg_url(claude_config_dir: Path | None = None) -> bool:
+    """Remove the stored Zerg API URL from local storage.
+
+    Args:
+        claude_config_dir: Optional override for Claude config directory.
+
+    Returns:
+        True if the URL was removed, False if no URL existed.
+    """
+    url_path = _get_url_path(claude_config_dir)
+
+    if not url_path.exists():
+        return False
+
+    try:
+        url_path.unlink()
+        return True
+    except (OSError, IOError):
+        return False
+
+
 def get_zerg_url(claude_config_dir: Path | None = None) -> str | None:
     """Load the configured Zerg API URL from local storage.
 

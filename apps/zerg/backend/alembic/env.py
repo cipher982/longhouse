@@ -93,6 +93,19 @@ def run_migrations_online() -> None:
             # Create zerg schema - completely isolated from other projects
             connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {DB_SCHEMA}"))
             connection.execute(text(f"SET search_path TO {DB_SCHEMA}, public"))
+            # Ensure alembic_version supports long revision ids
+            connection.execute(
+                text(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {DB_SCHEMA}.alembic_version (
+                        version_num VARCHAR(64) NOT NULL PRIMARY KEY
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(f"ALTER TABLE {DB_SCHEMA}.alembic_version ALTER COLUMN version_num TYPE VARCHAR(64)")
+            )
             connection.commit()
 
         context.configure(

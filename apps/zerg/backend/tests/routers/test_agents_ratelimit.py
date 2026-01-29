@@ -1,7 +1,7 @@
 """Tests for agents API rate limiting.
 
 Tests the server-side rate limiting for the ingest endpoint:
-- 1000 events/min per device_id soft cap
+- 1000 events/min per device (token-derived key or device_id) soft cap
 - HTTP 429 with Retry-After header when exceeded
 - Gzip decompression support
 """

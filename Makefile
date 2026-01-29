@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-reset-db reset test test-integration test-unit test-e2e test-e2e-core test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-runner-unit test-install-runner test-prompts test-ci test-backend-docker eval eval-live eval-compare eval-critical eval-fast eval-all eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage
+.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-reset-db reset test test-integration test-unit test-e2e test-e2e-core test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-runner-unit test-install-runner test-prompts test-ci test-backend-docker test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test eval eval-live eval-compare eval-critical eval-fast eval-all eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +168,7 @@ reset: ## Reset database (destroys all data)
 #   make test-e2e E2E_BACKEND_PORT=47300 E2E_FRONTEND_PORT=47200
 E2E_BACKEND_PORT ?= 8001
 E2E_FRONTEND_PORT ?= 8002
+SHIPPER_E2E_URL ?= http://localhost:47300
 
 test: ## Backend + frontend tests (no Playwright)
 	@echo "🧪 Running tests (no Playwright E2E)..."
@@ -313,6 +314,16 @@ test-integration: ## Run integration tests (REAL API calls, requires API keys)
 	@echo "🧪 Running integration tests (real API calls)..."
 	@echo "   Note: Requires OPENAI_API_KEY and/or GROQ_API_KEY"
 	cd apps/zerg/backend && EVAL_MODE=live uv run pytest tests/integration/ -v -m integration
+
+shipper-e2e-prereqs: ## Shipper E2E prerequisites (migrations + table check)
+	@./scripts/shipper-e2e-prereqs.sh
+
+test-shipper-e2e: ## Run shipper E2E tests (requires backend running)
+	@echo "🧪 Running shipper E2E tests (requires make dev)..."
+	cd apps/zerg/backend && SHIPPER_E2E=1 SHIPPER_E2E_URL=$(SHIPPER_E2E_URL) uv run pytest tests/integration/test_shipper_e2e.py tests/integration/test_shipper_watcher_e2e.py -v -m integration
+
+shipper-smoke-test: ## Run shipper live smoke test script (requires backend running)
+	@./scripts/shipper-smoke-test.sh
 
 test-zerg-e2e: ## Run Zerg E2E tests (Playwright)
 	@echo "🧪 Running Zerg E2E tests..."

@@ -29,6 +29,7 @@ from zerg.services.shipper import SessionWatcher
 from zerg.services.shipper import ShipperConfig
 from zerg.services.shipper import ShipResult
 from zerg.services.shipper import clear_token
+from zerg.services.shipper import clear_zerg_url
 from zerg.services.shipper import get_service_info
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import install_service
@@ -103,10 +104,15 @@ def auth(
     # Handle --clear
     if clear:
         cleared_token = clear_token(config_dir)
-        if cleared_token:
+        cleared_url = clear_zerg_url(config_dir)
+        if cleared_token and cleared_url:
+            typer.secho("Cleared stored token and URL", fg=typer.colors.GREEN)
+        elif cleared_token:
             typer.secho("Cleared stored token", fg=typer.colors.GREEN)
+        elif cleared_url:
+            typer.secho("Cleared stored URL", fg=typer.colors.GREEN)
         else:
-            typer.echo("No token to clear")
+            typer.echo("No token or URL to clear")
         return
 
     # Check for existing token

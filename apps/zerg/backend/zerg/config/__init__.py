@@ -46,6 +46,7 @@ class Settings:  # noqa: D401 – simple data container
     # Runtime flags -----------------------------------------------------
     testing: bool
     auth_disabled: bool
+    single_tenant: bool
 
     # Secrets & IDs -----------------------------------------------------
     jwt_secret: str
@@ -251,6 +252,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
     return Settings(
         testing=testing,
         auth_disabled=_truthy(os.getenv("AUTH_DISABLED")) or testing,
+        single_tenant=_truthy(os.getenv("SINGLE_TENANT", "1")),
         jwt_secret=os.getenv("JWT_SECRET", "dev-secret"),
         internal_api_secret=os.getenv("INTERNAL_API_SECRET", "dev-internal-secret"),
         google_client_id=os.getenv("GOOGLE_CLIENT_ID"),
