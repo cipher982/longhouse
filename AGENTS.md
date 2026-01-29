@@ -151,6 +151,15 @@ Sauron is the centralized ops scheduler, deployed as a standalone service on cli
 
 **Deploy:** Coolify on clifford, separate from main Zerg deployment.
 
+**Managing jobs (enable/disable):**
+Jobs live in `cipher982/sauron-jobs` repo, not here. To enable/disable:
+```bash
+gh repo clone cipher982/sauron-jobs /tmp/sauron-jobs -- --depth 1
+# Edit manifest.py: set enabled=True/False on the JobConfig
+cd /tmp/sauron-jobs && git commit -am "chore: disable foo-job" && git push
+```
+Sauron syncs every 5 min. API (`/jobs/{id}/disable`) exists but is internal-only (Docker network).
+
 ## Deep Dives
 
 | Topic | Guide |
