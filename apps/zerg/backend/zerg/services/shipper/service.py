@@ -479,31 +479,53 @@ def get_service_status() -> ServiceStatus:
 
 
 def _get_launchd_status() -> ServiceStatus:
-    """Get launchd service status on macOS."""
+    """Get launchd service status on macOS.
+
+    Uses `launchctl print gui/<uid>/<label>` for reliable status detection.
+    Falls back to checking if the plist file exists and service is listed.
+    """
     plist_path = _get_launchd_plist_path()
 
     if not plist_path.exists():
         return "not-installed"
 
-    # Check if service is running
+    # Get current user's UID for launchctl print command
+    import os
+
+    uid = os.getuid()
+
+    # Use launchctl print for more reliable status detection
     result = subprocess.run(
-        ["launchctl", "list", LAUNCHD_LABEL],
+        ["launchctl", "print", f"gui/{uid}/{LAUNCHD_LABEL}"],
         capture_output=True,
         text=True,
     )
 
-    if result.returncode == 0:
-        # Service is loaded - check if running
-        # Output format: PID\tStatus\tLabel
-        lines = result.stdout.strip().split("\n")
-        if lines:
-            parts = lines[0].split("\t")
-            if len(parts) >= 1 and parts[0] != "-":
-                return "running"
+    if result.returncode != 0:
+        # Service not loaded in launchd
         return "stopped"
-    else:
-        # Service not loaded
-        return "stopped"
+
+    # Parse output to check if service is actually running
+    # Look for "state = running" or "pid = <number>" in output
+    output = result.stdout.lower()
+
+    # Check for running state
+    if "state = running" in output:
+        return "running"
+
+    # Check for active PID (pid = <number> where number > 0)
+    for line in output.split("\n"):
+        line = line.strip()
+        if line.startswith("pid ="):
+            try:
+                pid_str = line.split("=")[1].strip()
+                if pid_str.isdigit() and int(pid_str) > 0:
+                    return "running"
+            except (IndexError, ValueError):
+                pass
+
+    # Service is loaded but not running
+    return "stopped"
 
 
 def _get_systemd_status() -> ServiceStatus:
