@@ -1,6 +1,6 @@
 # Shipper: Real-Time Session Sync
 
-**Status:** Phase 2C complete
+**Status:** Phase 2D complete
 **Protocol:** SDP-1
 **Vision:** VISION.md lines 320-361
 
@@ -69,18 +69,23 @@ The shipper syncs Claude Code (and other CLI agent) sessions to Zerg in real-tim
 
 ---
 
-### Phase 2D: Service Installation (NOT STARTED)
+### Phase 2D: Service Installation ✅ COMPLETE
 - launchd plist for macOS
 - systemd unit for Linux
 - `zerg connect --install` to set up
 - `zerg connect --uninstall` to remove
+- `zerg connect --status` to check status
+
+**Files:** service.py, connect.py updates
 
 **Acceptance criteria:**
-- [ ] `zerg connect --install` creates and starts service
-- [ ] Service auto-starts on boot
-- [ ] Service restarts on failure
-- [ ] `zerg connect --uninstall` stops and removes service
-- [ ] Works on macOS (launchd) and Linux (systemd)
+- [x] `zerg connect --install` creates and starts service
+- [x] Service auto-starts on boot
+- [x] Service restarts on failure
+- [x] `zerg connect --uninstall` stops and removes service
+- [x] Works on macOS (launchd) and Linux (systemd)
+
+**Commits:** 8efd6779
 
 ---
 
@@ -142,4 +147,5 @@ make test
 | services/shipper/shipper.py | Core ship logic |
 | services/shipper/watcher.py | File system watching |
 | services/shipper/spool.py | Offline queue |
+| services/shipper/service.py | Service installation (launchd/systemd) |
 | cli/connect.py | CLI commands |
