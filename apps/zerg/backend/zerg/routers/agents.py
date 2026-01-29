@@ -6,8 +6,13 @@ Provides endpoints for:
 - GET /api/agents/sessions/{id} - Get session details
 - GET /api/agents/sessions/{id}/events - Get session events
 - GET /api/agents/sessions/{id}/export - Export session as JSONL for --resume
+
+Authentication:
+- When AUTH_DISABLED=1 (dev mode), endpoints are open
+- Otherwise, requires X-Agents-Token header matching AGENTS_API_TOKEN env var
 """
 
+import hmac
 import logging
 from datetime import datetime
 from datetime import timedelta
@@ -22,12 +27,14 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Query
+from fastapi import Request
 from fastapi import Response
 from fastapi import status
 from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy.orm import Session
 
+from zerg.config import get_settings
 from zerg.database import get_db
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import SessionIngest
@@ -35,6 +42,58 @@ from zerg.services.agents_store import SessionIngest
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+
+_settings = get_settings()
+
+
+# ---------------------------------------------------------------------------
+# Auth Dependency
+# ---------------------------------------------------------------------------
+
+
+def verify_agents_token(request: Request) -> None:
+    """Verify the agents API token.
+
+    In dev mode (AUTH_DISABLED=1), allows all requests.
+    Otherwise, requires X-Agents-Token header or Authorization: Bearer token
+    matching the AGENTS_API_TOKEN env var.
+
+    Raises:
+        HTTPException(401): If token is missing or invalid
+        HTTPException(403): If AGENTS_API_TOKEN is not configured in production
+    """
+    # Dev mode - allow all
+    if _settings.auth_disabled:
+        return
+
+    # Get expected token from settings
+    expected_token = _settings.agents_api_token
+    if not expected_token:
+        # In production without a token configured, deny all access
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Agents API not configured - set AGENTS_API_TOKEN env var",
+        )
+
+    # Try X-Agents-Token header first, then Authorization: Bearer
+    provided_token = request.headers.get("X-Agents-Token")
+    if not provided_token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            provided_token = auth_header[7:]
+
+    if not provided_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authentication - provide X-Agents-Token header",
+        )
+
+    # Constant-time comparison to prevent timing attacks
+    if not hmac.compare_digest(provided_token, expected_token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid agents API token",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +162,7 @@ class IngestResponse(BaseModel):
 async def ingest_session(
     data: SessionIngest,
     db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
 ) -> IngestResponse:
     """Ingest a session with events.
 
@@ -141,6 +201,7 @@ async def list_sessions(
     limit: int = Query(20, ge=1, le=100, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
 ) -> SessionsListResponse:
     """List sessions with optional filters.
 
@@ -193,6 +254,7 @@ async def list_sessions(
 async def get_session(
     session_id: UUID,
     db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
 ) -> SessionResponse:
     """Get a single session by ID."""
     store = AgentsStore(db)
@@ -227,6 +289,7 @@ async def get_session_events(
     limit: int = Query(100, ge=1, le=1000, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
 ) -> EventsListResponse:
     """Get events for a session."""
     store = AgentsStore(db)
@@ -273,6 +336,7 @@ async def get_session_events(
 async def export_session(
     session_id: UUID,
     db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
 ) -> Response:
     """Export session as JSONL for Claude Code --resume.
 

@@ -221,16 +221,20 @@ async def ship_session_to_zerg(
 
     logger.info(f"Shipping session {provider_session_id} for commis {commis_id}")
 
-    # Read session content
-    session_content = session_file.read_text()
+    # Read session content as bytes to track offsets for dedup
+    session_bytes = session_file.read_bytes()
+    session_content = session_bytes.decode("utf-8", errors="replace")
 
-    # Parse JSONL and build ingest payload
+    # Parse JSONL and build ingest payload with byte offsets for dedup
     events = []
-    for line in session_content.splitlines():
-        if not line.strip():
+    byte_offset = 0
+    for line in session_content.splitlines(keepends=True):
+        line_stripped = line.strip()
+        if not line_stripped:
+            byte_offset += len(line.encode("utf-8"))
             continue
         try:
-            event = json.loads(line)
+            event = json.loads(line_stripped)
             events.append(
                 {
                     "role": event.get("role", "assistant"),
@@ -240,11 +244,12 @@ async def ship_session_to_zerg(
                     "tool_output_text": event.get("tool_output"),
                     "timestamp": event.get("timestamp", datetime.now(timezone.utc).isoformat()),
                     "source_path": str(session_file),
-                    "source_offset": None,  # Will be computed during ingest
+                    "source_offset": byte_offset,  # Byte offset for dedup
                 }
             )
         except json.JSONDecodeError:
-            logger.warning(f"Failed to parse JSONL line: {line[:100]}")
+            logger.warning(f"Failed to parse JSONL line: {line_stripped[:100]}")
+        byte_offset += len(line.encode("utf-8"))
 
     if not events:
         logger.warning(f"No events parsed from session file {session_file}")

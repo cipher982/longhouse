@@ -38,6 +38,7 @@ class ShipperConfig:
     scan_interval_seconds: int = 30
     batch_size: int = 100
     timeout_seconds: float = 30.0
+    api_token: str | None = None  # Token for authenticated API access
 
     def __post_init__(self):
         if self.claude_config_dir is None:
@@ -46,6 +47,9 @@ class ShipperConfig:
                 self.claude_config_dir = Path(config_dir)
             else:
                 self.claude_config_dir = Path.home() / ".claude"
+        # Load token from environment if not explicitly provided
+        if self.api_token is None:
+            self.api_token = os.getenv("AGENTS_API_TOKEN")
 
     @property
     def projects_dir(self) -> Path:
@@ -246,7 +250,11 @@ class SessionShipper:
         """Post payload to Zerg ingest endpoint."""
         url = f"{self.config.zerg_api_url}/api/agents/ingest"
 
+        headers = {"Content-Type": "application/json"}
+        if self.config.api_token:
+            headers["X-Agents-Token"] = self.config.api_token
+
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
-            response = await client.post(url, json=payload)
+            response = await client.post(url, json=payload, headers=headers)
             response.raise_for_status()
             return response.json()

@@ -109,6 +109,9 @@ class Settings:  # noqa: D401 – simple data container
     # Smoke testing -----------------------------------------------------
     smoke_test_secret: str | None  # Service account login for smoke tests
 
+    # Agents API -------------------------------------------------------
+    agents_api_token: str | None  # Token for shipper/agents API auth
+
     # Job queue settings -----------------------------------------------
     job_queue_enabled: bool  # Enable durable job queue (uses DATABASE_URL)
 
@@ -284,6 +287,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         oikos_workspace_path=os.getenv("OIKOS_WORKSPACE_PATH", "/var/oikos/workspaces"),
         notification_webhook=os.getenv("NOTIFICATION_WEBHOOK"),
         smoke_test_secret=os.getenv("SMOKE_TEST_SECRET"),
+        agents_api_token=os.getenv("AGENTS_API_TOKEN"),
         job_queue_enabled=_truthy(os.getenv("JOB_QUEUE_ENABLED")),
         # Git sync settings
         jobs_git_repo_url=os.getenv("JOBS_GIT_REPO_URL"),
