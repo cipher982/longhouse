@@ -167,7 +167,14 @@ make test-shipper-e2e
 make shipper-smoke-test
 ```
 
-Status: E2E not yet run in a live dev stack.
+Status: Manual E2E validated 2026-01-29 (see AI-Sessions note).
+
+**Results:**
+- Auth flow: PASS (token created via API, validated with CLI)
+- Service install: PASS (launchd started, stayed running)
+- Session shipping: PASS (83 sessions shipped, near-real-time)
+- Cleanup: PASS (uninstall + auth clear)
+- UI: PARTIAL (API works, no frontend page yet)
 
 ---
 
