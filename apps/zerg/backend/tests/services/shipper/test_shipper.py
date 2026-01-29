@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 from zerg.services.shipper import SessionShipper
@@ -295,9 +296,10 @@ class TestSessionShipper:
         # Mock httpx.AsyncClient to capture headers
         captured_headers = {}
 
-        async def mock_post(url, json, headers):
+        async def mock_post(url, content, headers):
             captured_headers.update(headers)
             mock_resp = MagicMock()
+            mock_resp.status_code = 200
             mock_resp.json.return_value = {
                 "session_id": "zerg-session-abc",
                 "events_inserted": 2,
@@ -333,9 +335,10 @@ class TestSessionShipper:
         # Mock httpx.AsyncClient to capture headers
         captured_headers = {}
 
-        async def mock_post(url, json, headers):
+        async def mock_post(url, content, headers):
             captured_headers.update(headers)
             mock_resp = MagicMock()
+            mock_resp.status_code = 200
             mock_resp.json.return_value = {
                 "session_id": "zerg-session-abc",
                 "events_inserted": 2,
@@ -360,3 +363,256 @@ class TestSessionShipper:
                         os.environ["AGENTS_API_TOKEN"] = orig_token
 
         assert "X-Agents-Token" not in captured_headers
+
+
+class TestGzipCompression:
+    """Tests for gzip compression in shipper."""
+
+    @pytest.mark.asyncio
+    async def test_gzip_compression_enabled(
+        self,
+        mock_projects_dir: Path,
+        shipper_state: ShipperState,
+    ):
+        """Payloads are gzip compressed when enable_gzip is True."""
+        import gzip as gzip_module
+
+        config = ShipperConfig(
+            zerg_api_url="http://test:47300",
+            claude_config_dir=mock_projects_dir,
+            enable_gzip=True,
+        )
+        shipper = SessionShipper(config=config, state=shipper_state)
+
+        captured_content = None
+        captured_headers = {}
+
+        async def mock_post(url, content, headers):
+            nonlocal captured_content, captured_headers
+            captured_content = content
+            captured_headers = dict(headers)
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {
+                "session_id": "zerg-session-abc",
+                "events_inserted": 2,
+                "events_skipped": 0,
+            }
+            return mock_resp
+
+        mock_client = AsyncMock()
+        mock_client.post = mock_post
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("zerg.services.shipper.shipper.httpx.AsyncClient", return_value=mock_client):
+            await shipper.scan_and_ship()
+
+        # Verify Content-Encoding header is set
+        assert captured_headers.get("Content-Encoding") == "gzip"
+
+        # Verify content is gzip compressed (can be decompressed)
+        assert captured_content is not None
+        decompressed = gzip_module.decompress(captured_content)
+        payload = json.loads(decompressed)
+        assert "events" in payload
+
+    @pytest.mark.asyncio
+    async def test_gzip_compression_disabled(
+        self,
+        mock_projects_dir: Path,
+        shipper_state: ShipperState,
+    ):
+        """Payloads are not compressed when enable_gzip is False."""
+        config = ShipperConfig(
+            zerg_api_url="http://test:47300",
+            claude_config_dir=mock_projects_dir,
+            enable_gzip=False,
+        )
+        shipper = SessionShipper(config=config, state=shipper_state)
+
+        captured_content = None
+        captured_headers = {}
+
+        async def mock_post(url, content, headers):
+            nonlocal captured_content, captured_headers
+            captured_content = content
+            captured_headers = dict(headers)
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {
+                "session_id": "zerg-session-abc",
+                "events_inserted": 2,
+                "events_skipped": 0,
+            }
+            return mock_resp
+
+        mock_client = AsyncMock()
+        mock_client.post = mock_post
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("zerg.services.shipper.shipper.httpx.AsyncClient", return_value=mock_client):
+            await shipper.scan_and_ship()
+
+        # Verify no Content-Encoding header
+        assert "Content-Encoding" not in captured_headers
+
+        # Verify content is plain JSON
+        assert captured_content is not None
+        payload = json.loads(captured_content.decode("utf-8"))
+        assert "events" in payload
+
+
+class TestHttp429Handling:
+    """Tests for HTTP 429 rate limit handling."""
+
+    @pytest.mark.asyncio
+    async def test_429_with_retry_after_header(
+        self,
+        mock_projects_dir: Path,
+        shipper_state: ShipperState,
+    ):
+        """Shipper respects Retry-After header on 429 response."""
+        config = ShipperConfig(
+            zerg_api_url="http://test:47300",
+            claude_config_dir=mock_projects_dir,
+            max_retries_429=2,
+            base_backoff_seconds=0.01,  # Fast backoff for testing
+        )
+        shipper = SessionShipper(config=config, state=shipper_state)
+
+        call_count = 0
+
+        async def mock_post(url, content, headers):
+            nonlocal call_count
+            call_count += 1
+
+            mock_resp = MagicMock()
+
+            if call_count == 1:
+                # First call returns 429
+                mock_resp.status_code = 429
+                mock_resp.headers = {"Retry-After": "0.01"}
+                return mock_resp
+            else:
+                # Second call succeeds
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = {
+                    "session_id": "zerg-session-abc",
+                    "events_inserted": 2,
+                    "events_skipped": 0,
+                }
+                return mock_resp
+
+        mock_client = AsyncMock()
+        mock_client.post = mock_post
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("zerg.services.shipper.shipper.httpx.AsyncClient", return_value=mock_client):
+            result = await shipper.scan_and_ship()
+
+        # Should have retried and succeeded
+        assert call_count == 2
+        assert result.events_shipped == 2
+
+    @pytest.mark.asyncio
+    async def test_429_exponential_backoff(
+        self,
+        mock_projects_dir: Path,
+        shipper_state: ShipperState,
+    ):
+        """Shipper uses exponential backoff on repeated 429 without Retry-After."""
+        config = ShipperConfig(
+            zerg_api_url="http://test:47300",
+            claude_config_dir=mock_projects_dir,
+            max_retries_429=2,
+            base_backoff_seconds=0.01,  # Fast backoff for testing
+        )
+        shipper = SessionShipper(config=config, state=shipper_state)
+
+        call_count = 0
+
+        async def mock_post(url, content, headers):
+            nonlocal call_count
+            call_count += 1
+
+            mock_resp = MagicMock()
+
+            if call_count <= 2:
+                # First two calls return 429 without Retry-After
+                mock_resp.status_code = 429
+                mock_resp.headers = {}
+                return mock_resp
+            else:
+                # Third call succeeds
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = {
+                    "session_id": "zerg-session-abc",
+                    "events_inserted": 2,
+                    "events_skipped": 0,
+                }
+                return mock_resp
+
+        mock_client = AsyncMock()
+        mock_client.post = mock_post
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("zerg.services.shipper.shipper.httpx.AsyncClient", return_value=mock_client):
+            result = await shipper.scan_and_ship()
+
+        # Should have retried twice and succeeded
+        assert call_count == 3
+        assert result.events_shipped == 2
+
+    @pytest.mark.asyncio
+    async def test_429_max_retries_exceeded(
+        self,
+        mock_projects_dir: Path,
+        shipper_state: ShipperState,
+    ):
+        """Shipper gives up after max retries on persistent 429."""
+        config = ShipperConfig(
+            zerg_api_url="http://test:47300",
+            claude_config_dir=mock_projects_dir,
+            max_retries_429=2,
+            base_backoff_seconds=0.01,
+        )
+        shipper = SessionShipper(config=config, state=shipper_state)
+
+        call_count = 0
+
+        async def mock_post(url, content, headers):
+            nonlocal call_count
+            call_count += 1
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 429
+            mock_resp.headers = {"Retry-After": "0.01"}
+
+            # Make raise_for_status actually raise
+            def raise_for_status():
+                raise httpx.HTTPStatusError(
+                    "429 Too Many Requests",
+                    request=MagicMock(),
+                    response=mock_resp,
+                )
+
+            mock_resp.raise_for_status = raise_for_status
+            return mock_resp
+
+        mock_client = AsyncMock()
+        mock_client.post = mock_post
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("zerg.services.shipper.shipper.httpx.AsyncClient", return_value=mock_client):
+            result = await shipper.scan_and_ship()
+
+        # Should have retried max_retries_429 times (2) + 1 initial = 3 total
+        assert call_count == 3
+        # After max retries, the 429 is treated as a client error (4xx)
+        # and events are skipped (not spooled, since client errors won't resolve with retry)
+        assert result.events_skipped > 0

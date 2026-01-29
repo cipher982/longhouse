@@ -6,10 +6,15 @@ The SessionShipper:
 3. Ships batches to Zerg's /api/agents/ingest endpoint
 4. Updates state to enable future incremental sync
 5. Spools payloads locally when API unreachable (offline resilience)
+6. Gzip compresses payloads for efficient network transfer
+7. Handles HTTP 429 rate limiting with exponential backoff
 """
 
 from __future__ import annotations
 
+import asyncio
+import gzip
+import json
 import logging
 import os
 from dataclasses import dataclass
@@ -41,6 +46,9 @@ class ShipperConfig:
     batch_size: int = 100
     timeout_seconds: float = 30.0
     api_token: str | None = None  # Token for authenticated API access
+    enable_gzip: bool = True  # Gzip compress payloads (reduces bandwidth)
+    max_retries_429: int = 3  # Max retries on HTTP 429
+    base_backoff_seconds: float = 1.0  # Base backoff for 429 retries
 
     def __post_init__(self):
         if self.claude_config_dir is None:
@@ -328,17 +336,58 @@ class SessionShipper:
         }
 
     async def _post_ingest(self, payload: dict) -> dict:
-        """Post payload to Zerg ingest endpoint."""
+        """Post payload to Zerg ingest endpoint.
+
+        Features:
+        - Gzip compression for efficient network transfer
+        - HTTP 429 handling with exponential backoff and Retry-After support
+        """
         url = f"{self.config.zerg_api_url}/api/agents/ingest"
 
         headers = {"Content-Type": "application/json"}
         if self.config.api_token:
             headers["X-Agents-Token"] = self.config.api_token
 
+        # Gzip compress the payload if enabled
+        if self.config.enable_gzip:
+            json_bytes = json.dumps(payload).encode("utf-8")
+            content = gzip.compress(json_bytes)
+            headers["Content-Encoding"] = "gzip"
+        else:
+            content = json.dumps(payload).encode("utf-8")
+
+        # Retry loop for 429 handling
+        retries = 0
+        backoff = self.config.base_backoff_seconds
+
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
-            response = await client.post(url, json=payload, headers=headers)
-            response.raise_for_status()
-            return response.json()
+            while True:
+                response = await client.post(url, content=content, headers=headers)
+
+                # Handle 429 Too Many Requests
+                if response.status_code == 429:
+                    if retries >= self.config.max_retries_429:
+                        logger.warning(f"Rate limited after {retries} retries, giving up")
+                        response.raise_for_status()
+
+                    # Use Retry-After header if present, otherwise exponential backoff
+                    retry_after = response.headers.get("Retry-After")
+                    if retry_after:
+                        try:
+                            wait_seconds = float(retry_after)
+                        except ValueError:
+                            wait_seconds = backoff
+                    else:
+                        wait_seconds = backoff
+
+                    logger.info(f"Rate limited (429), waiting {wait_seconds:.1f}s before retry {retries + 1}/{self.config.max_retries_429}")
+                    await asyncio.sleep(wait_seconds)
+                    retries += 1
+                    backoff *= 2  # Exponential backoff
+                    continue
+
+                response.raise_for_status()
+                return response.json()
 
     async def replay_spool(self, batch_size: int = 100, max_retries: int = 5) -> dict:
         """Replay spooled payloads that failed to ship.

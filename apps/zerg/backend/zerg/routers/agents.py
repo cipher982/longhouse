@@ -12,10 +12,16 @@ Authentication:
 - Otherwise, requires X-Agents-Token header with:
   1. Per-device token (zdt_...) created via /api/devices/tokens
   2. Legacy AGENTS_API_TOKEN env var (for backwards compatibility)
+
+Rate Limiting:
+- Ingest endpoint enforces 1000 events/min per device_id (soft cap)
+- Returns HTTP 429 with Retry-After header when exceeded
 """
 
+import gzip
 import hmac
 import logging
+from collections import defaultdict
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -47,6 +53,56 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/agents", tags=["agents"])
 
 _settings = get_settings()
+
+
+# ---------------------------------------------------------------------------
+# Rate Limiting
+# ---------------------------------------------------------------------------
+
+# In-memory rate limit tracking: device_id -> list of (timestamp, event_count)
+_rate_limits: dict[str, list[tuple[datetime, int]]] = defaultdict(list)
+RATE_LIMIT_EVENTS_PER_MIN = 1000  # Soft cap per device
+
+
+def check_rate_limit(device_id: str, event_count: int) -> tuple[bool, int]:
+    """Check if request would exceed rate limit.
+
+    Args:
+        device_id: The device making the request
+        event_count: Number of events in this request
+
+    Returns:
+        Tuple of (exceeded: bool, retry_after_seconds: int)
+    """
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=1)
+
+    # Clean old entries
+    _rate_limits[device_id] = [(ts, count) for ts, count in _rate_limits[device_id] if ts > cutoff]
+
+    # Sum events in the last minute
+    current_events = sum(count for _, count in _rate_limits[device_id])
+
+    # Check if this request would exceed the limit
+    if current_events + event_count > RATE_LIMIT_EVENTS_PER_MIN:
+        # Calculate retry-after based on oldest entry expiration
+        if _rate_limits[device_id]:
+            oldest_ts = min(ts for ts, _ in _rate_limits[device_id])
+            retry_after = int((oldest_ts + timedelta(minutes=1) - now).total_seconds())
+            retry_after = max(1, retry_after)  # At least 1 second
+        else:
+            retry_after = 60
+        return True, retry_after
+
+    # Record this request
+    _rate_limits[device_id].append((now, event_count))
+    return False, 0
+
+
+def reset_rate_limits() -> None:
+    """Reset all rate limits. Used for testing."""
+    global _rate_limits
+    _rate_limits = defaultdict(list)
 
 
 # ---------------------------------------------------------------------------
@@ -195,9 +251,32 @@ class IngestResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+async def decompress_if_gzipped(request: Request) -> bytes:
+    """Decompress request body if gzip-encoded.
+
+    Checks Content-Encoding header and decompresses if needed.
+
+    Returns:
+        Decompressed request body as bytes
+    """
+    body = await request.body()
+    content_encoding = request.headers.get("Content-Encoding", "").lower()
+
+    if content_encoding == "gzip":
+        try:
+            body = gzip.decompress(body)
+        except gzip.BadGzipFile as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid gzip content: {e}",
+            )
+
+    return body
+
+
 @router.post("/ingest", response_model=IngestResponse)
 async def ingest_session(
-    data: SessionIngest,
+    request: Request,
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_token),
     _pg: None = Depends(require_postgres),
@@ -209,8 +288,54 @@ async def ingest_session(
 
     This endpoint is called by the shipper to sync local session files
     (e.g., ~/.claude/projects/...) to Zerg.
+
+    Features:
+    - Accepts gzip-compressed payloads (Content-Encoding: gzip)
+    - Rate limiting: 1000 events/min per device_id (returns 429 if exceeded)
     """
     try:
+        # Decompress if gzip-encoded
+        body = await decompress_if_gzipped(request)
+
+        # Parse JSON
+        import json
+
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid JSON: {e}",
+            )
+
+        # Validate payload with Pydantic
+        try:
+            data = SessionIngest(**payload)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid payload: {e}",
+            )
+
+        # Check rate limit
+        device_id = data.device_id or "unknown"
+        event_count = len(data.events) if data.events else 0
+        exceeded, retry_after = check_rate_limit(device_id, event_count)
+
+        if exceeded:
+            logger.warning(f"Rate limit exceeded for device {device_id}: {event_count} events")
+            return Response(
+                content=json.dumps(
+                    {
+                        "detail": f"Rate limit exceeded. Max {RATE_LIMIT_EVENTS_PER_MIN} events/min per device.",
+                        "device_id": device_id,
+                    }
+                ),
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                media_type="application/json",
+                headers={"Retry-After": str(retry_after)},
+            )
+
         store = AgentsStore(db)
         result = store.ingest_session(data)
 
@@ -221,6 +346,8 @@ async def ingest_session(
             session_created=result.session_created,
         )
 
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
     except Exception as e:
         logger.exception("Failed to ingest session")
         raise HTTPException(
