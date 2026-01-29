@@ -43,6 +43,15 @@ def _agents_headers() -> dict:
     return {}
 
 
+# Test project patterns for cleanup
+TEST_PROJECT_PATTERNS = [
+    "test-%",
+    "ratelimit-%",
+    "smoke-%",
+    "watcher-%",
+]
+
+
 @pytest.fixture(scope="session", autouse=True)
 def ensure_backend_running():
     """Fail fast if the backend isn't reachable."""
@@ -51,6 +60,31 @@ def ensure_backend_running():
         response.raise_for_status()
     except Exception as exc:
         pytest.fail(f"Backend not reachable at {BASE_URL}. Start with `make dev`. Error: {exc}")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def cleanup_test_sessions():
+    """Clean up test sessions after all tests complete."""
+    yield  # Run all tests first
+
+    # Clean up test sessions
+    try:
+        with httpx.Client(base_url=BASE_URL, timeout=30) as client:
+            response = client.request(
+                "DELETE",
+                "/api/agents/test-cleanup",
+                json={"project_patterns": TEST_PROJECT_PATTERNS},
+                headers=_auth_headers(),
+            )
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("deleted", 0) > 0:
+                    print(f"\nCleaned up {data['deleted']} test sessions")
+            elif response.status_code == 403:
+                # Auth enabled, cleanup not available
+                pass
+    except Exception as e:
+        print(f"\nWarning: Could not clean up test sessions: {e}")
 
 
 def _skip_if_unauthorized(response: httpx.Response) -> None:

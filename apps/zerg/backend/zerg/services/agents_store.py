@@ -370,6 +370,34 @@ class AgentsStore:
             line["tool_output"] = event.tool_output_text
         return json.dumps(line)
 
+    def delete_sessions_by_project_patterns(self, patterns: list[str]) -> int:
+        """Delete sessions matching any of the project patterns.
+
+        Used for test cleanup. Patterns are matched with LIKE (e.g., 'test-%').
+        Events are cascade-deleted automatically.
+
+        Returns:
+            Number of sessions deleted.
+        """
+        from sqlalchemy import or_
+
+        if not patterns:
+            return 0
+
+        # Build OR condition for all patterns
+        conditions = [AgentSession.project.like(p) for p in patterns]
+        sessions = self.db.query(AgentSession).filter(or_(*conditions)).all()
+
+        count = len(sessions)
+        for session in sessions:
+            self.db.delete(session)
+
+        if count > 0:
+            self.db.commit()
+            logger.info(f"Deleted {count} test sessions matching patterns: {patterns}")
+
+        return count
+
 
 def ensure_agents_schema(db: Session) -> None:
     """Ensure the agents schema exists in the database.
