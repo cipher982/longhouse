@@ -1,6 +1,7 @@
 """Connect command for shipping Claude Code sessions to Zerg.
 
 Commands:
+- auth: Authenticate with Zerg and obtain a device token
 - ship: One-shot sync of all sessions
 - connect: Continuous sync (watch mode or polling)
 - connect --install: Install as background service
@@ -16,16 +17,24 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+import socket
+import webbrowser
 from pathlib import Path
 
+import httpx
 import typer
 
 from zerg.services.shipper import SessionShipper
 from zerg.services.shipper import SessionWatcher
 from zerg.services.shipper import ShipperConfig
 from zerg.services.shipper import ShipResult
+from zerg.services.shipper import clear_token
 from zerg.services.shipper import get_service_info
+from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import install_service
+from zerg.services.shipper import load_token
+from zerg.services.shipper import save_token
+from zerg.services.shipper import save_zerg_url
 from zerg.services.shipper import uninstall_service
 
 app = typer.Typer(help="Ship Claude Code sessions to Zerg")
@@ -40,19 +49,160 @@ logger = logging.getLogger(__name__)
 
 
 @app.command()
-def ship(
+def auth(
     url: str = typer.Option(
-        "http://localhost:47300",
+        None,
         "--url",
         "-u",
-        help="Zerg API URL",
+        help="Zerg API URL (e.g., https://api.swarmlet.com)",
+    ),
+    device_name: str = typer.Option(
+        None,
+        "--device",
+        "-d",
+        help="Device name (defaults to hostname)",
+    ),
+    token: str = typer.Option(
+        None,
+        "--token",
+        "-t",
+        help="Existing device token (skips interactive auth)",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Force re-authentication even if token exists",
+    ),
+    clear: bool = typer.Option(
+        False,
+        "--clear",
+        help="Remove stored token and URL",
+    ),
+    claude_dir: str = typer.Option(
+        None,
+        "--claude-dir",
+        help="Claude config directory (default: ~/.claude)",
+    ),
+) -> None:
+    """Authenticate with Zerg and store a device token.
+
+    The token is stored locally and used for all subsequent ship/connect commands.
+
+    Authentication methods:
+    1. Browser-based: Opens Zerg web UI to create a token interactively
+    2. Direct token: Use --token to provide an existing device token
+
+    Examples:
+        zerg auth --url https://api.swarmlet.com
+        zerg auth --token zdt_your_token_here
+        zerg auth --clear
+    """
+    config_dir = Path(claude_dir) if claude_dir else None
+
+    # Handle --clear
+    if clear:
+        cleared_token = clear_token(config_dir)
+        if cleared_token:
+            typer.secho("Cleared stored token", fg=typer.colors.GREEN)
+        else:
+            typer.echo("No token to clear")
+        return
+
+    # Check for existing token
+    existing_token = load_token(config_dir)
+    existing_url = get_zerg_url(config_dir)
+
+    if existing_token and not force:
+        typer.echo(f"Already authenticated with {existing_url or 'unknown URL'}")
+        typer.echo("Use --force to re-authenticate or --clear to remove")
+        return
+
+    # Get URL (required for auth)
+    if not url:
+        if existing_url:
+            url = existing_url
+            typer.echo(f"Using stored URL: {url}")
+        else:
+            url = typer.prompt("Zerg API URL", default="https://api.swarmlet.com")
+
+    # Get device name
+    if not device_name:
+        device_name = socket.gethostname()
+
+    # If token provided directly, validate and store
+    if token:
+        if _validate_token(url, token):
+            save_token(token, config_dir)
+            save_zerg_url(url, config_dir)
+            typer.secho(f"Token validated and stored for {device_name}", fg=typer.colors.GREEN)
+        else:
+            typer.secho("Invalid token", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+        return
+
+    # Interactive auth flow
+    typer.echo("")
+    typer.echo("To create a device token:")
+    typer.echo(f"1. Open: {url.rstrip('/')}/dashboard/settings/devices")
+    typer.echo(f"2. Create a new token for device: {device_name}")
+    typer.echo("3. Copy the token and paste it below")
+    typer.echo("")
+
+    # Try to open browser
+    dashboard_url = f"{url.rstrip('/')}/dashboard/settings/devices"
+    try:
+        if typer.confirm("Open browser to create token?", default=True):
+            webbrowser.open(dashboard_url)
+    except Exception:
+        pass
+
+    # Prompt for token
+    token = typer.prompt("Device token")
+
+    if not token:
+        typer.secho("No token provided", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    # Validate and store
+    if _validate_token(url, token):
+        save_token(token, config_dir)
+        save_zerg_url(url, config_dir)
+        typer.secho(f"Authenticated successfully as {device_name}", fg=typer.colors.GREEN)
+    else:
+        typer.secho("Invalid or expired token", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
+def _validate_token(url: str, token: str) -> bool:
+    """Validate a device token by making a test API call."""
+    try:
+        # Use a simple endpoint to validate
+        with httpx.Client(timeout=10) as client:
+            response = client.get(
+                f"{url}/api/agents/sessions",
+                headers={"X-Agents-Token": token},
+                params={"limit": 1},
+            )
+            return response.status_code in (200, 501)  # 501 = Postgres not available but auth passed
+    except Exception:
+        return False
+
+
+@app.command()
+def ship(
+    url: str = typer.Option(
+        None,
+        "--url",
+        "-u",
+        help="Zerg API URL (uses stored URL if not specified)",
     ),
     token: str = typer.Option(
         None,
         "--token",
         "-t",
         envvar="AGENTS_API_TOKEN",
-        help="API token for authentication (or set AGENTS_API_TOKEN env var)",
+        help="API token (uses stored token if not specified)",
     ),
     claude_dir: str = typer.Option(
         None,
@@ -71,9 +221,17 @@ def ship(
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
+    config_dir = Path(claude_dir) if claude_dir else None
+
+    # Load stored credentials if not provided
+    if not url:
+        url = get_zerg_url(config_dir) or "http://localhost:47300"
+    if not token:
+        token = load_token(config_dir)
+
     config = ShipperConfig(
         zerg_api_url=url,
-        claude_config_dir=Path(claude_dir) if claude_dir else None,
+        claude_config_dir=config_dir,
         api_token=token,
     )
 
@@ -101,17 +259,17 @@ def ship(
 @app.command()
 def connect(
     url: str = typer.Option(
-        "http://localhost:47300",
+        None,
         "--url",
         "-u",
-        help="Zerg API URL",
+        help="Zerg API URL (uses stored URL if not specified)",
     ),
     token: str = typer.Option(
         None,
         "--token",
         "-t",
         envvar="AGENTS_API_TOKEN",
-        help="API token for authentication (or set AGENTS_API_TOKEN env var)",
+        help="API token (uses stored token if not specified)",
     ),
     poll: bool = typer.Option(
         False,
@@ -167,9 +325,13 @@ def connect(
         --install   Install as background service (auto-starts on boot)
         --uninstall Stop and remove the background service
         --status    Check the status of the background service
+
+    Run 'zerg auth' first to authenticate with Zerg.
     """
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+
+    config_dir = Path(claude_dir) if claude_dir else None
 
     # Handle service management commands
     if status:
@@ -180,6 +342,12 @@ def connect(
         _handle_uninstall()
         return
 
+    # Load stored credentials if not provided
+    if not url:
+        url = get_zerg_url(config_dir) or "http://localhost:47300"
+    if not token:
+        token = load_token(config_dir)
+
     if install:
         # --interval implies --poll for install mode
         use_poll = poll or interval != 30
@@ -189,7 +357,7 @@ def connect(
     # Normal connect mode - run in foreground
     config = ShipperConfig(
         zerg_api_url=url,
-        claude_config_dir=Path(claude_dir) if claude_dir else None,
+        claude_config_dir=config_dir,
         scan_interval_seconds=interval,
         api_token=token,
     )

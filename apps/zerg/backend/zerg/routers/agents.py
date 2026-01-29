@@ -9,7 +9,9 @@ Provides endpoints for:
 
 Authentication:
 - When AUTH_DISABLED=1 (dev mode), endpoints are open
-- Otherwise, requires X-Agents-Token header matching AGENTS_API_TOKEN env var
+- Otherwise, requires X-Agents-Token header with:
+  1. Per-device token (zdt_...) created via /api/devices/tokens
+  2. Legacy AGENTS_API_TOKEN env var (for backwards compatibility)
 """
 
 import hmac
@@ -52,29 +54,22 @@ _settings = get_settings()
 # ---------------------------------------------------------------------------
 
 
-def verify_agents_token(request: Request) -> None:
+def verify_agents_token(request: Request, db: Session = Depends(get_db)) -> None:
     """Verify the agents API token.
 
+    Accepts two types of tokens:
+    1. Per-device tokens (zdt_...) created via /api/devices/tokens
+    2. Legacy AGENTS_API_TOKEN env var (for backwards compatibility)
+
     In dev mode (AUTH_DISABLED=1), allows all requests.
-    Otherwise, requires X-Agents-Token header or Authorization: Bearer token
-    matching the AGENTS_API_TOKEN env var.
 
     Raises:
-        HTTPException(401): If token is missing or invalid
-        HTTPException(403): If AGENTS_API_TOKEN is not configured in production
+        HTTPException(401): If token is missing, invalid, or revoked
+        HTTPException(403): If no auth method is configured in production
     """
     # Dev mode - allow all
     if _settings.auth_disabled:
         return
-
-    # Get expected token from settings
-    expected_token = _settings.agents_api_token
-    if not expected_token:
-        # In production without a token configured, deny all access
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Agents API not configured - set AGENTS_API_TOKEN env var",
-        )
 
     # Try X-Agents-Token header first, then Authorization: Bearer
     provided_token = request.headers.get("X-Agents-Token")
@@ -87,6 +82,31 @@ def verify_agents_token(request: Request) -> None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing authentication - provide X-Agents-Token header",
+        )
+
+    # Check if this is a per-device token (starts with zdt_)
+    if provided_token.startswith("zdt_"):
+        from zerg.routers.device_tokens import validate_device_token
+
+        device_token = validate_device_token(provided_token, db)
+        if device_token:
+            # Valid device token - auth successful
+            logger.debug(f"Device token validated for device {device_token.device_id}")
+            return
+
+        # Device token exists but is invalid/revoked
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or revoked device token",
+        )
+
+    # Fall back to legacy AGENTS_API_TOKEN comparison
+    expected_token = _settings.agents_api_token
+    if not expected_token:
+        # In production without any auth method configured, deny access
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Agents API not configured - create a device token or set AGENTS_API_TOKEN env var",
         )
 
     # Constant-time comparison to prevent timing attacks

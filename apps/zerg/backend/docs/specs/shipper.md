@@ -1,6 +1,6 @@
 # Shipper: Real-Time Session Sync
 
-**Status:** Phase 2D complete
+**Status:** Phase 3 complete
 **Protocol:** SDP-1
 **Vision:** VISION.md lines 320-361
 
@@ -85,22 +85,28 @@ The shipper syncs Claude Code (and other CLI agent) sessions to Zerg in real-tim
 - [x] `zerg connect --uninstall` stops and removes service
 - [x] Works on macOS (launchd) and Linux (systemd)
 
-**Commits:** 8efd6779
+**Commits:** 8efd6779, 98c46708 (KeepAlive fix), + CLI interval/status fixes
 
 ---
 
-### Phase 3: Per-Device Tokens (NOT STARTED)
-- Issue device-specific tokens during `zerg connect`
+### Phase 3: Per-Device Tokens ✅ COMPLETE
+- Issue device-specific tokens during `zerg auth`
 - Token scoped to user's instance
 - Revocable if device compromised
 - Store in ~/.claude/zerg-device-token
 
+**Files:**
+- models/device_token.py - DeviceToken SQLAlchemy model
+- routers/device_tokens.py - CRUD API endpoints
+- services/shipper/token.py - Local token storage
+- cli/connect.py - `zerg auth` command
+
 **Acceptance criteria:**
-- [ ] `zerg connect <url>` prompts for auth if no token
-- [ ] Token persisted locally
-- [ ] Token validated on each ingest
-- [ ] API to list/revoke device tokens
-- [ ] Expired/revoked tokens fail gracefully
+- [x] `zerg auth` command to obtain device token
+- [x] Token persisted locally at ~/.claude/zerg-device-token
+- [x] Token validated on each ingest (X-Agents-Token header)
+- [x] API to list/revoke device tokens (/api/devices/tokens)
+- [x] Expired/revoked tokens fail gracefully (401)
 
 ---
 
@@ -148,4 +154,7 @@ make test
 | services/shipper/watcher.py | File system watching |
 | services/shipper/spool.py | Offline queue |
 | services/shipper/service.py | Service installation (launchd/systemd) |
+| services/shipper/token.py | Local token storage |
+| models/device_token.py | DeviceToken model |
+| routers/device_tokens.py | Device token API |
 | cli/connect.py | CLI commands |

@@ -38,15 +38,27 @@ from zerg.services.shipper.spool import OfflineSpool
 from zerg.services.shipper.spool import SpooledPayload
 from zerg.services.shipper.state import ShippedSession
 from zerg.services.shipper.state import ShipperState
+from zerg.services.shipper.token import clear_token
+from zerg.services.shipper.token import get_token_path
+from zerg.services.shipper.token import get_zerg_url
+from zerg.services.shipper.token import load_token
+from zerg.services.shipper.token import save_token
+from zerg.services.shipper.token import save_zerg_url
 from zerg.services.shipper.watcher import SessionWatcher
 
 __all__ = [
+    "clear_token",
     "get_service_info",
     "get_service_status",
+    "get_token_path",
+    "get_zerg_url",
     "install_service",
+    "load_token",
     "OfflineSpool",
     "ParsedEvent",
     "parse_session_file",
+    "save_token",
+    "save_zerg_url",
     "SessionShipper",
     "SessionWatcher",
     "ShipperConfig",
