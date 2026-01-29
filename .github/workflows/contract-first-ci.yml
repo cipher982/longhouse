@@ -1,9 +1,11 @@
-name: CI
+name: push-pr-ci--validate-contracts-and-lints--unit-backend-frontend-runner--e2e-core-a11y
 
 on:
   push:
   pull_request:
   workflow_dispatch: {}
+
+run-name: push-pr-ci--${{ github.ref_name }}--${{ github.sha }}
 
 # Never cancel runs
 concurrency:
@@ -22,7 +24,7 @@ env:
 jobs:
   validate:
     runs-on: cube
-    name: "🔍 Validate (WS + Makefile)"
+    name: "🔍 validate--make-validate--ws-sse-makefile-lints"
 
     steps:
     - uses: actions/checkout@v4
@@ -44,7 +46,7 @@ jobs:
   backend-tests:
     runs-on: cube
     needs: validate
-    name: "🐍 Backend Unit"
+    name: "🐍 unit-backend--make-test-backend-ci--make-test-hatch-agent--make-test-install-runner"
     env:
       # Use dedicated CI Postgres (not Life Hub production)
       DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
@@ -78,7 +80,7 @@ jobs:
   frontend-tests:
     runs-on: cube
     needs: validate
-    name: "⚛️ Frontend Unit"
+    name: "⚛️ unit-frontend--bun-validate-types--bun-test--make-test-runner-unit"
 
     steps:
     - uses: actions/checkout@v4
@@ -111,7 +113,7 @@ jobs:
   e2e:
     runs-on: cube
     needs: [backend-tests, frontend-tests]
-    name: "🎭 E2E Tests (Core + A11y)"
+    name: "🎭 e2e-core-a11y--make-test-e2e"
     env:
       # Use dedicated CI Postgres with per-run schema isolation
       DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}

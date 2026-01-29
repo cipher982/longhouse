@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-reset-db reset test test-integration test-unit test-e2e test-e2e-core test-all test-full test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-hatch-agent test-runner-unit test-install-runner test-prompts test-ci test-backend-docker test-backend-ci test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage
+.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-reset-db reset test test-integration test-unit test-e2e test-e2e-core test-all test-full test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-hatch-agent test-runner-unit test-install-runner test-prompts test-ci test-backend-docker test-backend-ci test-super-fast--unit-backend-frontend-hatch-runner-install--approx-36s test-push-ci--e2e-core-a11y--approx-50s test-pre-merge-or-nightly--evals-live-openai--approx-4m test-validate-contracts-and-lints--approx-10s test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +161,24 @@ reset: ## Reset database (destroys all data)
 # ---------------------------------------------------------------------------
 # Testing targets
 # ---------------------------------------------------------------------------
+
+# =============================================================================
+# EXPLICIT TEST TIERS (long names for agents; keep legacy targets for scripts)
+# =============================================================================
+
+test-super-fast--unit-backend-frontend-hatch-runner-install--approx-36s: test ## Super-fast unit suite (~36s, measured locally)
+	@echo "✓ Super-fast unit suite complete"
+
+test-push-ci--e2e-core-a11y--approx-50s: test-e2e ## Push CI E2E core + a11y (~50s, measured after timeout trim)
+	@echo "✓ Push CI E2E core + a11y complete"
+
+test-pre-merge-or-nightly--evals-live-openai--approx-4m: eval ## Live evals (~4m, real OpenAI calls, costs money)
+	@echo "✓ Live evals complete"
+
+test-validate-contracts-and-lints--approx-10s: validate ## Fast preflight validations (~10s)
+	@echo "✓ Preflight validations complete"
+
+# =============================================================================
 
 # Playwright E2E should run against an isolated frontend/backend pair by default,
 # not whatever is currently running in Docker on the dev ports.
