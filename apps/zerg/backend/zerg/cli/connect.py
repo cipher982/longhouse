@@ -3,6 +3,9 @@
 Commands:
 - ship: One-shot sync of all sessions
 - connect: Continuous sync (watch mode or polling)
+- connect --install: Install as background service
+- connect --uninstall: Remove background service
+- connect --status: Check service status
 
 Watch mode (default): Uses file system events for sub-second sync.
 Polling mode: Falls back to periodic scanning (--poll or --interval).
@@ -21,6 +24,9 @@ from zerg.services.shipper import SessionShipper
 from zerg.services.shipper import SessionWatcher
 from zerg.services.shipper import ShipperConfig
 from zerg.services.shipper import ShipResult
+from zerg.services.shipper import get_service_info
+from zerg.services.shipper import install_service
+from zerg.services.shipper import uninstall_service
 
 app = typer.Typer(help="Ship Claude Code sessions to Zerg")
 
@@ -136,15 +142,49 @@ def connect(
         "-v",
         help="Enable verbose output",
     ),
+    install: bool = typer.Option(
+        False,
+        "--install",
+        help="Install shipper as a background service (auto-starts on boot)",
+    ),
+    uninstall: bool = typer.Option(
+        False,
+        "--uninstall",
+        help="Stop and remove the background service",
+    ),
+    status: bool = typer.Option(
+        False,
+        "--status",
+        help="Check the status of the background service",
+    ),
 ) -> None:
     """Continuous: watch and ship sessions to Zerg.
 
     By default uses file watching for sub-second sync.
     Use --poll or --interval for polling mode.
+
+    Service management:
+        --install   Install as background service (auto-starts on boot)
+        --uninstall Stop and remove the background service
+        --status    Check the status of the background service
     """
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
+    # Handle service management commands
+    if status:
+        _handle_status()
+        return
+
+    if uninstall:
+        _handle_uninstall()
+        return
+
+    if install:
+        _handle_install(url=url, token=token, claude_dir=claude_dir, poll=poll, interval=interval)
+        return
+
+    # Normal connect mode - run in foreground
     config = ShipperConfig(
         zerg_api_url=url,
         claude_config_dir=Path(claude_dir) if claude_dir else None,
@@ -175,6 +215,68 @@ def connect(
     except KeyboardInterrupt:
         typer.echo("")
         typer.secho("Stopped", fg=typer.colors.YELLOW)
+
+
+def _handle_status() -> None:
+    """Handle --status flag."""
+    info = get_service_info()
+    status = info["status"]
+
+    typer.echo(f"Platform: {info['platform']}")
+    typer.echo(f"Service: {info.get('service_name', 'N/A')}")
+
+    if status == "running":
+        typer.secho("Status: running", fg=typer.colors.GREEN)
+    elif status == "stopped":
+        typer.secho("Status: stopped", fg=typer.colors.YELLOW)
+    else:
+        typer.secho("Status: not installed", fg=typer.colors.RED)
+
+    if status != "not-installed":
+        typer.echo(f"Config: {info.get('service_file', 'N/A')}")
+        typer.echo(f"Logs: {info['log_path']}")
+
+
+def _handle_uninstall() -> None:
+    """Handle --uninstall flag."""
+    try:
+        result = uninstall_service()
+        typer.secho(f"[OK] {result['message']}", fg=typer.colors.GREEN)
+    except RuntimeError as e:
+        typer.secho(f"[ERROR] {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
+def _handle_install(
+    url: str,
+    token: str | None,
+    claude_dir: str | None,
+    poll: bool,
+    interval: int,
+) -> None:
+    """Handle --install flag."""
+    typer.echo("Installing shipper service...")
+    typer.echo(f"  URL: {url}")
+    typer.echo(f"  Mode: {'polling' if poll else 'watch'}")
+
+    try:
+        result = install_service(
+            url=url,
+            token=token,
+            claude_dir=claude_dir,
+            poll_mode=poll,
+            interval=interval,
+        )
+        typer.echo("")
+        typer.secho(f"[OK] {result['message']}", fg=typer.colors.GREEN)
+        typer.echo(f"  Service: {result.get('service', 'N/A')}")
+        typer.echo(f"  Config: {result.get('plist_path') or result.get('unit_path', 'N/A')}")
+        typer.echo("")
+        typer.echo("To check status: zerg connect --status")
+        typer.echo("To stop service: zerg connect --uninstall")
+    except RuntimeError as e:
+        typer.secho(f"[ERROR] {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
 
 
 async def _ship_once(config: ShipperConfig) -> ShipResult:
