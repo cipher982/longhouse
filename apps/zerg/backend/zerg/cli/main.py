@@ -20,9 +20,12 @@ app = typer.Typer(
 # Add subcommands from connect module
 app.add_typer(connect_app, name="session", help="Session shipping commands")
 
-# Also add ship and connect as top-level commands for convenience
-app.command(name="ship")(connect_app.registered_commands[0].callback)
-app.command(name="connect")(connect_app.registered_commands[1].callback)
+# Also add ship, connect, and auth as top-level commands for convenience
+# Find commands by callback function name to avoid index-position bugs
+_cmd_lookup = {cmd.callback.__name__: cmd.callback for cmd in connect_app.registered_commands}
+app.command(name="auth")(_cmd_lookup["auth"])
+app.command(name="ship")(_cmd_lookup["ship"])
+app.command(name="connect")(_cmd_lookup["connect"])
 
 
 def main():
