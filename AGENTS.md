@@ -52,6 +52,7 @@ make test-full     # Full suite (unit + full E2E + evals + visual baselines)
 - Set `PYTEST_XDIST_COMMIS=0` — kills parallelism, tests take 10x longer
 - Pass extra env vars — `DATABASE_URL` and `CI_TEST_SCHEMA` are already in `.env`
 - Run pytest directly — always use Make targets
+ - Agents: prefer explicit long-named Make aliases (`test-...--`) for tiered runs
 
 ## Architecture
 
@@ -228,3 +229,5 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-27) [gotcha] Sauron /sync reloads manifest but scheduler doesn't reschedule jobs; changes/new jobs won't run until restart or explicit re-schedule.
 - (2026-01-27) [gotcha] If Zerg backend has `JOB_QUEUE_ENABLED=1` and `JOBS_GIT_*` set, it will schedule external sauron-jobs too; remove/disable those vars when Sauron is the sole scheduler.
 - (2026-01-28) [pattern] Fix Scripted/Mock LLM tool-error handling before changing tool behavior so tests can signal real failures.
+- (2026-01-29) [pattern] CI pushes can trigger multiple workflows; aggregate runs by commit SHA and use `gh run watch` (avoid sleep/poll loops).
+- (2026-01-29) [gotcha] Supervisor/Oikos tool tests expect string errors; current tool functions return dict error payloads, causing unit test failures.
