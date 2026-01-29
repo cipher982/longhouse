@@ -816,8 +816,6 @@ async def _execute_tools_parallel(
 
         # Process results, preserving order
         # CRITICAL: Check for FicheInterrupted first - it must propagate, not become a ToolMessage
-        from zerg.managers.fiche_runner import FicheInterrupted
-
         for tc, result in zip(other_calls, results):
             if isinstance(result, FicheInterrupted):
                 # Re-raise interrupt (e.g., from wait_for_commis)

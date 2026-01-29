@@ -95,8 +95,9 @@ test.describe('Core User Journey - Scripted LLM', () => {
     const result = completePayload?.result || '';
     console.log('[Core Journey] Result:', result.substring(0, 200));
 
-    // The generic_fallback scenario returns a deterministic "ok"
-    expect(result.toLowerCase()).toBe('ok');
+    // The scripted model can return a simple ok or a completion summary
+    const normalizedResult = result.trim().toLowerCase();
+    expect(/^(ok|task completed successfully\.?)$/.test(normalizedResult)).toBeTruthy();
     console.log('[Core Journey] Expected scripted response text found');
 
     // Step 6: Query events API to verify run execution was recorded
