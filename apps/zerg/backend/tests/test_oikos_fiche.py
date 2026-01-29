@@ -184,48 +184,39 @@ class TestOikosDelegation:
         from zerg.connectors.context import set_credential_resolver
         from zerg.tools.builtin.oikos_tools import spawn_commis
 
-        # Without context, should return error
+        # Without context, should return error (structured response)
         set_credential_resolver(None)
         result = spawn_commis(task="Test task", model=TEST_COMMIS_MODEL)
-        # Tools now return dicts for errors
-        if isinstance(result, dict):
-            assert result.get("ok") is False
-            assert "context" in result.get("user_message", "").lower()
-        else:
-            assert "Error" in result or "error" in result.lower()
-            assert "credential context" in result.lower() or "context" in result.lower()
+        # Result is now a structured dict from tool_error()
+        assert isinstance(result, dict)
+        assert result.get("ok") is False
+        assert "context" in result.get("user_message", "").lower()
 
     def test_list_commiss_tool_basic(self, db_session, test_user):
         """Test list_commiss tool is callable and validates context."""
         from zerg.connectors.context import set_credential_resolver
         from zerg.tools.builtin.oikos_tools import list_commiss
 
-        # Without context, should return error
+        # Without context, should return error (structured response)
         set_credential_resolver(None)
         result = list_commiss(limit=10)
-        # Tools now return dicts for errors
-        if isinstance(result, dict):
-            assert result.get("ok") is False
-            assert "context" in result.get("user_message", "").lower()
-        else:
-            assert "Error" in result or "error" in result.lower()
-            assert "credential context" in result.lower() or "context" in result.lower()
+        # Result is now a structured dict from tool_error()
+        assert isinstance(result, dict)
+        assert result.get("ok") is False
+        assert "context" in result.get("user_message", "").lower()
 
     def test_read_commis_result_tool_basic(self, db_session, test_user):
         """Test read_commis_result tool is callable and validates context."""
         from zerg.connectors.context import set_credential_resolver
         from zerg.tools.builtin.oikos_tools import read_commis_result
 
-        # Without context, should return error
+        # Without context, should return error (structured response)
         set_credential_resolver(None)
         result = read_commis_result(job_id="999")
-        # Tools now return dicts for errors
-        if isinstance(result, dict):
-            assert result.get("ok") is False
-            assert "context" in result.get("user_message", "").lower()
-        else:
-            assert "Error" in result or "error" in result.lower()
-            assert "credential context" in result.lower() or "context" in result.lower()
+        # Result is now a structured dict from tool_error()
+        assert isinstance(result, dict)
+        assert result.get("ok") is False
+        assert "context" in result.get("user_message", "").lower()
 
 
 class TestOikosEndToEnd:
