@@ -9,10 +9,12 @@ import {
   fetchAgentSessions,
   fetchAgentSession,
   fetchAgentSessionEvents,
+  fetchAgentFilters,
   type AgentSessionFilters,
   type AgentSessionsListResponse,
   type AgentSession,
   type AgentEventsListResponse,
+  type AgentFiltersResponse,
 } from "../services/api/agents";
 
 /**
@@ -66,5 +68,19 @@ export function useAgentSessionEvents(
     enabled: !!sessionId,
     staleTime: 60_000,
     gcTime: 10 * 60_000,
+  });
+}
+
+/**
+ * Hook to fetch distinct filter values for dropdowns.
+ *
+ * @param daysBack - Days to look back for distinct values
+ */
+export function useAgentFilters(daysBack: number = 90) {
+  return useQuery<AgentFiltersResponse>({
+    queryKey: ["agent-filters", daysBack],
+    queryFn: () => fetchAgentFilters(daysBack),
+    staleTime: 5 * 60_000, // Cache for 5 minutes
+    gcTime: 30 * 60_000,
   });
 }

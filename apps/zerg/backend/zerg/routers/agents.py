@@ -115,7 +115,7 @@ def reset_rate_limits() -> None:
 
 
 def verify_agents_token(request: Request, db: Session = Depends(get_db)) -> DeviceToken | None:
-    """Verify the agents API token.
+    """Verify the agents API token for write operations (ingest).
 
     Accepts two types of tokens:
     1. Per-device tokens (zdt_...) created via /api/devices/tokens
@@ -179,6 +179,35 @@ def verify_agents_token(request: Request, db: Session = Depends(get_db)) -> Devi
 
     token_hash = hashlib.sha256(provided_token.encode()).hexdigest()
     request.state.agents_rate_key = f"token:{token_hash}"
+
+
+def verify_agents_read_access(request: Request, db: Session = Depends(get_db)) -> None:
+    """Verify read access for agents endpoints (sessions list, detail, events).
+
+    Accepts:
+    1. Browser cookie auth (swarmlet_session) - for UI access
+    2. Device tokens (zdt_...) - for programmatic access
+    3. Legacy AGENTS_API_TOKEN - for backwards compatibility
+
+    In dev mode (AUTH_DISABLED=1), allows all requests.
+    """
+    # Dev mode - allow all
+    if _settings.auth_disabled:
+        return
+
+    # Check for browser cookie auth first
+    if "swarmlet_session" in request.cookies:
+        from zerg.dependencies.auth import get_current_user
+
+        try:
+            # This will validate the cookie and return user or raise 401
+            get_current_user(request, db)
+            return  # Cookie auth successful
+        except HTTPException:
+            pass  # Fall through to token auth
+
+    # Fall back to device token / API token auth
+    verify_agents_token(request, db)
 
 
 def require_postgres() -> None:
@@ -276,6 +305,13 @@ class IngestResponse(BaseModel):
     events_inserted: int
     events_skipped: int
     session_created: bool
+
+
+class FiltersResponse(BaseModel):
+    """Response for filters endpoint."""
+
+    projects: List[str]
+    providers: List[str]
 
 
 # ---------------------------------------------------------------------------
@@ -413,7 +449,7 @@ async def list_sessions(
     limit: int = Query(20, ge=1, le=100, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: Session = Depends(get_db),
-    _auth: DeviceToken | None = Depends(verify_agents_token),
+    _auth: None = Depends(verify_agents_read_access),
     _pg: None = Depends(require_postgres),
     _single: None = Depends(require_single_tenant),
 ) -> SessionsListResponse:
@@ -464,11 +500,39 @@ async def list_sessions(
         )
 
 
+@router.get("/filters", response_model=FiltersResponse)
+async def get_filters(
+    days_back: int = Query(90, ge=1, le=365, description="Days to look back for distinct values"),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_read_access),
+    _pg: None = Depends(require_postgres),
+    _single: None = Depends(require_single_tenant),
+) -> FiltersResponse:
+    """Get distinct filter values for UI dropdowns.
+
+    Returns lists of distinct projects and providers found in sessions
+    from the specified time range.
+    """
+    try:
+        store = AgentsStore(db)
+        filters = store.get_distinct_filters(days_back=days_back)
+        return FiltersResponse(
+            projects=filters["projects"],
+            providers=filters["providers"],
+        )
+    except Exception as e:
+        logger.exception("Failed to get filters")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get filters: {e}",
+        )
+
+
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
 async def get_session(
     session_id: UUID,
     db: Session = Depends(get_db),
-    _auth: DeviceToken | None = Depends(verify_agents_token),
+    _auth: None = Depends(verify_agents_read_access),
     _pg: None = Depends(require_postgres),
     _single: None = Depends(require_single_tenant),
 ) -> SessionResponse:
@@ -505,7 +569,7 @@ async def get_session_events(
     limit: int = Query(100, ge=1, le=1000, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: Session = Depends(get_db),
-    _auth: DeviceToken | None = Depends(verify_agents_token),
+    _auth: None = Depends(verify_agents_read_access),
     _pg: None = Depends(require_postgres),
     _single: None = Depends(require_single_tenant),
 ) -> EventsListResponse:
@@ -554,7 +618,7 @@ async def get_session_events(
 async def export_session(
     session_id: UUID,
     db: Session = Depends(get_db),
-    _auth: DeviceToken | None = Depends(verify_agents_token),
+    _auth: None = Depends(verify_agents_read_access),
     _pg: None = Depends(require_postgres),
     _single: None = Depends(require_single_tenant),
 ) -> Response:

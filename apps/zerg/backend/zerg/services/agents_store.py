@@ -270,6 +270,34 @@ class AgentsStore:
         stmt = stmt.limit(limit).offset(offset)
         return list(self.db.execute(stmt).scalars().all())
 
+    def get_distinct_filters(self, days_back: int = 90) -> dict[str, list[str]]:
+        """Get distinct values for filter dropdowns.
+
+        Returns dict with:
+          - projects: List of distinct project names
+          - providers: List of distinct provider names
+        """
+        from datetime import timedelta
+        from datetime import timezone
+
+        since = datetime.now(timezone.utc) - timedelta(days=days_back)
+
+        # Get distinct projects (non-null)
+        projects_stmt = (
+            select(AgentSession.project)
+            .where(AgentSession.project.isnot(None))
+            .where(AgentSession.started_at >= since)
+            .distinct()
+            .order_by(AgentSession.project)
+        )
+        projects = [p for (p,) in self.db.execute(projects_stmt).fetchall() if p]
+
+        # Get distinct providers
+        providers_stmt = select(AgentSession.provider).where(AgentSession.started_at >= since).distinct().order_by(AgentSession.provider)
+        providers = [p for (p,) in self.db.execute(providers_stmt).fetchall() if p]
+
+        return {"projects": projects, "providers": providers}
+
     def export_session_jsonl(self, session_id: UUID) -> Optional[tuple[bytes, AgentSession]]:
         """Export a session as JSONL bytes for Claude Code --resume.
 

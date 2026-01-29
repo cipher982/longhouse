@@ -3,15 +3,16 @@
  *
  * Features:
  * - Sessions list grouped by day
- * - Filter by project, provider, date range
+ * - Filter by project, provider, date range (dynamic from API)
  * - Search sessions by content
  * - Live updates via polling
+ * - Pagination with "Load More"
  * - Click to view session details
  */
 
-import { useState, useEffect, useMemo } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { useAgentSessions } from "../hooks/useAgentSessions";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import { useNavigate, useSearchParams, useLocation } from "react-router-dom";
+import { useAgentSessions, useAgentFilters } from "../hooks/useAgentSessions";
 import type { AgentSession, AgentSessionFilters } from "../services/api/agents";
 import {
   Button,
@@ -29,9 +30,8 @@ import "../styles/sessions.css";
 // Constants
 // ---------------------------------------------------------------------------
 
-const PROVIDERS = ["claude", "codex", "gemini"] as const;
-const PROJECTS = ["zerg", "life-hub", "sauron", "hdr", "mytech"] as const;
 const DAYS_OPTIONS = [7, 14, 30, 60, 90] as const;
+const PAGE_SIZE = 50;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -95,12 +95,6 @@ function getProviderColor(provider: string): string {
   }
 }
 
-function truncateMessage(msg: string | null, maxLen: number = 80): string {
-  if (!msg) return "";
-  if (msg.length <= maxLen) return msg;
-  return msg.slice(0, maxLen) + "...";
-}
-
 function formatDuration(startedAt: string, endedAt: string | null): string {
   if (!endedAt) return "In progress";
   const start = new Date(startedAt);
@@ -122,17 +116,19 @@ function formatDuration(startedAt: string, endedAt: string | null): string {
 interface FilterSelectProps {
   label: string;
   value: string;
-  options: readonly string[];
+  options: string[];
   onChange: (value: string) => void;
+  loading?: boolean;
 }
 
-function FilterSelect({ label, value, options, onChange }: FilterSelectProps) {
+function FilterSelect({ label, value, options, onChange, loading }: FilterSelectProps) {
   return (
     <select
       className="sessions-filter-select"
       value={value}
       onChange={(e) => onChange(e.target.value)}
       aria-label={label}
+      disabled={loading}
     >
       <option value="">All {label}s</option>
       {options.map((opt) => (
@@ -259,6 +255,7 @@ function SessionGroup({ title, sessions, onSessionClick }: SessionGroupProps) {
 
 export default function SessionsPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Filter state from URL params
@@ -269,6 +266,14 @@ export default function SessionsPage() {
   );
   const [searchQuery, setSearchQuery] = useState(searchParams.get("query") || "");
   const [debouncedQuery, setDebouncedQuery] = useState(searchQuery);
+
+  // Pagination state
+  const [limit, setLimit] = useState(PAGE_SIZE);
+
+  // Fetch dynamic filter options
+  const { data: filtersData, isLoading: filtersLoading } = useAgentFilters(daysBack);
+  const projectOptions = filtersData?.projects || [];
+  const providerOptions = filtersData?.providers || [];
 
   // Debounce search query
   useEffect(() => {
@@ -288,6 +293,11 @@ export default function SessionsPage() {
     setSearchParams(params, { replace: true });
   }, [project, provider, daysBack, debouncedQuery, setSearchParams]);
 
+  // Reset pagination when filters change
+  useEffect(() => {
+    setLimit(PAGE_SIZE);
+  }, [project, provider, daysBack, debouncedQuery]);
+
   // Build filters
   const filters: AgentSessionFilters = useMemo(
     () => ({
@@ -295,9 +305,9 @@ export default function SessionsPage() {
       provider: provider || undefined,
       days_back: daysBack,
       query: debouncedQuery || undefined,
-      limit: 100,
+      limit,
     }),
-    [project, provider, daysBack, debouncedQuery]
+    [project, provider, daysBack, debouncedQuery, limit]
   );
 
   // Fetch sessions with polling
@@ -306,22 +316,31 @@ export default function SessionsPage() {
   });
 
   const sessions = data?.sessions || [];
+  const total = data?.total || 0;
+  const hasMore = sessions.length < total;
 
   // Group sessions by day
   const groupedSessions = useMemo(() => groupSessionsByDay(sessions), [sessions]);
 
-  // Handle session click
-  const handleSessionClick = (session: AgentSession) => {
-    navigate(`/sessions/${session.id}`);
-  };
+  // Handle session click - preserve current filters in location state
+  const handleSessionClick = useCallback((session: AgentSession) => {
+    navigate(`/sessions/${session.id}`, {
+      state: { from: location.pathname + location.search },
+    });
+  }, [navigate, location]);
+
+  // Load more sessions
+  const handleLoadMore = useCallback(() => {
+    setLimit((prev) => prev + PAGE_SIZE);
+  }, []);
 
   // Clear filters
-  const handleClearFilters = () => {
+  const handleClearFilters = useCallback(() => {
     setProject("");
     setProvider("");
     setDaysBack(14);
     setSearchQuery("");
-  };
+  }, []);
 
   const hasFilters = project || provider || daysBack !== 14 || searchQuery;
 
@@ -334,7 +353,7 @@ export default function SessionsPage() {
   }, [isLoading]);
 
   // Loading state
-  if (isLoading) {
+  if (isLoading && sessions.length === 0) {
     return (
       <PageShell size="wide" className="sessions-page-container">
         <EmptyState
@@ -378,14 +397,16 @@ export default function SessionsPage() {
             <FilterSelect
               label="project"
               value={project}
-              options={PROJECTS}
+              options={projectOptions}
               onChange={setProject}
+              loading={filtersLoading}
             />
             <FilterSelect
               label="provider"
               value={provider}
-              options={PROVIDERS}
+              options={providerOptions}
               onChange={setProvider}
+              loading={filtersLoading}
             />
             <DaysSelect value={daysBack} onChange={setDaysBack} />
           </div>
@@ -435,12 +456,22 @@ export default function SessionsPage() {
           </div>
         )}
 
-        {/* Total count */}
-        {data && data.total > 0 && (
+        {/* Footer with count and load more */}
+        {total > 0 && (
           <div className="sessions-footer">
             <span className="sessions-count">
-              Showing {sessions.length} of {data.total} sessions
+              Showing {sessions.length} of {total} sessions
             </span>
+            {hasMore && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={handleLoadMore}
+                disabled={isLoading}
+              >
+                {isLoading ? "Loading..." : "Load More"}
+              </Button>
+            )}
           </div>
         )}
       </div>
