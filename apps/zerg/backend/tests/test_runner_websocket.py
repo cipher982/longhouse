@@ -8,6 +8,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from zerg.crud import runner_crud
+from zerg.database import db_session
+from zerg.database import get_session_factory
 from zerg.models.models import Runner
 from zerg.models.models import User
 from zerg.services.runner_connection_manager import get_runner_connection_manager
@@ -31,6 +33,16 @@ def test_runner(db: Session, test_user: User) -> tuple[Runner, str]:
         metadata={"hostname": "test-host"},
     )
     return runner, secret
+
+
+def _load_runner(runner_id: int) -> Runner:
+    """Fetch runner in a fresh session to avoid stale/closed cursors."""
+    session_factory = get_session_factory()
+    with db_session(session_factory) as session:
+        runner = runner_crud.get_runner(session, runner_id)
+        if runner is None:
+            raise AssertionError(f"Runner {runner_id} not found")
+        return runner
 
 
 class TestRunnerWebSocket:
@@ -57,10 +69,10 @@ class TestRunnerWebSocket:
             time.sleep(0.1)
 
             # Check runner status in database
-            db.refresh(runner)
-            assert runner.status == "online"
-            assert runner.last_seen_at is not None
-            assert runner.runner_metadata.get("hostname") == "test-host"
+            runner_state = _load_runner(runner.id)
+            assert runner_state.status == "online"
+            assert runner_state.last_seen_at is not None
+            assert runner_state.runner_metadata.get("hostname") == "test-host"
 
             # Check connection manager
             conn_manager = get_runner_connection_manager()
@@ -137,8 +149,7 @@ class TestRunnerWebSocket:
             time.sleep(0.1)
 
             # Get initial last_seen
-            db.refresh(runner)
-            initial_last_seen = runner.last_seen_at
+            initial_last_seen = _load_runner(runner.id).last_seen_at
 
             # Wait a bit
             time.sleep(0.2)
@@ -150,8 +161,9 @@ class TestRunnerWebSocket:
             time.sleep(0.1)
 
             # Check that last_seen was updated
-            db.refresh(runner)
-            assert runner.last_seen_at > initial_last_seen
+            updated_last_seen = _load_runner(runner.id).last_seen_at
+            assert updated_last_seen is not None
+            assert updated_last_seen > initial_last_seen
 
     def test_disconnect_marks_offline(self, client: TestClient, db: Session, test_runner: tuple[Runner, str]):
         """Test that disconnection marks runner as offline."""
@@ -172,8 +184,7 @@ class TestRunnerWebSocket:
             time.sleep(0.1)
 
             # Verify online
-            db.refresh(runner)
-            assert runner.status == "online"
+            assert _load_runner(runner.id).status == "online"
 
         # WebSocket closed, wait for cleanup
         import time
@@ -181,8 +192,7 @@ class TestRunnerWebSocket:
         time.sleep(0.2)
 
         # Check runner is offline
-        db.refresh(runner)
-        assert runner.status == "offline"
+        assert _load_runner(runner.id).status == "offline"
 
         # Check connection manager
         conn_manager = get_runner_connection_manager()

@@ -120,6 +120,7 @@ test.describe('Voice Turn-Based - Core', () => {
       payload: {
         message: transcribeData.transcript,
         message_id: testMessageId,
+        model: 'gpt-scripted',
       },
       stopEvent: 'oikos_complete',
       timeoutMs: 30000,

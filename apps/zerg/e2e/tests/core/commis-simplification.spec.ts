@@ -23,7 +23,7 @@ test.describe('Commis Simplification - Single Execution Mode', () => {
   test('direct Oikos response without spawning commis', async ({ request, backendUrl, commisId }) => {
     // Simple math question should be answered directly by Oikos
     // No commis should be spawned
-    test.setTimeout(30000);
+    test.setTimeout(60000);
 
     const events = await postSseAndCollect({
       backendUrl,

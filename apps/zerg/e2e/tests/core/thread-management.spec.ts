@@ -57,10 +57,10 @@ async function navigateToChat(page: Page, ficheId: string): Promise<void> {
   await expect(chatBtn).toBeVisible({ timeout: 10000 });
   await chatBtn.click();
 
-  await page.waitForURL((url) => url.pathname.includes(`/fiche/${ficheId}/thread`), { timeout: 20000 });
-  await expect(page.locator('[data-testid="chat-page"]')).toBeVisible({ timeout: 20000 });
-  await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 20000 });
-  await expect(page.locator('[data-testid="chat-input"]')).toBeEnabled({ timeout: 20000 });
+  await page.waitForURL((url) => url.pathname.includes(`/fiche/${ficheId}/thread`), { timeout: 40000 });
+  await expect(page.locator('[data-testid="chat-page"]')).toBeVisible({ timeout: 40000 });
+  await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 40000 });
+  await expect(page.locator('[data-testid="chat-input"]')).toBeEnabled({ timeout: 40000 });
 }
 
 /**

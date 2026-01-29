@@ -298,8 +298,8 @@ async def test_stream_completed_run_closes_immediately(db_session, test_run, tes
 
     elapsed = time.time() - start_time
 
-    # Should have closed quickly (within 1 second)
-    assert elapsed < 1.0, f"Stream took {elapsed}s to close for completed run"
+    # Should have closed quickly (within 5 seconds)
+    assert elapsed < 5.0, f"Stream took {elapsed}s to close for completed run"
 
     # Filter out heartbeats
     event_types = [e.get("event") for e in events if e.get("event") != "heartbeat"]

@@ -54,6 +54,7 @@ def _mock_settings_with_allowlist(allowed_model: str):
         gmail_pubsub_topic=real_settings.gmail_pubsub_topic,
         pubsub_sa_email=real_settings.pubsub_sa_email,
         max_users=real_settings.max_users,
+        single_tenant=real_settings.single_tenant,
         admin_emails=real_settings.admin_emails,
         allowed_models_non_admin=allowed_model,  # Override this
         daily_runs_per_user=real_settings.daily_runs_per_user,
