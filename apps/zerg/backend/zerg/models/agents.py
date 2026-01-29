@@ -53,8 +53,8 @@ class AgentSession(AgentsBase):
     # Provider identification
     provider = Column(String(50), nullable=False, index=True)  # claude, codex, gemini, cursor, oikos
 
-    # Environment classification
-    environment = Column(String(20), nullable=False, default="production", index=True)  # production, development, test, e2e
+    # Environment classification (required - no default, caller must specify)
+    environment = Column(String(20), nullable=False, index=True)  # production, development, test, e2e
 
     # Context
     project = Column(String(255), nullable=True, index=True)  # Project name (parsed from cwd)
