@@ -231,8 +231,8 @@ class SessionShipper:
                 "new_offset": new_offset,
             }
 
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
-            # Connection issues - spool for later retry
+        except (httpx.ConnectError, httpx.TimeoutException) as e:
+            # Connection/timeout issues - spool for later retry
             logger.warning(f"API unreachable, spooling {len(events)} events: {e}")
             self.spool.enqueue(payload)
 
@@ -249,6 +249,51 @@ class SessionShipper:
                 "events_inserted": 0,
                 "events_skipped": 0,
                 "events_spooled": len(events),
+                "new_offset": new_offset,
+            }
+
+        except httpx.HTTPStatusError as e:
+            status_code = e.response.status_code
+
+            # Auth errors (401/403) - hard fail, don't spool (will never succeed)
+            if status_code in (401, 403):
+                logger.error(f"Auth error ({status_code}), not spooling: {e}")
+                raise
+
+            # Server errors (5xx) - spool for retry
+            if status_code >= 500:
+                logger.warning(f"Server error ({status_code}), spooling {len(events)} events: {e}")
+                self.spool.enqueue(payload)
+
+                new_offset = session_file.stat().st_size
+                self.state.set_offset(
+                    file_path_str,
+                    new_offset,
+                    session_id,
+                    metadata.session_id,
+                )
+
+                return {
+                    "events_inserted": 0,
+                    "events_skipped": 0,
+                    "events_spooled": len(events),
+                    "new_offset": new_offset,
+                }
+
+            # Other 4xx errors - log and skip (bad payload, won't retry)
+            logger.warning(f"Client error ({status_code}), skipping {len(events)} events: {e}")
+            new_offset = session_file.stat().st_size
+            self.state.set_offset(
+                file_path_str,
+                new_offset,
+                session_id,
+                metadata.session_id,
+            )
+
+            return {
+                "events_inserted": 0,
+                "events_skipped": len(events),
+                "events_spooled": 0,
                 "new_offset": new_offset,
             }
 
@@ -341,13 +386,32 @@ class SessionShipper:
                     }
 
                 except httpx.HTTPStatusError as e:
-                    # API error - mark as failed (may transition to permanent failure)
-                    permanently_failed = self.spool.mark_failed(item.id, str(e), max_retries=max_retries)
+                    status_code = e.response.status_code
+
+                    # Auth errors (401/403) - immediately mark as permanently failed
+                    if status_code in (401, 403):
+                        # Force immediate permanent failure by setting retry_count to max
+                        for _ in range(max_retries):
+                            self.spool.mark_failed(item.id, f"Auth error ({status_code})", max_retries=max_retries)
+                        failed += 1
+                        logger.error(f"Spooled payload {item.id} auth error ({status_code}), permanently failed")
+                        continue
+
+                    # Server errors (5xx) - mark as failed, will retry
+                    if status_code >= 500:
+                        permanently_failed = self.spool.mark_failed(item.id, str(e), max_retries=max_retries)
+                        failed += 1
+                        if permanently_failed:
+                            logger.warning(f"Spooled payload {item.id} permanently failed after max retries")
+                        else:
+                            logger.debug(f"Spooled payload {item.id} server error, will retry")
+                        continue
+
+                    # Other 4xx errors - immediately mark as permanently failed (bad payload)
+                    for _ in range(max_retries):
+                        self.spool.mark_failed(item.id, f"Client error ({status_code})", max_retries=max_retries)
                     failed += 1
-                    if permanently_failed:
-                        logger.warning(f"Spooled payload {item.id} permanently failed")
-                    else:
-                        logger.debug(f"Spooled payload {item.id} failed, will retry")
+                    logger.warning(f"Spooled payload {item.id} client error ({status_code}), permanently failed")
 
                 except Exception as e:
                     # Unexpected error - mark as failed
