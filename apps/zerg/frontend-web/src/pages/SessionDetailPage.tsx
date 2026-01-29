@@ -9,7 +9,7 @@
  */
 
 import { useState, useEffect, useMemo } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { useAgentSession, useAgentSessionEvents } from "../hooks/useAgentSessions";
 import type { AgentEvent } from "../services/api/agents";
 import {
@@ -222,6 +222,7 @@ function ToolCall({ event, isExpanded, onToggle }: ToolCallProps) {
 export default function SessionDetailPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
 
   // Fetch session and events
   const { data: session, isLoading: sessionLoading, error: sessionError } = useAgentSession(sessionId || null);
@@ -270,9 +271,14 @@ export default function SessionDetailPage() {
     return () => document.body.removeAttribute("data-ready");
   }, [sessionLoading, eventsLoading]);
 
-  // Back navigation
+  // Back navigation - preserve filters from location state
   const handleBack = () => {
-    navigate("/sessions");
+    const from = (location.state as { from?: string })?.from;
+    if (from) {
+      navigate(from);
+    } else {
+      navigate("/sessions");
+    }
   };
 
   // Loading state

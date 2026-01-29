@@ -56,6 +56,11 @@ export interface AgentSessionFilters {
   offset?: number;
 }
 
+export interface AgentFiltersResponse {
+  projects: string[];
+  providers: string[];
+}
+
 // ---------------------------------------------------------------------------
 // API Functions
 // ---------------------------------------------------------------------------
@@ -106,4 +111,15 @@ export async function fetchAgentSessionEvents(
   const path = `/agents/sessions/${sessionId}/events${queryString ? `?${queryString}` : ""}`;
 
   return request<AgentEventsListResponse>(path, { method: "GET" });
+}
+
+/**
+ * Get distinct filter values for dropdowns.
+ */
+export async function fetchAgentFilters(
+  daysBack: number = 90
+): Promise<AgentFiltersResponse> {
+  return request<AgentFiltersResponse>(`/agents/filters?days_back=${daysBack}`, {
+    method: "GET",
+  });
 }
