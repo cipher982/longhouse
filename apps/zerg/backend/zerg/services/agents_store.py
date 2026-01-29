@@ -53,7 +53,7 @@ class SessionIngest(BaseModel):
 
     id: Optional[UUID] = Field(None, description="Session UUID (generated if not provided)")
     provider: str = Field(..., description="AI provider: claude, codex, gemini, cursor, oikos")
-    environment: str = Field("production", description="Environment: production, development, test, e2e")
+    environment: str = Field(..., description="Environment: production, development, test, e2e")
     project: Optional[str] = Field(None, description="Project name")
     device_id: Optional[str] = Field(None, description="Device/machine identifier")
     cwd: Optional[str] = Field(None, description="Working directory")

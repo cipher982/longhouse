@@ -351,6 +351,7 @@ class SessionShipper:
         return {
             "id": session_id,
             "provider": "claude",
+            "environment": "production",
             "project": metadata.project,
             "device_id": f"shipper-{os.uname().nodename}",
             "cwd": metadata.cwd,
