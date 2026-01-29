@@ -240,6 +240,7 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-28) [pattern] For UX/design work, start with a brief principles/structure pass (layout, hierarchy, density) before incremental tweaks.
 - (2026-01-28) [pattern] Cold-start/hibernation breaks background agents; hosted model needs always-on workers or a central scheduler to keep tasks instant.
 - (2026-01-28) [gotcha] Multi-tenant isolation is app-level only (owner_id filters), no DB RLS; container_runner is a Docker scaffold not wired into commis yet.
+- (2026-01-29) [gotcha] Alembic uses the zerg schema for alembic_version; dev DBs created via create_all may lack version tracking unless stamped.
 - (2026-01-29) [gotcha] `_execute_tools_parallel` had a local `FicheInterrupted` import that shadowed the global, causing `<tool-error>cannot access free variable 'FicheInterrupted'...`; remove the inner import.
 - (2026-01-29) [gotcha] Agents sessions are single-tenant enforced; if >1 users exist, agents/session picker endpoints return 409 unless SINGLE_TENANT=0.
 - (2026-01-29) [gotcha] Alembic revision IDs >32 chars break `alembic_version` (varchar(32)); ensure version_num is VARCHAR(64) before running migrations.
