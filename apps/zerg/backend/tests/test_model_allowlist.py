@@ -67,6 +67,7 @@ def _mock_settings_with_allowlist(allowed_model: str):
         oikos_workspace_path=real_settings.oikos_workspace_path,
         notification_webhook=real_settings.notification_webhook,
         smoke_test_secret=real_settings.smoke_test_secret,
+        agents_api_token=real_settings.agents_api_token,
         job_queue_enabled=real_settings.job_queue_enabled,
         bootstrap_token=real_settings.bootstrap_token,
         container_default_image=real_settings.container_default_image,

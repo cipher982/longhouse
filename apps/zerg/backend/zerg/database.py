@@ -542,6 +542,9 @@ def initialize_database(engine: Engine = None) -> None:
 
     # Import all models to ensure they are registered with Base
     # We need to import the models explicitly to ensure they're registered
+    # Import agents models for OSS standalone deployment
+    from zerg.models.agents import AGENTS_SCHEMA
+    from zerg.models.agents import AgentsBase
     from zerg.models.models import CanvasLayout  # noqa: F401
     from zerg.models.models import Connector  # noqa: F401
     from zerg.models.models import Fiche  # noqa: F401
@@ -562,12 +565,13 @@ def initialize_database(engine: Engine = None) -> None:
 
     target_engine = engine or default_engine
 
-    # Ensure schema exists for fresh databases
+    # Ensure schemas exist for fresh databases
     if target_engine is not None and target_engine.dialect.name == "postgresql":
         from sqlalchemy import text
 
         with target_engine.connect() as conn:
             conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {DB_SCHEMA}"))
+            conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {AGENTS_SCHEMA}"))
             conn.commit()
 
     # Debug: Check what tables will be created
@@ -575,7 +579,11 @@ def initialize_database(engine: Engine = None) -> None:
         table_names = [table.name for table in Base.metadata.tables.values()]
         logger.debug("Creating tables: %s", sorted(table_names))
 
+    # Create main zerg tables
     Base.metadata.create_all(bind=target_engine)
+
+    # Create agents tables (for OSS standalone deployment)
+    AgentsBase.metadata.create_all(bind=target_engine)
 
     # Debug: Verify tables were created
     if os.getenv("NODE_ENV") == "test":

@@ -37,6 +37,13 @@ def ship(
         "-u",
         help="Zerg API URL",
     ),
+    token: str = typer.Option(
+        None,
+        "--token",
+        "-t",
+        envvar="AGENTS_API_TOKEN",
+        help="API token for authentication (or set AGENTS_API_TOKEN env var)",
+    ),
     claude_dir: str = typer.Option(
         None,
         "--claude-dir",
@@ -57,6 +64,7 @@ def ship(
     config = ShipperConfig(
         zerg_api_url=url,
         claude_config_dir=Path(claude_dir) if claude_dir else None,
+        api_token=token,
     )
 
     typer.echo(f"Shipping sessions to {url}...")
@@ -88,6 +96,13 @@ def connect(
         "-u",
         help="Zerg API URL",
     ),
+    token: str = typer.Option(
+        None,
+        "--token",
+        "-t",
+        envvar="AGENTS_API_TOKEN",
+        help="API token for authentication (or set AGENTS_API_TOKEN env var)",
+    ),
     interval: int = typer.Option(
         30,
         "--interval",
@@ -115,6 +130,7 @@ def connect(
         zerg_api_url=url,
         claude_config_dir=Path(claude_dir) if claude_dir else None,
         scan_interval_seconds=interval,
+        api_token=token,
     )
 
     typer.echo(f"Connecting to {url}...")
