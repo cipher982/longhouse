@@ -55,6 +55,7 @@ from zerg.database import initialize_database
 from zerg.routers.account_connectors import router as account_connectors_router
 from zerg.routers.admin import router as admin_router
 from zerg.routers.admin_bootstrap import router as admin_bootstrap_router
+from zerg.routers.agents import router as agents_router
 from zerg.routers.auth import router as auth_router
 from zerg.routers.connectors import router as connectors_router
 from zerg.routers.contacts import router as contacts_router
@@ -670,6 +671,7 @@ app.include_router(traces_router, prefix=f"{API_PREFIX}")  # Trace Explorer (adm
 app.include_router(reliability_router, prefix=f"{API_PREFIX}")  # Reliability Dashboard (admin only)
 app.include_router(skills_router, prefix=f"{API_PREFIX}")  # Skills Platform for workspace-scoped tools
 app.include_router(session_chat_router, prefix=f"{API_PREFIX}")  # Forum session chat (drop-in)
+app.include_router(agents_router, prefix=f"{API_PREFIX}")  # Agents schema for cross-provider session tracking
 
 # ---------------------------------------------------------------------------
 # Legacy admin routes without /api prefix – keep at very end so they override

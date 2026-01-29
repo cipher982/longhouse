@@ -1,6 +1,9 @@
 """Database models for the application."""
 
 # Re-export from split model files
+from .agents import AgentEvent
+from .agents import AgentsBase
+from .agents import AgentSession
 from .commis_barrier import CommisBarrier
 from .commis_barrier import CommisBarrierJob
 from .connector import Connector
@@ -39,6 +42,10 @@ from .user import User
 from .waitlist import WaitlistEntry
 
 __all__ = [
+    # Agents schema models (cross-provider session tracking)
+    "AgentSession",
+    "AgentEvent",
+    "AgentsBase",
     # Core models (split into separate files)
     "Fiche",
     "FicheMessage",

@@ -5,7 +5,8 @@ This service enables seamless --resume of Claude Code sessions across environmen
 - Zerg commis -> Laptop terminal
 - Zerg commis -> Zerg commis
 
-Sessions are archived in Life Hub and can be fetched/shipped via its API.
+Sessions are stored in Zerg's local database and can be fetched/shipped via the
+/api/agents endpoints.
 
 Key insight: Claude Code path encoding is deterministic:
     encoded_cwd = re.sub(r'[^A-Za-z0-9-]', '-', absolute_path)
@@ -14,6 +15,7 @@ Key insight: Claude Code path encoding is deterministic:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import platform
@@ -23,15 +25,20 @@ import tempfile
 import time
 from dataclasses import dataclass
 from dataclasses import field
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 
+if TYPE_CHECKING:
+    pass
+
 logger = logging.getLogger(__name__)
 
-# Life Hub API configuration
-LIFE_HUB_URL = os.getenv("LIFE_HUB_URL", "https://data.drose.io")
-LIFE_HUB_API_KEY = os.getenv("LIFE_HUB_API_KEY")
+# Zerg API configuration (local by default)
+ZERG_API_URL = os.getenv("ZERG_API_URL", "http://localhost:47300")
 
 # Valid session ID pattern (alphanumeric, dashes, underscores only)
 # Prevents path traversal attacks via malicious session IDs
@@ -83,11 +90,11 @@ def encode_cwd_for_claude(absolute_path: str) -> str:
     return re.sub(r"[^A-Za-z0-9-]", "-", absolute_path)
 
 
-async def fetch_session_from_life_hub(session_id: str) -> tuple[bytes, str, str]:
-    """Fetch a session from Life Hub for resumption.
+async def fetch_session_from_zerg(session_id: str) -> tuple[bytes, str, str]:
+    """Fetch a session from Zerg for resumption.
 
     Args:
-        session_id: Life Hub session UUID
+        session_id: Session UUID
 
     Returns:
         Tuple of (jsonl_bytes, cwd, provider_session_id)
@@ -96,20 +103,13 @@ async def fetch_session_from_life_hub(session_id: str) -> tuple[bytes, str, str]
         ValueError: If session not found or API error
         httpx.HTTPError: On network errors
     """
-    if not LIFE_HUB_API_KEY:
-        raise ValueError("LIFE_HUB_API_KEY not configured")
-
-    # Life Hub API currently exposes agent-session endpoints.
-    url = f"{LIFE_HUB_URL}/query/agents/sessions/{session_id}/export"
+    url = f"{ZERG_API_URL}/api/agents/sessions/{session_id}/export"
 
     async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.get(
-            url,
-            headers={"X-API-Key": LIFE_HUB_API_KEY},
-        )
+        response = await client.get(url)
 
         if response.status_code == 404:
-            raise ValueError(f"Session {session_id} not found in Life Hub")
+            raise ValueError(f"Session {session_id} not found")
 
         response.raise_for_status()
 
@@ -124,18 +124,24 @@ async def fetch_session_from_life_hub(session_id: str) -> tuple[bytes, str, str]
         return response.content, cwd, provider_session_id
 
 
+# Backwards compatibility alias
+async def fetch_session_from_life_hub(session_id: str) -> tuple[bytes, str, str]:
+    """Alias for fetch_session_from_zerg for backwards compatibility."""
+    return await fetch_session_from_zerg(session_id)
+
+
 async def prepare_session_for_resume(
     session_id: str,
     workspace_path: Path,
     claude_config_dir: Path | None = None,
 ) -> str:
-    """Fetch session from Life Hub and prepare it for Claude Code --resume.
+    """Fetch session from Zerg and prepare it for Claude Code --resume.
 
     Downloads the session JSONL and places it at the path Claude Code expects:
     {claude_config_dir}/projects/{encoded_cwd}/{provider_session_id}.jsonl
 
     Args:
-        session_id: Life Hub session UUID to fetch
+        session_id: Session UUID to fetch
         workspace_path: The workspace directory where Claude Code will run
         claude_config_dir: Override for Claude config dir (default: from CLAUDE_CONFIG_DIR or ~/.claude)
 
@@ -145,8 +151,8 @@ async def prepare_session_for_resume(
     Raises:
         ValueError: If session not found or configuration error
     """
-    # Fetch session from Life Hub
-    jsonl_bytes, original_cwd, provider_session_id = await fetch_session_from_life_hub(session_id)
+    # Fetch session from Zerg
+    jsonl_bytes, original_cwd, provider_session_id = await fetch_session_from_zerg(session_id)
 
     if not provider_session_id:
         raise ValueError(f"Session {session_id} has no provider_session_id - cannot resume")
@@ -174,15 +180,15 @@ async def prepare_session_for_resume(
     return provider_session_id
 
 
-async def ship_session_to_life_hub(
+async def ship_session_to_zerg(
     workspace_path: Path,
     commis_id: str,
     claude_config_dir: Path | None = None,
 ) -> str | None:
-    """Ship a Claude Code session from workspace to Life Hub.
+    """Ship a Claude Code session from workspace to Zerg.
 
     Finds the most recent session file in the workspace's Claude config
-    and ships it to Life Hub for future resumption.
+    and ships it to Zerg for future resumption.
 
     Args:
         workspace_path: The workspace directory where Claude Code ran
@@ -190,12 +196,8 @@ async def ship_session_to_life_hub(
         claude_config_dir: Override for Claude config dir (default: from CLAUDE_CONFIG_DIR or ~/.claude)
 
     Returns:
-        The Life Hub session ID if shipped successfully, None otherwise
+        The session ID if shipped successfully, None otherwise
     """
-    if not LIFE_HUB_API_KEY:
-        logger.warning("LIFE_HUB_API_KEY not configured, skipping session ship")
-        return None
-
     # Determine Claude config directory (respects CLAUDE_CONFIG_DIR env var)
     config_dir = claude_config_dir or get_claude_config_dir()
 
@@ -220,50 +222,67 @@ async def ship_session_to_life_hub(
     logger.info(f"Shipping session {provider_session_id} for commis {commis_id}")
 
     # Read session content
-    session_content = session_file.read_bytes()
+    session_content = session_file.read_text()
 
-    # Ship to Life Hub ingest endpoint.
-    # Life Hub currently ingests agent events at /ingest/agents/events.
-    # Note: The shipper service handles the full event ingestion format,
-    # but for immediate shipping we use a simplified approach.
-    url = f"{LIFE_HUB_URL}/ingest/agents/events"
+    # Parse JSONL and build ingest payload
+    events = []
+    for line in session_content.splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+            events.append(
+                {
+                    "role": event.get("role", "assistant"),
+                    "content_text": event.get("content"),
+                    "tool_name": event.get("tool_name"),
+                    "tool_input_json": event.get("tool_input"),
+                    "tool_output_text": event.get("tool_output"),
+                    "timestamp": event.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                    "source_path": str(session_file),
+                    "source_offset": None,  # Will be computed during ingest
+                }
+            )
+        except json.JSONDecodeError:
+            logger.warning(f"Failed to parse JSONL line: {line[:100]}")
+
+    if not events:
+        logger.warning(f"No events parsed from session file {session_file}")
+        return None
+
+    # Determine timestamps from events
+    timestamps = [e.get("timestamp") for e in events if e.get("timestamp")]
+    started_at = min(timestamps) if timestamps else datetime.now(timezone.utc).isoformat()
+    ended_at = max(timestamps) if timestamps else None
+
+    # Build ingest payload
+    # Note: Don't send 'id' - let API generate UUID. Store provider_session_id in device_id for tracking.
+    device_id = f"zerg-commis-{platform.node()}:{provider_session_id}"
+    payload = {
+        "provider": "claude",
+        "project": workspace_path.name,  # Use directory name as project
+        "device_id": device_id,
+        "cwd": str(workspace_path.absolute()),
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "events": events,
+    }
+
+    # Ship to Zerg ingest endpoint
+    url = f"{ZERG_API_URL}/api/agents/ingest"
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            # Parse JSONL and extract events for ingestion
-            import json
-
-            events = []
-            for line in session_content.decode("utf-8").splitlines():
-                if line.strip():
-                    try:
-                        event = json.loads(line)
-                        events.append({"raw_text": line, "raw_json": event})
-                    except json.JSONDecodeError:
-                        events.append({"raw_text": line})
-
-            # Build device_id for Life Hub (required field)
-            device_id = f"zerg-commis-{platform.node()}"
-
-            payload = {
-                "device_id": device_id,
-                "provider": "claude",
-                "source_path": str(session_file),
-                "provider_session_id": provider_session_id,
-                "cwd": str(workspace_path.absolute()),
-                "events": events,
-            }
-
             response = await client.post(
                 url,
-                headers={"X-API-Key": LIFE_HUB_API_KEY, "Content-Type": "application/json"},
+                headers={"Content-Type": "application/json"},
                 json=payload,
             )
             response.raise_for_status()
 
             result = response.json()
             session_id = result.get("session_id")
-            logger.info(f"Shipped session {provider_session_id} to Life Hub as {session_id}")
+            logger.info(f"Shipped session {provider_session_id} to Zerg as {session_id}")
             return session_id
 
     except Exception as e:
@@ -271,11 +290,23 @@ async def ship_session_to_life_hub(
         return None
 
 
+# Backwards compatibility alias
+async def ship_session_to_life_hub(
+    workspace_path: Path,
+    commis_id: str,
+    claude_config_dir: Path | None = None,
+) -> str | None:
+    """Alias for ship_session_to_zerg for backwards compatibility."""
+    return await ship_session_to_zerg(workspace_path, commis_id, claude_config_dir)
+
+
 __all__ = [
     "encode_cwd_for_claude",
-    "fetch_session_from_life_hub",
+    "fetch_session_from_zerg",
+    "fetch_session_from_life_hub",  # Backwards compatibility
     "prepare_session_for_resume",
-    "ship_session_to_life_hub",
+    "ship_session_to_zerg",
+    "ship_session_to_life_hub",  # Backwards compatibility
     "SessionLockManager",
     "SessionLock",
     "WorkspaceResolver",
@@ -334,7 +365,7 @@ class SessionLockManager:
         """Try to acquire lock for a session.
 
         Args:
-            session_id: Life Hub session UUID
+            session_id: Session UUID
             holder: Identifier for who's holding the lock
             ttl_seconds: Lock TTL (default 5 minutes)
 
@@ -365,7 +396,7 @@ class SessionLockManager:
         """Release a session lock.
 
         Args:
-            session_id: Life Hub session UUID
+            session_id: Session UUID
             holder: If provided, only release if holder matches
 
         Returns:

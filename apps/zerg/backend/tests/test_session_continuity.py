@@ -140,25 +140,13 @@ class TestGetClaudeConfigDir:
         assert result == Path.home() / ".claude"
 
 
-class TestFetchSessionFromLifeHub:
-    """Tests for fetch_session_from_life_hub function."""
+class TestFetchSessionFromZerg:
+    """Tests for fetch_session_from_zerg function (now uses local Zerg API)."""
 
     @pytest.mark.asyncio
-    async def test_raises_without_api_key(self, monkeypatch):
-        """Raises ValueError when LIFE_HUB_API_KEY is not configured."""
-        from zerg.services.session_continuity import fetch_session_from_life_hub
-
-        monkeypatch.setattr("zerg.services.session_continuity.LIFE_HUB_API_KEY", None)
-
-        with pytest.raises(ValueError, match="LIFE_HUB_API_KEY not configured"):
-            await fetch_session_from_life_hub("test-session-id")
-
-    @pytest.mark.asyncio
-    async def test_raises_on_404(self, monkeypatch):
+    async def test_raises_on_404(self):
         """Raises ValueError when session not found."""
-        from zerg.services.session_continuity import fetch_session_from_life_hub
-
-        monkeypatch.setattr("zerg.services.session_continuity.LIFE_HUB_API_KEY", "test-key")
+        from zerg.services.session_continuity import fetch_session_from_zerg
 
         mock_response = MagicMock()
         mock_response.status_code = 404
@@ -169,15 +157,13 @@ class TestFetchSessionFromLifeHub:
         mock_client.__aexit__.return_value = None
 
         with patch("httpx.AsyncClient", return_value=mock_client):
-            with pytest.raises(ValueError, match="not found in Life Hub"):
-                await fetch_session_from_life_hub("nonexistent-session")
+            with pytest.raises(ValueError, match="not found"):
+                await fetch_session_from_zerg("nonexistent-session")
 
     @pytest.mark.asyncio
-    async def test_validates_provider_session_id_from_response(self, monkeypatch):
+    async def test_validates_provider_session_id_from_response(self):
         """Validates provider_session_id from response headers to prevent path traversal."""
-        from zerg.services.session_continuity import fetch_session_from_life_hub
-
-        monkeypatch.setattr("zerg.services.session_continuity.LIFE_HUB_API_KEY", "test-key")
+        from zerg.services.session_continuity import fetch_session_from_zerg
 
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -196,14 +182,12 @@ class TestFetchSessionFromLifeHub:
         with patch("httpx.AsyncClient", return_value=mock_client):
             # Pattern check fails first due to dots/slashes
             with pytest.raises(ValueError, match="Invalid session ID format"):
-                await fetch_session_from_life_hub("test-session")
+                await fetch_session_from_zerg("test-session")
 
     @pytest.mark.asyncio
-    async def test_returns_session_data_on_success(self, monkeypatch):
+    async def test_returns_session_data_on_success(self):
         """Returns tuple of (content, cwd, provider_session_id) on success."""
-        from zerg.services.session_continuity import fetch_session_from_life_hub
-
-        monkeypatch.setattr("zerg.services.session_continuity.LIFE_HUB_API_KEY", "test-key")
+        from zerg.services.session_continuity import fetch_session_from_zerg
 
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -220,7 +204,7 @@ class TestFetchSessionFromLifeHub:
         mock_client.__aexit__.return_value = None
 
         with patch("httpx.AsyncClient", return_value=mock_client):
-            content, cwd, provider_id = await fetch_session_from_life_hub("test-session")
+            content, cwd, provider_id = await fetch_session_from_zerg("test-session")
 
         assert content == b'{"event": "test"}\n'
         assert cwd == "/Users/test/project"
@@ -231,26 +215,22 @@ class TestPrepareSessionForResume:
     """Tests for prepare_session_for_resume function."""
 
     @pytest.mark.asyncio
-    async def test_raises_without_provider_session_id(self, monkeypatch, tmp_path):
+    async def test_raises_without_provider_session_id(self, tmp_path):
         """Raises ValueError when session has no provider_session_id."""
         from zerg.services.session_continuity import prepare_session_for_resume
-
-        monkeypatch.setattr("zerg.services.session_continuity.LIFE_HUB_API_KEY", "test-key")
 
         # Mock fetch to return empty provider_session_id
         async def mock_fetch(*args, **kwargs):
             return (b'{"test": "data"}', "/test/path", "")
 
-        with patch("zerg.services.session_continuity.fetch_session_from_life_hub", mock_fetch):
+        with patch("zerg.services.session_continuity.fetch_session_from_zerg", mock_fetch):
             with pytest.raises(ValueError, match="no provider_session_id"):
                 await prepare_session_for_resume("test-session", tmp_path)
 
     @pytest.mark.asyncio
-    async def test_creates_session_file_in_correct_location(self, monkeypatch, tmp_path):
+    async def test_creates_session_file_in_correct_location(self, tmp_path):
         """Creates session file at {config_dir}/projects/{encoded_cwd}/{session_id}.jsonl."""
         from zerg.services.session_continuity import prepare_session_for_resume
-
-        monkeypatch.setattr("zerg.services.session_continuity.LIFE_HUB_API_KEY", "test-key")
 
         session_content = b'{"event": "init"}\n{"event": "user_message"}\n'
         provider_session_id = "abc123-session"
@@ -261,7 +241,7 @@ class TestPrepareSessionForResume:
         async def mock_fetch(*args, **kwargs):
             return (session_content, str(workspace), provider_session_id)
 
-        with patch("zerg.services.session_continuity.fetch_session_from_life_hub", mock_fetch):
+        with patch("zerg.services.session_continuity.fetch_session_from_zerg", mock_fetch):
             result = await prepare_session_for_resume(
                 "test-session",
                 workspace,
@@ -279,57 +259,41 @@ class TestPrepareSessionForResume:
         assert expected_file.read_bytes() == session_content
 
     @pytest.mark.asyncio
-    async def test_validates_provider_session_id_defense_in_depth(self, monkeypatch, tmp_path):
+    async def test_validates_provider_session_id_defense_in_depth(self, tmp_path):
         """Double-validates provider_session_id even after fetch validation."""
         from zerg.services.session_continuity import prepare_session_for_resume
-
-        monkeypatch.setattr("zerg.services.session_continuity.LIFE_HUB_API_KEY", "test-key")
 
         # Mock fetch to return a malicious session ID (simulating a bypassed validation)
         async def mock_fetch(*args, **kwargs):
             return (b'{"test": "data"}', "/test/path", "../../malicious")
 
-        with patch("zerg.services.session_continuity.fetch_session_from_life_hub", mock_fetch):
+        with patch("zerg.services.session_continuity.fetch_session_from_zerg", mock_fetch):
             # Pattern check fails first due to dots/slashes
             with pytest.raises(ValueError, match="Invalid session ID format"):
                 await prepare_session_for_resume("test-session", tmp_path)
 
 
-class TestShipSessionToLifeHub:
-    """Tests for ship_session_to_life_hub function."""
+class TestShipSessionToZerg:
+    """Tests for ship_session_to_zerg function (now uses local Zerg API)."""
 
     @pytest.mark.asyncio
-    async def test_returns_none_without_api_key(self, monkeypatch, tmp_path):
-        """Returns None when LIFE_HUB_API_KEY is not configured."""
-        from zerg.services.session_continuity import ship_session_to_life_hub
-
-        monkeypatch.setattr("zerg.services.session_continuity.LIFE_HUB_API_KEY", None)
-
-        result = await ship_session_to_life_hub(tmp_path, "commis-1")
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_returns_none_when_no_sessions_found(self, monkeypatch, tmp_path):
+    async def test_returns_none_when_no_sessions_found(self, tmp_path):
         """Returns None when no session files exist for workspace."""
-        from zerg.services.session_continuity import ship_session_to_life_hub
-
-        monkeypatch.setattr("zerg.services.session_continuity.LIFE_HUB_API_KEY", "test-key")
+        from zerg.services.session_continuity import ship_session_to_zerg
 
         workspace = tmp_path / "workspace"
         workspace.mkdir()
         config_dir = tmp_path / "claude_config"
         config_dir.mkdir()
 
-        result = await ship_session_to_life_hub(workspace, "commis-1", claude_config_dir=config_dir)
+        result = await ship_session_to_zerg(workspace, "commis-1", claude_config_dir=config_dir)
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_ships_most_recent_session(self, monkeypatch, tmp_path):
+    async def test_ships_most_recent_session(self, tmp_path):
         """Ships the most recently modified session file."""
         from zerg.services.session_continuity import encode_cwd_for_claude
-        from zerg.services.session_continuity import ship_session_to_life_hub
-
-        monkeypatch.setattr("zerg.services.session_continuity.LIFE_HUB_API_KEY", "test-key")
+        from zerg.services.session_continuity import ship_session_to_zerg
 
         workspace = tmp_path / "workspace"
         workspace.mkdir()
@@ -354,7 +318,7 @@ class TestShipSessionToLifeHub:
         # Mock the HTTP client
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {"session_id": "life-hub-session-123"}
+        mock_response.json.return_value = {"session_id": "zerg-session-123"}
         mock_response.raise_for_status = MagicMock()
 
         mock_client = AsyncMock()
@@ -363,22 +327,21 @@ class TestShipSessionToLifeHub:
         mock_client.__aexit__.return_value = None
 
         with patch("httpx.AsyncClient", return_value=mock_client):
-            result = await ship_session_to_life_hub(workspace, "commis-1", claude_config_dir=config_dir)
+            result = await ship_session_to_zerg(workspace, "commis-1", claude_config_dir=config_dir)
 
-        assert result == "life-hub-session-123"
+        assert result == "zerg-session-123"
 
-        # Verify the correct session was shipped
+        # Verify the correct session was shipped (most recent)
         call_args = mock_client.post.call_args
         payload = call_args.kwargs["json"]
-        assert payload["provider_session_id"] == "new-session"
+        # provider_session_id is now embedded in device_id
+        assert "new-session" in payload["device_id"]
 
     @pytest.mark.asyncio
-    async def test_handles_shipping_failure_gracefully(self, monkeypatch, tmp_path):
+    async def test_handles_shipping_failure_gracefully(self, tmp_path):
         """Returns None on network failure without raising."""
         from zerg.services.session_continuity import encode_cwd_for_claude
-        from zerg.services.session_continuity import ship_session_to_life_hub
-
-        monkeypatch.setattr("zerg.services.session_continuity.LIFE_HUB_API_KEY", "test-key")
+        from zerg.services.session_continuity import ship_session_to_zerg
 
         workspace = tmp_path / "workspace"
         workspace.mkdir()
@@ -397,7 +360,7 @@ class TestShipSessionToLifeHub:
         mock_client.__aexit__.return_value = None
 
         with patch("httpx.AsyncClient", return_value=mock_client):
-            result = await ship_session_to_life_hub(workspace, "commis-1", claude_config_dir=config_dir)
+            result = await ship_session_to_zerg(workspace, "commis-1", claude_config_dir=config_dir)
 
         # Should return None, not raise
         assert result is None
@@ -407,13 +370,11 @@ class TestSessionContinuityIntegration:
     """Integration tests for full session continuity flow."""
 
     @pytest.mark.asyncio
-    async def test_round_trip_prepare_and_ship(self, monkeypatch, tmp_path):
+    async def test_round_trip_prepare_and_ship(self, tmp_path):
         """Session can be prepared for resume and shipped after completion."""
         from zerg.services.session_continuity import encode_cwd_for_claude
         from zerg.services.session_continuity import prepare_session_for_resume
-        from zerg.services.session_continuity import ship_session_to_life_hub
-
-        monkeypatch.setattr("zerg.services.session_continuity.LIFE_HUB_API_KEY", "test-key")
+        from zerg.services.session_continuity import ship_session_to_zerg
 
         workspace = tmp_path / "workspace"
         workspace.mkdir()
@@ -427,9 +388,9 @@ class TestSessionContinuityIntegration:
             return (original_session_content, str(workspace), original_provider_id)
 
         # Prepare the session
-        with patch("zerg.services.session_continuity.fetch_session_from_life_hub", mock_fetch):
+        with patch("zerg.services.session_continuity.fetch_session_from_zerg", mock_fetch):
             result_id = await prepare_session_for_resume(
-                "life-hub-session-id",
+                "zerg-session-id",
                 workspace,
                 claude_config_dir=config_dir,
             )
@@ -457,12 +418,13 @@ class TestSessionContinuityIntegration:
         mock_client.__aexit__.return_value = None
 
         with patch("httpx.AsyncClient", return_value=mock_client):
-            shipped_id = await ship_session_to_life_hub(workspace, "commis-1", claude_config_dir=config_dir)
+            shipped_id = await ship_session_to_zerg(workspace, "commis-1", claude_config_dir=config_dir)
 
         assert shipped_id == "shipped-session-456"
 
         # Verify the shipped payload contains the modified session
         call_args = mock_client.post.call_args
         payload = call_args.kwargs["json"]
-        assert payload["provider_session_id"] == original_provider_id
+        # provider_session_id is now embedded in device_id
+        assert original_provider_id in payload["device_id"]
         assert len(payload["events"]) == 3  # Original 2 + 1 new
