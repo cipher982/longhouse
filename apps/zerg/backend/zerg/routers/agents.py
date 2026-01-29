@@ -654,3 +654,41 @@ async def export_session(
         media_type="application/x-ndjson",
         headers=headers,
     )
+
+
+class CleanupRequest(BaseModel):
+    """Request for test cleanup."""
+
+    project_patterns: List[str] = Field(
+        ...,
+        description="LIKE patterns to match (e.g., 'test-%', 'ratelimit-%')",
+    )
+
+
+class CleanupResponse(BaseModel):
+    """Response for test cleanup."""
+
+    deleted: int
+
+
+@router.delete("/test-cleanup", response_model=CleanupResponse)
+async def cleanup_test_sessions(
+    body: CleanupRequest,
+    db: Session = Depends(get_db),
+    _pg: None = Depends(require_postgres),
+) -> CleanupResponse:
+    """Delete test sessions by project pattern (dev-only).
+
+    Only available when AUTH_DISABLED=1. Used by E2E tests to clean up
+    test data after runs.
+    """
+    if not _settings.auth_disabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Test cleanup only available in dev mode (AUTH_DISABLED=1)",
+        )
+
+    store = AgentsStore(db)
+    deleted = store.delete_sessions_by_project_patterns(body.project_patterns)
+
+    return CleanupResponse(deleted=deleted)
