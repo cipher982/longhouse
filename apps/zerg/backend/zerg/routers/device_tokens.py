@@ -237,6 +237,10 @@ def validate_device_token(token: str, db: Session) -> DeviceToken | None:
 
     Updates last_used_at on successful validation.
 
+    Security: Uses constant-time comparison to prevent timing attacks.
+    The DB lookup by hash is O(1) via index, and we add an explicit
+    secrets.compare_digest() call to normalize any Python-level timing.
+
     Args:
         token: The plain token to validate
         db: Database session
@@ -249,6 +253,14 @@ def validate_device_token(token: str, db: Session) -> DeviceToken | None:
     device_token = db.query(DeviceToken).filter(DeviceToken.token_hash == token_hash).first()
 
     if not device_token:
+        # Constant-time comparison against dummy to normalize timing
+        # even when token doesn't exist in DB
+        secrets.compare_digest(token_hash, "0" * 64)
+        return None
+
+    # Constant-time comparison of the hash we computed vs stored hash
+    # This prevents timing leaks at the Python comparison level
+    if not secrets.compare_digest(token_hash, device_token.token_hash):
         return None
 
     if device_token.is_revoked:

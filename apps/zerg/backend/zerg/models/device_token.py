@@ -3,6 +3,11 @@
 Per-device tokens enable secure, revocable authentication for CLI tools
 like the shipper. Each token is scoped to a user and can be individually
 revoked if a device is compromised.
+
+Note on expiry: Tokens do not time-expire. They remain valid indefinitely
+until explicitly revoked via the API. This simplifies CLI UX (no re-auth
+needed) while still allowing security response via revocation. Time-based
+expiry can be added later if compliance or security policy requires it.
 """
 
 from uuid import uuid4

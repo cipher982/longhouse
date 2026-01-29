@@ -106,7 +106,10 @@ The shipper syncs Claude Code (and other CLI agent) sessions to Zerg in real-tim
 - [x] Token persisted locally at ~/.claude/zerg-device-token
 - [x] Token validated on each ingest (X-Agents-Token header)
 - [x] API to list/revoke device tokens (/api/devices/tokens)
-- [x] Expired/revoked tokens fail gracefully (401)
+- [x] Revoked tokens fail gracefully (401)
+
+**Note:** Tokens do not time-expire; they remain valid until explicitly revoked.
+Time-based expiry can be added in a future phase if needed.
 
 ---
 
