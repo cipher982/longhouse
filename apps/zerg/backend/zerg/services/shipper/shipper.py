@@ -5,6 +5,7 @@ The SessionShipper:
 2. Parses new events (incremental via byte offset tracking)
 3. Ships batches to Zerg's /api/agents/ingest endpoint
 4. Updates state to enable future incremental sync
+5. Spools payloads locally when API unreachable (offline resilience)
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import httpx
 from zerg.services.shipper.parser import ParsedEvent
 from zerg.services.shipper.parser import extract_session_metadata
 from zerg.services.shipper.parser import parse_session_file
+from zerg.services.shipper.spool import OfflineSpool
 from zerg.services.shipper.state import ShipperState
 
 logger = logging.getLogger(__name__)
@@ -65,6 +67,7 @@ class ShipResult:
     sessions_shipped: int = 0
     events_shipped: int = 0
     events_skipped: int = 0  # Duplicates
+    events_spooled: int = 0  # Queued for retry
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -84,15 +87,18 @@ class SessionShipper:
         self,
         config: ShipperConfig | None = None,
         state: ShipperState | None = None,
+        spool: OfflineSpool | None = None,
     ):
         """Initialize the shipper.
 
         Args:
             config: Shipper configuration
             state: State tracker (for incremental sync)
+            spool: Offline spool for resilience (auto-created if None)
         """
         self.config = config or ShipperConfig()
         self.state = state or ShipperState()
+        self.spool = spool or OfflineSpool()
 
     def _find_session_files(self) -> list[Path]:
         """Find all JSONL session files in projects directory."""
@@ -141,10 +147,11 @@ class SessionShipper:
         for path in files_to_ship:
             try:
                 ship_result = await self.ship_session(path)
-                if ship_result["events_inserted"] > 0 or ship_result["events_skipped"] > 0:
+                if ship_result["events_inserted"] > 0 or ship_result["events_skipped"] > 0 or ship_result["events_spooled"] > 0:
                     result.sessions_shipped += 1
                     result.events_shipped += ship_result["events_inserted"]
                     result.events_skipped += ship_result["events_skipped"]
+                    result.events_spooled += ship_result["events_spooled"]
             except Exception as e:
                 error_msg = f"Failed to ship {path.name}: {e}"
                 logger.error(error_msg)
@@ -159,7 +166,7 @@ class SessionShipper:
             session_file: Path to the JSONL session file
 
         Returns:
-            Dict with events_inserted, events_skipped, new_offset
+            Dict with events_inserted, events_skipped, events_spooled, new_offset
         """
         file_path_str = str(session_file)
         last_offset = self.state.get_offset(file_path_str)
@@ -178,7 +185,12 @@ class SessionShipper:
                     existing.session_id,
                     existing.provider_session_id,
                 )
-            return {"events_inserted": 0, "events_skipped": 0, "new_offset": new_offset}
+            return {
+                "events_inserted": 0,
+                "events_skipped": 0,
+                "events_spooled": 0,
+                "new_offset": new_offset,
+            }
 
         # Extract session metadata
         metadata = extract_session_metadata(session_file)
@@ -198,24 +210,47 @@ class SessionShipper:
             source_path=file_path_str,
         )
 
-        # Ship to Zerg
-        api_result = await self._post_ingest(payload)
+        # Try to ship to Zerg
+        try:
+            api_result = await self._post_ingest(payload)
 
-        # Update state with new offset (use file size to ensure we don't reparse)
-        new_offset = session_file.stat().st_size
+            # Update state with new offset (use file size to ensure we don't reparse)
+            new_offset = session_file.stat().st_size
 
-        self.state.set_offset(
-            file_path_str,
-            new_offset,
-            api_result.get("session_id", session_id),
-            metadata.session_id,
-        )
+            self.state.set_offset(
+                file_path_str,
+                new_offset,
+                api_result.get("session_id", session_id),
+                metadata.session_id,
+            )
 
-        return {
-            "events_inserted": api_result.get("events_inserted", 0),
-            "events_skipped": api_result.get("events_skipped", 0),
-            "new_offset": new_offset,
-        }
+            return {
+                "events_inserted": api_result.get("events_inserted", 0),
+                "events_skipped": api_result.get("events_skipped", 0),
+                "events_spooled": 0,
+                "new_offset": new_offset,
+            }
+
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
+            # Connection issues - spool for later retry
+            logger.warning(f"API unreachable, spooling {len(events)} events: {e}")
+            self.spool.enqueue(payload)
+
+            # Still update offset so we don't re-parse these events
+            new_offset = session_file.stat().st_size
+            self.state.set_offset(
+                file_path_str,
+                new_offset,
+                session_id,
+                metadata.session_id,
+            )
+
+            return {
+                "events_inserted": 0,
+                "events_skipped": 0,
+                "events_spooled": len(events),
+                "new_offset": new_offset,
+            }
 
     def _build_ingest_payload(
         self,
@@ -259,3 +294,72 @@ class SessionShipper:
             response = await client.post(url, json=payload, headers=headers)
             response.raise_for_status()
             return response.json()
+
+    async def replay_spool(self, batch_size: int = 100, max_retries: int = 5) -> dict:
+        """Replay spooled payloads that failed to ship.
+
+        Attempts to ship all pending payloads from the spool.
+        Items that fail max_retries times are permanently marked as failed.
+
+        Args:
+            batch_size: Number of payloads to process per batch
+            max_retries: Mark items as permanently failed after this many attempts
+
+        Returns:
+            Dict with replayed, failed, remaining counts
+        """
+        replayed = 0
+        failed = 0
+        processed_ids = set()  # Track what we've processed this run
+
+        while True:
+            batch = self.spool.dequeue_batch(limit=batch_size)
+            if not batch:
+                break
+
+            # Filter out items we've already processed this run
+            batch = [item for item in batch if item.id not in processed_ids]
+            if not batch:
+                break
+
+            for item in batch:
+                processed_ids.add(item.id)
+
+                try:
+                    await self._post_ingest(item.payload)
+                    self.spool.mark_shipped(item.id)
+                    replayed += 1
+                    logger.debug(f"Replayed spooled payload {item.id}")
+
+                except (httpx.ConnectError, httpx.TimeoutException) as e:
+                    # Still can't connect - stop trying this batch
+                    logger.warning(f"Spool replay failed, API still unreachable: {e}")
+                    return {
+                        "replayed": replayed,
+                        "failed": failed,
+                        "remaining": self.spool.pending_count(),
+                    }
+
+                except httpx.HTTPStatusError as e:
+                    # API error - mark as failed (may transition to permanent failure)
+                    permanently_failed = self.spool.mark_failed(item.id, str(e), max_retries=max_retries)
+                    failed += 1
+                    if permanently_failed:
+                        logger.warning(f"Spooled payload {item.id} permanently failed")
+                    else:
+                        logger.debug(f"Spooled payload {item.id} failed, will retry")
+
+                except Exception as e:
+                    # Unexpected error - mark as failed
+                    permanently_failed = self.spool.mark_failed(item.id, str(e), max_retries=max_retries)
+                    failed += 1
+                    logger.error(f"Unexpected error replaying {item.id}: {e}")
+
+        # Clean up old entries after successful replay
+        self.spool.cleanup_old()
+
+        return {
+            "replayed": replayed,
+            "failed": failed,
+            "remaining": self.spool.pending_count(),
+        }
