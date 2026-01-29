@@ -573,7 +573,7 @@ class TestHttp429Handling:
         mock_projects_dir: Path,
         shipper_state: ShipperState,
     ):
-        """Shipper gives up after max retries on persistent 429."""
+        """Shipper spools events after max retries on persistent 429."""
         config = ShipperConfig(
             zerg_api_url="http://test:47300",
             claude_config_dir=mock_projects_dir,
@@ -591,16 +591,6 @@ class TestHttp429Handling:
             mock_resp = MagicMock()
             mock_resp.status_code = 429
             mock_resp.headers = {"Retry-After": "0.01"}
-
-            # Make raise_for_status actually raise
-            def raise_for_status():
-                raise httpx.HTTPStatusError(
-                    "429 Too Many Requests",
-                    request=MagicMock(),
-                    response=mock_resp,
-                )
-
-            mock_resp.raise_for_status = raise_for_status
             return mock_resp
 
         mock_client = AsyncMock()
@@ -613,6 +603,8 @@ class TestHttp429Handling:
 
         # Should have retried max_retries_429 times (2) + 1 initial = 3 total
         assert call_count == 3
-        # After max retries, the 429 is treated as a client error (4xx)
-        # and events are skipped (not spooled, since client errors won't resolve with retry)
-        assert result.events_skipped > 0
+        # After max retries, events are spooled for later retry (rate limits are temporary)
+        assert result.events_spooled > 0
+        assert result.events_skipped == 0
+        # Verify events are in the spool
+        assert shipper.spool.pending_count() > 0
