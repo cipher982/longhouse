@@ -163,10 +163,7 @@ def _generate_launchd_plist(config: ServiceConfig) -> str:
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-    </dict>
+    <true/>
     <key>StandardOutPath</key>
     <string>{Path.home() / ".claude" / "shipper.log"}</string>
     <key>StandardErrorPath</key>
