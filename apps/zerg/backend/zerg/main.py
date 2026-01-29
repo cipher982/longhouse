@@ -59,6 +59,7 @@ from zerg.routers.agents import router as agents_router
 from zerg.routers.auth import router as auth_router
 from zerg.routers.connectors import router as connectors_router
 from zerg.routers.contacts import router as contacts_router
+from zerg.routers.device_tokens import router as device_tokens_router
 from zerg.routers.email_webhooks import router as email_webhook_router
 from zerg.routers.email_webhooks_pubsub import router as pubsub_webhook_router
 from zerg.routers.fiche_config import router as fiche_config_router
@@ -672,6 +673,7 @@ app.include_router(reliability_router, prefix=f"{API_PREFIX}")  # Reliability Da
 app.include_router(skills_router, prefix=f"{API_PREFIX}")  # Skills Platform for workspace-scoped tools
 app.include_router(session_chat_router, prefix=f"{API_PREFIX}")  # Forum session chat (drop-in)
 app.include_router(agents_router, prefix=f"{API_PREFIX}")  # Agents schema for cross-provider session tracking
+app.include_router(device_tokens_router, prefix=f"{API_PREFIX}")  # Per-device authentication tokens
 
 # ---------------------------------------------------------------------------
 # Legacy admin routes without /api prefix – keep at very end so they override

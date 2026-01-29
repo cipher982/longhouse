@@ -7,6 +7,7 @@ from .agents import AgentSession
 from .commis_barrier import CommisBarrier
 from .commis_barrier import CommisBarrierJob
 from .connector import Connector
+from .device_token import DeviceToken
 from .fiche import Fiche
 from .fiche import FicheMessage
 
@@ -47,6 +48,7 @@ __all__ = [
     "AgentEvent",
     "AgentsBase",
     # Core models (split into separate files)
+    "DeviceToken",
     "Fiche",
     "FicheMessage",
     "Run",
