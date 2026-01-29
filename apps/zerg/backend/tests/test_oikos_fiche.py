@@ -187,8 +187,13 @@ class TestOikosDelegation:
         # Without context, should return error
         set_credential_resolver(None)
         result = spawn_commis(task="Test task", model=TEST_COMMIS_MODEL)
-        assert "Error" in result or "error" in result.lower()
-        assert "credential context" in result.lower() or "context" in result.lower()
+        # Tools now return dicts for errors
+        if isinstance(result, dict):
+            assert result.get("ok") is False
+            assert "context" in result.get("user_message", "").lower()
+        else:
+            assert "Error" in result or "error" in result.lower()
+            assert "credential context" in result.lower() or "context" in result.lower()
 
     def test_list_commiss_tool_basic(self, db_session, test_user):
         """Test list_commiss tool is callable and validates context."""
@@ -198,8 +203,13 @@ class TestOikosDelegation:
         # Without context, should return error
         set_credential_resolver(None)
         result = list_commiss(limit=10)
-        assert "Error" in result or "error" in result.lower()
-        assert "credential context" in result.lower() or "context" in result.lower()
+        # Tools now return dicts for errors
+        if isinstance(result, dict):
+            assert result.get("ok") is False
+            assert "context" in result.get("user_message", "").lower()
+        else:
+            assert "Error" in result or "error" in result.lower()
+            assert "credential context" in result.lower() or "context" in result.lower()
 
     def test_read_commis_result_tool_basic(self, db_session, test_user):
         """Test read_commis_result tool is callable and validates context."""
@@ -209,8 +219,13 @@ class TestOikosDelegation:
         # Without context, should return error
         set_credential_resolver(None)
         result = read_commis_result(job_id="999")
-        assert "Error" in result or "error" in result.lower()
-        assert "credential context" in result.lower() or "context" in result.lower()
+        # Tools now return dicts for errors
+        if isinstance(result, dict):
+            assert result.get("ok") is False
+            assert "context" in result.get("user_message", "").lower()
+        else:
+            assert "Error" in result or "error" in result.lower()
+            assert "credential context" in result.lower() or "context" in result.lower()
 
 
 class TestOikosEndToEnd:

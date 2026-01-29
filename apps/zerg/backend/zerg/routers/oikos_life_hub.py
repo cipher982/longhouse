@@ -1,10 +1,11 @@
-"""Life Hub session integration for Oikos.
+"""Session integration for Oikos.
 
-Provides endpoints to list and preview past AI sessions from Life Hub.
+Provides endpoints to list and preview past AI sessions.
 Used by the Session Picker modal to enable resuming past sessions.
 
-Queries the agents.sessions and agents.events tables directly since
-Zerg and Life Hub share the same Postgres database.
+Queries the agents.sessions and agents.events tables in Zerg's local database.
+These tables are populated by the shipper service which syncs session data
+from local AI coding tools (Claude Code, Codex, Gemini, etc).
 """
 
 import logging
@@ -12,7 +13,6 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from typing import List
-from typing import Literal
 from typing import Optional
 
 from fastapi import APIRouter
@@ -39,7 +39,7 @@ router = APIRouter(prefix="/life-hub", tags=["life-hub"])
 
 
 class SessionSummary(BaseModel):
-    """Summary of a Life Hub AI session."""
+    """Summary of an AI session."""
 
     id: str = Field(..., description="Session UUID")
     project: Optional[str] = Field(None, description="Project name (e.g., 'zerg', 'life-hub')")
@@ -77,34 +77,6 @@ class SessionPreview(BaseModel):
     total_messages: int = Field(..., description="Total message count")
 
 
-class ActiveSession(BaseModel):
-    """Active session from the materialized view."""
-
-    id: str = Field(..., description="Session UUID")
-    project: Optional[str] = Field(None, description="Project name")
-    provider: str = Field(..., description="AI provider (claude, codex, gemini)")
-    cwd: Optional[str] = Field(None, description="Working directory")
-    git_branch: Optional[str] = Field(None, description="Git branch")
-    started_at: datetime = Field(..., description="Session start time")
-    ended_at: Optional[datetime] = Field(None, description="Session end time")
-    last_activity_at: datetime = Field(..., description="Last activity timestamp")
-    status: Literal["working", "thinking", "idle", "completed", "active"] = Field(..., description="Session status")
-    attention: Literal["hard", "needs", "soft", "auto"] = Field(..., description="Attention level")
-    duration_minutes: float = Field(..., description="Duration in minutes")
-    last_user_message: Optional[str] = Field(None, description="Last user message")
-    last_assistant_message: Optional[str] = Field(None, description="Last assistant message")
-    message_count: int = Field(..., description="Total message count")
-    tool_calls: int = Field(..., description="Number of tool calls")
-
-
-class ActiveSessionsResponse(BaseModel):
-    """Response for active sessions endpoint."""
-
-    sessions: List[ActiveSession] = Field(..., description="List of active sessions")
-    total: int = Field(..., description="Total count")
-    last_refresh: datetime = Field(..., description="When the view was last refreshed")
-
-
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -121,15 +93,21 @@ async def list_sessions(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_oikos_user),
 ) -> SessionsListResponse:
-    """List past AI sessions from Life Hub.
+    """List past AI sessions.
 
     Returns session summaries for the session picker modal.
     Sessions are filtered by the authenticated user's context and sorted
     by most recent first.
     """
     try:
+        # Check if agents schema exists
+        schema_check = db.execute(text("SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'agents'"))
+        if not schema_check.fetchone():
+            # Return empty results if agents schema doesn't exist yet
+            logger.warning("agents schema not found - returning empty session list")
+            return SessionsListResponse(sessions=[], total=0)
+
         # Build the SQL query
-        # Using text() for cross-schema query to agents schema
         since_date = datetime.now(timezone.utc) - timedelta(days=days_back)
 
         # Base query with optional filters
@@ -182,7 +160,7 @@ async def list_sessions(
                 s.started_at,
                 s.ended_at,
                 EXTRACT(EPOCH FROM (COALESCE(s.ended_at, NOW()) - s.started_at)) / 60 as duration_minutes,
-                s.user_messages + s.assistant_messages as turn_count,
+                COALESCE(s.user_messages, 0) + COALESCE(s.assistant_messages, 0) as turn_count,
                 last_user.content_preview as last_user_message,
                 last_ai.content_preview as last_ai_message
             FROM agents.sessions s
@@ -236,7 +214,7 @@ async def list_sessions(
         return SessionsListResponse(sessions=sessions, total=total)
 
     except Exception as e:
-        logger.exception("Failed to list Life Hub sessions")
+        logger.exception("Failed to list sessions")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list sessions: {e}",
@@ -256,9 +234,17 @@ async def preview_session(
     Default is 6 messages (3 exchanges).
     """
     try:
+        # Check if agents schema exists
+        schema_check = db.execute(text("SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'agents'"))
+        if not schema_check.fetchone():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Session {session_id} not found (agents schema not initialized)",
+            )
+
         # Validate session exists
         session_sql = text("""
-            SELECT id, user_messages + assistant_messages as total_messages
+            SELECT id, COALESCE(user_messages, 0) + COALESCE(assistant_messages, 0) as total_messages
             FROM agents.sessions
             WHERE id::text = :session_id
         """)
@@ -315,136 +301,4 @@ async def preview_session(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to preview session: {e}",
-        )
-
-
-@router.get("/sessions/active", response_model=ActiveSessionsResponse)
-async def get_active_sessions(
-    project: Optional[str] = Query(None, description="Filter by project name"),
-    attention: Optional[str] = Query(None, description="Filter by attention level (hard, needs, soft, auto)"),
-    session_status: Optional[str] = Query(None, alias="status", description="Filter by status"),
-    limit: int = Query(50, ge=1, le=100, description="Max results to return"),
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_oikos_user),
-) -> ActiveSessionsResponse:
-    """Get active sessions from the materialized view.
-
-    Uses agents.session_summary materialized view for fast queries with
-    pre-computed status, attention level, and last messages.
-
-    Used by the Forum UI to display real-time session state.
-    """
-    try:
-        # Build query against materialized view
-        where_clauses = ["1=1"]
-        params: dict = {"limit": limit}
-
-        if project:
-            where_clauses.append("project = :project")
-            params["project"] = project
-
-        if attention:
-            where_clauses.append("attention = :attention")
-            params["attention"] = attention
-
-        if session_status:
-            where_clauses.append("status = :status")
-            params["status"] = session_status
-
-        where_sql = " AND ".join(where_clauses)
-
-        sql = text(f"""
-            SELECT
-                id::text,
-                project,
-                provider,
-                cwd,
-                git_branch,
-                started_at,
-                ended_at,
-                last_activity_at,
-                status,
-                attention,
-                duration_minutes,
-                last_user_message,
-                last_assistant_message,
-                user_messages + assistant_messages as message_count,
-                tool_calls,
-                refreshed_at
-            FROM agents.session_summary
-            WHERE {where_sql}
-            ORDER BY last_activity_at DESC
-            LIMIT :limit
-        """)
-
-        result = db.execute(sql, params)
-        rows = result.fetchall()
-
-        sessions = []
-        last_refresh = None
-        for row in rows:
-            if last_refresh is None:
-                last_refresh = row[15]  # refreshed_at
-            sessions.append(
-                ActiveSession(
-                    id=row[0],
-                    project=row[1],
-                    provider=row[2],
-                    cwd=row[3],
-                    git_branch=row[4],
-                    started_at=row[5],
-                    ended_at=row[6],
-                    last_activity_at=row[7],
-                    status=row[8],
-                    attention=row[9],
-                    duration_minutes=float(row[10]) if row[10] else 0.0,
-                    last_user_message=row[11],
-                    last_assistant_message=row[12],
-                    message_count=row[13] or 0,
-                    tool_calls=row[14] or 0,
-                )
-            )
-
-        # Get total count
-        count_sql = text(f"""
-            SELECT COUNT(*) FROM agents.session_summary WHERE {where_sql}
-        """)
-        count_result = db.execute(count_sql, params)
-        total = count_result.scalar() or 0
-
-        logger.debug(f"Listed {len(sessions)} active sessions for user {current_user.id}")
-
-        return ActiveSessionsResponse(
-            sessions=sessions,
-            total=total,
-            last_refresh=last_refresh or datetime.now(timezone.utc),
-        )
-
-    except Exception as e:
-        logger.exception("Failed to list active sessions")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list active sessions: {e}",
-        )
-
-
-@router.post("/sessions/refresh")
-async def refresh_session_summary(
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_oikos_user),
-) -> dict:
-    """Manually refresh the session summary materialized view.
-
-    Triggers a CONCURRENT refresh which doesn't block reads.
-    """
-    try:
-        db.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY agents.session_summary"))
-        db.commit()
-        logger.info(f"Refreshed session_summary view (requested by user {current_user.id})")
-        return {"status": "refreshed", "timestamp": datetime.now(timezone.utc).isoformat()}
-    except Exception as e:
-        logger.exception("Failed to refresh session summary view")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to refresh: {e}",
         )

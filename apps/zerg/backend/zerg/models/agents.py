@@ -1,0 +1,145 @@
+"""Agent session models for cross-provider session tracking.
+
+These models store sessions from all AI coding assistants (Claude Code, Codex,
+Gemini, Cursor, Oikos) in a provider-agnostic format.
+
+The schema lives in the 'agents' schema (not 'zerg') to enable:
+1. OSS users to run Zerg standalone without Life Hub
+2. Cross-provider session tracking in a unified format
+3. Session continuity for Claude Code --resume
+"""
+
+from typing import TYPE_CHECKING
+from uuid import uuid4
+
+from sqlalchemy import BigInteger
+from sqlalchemy import Column
+from sqlalchemy import DateTime
+from sqlalchemy import ForeignKey
+from sqlalchemy import Index
+from sqlalchemy import Integer
+from sqlalchemy import MetaData
+from sqlalchemy import String
+from sqlalchemy import Text
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
+
+if TYPE_CHECKING:
+    pass
+
+# Separate metadata for agents schema (isolated from main zerg schema)
+AGENTS_SCHEMA = "agents"
+agents_metadata = MetaData(schema=AGENTS_SCHEMA)
+
+# Separate Base class for agents schema models
+AgentsBase = declarative_base(metadata=agents_metadata)
+
+
+class AgentSession(AgentsBase):
+    """A single AI coding session from any provider.
+
+    Stores session-level metadata like project, provider, git context, and
+    message counts. Each session has many events (messages, tool calls).
+    """
+
+    __tablename__ = "sessions"
+
+    # Primary key - UUID allows federation and prevents collision
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+
+    # Provider identification
+    provider = Column(String(50), nullable=False, index=True)  # claude, codex, gemini, cursor, oikos
+
+    # Context
+    project = Column(String(255), nullable=True, index=True)  # Project name (parsed from cwd)
+    device_id = Column(String(255), nullable=True, index=True)  # Machine identifier
+    cwd = Column(Text, nullable=True)  # Working directory
+    git_repo = Column(String(500), nullable=True)  # Git remote URL
+    git_branch = Column(String(255), nullable=True)  # Git branch name
+
+    # Timing
+    started_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    ended_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Counts (denormalized for fast queries)
+    user_messages = Column(Integer, default=0)
+    assistant_messages = Column(Integer, default=0)
+    tool_calls = Column(Integer, default=0)
+
+    # Metadata
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    events = relationship("AgentEvent", back_populates="session", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_sessions_project_started", "project", "started_at"),
+        Index("ix_sessions_provider_started", "provider", "started_at"),
+    )
+
+
+class AgentEvent(AgentsBase):
+    """A single event within an AI session (message, tool call, etc.).
+
+    Events are the granular units of a session transcript. They can be:
+    - User messages (role='user')
+    - Assistant messages (role='assistant')
+    - Tool calls (role='assistant' with tool_name set)
+    - Tool results (role='tool')
+    - System messages (role='system')
+    """
+
+    __tablename__ = "events"
+
+    # Primary key - BIGSERIAL for high-volume ingestion
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+
+    # Foreign key to session
+    session_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey(f"{AGENTS_SCHEMA}.sessions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # Event content
+    role = Column(String(20), nullable=False, index=True)  # user, assistant, tool, system
+    content_text = Column(Text, nullable=True)  # Message text content
+
+    # Tool call data (when role='assistant' and this is a tool call)
+    tool_name = Column(String(100), nullable=True, index=True)  # e.g., 'Edit', 'Bash', 'Read'
+    tool_input_json = Column(JSONB, nullable=True)  # Tool call parameters
+    tool_output_text = Column(Text, nullable=True)  # Tool result (when role='tool')
+
+    # Timing
+    timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
+
+    # Deduplication (for incremental sync)
+    source_path = Column(Text, nullable=True)  # Original file path (e.g., ~/.claude/projects/.../session.jsonl)
+    source_offset = Column(BigInteger, nullable=True)  # Byte offset in source file
+    event_hash = Column(String(64), nullable=True, index=True)  # SHA-256 of event content
+
+    # Schema versioning for format evolution
+    schema_version = Column(Integer, default=1)
+
+    # Relationships
+    session = relationship("AgentSession", back_populates="events")
+
+    __table_args__ = (
+        # Deduplication: prevent re-ingesting the same event
+        Index(
+            "ix_events_dedup",
+            "session_id",
+            "source_path",
+            "source_offset",
+            "event_hash",
+            unique=True,
+            postgresql_where=(source_path.isnot(None)),
+        ),
+        Index("ix_events_session_timestamp", "session_id", "timestamp"),
+        Index("ix_events_role_tool", "role", "tool_name"),
+    )

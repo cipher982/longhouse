@@ -78,8 +78,9 @@ def test_spawn_commis_no_context():
     """Test spawning commis without credential context fails gracefully."""
     result = spawn_commis(task="Test task")
 
-    assert "Error" in result
-    assert "no credential context" in result
+    # Tools now return dicts for errors
+    assert isinstance(result, dict) and result.get("ok") is False
+    assert "no credential context" in result.get("user_message", "")
 
 
 def test_spawn_workspace_commis_success(credential_context, temp_artifact_path, db_session):
@@ -121,8 +122,9 @@ def test_spawn_workspace_commis_no_context():
         git_repo="https://github.com/test/repo.git",
     )
 
-    assert "Error" in result
-    assert "no credential context" in result
+    # Tools now return dicts for errors
+    assert isinstance(result, dict) and result.get("ok") is False
+    assert "no credential context" in result.get("user_message", "")
 
 
 def test_spawn_commis_has_no_config(credential_context, temp_artifact_path, db_session):
@@ -180,8 +182,9 @@ def test_spawn_workspace_commis_rejects_file_url(credential_context, temp_artifa
         git_repo="file:///etc/passwd",
     )
 
-    assert "Error" in result
-    assert "Repository URL must use one of" in result
+    # Tools now return dicts for errors
+    assert isinstance(result, dict) and result.get("ok") is False
+    assert "Repository URL must use one of" in result.get("user_message", "")
     assert _count_commis_jobs(db_session) == before_count
 
 
@@ -193,8 +196,9 @@ def test_spawn_workspace_commis_rejects_flag_injection(credential_context, temp_
         git_repo="-o ProxyCommand=whoami",
     )
 
-    assert "Error" in result
-    assert "cannot start with '-'" in result
+    # Tools now return dicts for errors
+    assert isinstance(result, dict) and result.get("ok") is False
+    assert "cannot start with '-'" in result.get("user_message", "")
     assert _count_commis_jobs(db_session) == before_count
 
 
@@ -206,8 +210,9 @@ def test_spawn_workspace_commis_rejects_empty_repo(credential_context, temp_arti
         git_repo="",
     )
 
-    assert "Error" in result
-    assert "cannot be empty" in result
+    # Tools now return dicts for errors
+    assert isinstance(result, dict) and result.get("ok") is False
+    assert "cannot be empty" in result.get("user_message", "")
     assert _count_commis_jobs(db_session) == before_count
 
 
@@ -244,8 +249,10 @@ def test_spawn_workspace_commis_rejects_ssh_option_injection(
         git_repo="ssh://-oProxyCommand=whoami@github.com/repo.git",
     )
 
-    assert "Error" in result
-    assert "SSH option injection" in result or "cannot start with '-'" in result
+    # Tools now return dicts for errors
+    assert isinstance(result, dict) and result.get("ok") is False
+    msg = result.get("user_message", "")
+    assert "SSH option injection" in msg or "cannot start with '-'" in msg
     assert _count_commis_jobs(db_session) == before_count
 
 
@@ -298,8 +305,9 @@ def test_list_commiss_empty(temp_artifact_path):
     # We expect a "no credential context" error because we didn't set up context
     result = list_commiss()
 
-    assert "Error" in result
-    assert "no credential context" in result
+    # Tools now return dicts for errors
+    assert isinstance(result, dict) and result.get("ok") is False
+    assert "no credential context" in result.get("user_message", "")
 
 
 def test_list_commiss_with_data(credential_context, temp_artifact_path, db_session):
@@ -377,17 +385,29 @@ def test_security_read_access(credential_context, temp_artifact_path, db_session
     resolver_b = CredentialResolver(fiche_id=2, db=db_session, owner_id=user_b_id)
     set_credential_resolver(resolver_b)
 
-    # 3. Attempt to read result
+    # 3. Attempt to read result - tools now return dicts for errors
     res_read = read_commis_result(commis_id)
-    assert "Access denied" in res_read or "Error" in res_read
+    if isinstance(res_read, dict):
+        msg = res_read.get("user_message", "")
+        assert "Access denied" in msg or res_read.get("ok") is False
+    else:
+        assert "Access denied" in res_read or "Error" in res_read
 
     # 4. Attempt to read file
     res_file = read_commis_file(commis_id, "metadata.json")
-    assert "Access denied" in res_file or "Error" in res_file
+    if isinstance(res_file, dict):
+        msg = res_file.get("user_message", "")
+        assert "Access denied" in msg or res_file.get("ok") is False
+    else:
+        assert "Access denied" in res_file or "Error" in res_file
 
     # 5. Attempt to get metadata
     res_meta = get_commis_metadata(commis_id)
-    assert "Access denied" in res_meta or "Error" in res_meta
+    if isinstance(res_meta, dict):
+        msg = res_meta.get("user_message", "")
+        assert "Access denied" in msg or res_meta.get("ok") is False
+    else:
+        assert "Access denied" in res_meta or "Error" in res_meta
 
     # 6. Attempt to grep
     res_grep = grep_commiss("Secret")
@@ -484,23 +504,30 @@ def test_read_commis_result_success(credential_context, temp_artifact_path, db_s
     result = read_commis_result(job_id)
 
     # Job is queued, not executed, so should report that
-    assert "Error" in result or "not started" in result or "not complete" in result
+    # Tools now return dicts for errors
+    if isinstance(result, dict):
+        msg = result.get("user_message", "")
+        assert result.get("ok") is False or "not started" in msg or "not complete" in msg
+    else:
+        assert "Error" in result or "not started" in result or "not complete" in result
 
 
 def test_read_commis_result_not_found(temp_artifact_path):
     """Test reading result without context."""
     result = read_commis_result("nonexistent-commis-id")
 
-    assert "Error" in result
-    assert "no credential context" in result
+    # Tools now return dicts for errors
+    assert isinstance(result, dict) and result.get("ok") is False
+    assert "no credential context" in result.get("user_message", "")
 
 
 def test_get_tool_output_no_context():
     """Tool output should require credential context."""
     result = get_tool_output("deadbeef")
 
-    assert "Error" in result
-    assert "no credential context" in result
+    # Tools now return dicts for errors
+    assert isinstance(result, dict) and result.get("ok") is False
+    assert "no credential context" in result.get("user_message", "")
 
 
 def test_read_commis_file_metadata(credential_context, temp_artifact_path, db_session):
@@ -519,7 +546,12 @@ def test_read_commis_file_metadata(credential_context, temp_artifact_path, db_se
     result = read_commis_file(job_id, "metadata.json")
 
     # Job is queued, not executed, so should report error
-    assert "Error" in result or "not started" in result
+    # Tools now return dicts for errors
+    if isinstance(result, dict):
+        msg = result.get("user_message", "")
+        assert result.get("ok") is False or "not started" in msg
+    else:
+        assert "Error" in result or "not started" in result
 
 
 def test_read_commis_file_result(credential_context, temp_artifact_path, db_session):
@@ -538,7 +570,12 @@ def test_read_commis_file_result(credential_context, temp_artifact_path, db_sess
     result = read_commis_file(job_id, "result.txt")
 
     # Job is queued, not executed, so should report error
-    assert "Error" in result or "not started" in result
+    # Tools now return dicts for errors
+    if isinstance(result, dict):
+        msg = result.get("user_message", "")
+        assert result.get("ok") is False or "not started" in msg
+    else:
+        assert "Error" in result or "not started" in result
 
 
 def test_read_commis_file_not_found(credential_context, temp_artifact_path, db_session):
@@ -554,7 +591,11 @@ def test_read_commis_file_not_found(credential_context, temp_artifact_path, db_s
     # Try to read non-existent file - job hasn't executed
     result = read_commis_file(job_id, "nonexistent.txt")
 
-    assert "Error" in result
+    # Tools now return dicts for errors
+    if isinstance(result, dict):
+        assert result.get("ok") is False
+    else:
+        assert "Error" in result
 
 
 def test_read_commis_file_path_traversal(credential_context, temp_artifact_path, db_session):
@@ -570,7 +611,11 @@ def test_read_commis_file_path_traversal(credential_context, temp_artifact_path,
     # Try path traversal - should error (either because job not executed or path invalid)
     result = read_commis_file(job_id, "../../../etc/passwd")
 
-    assert "Error" in result
+    # Tools now return dicts for errors
+    if isinstance(result, dict):
+        assert result.get("ok") is False
+    else:
+        assert "Error" in result
 
 
 def test_peek_commis_output_live(credential_context, temp_artifact_path, db_session, test_user):
@@ -631,16 +676,18 @@ def test_get_commis_metadata_not_found(temp_artifact_path):
     """Test getting metadata without context."""
     result = get_commis_metadata("nonexistent-commis")
 
-    assert "Error" in result
-    assert "no credential context" in result
+    # Tools now return dicts for errors
+    assert isinstance(result, dict) and result.get("ok") is False
+    assert "no credential context" in result.get("user_message", "")
 
 
 def test_grep_commiss_no_matches(temp_artifact_path):
     """Test grepping commiss without context."""
     result = grep_commiss("nonexistent-pattern-xyz")
 
-    assert "Error" in result
-    assert "no credential context" in result
+    # Tools now return dicts for errors
+    assert isinstance(result, dict) and result.get("ok") is False
+    assert "no credential context" in result.get("user_message", "")
 
 
 def test_grep_commiss_with_matches(credential_context, temp_artifact_path, db_session):

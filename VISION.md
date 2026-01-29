@@ -509,6 +509,8 @@ Multi-tenant **inside the Zerg app** is a possible future, not a current require
 6. **Backfill** Life Hub history if desired
 7. **Life Hub reads Zerg** (dashboard only)
 
+**Implementation note:** Schema and APIs are provider-agnostic (Claude, Codex, Gemini, Cursor, Oikos). Phase 1 validation focuses on Claude (session picker), but the ingest/query layer must not hardcode provider assumptions.
+
 Optional safety step:
 - Dual-write during migration (Life Hub + Zerg) then reconcile counts/hashes.
 
