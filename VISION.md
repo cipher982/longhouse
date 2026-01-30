@@ -155,6 +155,38 @@ User -> Control Plane -> Provision Zerg instance (per-user)
 
 ---
 
+## Onboarding UX
+
+The first 2 minutes determine adoption. Onboarding must be zero-friction and demonstrate value before asking for configuration.
+
+**Timeline-first:**
+- Timeline (`/timeline`) is the default route for authenticated users
+- The session archive IS the product - not a feature buried in nav
+- New users land on Timeline immediately, not a dashboard or settings page
+
+**Zero-key demo:**
+- "Load demo" button seeds example sessions with no API key required
+- Users see the product working before any configuration
+- Chat/LLM features prompt for keys only when actually needed
+
+**Guided empty state:**
+When Timeline is empty, show a 3-step path:
+1. Connect shipper (optional) - for real session sync
+2. Load demo - instant gratification, no keys
+3. Explore timeline - filters, search, detail views
+
+This is not a modal or tour - it's inline content that disappears once sessions exist.
+
+**Docs-as-source validation:**
+README contains an `onboarding-contract` JSON block that CI executes:
+- Steps to run (`cp .env.example .env`, `docker compose up`, health check)
+- Cleanup commands
+- CTA selectors to verify (e.g., `[data-testid='demo-cta']`)
+
+If the README drifts from reality, CI fails. No hidden env flags - everything declared in the contract.
+
+---
+
 ## Mental Model (Core vs Scheduler vs Jobs)
 
 Zerg is the product. Sauron is the scheduler service. Jobs are the thing it runs.
