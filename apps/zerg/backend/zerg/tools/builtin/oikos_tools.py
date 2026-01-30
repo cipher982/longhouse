@@ -1561,6 +1561,11 @@ OIKOS_UTILITY_TOOLS: frozenset[str] = frozenset(
         "get_current_location",
         "get_whoop_data",
         "search_notes",
+        # Memory (persistent across sessions)
+        "save_memory",
+        "search_memory",
+        "list_memories",
+        "forget_memory",
     ]
 )
 

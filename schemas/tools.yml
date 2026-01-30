@@ -63,6 +63,11 @@ components:
         - memory_read
         - memory_search
         - memory_write
+        # Oikos memory tools (simpler v2 memory system)
+        - save_memory
+        - search_memory
+        - list_memories
+        - forget_memory
         - notion_append_blocks
         - notion_create_page
         - notion_get_page
@@ -260,6 +265,15 @@ components:
               const: memory
             memory_write:
               const: memory
+            # Oikos memory tools (v2 simplified)
+            save_memory:
+              const: oikos
+            search_memory:
+              const: oikos
+            list_memories:
+              const: oikos
+            forget_memory:
+              const: oikos
             notion_append_blocks:
               const: notion
             notion_create_page:

@@ -98,6 +98,7 @@ try:
     from zerg.models.models import Fiche  # noqa: F401
     from zerg.models.models import FicheMemoryKV  # noqa: F401
     from zerg.models.models import FicheMessage  # noqa: F401
+    from zerg.models.models import Memory  # noqa: F401
     from zerg.models.models import MemoryEmbedding  # noqa: F401
     from zerg.models.models import MemoryFile  # noqa: F401
     from zerg.models.models import NodeExecutionState  # noqa: F401
@@ -561,6 +562,7 @@ def initialize_database(engine: Engine = None) -> None:
     from zerg.models.models import Fiche  # noqa: F401
     from zerg.models.models import FicheMemoryKV  # noqa: F401
     from zerg.models.models import FicheMessage  # noqa: F401
+    from zerg.models.models import Memory  # noqa: F401
     from zerg.models.models import MemoryEmbedding  # noqa: F401
     from zerg.models.models import MemoryFile  # noqa: F401
     from zerg.models.models import NodeExecutionState  # noqa: F401
