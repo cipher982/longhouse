@@ -372,12 +372,32 @@ def google_sign_in(response: Response, body: dict[str, str], db: Session = Depen
         # Should never happen for verified google accounts
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Google token missing email claim")
 
-    user = crud.get_user_by_email(db, email)
+    # Single-tenant mode: enforce owner email binding
     settings = get_settings()
+    if settings.single_tenant and not settings.testing:
+        from zerg.services.single_tenant import is_owner_email
+
+        if not is_owner_email(email):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This Zerg instance is configured for a specific owner. Sign-in with the owner email.",
+            )
+
+    user = crud.get_user_by_email(db, email)
     admin_emails = {e.strip().lower() for e in (settings.admin_emails or "").split(",") if e.strip()}
     is_admin = email.lower() in admin_emails
 
     if not user:
+        # Single-tenant mode: block new user creation if one already exists
+        if settings.single_tenant and not settings.testing:
+            from zerg.services.single_tenant import can_create_user
+
+            if not can_create_user(db):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Single-tenant mode: instance already has an owner. Cannot create additional users.",
+                )
+
         # Enforce simple signup cap with admin exemption
         # When not testing and not admin, stop creating new users once MAX_USERS reached
         if not settings.testing and not is_admin:
