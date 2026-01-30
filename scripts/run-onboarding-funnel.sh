@@ -31,7 +31,7 @@ from pathlib import Path
 
 readme_path = Path(sys.argv[1])
 content = readme_path.read_text(encoding="utf-8")
-pattern = r"<!-- onboarding-contract:start -->\\s*```json\\s*(.*?)\\s*```\\s*<!-- onboarding-contract:end -->"
+pattern = r"<!-- onboarding-contract:start -->\s*```json\s*(.*?)\s*```\s*<!-- onboarding-contract:end -->"
 match = re.search(pattern, content, re.DOTALL)
 if not match:
     sys.exit("onboarding contract block not found in README")
@@ -79,7 +79,16 @@ fi
 
 if [[ -z "$WORKDIR_OVERRIDE" ]]; then
   echo "📦 Preparing sandbox at $WORKDIR"
-  rm -rf "$WORKDIR"
+  if [[ -d "$WORKDIR" ]]; then
+    if ! rm -rf "$WORKDIR" 2>/dev/null; then
+      true
+    fi
+  fi
+  if [[ -d "$WORKDIR" ]]; then
+    fallback="${WORKDIR}-$(date +%s)"
+    echo "⚠️  Could not clean $WORKDIR; using $fallback instead."
+    WORKDIR="$fallback"
+  fi
   git clone "$ROOT_DIR" "$WORKDIR" >/dev/null
 else
   echo "📦 Using existing workspace at $WORKDIR"
@@ -124,8 +133,9 @@ cleanup() {
   fi
   echo "🧹 Running cleanup steps..."
   for cmd in "${cleanup_cmds[@]}"; do
-    echo "→ $cmd"
-    bash -lc "$cmd"
+    resolved="${cmd//\{\{WORKDIR\}\}/$WORKDIR}"
+    echo "→ $resolved"
+    bash -lc "$resolved"
   done
 }
 
@@ -133,8 +143,9 @@ trap cleanup EXIT
 
 echo "🚦 Running onboarding funnel steps..."
 while IFS= read -r cmd; do
-  echo "→ $cmd"
-  bash -lc "$cmd"
+  resolved="${cmd//\{\{WORKDIR\}\}/$WORKDIR}"
+  echo "→ $resolved"
+  bash -lc "$resolved"
 done < <(run_steps steps)
 
 echo "✅ Onboarding funnel complete."

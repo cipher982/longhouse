@@ -112,6 +112,7 @@ This block is parsed by CI to validate that onboarding steps still work as docum
   ],
   "steps": [
     "cp .env.example .env",
+    "echo \"POSTGRES_DATA_PATH={{WORKDIR}}/.onboarding/postgres\" >> .env",
     "bun install",
     "make dev-bg",
     "curl -fsS http://localhost:30080/timeline",
