@@ -284,6 +284,25 @@ async def lifespan(app: FastAPI):
             raise
         logger.info("Database tables initialized")
 
+        # Single-tenant enforcement and owner bootstrap
+        # Must run after DB init but before other services
+        if _settings.single_tenant and not _settings.testing:
+            from zerg.database import SessionLocal
+            from zerg.services.single_tenant import SingleTenantViolation
+            from zerg.services.single_tenant import bootstrap_owner_user
+            from zerg.services.single_tenant import validate_single_tenant
+
+            with SessionLocal() as db:
+                try:
+                    validate_single_tenant(db)
+                    bootstrap_owner_user(db)
+                except SingleTenantViolation as e:
+                    logger.error(str(e))
+                    # Store violation for /health endpoint to report
+                    app.state.single_tenant_violation = str(e)
+                except Exception as e:
+                    logger.warning(f"Single-tenant bootstrap failed (non-fatal): {e}")
+
         # Auto-seed user context and credentials (idempotent)
         # Loads from scripts/*.local.json or ~/.config/zerg/*.json
         if not _settings.testing:
@@ -709,6 +728,13 @@ async def health_check():
 
     health_status = {"status": "healthy", "message": "Fiche Platform API is running"}
     checks = {}
+
+    # 0. Single-tenant violation check (critical)
+    single_tenant_violation = getattr(app.state, "single_tenant_violation", None)
+    if single_tenant_violation:
+        health_status["status"] = "unhealthy"
+        health_status["message"] = single_tenant_violation
+        checks["single_tenant"] = {"status": "fail", "error": single_tenant_violation}
 
     # 1. Environment validation
     try:
