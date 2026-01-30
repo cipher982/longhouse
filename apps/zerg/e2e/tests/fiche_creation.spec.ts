@@ -9,7 +9,7 @@ test.describe('Fiche Creation', () => {
 
   test('creates fiches with "New Fiche" placeholder name', async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Wait for create button to be ready
     await expect(page.locator('[data-testid="create-fiche-btn"]')).toBeVisible({ timeout: 5000 });
