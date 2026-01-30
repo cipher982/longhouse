@@ -56,11 +56,17 @@ def oikos_fiche(db_session, test_user):
 
 @pytest.mark.asyncio
 async def test_oikos_spawns_commis_via_tool(oikos_fiche, db_session, test_user, temp_artifact_path):
-    """Test that a oikos fiche can use spawn_commis tool (queues job).
+    """Test that a oikos fiche can use spawn_commis tool (triggers interrupt for barrier).
 
-    In async model, spawn_commis returns immediately and the oikos continues.
-    We verify the job was created and queued.
+    When spawn_commis is called (even in parallel), the oikos should raise FicheInterrupted
+    with interrupt_value containing job_ids for barrier creation. This allows the
+    oikos_service to create a CommisBarrier and set the run to WAITING state.
+
+    We verify:
+    1. FicheInterrupted is raised with correct interrupt_value
+    2. A CommisJob was created with status='created' (not 'queued' yet)
     """
+    from zerg.managers.fiche_runner import FicheInterrupted
     from zerg.models.models import CommisJob
 
     # Create a thread for the oikos
@@ -86,20 +92,31 @@ async def test_oikos_spawns_commis_via_tool(oikos_fiche, db_session, test_user, 
     set_credential_resolver(resolver)
 
     try:
-        # Run the oikos fiche - spawn_commis returns immediately in async model
+        # Run the oikos fiche - spawn_commis should raise FicheInterrupted for barrier creation
         runner = FicheRunner(oikos_fiche)
-        messages = await runner.run_thread(db_session, thread)
 
-        # Verify the oikos completed (not interrupted)
-        assert messages is not None, "Oikos should return messages"
+        with pytest.raises(FicheInterrupted) as exc_info:
+            await runner.run_thread(db_session, thread)
+
+        # Verify the interrupt has correct structure for barrier creation
+        interrupt_value = exc_info.value.interrupt_value
+        assert interrupt_value is not None, "FicheInterrupted should have interrupt_value"
+        assert interrupt_value.get("type") == "commiss_pending", (
+            f"interrupt_value.type should be 'commiss_pending', got: {interrupt_value.get('type')}"
+        )
+        assert "job_ids" in interrupt_value, "interrupt_value should contain job_ids"
+        assert "created_jobs" in interrupt_value, "interrupt_value should contain created_jobs"
+        assert len(interrupt_value["job_ids"]) >= 1, "Should have at least one job_id"
 
         # Verify a commis JOB was created
         jobs = db_session.query(CommisJob).filter(CommisJob.owner_id == test_user.id).all()
         assert len(jobs) >= 1, "At least one commis job should have been created"
 
-        # Verify job is in 'queued' status (async model flips to queued immediately)
+        # Verify job is in 'created' status (NOT 'queued' yet - oikos_service handles that)
         job = jobs[0]
-        assert job.status == "queued", "Commis job should be in 'queued' status"
+        assert job.status == "created", (
+            f"Commis job should be in 'created' status (two-phase commit), got: {job.status}"
+        )
         assert len(job.task) > 0, "Commis job should have a task"
 
     finally:
