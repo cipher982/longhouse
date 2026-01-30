@@ -21,12 +21,21 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Add sandbox column to commis_jobs table."""
-    op.add_column(
-        "commis_jobs",
-        sa.Column("sandbox", sa.Boolean(), nullable=False, server_default="false"),
-    )
+    # Check if table exists (for CI environments with partial schema)
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if "commis_jobs" in inspector.get_table_names(schema="zerg"):
+        op.add_column(
+            "commis_jobs",
+            sa.Column("sandbox", sa.Boolean(), nullable=False, server_default="false"),
+            schema="zerg",
+        )
+    # Skip if table doesn't exist (CI databases may not have full schema)
 
 
 def downgrade() -> None:
     """Remove sandbox column from commis_jobs table."""
-    op.drop_column("commis_jobs", "sandbox")
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if "commis_jobs" in inspector.get_table_names(schema="zerg"):
+        op.drop_column("commis_jobs", "sandbox", schema="zerg")
