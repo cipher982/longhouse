@@ -68,6 +68,12 @@ jobs:
     - name: Install build tools
       run: sudo apt-get update && sudo apt-get install -y make
 
+    - name: Install backend dependencies
+      run: cd apps/zerg/backend && uv sync
+
+    - name: Run database migrations
+      run: cd apps/zerg/backend && uv run alembic upgrade head
+
     - name: Run Backend Tests (external DB mode)
       run: make test-backend-ci
 
@@ -165,7 +171,7 @@ jobs:
       run: make test-e2e
 
   onboarding-contract:
-    runs-on: cube
+    runs-on: ubuntu-latest
     needs: validate
     name: "📋 onboarding-contract--docs-as-source"
 
