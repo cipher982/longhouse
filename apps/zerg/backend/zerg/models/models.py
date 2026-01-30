@@ -396,6 +396,10 @@ class CommisJob(Base):
     # Keys: execution_mode ("local" | "cloud"), git_repo (url), base_branch, etc.
     config = Column(JSON, nullable=True)
 
+    # Sandbox mode: run in isolated Docker container for autonomous/scheduled tasks
+    # When True, execution uses container isolation with restricted filesystem access
+    sandbox = Column(Boolean, nullable=False, default=False, server_default="false")
+
     # Execution state
     status = Column(String(20), nullable=False, default="queued")  # queued, running, success, failed, cancelled
     commis_id = Column(String(255), nullable=True, index=True)  # Set when execution starts

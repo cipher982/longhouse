@@ -1,0 +1,75 @@
+name: Extended CI
+
+on:
+  # Scheduled by Sauron via workflow_dispatch.
+  workflow_dispatch: {}
+
+# Never cancel runs
+concurrency:
+  group: ${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  # Self-hosted runners can have global pip config pointing at private indexes.
+  # Force public PyPI for CI so setup-python's pip step doesn't fail.
+  PIP_INDEX_URL: https://pypi.org/simple
+  PIP_EXTRA_INDEX_URL: ""
+  # Per-run schema isolation (prevents concurrent run collisions)
+  CI_TEST_SCHEMA: zerg_ci_full_${{ github.run_id }}_${{ github.run_attempt }}
+  E2E_SCHEMA_PREFIX: e2e_full_${{ github.run_id }}_${{ github.run_attempt }}_
+
+jobs:
+  extended:
+    runs-on: cube
+    name: "🧪 Extended CI (Full Suite)"
+    env:
+      # Use dedicated CI Postgres (not Life Hub production)
+      DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
+      FERNET_SECRET: ${{ secrets.FERNET_SECRET }}
+      E2E_USE_POSTGRES_SCHEMAS: "1"
+      # Life Hub credentials for session continuity tests
+      LIFE_HUB_API_KEY: ${{ secrets.LIFE_HUB_API_KEY }}
+      LIFE_HUB_URL: https://data.drose.io
+      # cube has 24 cores; xdist -n auto can be too aggressive
+      PYTEST_XDIST_COMMIS: "8"
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Setup uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: '1.2.20'
+
+    - name: Install dependencies
+      run: bun install --frozen-lockfile
+
+    - name: Install build tools
+      run: sudo apt-get update && sudo apt-get install -y make
+
+    - name: Install Playwright browsers
+      run: cd apps/zerg/e2e && bunx playwright install chromium
+
+    - name: Pre-install backend deps
+      run: cd apps/zerg/backend && uv sync
+
+    - name: Verify database connectivity
+      run: |
+        echo "Testing CI database connectivity..."
+        cd apps/zerg/backend && uv run python -c "import os; os.environ['TESTING'] = '1'; from zerg.database import default_engine; from sqlalchemy import text; conn = default_engine.connect(); result = conn.execute(text('SELECT version()')); print(f'Connected to: {result.fetchone()[0][:50]}...'); conn.close()"
+
+    - name: Run Extended Suite
+      run: make test-full

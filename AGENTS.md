@@ -7,6 +7,7 @@ AI agent orchestration platform. Oikos = voice/text UI. Swarmlet = product name.
 Skills-Dir: .agents/skills
 
 ## Philosophy
+
 - VISION.md is the guiding light right now, keep it in your thoughts during all work, ensure we stay on track despite the current task.
 - Always commit changes as you go (no lingering uncommitted work).
 
@@ -30,8 +31,8 @@ Skills-Dir: .agents/skills
 make dev              # Start everything (interactive, tails logs)
 make stop             # Stop everything
 make test             # Unit tests
-make test-e2e-core    # Core E2E (must pass 100%)
-make test-e2e         # Full E2E suite
+make test-e2e         # Core E2E + a11y
+make test-full        # Full suite (full E2E + evals + visual baselines)
 make debug-trace TRACE=<uuid>  # Debug a trace
 make regen-ws         # Regenerate WebSocket types
 make regen-sse        # Regenerate SSE types
@@ -41,8 +42,8 @@ make regen-sse        # Regenerate SSE types
 
 ```bash
 make test          # Unit tests (~80s, 16 parallel workers)
-make test-e2e-core # Core E2E (must pass 100%)
-make test-e2e      # Full E2E suite
+make test-e2e      # Core E2E + a11y
+make test-full     # Full suite (unit + full E2E + evals + visual baselines)
 ```
 
 **How it works:** External Postgres on cube (configured in `.env`). pytest-xdist spawns 16 workers with isolated schemas. No Docker needed.
@@ -51,6 +52,7 @@ make test-e2e      # Full E2E suite
 - Set `PYTEST_XDIST_COMMIS=0` — kills parallelism, tests take 10x longer
 - Pass extra env vars — `DATABASE_URL` and `CI_TEST_SCHEMA` are already in `.env`
 - Run pytest directly — always use Make targets
+ - Agents: prefer explicit long-named Make aliases (`test-...--`) for tiered runs
 
 ## Architecture
 
@@ -86,7 +88,7 @@ User message → `OikosService` → `oikos_react_engine` → (spawn_commis) → 
 
 1. **`make dev` is interactive** — tails logs forever. Use `make dev-bg` for background.
 2. **Never use raw `docker compose`** — use Make targets (wrong project names, missing env vars).
-3. **Never run tests directly** — `make test` / `make test-e2e` only.
+3. **Never run tests directly** — `make test` / `make test-e2e` / `make test-full` only.
 4. **DB routing differs by context** — Docker dev stack uses `postgres:5432` (compose override), host commands use `.env DATABASE_URL` (often cube).
 5. **WebSocket/SSE code must sync** — run `make regen-ws` / `make regen-sse` after schema changes.
 6. **Auth disabled in dev** — `AUTH_DISABLED=1` set in compose.
@@ -100,7 +102,7 @@ User message → `OikosService` → `oikos_react_engine` → (spawn_commis) → 
 ### Before Push
 ```bash
 make test              # Unit tests (required)
-make test-e2e-core     # Core E2E - must pass 100%
+make test-e2e          # Core E2E + a11y - must pass 100%
 ```
 
 ### After Push
@@ -117,7 +119,7 @@ This waits for health, runs API checks (auth, LLM, voice, CRUD), then browser te
 
 ### Checklist for Agents
 1. ✅ `make test` passes locally
-2. ✅ `make test-e2e-core` passes locally
+2. ✅ `make test-e2e` passes locally
 3. ✅ Push to main
 4. ✅ Run `make verify-prod` (~80s)
 5. ✅ Report result to user
@@ -151,15 +153,6 @@ Sauron is the centralized ops scheduler, deployed as a standalone service on cli
 | `/sync` | POST | Force git sync |
 
 **Deploy:** Coolify on clifford, separate from main Zerg deployment.
-
-**Managing jobs (enable/disable):**
-Jobs live in `cipher982/sauron-jobs` repo, not here. To enable/disable:
-```bash
-gh repo clone cipher982/sauron-jobs /tmp/sauron-jobs -- --depth 1
-# Edit manifest.py: set enabled=True/False on the JobConfig
-cd /tmp/sauron-jobs && git commit -am "chore: disable foo-job" && git push
-```
-Sauron syncs every 5 min. API (`/jobs/{id}/disable`) exists but is internal-only (Docker network).
 
 ## Deep Dives
 
@@ -207,7 +200,6 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 
 - (2026-01-28) [pattern] Parallel patrol agents converge on the same ideas unless diversity is enforced; use explicit target partitioning + shared dedupe gate.
 - (2026-01-28) [pattern] Linear-only dedupe is insufficient; record recent targets including NO_FINDINGS to prevent re-scans.
-- (2026-01-28) [gotcha] DB routing differs by context: Docker dev uses `postgres:5432` via compose override; host commands use `.env DATABASE_URL` (often cube) unless overridden.
 - (2026-01-22) [gotcha] Runner name+secret auth can collide across owners. If two owners seed runners with same name and secret, the first-created runner wins. Use unique secrets per environment.
 - (2026-01-22) [gotcha] Claude Code CLI with z.ai DOES work, but needs: 1) ANTHROPIC_AUTH_TOKEN not ANTHROPIC_API_KEY, 2) unset CLAUDE_CODE_USE_BEDROCK, 3) HOME=/tmp in read-only containers (CLI writes .claude.json config).
 - (2026-01-23) [gotcha] Sauron migration is partial: Zerg builtin jobs include backup_sentinel/disk_health/qa/gmail_sync; other scheduled jobs still live in sauron-jobs.
@@ -216,7 +208,7 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-23) [pattern] Repo tasks should be routed by tool/interface (separate tool or auto-routing); prompt-only enforcement leads to runner_exec misuse.
 - (2026-01-24) [gotcha] Tool contracts live in `schemas/tools.yml`; regenerate `apps/zerg/backend/zerg/tools/generated/tool_definitions.py` via `scripts/generate_tool_types.py` instead of editing the generated file.
 - (2026-01-24) [gotcha] Oikos tool registration is centralized: add tools in `oikos_tools.py`; `CORE_TOOLS` pulls `SUPERVISOR_TOOL_NAMES`; `oikos_service.py` uses `get_oikos_allowed_tools()`. Tests in `test_core_tools.py` catch drift.
-- (2026-01-24) [gotcha] Repo policy: confirm `git status -sb` before changes; no stashing unless explicitly requested. Worktrees encouraged for parallel agent work.
+- (2026-01-24) [gotcha] Repo policy: work only on main, no worktrees; confirm `git -C /Users/davidrose/git/zerg status -sb` before changes; no stashing unless explicitly requested.
 - (2026-01-24) [tool] Claude Code sessions are stored at `~/.claude/projects/{encoded-cwd}/{sessionId}.jsonl`; `--resume` requires the file locally.
 - (2026-01-24) [tool] `CLAUDE_CONFIG_DIR` overrides the entire `~/.claude/` location, enabling shared config/cache paths across machines.
 - (2026-01-24) [pattern] Oikos UX: "Human PA" model - kick off tasks, move on, don't block. Commiss report back async. Input should re-enable on `oikos_complete`, not wait for commiss. See `AI-Sessions/2026-01-24-jarvis-worker-ux-design.md`.
@@ -237,13 +229,5 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-27) [gotcha] Sauron /sync reloads manifest but scheduler doesn't reschedule jobs; changes/new jobs won't run until restart or explicit re-schedule.
 - (2026-01-27) [gotcha] If Zerg backend has `JOB_QUEUE_ENABLED=1` and `JOBS_GIT_*` set, it will schedule external sauron-jobs too; remove/disable those vars when Sauron is the sole scheduler.
 - (2026-01-28) [pattern] Fix Scripted/Mock LLM tool-error handling before changing tool behavior so tests can signal real failures.
-- (2026-01-28) [pattern] For UX/design work, start with a brief principles/structure pass (layout, hierarchy, density) before incremental tweaks.
-- (2026-01-28) [pattern] Cold-start/hibernation breaks background agents; hosted model needs always-on workers or a central scheduler to keep tasks instant.
-- (2026-01-28) [gotcha] Multi-tenant isolation is app-level only (owner_id filters), no DB RLS; container_runner is a Docker scaffold not wired into commis yet.
-- (2026-01-29) [gotcha] Alembic uses the zerg schema for alembic_version; dev DBs created via create_all may lack version tracking unless stamped.
-- (2026-01-29) [gotcha] `_execute_tools_parallel` had a local `FicheInterrupted` import that shadowed the global, causing `<tool-error>cannot access free variable 'FicheInterrupted'...`; remove the inner import.
-- (2026-01-29) [gotcha] Agents sessions are single-tenant enforced; if >1 users exist, agents/session picker endpoints return 409 unless SINGLE_TENANT=0.
-- (2026-01-29) [gotcha] Alembic revision IDs >32 chars break `alembic_version` (varchar(32)); ensure version_num is VARCHAR(64) before running migrations.
-- (2026-01-29) [gotcha] Orphaned "idle in transaction" DB connections from crashed E2E tests block TRUNCATE in unit tests; check `pg_stat_activity` and terminate stale connections before debugging test "timeouts".
-- (2026-01-29) [gotcha] Agents read endpoints (sessions, events, filters) now accept `swarmlet_session` cookie auth for browser access; write endpoints (ingest) still require device token.
-- (2026-01-30) [gotcha] Onboarding funnel steps run under `bash -lc` used system Node 18.18 (Playwright ESM failure); run steps via `$SHELL -lc` to match user env.
+- (2026-01-29) [pattern] CI pushes can trigger multiple workflows; aggregate runs by commit SHA and use `gh run watch` (avoid sleep/poll loops).
+- (2026-01-29) [gotcha] Supervisor/Oikos tool tests expect string errors; current tool functions return dict error payloads, causing unit test failures.

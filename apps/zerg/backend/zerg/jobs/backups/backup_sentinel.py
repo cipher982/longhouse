@@ -82,7 +82,7 @@ DEFAULT_BACKUP_CONFIG = {
             "threshold_hours": 30,
             "bastion_host": f"root@{DOCKER_HOST_SSH}",
             "kopia_path": "/opt/homebrew/bin/kopia",
-            "kopia_password_file": "~/.config/kopia/.password",
+            "kopia_password_file": "/Users/davidrose/.config/kopia/.password",
             "skip_ai_assessment": True,  # macOS has no journalctl
         },
     ]

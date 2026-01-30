@@ -234,7 +234,7 @@ class TestCommisJobProcessorIntegration:
     2. Real Life Hub API (LIFE_HUB_API_KEY in CI secrets)
     3. Mock hatch CLI (creates session files without running real Claude Code)
 
-    Run with: make test-e2e-core
+    Run with: make test-e2e
 
     The E2E tests provide full coverage including:
     - Workspace commis execution with mock hatch

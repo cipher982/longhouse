@@ -8,27 +8,27 @@
 
 import { test, expect } from './fixtures';
 
-test.describe('Timeline Page', () => {
-  test('Timeline tab renders and shows list or empty state', async ({ page }) => {
-    // Navigate to timeline page
-    await page.goto('/timeline');
+test.describe('Sessions Page', () => {
+  test('Sessions tab renders and shows list or empty state', async ({ page }) => {
+    // Navigate to sessions page
+    await page.goto('/sessions');
 
     // Wait for page to be ready
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
-    // The header nav should be visible with Timeline tab
+    // The header nav should be visible with Sessions tab
     await expect(page.locator('.header-nav')).toBeVisible();
-    await expect(page.locator('.nav-tab:has-text("Timeline")')).toBeVisible();
+    await expect(page.locator('.nav-tab:has-text("Sessions")')).toBeVisible();
 
     // Should show either sessions list or empty state
     const hasSessions = await page.locator('.session-card').count() > 0;
-    const hasEmptyState = await page.locator('.ui-empty-state, .timeline-empty').first().isVisible();
+    const hasEmptyState = await page.locator('.ui-empty-state').isVisible();
 
     expect(hasSessions || hasEmptyState).toBe(true);
   });
 
   test('Filter bar is visible and interactive', async ({ page }) => {
-    await page.goto('/timeline');
+    await page.goto('/sessions');
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
     // Filter bar should be visible
@@ -43,7 +43,7 @@ test.describe('Timeline Page', () => {
   });
 
   test('Filter by provider updates URL', async ({ page }) => {
-    await page.goto('/timeline');
+    await page.goto('/sessions');
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
     // Select a provider filter
@@ -55,23 +55,20 @@ test.describe('Timeline Page', () => {
   });
 
   test('Search input triggers debounced query', async ({ page }) => {
-    await page.goto('/timeline');
+    await page.goto('/sessions');
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
     // Type in search
     const searchInput = page.locator('input[type="search"]');
     await searchInput.fill('test query');
 
-    // Wait for debounce and URL update (poll for URL change instead of fixed timeout)
-    await expect(page).toHaveURL(/query=/, { timeout: 2000 });
-
-    // URL should include query param
+    // URL should include query param (auto-polls for debounce)
     await expect(page).toHaveURL(/query=test\+query|query=test%20query/);
   });
 
   test('Clear filters button removes all filters', async ({ page }) => {
     // Navigate with pre-set filters
-    await page.goto('/timeline?provider=claude&project=zerg');
+    await page.goto('/sessions?provider=claude&project=zerg');
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
     // Clear button should be visible
@@ -82,14 +79,14 @@ test.describe('Timeline Page', () => {
     await clearButton.click();
 
     // URL should no longer have filter params
-    await expect(page).toHaveURL('/timeline');
+    await expect(page).toHaveURL('/sessions');
   });
 });
 
 test.describe('Session Detail Page', () => {
   test('Shows error for invalid session ID', async ({ page }) => {
     // Navigate to a non-existent session
-    await page.goto('/timeline/00000000-0000-0000-0000-000000000000');
+    await page.goto('/sessions/00000000-0000-0000-0000-000000000000');
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
     // Should show error state
@@ -103,26 +100,26 @@ test.describe('Session Detail Page', () => {
 
   test('Back button navigates to sessions list', async ({ page }) => {
     // Navigate to invalid session to get error state
-    await page.goto('/timeline/00000000-0000-0000-0000-000000000000');
+    await page.goto('/sessions/00000000-0000-0000-0000-000000000000');
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
     // Click back button
     await page.locator('button:has-text("Back")').click();
 
-    // Should be back on timeline list
-    await expect(page).toHaveURL('/timeline');
+    // Should be back on sessions list
+    await expect(page).toHaveURL('/sessions');
   });
 });
 
-test.describe('Timeline Navigation', () => {
-  test('Timeline tab in nav links to /timeline', async ({ page }) => {
+test.describe('Sessions Navigation', () => {
+  test('Sessions tab in nav links to /sessions', async ({ page }) => {
     await page.goto('/dashboard');
     await page.waitForSelector('.header-nav', { timeout: 10000 });
 
-    // Click Timeline tab
-    await page.locator('.nav-tab:has-text("Timeline")').click();
+    // Click Sessions tab
+    await page.locator('.nav-tab:has-text("Sessions")').click();
 
-    // Should navigate to timeline page
-    await expect(page).toHaveURL('/timeline');
+    // Should navigate to sessions page
+    await expect(page).toHaveURL('/sessions');
   });
 });

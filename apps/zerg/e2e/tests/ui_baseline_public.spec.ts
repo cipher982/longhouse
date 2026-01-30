@@ -14,8 +14,6 @@ const PUBLIC_PAGES = [
 async function captureBaseline(page: Page, path: string, name: string) {
   await page.goto(path);
   await page.waitForLoadState('domcontentloaded');
-  // Wait for fonts and images to load before screenshot
-  await page.waitForFunction(() => document.fonts.ready);
   await expect(page).toHaveScreenshot(`${name}.png`, {
     fullPage: true,
     animations: 'disabled',

@@ -58,6 +58,7 @@ test.describe('Commis Database Isolation', () => {
 
     // Navigate to dashboard and verify fiche appears in UI
     await page.goto('/');
+    await page.waitForLoadState('domcontentloaded');
 
     // Wait for fiche row to be visible (deterministic)
     const ficheRow = page.locator(`tr[data-fiche-id="${fiche.id}"]`);
@@ -183,6 +184,7 @@ test.describe('Commis Database Isolation', () => {
     });
 
     await page.goto('/');
+    await page.waitForLoadState('domcontentloaded');
 
     // Wait for at least one WebSocket connection (deterministic polling)
     // fixtures.ts:113-136 injects commis=<id> into all WebSocket URLs

@@ -67,33 +67,19 @@ if (!process.env.FERNET_SECRET) {
     console.log('[spawn-backend] FERNET_SECRET not set; generated ephemeral key for tests.');
 }
 
-// Load dynamic port from .env file
-function getPortsFromEnv() {
-    let BACKEND_PORT = 8001;
-    let FRONTEND_PORT = 8002;
-
-    // Load from .env file
-    const envPath = findDotEnv(__dirname);
-    if (envPath && fs.existsSync(envPath)) {
-        const envContent = fs.readFileSync(envPath, 'utf8');
-        const lines = envContent.split('\n');
-        for (const line of lines) {
-            const [key, value] = line.split('=');
-            if (key === 'BACKEND_PORT') BACKEND_PORT = parseInt(value) || 8001;
-            if (key === 'FRONTEND_PORT') FRONTEND_PORT = parseInt(value) || 8002;
-        }
+// Backend port comes from env (set by playwright.config.js random port generation)
+// This script is spawned by Playwright, so env vars are already set
+function getBackendPort() {
+    const port = parseInt(process.env.BACKEND_PORT || '');
+    if (!port || isNaN(port)) {
+        throw new Error('BACKEND_PORT env var required (set by playwright.config.js)');
     }
-
-    // Allow env vars to override
-    BACKEND_PORT = process.env.BACKEND_PORT ? parseInt(process.env.BACKEND_PORT) : BACKEND_PORT;
-    FRONTEND_PORT = process.env.FRONTEND_PORT ? parseInt(process.env.FRONTEND_PORT) : FRONTEND_PORT;
-
-    return { BACKEND_PORT, FRONTEND_PORT };
+    return port;
 }
 
 // Optional commis ID from command line argument (legacy mode)
 const commisId = process.argv[2];
-const { BACKEND_PORT } = getPortsFromEnv();
+const BACKEND_PORT = getBackendPort();
 
 const port = commisId ? BACKEND_PORT + parseInt(commisId) : BACKEND_PORT;
 
