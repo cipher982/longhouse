@@ -62,10 +62,7 @@ test.describe('Sessions Page', () => {
     const searchInput = page.locator('input[type="search"]');
     await searchInput.fill('test query');
 
-    // Wait for debounce and URL update
-    await page.waitForTimeout(400);
-
-    // URL should include query param
+    // URL should include query param (auto-polls for debounce)
     await expect(page).toHaveURL(/query=test\+query|query=test%20query/);
   });
 
