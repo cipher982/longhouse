@@ -35,8 +35,8 @@ HOTSPOTS = [
     "tools/tool_search.py",
     "managers/fiche_runner.py",
     "services/oikos_service.py",
-    "routes/oikos.py",
-    "jobs/processor.py",
+    "jobs/commis.py",
+    "jobs/git_sync.py",
 ]
 
 # Patrol prompts - each has different focus
