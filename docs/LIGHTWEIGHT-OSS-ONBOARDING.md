@@ -1,7 +1,8 @@
 # Lightweight OSS Pivot
 
 **Status:** Active
-**Goal:** `pip install zerg && zerg serve` — cloud agent ops center in under 5 minutes
+**Goal:** `pip install zerg && zerg serve` — cloud agent ops center in under 5 minutes (SQLite only)
+**Reality check:** Current codebase still uses Postgres; this doc defines the SQLite-only target state.
 
 ---
 
@@ -15,6 +16,7 @@
 - Sessions lost if you restart
 
 **The Solution:** Zerg — your always-on agent operations center
+**Alignment:** SQLite is the core and only runtime DB; Postgres is control-plane only (if used).
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -50,8 +52,8 @@ pip install zerg
 zerg serve --host 0.0.0.0 --port 8080
 
 # That's it. Access from anywhere.
-# SQLite at ~/.zerg/zerg.db
-# No Postgres, no Docker, no external services
+# SQLite at ~/.zerg/zerg.db (default)
+# No Postgres in core/runtime; no Docker or external services required
 ```
 
 | Metric | Target |

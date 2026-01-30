@@ -400,7 +400,7 @@ Step 4: Done
 ### Custom Setup Path (adds)
 
 - Port configuration
-- Database choice (SQLite vs Postgres)
+- Database choice (SQLite-only target; Postgres is current runtime)
 - Auth setup (for multi-user)
 - Advanced shipper options
 
@@ -562,7 +562,7 @@ check_dep() {
   return 0
 }
 
-# Install Docker if missing
+# Install Docker if missing (current Postgres runtime; remove when SQLite-only ships)
 if ! check_dep docker; then
   if [ "$OS" = "macos" ]; then
     echo "Please install Docker Desktop: https://docker.com/products/docker-desktop"
