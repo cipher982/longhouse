@@ -585,7 +585,10 @@ class Runner:  # noqa: D401 – naming follows project conventions
             conversation_msgs.append(tool_msg)
         builder.with_conversation_messages(conversation_msgs, filter_system=True)
 
-        builder.with_dynamic_context(allowed_tools=getattr(agent_row, "allowed_tools", None))
+        builder.with_dynamic_context(
+            allowed_tools=getattr(agent_row, "allowed_tools", None),
+            conversation_msgs=conversation_msgs,
+        )
 
         builder_result = builder.build()
         full_messages = builder_result.messages
@@ -834,7 +837,10 @@ class Runner:  # noqa: D401 – naming follows project conventions
         conversation_msgs = list(db_messages) + tool_msgs_to_inject
         builder.with_conversation_messages(conversation_msgs, filter_system=True)
 
-        builder.with_dynamic_context(allowed_tools=getattr(agent_row, "allowed_tools", None))
+        builder.with_dynamic_context(
+            allowed_tools=getattr(agent_row, "allowed_tools", None),
+            conversation_msgs=conversation_msgs,
+        )
 
         builder_result = builder.build()
         full_messages = builder_result.messages
