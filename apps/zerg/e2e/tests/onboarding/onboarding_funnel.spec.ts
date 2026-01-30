@@ -13,28 +13,25 @@ type OnboardingContract = {
   cta_buttons?: OnboardingCTA[];
 };
 
-function findReadme(startDir: string): string {
-  let dir = startDir;
-  for (let i = 0; i < 8; i += 1) {
+const CONTRACT_PATTERN = /<!-- onboarding-contract:start -->\s*```json\s*([\s\S]*?)\s*```\s*<!-- onboarding-contract:end -->/;
+
+function loadOnboardingContract(): OnboardingContract {
+  const currentDir = path.dirname(fileURLToPath(import.meta.url));
+  let dir = currentDir;
+  for (let i = 0; i < 10; i += 1) {
     const candidate = path.join(dir, 'README.md');
-    if (fs.existsSync(candidate)) return candidate;
+    if (fs.existsSync(candidate)) {
+      const content = fs.readFileSync(candidate, 'utf8');
+      const match = content.match(CONTRACT_PATTERN);
+      if (match) {
+        return JSON.parse(match[1].trim());
+      }
+    }
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
-  throw new Error('README.md not found for onboarding contract');
-}
-
-function loadOnboardingContract(): OnboardingContract {
-  const currentDir = path.dirname(fileURLToPath(import.meta.url));
-  const readmePath = findReadme(currentDir);
-  const content = fs.readFileSync(readmePath, 'utf8');
-  const pattern = /<!-- onboarding-contract:start -->\s*```json\s*([\s\S]*?)\s*```\s*<!-- onboarding-contract:end -->/;
-  const match = content.match(pattern);
-  if (!match) {
-    throw new Error('Onboarding contract block missing in README.md');
-  }
-  return JSON.parse(match[1].trim());
+  throw new Error('Onboarding contract block missing in README.md');
 }
 
 test.describe('Onboarding Funnel (Docs-as-Source)', () => {
