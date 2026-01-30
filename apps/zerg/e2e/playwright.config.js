@@ -61,9 +61,12 @@ if (envPath && fs.existsSync(envPath)) {
   });
 }
 
-// Allow env vars to override
-BACKEND_PORT = process.env.BACKEND_PORT ? parseInt(process.env.BACKEND_PORT) : BACKEND_PORT;
-FRONTEND_PORT = process.env.FRONTEND_PORT ? parseInt(process.env.FRONTEND_PORT) : FRONTEND_PORT;
+// E2E_BACKEND_PORT/E2E_FRONTEND_PORT allow explicit override for E2E tests
+// Falls back to BACKEND_PORT/FRONTEND_PORT for compatibility with Makefile
+BACKEND_PORT = process.env.E2E_BACKEND_PORT ? parseInt(process.env.E2E_BACKEND_PORT)
+  : (process.env.BACKEND_PORT ? parseInt(process.env.BACKEND_PORT) : BACKEND_PORT);
+FRONTEND_PORT = process.env.E2E_FRONTEND_PORT ? parseInt(process.env.E2E_FRONTEND_PORT)
+  : (process.env.FRONTEND_PORT ? parseInt(process.env.FRONTEND_PORT) : FRONTEND_PORT);
 
 const frontendBaseUrl = `http://localhost:${FRONTEND_PORT}`;
 process.env.PLAYWRIGHT_FRONTEND_BASE = frontendBaseUrl;
