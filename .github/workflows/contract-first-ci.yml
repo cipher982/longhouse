@@ -96,6 +96,38 @@ jobs:
         bun run validate:types
         bun run test -- --run
 
+  onboarding-funnel:
+    runs-on: cube
+    needs: validate
+    name: "🧭 Onboarding Funnel"
+    concurrency:
+      group: onboarding-funnel
+      cancel-in-progress: false
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: '1.2.20'
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install build tools
+      run: sudo apt-get update && sudo apt-get install -y make
+
+    - name: Run onboarding funnel
+      run: make onboarding-funnel
+
   e2e-core:
     runs-on: cube
     needs: [backend-tests, frontend-tests]
