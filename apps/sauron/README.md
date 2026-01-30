@@ -134,6 +134,12 @@ response = await httpx.post("http://sauron:8080/jobs/llm-bench-health/trigger")
 response = await httpx.post("http://sauron:8080/sync")
 ```
 
+## Gotchas
+
+1. **Job source conflict:** If Zerg backend has `JOB_QUEUE_ENABLED=1` AND `JOBS_GIT_*` vars set, it will also load/schedule jobs from sauron-jobs. This causes duplicate scheduling. When Sauron is the sole scheduler, remove those vars from Zerg.
+
+2. **Sync doesn't reschedule:** `/sync` reloads the manifest but APScheduler doesn't reschedule existing jobs. New/changed jobs won't run until Sauron restarts.
+
 ## Migration from Old Sauron
 
 This is Sauron v2.0, rewritten to use `zerg.jobs` infrastructure. The old standalone Sauron repo (`cipher982/sauron`) is deprecated.
