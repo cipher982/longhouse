@@ -57,6 +57,7 @@ from zerg.routers.admin import router as admin_router
 from zerg.routers.admin_bootstrap import router as admin_bootstrap_router
 from zerg.routers.agents import router as agents_router
 from zerg.routers.auth import router as auth_router
+from zerg.routers.channels_webhooks import router as channels_webhooks_router
 from zerg.routers.connectors import router as connectors_router
 from zerg.routers.contacts import router as contacts_router
 from zerg.routers.device_tokens import router as device_tokens_router
@@ -669,6 +670,7 @@ app.include_router(admin_router, prefix=API_PREFIX)
 app.include_router(admin_bootstrap_router, prefix=API_PREFIX)  # Bootstrap API for config seeding
 app.include_router(email_webhook_router, prefix=f"{API_PREFIX}")
 app.include_router(pubsub_webhook_router, prefix=f"{API_PREFIX}")
+app.include_router(channels_webhooks_router, prefix=f"{API_PREFIX}")  # Channel plugin webhooks (Telegram, etc.)
 app.include_router(connectors_router, prefix=f"{API_PREFIX}")
 app.include_router(triggers_router, prefix=f"{API_PREFIX}")
 app.include_router(knowledge_router, prefix=f"{API_PREFIX}")
