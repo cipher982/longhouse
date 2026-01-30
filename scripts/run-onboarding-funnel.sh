@@ -2,7 +2,25 @@
 set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-README_PATH="${1:-$ROOT_DIR/README.md}"
+README_PATH="$ROOT_DIR/README.md"
+WORKDIR_OVERRIDE=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --workdir)
+      WORKDIR_OVERRIDE="${2:-}"
+      shift 2
+      ;;
+    --readme)
+      README_PATH="${2:-}"
+      shift 2
+      ;;
+    *)
+      README_PATH="$1"
+      shift
+      ;;
+  esac
+done
 
 extract_contract() {
   python3 - "$README_PATH" <<'PY'
@@ -51,11 +69,6 @@ else:
     print(cur)
 PY
 }
-
-WORKDIR_OVERRIDE=""
-if [[ "${2:-}" == "--workdir" && -n "${3:-}" ]]; then
-  WORKDIR_OVERRIDE="$3"
-fi
 
 CONTRACT_WORKDIR="$(get_field workdir)"
 WORKDIR="${WORKDIR_OVERRIDE:-$CONTRACT_WORKDIR}"
