@@ -22,6 +22,7 @@ from unittest.mock import patch
 import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
+from langchain_core.messages import SystemMessage
 from langchain_core.messages import ToolMessage
 
 from zerg.crud import crud
@@ -521,6 +522,77 @@ class TestRunContinuationIdempotency:
             if isinstance(msg, ToolMessage) and msg.tool_call_id == tool_call_id
         ]
         assert len(tool_msgs) == 1, f"Expected 1 ToolMessage in prompt, got {len(tool_msgs)}"
+
+    @pytest.mark.asyncio
+    async def test_run_continuation_includes_memory_context(self, db_session, test_user, sample_fiche):
+        """Memory context should be derived from conversation messages during continuation."""
+        from zerg.managers.fiche_runner import FicheRunner
+        from zerg.services.oikos_react_engine import OikosResult
+
+        sample_fiche.config = {"skills_enabled": False}
+        db_session.commit()
+
+        thread = crud.create_thread(
+            db=db_session,
+            fiche_id=sample_fiche.id,
+            title="Memory context thread",
+            active=True,
+        )
+
+        crud.create_thread_message(
+            db=db_session,
+            thread_id=thread.id,
+            role="user",
+            content="Run a task",
+            processed=True,
+        )
+
+        tool_call_id = f"call_{uuid.uuid4().hex[:12]}"
+        crud.create_thread_message(
+            db=db_session,
+            thread_id=thread.id,
+            role="assistant",
+            content="",
+            processed=True,
+            tool_calls=[{"id": tool_call_id, "name": "spawn_commis", "args": {"task": "test"}}],
+        )
+
+        captured = {}
+
+        async def mock_run_oikos_loop(*, messages, **kwargs):
+            captured["messages"] = messages
+            return OikosResult(messages=messages, usage={}, interrupted=False)
+
+        with (
+            patch("zerg.connectors.status_builder.build_fiche_context", return_value="{}"),
+            patch(
+                "zerg.services.memory_search.search_memory_files",
+                return_value=[{"path": "memory.txt", "snippets": ["Note"]}],
+            ) as mock_search,
+            patch("zerg.crud.knowledge_crud.search_knowledge_documents", return_value=[]),
+            patch("zerg.services.memory_embeddings.embeddings_enabled", return_value=False),
+            patch(
+                "zerg.services.oikos_react_engine.run_oikos_loop",
+                new=AsyncMock(side_effect=mock_run_oikos_loop),
+            ),
+        ):
+            runner = FicheRunner(sample_fiche)
+            await runner.run_continuation(
+                db=db_session,
+                thread=thread,
+                tool_call_id=tool_call_id,
+                tool_result="Commis completed: result",
+                run_id=123,
+            )
+
+        assert mock_search.call_args.kwargs["query"] == "Run a task"
+        context_msgs = [
+            msg
+            for msg in captured.get("messages", [])
+            if isinstance(msg, SystemMessage) and "[MEMORY CONTEXT]" in msg.content
+        ]
+        assert len(context_msgs) == 1
+        assert "memory.txt" in context_msgs[0].content
 
     @pytest.mark.asyncio
     async def test_run_continuation_creates_tool_message(self, db_session, test_user, sample_fiche):
