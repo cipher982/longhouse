@@ -1,0 +1,3 @@
+{"hash": "8d7be721616f1e4e", "target": "apps/zerg/backend/zerg/services/oikos_react_engine.py", "prompt_id": "doc_mismatch", "outcome": "invalid", "evidence_hash": null, "timestamp": "2026-01-27T21:36:04.462735"}
+{"hash": "8d7be721616f1e4e", "target": "apps/zerg/backend/zerg/services/oikos_react_engine.py", "prompt_id": "doc_mismatch", "outcome": "invalid", "evidence_hash": null, "timestamp": "2026-01-27T21:36:35.949802"}
+{"hash": "8d7be721616f1e4e", "target": "apps/zerg/backend/zerg/services/oikos_react_engine.py", "prompt_id": "doc_mismatch", "outcome": "finding", "evidence_hash": "6727136991687738120", "timestamp": "2026-01-27T21:37:14.407152"}
