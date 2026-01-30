@@ -227,7 +227,26 @@ test-e2e: ## Run E2E tests (core + a11y)
 
 test-e2e-core: ## @internal Run core E2E tests only (no retries, must pass 100%)
 	@echo "🔴 Running CORE E2E tests (no retries, must pass 100%)..."
-	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=core
+	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
+		bunx playwright test \
+		tests/core/chat-send.spec.ts \
+		tests/core/commis-flow.spec.ts \
+		tests/core/commis-sandbox.spec.ts \
+		tests/core/commis-simplification.spec.ts \
+		tests/core/core-journey.spec.ts \
+		tests/core/cross-origin-auth.spec.ts \
+		tests/core/dashboard-load.spec.ts \
+		tests/core/data-persistence.spec.ts \
+		tests/core/fiche-crud.spec.ts \
+		tests/core/infrastructure-smoke.spec.ts \
+		tests/core/oikos-commis-input-unblocked.spec.ts \
+		tests/core/oikos-math.spec.ts \
+		tests/core/session-continuity.spec.ts \
+		tests/core/skills-api.spec.ts \
+		tests/core/swarm-ops.spec.ts \
+		tests/core/thread-management.spec.ts \
+		tests/core/voice-turn-based.spec.ts \
+		--retries=0
 
 test-full: ## Full suite (unit + full E2E + evals + visual baselines)
 	@echo "🧪 Running full suite (unit + full E2E + evals + visual baselines)..."

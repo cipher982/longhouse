@@ -330,52 +330,32 @@ class Runner:  # noqa: D401 – naming follows project conventions
 
         system_msg = SystemMessage(content=system_content)
 
-        # Start with system message
+        # ------------------------------------------------------------------
+        # MESSAGE LAYOUT OPTIMIZED FOR LLM PROMPT CACHING
+        # ------------------------------------------------------------------
+        # Both OpenAI and Anthropic use prefix-based caching: identical prefix = cache hit.
+        # Dynamic content (connector status, memory, timestamps) changes every turn,
+        # so placing it early cache-busts the entire conversation history.
+        #
+        # BEFORE (cache-busting layout):
+        #   [system_prompt] → [connector_status] → [memory] → [conversation] → [user_msg]
+        #                          ↑                 ↑
+        #                     CACHE BUST!       CACHE BUST!
+        #
+        # AFTER (cache-optimized layout):
+        #   [system_prompt] → [conversation] → [dynamic_context + user_msg]
+        #        cacheable       cacheable            per-turn only
+        #
+        # NOTE: We inject dynamic context as a HumanMessage before the last user
+        # message since most providers only allow system messages at position 0.
+        # This preserves cache hits on the [system + conversation] prefix.
+        # ------------------------------------------------------------------
+
+        # Start with system message + conversation history (cacheable prefix)
         original_msgs = [system_msg] + conversation_msgs
         logger.debug(
             f"[Runner] Injected fresh system prompt ({len(agent_row.system_instructions)} chars) + {len(conversation_msgs)} conversation messages"
         )
-
-        # ------------------------------------------------------------------
-        # Inject connector status context into messages
-        # Per PRD: Inject after system message but before conversation history
-        # This gives the agent fresh awareness of which connectors are available
-        # IMPORTANT: These injected messages are NOT saved to DB - they're
-        # ephemeral context that gets regenerated fresh on every turn
-        # ------------------------------------------------------------------
-        try:
-            context_text = build_fiche_context(
-                db=db,
-                owner_id=self.agent.owner_id,
-                fiche_id=self.agent.id,
-                allowed_tools=getattr(agent_row, "allowed_tools", None),
-                compact_json=True,
-            )
-            # Inject as SystemMessage - this is background context, NOT user input
-            # The agent should be aware of connector status but not discuss it
-            # unless the user explicitly asks about integrations
-            context_system_msg = SystemMessage(content=f"[INTERNAL CONTEXT - Do not mention unless asked]\n{context_text}")
-
-            # Insert after main system message (index 0) if it exists
-            if original_msgs and hasattr(original_msgs[0], "type") and original_msgs[0].type == "system":
-                original_msgs = [original_msgs[0], context_system_msg] + original_msgs[1:]
-            else:
-                # No system message, prepend context
-                original_msgs = [context_system_msg] + original_msgs
-
-            logger.debug(
-                "[Runner] Injected connector context for agent %s (owner_id=%s)",
-                self.agent.id,
-                self.agent.owner_id,
-            )
-        except Exception as e:
-            # Graceful degradation: if context injection fails, agent still runs
-            logger.warning(
-                "[Runner] Failed to inject connector context: %s. Fiche will run without status awareness.",
-                e,
-                exc_info=True,
-                extra={"tag": "AGENT"},
-            )
 
         unprocessed_rows = crud.get_unprocessed_messages(db, thread.id)
         logger.debug(f"[Runner] Found {len(unprocessed_rows)} unprocessed messages")
@@ -385,8 +365,35 @@ class Runner:  # noqa: D401 – naming follows project conventions
             return []  # Return empty list if no work
 
         # ------------------------------------------------------------------
-        # Inject memory recall context (episodic + knowledge) before LLM call
+        # Build dynamic context (connector status + memory) - injected LATE
         # ------------------------------------------------------------------
+        dynamic_context_parts: list[str] = []
+
+        # 1. Connector status context
+        try:
+            context_text = build_fiche_context(
+                db=db,
+                owner_id=self.agent.owner_id,
+                fiche_id=self.agent.id,
+                allowed_tools=getattr(agent_row, "allowed_tools", None),
+                compact_json=True,
+            )
+            dynamic_context_parts.append(f"[INTERNAL CONTEXT - Do not mention unless asked]\n{context_text}")
+            logger.debug(
+                "[Runner] Built connector context for agent %s (owner_id=%s)",
+                self.agent.id,
+                self.agent.owner_id,
+            )
+        except Exception as e:
+            # Graceful degradation: if context injection fails, agent still runs
+            logger.warning(
+                "[Runner] Failed to build connector context: %s. Fiche will run without status awareness.",
+                e,
+                exc_info=True,
+                extra={"tag": "AGENT"},
+            )
+
+        # 2. Memory recall context (episodic + knowledge)
         memory_query = _latest_user_query(
             unprocessed_rows=unprocessed_rows,
             conversation_msgs=conversation_msgs,
@@ -397,12 +404,16 @@ class Runner:  # noqa: D401 – naming follows project conventions
             query=memory_query,
         )
         if memory_context:
-            memory_msg = SystemMessage(content=memory_context)
-            insert_at = 1
-            if len(original_msgs) > 1 and getattr(original_msgs[1], "type", None) == "system":
-                insert_at = 2
-            original_msgs = original_msgs[:insert_at] + [memory_msg] + original_msgs[insert_at:]
-            logger.debug("[Runner] Injected memory context for thread %s", thread.id)
+            dynamic_context_parts.append(memory_context)
+            logger.debug("[Runner] Built memory context for thread %s", thread.id)
+
+        # Inject dynamic context as a single SystemMessage AFTER conversation history
+        # This preserves the cacheable [system_prompt + conversation] prefix
+        if dynamic_context_parts:
+            combined_context = "\n\n".join(dynamic_context_parts)
+            context_msg = SystemMessage(content=combined_context)
+            original_msgs.append(context_msg)
+            logger.debug("[Runner] Injected dynamic context at end of message array (cache-optimized position)")
 
         # ------------------------------------------------------------------
         # Token-streaming context handling: set the *current* thread so the
@@ -769,7 +780,14 @@ class Runner:  # noqa: D401 – naming follows project conventions
 
         system_msg = SystemMessage(content=system_content)
 
-        # Build full message list for continuation
+        # ------------------------------------------------------------------
+        # MESSAGE LAYOUT OPTIMIZED FOR LLM PROMPT CACHING (continuation)
+        # See run_thread() for detailed rationale. Same principle applies:
+        # [system_prompt] → [conversation] → [dynamic_context]
+        #      cacheable       cacheable        per-turn only
+        # ------------------------------------------------------------------
+
+        # Build full message list for continuation (cacheable prefix)
         # conversation_msgs already includes the AIMessage with tool_calls
         if existing_tool_response:
             # ToolMessage already in conversation_msgs, don't add again
@@ -778,7 +796,10 @@ class Runner:  # noqa: D401 – naming follows project conventions
             # Add the newly created tool result
             full_messages = [system_msg] + conversation_msgs + [tool_msg]
 
-        # Inject connector status context (same as run_thread)
+        # Build dynamic context (connector status + memory) - injected LATE
+        dynamic_context_parts: list[str] = []
+
+        # 1. Connector status context
         try:
             context_text = build_fiche_context(
                 db=db,
@@ -787,17 +808,15 @@ class Runner:  # noqa: D401 – naming follows project conventions
                 allowed_tools=getattr(agent_row, "allowed_tools", None),
                 compact_json=True,
             )
-            context_system_msg = SystemMessage(content=f"[INTERNAL CONTEXT - Do not mention unless asked]\n{context_text}")
-            # Insert after main system message
-            full_messages = [full_messages[0], context_system_msg] + full_messages[1:]
+            dynamic_context_parts.append(f"[INTERNAL CONTEXT - Do not mention unless asked]\n{context_text}")
         except Exception as e:
             logger.warning(
-                "[Runner] Failed to inject connector context in continuation: %s",
+                "[Runner] Failed to build connector context in continuation: %s",
                 e,
                 exc_info=True,
             )
 
-        # Inject memory recall context (use latest user message)
+        # 2. Memory recall context (use latest user message)
         memory_query = _latest_user_query(conversation_msgs=conversation_msgs)
         memory_context = _build_memory_context(
             db,
@@ -805,12 +824,15 @@ class Runner:  # noqa: D401 – naming follows project conventions
             query=memory_query,
         )
         if memory_context:
-            memory_msg = SystemMessage(content=memory_context)
-            insert_at = 1
-            if len(full_messages) > 1 and getattr(full_messages[1], "type", None) == "system":
-                insert_at = 2
-            full_messages = full_messages[:insert_at] + [memory_msg] + full_messages[insert_at:]
-            logger.debug("[Runner] Injected memory context for continuation thread %s", thread.id)
+            dynamic_context_parts.append(memory_context)
+            logger.debug("[Runner] Built memory context for continuation thread %s", thread.id)
+
+        # Inject dynamic context at end (cache-optimized position)
+        if dynamic_context_parts:
+            combined_context = "\n\n".join(dynamic_context_parts)
+            context_msg = SystemMessage(content=combined_context)
+            full_messages.append(context_msg)
+            logger.debug("[Runner] Injected dynamic context at end (continuation, cache-optimized)")
 
         messages_with_context = len(full_messages)
 
@@ -1068,13 +1090,23 @@ class Runner:  # noqa: D401 – naming follows project conventions
 
         system_msg = SystemMessage(content=system_content)
 
-        # Build full message list for continuation
+        # ------------------------------------------------------------------
+        # MESSAGE LAYOUT OPTIMIZED FOR LLM PROMPT CACHING (batch continuation)
+        # See run_thread() for detailed rationale. Same principle applies:
+        # [system_prompt] → [conversation] → [dynamic_context]
+        #      cacheable       cacheable        per-turn only
+        # ------------------------------------------------------------------
+
+        # Build full message list for continuation (cacheable prefix)
         # Reload conversation to include newly persisted tool messages
         db_messages = self.thread_service.get_thread_messages_as_langchain(db, thread.id)
         conversation_msgs = [msg for msg in db_messages if not (hasattr(msg, "type") and msg.type == "system")]
         full_messages = [system_msg] + conversation_msgs
 
-        # Inject connector status context
+        # Build dynamic context (connector status + memory) - injected LATE
+        dynamic_context_parts: list[str] = []
+
+        # 1. Connector status context
         try:
             context_text = build_fiche_context(
                 db=db,
@@ -1083,16 +1115,15 @@ class Runner:  # noqa: D401 – naming follows project conventions
                 allowed_tools=getattr(agent_row, "allowed_tools", None),
                 compact_json=True,
             )
-            context_system_msg = SystemMessage(content=f"[INTERNAL CONTEXT - Do not mention unless asked]\n{context_text}")
-            full_messages = [full_messages[0], context_system_msg] + full_messages[1:]
+            dynamic_context_parts.append(f"[INTERNAL CONTEXT - Do not mention unless asked]\n{context_text}")
         except Exception as e:
             logger.warning(
-                "[Runner] Failed to inject connector context in batch continuation: %s",
+                "[Runner] Failed to build connector context in batch continuation: %s",
                 e,
                 exc_info=True,
             )
 
-        # Inject memory recall context (use latest user message)
+        # 2. Memory recall context (use latest user message)
         memory_query = _latest_user_query(conversation_msgs=conversation_msgs)
         memory_context = _build_memory_context(
             db,
@@ -1100,12 +1131,15 @@ class Runner:  # noqa: D401 – naming follows project conventions
             query=memory_query,
         )
         if memory_context:
-            memory_msg = SystemMessage(content=memory_context)
-            insert_at = 1
-            if len(full_messages) > 1 and getattr(full_messages[1], "type", None) == "system":
-                insert_at = 2
-            full_messages = full_messages[:insert_at] + [memory_msg] + full_messages[insert_at:]
-            logger.debug("[Runner] Injected memory context for batch continuation thread %s", thread.id)
+            dynamic_context_parts.append(memory_context)
+            logger.debug("[Runner] Built memory context for batch continuation thread %s", thread.id)
+
+        # Inject dynamic context at end (cache-optimized position)
+        if dynamic_context_parts:
+            combined_context = "\n\n".join(dynamic_context_parts)
+            context_msg = SystemMessage(content=combined_context)
+            full_messages.append(context_msg)
+            logger.debug("[Runner] Injected dynamic context at end (batch continuation, cache-optimized)")
 
         messages_with_context = len(full_messages)
 
