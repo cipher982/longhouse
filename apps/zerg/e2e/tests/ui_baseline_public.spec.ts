@@ -13,7 +13,7 @@ const PUBLIC_PAGES = [
 
 async function captureBaseline(page: Page, path: string, name: string) {
   await page.goto(path);
-  await page.waitForLoadState('networkidle');
+  await page.waitForLoadState('domcontentloaded');
   await expect(page).toHaveScreenshot(`${name}.png`, {
     fullPage: true,
     animations: 'disabled',

@@ -134,7 +134,7 @@ test.describe('Cross-Origin Authentication - Core', () => {
     await page.goto(frontendUrl);
 
     // 4. Wait for app to load
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // 5. Check that the auth state is detected
     // In the UI, authenticated users should see the dashboard or chat
