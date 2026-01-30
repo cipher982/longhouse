@@ -429,6 +429,7 @@ class CommisJobProcessor:
             job_model = job.model
             job_owner_id = job.owner_id
             job_trace_id = str(job.trace_id) if job.trace_id else None
+            job_sandbox = job.sandbox  # Container isolation flag
             job_config = job.config or {}
             git_repo = job_config.get("git_repo")
             resume_session_id = job_config.get("resume_session_id")
@@ -527,12 +528,15 @@ class CommisJobProcessor:
                     logger.warning(f"Failed to emit commis_started event for job {job_id}: {started_error}")
 
             # 5. Run commis in workspace (LONG-RUNNING - no DB session held!)
-            logger.info(f"Running workspace commis for job {job_id} in {workspace.path}")
+            sandbox_mode = "sandboxed" if job_sandbox else "direct"
+            logger.info(f"Running workspace commis for job {job_id} in {workspace.path} ({sandbox_mode})")
             result = await cloud_executor.run_commis(
                 task=job_task,
                 workspace_path=workspace.path,
                 model=job_model,
                 resume_session_id=prepared_resume_id,
+                sandbox=job_sandbox,
+                run_id=commis_id,
             )
 
             # 6. Capture git diff (best-effort, don't fail job on diff errors)
