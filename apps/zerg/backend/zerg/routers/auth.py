@@ -389,10 +389,11 @@ def google_sign_in(response: Response, body: dict[str, str], db: Session = Depen
 
     if not user:
         # Single-tenant mode: block new user creation if one already exists
+        # Uses advisory lock to prevent race conditions with concurrent OAuth
         if settings.single_tenant and not settings.testing:
-            from zerg.services.single_tenant import can_create_user
+            from zerg.services.single_tenant import can_create_user_locked
 
-            if not can_create_user(db):
+            if not can_create_user_locked(db):
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="Single-tenant mode: instance already has an owner. Cannot create additional users.",

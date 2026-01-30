@@ -291,7 +291,15 @@ async def lifespan(app: FastAPI):
             from zerg.services.single_tenant import SingleTenantViolation
             from zerg.services.single_tenant import bootstrap_owner_user
             from zerg.services.single_tenant import validate_single_tenant
+            from zerg.services.single_tenant import validate_single_tenant_config
 
+            # First, validate configuration (fail fast on misconfig)
+            config_error = validate_single_tenant_config()
+            if config_error:
+                logger.error(f"Single-tenant config error: {config_error}")
+                app.state.single_tenant_violation = config_error
+
+            # Then validate and bootstrap in DB
             with SessionLocal() as db:
                 try:
                     validate_single_tenant(db)
@@ -301,7 +309,8 @@ async def lifespan(app: FastAPI):
                     # Store violation for /health endpoint to report
                     app.state.single_tenant_violation = str(e)
                 except Exception as e:
-                    logger.warning(f"Single-tenant bootstrap failed (non-fatal): {e}")
+                    logger.error(f"Single-tenant bootstrap failed: {e}")
+                    app.state.single_tenant_violation = f"Bootstrap failed: {e}"
 
         # Auto-seed user context and credentials (idempotent)
         # Loads from scripts/*.local.json or ~/.config/zerg/*.json
