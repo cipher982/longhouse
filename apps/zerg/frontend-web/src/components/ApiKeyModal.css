@@ -1,0 +1,64 @@
+/* ApiKeyModal Styles
+   Extends base modal styles from styles/modal.css
+   ==================================================================== */
+
+@layer components {
+  .api-key-modal {
+    max-width: 480px;
+  }
+
+  .api-key-modal__description {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-base);
+    line-height: var(--font-line-height-relaxed);
+    margin-bottom: var(--space-6);
+  }
+
+  .api-key-modal__options {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    margin-bottom: var(--space-6);
+  }
+
+  .api-key-modal__option {
+    background: var(--color-surface-secondary);
+    border: 1px solid var(--color-border-primary);
+    border-radius: var(--radius-lg);
+    padding: var(--space-4);
+  }
+
+  .api-key-modal__option h3 {
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+    margin: 0 0 var(--space-2) 0;
+  }
+
+  .api-key-modal__option p {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    margin: 0;
+  }
+
+  .api-key-modal__note {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    text-align: center;
+    padding: var(--space-4);
+    background: var(--color-surface-elevated);
+    border-radius: var(--radius-md);
+  }
+
+  /* Actions have bottom padding */
+  .api-key-modal .modal-actions {
+    padding: var(--space-4) var(--space-6) var(--space-6);
+  }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    .api-key-modal {
+      max-width: 95%;
+    }
+  }
+}
