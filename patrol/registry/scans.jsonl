@@ -1,3 +1,7 @@
 {"hash": "8d7be721616f1e4e", "target": "apps/zerg/backend/zerg/services/oikos_react_engine.py", "prompt_id": "doc_mismatch", "outcome": "invalid", "evidence_hash": null, "timestamp": "2026-01-27T21:36:04.462735"}
 {"hash": "8d7be721616f1e4e", "target": "apps/zerg/backend/zerg/services/oikos_react_engine.py", "prompt_id": "doc_mismatch", "outcome": "invalid", "evidence_hash": null, "timestamp": "2026-01-27T21:36:35.949802"}
 {"hash": "8d7be721616f1e4e", "target": "apps/zerg/backend/zerg/services/oikos_react_engine.py", "prompt_id": "doc_mismatch", "outcome": "finding", "evidence_hash": "6727136991687738120", "timestamp": "2026-01-27T21:37:14.407152"}
+{"hash": "4f98f739e3852acf", "target": "apps/zerg/backend/zerg/jobs/git_sync.py", "prompt_id": "edge_case", "outcome": "finding", "evidence_hash": "-9205882992353896366", "timestamp": "2026-01-28T12:17:22.645174"}
+{"hash": "5599e3109b9cd7b7", "target": "apps/zerg/backend/zerg/jobs/commis.py", "prompt_id": "edge_case", "outcome": "finding", "evidence_hash": "3388526580351422358", "timestamp": "2026-01-28T12:17:55.147945"}
+{"hash": "ac18e84ef79dfae6", "target": "apps/zerg/backend/zerg/jobs/git_sync.py", "prompt_id": "doc_mismatch", "outcome": "finding", "evidence_hash": "-4633411051920063582", "timestamp": "2026-01-28T12:18:19.207469"}
+{"hash": "92e9f8695ffc436f", "target": "apps/zerg/backend/zerg/tools/builtin/oikos_tools.py", "prompt_id": "doc_mismatch", "outcome": "no_findings", "evidence_hash": null, "timestamp": "2026-01-28T12:18:31.846023"}
