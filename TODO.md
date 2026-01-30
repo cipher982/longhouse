@@ -25,6 +25,14 @@ Canonical task list for parallel agents. Keep AGENTS.md lean; do not duplicate t
 
 ## Medium Priority (Performance / Architecture)
 
+### Prompting Pipeline Hardening
+- [ ] Create a unified prompt/run helper used by `run_thread`, `run_continuation`, and `run_batch_continuation` to remove divergence (tool loading, usage capture, persistence).
+- [ ] Introduce a `PromptContext` (system + conversation + tool_messages + dynamic_context_inputs) so required data is explicit (no hidden fallbacks).
+- [ ] Extract a single `derive_memory_query(...)` helper (used by all flows) to make memory query behavior consistent and testable.
+- [ ] Add DB-level idempotency for tool results (unique constraint or `get_or_create_tool_message`) so duplicates can’t be persisted.
+- [ ] Consider splitting dynamic context into tagged system messages (connector status / memory / other) for clearer auditing & caching.
+- [ ] Add a prompt snapshot test fixture (serialize message list with roles/types) for fast regression checks.
+
 ### Prompt Cache Optimization
 Current message layout busts cache by injecting dynamic content early:
 ```
