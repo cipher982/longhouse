@@ -442,6 +442,87 @@ class TestRunContinuationIdempotency:
     """Test FicheRunner.run_continuation() idempotency."""
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("preexisting_tool", [False, True])
+    async def test_run_continuation_prompt_has_single_tool_message(
+        self,
+        db_session,
+        test_user,
+        sample_fiche,
+        preexisting_tool,
+    ):
+        """Tool results should appear exactly once in the LLM prompt."""
+        from zerg.managers.fiche_runner import FicheRunner
+        from zerg.services.oikos_react_engine import OikosResult
+
+        sample_fiche.config = {"skills_enabled": False}
+        db_session.commit()
+
+        thread = crud.create_thread(
+            db=db_session,
+            fiche_id=sample_fiche.id,
+            title="Prompt dedupe thread",
+            active=True,
+        )
+
+        crud.create_thread_message(
+            db=db_session,
+            thread_id=thread.id,
+            role="user",
+            content="Run a task",
+            processed=True,
+        )
+
+        tool_call_id = f"call_{uuid.uuid4().hex[:12]}"
+        crud.create_thread_message(
+            db=db_session,
+            thread_id=thread.id,
+            role="assistant",
+            content="",
+            processed=True,
+            tool_calls=[{"id": tool_call_id, "name": "spawn_commis", "args": {"task": "test"}}],
+        )
+
+        if preexisting_tool:
+            crud.create_thread_message(
+                db=db_session,
+                thread_id=thread.id,
+                role="tool",
+                content="Commis completed:\n\nExisting result",
+                processed=True,
+                tool_call_id=tool_call_id,
+                name="spawn_commis",
+            )
+
+        captured = {}
+
+        async def mock_run_oikos_loop(*, messages, **kwargs):
+            captured["messages"] = messages
+            return OikosResult(messages=messages, usage={}, interrupted=False)
+
+        with patch(
+            "zerg.connectors.status_builder.build_fiche_context",
+            return_value="{}",
+        ), patch(
+            "zerg.services.oikos_react_engine.run_oikos_loop",
+            new=AsyncMock(side_effect=mock_run_oikos_loop),
+        ):
+            runner = FicheRunner(sample_fiche)
+            await runner.run_continuation(
+                db=db_session,
+                thread=thread,
+                tool_call_id=tool_call_id,
+                tool_result="Commis completed: new result",
+                run_id=123,
+            )
+
+        tool_msgs = [
+            msg
+            for msg in captured.get("messages", [])
+            if isinstance(msg, ToolMessage) and msg.tool_call_id == tool_call_id
+        ]
+        assert len(tool_msgs) == 1, f"Expected 1 ToolMessage in prompt, got {len(tool_msgs)}"
+
+    @pytest.mark.asyncio
     async def test_run_continuation_creates_tool_message(self, db_session, test_user, sample_fiche):
         """Test that run_continuation creates ToolMessage for commis result."""
         from langchain_core.messages import SystemMessage as LcSystemMessage
