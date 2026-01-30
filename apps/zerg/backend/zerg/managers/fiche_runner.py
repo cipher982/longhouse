@@ -786,6 +786,7 @@ class Runner:  # noqa: D401 – naming follows project conventions
             parent_id = parent_msg.id
 
         # Create ToolMessages for ALL commis results
+        tool_msgs_to_inject: List[ToolMessage] = []
         for wr in commis_results:
             tool_call_id = wr.get("tool_call_id")
             result = wr.get("result") or ""
@@ -820,18 +821,22 @@ class Runner:  # noqa: D401 – naming follows project conventions
                 )
                 logger.debug(f"[Runner] Persisted ToolMessage for tool_call_id={tool_call_id}")
 
+                # The tool_msg was persisted; use it in the prompt without duplication
+                tool_msgs_to_inject.append(tool_msg)
+
         # ------------------------------------------------------------------
         # Build message array using MessageArrayBuilder (cache-optimized)
         # Layout: [system] -> [conversation] -> [dynamic_context]
-        # Note: We reload conversation to include newly persisted tool messages
+        # Tool results should appear exactly once in the prompt
         # ------------------------------------------------------------------
-        builder_result = (
-            MessageArrayBuilder(db, self.agent)
-            .with_system_prompt(agent_row)
-            .with_conversation(thread.id, thread_service=self.thread_service)
-            .with_dynamic_context(allowed_tools=getattr(agent_row, "allowed_tools", None))
-            .build()
-        )
+        builder = MessageArrayBuilder(db, self.agent)
+        builder.with_system_prompt(agent_row)
+        conversation_msgs = list(db_messages) + tool_msgs_to_inject
+        builder.with_conversation_messages(conversation_msgs, filter_system=True)
+
+        builder.with_dynamic_context(allowed_tools=getattr(agent_row, "allowed_tools", None))
+
+        builder_result = builder.build()
         full_messages = builder_result.messages
         skill_integration = builder_result.skill_integration
         messages_with_context = builder_result.message_count_with_context
