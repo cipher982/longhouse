@@ -246,3 +246,5 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-29) [gotcha] Alembic revision IDs >32 chars break `alembic_version` (varchar(32)); ensure version_num is VARCHAR(64) before running migrations.
 - (2026-01-29) [gotcha] Orphaned "idle in transaction" DB connections from crashed E2E tests block TRUNCATE in unit tests; check `pg_stat_activity` and terminate stale connections before debugging test "timeouts".
 - (2026-01-29) [gotcha] Agents read endpoints (sessions, events, filters) now accept `swarmlet_session` cookie auth for browser access; write endpoints (ingest) still require device token.
+- (2026-01-29) [pattern] CI pushes can trigger multiple workflows; aggregate runs by commit SHA and use `gh run watch` (avoid sleep/poll loops).
+- (2026-01-29) [gotcha] Supervisor/Oikos tool tests expect string errors; current tool functions return dict error payloads, causing unit test failures.
