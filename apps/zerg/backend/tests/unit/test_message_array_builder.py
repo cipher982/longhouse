@@ -18,13 +18,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from tests.conftest import TEST_COMMIS_MODEL
 from zerg.crud import crud
 from zerg.managers.fiche_runner import RuntimeView
-from zerg.managers.message_array_builder import (
-    BuildPhase,
-    MessageArrayBuilder,
-    MessageArrayResult,
-    _strip_timestamp_prefix,
-    _truncate,
-)
+from zerg.managers.message_array_builder import MessageArrayBuilder, MessageArrayResult
 
 
 # ---------------------------------------------------------------------------
@@ -80,43 +74,6 @@ def runtime_view(test_fiche):
 
 
 # ---------------------------------------------------------------------------
-# Helper function tests
-# ---------------------------------------------------------------------------
-
-
-class TestHelperFunctions:
-    def test_strip_timestamp_prefix_removes_iso_timestamp(self):
-        text = "[2024-01-15T10:30:00Z] Hello world"
-        assert _strip_timestamp_prefix(text) == "Hello world"
-
-    def test_strip_timestamp_prefix_no_timestamp(self):
-        text = "Hello world"
-        assert _strip_timestamp_prefix(text) == "Hello world"
-
-    def test_strip_timestamp_prefix_empty(self):
-        assert _strip_timestamp_prefix("") == ""
-        assert _strip_timestamp_prefix(None) == ""
-
-    def test_truncate_short_text(self):
-        text = "Short text"
-        assert _truncate(text) == "Short text"
-
-    def test_truncate_long_text(self):
-        text = "x" * 300
-        result = _truncate(text, max_chars=220)
-        assert len(result) == 223  # 220 + "..."
-        assert result.endswith("...")
-
-    def test_truncate_empty(self):
-        assert _truncate("") == ""
-        assert _truncate(None) == ""
-
-    def test_truncate_normalizes_whitespace(self):
-        text = "  hello   world  "
-        assert _truncate(text) == "hello world"
-
-
-# ---------------------------------------------------------------------------
 # Builder state tracking tests
 # ---------------------------------------------------------------------------
 
@@ -167,21 +124,20 @@ class TestBuilderStateTracking:
 
 
 class TestSystemPrompt:
-    def test_system_prompt_includes_instructions(self, db_session, runtime_view, test_fiche):
+    def test_system_prompt_includes_instructions(self, db_session, runtime_view, test_fiche, test_thread):
         builder = MessageArrayBuilder(db_session, runtime_view)
-        builder.with_system_prompt(test_fiche)
+        result = builder.with_system_prompt(test_fiche).with_conversation(test_thread.id).build()
 
-        # Check internal state
-        assert len(builder._messages) == 1
-        assert isinstance(builder._messages[0], SystemMessage)
-        assert "You are a helpful assistant." in builder._messages[0].content
+        assert len(result.messages) == 1
+        assert isinstance(result.messages[0], SystemMessage)
+        assert "You are a helpful assistant." in result.messages[0].content
 
-    def test_system_prompt_includes_protocols(self, db_session, runtime_view, test_fiche):
+    def test_system_prompt_includes_protocols(self, db_session, runtime_view, test_fiche, test_thread):
         builder = MessageArrayBuilder(db_session, runtime_view)
-        builder.with_system_prompt(test_fiche)
+        result = builder.with_system_prompt(test_fiche).with_conversation(test_thread.id).build()
 
         # Protocols should be prepended
-        content = builder._messages[0].content
+        content = result.messages[0].content
         assert "<connector_protocol>" in content
 
     def test_system_prompt_requires_instructions(self, db_session, runtime_view, test_fiche):
@@ -191,13 +147,13 @@ class TestSystemPrompt:
             builder = MessageArrayBuilder(db_session, runtime_view)
             builder.with_system_prompt(test_fiche)
 
-    def test_system_prompt_with_skills_disabled(self, db_session, runtime_view, test_fiche):
+    def test_system_prompt_with_skills_disabled(self, db_session, runtime_view, test_fiche, test_thread):
         builder = MessageArrayBuilder(db_session, runtime_view)
-        builder.with_system_prompt(test_fiche, include_skills=False)
+        result = builder.with_system_prompt(test_fiche, include_skills=False).with_conversation(test_thread.id).build()
 
         # Should still work, just no skills integration
-        assert builder._skill_integration is None
-        assert len(builder._messages) == 1
+        assert result.skill_integration is None
+        assert len(result.messages) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -208,11 +164,10 @@ class TestSystemPrompt:
 class TestConversationLoading:
     def test_loads_empty_conversation(self, db_session, runtime_view, test_fiche, test_thread):
         builder = MessageArrayBuilder(db_session, runtime_view)
-        builder.with_system_prompt(test_fiche)
-        builder.with_conversation(test_thread.id)
+        result = builder.with_system_prompt(test_fiche).with_conversation(test_thread.id).build()
 
         # System message only
-        assert len(builder._messages) == 1
+        assert len(result.messages) == 1
 
     def test_loads_conversation_messages(self, db_session, runtime_view, test_fiche, test_thread):
         # Add some messages to thread
@@ -229,13 +184,12 @@ class TestConversationLoading:
         )
 
         builder = MessageArrayBuilder(db_session, runtime_view)
-        builder.with_system_prompt(test_fiche)
-        builder.with_conversation(test_thread.id)
+        result = builder.with_system_prompt(test_fiche).with_conversation(test_thread.id).build()
 
         # System + 2 conversation messages
-        assert len(builder._messages) == 3
-        assert isinstance(builder._messages[1], HumanMessage)
-        assert isinstance(builder._messages[2], AIMessage)
+        assert len(result.messages) == 3
+        assert isinstance(result.messages[1], HumanMessage)
+        assert isinstance(result.messages[2], AIMessage)
 
     def test_filters_system_messages_by_default(self, db_session, runtime_view, test_fiche, test_thread):
         # Add messages including a system message
@@ -252,13 +206,12 @@ class TestConversationLoading:
         )
 
         builder = MessageArrayBuilder(db_session, runtime_view)
-        builder.with_system_prompt(test_fiche)
-        builder.with_conversation(test_thread.id, filter_system=True)
+        result = builder.with_system_prompt(test_fiche).with_conversation(test_thread.id, filter_system=True).build()
 
         # Only fresh system + human (stale system filtered)
-        assert len(builder._messages) == 2
-        assert isinstance(builder._messages[0], SystemMessage)
-        assert isinstance(builder._messages[1], HumanMessage)
+        assert len(result.messages) == 2
+        assert isinstance(result.messages[0], SystemMessage)
+        assert isinstance(result.messages[1], HumanMessage)
 
 
 # ---------------------------------------------------------------------------
@@ -277,20 +230,26 @@ class TestToolMessages:
             ToolMessage(content="Result 2", tool_call_id="tc2", name="spawn_commis"),
         ]
         builder.with_tool_messages(tool_msgs)
+        result = builder.build()
 
         # System + 2 tool messages
-        assert len(builder._messages) == 3
-        assert isinstance(builder._messages[1], ToolMessage)
-        assert isinstance(builder._messages[2], ToolMessage)
+        assert len(result.messages) == 3
+        assert isinstance(result.messages[1], ToolMessage)
+        assert isinstance(result.messages[2], ToolMessage)
 
     def test_empty_tool_messages_is_noop(self, db_session, runtime_view, test_fiche, test_thread):
         builder = MessageArrayBuilder(db_session, runtime_view)
         builder.with_system_prompt(test_fiche)
         builder.with_conversation(test_thread.id)
         builder.with_tool_messages([])
+        with patch("zerg.connectors.status_builder.build_fiche_context") as mock_ctx:
+            mock_ctx.return_value = "{}"
+            builder.with_dynamic_context()
+        result = builder.build()
 
-        # Phase should not advance for empty list
-        assert builder._phase == BuildPhase.CONVERSATION
+        # System + dynamic context (no tool messages)
+        assert len(result.messages) == 2
+        assert isinstance(result.messages[-1], SystemMessage)
 
     def test_tool_messages_after_conversation(self, db_session, runtime_view, test_fiche, test_thread):
         from zerg.services.thread_service import ThreadService
@@ -306,12 +265,13 @@ class TestToolMessages:
         builder.with_system_prompt(test_fiche)
         builder.with_conversation(test_thread.id)
         builder.with_tool_messages([ToolMessage(content="Result", tool_call_id="tc1", name="test")])
+        result = builder.build()
 
         # System + Human + Tool
-        assert len(builder._messages) == 3
-        assert isinstance(builder._messages[0], SystemMessage)
-        assert isinstance(builder._messages[1], HumanMessage)
-        assert isinstance(builder._messages[2], ToolMessage)
+        assert len(result.messages) == 3
+        assert isinstance(result.messages[0], SystemMessage)
+        assert isinstance(result.messages[1], HumanMessage)
+        assert isinstance(result.messages[2], ToolMessage)
 
 
 # ---------------------------------------------------------------------------
@@ -330,9 +290,11 @@ class TestDynamicContext:
             mock_ctx.return_value = '{"connectors": []}'
             builder.with_dynamic_context(allowed_tools=None)
 
+        result = builder.build()
+
         # System + dynamic context
-        assert len(builder._messages) == 2
-        last_msg = builder._messages[-1]
+        assert len(result.messages) == 2
+        last_msg = result.messages[-1]
         assert isinstance(last_msg, SystemMessage)
         assert "[INTERNAL CONTEXT" in last_msg.content
 
@@ -371,10 +333,12 @@ class TestDynamicContext:
             mock_ctx.return_value = '{"connectors": []}'
             builder.with_dynamic_context()
 
+        result = builder.build()
+
         # System -> Human -> AI -> DynamicContext (at end)
-        assert len(builder._messages) == 4
-        assert isinstance(builder._messages[-1], SystemMessage)
-        assert "[INTERNAL CONTEXT" in builder._messages[-1].content
+        assert len(result.messages) == 4
+        assert isinstance(result.messages[-1], SystemMessage)
+        assert "[INTERNAL CONTEXT" in result.messages[-1].content
 
     def test_can_call_after_tool_messages(self, db_session, runtime_view, test_fiche, test_thread):
         builder = MessageArrayBuilder(db_session, runtime_view)
@@ -389,6 +353,9 @@ class TestDynamicContext:
         # Should work without error
         result = builder.build()
         assert len(result.messages) == 3
+        assert isinstance(result.messages[0], SystemMessage)
+        assert isinstance(result.messages[1], ToolMessage)
+        assert isinstance(result.messages[2], SystemMessage)
 
 
 # ---------------------------------------------------------------------------
@@ -505,31 +472,69 @@ class TestMessageOrdering:
 
 
 class TestMemoryContext:
-    def test_extracts_user_query_from_unprocessed(self, db_session, runtime_view, test_fiche, test_thread):
+    def test_memory_context_uses_unprocessed_rows(self, db_session, runtime_view, test_fiche, test_thread):
         builder = MessageArrayBuilder(db_session, runtime_view)
+        builder.with_system_prompt(test_fiche)
+        builder.with_conversation(test_thread.id)
 
-        # Create mock unprocessed rows
         mock_row = MagicMock()
         mock_row.role = "user"
         mock_row.internal = False
         mock_row.content = "What is the weather?"
 
-        query = builder._extract_user_query(unprocessed_rows=[mock_row])
-        assert query == "What is the weather?"
+        long_snippet = "x" * 300
 
-    def test_extracts_user_query_from_conversation(self, db_session, runtime_view, test_fiche, test_thread):
+        with (
+            patch("zerg.connectors.status_builder.build_fiche_context", return_value="{}"),
+            patch(
+                "zerg.services.memory_search.search_memory_files",
+                return_value=[{"path": "memory.txt", "snippets": [long_snippet]}],
+            ) as mock_search,
+            patch("zerg.crud.knowledge_crud.search_knowledge_documents", return_value=[]),
+            patch("zerg.services.memory_embeddings.embeddings_enabled", return_value=False),
+        ):
+            builder.with_dynamic_context(unprocessed_rows=[mock_row])
+            result = builder.build()
+
+        assert mock_search.call_args.kwargs["query"] == "What is the weather?"
+        content = result.messages[-1].content
+        assert "[MEMORY CONTEXT]" in content
+        line = next(line for line in content.splitlines() if line.startswith("- memory.txt:"))
+        snippet = line.split(":", 1)[1].strip()
+        assert snippet.endswith("...")
+        assert len(snippet) == 223  # 220 + "..."
+
+    def test_memory_context_uses_conversation_for_query(self, db_session, runtime_view, test_fiche, test_thread):
+        from zerg.services.thread_service import ThreadService
+
+        ThreadService.save_new_messages(
+            db_session,
+            thread_id=test_thread.id,
+            messages=[HumanMessage(content="Tell me about Python")],
+            processed=True,
+        )
+        conversation_msgs = ThreadService.get_thread_messages_as_langchain(db_session, test_thread.id)
+
         builder = MessageArrayBuilder(db_session, runtime_view)
+        builder.with_system_prompt(test_fiche)
+        builder.with_conversation(test_thread.id)
 
-        msgs = [
-            HumanMessage(content="[2024-01-15T10:00:00Z] Tell me about Python"),
-            AIMessage(content="Python is a programming language."),
-        ]
+        with (
+            patch("zerg.connectors.status_builder.build_fiche_context", return_value="{}"),
+            patch("zerg.services.memory_search.search_memory_files", return_value=[{"path": "memory.txt", "snippets": ["Note"]}]) as mock_search,
+            patch("zerg.crud.knowledge_crud.search_knowledge_documents", return_value=[]),
+            patch("zerg.services.memory_embeddings.embeddings_enabled", return_value=False),
+        ):
+            builder.with_dynamic_context(conversation_msgs=conversation_msgs)
+            result = builder.build()
 
-        query = builder._extract_user_query(conversation_msgs=msgs)
-        assert query == "Tell me about Python"
+        assert mock_search.call_args.kwargs["query"] == "Tell me about Python"
+        assert "[MEMORY CONTEXT]" in result.messages[-1].content
 
-    def test_skips_internal_messages(self, db_session, runtime_view, test_fiche, test_thread):
+    def test_memory_context_skips_internal_messages(self, db_session, runtime_view, test_fiche, test_thread):
         builder = MessageArrayBuilder(db_session, runtime_view)
+        builder.with_system_prompt(test_fiche)
+        builder.with_conversation(test_thread.id)
 
         mock_internal = MagicMock()
         mock_internal.role = "user"
@@ -541,9 +546,17 @@ class TestMemoryContext:
         mock_real.internal = False
         mock_real.content = "Real message"
 
-        # Internal should be skipped, real should be found
-        query = builder._extract_user_query(unprocessed_rows=[mock_real, mock_internal])
-        assert query == "Real message"
+        with (
+            patch("zerg.connectors.status_builder.build_fiche_context", return_value="{}"),
+            patch("zerg.services.memory_search.search_memory_files", return_value=[{"path": "memory.txt", "snippets": ["Note"]}]) as mock_search,
+            patch("zerg.crud.knowledge_crud.search_knowledge_documents", return_value=[]),
+            patch("zerg.services.memory_embeddings.embeddings_enabled", return_value=False),
+        ):
+            builder.with_dynamic_context(unprocessed_rows=[mock_real, mock_internal])
+            result = builder.build()
+
+        assert mock_search.call_args.kwargs["query"] == "Real message"
+        assert "[MEMORY CONTEXT]" in result.messages[-1].content
 
 
 # ---------------------------------------------------------------------------
