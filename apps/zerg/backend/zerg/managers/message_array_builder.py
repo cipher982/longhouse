@@ -187,22 +187,33 @@ class MessageArrayBuilder:
             thread_service = ThreadService
 
         db_messages = thread_service.get_thread_messages_as_langchain(self._db, thread_id)
-
-        if filter_system:
-            # Filter out system messages - they're injected fresh above
-            conversation_msgs = [msg for msg in db_messages if not (hasattr(msg, "type") and msg.type == "system")]
-        else:
-            conversation_msgs = list(db_messages)
-
-        logger.debug(
-            "[Builder] Retrieved %d conversation messages from thread %d (filtered=%s)",
-            len(conversation_msgs),
-            thread_id,
-            filter_system,
+        return self._add_conversation_messages(
+            db_messages,
+            filter_system=filter_system,
+            log_source=f"thread {thread_id}",
         )
 
-        self._messages.extend(conversation_msgs)
-        return self
+    def with_conversation_messages(
+        self,
+        conversation_msgs: Sequence[BaseMessage],
+        *,
+        filter_system: bool = True,
+    ) -> MessageArrayBuilder:
+        """Add conversation history from preloaded messages.
+
+        Args:
+            conversation_msgs: Conversation messages already loaded (e.g., from DB)
+            filter_system: Filter out stale system messages (recommended)
+
+        Returns:
+            Self for chaining
+        """
+        self._check_phase(BuildPhase.SYSTEM_PROMPT, BuildPhase.CONVERSATION)
+        return self._add_conversation_messages(
+            conversation_msgs,
+            filter_system=filter_system,
+            log_source="provided messages",
+        )
 
     def with_tool_messages(
         self,
@@ -323,6 +334,30 @@ class MessageArrayBuilder:
     # ------------------------------------------------------------------
     # Private helpers (extracted from fiche_runner.py)
     # ------------------------------------------------------------------
+
+    def _add_conversation_messages(
+        self,
+        conversation_msgs: Sequence[BaseMessage],
+        *,
+        filter_system: bool,
+        log_source: str,
+    ) -> MessageArrayBuilder:
+        """Append conversation messages with optional system filtering."""
+        if filter_system:
+            # Filter out system messages - they're injected fresh above
+            filtered = [msg for msg in conversation_msgs if not (hasattr(msg, "type") and msg.type == "system")]
+        else:
+            filtered = list(conversation_msgs)
+
+        logger.debug(
+            "[Builder] Retrieved %d conversation messages (%s, filtered=%s)",
+            len(filtered),
+            log_source,
+            filter_system,
+        )
+
+        self._messages.extend(filtered)
+        return self
 
     def _normalize_skill_allowlist(self, raw: Any) -> Optional[List[str]]:
         """Normalize allowed skills to a list of patterns or None."""

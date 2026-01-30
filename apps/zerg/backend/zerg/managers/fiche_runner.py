@@ -525,7 +525,7 @@ class Runner:  # noqa: D401 – naming follows project conventions
 
         # Check if ToolMessage for this tool_call_id already exists (idempotency)
         existing_tool_response = any(isinstance(m, ToolMessage) and m.tool_call_id == tool_call_id for m in db_messages)
-        tool_msgs_to_inject = []
+        tool_msg: ToolMessage | None = None
 
         if existing_tool_response:
             logger.info(f"[Runner] ToolMessage for tool_call_id={tool_call_id} already exists, skipping creation")
@@ -571,22 +571,19 @@ class Runner:  # noqa: D401 – naming follows project conventions
             )
             logger.debug(f"[Runner] Persisted ToolMessage for tool_call_id={tool_call_id} (parent_id={parent_id})")
 
-            # The tool_msg was persisted, so conversation will include it when reloaded
-            tool_msgs_to_inject = [tool_msg]
+            # The tool_msg was persisted; use it in the prompt without duplication
 
         # ------------------------------------------------------------------
         # Build message array using MessageArrayBuilder (cache-optimized)
-        # Layout: [system] -> [conversation] -> [tool_messages] -> [dynamic_context]
-        # Note: If tool message was just persisted, it won't be in the conversation
-        # yet (we need to reload or inject manually)
+        # Layout: [system] -> [conversation] -> [dynamic_context]
+        # Tool results should appear exactly once in the prompt
         # ------------------------------------------------------------------
         builder = MessageArrayBuilder(db, self.agent)
         builder.with_system_prompt(agent_row)
-        builder.with_conversation(thread.id, thread_service=self.thread_service)
-
-        # Add the new tool message if it wasn't already in the conversation
-        if tool_msgs_to_inject:
-            builder.with_tool_messages(tool_msgs_to_inject)
+        conversation_msgs = list(db_messages)
+        if tool_msg is not None:
+            conversation_msgs.append(tool_msg)
+        builder.with_conversation_messages(conversation_msgs, filter_system=True)
 
         builder.with_dynamic_context(allowed_tools=getattr(agent_row, "allowed_tools", None))
 

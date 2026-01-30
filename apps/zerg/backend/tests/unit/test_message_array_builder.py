@@ -213,6 +213,26 @@ class TestConversationLoading:
         assert isinstance(result.messages[0], SystemMessage)
         assert isinstance(result.messages[1], HumanMessage)
 
+    def test_with_conversation_messages_filters_system(self, db_session, runtime_view, test_fiche):
+        builder = MessageArrayBuilder(db_session, runtime_view)
+        conversation = [
+            SystemMessage(content="Stale system"),
+            HumanMessage(content="Hello"),
+            AIMessage(content="Hi"),
+        ]
+
+        result = (
+            builder.with_system_prompt(test_fiche)
+            .with_conversation_messages(conversation, filter_system=True)
+            .build()
+        )
+
+        # System prompt + human + AI (stale system filtered)
+        assert len(result.messages) == 3
+        assert isinstance(result.messages[0], SystemMessage)
+        assert isinstance(result.messages[1], HumanMessage)
+        assert isinstance(result.messages[2], AIMessage)
+
 
 # ---------------------------------------------------------------------------
 # Tool message tests
