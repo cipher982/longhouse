@@ -4,6 +4,11 @@ set -euo pipefail
 ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 README_PATH="$ROOT_DIR/README.md"
 WORKDIR_OVERRIDE=""
+RUN_SHELL="${SHELL:-/bin/bash}"
+
+if [[ ! -x "$RUN_SHELL" ]]; then
+  RUN_SHELL="/bin/bash"
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -135,7 +140,7 @@ cleanup() {
   for cmd in "${cleanup_cmds[@]}"; do
     resolved="${cmd//\{\{WORKDIR\}\}/$WORKDIR}"
     echo "→ $resolved"
-    bash -lc "$resolved"
+    "$RUN_SHELL" -lc "$resolved"
   done
 }
 
@@ -145,7 +150,7 @@ echo "🚦 Running onboarding funnel steps..."
 while IFS= read -r cmd; do
   resolved="${cmd//\{\{WORKDIR\}\}/$WORKDIR}"
   echo "→ $resolved"
-  bash -lc "$resolved"
+  "$RUN_SHELL" -lc "$resolved"
 done < <(run_steps steps)
 
 echo "✅ Onboarding funnel complete."
