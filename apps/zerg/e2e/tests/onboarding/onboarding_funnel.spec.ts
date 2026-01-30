@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { test, expect } from '@playwright/test';
 
 type OnboardingCTA = {
@@ -25,7 +26,8 @@ function findReadme(startDir: string): string {
 }
 
 function loadOnboardingContract(): OnboardingContract {
-  const readmePath = findReadme(__dirname);
+  const currentDir = path.dirname(fileURLToPath(import.meta.url));
+  const readmePath = findReadme(currentDir);
   const content = fs.readFileSync(readmePath, 'utf8');
   const pattern = /<!-- onboarding-contract:start -->\s*```json\s*([\s\S]*?)\s*```\s*<!-- onboarding-contract:end -->/;
   const match = content.match(pattern);
