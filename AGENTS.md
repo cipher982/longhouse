@@ -52,7 +52,11 @@ make test-full     # Full suite (unit + full E2E + evals + visual baselines)
 - Set `PYTEST_XDIST_COMMIS=0` — kills parallelism, tests take 10x longer
 - Pass extra env vars — `DATABASE_URL` and `CI_TEST_SCHEMA` are already in `.env`
 - Run pytest directly — always use Make targets
- - Agents: prefer explicit long-named Make aliases (`test-...--`) for tiered runs
+- Agents: prefer explicit long-named Make aliases (`test-...--`) for tiered runs
+
+**CI Debugging:** Run commands directly, no `&` background, no `|| echo` swallowing. Let it crash, read the first error.
+
+**CI Workflows:** Pushes can trigger multiple workflows; aggregate runs by commit SHA and use `gh run watch` (avoid sleep/poll loops).
 
 ## Architecture
 
@@ -76,6 +80,12 @@ User message → `OikosService` → `oikos_react_engine` → (spawn_commis) → 
 
 **Lazy Tool Loading:** 65+ tools available, ~12 core tools pre-bound. Others discovered via `search_tools()`.
 
+**Oikos UX ("Human PA" model):** Kick off tasks, move on, don't block. Commiss report back async. Input re-enables on `oikos_complete`, not waiting for commiss.
+
+**Single Brain:** OikosService enforces one `ThreadType.SUPER` thread per user; each message creates a Run tied to that thread.
+
+**System Prompt Injection:** FicheRunner filters DB-stored system messages; prompt is injected fresh from `fiche.system_instructions` every run to prevent staleness. Dynamic context (connector status, RAG) should go late in the message array for cache efficiency.
+
 ## Conventions
 
 - **Backend**: FastAPI + Pydantic, `apps/zerg/backend/zerg/`
@@ -83,6 +93,9 @@ User message → `OikosService` → `oikos_react_engine` → (spawn_commis) → 
 - **Package managers**: Bun (JS), uv (Python) — never npm/pip
 - **Generated code** (don't edit): `src/generated/`, `zerg/generated/`
 - **Tests**: Always use `make test*` targets, never direct pytest/playwright
+- **Tool contracts**: Edit `schemas/tools.yml`, then run `scripts/generate_tool_types.py` — never edit generated files directly
+- **Oikos tools**: Registration is centralized in `oikos_tools.py`; `CORE_TOOLS` pulls from `SUPERVISOR_TOOL_NAMES`; tests in `test_core_tools.py` catch drift
+- **Git policy**: Work only on `main`, no worktrees; confirm `git status -sb` before changes; no stashing unless explicitly requested
 
 ## Gotchas
 
@@ -94,6 +107,10 @@ User message → `OikosService` → `oikos_react_engine` → (spawn_commis) → 
 6. **Auth disabled in dev** — `AUTH_DISABLED=1` set in compose.
 7. **Coolify env var changes need redeploy** — restart doesn't pick up new vars.
 8. **AGENTS.md is canonical** — `CLAUDE.md` is a symlink, edit AGENTS.md only.
+9. **Runner name+secret collision** — If two owners seed runners with same name and secret, first-created wins. Use unique secrets per environment.
+10. **SSE event types** — New types must be added to `EventType` enum or `append_run_event()` won't publish live.
+11. **Sauron job source conflict** — If Zerg backend has `JOB_QUEUE_ENABLED=1` AND `JOBS_GIT_*` vars, it schedules sauron-jobs too. Remove those vars when Sauron is the sole scheduler.
+12. **Sauron /sync doesn't reschedule** — Reloads manifest but APScheduler doesn't reschedule. Changes won't run until restart.
 
 ## Pushing Changes
 
@@ -163,6 +180,7 @@ Sauron is the centralized ops scheduler, deployed as a standalone service on cli
 
 ## Misc
 - GH actions use runners on Cube
+- **Parallel patrol agents** converge on same ideas unless diversity enforced; use explicit target partitioning + shared dedupe gate
 
 ## TODOs (Agent-Tracked)
 
@@ -188,7 +206,7 @@ Sauron is the centralized ops scheduler, deployed as a standalone service on cli
 - (YYYY-MM-DD) [category] Specific insight. "X caused Y, fix is Z"
 ```
 
-Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
+Categories: `gotcha`, `pattern`, `design`, `tool`, `test`, `deploy`, `perf`
 
 ### Rules
 
@@ -202,15 +220,3 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 ### Learnings
 
 <!-- Agents: append below this line. Human compacts weekly. -->
-
-- (2026-01-28) [pattern] Parallel patrol agents converge on the same ideas unless diversity is enforced; use explicit target partitioning + shared dedupe gate.
-- (2026-01-22) [gotcha] Runner name+secret auth can collide across owners. If two owners seed runners with same name and secret, the first-created runner wins. Use unique secrets per environment.
-- (2026-01-24) [gotcha] Tool contracts live in `schemas/tools.yml`; regenerate `apps/zerg/backend/zerg/tools/generated/tool_definitions.py` via `scripts/generate_tool_types.py` instead of editing the generated file.
-- (2026-01-24) [gotcha] Oikos tool registration is centralized: add tools in `oikos_tools.py`; `CORE_TOOLS` pulls `SUPERVISOR_TOOL_NAMES`; `oikos_service.py` uses `get_oikos_allowed_tools()`. Tests in `test_core_tools.py` catch drift.
-- (2026-01-24) [gotcha] Repo policy: work only on main, no worktrees; confirm `git -C /Users/davidrose/git/zerg status -sb` before changes; no stashing unless explicitly requested.
-- (2026-01-24) [pattern] Oikos UX: "Human PA" model - kick off tasks, move on, don't block. Commiss report back async. Input should re-enable on `oikos_complete`, not wait for commiss.
-- (2026-01-25) [pattern] OikosService enforces a single ThreadType.SUPER thread per user ("one brain"); each Oikos message creates a Run tied to that thread.
-- (2026-01-25) [design] FicheRunner intentionally filters DB-stored system messages; system prompt is injected fresh from `fiche.system_instructions` every run to prevent prompt staleness.
-- (2026-01-26) [gotcha] New SSE event types must be added to `EventType` enum or `append_run_event()` won't publish live (modal won't open until reconnect).
-- (2026-01-26) [pattern] CI debugging: run commands directly, no `&` background, no `|| echo` swallowing. Let it crash, read the first error.
-- (2026-01-29) [pattern] CI pushes can trigger multiple workflows; aggregate runs by commit SHA and use `gh run watch` (avoid sleep/poll loops).
