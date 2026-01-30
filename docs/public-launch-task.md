@@ -76,10 +76,10 @@ Use these to prove we didn’t regress the experience:
 - No automated docs/README validation.
 - No packaging smoke test for a future `brew install zerg` or `install.sh`.
 
-## Decisions Needed
-- Do we redirect root `/` to Timeline when auth is enabled?
-- Do we rename Sessions to Timeline in nav + routes?
-- Do we include shipper onboarding in first-run for OSS?
+## Decisions (Locked)
+- **Primary surface = Timeline.** The Sessions list is the product; rename it to “Timeline.”
+- **Default route for authenticated users = Timeline.** Root `/` remains a public landing page, but post-auth and dev auth-disabled flows land on Timeline.
+- **Shipper onboarding is optional, not required.** First-run flow includes “Connect shipper” as a recommended step, but demo sessions/timeline must work without it or API keys.
 
 ## Working Agreement
 - Do not ship to public without completing the Finish Conditions.
