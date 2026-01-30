@@ -65,7 +65,7 @@ test.describe('Fiche Creation Full Workflow', () => {
 
     // Step 5: Test UI integration - navigate to dashboard
     await page.goto('/dashboard');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Step 6: Create a second fiche to test isolation
     const secondMarker = `second_fiche_${uniqueMarker}`;

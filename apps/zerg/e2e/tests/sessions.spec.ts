@@ -62,8 +62,8 @@ test.describe('Timeline Page', () => {
     const searchInput = page.locator('input[type="search"]');
     await searchInput.fill('test query');
 
-    // Wait for debounce and URL update
-    await page.waitForTimeout(400);
+    // Wait for debounce and URL update (poll for URL change instead of fixed timeout)
+    await expect(page).toHaveURL(/query=/, { timeout: 2000 });
 
     // URL should include query param
     await expect(page).toHaveURL(/query=test\+query|query=test%20query/);
