@@ -2,7 +2,7 @@
 
 Date: 2026-01-30
 Owner: David Rose
-Status: Draft (active)
+Status: In progress
 
 ## Purpose
 This is the execution checklist and plan for improving the app experience before public launch.
@@ -25,8 +25,8 @@ We must follow this doc for scope, finish conditions, and validation steps.
 5) Reliability: a single onboarding smoke check validates a fresh setup path.
 
 ## Finish Conditions (Required)
-- [ ] App landing or first-run experience clearly points to Timeline as the product.
-- [ ] New users can see demo sessions without API keys.
+- [x] App landing or first-run experience clearly points to Timeline as the product.
+- [x] New users can see demo sessions without API keys.
 - [ ] README rewritten to highlight timeline-first value and 3 install paths.
 - [ ] Onboarding smoke command exists and passes locally.
 - [ ] Core UI smoke snapshots pass (qa-ui-smoke).
@@ -38,17 +38,17 @@ We focus on UX improvements + onboarding clarity. No deep backend refactors unle
 ## Plan
 
 ### Phase 0: Align on primary surface
-- Decide primary nav and default route (Timeline vs Dashboard vs Chat).
-- Decide naming: "Sessions" -> "Timeline" (recommended).
-- Define the default landing behavior for auth-enabled and auth-disabled modes.
+- [x] Decide primary nav and default route (Timeline vs Dashboard vs Chat).
+- [x] Decide naming: "Sessions" -> "Timeline" (recommended).
+- [x] Define the default landing behavior for auth-enabled and auth-disabled modes.
 
 ### Phase 1: First-run / empty-state UX
-- Implement guided empty state for Timeline with 3 steps:
+- [x] Implement guided empty state for Timeline with 3 steps:
   1) Connect shipper (optional)
   2) Run demo session (no keys)
   3) Explore timeline
-- Add a lightweight demo seed path for sessions if none exist.
-- Add CTA from Chat to “View session trace” after a run.
+- [x] Add a lightweight demo seed path for sessions if none exist.
+- [ ] Add CTA from Chat to “View session trace” after a run.
 
 ### Phase 2: Timeline polish
 - Improve Session detail header (goal, repo/project, duration, status).
@@ -56,10 +56,17 @@ We focus on UX improvements + onboarding clarity. No deep backend refactors unle
 - Add filters within detail view (user/assistant/tool) and search.
 
 ### Phase 3: Docs + onboarding
-- Rewrite README to center the timeline value prop.
-- Provide 3 install paths (quick, guided, developer).
-- Add screenshots and a short “what you get” section.
-- Add a single onboarding smoke command to verify first-run.
+- [ ] Rewrite README to center the timeline value prop.
+- [ ] Provide 3 install paths (quick, guided, developer).
+- [ ] Add screenshots and a short “what you get” section.
+- [x] Add a single onboarding smoke command to verify first-run.
+
+## Current State (Summary)
+- Timeline is now the primary nav item and default route for authenticated/dev users.
+- `/sessions` routes redirect/alias to `/timeline` (detail view remains supported).
+- Guided Timeline empty state added with demo seed + optional shipper CTA.
+- Demo sessions seeded via `POST /api/agents/demo` (idempotent).
+- Onboarding smoke target added: `make onboarding-smoke` (not yet run).
 
 ## Tests / Validation (Existing)
 Use these to prove we didn’t regress the experience:
