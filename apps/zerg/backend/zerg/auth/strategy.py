@@ -140,6 +140,45 @@ class DevAuthStrategy(AuthStrategy):
 
         desired_role = "ADMIN" if self._settings.dev_admin else "USER"
 
+        # Single-tenant mode: use existing owner user if one exists
+        if self._settings.single_tenant:
+            from zerg.services.single_tenant import OSS_DEFAULT_EMAIL
+            from zerg.services.single_tenant import get_owner_email
+
+            owner_email = get_owner_email()
+
+            # First check if any user exists
+            user_count = crud.count_users(db)
+            if user_count > 0:
+                # Try to get the owner user
+                user = crud.get_user_by_email(db, owner_email)
+                if user is not None:
+                    return user
+                # Fall back to first user if owner email doesn't match
+                # (handles migration scenarios)
+                first_user = db.query(crud.User).first()
+                if first_user is not None:
+                    return first_user
+
+            # No users exist - create the owner user
+            try:
+                return crud.create_user(
+                    db,
+                    email=owner_email,
+                    provider="local" if owner_email == OSS_DEFAULT_EMAIL else None,
+                    provider_user_id="local-user-1" if owner_email == OSS_DEFAULT_EMAIL else None,
+                    role=desired_role,
+                )
+            except Exception as e:  # noqa: BLE001 – catch IntegrityError from any DB driver
+                error_str = str(e).lower()
+                if "duplicate" in error_str or "unique" in error_str:
+                    db.rollback()
+                    user = crud.get_user_by_email(db, owner_email)
+                    if user is not None:
+                        return user
+                raise
+
+        # Legacy multi-tenant dev mode: use dev@local user
         user = crud.get_user_by_email(db, self.DEV_EMAIL)
         if user is not None:
             if getattr(user, "role", "USER") != desired_role:
