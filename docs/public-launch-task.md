@@ -61,7 +61,7 @@ We focus on UX improvements + onboarding clarity. No deep backend refactors unle
 - [ ] Provide 3 install paths (quick, guided, developer).
 - [ ] Add screenshots and a short “what you get” section.
 - [x] Add a single onboarding smoke command to verify first-run.
-- [ ] Add README “onboarding contract” block and CI runner (docs-as-source).
+- [x] Add README “onboarding contract” block and CI runner (docs-as-source).
 
 ## Current State (Summary)
 - Timeline is now the primary nav item and default route for authenticated/dev users.
