@@ -19,130 +19,24 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 from dataclasses import dataclass
 from typing import Any
 from typing import List
 from typing import Optional
 from typing import Sequence
 
-from langchain_core.messages import BaseMessage
-from langchain_core.messages import HumanMessage
-from langchain_core.messages import SystemMessage
 from sqlalchemy.orm import Session
 
 from zerg.callbacks.token_stream import set_current_thread_id
-from zerg.config import get_settings
 from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
-from zerg.connectors.status_builder import build_fiche_context
 from zerg.crud import crud
-from zerg.crud import knowledge_crud
 from zerg.models.models import Fiche as FicheModel
 from zerg.models.models import Thread as ThreadModel
 from zerg.models.models import ThreadMessage as ThreadMessageModel
-from zerg.prompts.connector_protocols import get_connector_protocols
-from zerg.services import memory_embeddings
-from zerg.services import memory_search as memory_search_service
 from zerg.services.thread_service import ThreadService
-from zerg.tools.builtin.knowledge_tools import extract_snippets
 
 logger = logging.getLogger(__name__)
-
-
-_TIMESTAMP_PREFIX_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\]\s*")
-
-
-def _strip_timestamp_prefix(text: str) -> str:
-    return _TIMESTAMP_PREFIX_RE.sub("", text or "").strip()
-
-
-def _truncate(text: str, max_chars: int = 220) -> str:
-    if not text:
-        return ""
-    clean = " ".join(text.split())
-    if len(clean) <= max_chars:
-        return clean
-    return clean[:max_chars].rstrip() + "…"
-
-
-def _build_memory_context(
-    db: Session,
-    *,
-    owner_id: int,
-    query: str | None,
-    memory_limit: int = 3,
-    knowledge_limit: int = 3,
-) -> str | None:
-    if not query:
-        return None
-
-    settings = get_settings()
-    use_embeddings = memory_embeddings.embeddings_enabled(settings)
-
-    try:
-        memory_hits = memory_search_service.search_memory_files(
-            db,
-            owner_id=owner_id,
-            query=query,
-            limit=memory_limit,
-            use_embeddings=use_embeddings,
-        )
-    except Exception as e:
-        logger.warning("Memory search failed: %s", e)
-        memory_hits = []
-
-    try:
-        knowledge_hits = knowledge_crud.search_knowledge_documents(
-            db,
-            owner_id=owner_id,
-            query=query,
-            limit=knowledge_limit,
-        )
-    except Exception as e:
-        logger.warning("Knowledge search failed: %s", e)
-        knowledge_hits = []
-
-    if not memory_hits and not knowledge_hits:
-        return None
-
-    lines = ["[MEMORY CONTEXT]"]
-
-    if memory_hits:
-        lines.append("Memory Files:")
-        for hit in memory_hits:
-            snippet = ""
-            snippets = hit.get("snippets") or []
-            if snippets:
-                snippet = _truncate(snippets[0])
-            lines.append(f"- {hit.get('path')}: {snippet}".rstrip())
-
-    if knowledge_hits:
-        lines.append("Knowledge Base:")
-        for doc, source in knowledge_hits:
-            snippets = extract_snippets(doc.content_text, query, max_snippets=1)
-            snippet = _truncate(snippets[0]) if snippets else ""
-            lines.append(f"- {source.name} :: {doc.path}: {snippet}".rstrip())
-
-    return "\n".join(lines)
-
-
-def _latest_user_query(
-    *,
-    unprocessed_rows: list[ThreadMessageModel] | None = None,
-    conversation_msgs: list[BaseMessage] | None = None,
-) -> str | None:
-    if unprocessed_rows:
-        for row in reversed(unprocessed_rows):
-            if row.role == "user" and not getattr(row, "internal", False):
-                return (row.content or "").strip() or None
-
-    if conversation_msgs:
-        for msg in reversed(conversation_msgs):
-            if isinstance(msg, HumanMessage):
-                return _strip_timestamp_prefix(msg.content)
-
-    return None
 
 
 class FicheInterrupted(Exception):
@@ -293,70 +187,16 @@ class Runner:  # noqa: D401 – naming follows project conventions
 
     async def run_thread(self, db: Session, thread: ThreadModel) -> Sequence[ThreadMessageModel]:
         """Process unprocessed messages and return created assistant message rows."""
+        from zerg.managers.message_array_builder import MessageArrayBuilder
 
         logger.info(f"[Runner] Starting run_thread for thread {thread.id}, agent {self.agent.id}", extra={"tag": "AGENT"})
-
-        # Load conversation history from DB (excludes system messages - those are injected fresh)
-        db_messages = self.thread_service.get_thread_messages_as_langchain(db, thread.id)
-
-        # Filter out any system messages from DB (they're stale - we inject fresh below)
-        conversation_msgs = [msg for msg in db_messages if not (hasattr(msg, "type") and msg.type == "system")]
-        logger.debug(f"[Runner] Retrieved {len(conversation_msgs)} conversation messages from thread (filtered out stale system messages)")
-
-        # ------------------------------------------------------------------
-        # ALWAYS inject fresh system prompt from agent configuration
-        # This ensures the agent always runs with current instructions,
-        # even after history clears or prompt updates
-        # ------------------------------------------------------------------
 
         # Load agent from DB to get current system_instructions
         agent_row = crud.get_fiche(db, self.agent.id)
         if not agent_row or not agent_row.system_instructions:
             raise RuntimeError(f"Fiche {self.agent.id} has no system_instructions")
 
-        # Build system message with connector protocols prepended
-        protocols = get_connector_protocols()
-        system_content = f"{protocols}\n\n{agent_row.system_instructions}"
-
-        skill_integration, skill_max = self._build_skill_integration(db, agent_row)
-        if skill_integration:
-            try:
-                skills_prompt = skill_integration.get_prompt(include_content=False, max_skills=skill_max)
-                if skills_prompt:
-                    system_content = f"{system_content}\n\n{skills_prompt}"
-                    logger.debug("[Runner] Injected skills prompt for agent %s", self.agent.id)
-            except Exception as e:
-                logger.warning("[Runner] Failed to inject skills prompt: %s", e, exc_info=True)
-
-        system_msg = SystemMessage(content=system_content)
-
-        # ------------------------------------------------------------------
-        # MESSAGE LAYOUT OPTIMIZED FOR LLM PROMPT CACHING
-        # ------------------------------------------------------------------
-        # Both OpenAI and Anthropic use prefix-based caching: identical prefix = cache hit.
-        # Dynamic content (connector status, memory, timestamps) changes every turn,
-        # so placing it early cache-busts the entire conversation history.
-        #
-        # BEFORE (cache-busting layout):
-        #   [system_prompt] → [connector_status] → [memory] → [conversation] → [user_msg]
-        #                          ↑                 ↑
-        #                     CACHE BUST!       CACHE BUST!
-        #
-        # AFTER (cache-optimized layout):
-        #   [system_prompt] → [conversation] → [dynamic_context + user_msg]
-        #        cacheable       cacheable            per-turn only
-        #
-        # NOTE: We inject dynamic context as a HumanMessage before the last user
-        # message since most providers only allow system messages at position 0.
-        # This preserves cache hits on the [system + conversation] prefix.
-        # ------------------------------------------------------------------
-
-        # Start with system message + conversation history (cacheable prefix)
-        original_msgs = [system_msg] + conversation_msgs
-        logger.debug(
-            f"[Runner] Injected fresh system prompt ({len(agent_row.system_instructions)} chars) + {len(conversation_msgs)} conversation messages"
-        )
-
+        # Check for unprocessed messages before building the full message array
         unprocessed_rows = crud.get_unprocessed_messages(db, thread.id)
         logger.debug(f"[Runner] Found {len(unprocessed_rows)} unprocessed messages")
 
@@ -365,55 +205,24 @@ class Runner:  # noqa: D401 – naming follows project conventions
             return []  # Return empty list if no work
 
         # ------------------------------------------------------------------
-        # Build dynamic context (connector status + memory) - injected LATE
+        # Build message array using MessageArrayBuilder (cache-optimized)
+        # Layout: [system] -> [conversation] -> [dynamic_context]
         # ------------------------------------------------------------------
-        dynamic_context_parts: list[str] = []
-
-        # 1. Connector status context
-        try:
-            context_text = build_fiche_context(
-                db=db,
-                owner_id=self.agent.owner_id,
-                fiche_id=self.agent.id,
+        builder_result = (
+            MessageArrayBuilder(db, self.agent)
+            .with_system_prompt(agent_row)
+            .with_conversation(thread.id, thread_service=self.thread_service)
+            .with_dynamic_context(
                 allowed_tools=getattr(agent_row, "allowed_tools", None),
-                compact_json=True,
+                unprocessed_rows=unprocessed_rows,
             )
-            dynamic_context_parts.append(f"[INTERNAL CONTEXT - Do not mention unless asked]\n{context_text}")
-            logger.debug(
-                "[Runner] Built connector context for agent %s (owner_id=%s)",
-                self.agent.id,
-                self.agent.owner_id,
-            )
-        except Exception as e:
-            # Graceful degradation: if context injection fails, agent still runs
-            logger.warning(
-                "[Runner] Failed to build connector context: %s. Fiche will run without status awareness.",
-                e,
-                exc_info=True,
-                extra={"tag": "AGENT"},
-            )
-
-        # 2. Memory recall context (episodic + knowledge)
-        memory_query = _latest_user_query(
-            unprocessed_rows=unprocessed_rows,
-            conversation_msgs=conversation_msgs,
+            .build()
         )
-        memory_context = _build_memory_context(
-            db,
-            owner_id=self.agent.owner_id,
-            query=memory_query,
-        )
-        if memory_context:
-            dynamic_context_parts.append(memory_context)
-            logger.debug("[Runner] Built memory context for thread %s", thread.id)
+        original_msgs = builder_result.messages
+        skill_integration = builder_result.skill_integration
+        messages_with_context = builder_result.message_count_with_context
 
-        # Inject dynamic context as a single SystemMessage AFTER conversation history
-        # This preserves the cacheable [system_prompt + conversation] prefix
-        if dynamic_context_parts:
-            combined_context = "\n\n".join(dynamic_context_parts)
-            context_msg = SystemMessage(content=combined_context)
-            original_msgs.append(context_msg)
-            logger.debug("[Runner] Injected dynamic context at end of message array (cache-optimized position)")
+        logger.debug(f"[Runner] Built message array: {messages_with_context} messages (system + conversation + dynamic context)")
 
         # ------------------------------------------------------------------
         # Token-streaming context handling: set the *current* thread so the
@@ -445,8 +254,6 @@ class Runner:  # noqa: D401 – naming follows project conventions
         )
 
         try:
-            # Track count of messages sent to LLM (including injected context)
-            messages_with_context = len(original_msgs)
             logger.info(f"[Runner] Calling LLM with {messages_with_context} messages (thread={thread.id})", extra={"tag": "LLM"})
 
             # Optional debug: dump full LLM input to file (set DEBUG_LLM_INPUT=1)
@@ -699,6 +506,7 @@ class Runner:  # noqa: D401 – naming follows project conventions
         from zerg.connectors.context import reset_credential_resolver
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
+        from zerg.managers.message_array_builder import MessageArrayBuilder
         from zerg.services.oikos_react_engine import run_oikos_loop
         from zerg.tools.unified_access import get_tool_resolver
 
@@ -707,17 +515,20 @@ class Runner:  # noqa: D401 – naming follows project conventions
             extra={"tag": "AGENT"},
         )
 
-        # Load conversation history from DB
+        # Load agent from DB to get current system_instructions
+        agent_row = crud.get_fiche(db, self.agent.id)
+        if not agent_row or not agent_row.system_instructions:
+            raise RuntimeError(f"Fiche {self.agent.id} has no system_instructions")
+
+        # Load conversation history from DB to check for existing tool response
         db_messages = self.thread_service.get_thread_messages_as_langchain(db, thread.id)
-        conversation_msgs = [msg for msg in db_messages if not (hasattr(msg, "type") and msg.type == "system")]
 
         # Check if ToolMessage for this tool_call_id already exists (idempotency)
         existing_tool_response = any(isinstance(m, ToolMessage) and m.tool_call_id == tool_call_id for m in db_messages)
+        tool_msgs_to_inject = []
 
         if existing_tool_response:
             logger.info(f"[Runner] ToolMessage for tool_call_id={tool_call_id} already exists, skipping creation")
-            # Reload conversation with existing tool message
-            tool_msg = next(m for m in db_messages if isinstance(m, ToolMessage) and m.tool_call_id == tool_call_id)
         else:
             # Create ToolMessage for the commis result
             tool_msg = ToolMessage(
@@ -760,81 +571,31 @@ class Runner:  # noqa: D401 – naming follows project conventions
             )
             logger.debug(f"[Runner] Persisted ToolMessage for tool_call_id={tool_call_id} (parent_id={parent_id})")
 
-        # Build fresh system prompt
-        agent_row = crud.get_fiche(db, self.agent.id)
-        if not agent_row or not agent_row.system_instructions:
-            raise RuntimeError(f"Fiche {self.agent.id} has no system_instructions")
-
-        protocols = get_connector_protocols()
-        system_content = f"{protocols}\n\n{agent_row.system_instructions}"
-
-        skill_integration, skill_max = self._build_skill_integration(db, agent_row)
-        if skill_integration:
-            try:
-                skills_prompt = skill_integration.get_prompt(include_content=False, max_skills=skill_max)
-                if skills_prompt:
-                    system_content = f"{system_content}\n\n{skills_prompt}"
-                    logger.debug("[Runner] Injected skills prompt for agent %s (continuation)", self.agent.id)
-            except Exception as e:
-                logger.warning("[Runner] Failed to inject skills prompt (continuation): %s", e, exc_info=True)
-
-        system_msg = SystemMessage(content=system_content)
+            # The tool_msg was persisted, so conversation will include it when reloaded
+            tool_msgs_to_inject = [tool_msg]
 
         # ------------------------------------------------------------------
-        # MESSAGE LAYOUT OPTIMIZED FOR LLM PROMPT CACHING (continuation)
-        # See run_thread() for detailed rationale. Same principle applies:
-        # [system_prompt] → [conversation] → [dynamic_context]
-        #      cacheable       cacheable        per-turn only
+        # Build message array using MessageArrayBuilder (cache-optimized)
+        # Layout: [system] -> [conversation] -> [tool_messages] -> [dynamic_context]
+        # Note: If tool message was just persisted, it won't be in the conversation
+        # yet (we need to reload or inject manually)
         # ------------------------------------------------------------------
+        builder = MessageArrayBuilder(db, self.agent)
+        builder.with_system_prompt(agent_row)
+        builder.with_conversation(thread.id, thread_service=self.thread_service)
 
-        # Build full message list for continuation (cacheable prefix)
-        # conversation_msgs already includes the AIMessage with tool_calls
-        if existing_tool_response:
-            # ToolMessage already in conversation_msgs, don't add again
-            full_messages = [system_msg] + conversation_msgs
-        else:
-            # Add the newly created tool result
-            full_messages = [system_msg] + conversation_msgs + [tool_msg]
+        # Add the new tool message if it wasn't already in the conversation
+        if tool_msgs_to_inject:
+            builder.with_tool_messages(tool_msgs_to_inject)
 
-        # Build dynamic context (connector status + memory) - injected LATE
-        dynamic_context_parts: list[str] = []
+        builder.with_dynamic_context(allowed_tools=getattr(agent_row, "allowed_tools", None))
 
-        # 1. Connector status context
-        try:
-            context_text = build_fiche_context(
-                db=db,
-                owner_id=self.agent.owner_id,
-                fiche_id=self.agent.id,
-                allowed_tools=getattr(agent_row, "allowed_tools", None),
-                compact_json=True,
-            )
-            dynamic_context_parts.append(f"[INTERNAL CONTEXT - Do not mention unless asked]\n{context_text}")
-        except Exception as e:
-            logger.warning(
-                "[Runner] Failed to build connector context in continuation: %s",
-                e,
-                exc_info=True,
-            )
+        builder_result = builder.build()
+        full_messages = builder_result.messages
+        skill_integration = builder_result.skill_integration
+        messages_with_context = builder_result.message_count_with_context
 
-        # 2. Memory recall context (use latest user message)
-        memory_query = _latest_user_query(conversation_msgs=conversation_msgs)
-        memory_context = _build_memory_context(
-            db,
-            owner_id=self.agent.owner_id,
-            query=memory_query,
-        )
-        if memory_context:
-            dynamic_context_parts.append(memory_context)
-            logger.debug("[Runner] Built memory context for continuation thread %s", thread.id)
-
-        # Inject dynamic context at end (cache-optimized position)
-        if dynamic_context_parts:
-            combined_context = "\n\n".join(dynamic_context_parts)
-            context_msg = SystemMessage(content=combined_context)
-            full_messages.append(context_msg)
-            logger.debug("[Runner] Injected dynamic context at end (continuation, cache-optimized)")
-
-        messages_with_context = len(full_messages)
+        logger.debug(f"[Runner] Built continuation message array: {messages_with_context} messages")
 
         # Set up credential resolver context
         credential_resolver = CredentialResolver(
@@ -852,14 +613,6 @@ class Runner:  # noqa: D401 – naming follows project conventions
             resolver = get_tool_resolver()
             allowed_tools = getattr(agent_row, "allowed_tools", None)
             tools = resolver.filter_by_allowlist(allowed_tools)
-            if skill_integration:
-                tool_map = {tool.name: tool for tool in tools}
-                try:
-                    skill_tools = skill_integration.get_tools(tool_map)
-                    if skill_tools:
-                        tools = tools + skill_tools
-                except Exception as e:
-                    logger.warning("[Runner] Failed to build skill tools (batch continuation): %s", e, exc_info=True)
             if skill_integration:
                 tool_map = {tool.name: tool for tool in tools}
                 try:
@@ -1001,6 +754,7 @@ class Runner:  # noqa: D401 – naming follows project conventions
         from zerg.connectors.context import reset_credential_resolver
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
+        from zerg.managers.message_array_builder import MessageArrayBuilder
         from zerg.services.oikos_react_engine import run_oikos_loop
         from zerg.tools.unified_access import get_tool_resolver
 
@@ -1009,9 +763,13 @@ class Runner:  # noqa: D401 – naming follows project conventions
             extra={"tag": "AGENT"},
         )
 
-        # Load conversation history from DB
+        # Load agent from DB to get current system_instructions
+        agent_row = crud.get_fiche(db, self.agent.id)
+        if not agent_row or not agent_row.system_instructions:
+            raise RuntimeError(f"Fiche {self.agent.id} has no system_instructions")
+
+        # Load conversation history from DB to check for existing tool responses
         db_messages = self.thread_service.get_thread_messages_as_langchain(db, thread.id)
-        conversation_msgs = [msg for msg in db_messages if not (hasattr(msg, "type") and msg.type == "system")]
 
         # Find the parent assistant message for tool response grouping
         from zerg.models.thread import ThreadMessage as ThreadMessageModel
@@ -1031,7 +789,6 @@ class Runner:  # noqa: D401 – naming follows project conventions
             parent_id = parent_msg.id
 
         # Create ToolMessages for ALL commis results
-        tool_messages = []
         for wr in commis_results:
             tool_call_id = wr.get("tool_call_id")
             result = wr.get("result") or ""
@@ -1043,8 +800,6 @@ class Runner:  # noqa: D401 – naming follows project conventions
 
             if existing:
                 logger.debug(f"[Runner] ToolMessage for tool_call_id={tool_call_id} already exists")
-                # Find and reuse existing
-                tool_msg = next(m for m in db_messages if isinstance(m, ToolMessage) and m.tool_call_id == tool_call_id)
             else:
                 # Create ToolMessage with error context if failed
                 if error or status == "failed":
@@ -1068,80 +823,23 @@ class Runner:  # noqa: D401 – naming follows project conventions
                 )
                 logger.debug(f"[Runner] Persisted ToolMessage for tool_call_id={tool_call_id}")
 
-            tool_messages.append(tool_msg)
-
-        # Build fresh system prompt
-        agent_row = crud.get_fiche(db, self.agent.id)
-        if not agent_row or not agent_row.system_instructions:
-            raise RuntimeError(f"Fiche {self.agent.id} has no system_instructions")
-
-        protocols = get_connector_protocols()
-        system_content = f"{protocols}\n\n{agent_row.system_instructions}"
-
-        skill_integration, skill_max = self._build_skill_integration(db, agent_row)
-        if skill_integration:
-            try:
-                skills_prompt = skill_integration.get_prompt(include_content=False, max_skills=skill_max)
-                if skills_prompt:
-                    system_content = f"{system_content}\n\n{skills_prompt}"
-                    logger.debug("[Runner] Injected skills prompt for agent %s (batch continuation)", self.agent.id)
-            except Exception as e:
-                logger.warning("[Runner] Failed to inject skills prompt (batch continuation): %s", e, exc_info=True)
-
-        system_msg = SystemMessage(content=system_content)
-
         # ------------------------------------------------------------------
-        # MESSAGE LAYOUT OPTIMIZED FOR LLM PROMPT CACHING (batch continuation)
-        # See run_thread() for detailed rationale. Same principle applies:
-        # [system_prompt] → [conversation] → [dynamic_context]
-        #      cacheable       cacheable        per-turn only
+        # Build message array using MessageArrayBuilder (cache-optimized)
+        # Layout: [system] -> [conversation] -> [dynamic_context]
+        # Note: We reload conversation to include newly persisted tool messages
         # ------------------------------------------------------------------
-
-        # Build full message list for continuation (cacheable prefix)
-        # Reload conversation to include newly persisted tool messages
-        db_messages = self.thread_service.get_thread_messages_as_langchain(db, thread.id)
-        conversation_msgs = [msg for msg in db_messages if not (hasattr(msg, "type") and msg.type == "system")]
-        full_messages = [system_msg] + conversation_msgs
-
-        # Build dynamic context (connector status + memory) - injected LATE
-        dynamic_context_parts: list[str] = []
-
-        # 1. Connector status context
-        try:
-            context_text = build_fiche_context(
-                db=db,
-                owner_id=self.agent.owner_id,
-                fiche_id=self.agent.id,
-                allowed_tools=getattr(agent_row, "allowed_tools", None),
-                compact_json=True,
-            )
-            dynamic_context_parts.append(f"[INTERNAL CONTEXT - Do not mention unless asked]\n{context_text}")
-        except Exception as e:
-            logger.warning(
-                "[Runner] Failed to build connector context in batch continuation: %s",
-                e,
-                exc_info=True,
-            )
-
-        # 2. Memory recall context (use latest user message)
-        memory_query = _latest_user_query(conversation_msgs=conversation_msgs)
-        memory_context = _build_memory_context(
-            db,
-            owner_id=self.agent.owner_id,
-            query=memory_query,
+        builder_result = (
+            MessageArrayBuilder(db, self.agent)
+            .with_system_prompt(agent_row)
+            .with_conversation(thread.id, thread_service=self.thread_service)
+            .with_dynamic_context(allowed_tools=getattr(agent_row, "allowed_tools", None))
+            .build()
         )
-        if memory_context:
-            dynamic_context_parts.append(memory_context)
-            logger.debug("[Runner] Built memory context for batch continuation thread %s", thread.id)
+        full_messages = builder_result.messages
+        skill_integration = builder_result.skill_integration
+        messages_with_context = builder_result.message_count_with_context
 
-        # Inject dynamic context at end (cache-optimized position)
-        if dynamic_context_parts:
-            combined_context = "\n\n".join(dynamic_context_parts)
-            context_msg = SystemMessage(content=combined_context)
-            full_messages.append(context_msg)
-            logger.debug("[Runner] Injected dynamic context at end (batch continuation, cache-optimized)")
-
-        messages_with_context = len(full_messages)
+        logger.debug(f"[Runner] Built batch continuation message array: {messages_with_context} messages")
 
         # Set up credential resolver context
         credential_resolver = CredentialResolver(
@@ -1159,6 +857,14 @@ class Runner:  # noqa: D401 – naming follows project conventions
             resolver = get_tool_resolver()
             allowed_tools = getattr(agent_row, "allowed_tools", None)
             tools = resolver.filter_by_allowlist(allowed_tools)
+            if skill_integration:
+                tool_map = {tool.name: tool for tool in tools}
+                try:
+                    skill_tools = skill_integration.get_tools(tool_map)
+                    if skill_tools:
+                        tools = tools + skill_tools
+                except Exception as e:
+                    logger.warning("[Runner] Failed to build skill tools (batch continuation): %s", e, exc_info=True)
 
             # Reset usage tracking
             from zerg.services.oikos_react_engine import reset_llm_usage
