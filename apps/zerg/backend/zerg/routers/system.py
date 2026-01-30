@@ -38,6 +38,19 @@ def system_info() -> Dict[str, Any]:
     }
 
 
+@router.get("/capabilities", status_code=status.HTTP_200_OK)
+def system_capabilities() -> Dict[str, Any]:
+    """Return system capability flags for graceful degradation.
+
+    Used by frontend to determine which features are available based on
+    configured API keys and services.
+    """
+    return {
+        "llm_available": _settings.llm_available,
+        "auth_disabled": _settings.auth_disabled,
+    }
+
+
 @router.get("/health", status_code=status.HTTP_200_OK)
 def health() -> Dict[str, Any]:
     """Lightweight readiness probe used by E2E tests.
