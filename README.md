@@ -91,6 +91,41 @@ scripts/                # Dev tools + generators
 
 ---
 
+## Onboarding Contract (CI)
+
+This block is parsed by CI to validate that onboarding steps still work as documented.
+
+<!-- onboarding-contract:start -->
+```json
+{
+  "workdir": "/tmp/zerg-onboarding-funnel",
+  "primary_route": "/timeline",
+  "cta_buttons": [
+    {
+      "label": "Open Integrations",
+      "selector": ".timeline-step button:has-text('Open Integrations')"
+    },
+    {
+      "label": "Load demo",
+      "selector": ".timeline-step button:has-text('Load demo')"
+    }
+  ],
+  "steps": [
+    "cp .env.example .env",
+    "bun install",
+    "make dev-bg",
+    "curl -fsS http://localhost:30080/timeline",
+    "cd apps/zerg/e2e && PLAYWRIGHT_BASE_URL=http://localhost:30080 bunx playwright test --config playwright.onboarding.config.js"
+  ],
+  "cleanup": [
+    "make stop"
+  ]
+}
+```
+<!-- onboarding-contract:end -->
+
+---
+
 ## License
 
 ISC
