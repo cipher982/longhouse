@@ -6,6 +6,7 @@ from sqlalchemy import CheckConstraint
 from sqlalchemy import Column
 from sqlalchemy import Date
 from sqlalchemy import DateTime
+from sqlalchemy import Float
 from sqlalchemy import ForeignKey
 from sqlalchemy import Index
 from sqlalchemy import Integer
@@ -820,6 +821,58 @@ class MemoryEmbedding(Base):
     memory_file = relationship("MemoryFile", backref=backref("embeddings", passive_deletes=True))
 
     __table_args__ = (UniqueConstraint("owner_id", "memory_file_id", "model", name="uq_memory_embedding"),)
+
+
+# ---------------------------------------------------------------------------
+# Memory – Simplified persistent memory for agents (v2)
+# ---------------------------------------------------------------------------
+
+
+class Memory(Base):
+    """Persistent memory for Oikos/agents.
+
+    Simpler than MemoryFile - designed for natural "remember X" style storage.
+    Scope model:
+    - fiche_id = NULL → global memory (user-level), available to all fiches
+    - fiche_id = X → fiche-specific, only this agent sees it
+
+    Retrieval should use: WHERE user_id = ? AND (fiche_id IS NULL OR fiche_id = ?)
+    """
+
+    __tablename__ = "memories"
+    __table_args__ = (
+        Index("ix_memories_user_fiche", "user_id", "fiche_id"),
+        Index("ix_memories_user_type", "user_id", "type"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
+
+    # Owner (user)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Optional fiche scope (NULL = global memory available to all fiches)
+    # Note: Fiche.id is Integer, not UUID
+    fiche_id = Column(Integer, ForeignKey("fiches.id", ondelete="CASCADE"), nullable=True)
+
+    # The memory content itself
+    content = Column(Text, nullable=False)
+
+    # Optional categorization
+    type = Column(String(50), nullable=True)  # note, decision, bug, preference, fact
+    source = Column(String(100), nullable=True)  # oikos, user, import
+
+    # Confidence score (1.0 = certain, lower = less confident)
+    confidence = Column(Float, nullable=False, server_default="1.0")
+
+    # Optional expiration for temporary memories
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # Relationships
+    user = relationship("User", backref="memories")
+    fiche = relationship("Fiche", backref="memories")
 
 
 # ---------------------------------------------------------------------------
