@@ -112,7 +112,7 @@ function WelcomeHeader() {
         </button>
 
         <div className="header-brand">
-          <a href="/dashboard" className="brand-link" onClick={(e) => { e.preventDefault(); navigate('/dashboard'); }}>
+          <a href="/timeline" className="brand-link" onClick={(e) => { e.preventDefault(); navigate('/timeline'); }}>
             <div className="brand-logo-wrapper">
               <img
                 src="/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png"

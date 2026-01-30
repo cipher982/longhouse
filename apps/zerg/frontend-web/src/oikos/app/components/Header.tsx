@@ -9,6 +9,7 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
+  { label: 'Timeline', href: '/timeline' },
   { label: 'Chat', href: '/chat' },
   { label: 'Dashboard', href: '/dashboard' },
   { label: 'Canvas', href: '/canvas' },
@@ -28,7 +29,7 @@ export function Header({ onSync, onReset, isResetting }: HeaderProps) {
   return (
     <div className="main-header">
       <div className="header-brand">
-        <a href="/chat" className="brand-link">
+        <a href="/timeline" className="brand-link">
           <div className="brand-logo-wrapper">
             <img
               src="/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png"

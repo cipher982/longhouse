@@ -23,7 +23,11 @@ import App from '../oikos/app/App';
 import { oikosToolStore, type OikosToolCall } from '../oikos/lib/oikos-tool-store';
 
 // API functions
-import { fetchThreadByTitle, fetchThreadMessages, request } from '../services/api';
+import { fetchThreadByTitle, fetchThreadMessages, request, fetchSystemCapabilities } from '../services/api';
+
+// Components
+import { ApiKeyModal } from '../components/ApiKeyModal';
+import '../components/ApiKeyModal.css';
 
 const DEMO_THREAD_TITLES: Record<string, string> = {
   'oikos-math': '[scenario:oikos-math] Oikos math (2+2)',
@@ -37,6 +41,45 @@ export default function OikosChatPage() {
   const [initialMessages, setInitialMessages] = useState<ChatMessage[] | undefined>(undefined);
   const [loading, setLoading] = useState(!!threadTitle || !!demoScenario);
   const { showSessionPicker } = useSessionPicker();
+
+  // API key availability state
+  const [llmAvailable, setLlmAvailable] = useState<boolean | null>(null);
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+
+  // Check system capabilities on mount
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkCapabilities = async () => {
+      try {
+        const caps = await fetchSystemCapabilities();
+        if (!cancelled) {
+          setLlmAvailable(caps.llm_available);
+          // Show modal if LLM is not available
+          if (!caps.llm_available) {
+            setShowApiKeyModal(true);
+          }
+        }
+      } catch (error) {
+        // If capabilities endpoint fails, assume LLM is available (fail open)
+        console.warn('Failed to fetch system capabilities:', error);
+        if (!cancelled) {
+          setLlmAvailable(true);
+        }
+      }
+    };
+
+    void checkCapabilities();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleOpenIntegrations = useCallback(() => {
+    setShowApiKeyModal(false);
+    navigate('/integrations');
+  }, [navigate]);
 
   // Handle session picker event from oikos
   const handleShowSessionPicker = useCallback(
@@ -204,6 +247,11 @@ export default function OikosChatPage() {
       <div className="oikos-container">
         <App embedded={true} />
       </div>
+      <ApiKeyModal
+        isOpen={showApiKeyModal}
+        onClose={() => setShowApiKeyModal(false)}
+        onOpenIntegrations={handleOpenIntegrations}
+      />
     </AppProvider>
   );
 }
