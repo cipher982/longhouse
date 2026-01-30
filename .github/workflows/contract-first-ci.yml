@@ -163,3 +163,17 @@ jobs:
 
     - name: Run E2E Tests (core + a11y)
       run: make test-e2e
+
+  onboarding-contract:
+    runs-on: cube
+    needs: validate
+    name: "📋 onboarding-contract--docs-as-source"
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Docker Compose
+      run: docker compose version
+
+    - name: Run onboarding funnel
+      run: ./scripts/run-onboarding-funnel.sh

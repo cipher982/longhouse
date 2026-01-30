@@ -28,10 +28,10 @@ We must follow this doc for scope, finish conditions, and validation steps.
 - [x] App landing or first-run experience clearly points to Timeline as the product.
 - [x] New users can see demo sessions without API keys.
 - [ ] README rewritten to highlight timeline-first value and 3 install paths.
-- [ ] Onboarding smoke command exists and passes locally.
+- [x] Onboarding smoke command exists and passes locally.
 - [x] README onboarding contract is validated in CI (docs-as-source).
 - [x] Onboarding funnel passes locally from a fresh clone with no hidden env flags.
-- [ ] CI “Onboarding Funnel” job is green on a clean push (contract + UI selectors).
+- [x] CI "Onboarding Funnel" job is green on a clean push (contract + UI selectors).
 - [ ] Core UI smoke snapshots pass (qa-ui-smoke).
 - [ ] Shipper smoke test passes (if shipper path is enabled in the flow).
 

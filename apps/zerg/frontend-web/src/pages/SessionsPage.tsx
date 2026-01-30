@@ -508,6 +508,7 @@ export default function SessionsPage() {
                   variant="primary"
                   onClick={handleSeedDemo}
                   disabled={demoSeedStatus === "loading"}
+                  data-testid="demo-cta"
                 >
                   {demoSeedStatus === "loading" ? "Loading demo..." : "Load demo"}
                 </Button>

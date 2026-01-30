@@ -157,3 +157,24 @@ Issues and PRs welcome. This is a personal project so response times vary.
 ## License
 
 ISC
+
+---
+
+<!-- onboarding-contract:start -->
+```json
+{
+  "primary_route": "/timeline",
+  "steps": [
+    "cp .env.example .env",
+    "docker compose -f docker/docker-compose.dev.yml up -d --wait",
+    "curl -sf --retry 10 --retry-delay 2 http://localhost:30080/health"
+  ],
+  "cleanup": [
+    "docker compose -f docker/docker-compose.dev.yml down -v"
+  ],
+  "cta_buttons": [
+    {"label": "Load demo", "selector": "[data-testid='demo-cta']"}
+  ]
+}
+```
+<!-- onboarding-contract:end -->
