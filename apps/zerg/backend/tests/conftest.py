@@ -174,7 +174,7 @@ def _get_connection_options(schema: str) -> str:
         f"-c search_path={schema},public "
         f"-c application_name={_get_application_name()} "
         "-c idle_in_transaction_session_timeout=60s "
-        "-c lock_timeout=10s "
+        "-c lock_timeout=60s "
         "-c statement_timeout=180s"
     )
 
@@ -755,14 +755,27 @@ def _db_schema():
             pass  # Best effort cleanup
 
 
+# Advisory lock ID for serializing TRUNCATE across xdist workers
+# This prevents deadlocks when workers acquire table locks in different orders
+TRUNCATE_LOCK_ID = 0x7E5F5B01
+
+
 def _truncate_all_tables(connection):
-    """Truncate all tables efficiently using a single statement."""
+    """Truncate all tables efficiently using a single statement.
+
+    Uses an advisory lock to serialize TRUNCATE across xdist workers,
+    preventing deadlocks when workers acquire table locks in different orders.
+    """
     from sqlalchemy import text
 
     # Get all table names in dependency order (reverse for truncation)
     table_names = [t.name for t in reversed(Base.metadata.sorted_tables)]
     if not table_names:
         return
+
+    # Acquire advisory lock to serialize TRUNCATE across workers
+    # pg_advisory_xact_lock is transaction-scoped and auto-released on commit
+    connection.execute(text(f"SELECT pg_advisory_xact_lock({TRUNCATE_LOCK_ID})"))
 
     # Use TRUNCATE ... CASCADE for speed (single statement, minimal WAL)
     # RESTART IDENTITY resets sequences for predictable IDs
