@@ -1,6 +1,6 @@
-# Zerg TODO
+# Zerg TODO (Master Task List)
 
-Active work items tracked outside of GitHub issues. For agent-tracked TODOs see AGENTS.md.
+Canonical task list for parallel agents. Keep AGENTS.md lean; do not duplicate tasks there.
 
 ---
 
@@ -81,3 +81,28 @@ Workspace commis emit only `commis_started` and `commis_complete` - no tool even
 - [x] Sauron gotchas documented in README (2026-01-30)
 - [x] Life Hub agent migration complete - Zerg owns agents DB (2026-01-28)
 - [x] Single-tenant enforcement in agents API (2026-01-29)
+
+---
+
+## Vision Shift: SQLite-Only Runtime (Core)
+
+### Phase 0 — Tracking + Reality Checks
+- [ ] Audit and tag all Postgres-only codepaths (UUID/JSONB/schema/ILIKE) that block SQLite runtime
+- [ ] Define SQLite-compatible schema strategy (no schemas; table prefixes or shared metadata)
+- [ ] Decide whether SQLite uses separate migration path or conditional migrations
+
+### Phase 1 — Unblock SQLite Runtime
+- [ ] Remove SQLite rejection in `apps/zerg/backend/zerg/database.py`
+- [ ] Replace agents schema types (UUID/JSONB) with SQLite-compatible variants
+- [ ] Remove `require_postgres()` gates on agents endpoints and switch to capability checks
+- [ ] Update `apps/zerg/backend/alembic/versions/0002_agents_schema.py` to be SQLite-safe
+
+### Phase 2 — Agents + Timeline on SQLite
+- [ ] Ensure ingest + demo seed work on SQLite (no schema-qualified queries)
+- [ ] Update queries that use `ILIKE` or schema-qualified names
+- [ ] Verify timeline UI works end-to-end on SQLite
+
+### Phase 3 — Onboarding Validation (SQLite Path)
+- [ ] Run `make onboarding-smoke` and record result
+- [ ] Run `make onboarding-funnel` from fresh clone
+- [ ] Update README quick start to make SQLite the default path
