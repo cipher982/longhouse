@@ -763,3 +763,141 @@ class TestParallelSpawnCommisConfig:
         finally:
             reset_oikos_context(token)
             set_credential_resolver(None)
+
+    @pytest.mark.asyncio
+    async def test_parallel_spawn_commis_returns_interrupt_value(self, db_session, test_user):
+        """_execute_tools_parallel with spawn_commis should return interrupt_value for barrier creation.
+
+        Regression test for bug where parallel spawn_commis returned (tool_results, None)
+        instead of (tool_results, interrupt_value), causing runs to finish SUCCESS instead
+        of WAITING. This meant commis results only surfaced on the next user turn.
+
+        The fix ensures interrupt_value is returned with:
+        - type: "commiss_pending"
+        - job_ids: list of job IDs
+        - created_jobs: list of job info dicts for barrier creation
+        """
+        from zerg.models.models import CommisJob, Run
+        from zerg.models.enums import RunStatus, RunTrigger
+        from zerg.connectors.context import set_credential_resolver
+        from zerg.connectors.resolver import CredentialResolver
+        from zerg.services.oikos_context import set_oikos_context, reset_oikos_context
+        from zerg.services.oikos_react_engine import _execute_tools_parallel
+        from zerg.crud import crud
+        from zerg.services.thread_service import ThreadService
+
+        # Create fiche, thread, and run for the oikos context
+        fiche = crud.create_fiche(
+            db=db_session,
+            owner_id=test_user.id,
+            name="Test Oikos Interrupt",
+            model=TEST_MODEL,
+            system_instructions="Test oikos",
+            task_instructions="",
+        )
+        thread = ThreadService.create_thread_with_system_message(
+            db_session,
+            fiche,
+            title="Test Thread Interrupt",
+            thread_type="manual",
+            active=False,
+        )
+        run = Run(
+            fiche_id=fiche.id,
+            thread_id=thread.id,
+            status=RunStatus.RUNNING,
+            trigger=RunTrigger.API,
+            started_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            model=TEST_MODEL,
+        )
+        db_session.add(run)
+        db_session.commit()
+        db_session.refresh(run)
+
+        # Set up credential resolver context
+        resolver = CredentialResolver(fiche_id=fiche.id, db=db_session, owner_id=test_user.id)
+        set_credential_resolver(resolver)
+
+        # Set up oikos context with valid run_id
+        test_trace_id = str(uuid.uuid4())
+        token = set_oikos_context(
+            run_id=run.id,
+            owner_id=test_user.id,
+            message_id="test-msg-interrupt",
+            trace_id=test_trace_id,
+            model=TEST_MODEL,
+            reasoning_effort="none",
+        )
+
+        try:
+            # Simulate parallel tool execution with multiple spawn_commis calls
+            tool_calls = [
+                {
+                    "id": "call_interrupt_1",
+                    "name": "spawn_commis",
+                    "args": {
+                        "task": "Research task A",
+                        "model": TEST_COMMIS_MODEL,
+                    },
+                },
+                {
+                    "id": "call_interrupt_2",
+                    "name": "spawn_commis",
+                    "args": {
+                        "task": "Research task B",
+                        "model": TEST_COMMIS_MODEL,
+                    },
+                },
+            ]
+
+            # Execute tools in parallel - THIS IS THE FIX BEING TESTED
+            tool_results, interrupt_value = await _execute_tools_parallel(
+                tool_calls,
+                tools_by_name={},
+                run_id=run.id,
+                owner_id=test_user.id,
+            )
+
+            # CRITICAL: interrupt_value must NOT be None for parallel spawn_commis
+            assert interrupt_value is not None, (
+                "interrupt_value should NOT be None when spawn_commis is called in parallel. "
+                "This bug caused runs to finish SUCCESS instead of WAITING."
+            )
+
+            # Verify interrupt_value structure matches what oikos_service expects
+            assert interrupt_value.get("type") == "commiss_pending", (
+                f"interrupt_value.type should be 'commiss_pending', got: {interrupt_value.get('type')}"
+            )
+            assert "job_ids" in interrupt_value, "interrupt_value should contain job_ids"
+            assert "created_jobs" in interrupt_value, "interrupt_value should contain created_jobs"
+
+            # Verify job_ids list
+            job_ids = interrupt_value["job_ids"]
+            assert len(job_ids) == 2, f"Should have 2 job_ids, got: {len(job_ids)}"
+
+            # Verify created_jobs list
+            created_jobs = interrupt_value["created_jobs"]
+            assert len(created_jobs) == 2, f"Should have 2 created_jobs, got: {len(created_jobs)}"
+
+            # Verify each created_job has the required fields for barrier creation
+            for job_info in created_jobs:
+                assert "job" in job_info, "created_job should have 'job' key"
+                assert "tool_call_id" in job_info, "created_job should have 'tool_call_id' key"
+                assert "task" in job_info, "created_job should have 'task' key"
+
+            # Verify tool_results are also returned (for message history)
+            assert len(tool_results) == 2, f"Should have 2 tool_results, got: {len(tool_results)}"
+
+            # Verify jobs are still in 'created' status (NOT 'queued')
+            # oikos_service handles flipping to 'queued' as part of two-phase commit
+            for job_id in job_ids:
+                job = db_session.query(CommisJob).filter(CommisJob.id == job_id).first()
+                assert job is not None, f"Job {job_id} should exist"
+                assert job.status == "created", (
+                    f"Job {job_id} should still be 'created' (not 'queued'). "
+                    "oikos_service handles the status flip as part of two-phase commit."
+                )
+
+        finally:
+            reset_oikos_context(token)
+            set_credential_resolver(None)

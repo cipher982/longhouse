@@ -1042,55 +1042,37 @@ async def _execute_tools_parallel(
                     )
                 )
 
-        # If we created/found jobs, return ToolMessages and continue (async model)
-        # Commis run in background, oikos sees results via inbox context on next turn
+        # If we created/found jobs, return interrupt_value for barrier creation
+        # This triggers the two-phase commit in oikos_service.py
         if created_jobs:
-            from zerg.services.event_store import append_run_event
-
+            # Build ToolMessages for spawn_commis results
             for job_info in created_jobs:
                 job = job_info["job"]
                 tool_call_id = job_info["tool_call_id"]
                 task = job_info.get("task", job.task[:100] if job.task else "")
                 tool_results.append(
                     ToolMessage(
-                        content=f"Commis job {job.id} spawned successfully. Working on: {task}\n\n"
-                        f"The commis is running in the background. You can continue the conversation. "
-                        f"Check commis status with check_commis_status({job.id}) or wait for results "
-                        f"with wait_for_commis({job.id}).",
+                        content=f"Commis job {job.id} spawned successfully. Working on: {task}\n\n" f"Waiting for commis to complete...",
                         tool_call_id=tool_call_id,
                         name="spawn_commis",
                     )
                 )
 
-                # Flip job status from 'created' to 'queued' immediately
-                db.query(CommisJob).filter(
-                    CommisJob.id == job.id,
-                    CommisJob.status == "created",
-                ).update({"status": "queued"})
+            # NOTE: Do NOT flip jobs to 'queued' here - oikos_service handles this
+            # as part of the two-phase commit (barrier creation + job activation)
 
-            db.commit()
+            # Build interrupt_value for barrier creation in oikos_service
+            # This matches the expected format at lines 804-867 of oikos_service.py
+            interrupt_value = {
+                "type": "commiss_pending",
+                "job_ids": [job_info["job"].id for job_info in created_jobs],
+                "created_jobs": created_jobs,  # Full info for barrier job records
+            }
 
-            # Emit commis_spawned events for UI
-            if oikos_run_id is not None:
-                for job_info in created_jobs:
-                    job = job_info["job"]
-                    tool_call_id = job_info["tool_call_id"]
-                    task = job_info.get("task", job.task[:100] if job.task else "")
-                    await append_run_event(
-                        run_id=oikos_run_id,
-                        event_type="commis_spawned",
-                        payload={
-                            "job_id": job.id,
-                            "tool_call_id": tool_call_id,
-                            "task": task,
-                            "model": job.model,
-                            "owner_id": resolver.owner_id,
-                            "trace_id": trace_id,
-                        },
-                    )
-
-            logger.info(f"Spawned {len(created_jobs)} commis (async)")
-            return tool_results, None
+            logger.info(
+                f"[PARALLEL-SPAWN] Returning interrupt_value with {len(created_jobs)} jobs " f"for barrier creation (two-phase commit)"
+            )
+            return tool_results, interrupt_value
 
     return tool_results, None
 
