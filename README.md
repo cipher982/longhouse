@@ -32,6 +32,8 @@ Zerg watches your AI coding sessions and unifies them into a single, searchable 
 
 ## Quick Start
 
+> **Note:** Current dev/runtime uses Postgres. The goal is SQLite-only for the Zerg runtime (no user-managed Postgres). The control plane may use Postgres.
+
 ### Option 1: Docker Compose (Recommended)
 
 ```bash
@@ -47,7 +49,7 @@ docker compose -f docker/docker-compose.dev.yml --profile dev up -d
 
 ### Option 2: Local Development
 
-Requires: Node.js 20+, Python 3.11+, PostgreSQL
+Requires: Node.js 20+, Python 3.11+, PostgreSQL (current). SQLite-only runtime is the target.
 
 ```bash
 git clone https://github.com/cipher982/zerg.git
@@ -59,7 +61,7 @@ cd apps/zerg/backend && uv sync && cd ../../..
 
 # Configure
 cp .env.example .env
-# Edit .env: set DATABASE_URL to your Postgres
+# Edit .env: set DATABASE_URL to your Postgres (current)
 
 # Start everything
 make dev
@@ -128,8 +130,9 @@ docker/                 # Compose files + nginx
 
 - **Backend**: FastAPI + SQLAlchemy
 - **Frontend**: React + React Query
-- **Database**: PostgreSQL
+- **Database**: PostgreSQL (current). SQLite-only runtime is the target.
 - **Package Managers**: Bun (JS), uv (Python)
+ - **Control plane storage**: may use Postgres; runtime instances should not.
 
 ---
 
@@ -139,7 +142,7 @@ Copy `.env.example` to `.env` and configure:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `DATABASE_URL` | Yes | PostgreSQL connection string |
+| `DATABASE_URL` | Yes | PostgreSQL connection string (current) |
 | `OPENAI_API_KEY` | No | Enables Oikos chat (optional) |
 | `FERNET_SECRET` | Yes | Encryption key for credentials |
 | `AUTH_DISABLED` | Dev only | Set to `1` for local development |

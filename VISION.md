@@ -8,7 +8,7 @@ This is a living vision doc. It captures both the direction and the reasoning th
 
 ## North Star
 
-1. Zero-friction onboarding for OSS builders: `brew install zerg` or `docker compose up`.
+1. Zero-friction onboarding for OSS builders: `pip install zerg` or `brew install zerg`, SQLite only.
 2. Always-on agents: background work continues even when the user is away.
 3. Unified, queryable agent sessions across providers (Claude, Codex, Gemini, Cursor, Oikos).
 4. A hosted option that feels like "I pay $5 and never think about it."
@@ -24,6 +24,7 @@ This is a living vision doc. It captures both the direction and the reasoning th
 - **Single-tenant core (enforced)**: build fast, keep code simple, avoid multi-tenant security tax. Agents APIs reject instances with >1 user.
 - **Hosted = convenience**: premium support and "don't think about it" operations.
 - **Users bring their own API keys**. Zerg is orchestration + UI + data, not LLM compute billing.
+- **No Postgres in core**. SQLite is the only DB requirement for OSS and hosted runtime instances.
 - **Hosted architecture = control plane + isolated runtimes**. Control plane is multi-tenant; Zerg app stays single-tenant.
 
 ---
@@ -130,7 +131,7 @@ zerg up
 ```
 Laptop
   ├─ Zerg (UI + API)
-  ├─ Postgres/SQLite
+  ├─ SQLite only (default and core)
   └─ Shipper watches ~/.claude/...
 ```
 
@@ -204,7 +205,7 @@ This framing keeps OSS onboarding simple while preserving the “power user” p
 We do not do "one VM per user." We do:
 
 - **Control plane (tiny)**: signup -> payment -> provision -> route
-- **Runtime**: one container stack per user (Zerg + DB) on shared nodes
+- **Runtime**: one container stack per user (Zerg + SQLite) on shared nodes
 - **Routing**: wildcard DNS + reverse proxy to per-user container
 - **Always-on**: paid instances never sleep
 
@@ -252,6 +253,8 @@ POST /api/applications
 - User email, Stripe customer ID, subscription status
 - Instance ID, provisioned timestamp, current state
 - NOT user data (that's in their isolated instance)
+
+**Control plane storage:** may use Postgres; runtime instances do not.
 
 ---
 
@@ -395,13 +398,13 @@ The shipper-to-Zerg ingest must be robust:
 
 ## Agents Schema (Source of Truth)
 
-Adopt the Life Hub schema as Zerg's canonical agent archive:
+Adopt the Life Hub schema as Zerg's canonical agent archive, implemented to run on SQLite by default:
 
 - Lossless storage: raw text + raw JSON
 - Queryable: extracted fields for search
 - Append-only: events never updated
 - Dedup: hash + source offset
-- Optional TimescaleDB (fallback to vanilla Postgres if missing)
+- Optional Postgres/TimescaleDB for scale and advanced search
 
 Zerg owns this data. Life Hub becomes a reader.
 
@@ -457,13 +460,11 @@ Users bring their own LLM API keys. Zerg stores and uses them securely.
 **What's in the package:**
 - `zerg` CLI (Python, via pipx or standalone binary)
 - Embeds: FastAPI backend, React frontend (built), shipper
-- Default: SQLite for local DB (zero-config). Full agents/search features require Postgres.
-- Optional: Postgres for production use
+- Default: SQLite for local DB (zero-config). Postgres is not part of core/runtime.
 
 **Commands:**
 ```bash
 zerg up              # Start local server (SQLite, port 30080)
-zerg up --postgres   # Use Postgres (reads DATABASE_URL)
 zerg connect <url>   # Connect shipper to remote instance
 zerg ship            # One-time manual sync
 ```
@@ -474,8 +475,7 @@ docker compose up    # Full stack with Postgres
 ```
 
 **DB note (self-contained):**
-- Should work with a single local Postgres spawned by docker compose.
-- Also support pointing to an existing Postgres (if users already have one).
+- Should work out of the box with a local SQLite file.
 - Scheduler/queue needs ops/agents schemas to bootstrap automatically.
 
 **What's NOT in the package:**
