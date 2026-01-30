@@ -29,6 +29,7 @@ from telegram.ext import MessageHandler
 from telegram.ext import filters
 
 from zerg.channels.plugin import ChannelPlugin
+from zerg.channels.sdk import WebhookChannel
 from zerg.channels.types import ChannelCapabilities
 from zerg.channels.types import ChannelConfig
 from zerg.channels.types import ChannelConfigField
@@ -47,7 +48,7 @@ MAX_TEXT_LENGTH = 4096
 MAX_CAPTION_LENGTH = 1024
 
 
-class TelegramChannel(ChannelPlugin):
+class TelegramChannel(WebhookChannel):
     """Telegram channel implementation using python-telegram-bot.
 
     Supports:
@@ -59,6 +60,7 @@ class TelegramChannel(ChannelPlugin):
     - Markdown/HTML formatting
     - Message editing and deletion
     - Reactions
+    - Webhook-based updates
 
     Configuration:
         credentials:
@@ -66,6 +68,8 @@ class TelegramChannel(ChannelPlugin):
         settings:
             parse_mode: Default message format (markdown, html, text)
             disable_notification: Send messages silently by default
+            webhook_url: URL for receiving Telegram updates (alternative to polling)
+            webhook_secret: Secret token for webhook validation
 
     Example:
         channel = TelegramChannel()
@@ -84,15 +88,11 @@ class TelegramChannel(ChannelPlugin):
 
     def __init__(self) -> None:
         """Initialize the Telegram channel."""
-        self._status = ChannelStatus.DISCONNECTED
-        self._config: ChannelConfig = {}
+        super().__init__()
         self._bot: Bot | None = None
         self._application: Application | None = None
         self._bot_info: dict[str, Any] = {}
         self._polling_task: asyncio.Task | None = None
-        self._message_handlers: list = []
-        self._typing_handlers: list = []
-        self._status_handlers: list = []
         self._parse_mode: str = "markdown"
         self._disable_notification: bool = False
 
@@ -177,8 +177,17 @@ class TelegramChannel(ChannelPlugin):
                     label="Webhook URL",
                     type="url",
                     required=False,
-                    placeholder="https://your-domain.com/webhook/telegram",
-                    help_text="Optional: Use webhooks instead of polling",
+                    placeholder="https://your-domain.com/api/webhooks/channels/telegram",
+                    help_text="Optional: Use webhooks instead of polling. Set to your Zerg API URL.",
+                    advanced=True,
+                ),
+                ChannelConfigField(
+                    key="webhook_secret",
+                    label="Webhook Secret",
+                    type="password",
+                    required=False,
+                    sensitive=True,
+                    help_text="Secret token for webhook validation. Telegram sends this in X-Telegram-Bot-Api-Secret-Token header.",
                     advanced=True,
                 ),
             ]
@@ -213,6 +222,9 @@ class TelegramChannel(ChannelPlugin):
 
         self._parse_mode = settings.get("parse_mode", "markdown")
         self._disable_notification = settings.get("disable_notification", False)
+
+        # Store webhook secret for signature validation
+        self._webhook_secret = settings.get("webhook_secret")
 
         # Create bot instance
         self._bot = Bot(token=bot_token)
@@ -254,7 +266,11 @@ class TelegramChannel(ChannelPlugin):
             # Check for webhook configuration
             webhook_url = self._config.get("settings", {}).get("webhook_url")
             if webhook_url:
-                await self._bot.set_webhook(url=webhook_url)
+                # Set webhook with optional secret token for validation
+                webhook_kwargs: dict[str, Any] = {"url": webhook_url}
+                if self._webhook_secret:
+                    webhook_kwargs["secret_token"] = self._webhook_secret
+                await self._bot.set_webhook(**webhook_kwargs)
                 logger.info(f"Telegram webhook set: {webhook_url}")
             else:
                 # Start polling in background
@@ -751,6 +767,120 @@ class TelegramChannel(ChannelPlugin):
             edited=edited,
             is_bot=sender.is_bot if sender else False,
         )
+
+    # --- WebhookChannel Implementation ---
+
+    async def _do_connect(self) -> None:
+        """Platform-specific connection logic for Telegram.
+
+        Note: The existing start() method handles both polling and webhook modes.
+        This method is provided for compatibility with BaseChannel but the actual
+        connection logic is in start().
+        """
+        # Connection logic is handled in start() which sets up either polling or webhooks
+        pass
+
+    async def _do_disconnect(self) -> None:
+        """Platform-specific disconnection logic for Telegram.
+
+        Note: The existing stop() method handles cleanup.
+        This method is provided for compatibility with BaseChannel.
+        """
+        # Disconnection logic is handled in stop()
+        pass
+
+    async def _do_send(self, message: ChannelMessage) -> MessageDeliveryResult:
+        """Platform-specific message sending for Telegram.
+
+        Note: The existing send_message() method handles all sending logic.
+        This delegates to that implementation.
+        """
+        return await self.send_message(message)
+
+    async def handle_webhook(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        """Handle an incoming Telegram webhook update.
+
+        Telegram sends updates as JSON with the following structure:
+        {
+            "update_id": 123456789,
+            "message": {...},  // or edited_message, channel_post, etc.
+        }
+
+        Args:
+            payload: The Telegram Update object as a dict
+
+        Returns:
+            Response dict (Telegram expects an empty 200 OK)
+        """
+        try:
+            # Parse the Telegram Update
+            update = Update.de_json(payload, self._bot)
+            if not update:
+                logger.warning("Failed to parse Telegram update")
+                return {"status": "error", "message": "Invalid update format"}
+
+            # Handle the update based on type
+            message = update.message or update.edited_message
+            if message:
+                # Skip messages from bots
+                if message.from_user and message.from_user.is_bot:
+                    return {"status": "ok", "skipped": "bot_message"}
+
+                # Build and emit message event
+                event = self._build_message_event(
+                    message,
+                    edited=update.edited_message is not None,
+                )
+                self._emit_message(event)
+                logger.debug(f"Processed webhook message: {message.message_id} from chat {message.chat.id}")
+
+            # Handle channel posts
+            channel_post = update.channel_post or update.edited_channel_post
+            if channel_post:
+                event = self._build_message_event(
+                    channel_post,
+                    edited=update.edited_channel_post is not None,
+                )
+                self._emit_message(event)
+                logger.debug(f"Processed channel post: {channel_post.message_id}")
+
+            # Handle callback queries (inline button presses)
+            if update.callback_query:
+                logger.debug(f"Received callback query: {update.callback_query.id}")
+                # Could be extended to handle inline button callbacks
+
+            return {"status": "ok"}
+
+        except Exception as e:
+            logger.exception(f"Error processing Telegram webhook: {e}")
+            return {"status": "error", "message": str(e)}
+
+    def validate_webhook_signature(
+        self,
+        payload: bytes,
+        signature: str,
+    ) -> bool:
+        """Validate Telegram webhook signature.
+
+        Telegram uses a simple secret token comparison rather than HMAC.
+        The secret token is sent in the X-Telegram-Bot-Api-Secret-Token header.
+
+        Args:
+            payload: Raw request body (not used by Telegram)
+            signature: The secret token from the header
+
+        Returns:
+            True if signature matches the configured secret
+        """
+        # If no secret is configured, allow all requests (development mode)
+        if not self._webhook_secret:
+            logger.warning("Telegram webhook received without secret configured. " "Set webhook_secret in channel settings for production.")
+            return True
+
+        # Telegram uses constant-time string comparison
+        import hmac
+
+        return hmac.compare_digest(signature, self._webhook_secret)
 
     # --- Helpers ---
 
