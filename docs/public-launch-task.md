@@ -29,7 +29,7 @@ We must follow this doc for scope, finish conditions, and validation steps.
 - [x] New users can see demo sessions without API keys.
 - [ ] README rewritten to highlight timeline-first value and 3 install paths.
 - [ ] Onboarding smoke command exists and passes locally.
-- [ ] README onboarding contract is validated in CI (docs-as-source).
+- [x] README onboarding contract is validated in CI (docs-as-source).
 - [ ] Core UI smoke snapshots pass (qa-ui-smoke).
 - [ ] Shipper smoke test passes (if shipper path is enabled in the flow).
 
@@ -69,6 +69,7 @@ We focus on UX improvements + onboarding clarity. No deep backend refactors unle
 - Guided Timeline empty state added with demo seed + optional shipper CTA.
 - Demo sessions seeded via `POST /api/agents/demo` (idempotent).
 - Onboarding smoke target added: `make onboarding-smoke` (not yet run).
+- Onboarding funnel CI job added to `contract-first-ci.yml`.
 
 ## Tests / Validation (Existing)
 Use these to prove we didn’t regress the experience:
