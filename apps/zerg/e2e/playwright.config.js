@@ -22,8 +22,6 @@ function findDotEnv(startDir) {
 
 // Load .env file from repo root (walk upward so this works from any CWD).
 const envPath = findDotEnv(__dirname);
-let BACKEND_PORT = 8001;
-let FRONTEND_PORT = 8002;
 
 function loadDotEnv(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -43,6 +41,8 @@ function loadDotEnv(filePath) {
     if (isQuoted) {
       value = value.slice(1, -1);
     }
+    // Skip port vars - E2E generates its own random ports unless explicitly overridden
+    if (key === 'BACKEND_PORT' || key === 'FRONTEND_PORT') return;
     if (process.env[key] === undefined) {
       process.env[key] = value;
     }
@@ -50,23 +50,49 @@ function loadDotEnv(filePath) {
 }
 
 if (envPath && fs.existsSync(envPath)) {
-  // Ensure Playwright-started web servers inherit your repo-root .env.
   loadDotEnv(envPath);
-
-  const envContent = fs.readFileSync(envPath, 'utf8');
-  envContent.split('\n').forEach(line => {
-    const [key, value] = line.split('=');
-    if (key === 'BACKEND_PORT') BACKEND_PORT = parseInt(value) || 8001;
-    if (key === 'FRONTEND_PORT') FRONTEND_PORT = parseInt(value) || 8002;
-  });
 }
 
-// E2E_BACKEND_PORT/E2E_FRONTEND_PORT allow explicit override for E2E tests
-// Falls back to BACKEND_PORT/FRONTEND_PORT for compatibility with Makefile
-BACKEND_PORT = process.env.E2E_BACKEND_PORT ? parseInt(process.env.E2E_BACKEND_PORT)
-  : (process.env.BACKEND_PORT ? parseInt(process.env.BACKEND_PORT) : BACKEND_PORT);
-FRONTEND_PORT = process.env.E2E_FRONTEND_PORT ? parseInt(process.env.E2E_FRONTEND_PORT)
-  : (process.env.FRONTEND_PORT ? parseInt(process.env.FRONTEND_PORT) : FRONTEND_PORT);
+// Generate random high ports for E2E - avoids conflicts with dev servers and parallel worktrees
+// Cache file is keyed by directory hash so parallel runs in different dirs don't collide
+const dirHash = Buffer.from(__dirname).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 12);
+const portCacheFile = path.join(os.tmpdir(), `pw-ports-${dirHash}.json`);
+
+function getRandomPorts() {
+  // Check if ports were already generated (within last 10 min to handle stale caches)
+  if (fs.existsSync(portCacheFile)) {
+    try {
+      const stat = fs.statSync(portCacheFile);
+      const ageMs = Date.now() - stat.mtimeMs;
+      if (ageMs < 10 * 60 * 1000) { // 10 minutes
+        const cached = JSON.parse(fs.readFileSync(portCacheFile, 'utf8'));
+        if (cached.backend && cached.frontend) {
+          return { backend: cached.backend, frontend: cached.frontend };
+        }
+      }
+    } catch { /* regenerate if cache is corrupt */ }
+  }
+
+  // Generate new random ports (range: 30000-59999)
+  const randomBase = 30000 + Math.floor(Math.random() * 30000);
+  const ports = { backend: randomBase, frontend: randomBase + 1 };
+
+  // Cache for other workers/reloads
+  fs.writeFileSync(portCacheFile, JSON.stringify(ports));
+  return ports;
+}
+
+// Port priority: explicit env var > random generation
+// E2E_BACKEND_PORT/E2E_FRONTEND_PORT or BACKEND_PORT/FRONTEND_PORT override random
+const randomPorts = getRandomPorts();
+let BACKEND_PORT = process.env.E2E_BACKEND_PORT ? parseInt(process.env.E2E_BACKEND_PORT)
+  : (process.env.BACKEND_PORT ? parseInt(process.env.BACKEND_PORT) : randomPorts.backend);
+let FRONTEND_PORT = process.env.E2E_FRONTEND_PORT ? parseInt(process.env.E2E_FRONTEND_PORT)
+  : (process.env.FRONTEND_PORT ? parseInt(process.env.FRONTEND_PORT) : randomPorts.frontend);
+
+// Export to env so fixtures.ts and spawn-test-backend.js can access them
+process.env.BACKEND_PORT = String(BACKEND_PORT);
+process.env.FRONTEND_PORT = String(FRONTEND_PORT);
 
 const frontendBaseUrl = `http://localhost:${FRONTEND_PORT}`;
 process.env.PLAYWRIGHT_FRONTEND_BASE = frontendBaseUrl;
