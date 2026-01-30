@@ -30,7 +30,7 @@ We must follow this doc for scope, finish conditions, and validation steps.
 - [ ] README rewritten to highlight timeline-first value and 3 install paths.
 - [ ] Onboarding smoke command exists and passes locally.
 - [x] README onboarding contract is validated in CI (docs-as-source).
-- [ ] Onboarding funnel passes locally from a fresh clone with no hidden env flags.
+- [x] Onboarding funnel passes locally from a fresh clone with no hidden env flags.
 - [ ] CI “Onboarding Funnel” job is green on a clean push (contract + UI selectors).
 - [ ] Core UI smoke snapshots pass (qa-ui-smoke).
 - [ ] Shipper smoke test passes (if shipper path is enabled in the flow).
@@ -72,6 +72,9 @@ We focus on UX improvements + onboarding clarity. No deep backend refactors unle
 - Demo sessions seeded via `POST /api/agents/demo` (idempotent).
 - Onboarding smoke target added: `make onboarding-smoke` (not yet run).
 - Onboarding funnel CI job added to `contract-first-ci.yml`.
+- Onboarding funnel runs steps in the user’s shell (avoids Node version mismatch).
+- Onboarding Playwright test searches upward for the README contract and accepts multiple demo session cards.
+- Onboarding funnel passes locally from a fresh clone.
 
 ## Tests / Validation (Existing)
 Use these to prove we didn’t regress the experience:
