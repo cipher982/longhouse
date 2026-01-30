@@ -40,7 +40,7 @@ cd zerg
 cp .env.example .env
 
 # Start the stack
-docker compose -f docker/docker-compose.dev.yml up -d
+docker compose -f docker/docker-compose.dev.yml --profile dev up -d
 
 # Open http://localhost:30080/timeline
 ```
@@ -166,11 +166,11 @@ ISC
   "primary_route": "/timeline",
   "steps": [
     "cp .env.example .env",
-    "docker compose -f docker/docker-compose.dev.yml up -d --wait",
+    "docker compose -f docker/docker-compose.dev.yml --profile dev up -d --wait",
     "curl -sf --retry 10 --retry-delay 2 http://localhost:30080/health"
   ],
   "cleanup": [
-    "docker compose -f docker/docker-compose.dev.yml down -v"
+    "docker compose -f docker/docker-compose.dev.yml --profile dev down -v"
   ],
   "cta_buttons": [
     {"label": "Load demo", "selector": "[data-testid='demo-cta']"}

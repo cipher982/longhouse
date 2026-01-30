@@ -72,6 +72,11 @@ jobs:
       run: cd apps/zerg/backend && uv sync
 
     - name: Run database migrations
+      env:
+        # Alembic needs minimal settings to run - disable auth check
+        AUTH_DISABLED: "1"
+        JWT_SECRET: "ci-test-secret-jwt-1234567890"
+        INTERNAL_API_SECRET: "ci-test-internal-secret-1234"
       run: cd apps/zerg/backend && uv run alembic upgrade head
 
     - name: Run Backend Tests (external DB mode)
