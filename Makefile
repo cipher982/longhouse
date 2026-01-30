@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-reset-db reset test test-integration test-unit test-e2e test-e2e-core test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-runner-unit test-install-runner test-prompts test-ci test-backend-docker test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test onboarding-smoke eval eval-live eval-compare eval-critical eval-fast eval-all eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage
+.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-reset-db reset test test-integration test-unit test-e2e test-e2e-core test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-runner-unit test-install-runner test-prompts test-ci test-backend-docker test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test onboarding-smoke onboarding-funnel eval eval-live eval-compare eval-critical eval-fast eval-all eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +333,9 @@ onboarding-smoke: ## Run onboarding smoke checks (setup + UI + optional shipper)
 	else \
 		echo "ℹ️  Skipping shipper smoke test (set SHIPPER_SMOKE=1 to run)."; \
 	fi
+
+onboarding-funnel: ## Run docs-as-source onboarding funnel (README contract)
+	@./scripts/run-onboarding-funnel.sh
 
 test-zerg-e2e: ## Run Zerg E2E tests (Playwright)
 	@echo "🧪 Running Zerg E2E tests..."
