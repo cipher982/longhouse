@@ -5,9 +5,9 @@ import config from "../../lib/config";
 
 export function FooterCTA() {
   const handleStartFree = () => {
-    // If auth is disabled (dev mode), go directly to dashboard
+    // If auth is disabled (dev mode), go directly to timeline
     if (!config.authEnabled) {
-      window.location.href = '/dashboard';
+      window.location.href = '/timeline';
       return;
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });

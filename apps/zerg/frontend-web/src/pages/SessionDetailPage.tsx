@@ -277,7 +277,7 @@ export default function SessionDetailPage() {
     if (from) {
       navigate(from);
     } else {
-      navigate("/sessions");
+      navigate("/timeline");
     }
   };
 
@@ -309,7 +309,7 @@ export default function SessionDetailPage() {
           }
           action={
             <Button variant="primary" onClick={handleBack}>
-              Back to Sessions
+              Back to Timeline
             </Button>
           }
         />
