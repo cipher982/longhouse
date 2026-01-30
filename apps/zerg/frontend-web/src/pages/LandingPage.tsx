@@ -127,7 +127,7 @@ export default function LandingPage() {
     };
   }, [particlesEnabled, heroAnimationsEnabled]);
 
-  // If already logged in, redirect to dashboard
+  // If already logged in, redirect to timeline
   // SKIP redirect when:
   // - authEnabled=false (dev mode - fake auth, don't redirect)
   // - noredirect=1 query param (manual override for testing)
@@ -136,7 +136,7 @@ export default function LandingPage() {
     const params = new URLSearchParams(window.location.search);
     const skipRedirect = params.get("noredirect") === "1";
     if (isAuthenticated && !isLoading && !skipRedirect) {
-      navigate("/dashboard");
+      navigate("/timeline");
     }
   }, [isAuthenticated, isLoading, navigate]);
 

@@ -61,6 +61,11 @@ export interface AgentFiltersResponse {
   providers: string[];
 }
 
+export interface AgentDemoSeedResponse {
+  seeded: boolean;
+  sessions_created: number;
+}
+
 // ---------------------------------------------------------------------------
 // API Functions
 // ---------------------------------------------------------------------------
@@ -122,4 +127,11 @@ export async function fetchAgentFilters(
   return request<AgentFiltersResponse>(`/agents/filters?days_back=${daysBack}`, {
     method: "GET",
   });
+}
+
+/**
+ * Seed demo sessions for the timeline.
+ */
+export async function seedAgentDemoSessions(): Promise<AgentDemoSeedResponse> {
+  return request<AgentDemoSeedResponse>("/agents/demo", { method: "POST" });
 }

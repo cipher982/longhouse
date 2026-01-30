@@ -20,9 +20,9 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
       window.SwarmletFunnel.track('cta_clicked', { location: 'hero' });
     }
 
-    // If auth is disabled (dev mode), go directly to dashboard
+    // If auth is disabled (dev mode), go directly to timeline
     if (!config.authEnabled) {
-      window.location.href = '/dashboard';
+      window.location.href = '/timeline';
       return;
     }
 
@@ -66,7 +66,7 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
           }).catch(() => {});
         }
 
-        window.location.href = '/dashboard';
+        window.location.href = '/timeline';
       }
     } catch (error) {
       console.error('Dev login failed:', error);
@@ -189,7 +189,7 @@ function GoogleSignInButtonWrapper() {
           }).catch(() => {});
         }
 
-        window.location.href = '/dashboard';
+        window.location.href = '/timeline';
       } catch (error) {
         console.error('Login failed:', error);
       } finally {

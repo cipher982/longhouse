@@ -5,9 +5,9 @@ export type NavItem = {
 };
 
 const BASE_ITEMS: NavItem[] = [
+  { label: "Timeline", href: "/timeline", testId: "global-timeline-tab" },
   { label: "Chat", href: "/chat", testId: "global-chat-tab" },
   { label: "Dashboard", href: "/dashboard", testId: "global-dashboard-tab" },
-  { label: "Sessions", href: "/sessions", testId: "global-sessions-tab" },
   { label: "Forum", href: "/forum", testId: "global-forum-tab" },
   { label: "Canvas", href: "/canvas", testId: "global-canvas-tab" },
   { label: "Integrations", href: "/settings/integrations", testId: "global-integrations-tab" },

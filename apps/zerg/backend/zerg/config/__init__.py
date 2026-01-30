@@ -150,6 +150,15 @@ class Settings:  # noqa: D401 – simple data container
 
     # Dynamic guards (evaluated at runtime) -----------------------------
     @property
+    def llm_available(self) -> bool:
+        """Return True when at least one LLM API key is configured.
+
+        Used for graceful degradation: UI boots without API keys,
+        but chat features prompt for configuration.
+        """
+        return bool(self.openai_api_key) or bool(self.groq_api_key)
+
+    @property
     def data_dir(self) -> Path:
         """Return the absolute path to the persistent data directory.
 
@@ -359,9 +368,9 @@ def _validate_required(settings: Settings) -> None:  # noqa: D401 – helper
     # Critical configuration validation - fail fast on missing required vars
     missing_vars = []
 
-    # Core application requirements
-    if not settings.openai_api_key:
-        missing_vars.append("OPENAI_API_KEY")
+    # Note: OPENAI_API_KEY is now optional for graceful degradation.
+    # The UI will boot without it, but chat features will prompt for configuration.
+    # Use settings.llm_available to check if LLM calls will work.
 
     if not settings.database_url:
         missing_vars.append("DATABASE_URL")
@@ -391,7 +400,7 @@ def _validate_required(settings: Settings) -> None:  # noqa: D401 – helper
             f"CRITICAL: Missing required environment variables: {', '.join(missing_vars)}\n"
             f"Set these in your .env file or deployment environment.\n"
             f"Current DATABASE_URL: '{settings.database_url}'\n"
-            f"Current OPENAI_API_KEY: '{'SET' if settings.openai_api_key else 'MISSING'}'\n"
+            f"LLM available: {settings.llm_available}\n"
             f"Deployment will fail without these variables."
         )
         raise RuntimeError(error_msg)

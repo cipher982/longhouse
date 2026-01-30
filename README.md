@@ -1,93 +1,156 @@
 <p align="center">
-  <img src="apps/zerg/frontend-web/branding/swarm-logo-master.png" alt="Zerg" width="200" />
+  <img src="apps/zerg/frontend-web/branding/swarm-logo-master.png" alt="Zerg" width="180" />
 </p>
 
-<h1 align="center">Zerg + Oikos (Unified)</h1>
+<h1 align="center">Zerg</h1>
 
 <p align="center">
-  <strong>Supervisor + Workers with a unified single-origin UI.</strong>
+  <strong>All your AI coding sessions, unified and searchable.</strong>
 </p>
 
-Zerg is the supervisor/worker orchestration backend. Oikos is the voice/text UI. They now ship behind one nginx entrypoint for same-origin UX.
+<p align="center">
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#features">Features</a> •
+  <a href="#how-it-works">How It Works</a> •
+  <a href="#status">Status</a>
+</p>
 
 ---
 
-## Current Architecture
+## The Problem
+
+You use Claude Code, Codex, Gemini, Cursor. Each stores sessions in obscure JSONL files scattered across your filesystem. Want to find that conversation from last week? Good luck.
+
+## The Solution
+
+Zerg watches your AI coding sessions and unifies them into a single, searchable timeline. See what you worked on, when, and pick up where you left off.
+
+<!-- Screenshot will go here once we capture it -->
+<!-- ![Timeline Screenshot](apps/zerg/frontend-web/branding/timeline-screenshot.png) -->
+
+---
+
+## Quick Start
+
+### Option 1: Docker Compose (Recommended)
+
+```bash
+git clone https://github.com/cipher982/zerg.git
+cd zerg
+cp .env.example .env
+
+# Start the stack
+docker compose -f docker/docker-compose.dev.yml up -d
+
+# Open http://localhost:30080/timeline
+```
+
+### Option 2: Local Development
+
+Requires: Node.js 20+, Python 3.11+, PostgreSQL
+
+```bash
+git clone https://github.com/cipher982/zerg.git
+cd zerg
+
+# Install dependencies
+bun install
+cd apps/zerg/backend && uv sync && cd ../../..
+
+# Configure
+cp .env.example .env
+# Edit .env: set DATABASE_URL to your Postgres
+
+# Start everything
+make dev
+
+# Open http://localhost:30080/timeline
+```
+
+---
+
+## Features
+
+- **Unified Timeline** — See all your AI coding sessions in one place, sorted by time
+- **Multi-Provider Support** — Claude Code, Codex, Gemini, Cursor (more coming)
+- **Session Search** — Find conversations by project, content, or date
+- **Demo Mode** — Try it instantly with sample sessions, no API key needed
+- **Oikos Chat** — Built-in AI assistant that can browse your session history
+
+---
+
+## How It Works
 
 ```
-User → http://localhost:30080 (nginx)
-  /            → Unified React SPA (dashboard + /chat)
-  /dashboard   → Zerg dashboard (alias)
-  /chat        → Oikos chat UI (SPA route)
-  /api/*       → Zerg FastAPI backend (includes Oikos BFF at /api/oikos/*)
-  /ws/*        → Zerg WS (SSE/WS)
-
-Backend: FastAPI + LangGraph-free supervisor/worker agents (workflow engine uses LangGraph)
-Workers: disposable agents, artifacts under /data/workers
-Frontend: Unified React SPA (Zerg dashboard + Oikos chat), served same-origin
+Your IDE/CLI                    Zerg
+┌──────────────┐               ┌──────────────────────┐
+│ Claude Code  │──────────────▶│                      │
+│ Codex CLI    │   session     │  Timeline UI         │
+│ Gemini CLI   │   JSONL       │  (http://localhost:  │
+│ Cursor       │   files       │   30080/timeline)    │
+└──────────────┘               └──────────────────────┘
 ```
 
-Ports (dev): nginx 30080 external; service ports 47200 (frontend), 47300 (backend).
+Zerg ingests session files from AI coding tools and presents them in a unified web interface. Sessions are indexed by project, provider, and timestamp.
 
 ---
 
-## Highlights
+## Status
 
-- **Durable Runs (v2.2):** Runs survive disconnects and timeouts. `asyncio.shield()` prevents server-side cancellation on client timeout; `DEFERRED` state for long-running work.
-- **Progressive Disclosure:** Large tool outputs stored by reference with markers; worker evidence fetched on-demand via `get_worker_evidence()`. Context trimming keeps LLM prompts within budget.
-- **Worker supervision (v2.1):** tool events, activity ticker, roundabout monitoring (heuristic warnings, no auto-cancel), fail-fast critical errors.
-- **Supervisor tool visibility (v2.2):** supervisor-direct tool calls emit SSE tool events and render as inline ToolCards in chat.
-- **Jobs Infrastructure:** Scheduled background jobs (backups, monitoring) with manual trigger API.
-- **Lazy tool loading:** 65+ tools available via `search_tools()`, ~14 core tools always bound.
-- **Unified frontend (v2.1):** single origin, CORS tightened, cross-nav links, Playwright e2e green.
-- **Bun-only JS workspace:** single `bun.lock`; Python via `uv`.
-- **Same-origin auth (dev):** `AUTH_DISABLED=1` backend, `VITE_AUTH_ENABLED=false` in `docker/docker-compose.dev.yml`; enable auth in prod.
+**Alpha** — Works for personal use. Not production-ready.
 
----
+### What Works
+- Timeline view with session listing
+- Session detail with full message history
+- Demo session loading
+- Graceful degradation without API keys
 
-## Commands
-
-- `make dev` – brings up unified stack with nginx front.
-- Tests: `make test` (unit), `make test-e2e` (core + a11y), `make test-full` (full suite), `make test-chat-e2e`, `make test-perf` (latency).
-- Prompt Iteration: `cd apps/zerg/backend && uv run python scripts/replay_run.py <run_id>`
-- Trace Debugging: `make debug-trace TRACE=<uuid>`
-- Video Pipeline: `make video-all` (audio -> record -> process)
-- Codegen: `make generate-sdk`, `make regen-ws`, `make regen-sse`.
+### Coming Soon
+- Automatic session watching (currently requires manual import)
+- Session search
+- Session tagging and organization
+- `curl | sh` installer
 
 ---
 
-## Health Checks (Production)
-
-- Unified Health: `https://swarmlet.com/health`
-- Backend Readiness: `https://swarmlet.com/api/system/health`
-- Smoke Test: `./scripts/smoke-prod.sh`
-
----
-
-## Project Structure
+## Architecture
 
 ```
 apps/
 ├── zerg/
-│   ├── backend/        # FastAPI + supervisor/commis agents
-│   ├── frontend-web/   # React dashboard + Oikos chat
-│   └── e2e/            # Playwright tests
+│   ├── backend/        # FastAPI + session ingestion
+│   └── frontend-web/   # React timeline UI
 ├── runner/             # Remote execution daemon
-└── sauron/             # Standalone scheduler
+└── sauron/             # Scheduled jobs
 
-docker/                 # Compose files + nginx configs
-scripts/                # Dev tools + generators
+docker/                 # Compose files + nginx
 ```
+
+- **Backend**: FastAPI + SQLAlchemy
+- **Frontend**: React + React Query
+- **Database**: PostgreSQL
+- **Package Managers**: Bun (JS), uv (Python)
 
 ---
 
-## Documentation
+## Configuration
 
-- `AGENTS.md` – Main project guide (architecture, commands, conventions)
-- `apps/zerg/backend/DATABASE.md` – Database patterns
-- `apps/zerg/backend/TESTING_STRATEGY.md` – Testing philosophy
-- `apps/zerg/backend/evals/README.md` – Eval system
-- `apps/sauron/README.md` – Scheduler service
+Copy `.env.example` to `.env` and configure:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DATABASE_URL` | Yes | PostgreSQL connection string |
+| `OPENAI_API_KEY` | No | Enables Oikos chat (optional) |
+| `FERNET_SECRET` | Yes | Encryption key for credentials |
+| `AUTH_DISABLED` | Dev only | Set to `1` for local development |
+
+The UI boots and shows Timeline without any API keys. Chat features prompt for configuration when needed.
+
+---
+
+## Contributing
+
+Issues and PRs welcome. This is a personal project so response times vary.
 
 ---
 
