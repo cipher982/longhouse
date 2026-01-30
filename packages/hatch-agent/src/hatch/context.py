@@ -47,6 +47,11 @@ def detect_context() -> ExecutionContext:
     )
 
 
+def clear_context_cache() -> None:
+    """Clear the cached context (useful for testing)."""
+    detect_context.cache_clear()
+
+
 def _detect_container() -> bool:
     """Check if running inside a container."""
     # Docker
@@ -73,7 +78,7 @@ def _check_home_writable() -> bool:
     """Check if HOME directory is writable."""
     home = os.environ.get("HOME", "/root")
     try:
-        test_file = Path(home) / ".agent_runner_test"
+        test_file = Path(home) / ".hatchner_test"
         test_file.write_text("test")
         test_file.unlink()
         return True

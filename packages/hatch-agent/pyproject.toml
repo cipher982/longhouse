@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hatch-agent"
+version = "0.1.0"
+description = "Hatch AI agents from the swarm (Claude Code, Codex, Gemini)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    { name = "David Rose", email = "david010@gmail.com" }
+]
+keywords = ["ai", "agent", "cli", "claude", "codex", "gemini", "zerg", "swarm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development",
+    "Topic :: Utilities",
+]
+
+# Zero dependencies - stdlib only!
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+hatch = "hatch.cli:main"
+
+[project.urls]
+Repository = "https://github.com/davidrose/hatch"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hatch"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: marks tests that make real API calls (slow, requires credentials)",
+]

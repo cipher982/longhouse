@@ -222,6 +222,15 @@ class ScriptedChatLLM(BaseChatModel):
         if sequenced_response is not None:
             return ChatResult(generations=[ChatGeneration(message=sequenced_response)])
 
+        # Check math scenario EARLY - it's unambiguous and should always return "4"
+        # regardless of stale ToolMessages from previous test runs.
+        # This prevents flaky tests where leftover tool messages from a prior run
+        # cause ScriptedLLM to take the "tool result synthesis" path instead of math.
+        scenario = find_matching_scenario(prompt, role)
+        if scenario and scenario.get("name") == "math_simple":
+            ai_message = AIMessage(content="4", tool_calls=[])
+            return ChatResult(generations=[ChatGeneration(message=ai_message)])
+
         # If tool results are present, emit final synthesis (no more tool calls).
         tool_msg = next((m for m in reversed(messages) if isinstance(m, ToolMessage)), None)
         if tool_msg is not None:
@@ -233,7 +242,6 @@ class ScriptedChatLLM(BaseChatModel):
             if is_error:
                 final_text = f"Task failed due to tool error: {error_msg or content}"
             else:
-                scenario = find_matching_scenario(prompt, role)
                 # Determine final text based on scenario type
                 if scenario and scenario.get("name") == "workspace_commis_oikos":
                     # Workspace commis completed - summarize the result
@@ -248,12 +256,6 @@ class ScriptedChatLLM(BaseChatModel):
                     final_text = "Task completed successfully."
 
             ai_message = AIMessage(content=final_text, tool_calls=[])
-            return ChatResult(generations=[ChatGeneration(message=ai_message)])
-
-        scenario = find_matching_scenario(prompt, role)
-
-        if role == "oikos" and scenario and scenario.get("name") == "math_simple":
-            ai_message = AIMessage(content="4", tool_calls=[])
             return ChatResult(generations=[ChatGeneration(message=ai_message)])
 
         # Workspace commis scenario: spawns spawn_workspace_commis with git repo and optional resume

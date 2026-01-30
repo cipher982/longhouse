@@ -56,7 +56,8 @@ dependencies = [
     # Text-to-speech for Oikos voice responses
     "edge-tts>=7.0.0",
     # Hatch CLI for workspace execution (runs coding agents headlessly)
-    "hatch-agent @ git+https://github.com/cipher982/hatch.git",
+    # Local package from packages/hatch-agent (source of truth for agent runner)
+    "hatch-agent",
     # Telegram Bot API integration for channel plugins
     "python-telegram-bot>=21.0",
     # External job dependencies (sauron-jobs migration)
@@ -81,6 +82,13 @@ allow-direct-references = true
 
 [tool.hatch.build]
 packages = ["zerg"]
+
+[tool.uv]
+# Keep cache inside repo for hermetic test runs
+cache-dir = "./.uv_cache"
+
+[tool.uv.sources]
+hatch-agent = { path = "../../../packages/hatch-agent" }
 
 [tool.ruff]
 line-length = 140

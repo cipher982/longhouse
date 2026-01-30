@@ -1,25 +1,6 @@
 import { test as base, expect, BrowserContext, type Page } from '@playwright/test';
 
 export type { Page };
-import * as fs from 'fs';
-import * as path from 'path';
-import { fileURLToPath } from 'url';
-
-// ESM equivalent of __dirname
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-function findDotEnv(startDir: string): string | null {
-  let dir = startDir;
-  for (let i = 0; i < 8; i++) {
-    const candidate = path.join(dir, '.env');
-    if (fs.existsSync(candidate)) return candidate;
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return null;
-}
 
 // ---------------------------------------------------------------------------
 // Shared Playwright *test* object that injects the `X-Test-Commis` header *and*
@@ -31,27 +12,14 @@ function findDotEnv(startDir: string): string | null {
 // No other code changes are required.
 // ---------------------------------------------------------------------------
 
-// Load dynamic backend port from .env
+// Backend port comes from env (set by playwright.config.js random port generation)
+// Explicit env vars override random ports, but we always have a value from config
 function getBackendPort(): number {
-  // Check environment variable first
-  if (process.env.BACKEND_PORT) {
-    return parseInt(process.env.BACKEND_PORT);
+  const port = parseInt(process.env.BACKEND_PORT || '');
+  if (!port || isNaN(port)) {
+    throw new Error('BACKEND_PORT env var required (set by playwright.config.js)');
   }
-
-  // Load from .env file
-  const envPath = findDotEnv(__dirname);
-  if (envPath && fs.existsSync(envPath)) {
-    const envContent = fs.readFileSync(envPath, 'utf8');
-    const lines = envContent.split('\n');
-    for (const line of lines) {
-      const [key, value] = line.split('=');
-      if (key === 'BACKEND_PORT') {
-        return parseInt(value) || 8001;
-      }
-    }
-  }
-
-  return 8001; // Default fallback
+  return port;
 }
 
 type TestFixtures = {
