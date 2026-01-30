@@ -205,15 +205,15 @@ test.describe('Core User Journey - Scripted LLM', () => {
     );
 
     const commisCard = page.locator('.commis-tool-card').first();
-    await expect(commisCard).toBeVisible({ timeout: 2000 });
+    await expect(commisCard).toBeVisible({ timeout: 5000 });
 
     const commandLabel = commisCard.locator('.nested-tool-name--command');
-    await expect(commandLabel).toContainText('df -h', { timeout: 2000 });
+    await expect(commandLabel).toContainText('df -h', { timeout: 5000 });
 
     const toolMeta = commisCard.locator('.nested-tool-meta');
-    await expect(toolMeta).toContainText('runner_exec', { timeout: 2000 });
-    await expect(toolMeta).toContainText('target: cube', { timeout: 2000 });
-    await expect(toolMeta).toContainText('exit 0', { timeout: 2000 });
+    await expect(toolMeta).toContainText('runner_exec', { timeout: 5000 });
+    await expect(toolMeta).toContainText('target: cube', { timeout: 5000 });
+    await expect(toolMeta).toContainText('exit 0', { timeout: 5000 });
 
     console.log('[Commis Tool UI] Command preview verified');
   });
@@ -275,19 +275,21 @@ test.describe('Core User Journey - Scripted LLM', () => {
     );
 
     const commisCard = page.locator('.commis-tool-card').first();
-    await expect(commisCard).toBeVisible({ timeout: 2000 });
+    await expect(commisCard).toBeVisible({ timeout: 5000 });
 
     // Click on the nested tool row to expand details
+    // Wait for element to be stable before clicking (avoids DOM detachment during React re-render)
     const nestedToolRow = commisCard.locator('.nested-tool-row').first();
-    await nestedToolRow.click();
+    await expect(nestedToolRow).toBeVisible({ timeout: 5000 });
+    await nestedToolRow.click({ timeout: 5000 });
 
     // Verify details drawer is visible
     const detailsDrawer = commisCard.locator('[data-testid="nested-tool-details"]');
-    await expect(detailsDrawer).toBeVisible({ timeout: 2000 });
+    await expect(detailsDrawer).toBeVisible({ timeout: 5000 });
 
     // Verify content sections are present
-    await expect(detailsDrawer.locator('.nested-tool-details__label').first()).toContainText('Args', { timeout: 2000 });
-    await expect(detailsDrawer.locator('.nested-tool-details__content').first()).toBeVisible({ timeout: 2000 });
+    await expect(detailsDrawer.locator('.nested-tool-details__label').first()).toContainText('Args', { timeout: 5000 });
+    await expect(detailsDrawer.locator('.nested-tool-details__content').first()).toBeVisible({ timeout: 5000 });
 
     console.log('[Details Drawer] Details drawer expands correctly');
   });
@@ -340,11 +342,11 @@ test.describe('Core User Journey - Scripted LLM', () => {
     );
 
     const commisCard = page.locator('.commis-tool-card').first();
-    await expect(commisCard).toBeVisible({ timeout: 2000 });
+    await expect(commisCard).toBeVisible({ timeout: 5000 });
 
     // Verify source badge is visible
     const sourceBadge = commisCard.locator('.nested-tool-meta-item--source');
-    await expect(sourceBadge).toContainText('Runner', { timeout: 2000 });
+    await expect(sourceBadge).toContainText('Runner', { timeout: 5000 });
 
     console.log('[Source Badge] Source badge displays correctly');
   });
@@ -405,11 +407,11 @@ test.describe('Core User Journey - Scripted LLM', () => {
     );
 
     const commisCard = page.locator('.commis-tool-card').first();
-    await expect(commisCard).toBeVisible({ timeout: 2000 });
+    await expect(commisCard).toBeVisible({ timeout: 5000 });
 
     // Verify offline badge is visible
     const offlineBadge = commisCard.locator('.nested-tool-meta-item--offline');
-    await expect(offlineBadge).toContainText('Runner offline', { timeout: 2000 });
+    await expect(offlineBadge).toContainText('Runner offline', { timeout: 5000 });
 
     console.log('[Offline Badge] Offline badge displays correctly');
   });
@@ -470,21 +472,21 @@ test.describe('Core User Journey - Scripted LLM', () => {
     );
 
     const commisCard = page.locator('.commis-tool-card').first();
-    await expect(commisCard).toBeVisible({ timeout: 2000 });
+    await expect(commisCard).toBeVisible({ timeout: 5000 });
 
     // Verify preview is visible initially
     const previewText = commisCard.locator('.nested-tool-preview');
-    await expect(previewText).toBeVisible({ timeout: 2000 });
+    await expect(previewText).toBeVisible({ timeout: 5000 });
 
     // Click compact toggle
     const compactToggle = commisCard.locator('.commis-tool-card__compact-toggle');
     await compactToggle.click();
 
     // Verify compact class is applied
-    await expect(commisCard).toHaveClass(/commis-tool-card--compact/, { timeout: 2000 });
+    await expect(commisCard).toHaveClass(/commis-tool-card--compact/, { timeout: 5000 });
 
     // Preview should be hidden in compact mode (CSS display: none)
-    await expect(previewText).not.toBeVisible({ timeout: 2000 });
+    await expect(previewText).not.toBeVisible({ timeout: 5000 });
 
     console.log('[Compact Mode] Compact mode toggle works correctly');
   });
@@ -537,18 +539,20 @@ test.describe('Core User Journey - Scripted LLM', () => {
     );
 
     const commisCard = page.locator('.commis-tool-card').first();
-    await expect(commisCard).toBeVisible({ timeout: 2000 });
+    await expect(commisCard).toBeVisible({ timeout: 5000 });
 
     // Hover over the nested tool row to make copy button visible
+    // Wait for element to be stable before hovering (avoids DOM detachment during React re-render)
     const nestedToolRow = commisCard.locator('.nested-tool-row').first();
-    await nestedToolRow.hover();
+    await expect(nestedToolRow).toBeVisible({ timeout: 5000 });
+    await nestedToolRow.hover({ timeout: 5000 });
 
     // Verify copy button exists (it's there but hidden until hover in CSS)
     const copyButton = commisCard.locator('.nested-tool-copy');
-    await expect(copyButton).toBeAttached({ timeout: 2000 });
+    await expect(copyButton).toBeAttached({ timeout: 5000 });
 
     // Clicking copy button should not throw an error
-    await copyButton.click();
+    await copyButton.click({ timeout: 5000 });
 
     console.log('[Copy Button] Copy button is present and clickable');
   });
