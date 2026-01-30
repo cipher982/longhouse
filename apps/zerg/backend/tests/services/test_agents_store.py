@@ -63,6 +63,7 @@ class TestExportSessionJsonl:
         session = AgentSession(
             id=session_id,
             provider="claude",
+            environment="test",
             project="test",
             started_at=datetime.now(timezone.utc),
             user_messages=1,
@@ -136,6 +137,7 @@ class TestExportSessionJsonl:
         session = AgentSession(
             id=session_id,
             provider="claude",
+            environment="test",
             project="test",
             started_at=datetime.now(timezone.utc),
             user_messages=2,
@@ -193,6 +195,7 @@ class TestExportSessionJsonl:
         session = AgentSession(
             id=session_id,
             provider="claude",
+            environment="test",
             project="test",
             started_at=datetime.now(timezone.utc),
             user_messages=2,
@@ -248,6 +251,7 @@ class TestExportSessionJsonl:
         session = AgentSession(
             id=session_id,
             provider="claude",
+            environment="test",
             project="test",
             started_at=datetime.now(timezone.utc),
             user_messages=1,
@@ -286,6 +290,7 @@ class TestExportSessionJsonl:
         session = AgentSession(
             id=session_id,
             provider="claude",
+            environment="test",
             project="test",
             started_at=datetime.now(timezone.utc),
             user_messages=0,
