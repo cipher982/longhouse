@@ -9,9 +9,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from zerg.libs.agent_runner.backends import Backend
-from zerg.libs.agent_runner.backends import get_config
-from zerg.libs.agent_runner.context import detect_context
+from hatch.backends import Backend
+from hatch.backends import get_config
+from hatch.context import detect_context
 
 
 @dataclass
@@ -35,6 +35,18 @@ class AgentResult:
         if self.exit_code == -2:
             return "not_found"
         return "error"
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "ok": self.ok,
+            "status": self.status,
+            "output": self.output,
+            "exit_code": self.exit_code,
+            "duration_ms": self.duration_ms,
+            "error": self.error,
+            "stderr": self.stderr,
+        }
 
 
 def _run_subprocess(
@@ -65,10 +77,38 @@ def _run_subprocess(
         )
         return stdout or "", stderr or "", proc.returncode, False
     except subprocess.TimeoutExpired:
-        # Kill the process tree on timeout
+        # Kill the process on timeout
         proc.kill()
-        proc.wait()
-        return "", "", -1, True
+        stdout, stderr = proc.communicate()
+        return stdout or "", stderr or "", -1, True
+
+
+def _validate_timeout(timeout_s: int) -> None:
+    """Validate timeout."""
+    if timeout_s <= 0:
+        raise ValueError("timeout_s must be > 0")
+
+
+def _validate_cwd(cwd: str | Path | None) -> None:
+    """Validate working directory."""
+    if cwd is None:
+        return
+    path = Path(cwd)
+    if not path.exists():
+        raise ValueError(f"cwd does not exist: {cwd}")
+    if not path.is_dir():
+        raise ValueError(f"cwd is not a directory: {cwd}")
+
+
+def run_sync(
+    cmd: list[str],
+    stdin_data: bytes | None,
+    env: dict[str, str],
+    cwd: str | None,
+    timeout_s: int,
+) -> tuple[str, str, int, bool]:
+    """Synchronous version for CLI use."""
+    return _run_subprocess(cmd, stdin_data, env, cwd, timeout_s)
 
 
 async def run(
@@ -91,12 +131,26 @@ async def run(
     Returns:
         AgentResult with ok, output, duration_ms, error, etc.
     """
+    start = time.monotonic()
+
+    try:
+        _validate_timeout(timeout_s)
+        _validate_cwd(cwd)
+    except ValueError as e:
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return AgentResult(
+            ok=False,
+            output="",
+            exit_code=-3,
+            duration_ms=duration_ms,
+            error=str(e),
+        )
+
     ctx = detect_context()
     config = get_config(backend, prompt, ctx, **backend_kwargs)
     env = config.build_env()
 
     cwd_str = str(cwd) if cwd else None
-    start = time.monotonic()
 
     try:
         stdout, stderr, return_code, timed_out = await asyncio.to_thread(
@@ -116,7 +170,7 @@ async def run(
                 output="",
                 exit_code=-1,  # Special code for timeout
                 duration_ms=duration_ms,
-                error=f"Fiche timed out after {timeout_s}s",
+                error=f"Agent timed out after {timeout_s}s",
             )
 
         if return_code != 0:

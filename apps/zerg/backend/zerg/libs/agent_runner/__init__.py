@@ -1,25 +1,25 @@
-"""Unified agent runner library.
+"""DEPRECATED: Use 'from hatch import run, Backend, AgentResult' instead.
 
-Simple subprocess wrapper for running Claude/Codex/Gemini headlessly.
-Handles env var configuration for each backend and container/laptop detection.
+This module is a thin wrapper around the hatch package for backwards compatibility.
+It will be removed in a future version.
 
-Usage:
-    from zerg.libs.agent_runner import run, Backend
+Usage (preferred):
+    from hatch import run, Backend, AgentResult
 
-    result = await run(
-        prompt="Fix the bug",
-        backend=Backend.ZAI,
-        cwd="/path/to/workspace",
-        timeout_s=300,
-    )
-    if result.ok:
-        print(result.output)
-    else:
-        print(f"Failed: {result.error}")
+Usage (deprecated, still works):
+    from zerg.libs.agent_runner import run, Backend, AgentResult
 """
 
-from zerg.libs.agent_runner.backends import Backend
-from zerg.libs.agent_runner.runner import AgentResult
-from zerg.libs.agent_runner.runner import run
+import warnings
+
+warnings.warn(
+    "zerg.libs.agent_runner is deprecated. Use 'from hatch import run, Backend, AgentResult' instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
+from hatch import AgentResult  # noqa: E402
+from hatch import Backend  # noqa: E402
+from hatch import run  # noqa: E402
 
 __all__ = ["run", "Backend", "AgentResult"]
