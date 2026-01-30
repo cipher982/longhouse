@@ -300,6 +300,8 @@ test.describe('Commis Simplification - Single Execution Mode', () => {
     }
 
     // Wait for all 3 commis to complete
+    // Increased timeout to 60s because parallel commis can take longer when
+    // the full test suite is running and resources are contended
     let events: Array<{ event_type: string; payload?: any }> = [];
     await expect
       .poll(
