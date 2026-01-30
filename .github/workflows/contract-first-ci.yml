@@ -44,7 +44,7 @@ jobs:
   backend-tests:
     runs-on: cube
     needs: validate
-    name: "🐍 Backend Tests"
+    name: "🐍 Backend Unit"
     env:
       # Use dedicated CI Postgres (not Life Hub production)
       DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
@@ -72,7 +72,7 @@ jobs:
   frontend-tests:
     runs-on: cube
     needs: validate
-    name: "⚛️  Frontend Tests"
+    name: "⚛️ Frontend Unit"
 
     steps:
     - uses: actions/checkout@v4

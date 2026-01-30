@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-reset-db reset test test-integration test-unit test-e2e test-e2e-core test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-runner-unit test-install-runner test-prompts test-ci test-backend-docker test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test eval eval-live eval-compare eval-critical eval-fast eval-all eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage
+.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-reset-db reset test test-integration test-unit test-e2e test-e2e-core test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-runner-unit test-install-runner test-prompts test-ci test-backend-docker test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage
 
 
 # ---------------------------------------------------------------------------
@@ -348,16 +348,16 @@ test-prompts: ## Run live prompt quality tests (requires backend running + --liv
 		-v
 
 # ---------------------------------------------------------------------------
-# Eval Tests (AI Agent Evaluation)
+# Eval Tests (AI Quality - REAL LLM calls, costs money)
 # ---------------------------------------------------------------------------
+# NOTE: Evals use REAL OpenAI API calls. Not run in CI.
+# Use for manual quality testing or scheduled jobs.
 EVAL_VARIANT ?= baseline
 
-eval: ## Run eval tests (hermetic mode, baseline variant)
-	@echo "🧪 Running eval tests (hermetic mode)..."
-	cd apps/zerg/backend && uv run pytest evals/ -v -n auto --variant=$(EVAL_VARIANT) --timeout=60
-
-eval-live: ## Run eval tests (LIVE mode - real OpenAI)
-	@echo "🔴 Running eval tests (LIVE mode - real OpenAI)..."
+eval: ## 🔴 Run AI evals (REAL LLM - costs $$$)
+	@echo "🔴 Running AI evals (REAL OpenAI API calls)..."
+	@echo "   This costs money. Press Ctrl+C to cancel."
+	@sleep 2
 	cd apps/zerg/backend && env EVAL_MODE=live uv run pytest evals/ -v --variant=$(EVAL_VARIANT) --timeout=120
 
 eval-compare: ## Compare two eval result files (usage: make eval-compare BASELINE=file1 VARIANT=file2)
@@ -366,21 +366,8 @@ eval-compare: ## Compare two eval result files (usage: make eval-compare BASELIN
 	@echo "📊 Comparing eval results..."
 	cd apps/zerg/backend && uv run python -m evals.compare evals/results/$(BASELINE) evals/results/$(VARIANT)
 
-eval-critical: ## Run critical tests only (deployment gate - must pass 100%)
-	@echo "🔴 Running CRITICAL eval tests (deployment gate)..."
-	@echo "⚠️  These tests MUST pass 100% for deployment"
-	cd apps/zerg/backend && uv run pytest evals/ -v -n auto -m critical --variant=$(EVAL_VARIANT) --timeout=60
-
-eval-fast: ## Run fast tests only (quick sanity check)
-	@echo "⚡ Running FAST eval tests (quick sanity check)..."
-	cd apps/zerg/backend && uv run pytest evals/ -v -n auto -m fast --variant=$(EVAL_VARIANT) --timeout=30
-
-eval-all: ## Run all eval tests including slow ones
-	@echo "🔬 Running ALL eval tests (including slow tests)..."
-	cd apps/zerg/backend && uv run pytest evals/ -v -n auto --variant=$(EVAL_VARIANT) --timeout=120
-
-eval-tool-selection: ## Run tool selection evals (LIVE mode - tests tool picking quality)
-	@echo "🎯 Running tool selection evals (LIVE mode)..."
+eval-tool-selection: ## @internal Run tool selection evals (tests tool picking quality)
+	@echo "🎯 Running tool selection evals (REAL LLM)..."
 	cd apps/zerg/backend && env EVAL_MODE=live uv run pytest evals/ -v -k tool_selection --timeout=120
 
 # ---------------------------------------------------------------------------
