@@ -1,8 +1,8 @@
 /**
- * SessionsPage - Browse agent sessions shipped via the shipper
+ * TimelinePage - Browse agent sessions shipped via the shipper
  *
  * Features:
- * - Sessions list grouped by day
+ * - Timeline list grouped by day
  * - Filter by project, provider, date range (dynamic from API)
  * - Search sessions by content
  * - Live updates via polling
@@ -13,7 +13,11 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate, useSearchParams, useLocation } from "react-router-dom";
 import { useAgentSessions, useAgentFilters } from "../hooks/useAgentSessions";
-import type { AgentSession, AgentSessionFilters } from "../services/api/agents";
+import {
+  seedAgentDemoSessions,
+  type AgentSession,
+  type AgentSessionFilters,
+} from "../services/api/agents";
 import {
   Button,
   Badge,
@@ -291,6 +295,8 @@ export default function SessionsPage() {
 
   // Pagination state
   const [limit, setLimit] = useState(PAGE_SIZE);
+  const [demoSeedStatus, setDemoSeedStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [demoSeedError, setDemoSeedError] = useState<string | null>(null);
 
   // Fetch dynamic filter options
   const { data: filtersData, isLoading: filtersLoading } = useAgentFilters(daysBack);
@@ -364,7 +370,26 @@ export default function SessionsPage() {
     setSearchQuery("");
   }, []);
 
+  const handleConnectShipper = useCallback(() => {
+    navigate("/settings/integrations");
+  }, [navigate]);
+
+  const handleSeedDemo = useCallback(async () => {
+    if (demoSeedStatus === "loading") return;
+    setDemoSeedStatus("loading");
+    setDemoSeedError(null);
+    try {
+      await seedAgentDemoSessions();
+      setDemoSeedStatus("done");
+      await refetch();
+    } catch (err) {
+      setDemoSeedStatus("error");
+      setDemoSeedError(err instanceof Error ? err.message : "Failed to seed demo sessions.");
+    }
+  }, [demoSeedStatus, refetch]);
+
   const hasFilters = project || provider || daysBack !== 14 || searchQuery;
+  const showGuidedEmptyState = sessions.length === 0 && !hasFilters;
 
   // Ready signal for E2E
   useEffect(() => {
@@ -380,8 +405,8 @@ export default function SessionsPage() {
       <PageShell size="wide" className="sessions-page-container">
         <EmptyState
           icon={<Spinner size="lg" />}
-          title="Loading sessions..."
-          description="Fetching your agent sessions."
+          title="Loading timeline..."
+          description="Fetching your timeline sessions."
         />
       </PageShell>
     );
@@ -393,7 +418,7 @@ export default function SessionsPage() {
       <PageShell size="wide" className="sessions-page-container">
         <EmptyState
           variant="error"
-          title="Error loading sessions"
+          title="Error loading timeline"
           description={error instanceof Error ? error.message : "Unknown error"}
           action={
             <Button variant="primary" onClick={() => refetch()}>
@@ -409,8 +434,8 @@ export default function SessionsPage() {
     <PageShell size="wide" className="sessions-page-container">
       <div className="sessions-page">
         <SectionHeader
-          title="Agent Sessions"
-          description="Browse and review your AI coding sessions."
+          title="Timeline"
+          description="A unified view of your AI coding sessions across providers."
         />
 
         {/* Filter Bar */}
@@ -435,7 +460,7 @@ export default function SessionsPage() {
           <div className="sessions-search">
             <Input
               type="search"
-              placeholder="Search sessions..."
+              placeholder="Search timeline..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="sessions-search-input"
@@ -448,14 +473,64 @@ export default function SessionsPage() {
           </div>
         </div>
 
-        {/* Sessions List */}
-        {sessions.length === 0 ? (
+        {/* Timeline List */}
+        {showGuidedEmptyState ? (
+          <div className="timeline-empty">
+            <div className="timeline-empty__intro">
+              <h3>Welcome to your Timeline</h3>
+              <p>
+                This is where your Claude, Codex, Gemini, and Oikos sessions live. Start with a demo
+                timeline or connect your shipper for live sync.
+              </p>
+            </div>
+            <div className="timeline-empty__steps">
+              <Card className="timeline-step">
+                <div className="timeline-step__header">
+                  <span className="timeline-step__badge">1</span>
+                  <div>
+                    <h4>Connect your shipper</h4>
+                    <p>Optional: sync real sessions from your laptop.</p>
+                  </div>
+                </div>
+                <Button variant="secondary" onClick={handleConnectShipper}>
+                  Open Integrations
+                </Button>
+              </Card>
+              <Card className="timeline-step">
+                <div className="timeline-step__header">
+                  <span className="timeline-step__badge">2</span>
+                  <div>
+                    <h4>Load demo timeline</h4>
+                    <p>No API key required. Seeds a couple of example sessions.</p>
+                  </div>
+                </div>
+                <Button
+                  variant="primary"
+                  onClick={handleSeedDemo}
+                  disabled={demoSeedStatus === "loading"}
+                >
+                  {demoSeedStatus === "loading" ? "Loading demo..." : "Load demo"}
+                </Button>
+                {demoSeedError && <div className="timeline-step__error">{demoSeedError}</div>}
+              </Card>
+              <Card className="timeline-step">
+                <div className="timeline-step__header">
+                  <span className="timeline-step__badge">3</span>
+                  <div>
+                    <h4>Explore the timeline</h4>
+                    <p>Filter by provider, project, or search across sessions.</p>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          </div>
+        ) : sessions.length === 0 ? (
           <EmptyState
-            title="No sessions found"
+            title="No timeline sessions found"
             description={
               hasFilters
                 ? "Try adjusting your filters or search query."
-                : "Sessions will appear here once the shipper starts syncing."
+                : "Timeline entries appear once your shipper starts syncing."
             }
             action={
               hasFilters ? (
