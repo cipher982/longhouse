@@ -44,7 +44,6 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
-from zerg.crud import count_users
 from zerg.database import get_db
 from zerg.database import is_postgres
 from zerg.models.agents import AgentSession
@@ -231,24 +230,26 @@ def require_postgres() -> None:
 def require_single_tenant(db: Session = Depends(get_db)) -> None:
     """Enforce single-tenant mode for agents endpoints.
 
-    Blocks access if more than one user exists in the instance. This prevents
-    data leakage because the agents schema is not owner-scoped.
+    In single-tenant mode (SINGLE_TENANT=1, the default), agents endpoints are
+    accessible without owner scoping - the deployment is trusted to have one owner.
+
+    In multi-tenant mode (SINGLE_TENANT=0), agents endpoints require owner scoping
+    which isn't implemented yet, so we block access.
     """
     settings = get_settings()
-    if not settings.single_tenant or settings.testing:
+
+    # Testing mode: always allow
+    if settings.testing:
         return
 
-    try:
-        total_users = count_users(db)
-    except Exception:
-        total_users = 0
-
-    if total_users <= 1:
+    # Single-tenant mode (default): trust the deployment, allow access
+    if settings.single_tenant:
         return
 
+    # Multi-tenant mode: agents tables aren't owner-scoped yet, block access
     raise HTTPException(
-        status_code=status.HTTP_409_CONFLICT,
-        detail="Single-tenant mode: multiple users detected. This instance supports a single user only.",
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Multi-tenant agents API not implemented. Set SINGLE_TENANT=1 or contact support.",
     )
 
 
