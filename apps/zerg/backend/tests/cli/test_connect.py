@@ -11,7 +11,9 @@ from typer.testing import CliRunner
 from zerg.cli.main import app
 from zerg.services.shipper import ShipResult
 
-runner = CliRunner()
+# Use env to disable Rich's terminal detection for consistent output in CI
+# Rich/Typer can produce inconsistent output based on terminal settings
+runner = CliRunner(mix_stderr=False, env={"TERM": "dumb", "NO_COLOR": "1", "COLUMNS": "120"})
 
 
 @pytest.fixture
