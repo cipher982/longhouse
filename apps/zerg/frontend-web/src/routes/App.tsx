@@ -70,7 +70,7 @@ export default function App() {
   }, []);
 
   const routes = useRoutes([
-    // Root route: redirect to dashboard when auth disabled (dev/test mode)
+    // Root route: redirect to timeline when auth disabled (dev/test mode)
     // In production (auth enabled), show landing page (it handles its own auth redirect)
     {
       path: "/",
@@ -79,7 +79,7 @@ export default function App() {
           <LandingPage />
         </ErrorBoundary>
       ) : (
-        <Navigate to="/dashboard" replace />
+        <Navigate to="/timeline" replace />
       )
     },
     // Landing page accessible at /landing for dev preview when auth is disabled
@@ -283,12 +283,24 @@ export default function App() {
           )
         },
         {
-          path: "/sessions",
+          path: "/timeline",
           element: (
             <ErrorBoundary>
               <SessionsPage />
             </ErrorBoundary>
           )
+        },
+        {
+          path: "/timeline/:sessionId",
+          element: (
+            <ErrorBoundary>
+              <SessionDetailPage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/sessions",
+          element: <Navigate to="/timeline" replace />
         },
         {
           path: "/sessions/:sessionId",
@@ -300,7 +312,7 @@ export default function App() {
         },
       ]
     },
-    // Fallback for unknown SPA routes - redirect to dashboard (dev) or landing (prod)
+    // Fallback for unknown SPA routes - redirect to timeline (dev) or landing (prod)
     // NOTE: Static files (.html, .js, etc.) are served by Vite before reaching React Router
     {
       path: "*",
@@ -309,7 +321,7 @@ export default function App() {
           <LandingPage />
         </ErrorBoundary>
       ) : (
-        <Navigate to="/dashboard" replace />
+        <Navigate to="/timeline" replace />
       )
     },
   ]);

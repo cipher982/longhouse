@@ -346,7 +346,7 @@ export default function SessionsPage() {
 
   // Handle session click - preserve current filters in location state
   const handleSessionClick = useCallback((session: AgentSession) => {
-    navigate(`/sessions/${session.id}`, {
+    navigate(`/timeline/${session.id}`, {
       state: { from: location.pathname + location.search },
     });
   }, [navigate, location]);
