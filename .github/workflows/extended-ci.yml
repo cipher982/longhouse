@@ -1,9 +1,7 @@
 name: Extended CI
 
 on:
-  schedule:
-    # Nightly at 08:00 UTC (midnight PT / 3am ET)
-    - cron: '0 8 * * *'
+  # Scheduled by Sauron via workflow_dispatch.
   workflow_dispatch: {}
 
 # Never cancel runs
