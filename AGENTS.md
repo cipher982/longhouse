@@ -184,8 +184,8 @@ Sauron is the centralized ops scheduler, deployed as a standalone service on cli
 
 ## TODOs (Agent-Tracked)
 
-- [ ] **Telegram webhook handler** - `webhook_url` config sets remote webhook but no local handler exists at `/webhooks/channels/{channel_id}`. Implement `WebhookChannel` router or remove setting from UI.
-- [ ] **Parallel spawn_commis interrupt** - `_execute_tools_parallel()` doesn't raise `FicheInterrupted`, so runs finish SUCCESS instead of WAITING. Fix to return `interrupt_value` dict for barrier creation.
+- [x] **Telegram webhook handler** - Implemented in `routers/channels_webhooks.py` (commit 2dc1ee0b)
+- [x] **Parallel spawn_commis interrupt** - Fixed to return `interrupt_value` dict (commit a8264f9d)
 
 ---
 
