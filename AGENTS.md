@@ -220,3 +220,4 @@ Categories: `gotcha`, `pattern`, `design`, `tool`, `test`, `deploy`, `perf`
 ### Learnings
 
 <!-- Agents: append below this line. Human compacts weekly. -->
+- (2026-01-30) [gotcha] Multi-tenant mode disables Agents API via require_single_tenant(); schema routing in commis_db is test-only and blocked in prod.
