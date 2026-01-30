@@ -578,27 +578,6 @@ class TestMemoryContext:
         assert mock_search.call_args.kwargs["query"] == "Real message"
         assert "[MEMORY CONTEXT]" in result.messages[-1].content
 
-    def test_memory_context_fallback_to_internal_state(self, db_session, runtime_view, test_fiche):
-        builder = MessageArrayBuilder(db_session, runtime_view)
-        builder.with_system_prompt(test_fiche)
-
-        # Add a HumanMessage directly to the builder's state
-        builder.with_conversation_messages([HumanMessage(content="My internal query")])
-
-        with (
-            patch("zerg.connectors.status_builder.build_fiche_context", return_value="{}"),
-            patch("zerg.services.memory_search.search_memory_files", return_value=[{"path": "m.txt", "snippets": ["S"]}]) as mock_search,
-            patch("zerg.crud.knowledge_crud.search_knowledge_documents", return_value=[]),
-            patch("zerg.services.memory_embeddings.embeddings_enabled", return_value=False),
-        ):
-            # Call without arguments - should fallback to internal state
-            builder.with_dynamic_context()
-            builder.build()
-
-        assert mock_search.called
-        assert mock_search.call_args.kwargs["query"] == "My internal query"
-
-
 # ---------------------------------------------------------------------------
 # Golden equivalence tests (builder matches legacy run_thread output)
 # ---------------------------------------------------------------------------

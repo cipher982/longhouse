@@ -435,11 +435,8 @@ class MessageArrayBuilder:
                 if row.role == "user" and not getattr(row, "internal", False):
                     return (row.content or "").strip() or None
 
-        # Fallback to provided conversation messages
-        msgs_to_search = conversation_msgs if conversation_msgs is not None else self._messages
-
-        if msgs_to_search:
-            for msg in reversed(msgs_to_search):
+        if conversation_msgs:
+            for msg in reversed(conversation_msgs):
                 if isinstance(msg, HumanMessage):
                     return _strip_timestamp_prefix(msg.content)
 
