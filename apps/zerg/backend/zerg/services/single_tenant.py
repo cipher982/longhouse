@@ -145,8 +145,38 @@ def is_owner_email(email: str) -> bool:
     return email.strip().lower() == owner_email.lower()
 
 
+def can_create_user_locked(db: Session) -> bool:
+    """Check if a new user can be created, with advisory lock for concurrency safety.
+
+    Uses PostgreSQL advisory lock to prevent race conditions where concurrent
+    OAuth sign-ins both see 0 users and create multiple accounts.
+
+    Returns True if:
+    - Single-tenant mode is disabled, OR
+    - No users exist yet (checked under lock)
+    """
+    from sqlalchemy import text
+
+    settings = get_settings()
+    if not settings.single_tenant:
+        return True
+
+    # Advisory lock key for single-tenant user creation
+    # Uses a fixed hash to ensure all processes use the same lock
+    lock_key = 2147483647  # Max 32-bit int, unlikely to collide
+
+    # Acquire advisory lock (blocks if another transaction holds it)
+    db.execute(text(f"SELECT pg_advisory_xact_lock({lock_key})"))
+
+    # Now safely check user count under the lock
+    return crud.count_users(db) == 0
+
+
 def can_create_user(db: Session) -> bool:
     """Check if a new user can be created (single-tenant enforcement).
+
+    Note: This is NOT race-safe. Use can_create_user_locked() in OAuth flows.
+    This version is kept for backwards compatibility and non-critical checks.
 
     Returns True if:
     - Single-tenant mode is disabled, OR
@@ -159,12 +189,40 @@ def can_create_user(db: Session) -> bool:
     return crud.count_users(db) == 0
 
 
+def validate_single_tenant_config() -> str | None:
+    """Validate single-tenant configuration at startup.
+
+    Returns an error message if misconfigured, None if valid.
+    Called during startup to fail fast on bad config.
+    """
+    settings = get_settings()
+
+    if not settings.single_tenant:
+        return None  # Multi-tenant mode, no validation needed
+
+    # If auth is enabled, we need either OWNER_EMAIL or ADMIN_EMAILS
+    # to know who should own this instance
+    if not settings.auth_disabled:
+        owner_email = os.getenv("OWNER_EMAIL", "").strip()
+        admin_emails = settings.admin_emails.strip() if settings.admin_emails else ""
+
+        if not owner_email and not admin_emails:
+            return (
+                "Single-tenant mode with auth enabled requires OWNER_EMAIL or ADMIN_EMAILS. "
+                "Set OWNER_EMAIL to the email of the instance owner, or use AUTH_DISABLED=1 for OSS mode."
+            )
+
+    return None
+
+
 __all__ = [
     "SingleTenantViolation",
     "validate_single_tenant",
+    "validate_single_tenant_config",
     "get_owner_email",
     "bootstrap_owner_user",
     "is_owner_email",
     "can_create_user",
+    "can_create_user_locked",
     "OSS_DEFAULT_EMAIL",
 ]
