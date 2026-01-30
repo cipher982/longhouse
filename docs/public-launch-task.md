@@ -29,6 +29,7 @@ We must follow this doc for scope, finish conditions, and validation steps.
 - [x] New users can see demo sessions without API keys.
 - [ ] README rewritten to highlight timeline-first value and 3 install paths.
 - [ ] Onboarding smoke command exists and passes locally.
+- [ ] README onboarding contract is validated in CI (docs-as-source).
 - [ ] Core UI smoke snapshots pass (qa-ui-smoke).
 - [ ] Shipper smoke test passes (if shipper path is enabled in the flow).
 
@@ -60,6 +61,7 @@ We focus on UX improvements + onboarding clarity. No deep backend refactors unle
 - [ ] Provide 3 install paths (quick, guided, developer).
 - [ ] Add screenshots and a short “what you get” section.
 - [x] Add a single onboarding smoke command to verify first-run.
+- [ ] Add README “onboarding contract” block and CI runner (docs-as-source).
 
 ## Current State (Summary)
 - Timeline is now the primary nav item and default route for authenticated/dev users.
@@ -77,6 +79,13 @@ Use these to prove we didn’t regress the experience:
 - `make test-e2e-core` (core flows)
 - `make shipper-smoke-test` (shipper live smoke; if used)
 - `make test-install-runner` (runner install script tests)
+- `make onboarding-funnel` (docs-as-source funnel)
+
+## Docs-as-Source CI (Onboarding Funnel)
+- README contains an “onboarding contract” block (JSON).
+- CI runner extracts this block and executes its commands in a temp workspace.
+- Playwright checks use the contract’s selectors/labels; UI/doc drift fails CI.
+- No hidden env flags; all behavior is declared in the contract block.
 
 ## Gaps / Missing Tests
 - No automated test for a full onboarding “happy path”.
