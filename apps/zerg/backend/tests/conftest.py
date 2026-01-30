@@ -5,6 +5,9 @@ from pathlib import Path
 # Set *before* any project imports so backend skips background services
 os.environ["TESTING"] = "1"
 
+# Disable single-tenant mode for tests - tests need multiple users for permission testing
+os.environ["SINGLE_TENANT"] = "0"
+
 # Crypto – provide deterministic Fernet key for tests *before* any zerg imports.
 # (Some modules import zerg.utils.crypto at import time.)
 if not os.environ.get("FERNET_SECRET"):
@@ -174,7 +177,7 @@ def _get_connection_options(schema: str) -> str:
         f"-c search_path={schema},public "
         f"-c application_name={_get_application_name()} "
         "-c idle_in_transaction_session_timeout=60s "
-        "-c lock_timeout=60s "
+        "-c lock_timeout=10s "
         "-c statement_timeout=180s"
     )
 
@@ -755,16 +758,17 @@ def _db_schema():
             pass  # Best effort cleanup
 
 
-# Advisory lock ID for serializing TRUNCATE across xdist workers
-# This prevents deadlocks when workers acquire table locks in different orders
-TRUNCATE_LOCK_ID = 0x7E5F5B01
-
-
-def _truncate_all_tables(connection):
+def _truncate_all_tables(connection, schema_name: str):
     """Truncate all tables efficiently using a single statement.
 
-    Uses an advisory lock to serialize TRUNCATE across xdist workers,
-    preventing deadlocks when workers acquire table locks in different orders.
+    Each xdist worker operates in its own isolated schema. Tables are explicitly
+    schema-qualified to ensure we only truncate the worker's own tables, avoiding
+    any cross-schema interference or deadlocks.
+
+    No advisory lock is needed because:
+    1. Each worker has its own schema (e.g., zerg_test_wt_xxx__gw0)
+    2. Schema-qualified names ensure isolation
+    3. Workers never touch each other's tables
     """
     from sqlalchemy import text
 
@@ -773,13 +777,13 @@ def _truncate_all_tables(connection):
     if not table_names:
         return
 
-    # Acquire advisory lock to serialize TRUNCATE across workers
-    # pg_advisory_xact_lock is transaction-scoped and auto-released on commit
-    connection.execute(text(f"SELECT pg_advisory_xact_lock({TRUNCATE_LOCK_ID})"))
+    # Explicitly schema-qualify each table to ensure we only touch this worker's schema.
+    # This prevents any possibility of cross-schema interference that could cause deadlocks.
+    qualified_tables = [f"{schema_name}.{name}" for name in table_names]
+    tables_str = ", ".join(qualified_tables)
 
     # Use TRUNCATE ... CASCADE for speed (single statement, minimal WAL)
     # RESTART IDENTITY resets sequences for predictable IDs
-    tables_str = ", ".join(table_names)
     connection.execute(text(f"TRUNCATE TABLE {tables_str} RESTART IDENTITY CASCADE"))
     connection.commit()
 
@@ -793,8 +797,9 @@ def db_session(_db_schema):
     Schema is created once per session, tables are truncated per test.
     """
     # TRUNCATE all tables BEFORE the test to ensure clean state
+    # Pass schema name explicitly to ensure proper isolation
     with test_engine.connect() as conn:
-        _truncate_all_tables(conn)
+        _truncate_all_tables(conn, _CI_TEST_SCHEMA)
 
     db = TestingSessionLocal()
 
@@ -809,7 +814,8 @@ def db_session(_db_schema):
 
         # Advance sequence past seeded user so auto-generated IDs don't conflict
         # Uses MAX(id) so it self-heals if seed changes
-        db.execute(text("SELECT setval('users_id_seq', COALESCE((SELECT MAX(id) FROM users), 1))"))
+        # Schema-qualify to ensure we're targeting this worker's sequence
+        db.execute(text(f"SELECT setval('{_CI_TEST_SCHEMA}.users_id_seq', COALESCE((SELECT MAX(id) FROM {_CI_TEST_SCHEMA}.users), 1))"))
         db.commit()
     except Exception:
         # If seeding fails, continue; individual tests may create their own users
