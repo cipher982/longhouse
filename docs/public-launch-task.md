@@ -30,6 +30,8 @@ We must follow this doc for scope, finish conditions, and validation steps.
 - [ ] README rewritten to highlight timeline-first value and 3 install paths.
 - [ ] Onboarding smoke command exists and passes locally.
 - [x] README onboarding contract is validated in CI (docs-as-source).
+- [ ] Onboarding funnel passes locally from a fresh clone with no hidden env flags.
+- [ ] CI “Onboarding Funnel” job is green on a clean push (contract + UI selectors).
 - [ ] Core UI smoke snapshots pass (qa-ui-smoke).
 - [ ] Shipper smoke test passes (if shipper path is enabled in the flow).
 
@@ -87,10 +89,12 @@ Use these to prove we didn’t regress the experience:
 - CI runner extracts this block and executes its commands in a temp workspace.
 - Playwright checks use the contract’s selectors/labels; UI/doc drift fails CI.
 - No hidden env flags; all behavior is declared in the contract block.
+- Contract owns any onboarding-specific env tweaks (e.g., POSTGRES_DATA_PATH for isolated DB).
+- If the landing page/CTA changes, selectors in the contract must be updated or CI fails.
 
 ## Gaps / Missing Tests
 - No automated test for a full onboarding “happy path”.
-- No automated docs/README validation.
+- Docs validation is limited to the onboarding contract (README rewrite not yet enforced).
 - No packaging smoke test for a future `brew install zerg` or `install.sh`.
 
 ## Decisions (Locked)
