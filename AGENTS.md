@@ -231,3 +231,4 @@ Categories: `gotcha`, `pattern`, `design`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-30) [gotcha] SQLite URLs are rejected in zerg.database and Agents schema uses Postgres-only UUID/JSONB/partial indexes, so SQLite mode must gate these features.
 - (2026-01-30) [design] VISION.md enforces Postgres-only agents schema today, while LIGHTWEIGHT-OSS-ONBOARDING.md assumes SQLite; align docs before using “pip install + sqlite” as default.
 - (2026-01-30) [gotcha] list_memories shows only short IDs; forget_memory requires full UUID, so deletes fail unless full IDs are exposed or prefix lookup is added.
+- (2026-01-31) [gotcha] DB schemas are hard-coded (DB_SCHEMA="zerg", Agents schema="agents") and raw SQL references schema-qualified tables (e.g., ops.job_queue); SQLite needs schema remapping or SQL changes.
