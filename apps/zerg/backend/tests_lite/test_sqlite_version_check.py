@@ -2,7 +2,7 @@
 
 These tests verify that:
 1. The version check function works correctly
-2. The current environment meets SQLite 3.24+ requirements
+2. The current environment meets SQLite 3.35+ requirements
 3. The runtime enforces the minimum version
 
 NOTE: Modern Python (3.8+) bundles SQLite 3.35+, so these tests serve as
@@ -18,7 +18,7 @@ from zerg.database import make_engine
 
 
 def test_check_sqlite_version_compatible(tmp_path):
-    """Current SQLite version should be compatible (>= 3.24)."""
+    """Current SQLite version should be compatible (>= 3.35)."""
     db_path = tmp_path / "version_check.db"
     engine = make_engine(f"sqlite:///{db_path}")
 
