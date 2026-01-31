@@ -11,7 +11,6 @@ The schema lives in the 'agents' schema (not 'zerg') to enable:
 
 import os
 from typing import TYPE_CHECKING
-from uuid import UUID as PyUUID
 from uuid import uuid4
 
 from sqlalchemy import JSON
@@ -25,54 +24,24 @@ from sqlalchemy import MetaData
 from sqlalchemy import String
 from sqlalchemy import Text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-from sqlalchemy.types import CHAR
-from sqlalchemy.types import TypeDecorator
+
+from zerg.models.types import GUID
 
 if TYPE_CHECKING:
     pass
 
 
-class GUID(TypeDecorator):
-    """Platform-independent GUID type.
-
-    Uses PostgreSQL's UUID type for Postgres, stores as CHAR(36) for SQLite.
-    Based on SQLAlchemy's TypeDecorator pattern for cross-database UUID support.
-    """
-
-    impl = CHAR
-    cache_ok = True
-
-    def load_dialect_impl(self, dialect):
-        if dialect.name == "postgresql":
-            return dialect.type_descriptor(PG_UUID(as_uuid=True))
-        else:
-            return dialect.type_descriptor(CHAR(36))
-
-    def process_bind_param(self, value, dialect):
-        if value is None:
-            return value
-        elif dialect.name == "postgresql":
-            return value if isinstance(value, PyUUID) else PyUUID(value)
-        else:
-            return str(value) if isinstance(value, PyUUID) else value
-
-    def process_result_value(self, value, dialect):
-        if value is None:
-            return value
-        elif isinstance(value, PyUUID):
-            return value
-        else:
-            return PyUUID(value)
-
-
 # Separate metadata for agents schema (isolated from main zerg schema)
 # AGENTS_SCHEMA is None for SQLite (no schema support), "agents" for Postgres
+# Import _is_sqlite_url to avoid circular import - it's defined early in database.py
+# before any model imports, so we use late import here
+from zerg.database import _is_sqlite_url
+
 _db_url = os.environ.get("DATABASE_URL", "")
-AGENTS_SCHEMA = None if _db_url.startswith("sqlite") else "agents"
+AGENTS_SCHEMA = None if _is_sqlite_url(_db_url) else "agents"
 agents_metadata = MetaData(schema=AGENTS_SCHEMA)
 
 # Separate Base class for agents schema models

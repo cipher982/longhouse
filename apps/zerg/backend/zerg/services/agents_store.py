@@ -185,30 +185,25 @@ class AgentsStore:
                         index_elements=["session_id", "source_path", "source_offset", "event_hash"],
                         index_where=AgentEvent.source_path.isnot(None),
                     )
-                # SQLite: partial indexes can't be used for ON CONFLICT, skip the clause
-                # and rely on the try/except below for duplicate handling
+                else:
+                    # SQLite: use on_conflict_do_nothing without index_elements
+                    # This works for any unique constraint violation, avoiding the need
+                    # for try/except which would leave the session in a failed state
+                    stmt = stmt.on_conflict_do_nothing()
 
-            # Execute insert with duplicate handling
-            try:
-                result = self.db.execute(stmt)
-                if result.rowcount > 0:
-                    events_inserted += 1
-                    # Track counts
-                    if event_data.role == "user":
-                        user_count += 1
-                    elif event_data.role == "assistant":
-                        assistant_count += 1
-                        if event_data.tool_name:
-                            tool_count += 1
-                else:
-                    events_skipped += 1
-            except Exception as e:
-                # SQLite raises IntegrityError for unique constraint violations
-                # Treat as duplicate/skipped
-                if "UNIQUE constraint failed" in str(e) or "duplicate" in str(e).lower():
-                    events_skipped += 1
-                else:
-                    raise
+            # Execute insert
+            result = self.db.execute(stmt)
+            if result.rowcount > 0:
+                events_inserted += 1
+                # Track counts
+                if event_data.role == "user":
+                    user_count += 1
+                elif event_data.role == "assistant":
+                    assistant_count += 1
+                    if event_data.tool_name:
+                        tool_count += 1
+            else:
+                events_skipped += 1
 
         # Update session counts
         session_obj = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()

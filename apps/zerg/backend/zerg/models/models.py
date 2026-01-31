@@ -1,4 +1,3 @@
-from uuid import UUID as PyUUID
 from uuid import uuid4
 
 from sqlalchemy import JSON
@@ -18,52 +17,17 @@ from sqlalchemy import String
 from sqlalchemy import Text
 from sqlalchemy import UniqueConstraint
 from sqlalchemy import text
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import backref
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-from sqlalchemy.types import CHAR
-from sqlalchemy.types import TypeDecorator
 
 # Local helpers / enums
 from zerg.database import Base
 from zerg.models.enums import Phase
+from zerg.models.types import GUID
 from zerg.models_config import DEFAULT_COMMIS_MODEL_ID
-
-
-class GUID(TypeDecorator):
-    """Platform-independent GUID type.
-
-    Uses PostgreSQL's UUID type for Postgres, stores as CHAR(36) for SQLite.
-    """
-
-    impl = CHAR
-    cache_ok = True
-
-    def load_dialect_impl(self, dialect):
-        if dialect.name == "postgresql":
-            return dialect.type_descriptor(UUID(as_uuid=True))
-        else:
-            return dialect.type_descriptor(CHAR(36))
-
-    def process_bind_param(self, value, dialect):
-        if value is None:
-            return value
-        elif dialect.name == "postgresql":
-            return value if isinstance(value, PyUUID) else PyUUID(value)
-        else:
-            return str(value) if isinstance(value, PyUUID) else value
-
-    def process_result_value(self, value, dialect):
-        if value is None:
-            return value
-        elif isinstance(value, PyUUID):
-            return value
-        else:
-            return PyUUID(value)
-
 
 from .connector import Connector  # noqa: E402, F401
 
