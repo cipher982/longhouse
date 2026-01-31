@@ -10,6 +10,7 @@ implemented.
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
 from typing import Any
 from typing import Dict
@@ -44,10 +45,49 @@ def detect_role_from_messages(messages: List[BaseMessage]) -> str:
     return "commis"
 
 
+def _parse_memory_e2e_scenario(text: str) -> Optional[Dict[str, Any]]:
+    """Parse MEMORY_E2E_* prompts for deterministic tool-call testing."""
+    lowered = text.strip().lower()
+    if "memory_e2e_" not in lowered:
+        return None
+
+    save_match = re.search(r"memory_e2e_save\s*:\s*(.+)", text, re.IGNORECASE | re.DOTALL)
+    if save_match:
+        content = save_match.group(1).strip()
+        if not content:
+            content = "E2E memory content"
+        return {"name": "memory_e2e", "action": "save", "content": content}
+
+    search_match = re.search(r"memory_e2e_search\s*:\s*(.+)", text, re.IGNORECASE | re.DOTALL)
+    if search_match:
+        query = search_match.group(1).strip()
+        if not query:
+            query = "E2E"
+        return {"name": "memory_e2e", "action": "search", "query": query}
+
+    if "memory_e2e_list" in lowered:
+        return {"name": "memory_e2e", "action": "list"}
+
+    forget_match = re.search(r"memory_e2e_forget\s*:\s*([a-f0-9-]{8,36})", lowered)
+    if not forget_match:
+        forget_match = re.search(r"([a-f0-9-]{8,36})", lowered)
+    if forget_match:
+        return {"name": "memory_e2e", "action": "forget", "memory_id": forget_match.group(1)}
+
+    return None
+
+
 def find_matching_scenario(prompt: str, role: str) -> Optional[Dict[str, Any]]:
     """Return a scenario dict for (prompt, role), or None if no match."""
     text = (prompt or "").lower()
     role = (role or "").lower()
+
+    memory_scenario = _parse_memory_e2e_scenario(prompt or "")
+    if memory_scenario:
+        return {
+            "role": "oikos",
+            **memory_scenario,
+        }
 
     is_disk = any(k in text for k in ("disk", "storage", "space"))
     is_cube = "cube" in text
@@ -62,8 +102,6 @@ def find_matching_scenario(prompt: str, role: str) -> Optional[Dict[str, Any]]:
     is_resume = any(k in text for k in ("resume", "continue session", "pick up where"))
     is_workspace = any(k in text for k in ("workspace", "git repo", "code change", "repository"))
     # Extract session ID if present (UUID-like pattern or explicit session ID mention)
-    import re
-
     session_match = re.search(r"session[:\s]+([a-f0-9-]{36})", text) or re.search(r"([a-f0-9-]{36})", text)
     resume_session_id = session_match.group(1) if session_match else None
 
@@ -257,6 +295,34 @@ class ScriptedChatLLM(BaseChatModel):
 
             ai_message = AIMessage(content=final_text, tool_calls=[])
             return ChatResult(generations=[ChatGeneration(message=ai_message)])
+
+        if role == "oikos" and scenario and scenario.get("name") == "memory_e2e":
+            action = scenario.get("action")
+            tool_name = None
+            args: Dict[str, Any] = {}
+
+            if action == "save":
+                tool_name = "save_memory"
+                args = {"content": scenario.get("content", "E2E memory content"), "type": "note"}
+            elif action == "search":
+                tool_name = "search_memory"
+                args = {"query": scenario.get("query", "E2E")}
+            elif action == "list":
+                tool_name = "list_memories"
+                args = {"limit": 10}
+            elif action == "forget":
+                tool_name = "forget_memory"
+                memory_id = scenario.get("memory_id") or "00000000-0000-0000-0000-000000000000"
+                args = {"memory_id": memory_id}
+
+            if tool_name:
+                tool_call = {
+                    "id": f"call_{uuid.uuid4().hex[:8]}",
+                    "name": tool_name,
+                    "args": args,
+                }
+                ai_message = AIMessage(content="", tool_calls=[tool_call])
+                return ChatResult(generations=[ChatGeneration(message=ai_message)])
 
         # Workspace commis scenario: spawns spawn_workspace_commis with git repo and optional resume
         if role == "oikos" and scenario and scenario.get("name") == "workspace_commis_oikos":

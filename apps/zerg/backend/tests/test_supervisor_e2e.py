@@ -282,3 +282,69 @@ class TestCommisSpawning:
 
             crud.delete_fiche(db_session, temp_agent.id)
             db_session.commit()
+
+
+class TestOikosMemoryE2E:
+    """End-to-end memory tool flow via OikosService + scripted model."""
+
+    @pytest.fixture
+    def temp_artifact_path(self, monkeypatch):
+        """Create temporary artifact store path."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            monkeypatch.setenv("SWARMLET_DATA_PATH", tmpdir)
+            yield tmpdir
+
+    @pytest.mark.asyncio
+    async def test_oikos_memory_tools_flow(self, db_session, test_user, temp_artifact_path):
+        """save -> search -> list -> forget via scripted tool calls."""
+        from zerg.models.models import Memory
+        from zerg.models.run_event import RunEvent
+
+        service = OikosService(db_session)
+
+        def run_has_tool(run_id: int, tool_name: str) -> bool:
+            events = (
+                db_session.query(RunEvent)
+                .filter(RunEvent.run_id == run_id)
+                .filter(RunEvent.event_type == "oikos_tool_started")
+                .all()
+            )
+            return any((e.payload or {}).get("tool_name") == tool_name for e in events)
+
+        save_result = await service.run_oikos(
+            owner_id=test_user.id,
+            task="MEMORY_E2E_SAVE: User prefers dark mode",
+            model_override="gpt-scripted",
+            timeout=30,
+        )
+
+        memory = db_session.query(Memory).filter(Memory.user_id == test_user.id).first()
+        assert memory is not None
+        memory_id = str(memory.id)
+        assert run_has_tool(save_result.run_id, "save_memory")
+
+        search_result = await service.run_oikos(
+            owner_id=test_user.id,
+            task="MEMORY_E2E_SEARCH: dark mode",
+            model_override="gpt-scripted",
+            timeout=30,
+        )
+        assert run_has_tool(search_result.run_id, "search_memory")
+
+        list_result = await service.run_oikos(
+            owner_id=test_user.id,
+            task="MEMORY_E2E_LIST",
+            model_override="gpt-scripted",
+            timeout=30,
+        )
+        assert run_has_tool(list_result.run_id, "list_memories")
+
+        forget_result = await service.run_oikos(
+            owner_id=test_user.id,
+            task=f"MEMORY_E2E_FORGET: {memory_id}",
+            model_override="gpt-scripted",
+            timeout=30,
+        )
+        assert run_has_tool(forget_result.run_id, "forget_memory")
+
+        assert db_session.query(Memory).filter(Memory.user_id == test_user.id).count() == 0

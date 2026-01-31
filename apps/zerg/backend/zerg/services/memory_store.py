@@ -8,6 +8,7 @@ Phase 2: Add embeddings for semantic search.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
@@ -264,10 +265,13 @@ class PostgresMemoryStore:
 
             # Allow prefix deletion (>= 8 chars) for usability with short IDs.
             if len(memory_id) < 36:
-                if len(memory_id) < 8:
+                prefix = memory_id.strip().lower()
+                if not re.fullmatch(r"[0-9a-f-]+", prefix or ""):
+                    raise ValueError("Invalid memory ID format")
+                if len(prefix) < 8:
                     raise ValueError("Memory ID prefix must be at least 8 characters")
 
-                matches = db.query(Memory).filter(Memory.user_id == user_id).filter(cast(Memory.id, String).ilike(f"{memory_id}%")).all()
+                matches = db.query(Memory).filter(Memory.user_id == user_id).filter(cast(Memory.id, String).ilike(f"{prefix}%")).all()
 
                 if not matches:
                     return False
