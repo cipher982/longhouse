@@ -23,6 +23,7 @@ Phase 0 — Audit:
 - [ ] Tag all Postgres-only codepaths (UUID/JSONB/schema/ILIKE)
 - [ ] Define SQLite-compatible schema strategy (no schemas; table prefixes or flat)
 - [ ] Decide: separate migration path or conditional migrations?
+ - [ ] Plan details captured in `docs/LIGHTWEIGHT-OSS-ONBOARDING.md` (2026-01-31)
 
 Phase 1 — Unblock:
 - [ ] Remove SQLite rejection in `database.py`

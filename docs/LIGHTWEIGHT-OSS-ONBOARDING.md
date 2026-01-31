@@ -6,6 +6,134 @@
 
 ---
 
+## Current State Findings (2026-01-31)
+
+These are the concrete mismatches between today’s codebase and the SQLite-only target. This section is here so we can plan from reality instead of aspiration.
+
+- **SQLite is hard-blocked** in `zerg.database.make_engine()` and startup enforces PostgreSQL only in `zerg.main.lifespan()`.
+- **Schemas are hard-coded** (`DB_SCHEMA="zerg"`, agents schema `"agents"`). SQLite does not support schemas, and there are raw SQL references like `ops.job_queue`.
+- **Postgres-only column types** exist across models (UUID, JSONB, `gen_random_uuid()` defaults, partial indexes).
+- **Agents API is PG-only**: models use UUID/JSONB/schema, `AgentsStore` uses `postgresql.insert`, and endpoints are guarded by `require_postgres()`.
+- **Job claiming uses PG locks** (`FOR UPDATE SKIP LOCKED`) in `commis_job_processor` and `jobs.queue`.
+- **Advisory locks / row locks** are used in multiple paths (`single_tenant`, `fiche_locks`, `commis_resume`, email/sms tools).
+- **Checkpoints are non-durable on SQLite** (MemorySaver only).
+- **CLI lacks `zerg serve` and package bundling**: no server command, and backend expects `static/` at repo root but frontend dist is at `apps/zerg/frontend-web/dist`.
+
+If we want `pip install zerg && zerg serve` on SQLite, all of the above must be addressed or intentionally gated off in lite mode.
+
+---
+
+## Decisions to Lock (before implementation)
+
+1. **SQLite schema strategy**: recommended = **flat tables, no schemas** (there are no name collisions with agents tables). Postgres keeps schemas.
+2. **Ops job queue scope**: recommended = **disable `ops.job_queue` in lite** (keep it Postgres-only), but make `commis_jobs` SQLite-safe for local concurrency.
+3. **Durable checkpoints**: recommended = **use `langgraph-checkpoint-sqlite`** for SQLite so resumes survive restarts.
+4. **Static frontend packaging**: recommended = **bundle `apps/zerg/frontend-web/dist` in the python package** and mount via FastAPI.
+
+---
+
+## Detailed Execution Plan (SQLite Lite Mode)
+
+### Phase 0 — Preflight Decisions + Flags
+
+**Goal:** Establish SQLite vs Postgres mode cleanly so the rest of the system can branch safely.
+
+- Add a computed `lite_mode` (or `db_is_sqlite`) flag in `zerg.config.get_settings()` based on `database_url` scheme.
+- Decide schema strategy (flat tables) and write it down in this doc.
+- Decide job queue scope (disable ops job queue in lite).
+- Decide durable checkpoints (sqlite checkpointer).
+
+### Phase 1 — Core DB Boot on SQLite
+
+**Goal:** `zerg serve` boots on SQLite without crashing.
+
+- **database.py**
+  - Allow sqlite URLs (remove hard error).
+  - Skip `_apply_search_path()` for sqlite.
+  - Make `DB_SCHEMA` and `AGENTS_SCHEMA` conditional; use `None` for sqlite.
+  - Set SQLite pragmas on connect: `journal_mode=WAL`, `busy_timeout`, `foreign_keys=ON`.
+- **main.py**
+  - Remove PostgreSQL-only guard in `lifespan()`. Replace with a warning if SQLite (locks/features are degraded).
+- **initialize_database()**
+  - Skip schema creation for sqlite and avoid schema-qualified introspection.
+
+**Test:** `DATABASE_URL=sqlite:///~/.zerg/zerg.db zerg serve` starts and `/health` works.
+
+### Phase 2 — Model Compatibility (Core + Agents)
+
+**Goal:** All tables can be created on SQLite.
+
+- Replace `UUID` columns with `String(36)` (or `String`) + `uuid4()` defaults.
+- Replace `JSONB` with `JSON().with_variant(JSONB, "postgresql")` or plain `JSON`.
+- Replace `gen_random_uuid()` defaults with Python-side defaults on sqlite.
+- Update partial indexes to include `sqlite_where` or drop them if not supported.
+- Make `agents` metadata schema conditional (None for sqlite).
+
+**Files:** `models/agents.py`, `models/device_token.py`, `models/llm_audit.py`, `models/run.py`, `models/models.py`
+
+**Test:** `initialize_database()` succeeds on SQLite; `sqlite3 ~/.zerg/zerg.db .tables` shows all tables.
+
+### Phase 3 — Agents API + Ingest
+
+**Goal:** Shipper ingestion + Timeline endpoints work on SQLite.
+
+- Replace `postgresql.insert` with dialect-agnostic upsert:
+  - If sqlite: use `sqlalchemy.dialects.sqlite.insert(...).on_conflict_do_nothing()` or catch `IntegrityError`.
+  - If postgres: keep current `on_conflict_do_nothing` with partial index.
+- Remove `require_postgres()` guard; keep `require_single_tenant()` if needed.
+- Ensure dedupe index works without schema-qualified names.
+
+**Files:** `services/agents_store.py`, `routers/agents.py`, `models/agents.py`, `alembic/versions/0002_agents_schema.py` (+ follow-on migrations)
+
+**Test:** Shipper syncs session; sessions appear in Timeline UI on SQLite.
+
+### Phase 4 — Job Queue + Concurrency (SQLite-safe)
+
+**Goal:** Multiple commis can run concurrently without PG locks.
+
+- Replace `FOR UPDATE SKIP LOCKED` with `BEGIN IMMEDIATE` + atomic `UPDATE ... RETURNING`.
+- Add heartbeat fields + reclaim logic for stale jobs.
+- Replace advisory locks with file locks or status-guarded updates.
+- For SQLite: disable `ops.job_queue` paths (or gate behind `job_queue_enabled && not lite_mode`).
+
+**Files:** `services/commis_job_processor.py`, `jobs/queue.py`, `services/commis_resume.py`, `services/single_tenant.py`, `services/fiche_locks.py`, `tools/builtin/email_tools.py`, `tools/builtin/sms_tools.py`
+
+**Test:** Spawn 3 commis jobs, kill server, restart, jobs resume.
+
+### Phase 5 — Durable Checkpoints (SQLite)
+
+**Goal:** Interrupt/resume survives process restart in lite mode.
+
+- Replace MemorySaver for sqlite with `langgraph-checkpoint-sqlite` backed by the same `~/.zerg/zerg.db`.
+- Ensure migrations/setup are idempotent for sqlite.
+
+**Files:** `services/checkpointer.py`
+
+**Test:** Interrupt a run, restart server, resume continues correctly.
+
+### Phase 6 — CLI + Frontend Bundle
+
+**Goal:** `pip install zerg && zerg serve` is real.
+
+- Add `zerg serve` command (typer) that runs uvicorn with sane defaults (`0.0.0.0:8080`).
+- Bundle frontend `dist` into the python package (hatch config).
+- Update FastAPI static mount to use packaged assets when available.
+
+**Files:** `cli/main.py`, `pyproject.toml`, `main.py`, `apps/zerg/frontend-web/dist`
+
+**Test:** fresh venv → `pip install zerg` → `zerg serve` → open `/dashboard` and `/chat`.
+
+### Phase 7 — Onboarding Smoke + Docs
+
+**Goal:** Validate the full OSS onboarding flow.
+
+- Add/extend `make onboarding-smoke` to run SQLite boot + basic API checks.
+- Update README quick-start to default to SQLite.
+
+**Test:** `make onboarding-smoke` passes on a clean machine.
+
+---
+
 ## The Vision
 
 **The Problem:**
