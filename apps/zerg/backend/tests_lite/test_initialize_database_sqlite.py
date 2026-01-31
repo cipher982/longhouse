@@ -5,10 +5,6 @@ from zerg.database import initialize_database
 from zerg.database import make_engine
 
 
-@pytest.mark.xfail(
-    reason="SQLite models still use Postgres-only types and schemas; Phase 2 will fix",
-    strict=True,
-)
 def test_initialize_database_sqlite_creates_tables(tmp_path):
     db_path = tmp_path / "zerg.db"
     engine = make_engine(f"sqlite:///{db_path}")

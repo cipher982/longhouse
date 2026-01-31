@@ -20,7 +20,8 @@ from pydantic import Field
 from sqlalchemy import func
 from sqlalchemy import select
 from sqlalchemy import text
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentEvent
@@ -111,7 +112,10 @@ class AgentsStore:
         Returns:
             IngestResult with counts of inserted/skipped events.
         """
-        session_id = data.id or uuid4()
+        # Use UUID object - SQLAlchemy with_variant handles conversion
+        # For Postgres: UUID object stored as native UUID
+        # For SQLite: UUID object converted to string
+        session_id = data.id if data.id else uuid4()
 
         # Check if session exists
         existing = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
@@ -153,7 +157,12 @@ class AgentsStore:
             event_hash = self._compute_event_hash(event_data)
 
             # Use ON CONFLICT DO NOTHING for deduplication
-            stmt = insert(AgentEvent).values(
+            # Choose dialect-specific insert based on database engine
+            engine = self.db.get_bind()
+            is_postgres = engine.dialect.name == "postgresql"
+            insert_fn = pg_insert if is_postgres else sqlite_insert
+
+            stmt = insert_fn(AgentEvent).values(
                 session_id=session_id,
                 role=event_data.role,
                 content_text=event_data.content_text,
@@ -170,23 +179,36 @@ class AgentsStore:
 
             # Handle deduplication - if source_path is set, use UPSERT
             if event_data.source_path:
-                stmt = stmt.on_conflict_do_nothing(
-                    index_elements=["session_id", "source_path", "source_offset", "event_hash"],
-                    index_where=AgentEvent.source_path.isnot(None),
-                )
+                if is_postgres:
+                    # Postgres supports index_where for partial unique indexes
+                    stmt = stmt.on_conflict_do_nothing(
+                        index_elements=["session_id", "source_path", "source_offset", "event_hash"],
+                        index_where=AgentEvent.source_path.isnot(None),
+                    )
+                # SQLite: partial indexes can't be used for ON CONFLICT, skip the clause
+                # and rely on the try/except below for duplicate handling
 
-            result = self.db.execute(stmt)
-            if result.rowcount > 0:
-                events_inserted += 1
-                # Track counts
-                if event_data.role == "user":
-                    user_count += 1
-                elif event_data.role == "assistant":
-                    assistant_count += 1
-                    if event_data.tool_name:
-                        tool_count += 1
-            else:
-                events_skipped += 1
+            # Execute insert with duplicate handling
+            try:
+                result = self.db.execute(stmt)
+                if result.rowcount > 0:
+                    events_inserted += 1
+                    # Track counts
+                    if event_data.role == "user":
+                        user_count += 1
+                    elif event_data.role == "assistant":
+                        assistant_count += 1
+                        if event_data.tool_name:
+                            tool_count += 1
+                else:
+                    events_skipped += 1
+            except Exception as e:
+                # SQLite raises IntegrityError for unique constraint violations
+                # Treat as duplicate/skipped
+                if "UNIQUE constraint failed" in str(e) or "duplicate" in str(e).lower():
+                    events_skipped += 1
+                else:
+                    raise
 
         # Update session counts
         session_obj = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
@@ -418,7 +440,12 @@ def ensure_agents_schema(db: Session) -> None:
     """Ensure the agents schema exists in the database.
 
     Called during app startup to create schema if needed.
+    Only applies to PostgreSQL; SQLite has no schema support.
     """
+    engine = db.get_bind()
+    if engine.dialect.name != "postgresql":
+        return  # SQLite has no schemas
+
     try:
         db.execute(text("CREATE SCHEMA IF NOT EXISTS agents"))
         db.commit()

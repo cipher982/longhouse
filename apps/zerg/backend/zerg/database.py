@@ -84,8 +84,10 @@ dotenv.load_dotenv(override=True)
 
 
 # Default schema for all Zerg tables
-DB_SCHEMA = "zerg"
-_metadata = MetaData(schema=DB_SCHEMA)
+# DB_SCHEMA is None for SQLite (no schema support), "zerg" for Postgres
+_db_url = os.environ.get("DATABASE_URL", "")
+DB_SCHEMA = None if _db_url.startswith("sqlite") else "zerg"
+_metadata = MetaData(schema=DB_SCHEMA) if DB_SCHEMA else MetaData()
 
 # Create Base class
 Base = declarative_base(metadata=_metadata)
@@ -608,7 +610,13 @@ def initialize_database(engine: Engine = None) -> None:
 
     target_engine = engine or default_engine
 
-    # Ensure schemas exist for fresh databases
+    # For SQLite, strip schemas using schema_translate_map
+    # This allows models defined with schema="zerg" or schema="agents" to work
+    # without schema prefixes on SQLite (which doesn't support schemas)
+    if target_engine is not None and target_engine.dialect.name == "sqlite":
+        target_engine = target_engine.execution_options(schema_translate_map={"zerg": None, "agents": None})
+
+    # Ensure schemas exist for fresh databases (Postgres only)
     if target_engine is not None and target_engine.dialect.name == "postgresql":
         from sqlalchemy import text
 

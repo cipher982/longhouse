@@ -1,3 +1,6 @@
+from uuid import UUID as PyUUID
+from uuid import uuid4
+
 from sqlalchemy import JSON
 
 # SQLAlchemy core imports
@@ -21,23 +24,58 @@ from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import backref
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+from sqlalchemy.types import CHAR
+from sqlalchemy.types import TypeDecorator
 
 # Local helpers / enums
 from zerg.database import Base
 from zerg.models.enums import Phase
 from zerg.models_config import DEFAULT_COMMIS_MODEL_ID
 
-from .connector import Connector  # noqa: F401
+
+class GUID(TypeDecorator):
+    """Platform-independent GUID type.
+
+    Uses PostgreSQL's UUID type for Postgres, stores as CHAR(36) for SQLite.
+    """
+
+    impl = CHAR
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(UUID(as_uuid=True))
+        else:
+            return dialect.type_descriptor(CHAR(36))
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return value
+        elif dialect.name == "postgresql":
+            return value if isinstance(value, PyUUID) else PyUUID(value)
+        else:
+            return str(value) if isinstance(value, PyUUID) else value
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return value
+        elif isinstance(value, PyUUID):
+            return value
+        else:
+            return PyUUID(value)
+
+
+from .connector import Connector  # noqa: E402, F401
 
 # Re-export models that have been split into separate files.
-from .fiche import Fiche  # noqa: F401
-from .fiche import FicheMessage  # noqa: F401
-from .llm_audit import LLMAuditLog  # noqa: F401
-from .run import Run  # noqa: F401
-from .thread import Thread  # noqa: F401
-from .thread import ThreadMessage  # noqa: F401
-from .trigger import Trigger  # noqa: F401
-from .user import User  # noqa: F401
+from .fiche import Fiche  # noqa: E402, F401
+from .fiche import FicheMessage  # noqa: E402, F401
+from .llm_audit import LLMAuditLog  # noqa: E402, F401
+from .run import Run  # noqa: E402, F401
+from .thread import Thread  # noqa: E402, F401
+from .thread import ThreadMessage  # noqa: E402, F401
+from .trigger import Trigger  # noqa: E402, F401
+from .user import User  # noqa: E402, F401
 
 # ---------------------------------------------------------------------------
 # Integrations – Connectors (single source of truth for provider creds)
@@ -386,7 +424,8 @@ class CommisJob(Base):
     tool_call_id = Column(String(64), nullable=True, index=True)
 
     # Trace ID for end-to-end debugging (inherited from oikos run)
-    trace_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    # String(36) for SQLite compatibility
+    trace_id = Column(String(36), nullable=True, index=True)
 
     # Job specification
     task = Column(Text, nullable=False)
@@ -845,7 +884,8 @@ class Memory(Base):
         Index("ix_memories_user_type", "user_id", "type"),
     )
 
-    id = Column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
+    # GUID TypeDecorator: UUID for Postgres, CHAR(36) for SQLite
+    id = Column(GUID(), primary_key=True, default=uuid4)
 
     # Owner (user)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)

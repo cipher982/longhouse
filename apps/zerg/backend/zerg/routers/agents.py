@@ -357,7 +357,6 @@ async def ingest_session(
     request: Request,
     db: Session = Depends(get_db),
     device_token: DeviceToken | None = Depends(verify_agents_token),
-    _pg: None = Depends(require_postgres),
     _single: None = Depends(require_single_tenant),
 ) -> IngestResponse:
     """Ingest a session with events.
@@ -462,7 +461,6 @@ async def list_sessions(
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_read_access),
-    _pg: None = Depends(require_postgres),
     _single: None = Depends(require_single_tenant),
 ) -> SessionsListResponse:
     """List sessions with optional filters.
@@ -520,7 +518,6 @@ async def get_filters(
     days_back: int = Query(90, ge=1, le=365, description="Days to look back for distinct values"),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_read_access),
-    _pg: None = Depends(require_postgres),
     _single: None = Depends(require_single_tenant),
 ) -> FiltersResponse:
     """Get distinct filter values for UI dropdowns.
@@ -638,7 +635,6 @@ def _build_demo_sessions(now: datetime) -> list[SessionIngest]:
 async def seed_demo_sessions(
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_read_access),
-    _pg: None = Depends(require_postgres),
     _single: None = Depends(require_single_tenant),
 ) -> DemoSeedResponse:
     """Seed demo sessions for the timeline (idempotent)."""
@@ -659,7 +655,6 @@ async def get_session(
     session_id: UUID,
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_read_access),
-    _pg: None = Depends(require_postgres),
     _single: None = Depends(require_single_tenant),
 ) -> SessionResponse:
     """Get a single session by ID."""
@@ -696,7 +691,6 @@ async def get_session_events(
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_read_access),
-    _pg: None = Depends(require_postgres),
     _single: None = Depends(require_single_tenant),
 ) -> EventsListResponse:
     """Get events for a session."""
@@ -745,7 +739,6 @@ async def export_session(
     session_id: UUID,
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_read_access),
-    _pg: None = Depends(require_postgres),
     _single: None = Depends(require_single_tenant),
 ) -> Response:
     """Export session as JSONL for Claude Code --resume.
@@ -801,7 +794,6 @@ class CleanupResponse(BaseModel):
 async def cleanup_test_sessions(
     body: CleanupRequest,
     db: Session = Depends(get_db),
-    _pg: None = Depends(require_postgres),
 ) -> CleanupResponse:
     """Delete test sessions by project pattern (dev-only).
 
