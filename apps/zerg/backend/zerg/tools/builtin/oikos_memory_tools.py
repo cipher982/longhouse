@@ -59,7 +59,7 @@ async def save_memory_async(
     Args:
         content: What to remember (be specific and descriptive)
         type: Category - "note", "decision", "bug", "preference", "fact" (optional)
-        scope: "global" (available to all agents) or "fiche" (only this agent)
+        scope: "global" (available to all agents) or "fiche" (only this agent, requires fiche context)
 
     Returns:
         Confirmation message
@@ -273,7 +273,7 @@ async def forget_memory_async(memory_id: str) -> str:
     Use this to remove outdated or incorrect memories.
 
     Args:
-        memory_id: The memory ID (from list_memories or search_memory)
+        memory_id: The memory ID (from list_memories/search_memory) or an ID prefix (>= 8 chars)
 
     Returns:
         Confirmation message

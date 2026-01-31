@@ -142,6 +142,7 @@ class TestListMemories:
         assert "Recent memories" in result
         assert "3 shown" in result
         assert "Third memory" in result
+        assert "id=" in result
 
     def test_list_memories_with_type_filter(self, credential_context):
         """list_memories should filter by type."""
@@ -203,6 +204,19 @@ class TestForgetMemory:
 
         assert is_error(result)
         assert result["error_type"] == "not_found"
+
+    def test_forget_memory_accepts_prefix(self, credential_context, test_user):
+        """forget_memory should accept a short ID prefix."""
+        save_memory(content="Delete by prefix")
+
+        store = get_memory_store()
+        memory_id = store.list(user_id=test_user.id)[0].id
+        prefix = memory_id[:8]
+
+        result = forget_memory(memory_id=prefix)
+
+        assert "deleted" in result.lower()
+        assert store.list(user_id=test_user.id) == []
 
     def test_forget_memory_invalid_uuid(self, credential_context):
         """forget_memory with malformed UUID should fail gracefully."""
