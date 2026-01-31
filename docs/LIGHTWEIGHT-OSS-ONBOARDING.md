@@ -532,6 +532,62 @@ Your personal cloud agent team. Always on. SQLite simple. Actually works.
 
 ---
 
+## Prior Art & SQLite Best Practices (Sources)
+
+Curated sources we can lean on when pushing SQLite to its limits, plus the concrete behaviors that matter for Zerg’s design.
+
+### Concurrency & Locking Reality
+
+- **WAL improves read/write concurrency, but still single-writer.** Readers and writers can run concurrently, but only one writer at a time. WAL also requires shared memory and does not work over network filesystems.
+  https://sqlite.org/wal.html
+  https://www.sqlite.org/isolation.html
+- **Checkpoint starvation is real.** Long-lived readers can prevent WAL checkpoint completion, letting the WAL grow without bound.
+  https://sqlite.org/wal.html
+  https://wchargin.com/better-sqlite3/performance.html
+- **BEGIN IMMEDIATE grabs the write lock up-front.** It can return `SQLITE_BUSY` if another writer is active; DEFERRED upgrades on first write and can also hit `SQLITE_BUSY`.
+  https://www.sqlite.org/lang_transaction.html
+- **Timeouts matter under contention.** `PRAGMA busy_timeout` / `sqlite3_busy_timeout()` make writes wait instead of failing; high concurrency often needs longer timeouts than you expect.
+  https://www.sqlite.org/c3ref/busy_timeout.html
+  https://blog.skypilot.co/abusing-sqlite-to-handle-concurrency/
+
+### DML Features We Can Rely On
+
+- **UPSERT (ON CONFLICT)** is supported and designed for unique constraints (SQLite 3.24+).
+  https://www.sqlite.org/lang_upsert.html
+- **RETURNING** is supported (SQLite 3.35+), but output order is unspecified.
+  https://www.sqlite.org/lang_returning.html
+
+### Durability Tuning in WAL
+
+- **`PRAGMA synchronous` tradeoffs**: `FULL` adds durability; `NORMAL` is faster but can reduce durability in WAL mode.
+  https://www.sqlite.org/pragma.html
+- **Auto-checkpoint defaults**: WAL checkpoints trigger at ~1000 pages by default; disabling checkpoints can let WAL grow unbounded.
+  https://sqlite.org/wal.html
+
+### JSON Support
+
+- **JSON1 functions and operators** (`json_*`, `->`, `->>`) exist; JSON5 extensions are supported in newer SQLite builds.
+  https://www.sqlite.org/json1.html
+
+### Tooling / Prior Art
+
+- **Litestream** — streaming replication of SQLite (WAL-aware) to object storage for backups/DR.
+  https://litestream.io/how-it-works/
+  https://litestream.io/reference/replicate/
+- **LiteFS** — distributed SQLite via a FUSE filesystem + single-writer leases; production caveats are documented.
+  https://fly.io/docs/litefs/
+  https://fly.io/blog/introducing-litefs/
+- **rqlite** — Raft-based replication of SQLite commands; single leader handles writes.
+  https://rqlite.io/docs/design/
+- **dqlite** — Canonical’s Raft-based HA SQLite (used in LXD).
+  https://canonical.com/dqlite
+  https://documentation.ubuntu.com/lxd/latest/reference/dqlite-internals/
+- **Datasette + sqlite-utils** — ecosystem for creating/inspecting SQLite DBs; `sqlite-utils` CLI is great for migration/debugging.
+  https://datasette.io/tools/sqlite-utils
+  https://docs.datasette.io/en/0.56/ecosystem.html
+
+---
+
 ## References
 
 - [OpenClaw](https://github.com/moltbot/moltbot) — Lightweight agent platform
