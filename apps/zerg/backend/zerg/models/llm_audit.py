@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 
 from zerg.database import Base
+from zerg.models.types import GUID
 
 
 class LLMAuditLog(Base):
@@ -24,9 +25,9 @@ class LLMAuditLog(Base):
     owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     # Tracing - for end-to-end debugging
-    # String(36) for SQLite compatibility
-    trace_id = Column(String(36), nullable=True, index=True)  # End-to-end trace correlation
-    span_id = Column(String(36), nullable=True)  # Unique ID for this LLM call
+    # GUID: UUID for Postgres, CHAR(36) for SQLite
+    trace_id = Column(GUID(), nullable=True, index=True)  # End-to-end trace correlation
+    span_id = Column(GUID(), nullable=True)  # Unique ID for this LLM call
 
     # Request
     phase = Column(String(50))  # initial, tool_iteration, synthesis

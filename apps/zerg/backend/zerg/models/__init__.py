@@ -39,10 +39,13 @@ from .thread import Thread
 from .thread import ThreadMessage
 from .trigger import Trigger
 from .trigger_config import TriggerConfig
+from .types import GUID
 from .user import User
 from .waitlist import WaitlistEntry
 
 __all__ = [
+    # Shared types
+    "GUID",
     # Agents schema models (cross-provider session tracking)
     "AgentSession",
     "AgentEvent",
