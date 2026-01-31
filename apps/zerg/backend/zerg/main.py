@@ -274,12 +274,15 @@ async def lifespan(app: FastAPI):
         # Create DB tables if they don't exist
         initialize_database()
 
-        # Enforce PostgreSQL-only runtime for simplicity and correctness
+        # SQLite-lite mode is allowed; warn that some PG-only features are reduced.
         try:
             from zerg.database import default_engine
 
-            if not _settings.testing and default_engine.dialect.name != "postgresql":  # pragma: no cover - caught in tests via conftest
-                raise RuntimeError("PostgreSQL is required to run the backend (advisory locks, concurrency).")
+            if not _settings.testing and default_engine is not None and default_engine.dialect.name == "sqlite":
+                logger.warning(
+                    "SQLite mode enabled: single-writer concurrency and reduced locking guarantees. "
+                    "See docs/LIGHTWEIGHT-OSS-ONBOARDING.md for constraints."
+                )
         except Exception as _e:
             logger.error(str(_e))
             raise
