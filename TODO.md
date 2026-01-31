@@ -46,14 +46,24 @@ Phase 3 — Agents API + Ingest: ✅ DONE (2026-01-31)
 - [x] Timeline UI works end-to-end on SQLite
 - [x] Lite test suite added (`make test` runs SQLite-lite by default)
 
-Phase 4 — Job Queue + Concurrency: 🔲 OPEN (see standalone task below)
+Phase 4 — Job Queue + Concurrency: ✅ DONE (2026-01-31)
+- [x] Dialect-aware claim_jobs() in commis_job_queue.py
+- [x] worker_id, claimed_at, heartbeat_at columns
+- [x] Heartbeat loop + stale job reclaim
+
+Phase 4b — Advisory Locks: ✅ DONE (2026-01-31)
+- [x] resource_locks table pattern in db_utils.py
+- [x] Updated fiche_locks.py, single_tenant.py
 
 Phase 5 — Durable Checkpoints: ✅ DONE (2026-01-31)
 - [x] SqliteSaver for SQLite (sync, avoids event loop affinity issues)
 - [x] workflow_engine.py uses get_checkpointer() factory
 - [x] Thread-safe caching with _sqlite_cache_lock
 
-Phase 6 — CLI + Frontend Bundle: 🔲 OPEN (see standalone task below)
+Phase 6 — CLI: ✅ DONE (2026-01-31)
+- [x] cli/serve.py with serve and status commands
+- [x] Zero-config: auto FERNET_SECRET, SQLite default
+- [ ] Frontend bundling (importlib.resources) — REMAINING
 
 Phase 7 — Onboarding Smoke + Docs: 🔲 OPEN
 - [ ] Add/extend `make onboarding-smoke` for SQLite boot + API checks
@@ -62,7 +72,7 @@ Phase 7 — Onboarding Smoke + Docs: 🔲 OPEN
 
 ---
 
-## SQLite Job Queue (Phase 4) (5)
+## SQLite Job Queue (Phase 4) (5) ✅ DONE (2026-01-31)
 
 Make commis job claiming work on SQLite. Currently uses `FOR UPDATE SKIP LOCKED` which is Postgres-only.
 
@@ -98,7 +108,7 @@ def claim_job(db, worker_id):
 
 ---
 
-## SQLite Advisory Locks (Phase 4b) (4)
+## SQLite Advisory Locks (Phase 4b) (4) ✅ DONE (2026-01-31)
 
 Replace Postgres advisory locks with SQLite-safe alternatives. These are used for single-tenant guard, fiche locks, and state recovery.
 
@@ -145,7 +155,7 @@ Make LangGraph checkpoints durable on SQLite. Currently uses MemorySaver which l
 
 ---
 
-## Zerg CLI + Package (Phase 6) (5)
+## Zerg CLI + Package (Phase 6) (5) ✅ DONE (2026-01-31)
 
 Create `zerg serve` command and pip-installable package. The finish line for OSS onboarding.
 
