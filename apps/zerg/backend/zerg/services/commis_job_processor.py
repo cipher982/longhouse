@@ -206,6 +206,7 @@ class CommisJobProcessor:
         Uses atomic UPDATE ... RETURNING to prevent race conditions.
         """
         from sqlalchemy import text
+        from sqlalchemy.exc import ProgrammingError
 
         # Poll schemas 0-15 (matches Playwright commis count in test setup)
         # This is fast because empty schemas return immediately
@@ -214,28 +215,32 @@ class CommisJobProcessor:
             token = current_commis_id.set(commis_id_str)
             try:
                 job_ids = []
-                with db_session() as db:
-                    # Atomic job pickup for E2E mode
-                    result = db.execute(
-                        text("""
-                            UPDATE commis_jobs
-                            SET status = 'running', started_at = NOW()
-                            WHERE id IN (
-                                SELECT id FROM commis_jobs
-                                WHERE status = 'queued'
-                                ORDER BY created_at ASC
-                                LIMIT :limit
-                                FOR UPDATE SKIP LOCKED
-                            )
-                            RETURNING id
-                        """),
-                        {"limit": self._max_concurrent_jobs},
-                    )
-                    job_ids = [row[0] for row in result.fetchall()]
-                    db.commit()
+                try:
+                    with db_session() as db:
+                        # Atomic job pickup for E2E mode
+                        result = db.execute(
+                            text("""
+                                UPDATE commis_jobs
+                                SET status = 'running', started_at = NOW()
+                                WHERE id IN (
+                                    SELECT id FROM commis_jobs
+                                    WHERE status = 'queued'
+                                    ORDER BY created_at ASC
+                                    LIMIT :limit
+                                    FOR UPDATE SKIP LOCKED
+                                )
+                                RETURNING id
+                            """),
+                            {"limit": self._max_concurrent_jobs},
+                        )
+                        job_ids = [row[0] for row in result.fetchall()]
+                        db.commit()
 
-                    if job_ids:
-                        logger.info(f"Claimed {len(job_ids)} queued commis jobs in schema {commis_id}")
+                        if job_ids:
+                            logger.info(f"Claimed {len(job_ids)} queued commis jobs in schema {commis_id}")
+                except ProgrammingError:
+                    # Schema doesn't exist yet (race with globalSetup) - skip silently
+                    continue
 
                 if job_ids:
                     # Process jobs with the correct commis_id context
