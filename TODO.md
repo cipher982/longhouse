@@ -1,116 +1,132 @@
-# Zerg TODO (Master Task List)
+# TODO
 
-Canonical task list for parallel agents. Keep AGENTS.md lean; do not duplicate tasks there.
+Capture list for substantial work. Not quick fixes (do those live).
 
----
+## For Agents
 
-## High Priority (Bugs / UX Issues)
-
-### Parallel spawn_commis Interrupt Bug
-`_execute_tools_parallel()` doesn't raise `FicheInterrupted`, so runs finish SUCCESS instead of WAITING when multiple commis are spawned. Commis results only surface on next user turn.
-
-**Location:** `services/oikos_react_engine.py`
-**Fix:** Return `interrupt_value` dict for barrier creation, or raise `FicheInterrupted` like sequential path.
-
-### Telegram Webhook Handler
-`webhook_url` config sets remote webhook on Telegram but no local handler exists. Users configure webhook, Telegram sends updates, nothing receives them.
-
-**Options:**
-1. Implement `WebhookChannel` router at `/webhooks/channels/{channel_id}`
-2. Remove `webhook_url` from UI until supported
-
-**Location:** `channels/plugins/telegram.py`, need new `routers/channels_webhooks.py`
+- Each entry is a self-contained handoff — read it, you have context to start
+- Size (1-10) indicates scope: 1 = hour, 5 = day, 10 = week+
+- Check off subtasks as you go so next agent knows state
+- Add notes under tasks if you hit blockers or learn something
 
 ---
 
-## Medium Priority (Performance / Architecture)
+## SQLite Runtime Shift (9)
 
-### Prompting Pipeline Hardening
-- [ ] Create a unified prompt/run helper used by `run_thread`, `run_continuation`, and `run_batch_continuation` to remove divergence (tool loading, usage capture, persistence).
-- [ ] Introduce a `PromptContext` (system + conversation + tool_messages + dynamic_context_inputs) so required data is explicit (no hidden fallbacks).
-- [ ] Extract a single `derive_memory_query(...)` helper (used by all flows) to make memory query behavior consistent and testable.
-- [ ] Add DB-level idempotency for tool results (unique constraint or `get_or_create_tool_message`) so duplicates can’t be persisted.
-- [ ] Consider splitting dynamic context into tagged system messages (connector status / memory / other) for clearer auditing & caching.
-- [ ] Add a prompt snapshot test fixture (serialize message list with roles/types) for fast regression checks.
+Remove Postgres-only guards so the agents schema works on SQLite. Core blocker for lightweight OSS onboarding — enables `pip install zerg && zerg serve` without requiring Postgres.
 
-### Prompt Cache Optimization
-Current message layout busts cache by injecting dynamic content early:
+**Why:** VISION.md specifies SQLite-only runtime. Current code hard-rejects SQLite URLs and uses Postgres-specific types (UUID, JSONB, schemas).
+
+**Files:** `database.py`, `models/agents.py`, `routers/agents.py`, `alembic/versions/0002_agents_schema.py`
+
+Phase 0 — Audit:
+- [ ] Tag all Postgres-only codepaths (UUID/JSONB/schema/ILIKE)
+- [ ] Define SQLite-compatible schema strategy (no schemas; table prefixes or flat)
+- [ ] Decide: separate migration path or conditional migrations?
+
+Phase 1 — Unblock:
+- [ ] Remove SQLite rejection in `database.py`
+- [ ] Replace UUID/JSONB in agents models with SQLite-compatible types
+- [ ] Remove `require_postgres()` guards on agents endpoints
+- [ ] Update `0002_agents_schema.py` to be dialect-aware
+
+Phase 2 — Verify:
+- [ ] Ingest + demo seed work on SQLite (no schema-qualified queries)
+- [ ] Fix queries using `ILIKE` or schema-qualified names
+- [ ] Timeline UI works end-to-end on SQLite
+
+Phase 3 — Ship:
+- [ ] `make onboarding-smoke` passes
+- [ ] `make onboarding-funnel` passes from fresh clone
+- [ ] README quick start updated to make SQLite the default
+
+---
+
+## Prompting Pipeline Hardening (6)
+
+Unify prompt construction across `run_thread`, `run_continuation`, and `run_batch_continuation` to eliminate divergence in tool loading, usage capture, and persistence.
+
+**Why:** Current flows have subtle differences that cause bugs. Memory query behavior varies, tool results can duplicate.
+
+**Files:** `managers/fiche_runner.py`, related service files
+
+- [ ] Create unified prompt/run helper used by all three flows
+- [ ] Introduce `PromptContext` dataclass (system + conversation + tool_messages + dynamic_context)
+- [ ] Extract single `derive_memory_query(...)` helper for consistent memory behavior
+- [ ] Add DB-level idempotency for tool results (unique constraint or `get_or_create`)
+- [ ] Split dynamic context into tagged system messages for clearer auditing
+- [ ] Add prompt snapshot test fixture for regression checks
+
+---
+
+## Prompt Cache Optimization (5)
+
+Reorder message layout to maximize cache hits. Current layout busts cache by injecting dynamic content early.
+
+**Why:** Cache misses = slower + more expensive. Research shows 10-90% cost reduction with proper ordering.
+
+**Current (bad):**
 ```
-[system_prompt] → [connector_status] → [memory] → [conversation] → [user_msg]
-                        ↑                 ↑
-                   CACHE BUST!       CACHE BUST!
+[system] → [connector_status] → [memory] → [conversation] → [user_msg]
+                ↑ BUST              ↑ BUST
 ```
 
-**Optimal layout:**
+**Target:**
 ```
-[system_prompt] → [conversation] → [dynamic_context + user_msg]
-     cacheable       cacheable            per-turn only
+[system] → [conversation] → [dynamic + user_msg]
+ cached      cached           per-turn only
 ```
 
-**Key principles (from research):**
+**Files:** `managers/fiche_runner.py` lines 340-405
+
+**Principles:**
 - Static content at position 0 (tools, system prompt)
 - Conversation history next (extends cacheable prefix)
 - Dynamic content LAST (connector status, RAG, timestamps)
-- Canonical JSON serialization (sorted keys, stable whitespace)
-- Never remove tools - return "disabled" instead
+- Never remove tools — return "disabled" instead
 
-**References:**
-- OpenAI: platform.openai.com/docs/guides/prompt-caching
-- Anthropic: docs.anthropic.com/docs/build-with-claude/prompt-caching
-- Paper: "Don't Break the Cache" (Jan 2026) - arxiv.org/abs/2601.06007
-
-**Location:** `managers/fiche_runner.py` lines 340-405
-
-### Workspace Commis Tool Events
-Workspace commis emit only `commis_started` and `commis_complete` - no tool events. The events exist in the hatch session JSONL but aren't extracted.
-
-**Question:** Should we extract tool events post-hoc from session log for UI consistency?
-
-**Trade-off:**
-- Status quo: Accept reduced visibility for headless execution
-- Post-hoc: Parse session log on completion, emit `commis_tool_*` events retroactively
-
-**Location:** `services/commis_job_processor.py` workspace execution path
+- [ ] Reorder message construction in fiche_runner
+- [ ] Verify cache hit rate improves (add logging/metrics)
+- [ ] Document the ordering contract
 
 ---
 
-## Low Priority (Nice to Have)
+## Workspace Commis Tool Events (4)
 
-### Sauron /sync Reschedule
-`/sync` reloads manifest but APScheduler doesn't reschedule existing jobs. New/changed jobs won't run until Sauron restarts.
+Workspace commis emit only `commis_started` and `commis_complete` — no tool events during execution. Events exist in hatch session JSONL but aren't extracted.
 
-**Location:** `apps/sauron/sauron/main.py`
+**Why:** UI shows black box during workspace commis. Users can't see what tools ran.
+
+**Files:** `services/commis_job_processor.py` workspace execution path
+
+**Decision needed:** Post-hoc extraction vs accept reduced visibility?
+- Post-hoc: Parse session log on completion, emit `commis_tool_*` events retroactively
+- Status quo: Accept that headless = less visibility
+
+- [ ] Decide approach
+- [ ] Implement if post-hoc chosen
+- [ ] Update UI to indicate "headless mode" if status quo
+
+---
+
+## Sauron /sync Reschedule (3)
+
+`/sync` endpoint reloads manifest but APScheduler doesn't reschedule existing jobs. Changed schedules don't take effect until restart.
+
+**Files:** `apps/sauron/sauron/main.py`
+
+- [ ] On sync, diff old vs new jobs
+- [ ] Remove jobs no longer in manifest
+- [ ] Reschedule jobs with changed cron expressions
+- [ ] Add test coverage
 
 ---
 
 ## Done (Recent)
 
-- [x] Learnings review - compacted 33 → 11 (2026-01-30)
-- [x] Sauron gotchas documented in README (2026-01-30)
-- [x] Life Hub agent migration complete - Zerg owns agents DB (2026-01-28)
+- [x] Parallel spawn_commis interrupt fix (2026-01-30) — commit a8264f9d
+- [x] Telegram webhook handler (2026-01-30) — commit 2dc1ee0b, `routers/channels_webhooks.py`
+- [x] Learnings review compacted 33 → 11 (2026-01-30)
+- [x] Sauron gotchas documented (2026-01-30)
+- [x] Life Hub agent migration (2026-01-28) — Zerg owns agents DB
 - [x] Single-tenant enforcement in agents API (2026-01-29)
-
----
-
-## Vision Shift: SQLite-Only Runtime (Core)
-
-### Phase 0 — Tracking + Reality Checks
-- [ ] Audit and tag all Postgres-only codepaths (UUID/JSONB/schema/ILIKE) that block SQLite runtime
-- [ ] Define SQLite-compatible schema strategy (no schemas; table prefixes or shared metadata)
-- [ ] Decide whether SQLite uses separate migration path or conditional migrations
-
-### Phase 1 — Unblock SQLite Runtime
-- [ ] Remove SQLite rejection in `apps/zerg/backend/zerg/database.py`
-- [ ] Replace agents schema types (UUID/JSONB) with SQLite-compatible variants
-- [ ] Remove `require_postgres()` gates on agents endpoints and switch to capability checks
-- [ ] Update `apps/zerg/backend/alembic/versions/0002_agents_schema.py` to be SQLite-safe
-
-### Phase 2 — Agents + Timeline on SQLite
-- [ ] Ensure ingest + demo seed work on SQLite (no schema-qualified queries)
-- [ ] Update queries that use `ILIKE` or schema-qualified names
-- [ ] Verify timeline UI works end-to-end on SQLite
-
-### Phase 3 — Onboarding Validation (SQLite Path)
-- [ ] Run `make onboarding-smoke` and record result
-- [ ] Run `make onboarding-funnel` from fresh clone
-- [ ] Update README quick start to make SQLite the default path
