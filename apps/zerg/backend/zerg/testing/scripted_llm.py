@@ -260,14 +260,66 @@ class ScriptedChatLLM(BaseChatModel):
         if sequenced_response is not None:
             return ChatResult(generations=[ChatGeneration(message=sequenced_response)])
 
-        # Check math scenario EARLY - it's unambiguous and should always return "4"
-        # regardless of stale ToolMessages from previous test runs.
-        # This prevents flaky tests where leftover tool messages from a prior run
-        # cause ScriptedLLM to take the "tool result synthesis" path instead of math.
+        # Check deterministic scenarios EARLY - they are unambiguous and should always
+        # trigger their specific tool calls regardless of stale ToolMessages from
+        # previous test runs. This prevents flaky tests where leftover tool messages
+        # from a prior run cause ScriptedLLM to take the "tool result synthesis" path.
         scenario = find_matching_scenario(prompt, role)
         if scenario and scenario.get("name") == "math_simple":
             ai_message = AIMessage(content="4", tool_calls=[])
             return ChatResult(generations=[ChatGeneration(message=ai_message)])
+
+        # Memory E2E scenarios should also bypass the "tool result" check, but only if
+        # the memory tool hasn't already been executed *in this turn* (i.e., after the
+        # last HumanMessage). This is needed because the thread persists messages across
+        # multiple run_oikos calls.
+        if role == "oikos" and scenario and scenario.get("name") == "memory_e2e":
+            # Find messages after the last HumanMessage (the current turn)
+            last_human_idx = None
+            for i, m in enumerate(messages):
+                if isinstance(m, HumanMessage):
+                    last_human_idx = i
+            current_turn_msgs = messages[last_human_idx + 1 :] if last_human_idx is not None else []
+
+            # Check if there's a ToolMessage in the current turn
+            tool_msg_this_turn = next((m for m in current_turn_msgs if isinstance(m, ToolMessage)), None)
+            if tool_msg_this_turn is not None:
+                # A memory tool was already executed in this turn, synthesize result
+                content = str(tool_msg_this_turn.content)
+                final_text = (
+                    "Memory operation completed."
+                    if "Memory" in content or "Found" in content or "deleted" in content
+                    else "Task completed successfully."
+                )
+                ai_message = AIMessage(content=final_text, tool_calls=[])
+                return ChatResult(generations=[ChatGeneration(message=ai_message)])
+
+            action = scenario.get("action")
+            tool_name = None
+            args: Dict[str, Any] = {}
+
+            if action == "save":
+                tool_name = "save_memory"
+                args = {"content": scenario.get("content", "E2E memory content"), "type": "note"}
+            elif action == "search":
+                tool_name = "search_memory"
+                args = {"query": scenario.get("query", "E2E")}
+            elif action == "list":
+                tool_name = "list_memories"
+                args = {"limit": 10}
+            elif action == "forget":
+                tool_name = "forget_memory"
+                memory_id = scenario.get("memory_id") or "00000000-0000-0000-0000-000000000000"
+                args = {"memory_id": memory_id}
+
+            if tool_name:
+                tool_call = {
+                    "id": f"call_{uuid.uuid4().hex[:8]}",
+                    "name": tool_name,
+                    "args": args,
+                }
+                ai_message = AIMessage(content="", tool_calls=[tool_call])
+                return ChatResult(generations=[ChatGeneration(message=ai_message)])
 
         # If tool results are present, emit final synthesis (no more tool calls).
         tool_msg = next((m for m in reversed(messages) if isinstance(m, ToolMessage)), None)
@@ -295,34 +347,6 @@ class ScriptedChatLLM(BaseChatModel):
 
             ai_message = AIMessage(content=final_text, tool_calls=[])
             return ChatResult(generations=[ChatGeneration(message=ai_message)])
-
-        if role == "oikos" and scenario and scenario.get("name") == "memory_e2e":
-            action = scenario.get("action")
-            tool_name = None
-            args: Dict[str, Any] = {}
-
-            if action == "save":
-                tool_name = "save_memory"
-                args = {"content": scenario.get("content", "E2E memory content"), "type": "note"}
-            elif action == "search":
-                tool_name = "search_memory"
-                args = {"query": scenario.get("query", "E2E")}
-            elif action == "list":
-                tool_name = "list_memories"
-                args = {"limit": 10}
-            elif action == "forget":
-                tool_name = "forget_memory"
-                memory_id = scenario.get("memory_id") or "00000000-0000-0000-0000-000000000000"
-                args = {"memory_id": memory_id}
-
-            if tool_name:
-                tool_call = {
-                    "id": f"call_{uuid.uuid4().hex[:8]}",
-                    "name": tool_name,
-                    "args": args,
-                }
-                ai_message = AIMessage(content="", tool_calls=[tool_call])
-                return ChatResult(generations=[ChatGeneration(message=ai_message)])
 
         # Workspace commis scenario: spawns spawn_workspace_commis with git repo and optional resume
         if role == "oikos" and scenario and scenario.get("name") == "workspace_commis_oikos":
