@@ -233,3 +233,4 @@ Categories: `gotcha`, `pattern`, `design`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-30) [gotcha] Multi-tenant mode disables Agents API via require_single_tenant(); schema routing in commis_db is test-only and blocked in prod.
 - (2026-01-31) [test] ScriptedLLM checks for ToolMessage to decide synthesis vs tool-call; multi-run threads accumulate messages, so new scenarios must check "current turn only" (messages after last HumanMessage).
 - (2026-01-31) [test] E2E schema mismatch: globalSetup creates 4 schemas, processor polls 16. Fixed: processor catches ProgrammingError for missing schemas.
+- (2026-01-31) [test] `make test` now runs the SQLite-lite suite by default; use `make test-legacy` for full Postgres coverage.
