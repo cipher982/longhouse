@@ -1,11 +1,11 @@
 """
-PostgreSQL advisory lock-based fiche concurrency control.
+Dialect-aware fiche concurrency control.
 
-This module implements proper distributed locking using PostgreSQL advisory locks,
-which automatically release when the database session terminates, eliminating the
-stuck fiche bug entirely.
+This module implements distributed locking for fiches that works on both
+PostgreSQL (using advisory locks) and SQLite (using status column pattern).
 
-This is the proper architectural solution based on distributed systems research.
+PostgreSQL advisory locks automatically release when the session terminates.
+SQLite uses a resource_locks table with heartbeat-based stale detection.
 """
 
 import logging
@@ -15,44 +15,58 @@ from typing import Generator
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from zerg.db_utils import _generate_holder_id
+from zerg.db_utils import acquire_resource_lock
+from zerg.db_utils import get_active_locks_sqlite
+from zerg.db_utils import is_sqlite_session
+from zerg.db_utils import release_resource_lock
+from zerg.db_utils import resource_lock
+
 logger = logging.getLogger(__name__)
+
+# Lock type constant for fiche locks
+FICHE_LOCK_TYPE = "fiche"
 
 
 class FicheLockManager:
     """
-    Manages fiche concurrency using PostgreSQL advisory locks.
+    Manages fiche concurrency using dialect-aware locking.
 
-    Advisory locks are session-scoped and automatically released when:
-    1. The session/connection terminates (normal shutdown or crash)
-    2. The connection is lost
+    On PostgreSQL: Uses advisory locks (session-scoped, auto-released on disconnect)
+    On SQLite: Uses resource_locks table with heartbeat-based stale detection
 
-    Note: session-level advisory locks are NOT released on transaction rollback.
-    To keep a simple boolean contract we also guard against re-entrancy within
-    the same DB session (second acquire returns False).
+    Note: For PostgreSQL, session-level advisory locks are NOT released on
+    transaction rollback. To keep a simple boolean contract we also guard
+    against re-entrancy within the same DB session (second acquire returns False).
     """
 
     @staticmethod
-    def acquire_fiche_lock(db: Session, fiche_id: int) -> bool:
+    def acquire_fiche_lock(db: Session, fiche_id: int, holder_id: str | None = None) -> tuple[bool, str]:
         """
-        Acquire an advisory lock for a fiche.
-
-        Uses PostgreSQL pg_try_advisory_lock which:
-        - Returns immediately (non-blocking)
-        - Returns True if lock acquired, False if already held
-        - Automatically releases on session termination
+        Acquire a lock for a fiche.
 
         Args:
             db: Database session
             fiche_id: ID of the fiche to lock
+            holder_id: Optional holder identifier (defaults to auto-generated unique ID)
 
         Returns:
-            True if lock was acquired, False if already held by another session
+            Tuple of (acquired: bool, holder_id: str).
+            The holder_id is needed to release SQLite locks.
         """
+        holder = holder_id or _generate_holder_id()
+
         try:
-            # Guard against re-entrancy within the same DB session. PostgreSQL
-            # allows session-level advisory locks to be acquired multiple times
-            # by the same session; to keep a simple boolean contract we treat
-            # a second acquisition attempt from the same session as "not acquired".
+            if is_sqlite_session(db):
+                # SQLite: use resource_lock table
+                acquired = acquire_resource_lock(db, FICHE_LOCK_TYPE, str(fiche_id), holder, blocking=False)
+                if acquired:
+                    logger.debug(f"Acquired SQLite lock for fiche {fiche_id}")
+                else:
+                    logger.debug(f"Fiche {fiche_id} is already locked (SQLite)")
+                return acquired, holder
+
+            # PostgreSQL: use advisory locks with re-entrancy guard
             already_held = db.execute(
                 text(
                     """
@@ -69,8 +83,8 @@ class FicheLockManager:
             ).scalar()
 
             if already_held:
-                logger.debug(f"⚠️ Advisory lock for fiche {fiche_id} already held by this session")
-                return False
+                logger.debug(f"Advisory lock for fiche {fiche_id} already held by this session")
+                return False, holder
 
             result = db.execute(
                 text("SELECT pg_try_advisory_lock(:fiche_id)"),
@@ -79,48 +93,64 @@ class FicheLockManager:
             acquired = result.scalar()
 
             if acquired:
-                logger.debug(f"✅ Acquired advisory lock for fiche {fiche_id}")
+                logger.debug(f"Acquired advisory lock for fiche {fiche_id}")
             else:
-                logger.debug(f"⚠️ Fiche {fiche_id} is already locked by another session")
+                logger.debug(f"Fiche {fiche_id} is already locked by another session")
 
-            return bool(acquired)
+            return bool(acquired), holder
 
         except Exception as e:
-            logger.error(f"❌ Failed to acquire advisory lock for fiche {fiche_id}: {e}")
-            return False
+            logger.error(f"Failed to acquire lock for fiche {fiche_id}: {e}")
+            return False, holder
 
     @staticmethod
-    def release_fiche_lock(db: Session, fiche_id: int) -> bool:
+    def release_fiche_lock(db: Session, fiche_id: int, holder_id: str) -> bool:
         """
-        Release an advisory lock for a fiche.
+        Release a lock for a fiche.
 
         Args:
             db: Database session
             fiche_id: ID of the fiche to unlock
+            holder_id: The holder identifier returned from acquire_fiche_lock()
 
         Returns:
             True if lock was released, False if not held by this session
         """
+        holder = holder_id
+
         try:
-            result = db.execute(text("SELECT pg_advisory_unlock(:fiche_id)"), {"fiche_id": fiche_id})
+            if is_sqlite_session(db):
+                # SQLite: delete from resource_locks table
+                released = release_resource_lock(db, FICHE_LOCK_TYPE, str(fiche_id), holder)
+                if released:
+                    logger.debug(f"Released SQLite lock for fiche {fiche_id}")
+                else:
+                    logger.warning(f"Fiche {fiche_id} lock not held by {holder} (SQLite)")
+                return released
+
+            # PostgreSQL: release advisory lock
+            result = db.execute(
+                text("SELECT pg_advisory_unlock(:fiche_id)"),
+                {"fiche_id": fiche_id},
+            )
             released = result.scalar()
 
             if released:
-                logger.debug(f"✅ Released advisory lock for fiche {fiche_id}")
+                logger.debug(f"Released advisory lock for fiche {fiche_id}")
             else:
-                logger.warning(f"⚠️ Attempted to release advisory lock for fiche {fiche_id} but it wasn't held by this session")
+                logger.warning(f"Advisory lock for fiche {fiche_id} not held by this session")
 
             return bool(released)
 
         except Exception as e:
-            logger.error(f"❌ Failed to release advisory lock for fiche {fiche_id}: {e}")
+            logger.error(f"Failed to release lock for fiche {fiche_id}: {e}")
             return False
 
     @staticmethod
     @contextmanager
-    def fiche_lock(db: Session, fiche_id: int) -> Generator[bool, None, None]:
+    def fiche_lock(db: Session, fiche_id: int, holder_id: str | None = None) -> Generator[bool, None, None]:
         """
-        Context manager for fiche advisory locks.
+        Context manager for fiche locks.
 
         Usage:
             with FicheLockManager.fiche_lock(db, fiche_id) as acquired:
@@ -137,24 +167,31 @@ class FicheLockManager:
         Args:
             db: Database session
             fiche_id: ID of the fiche to lock
+            holder_id: Optional holder identifier (auto-generated if not provided)
 
         Yields:
             bool: True if lock was acquired, False otherwise
         """
-        acquired = FicheLockManager.acquire_fiche_lock(db, fiche_id)
+        # Generate holder_id once upfront for consistent acquire/release
+        holder = holder_id or _generate_holder_id()
 
-        try:
-            yield acquired
-        finally:
-            if acquired:
-                FicheLockManager.release_fiche_lock(db, fiche_id)
+        if is_sqlite_session(db):
+            # Use the unified resource_lock context manager for SQLite
+            with resource_lock(db, FICHE_LOCK_TYPE, str(fiche_id), holder) as acquired:
+                yield acquired
+        else:
+            # PostgreSQL: use direct acquire/release for advisory locks
+            acquired, actual_holder = FicheLockManager.acquire_fiche_lock(db, fiche_id, holder)
+            try:
+                yield acquired
+            finally:
+                if acquired:
+                    FicheLockManager.release_fiche_lock(db, fiche_id, actual_holder)
 
     @staticmethod
     def get_locked_fiches(db: Session) -> list[int]:
         """
         Get list of currently locked fiche IDs.
-
-        This queries pg_locks to see which advisory locks are currently held.
 
         Args:
             db: Database session
@@ -163,9 +200,14 @@ class FicheLockManager:
             List of fiche IDs that are currently locked
         """
         try:
-            # For pg_try_advisory_lock(bigint) the lock key is split across
-            # classid (high 32 bits) and objid (low 32 bits). Reconstruct the
-            # original bigint to match the fiche_id we lock against.
+            if is_sqlite_session(db):
+                # SQLite: query resource_locks table
+                locks = get_active_locks_sqlite(db, FICHE_LOCK_TYPE)
+                locked_fiches = [int(lock["lock_key"]) for lock in locks]
+                logger.debug(f"Currently locked fiches (SQLite): {locked_fiches}")
+                return locked_fiches
+
+            # PostgreSQL: query pg_locks for advisory locks
             result = db.execute(
                 text(
                     """
@@ -184,18 +226,29 @@ class FicheLockManager:
             return locked_fiches
 
         except Exception as e:
-            logger.error(f"❌ Failed to get locked fiches: {e}")
+            logger.error(f"Failed to get locked fiches: {e}")
             return []
 
 
 # Convenience helpers for fiche lock usage
 
 
-def acquire_fiche_lock_advisory(db, fiche_id: int) -> bool:
-    """Acquire a fiche advisory lock (thin wrapper for FicheLockManager)."""
+def acquire_fiche_lock_advisory(db: Session, fiche_id: int) -> tuple[bool, str]:
+    """Acquire a fiche lock (thin wrapper for FicheLockManager).
+
+    Returns:
+        Tuple of (acquired: bool, holder_id: str).
+        Keep holder_id to pass to release_fiche_lock_advisory().
+    """
     return FicheLockManager.acquire_fiche_lock(db, fiche_id)
 
 
-def release_fiche_lock_advisory(db, fiche_id: int) -> bool:
-    """Release a fiche advisory lock (thin wrapper for FicheLockManager)."""
-    return FicheLockManager.release_fiche_lock(db, fiche_id)
+def release_fiche_lock_advisory(db: Session, fiche_id: int, holder_id: str) -> bool:
+    """Release a fiche lock (thin wrapper for FicheLockManager).
+
+    Args:
+        db: Database session
+        fiche_id: ID of the fiche to unlock
+        holder_id: The holder_id returned from acquire_fiche_lock_advisory()
+    """
+    return FicheLockManager.release_fiche_lock(db, fiche_id, holder_id)

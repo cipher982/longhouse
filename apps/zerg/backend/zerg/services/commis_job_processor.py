@@ -8,6 +8,11 @@ Events emitted (for SSE streaming):
 - COMMIS_STARTED: When commis execution begins
 - COMMIS_COMPLETE: When commis finishes (success/failed/timeout)
 - COMMIS_SUMMARY_READY: When summary extraction completes
+
+SQLite-safe concurrency:
+- Uses dialect-aware job claiming (Postgres: FOR UPDATE SKIP LOCKED, SQLite: BEGIN IMMEDIATE)
+- Heartbeat tracking for stale job detection
+- Automatic reclaim of jobs from dead workers
 """
 
 from __future__ import annotations
@@ -23,6 +28,11 @@ from zerg.crud import crud
 from zerg.database import db_session
 from zerg.middleware.commis_db import current_commis_id
 from zerg.services.commis_artifact_store import CommisArtifactStore
+from zerg.services.commis_job_queue import HEARTBEAT_INTERVAL_SECONDS
+from zerg.services.commis_job_queue import claim_jobs
+from zerg.services.commis_job_queue import get_worker_id
+from zerg.services.commis_job_queue import reclaim_stale_jobs
+from zerg.services.commis_job_queue import update_heartbeat
 from zerg.services.commis_runner import CommisRunner
 
 logger = logging.getLogger(__name__)
@@ -107,16 +117,24 @@ def _extract_summary_from_output(
 
 
 class CommisJobProcessor:
-    """Service to process queued commis jobs in the background."""
+    """Service to process queued commis jobs in the background.
+
+    SQLite-safe: Uses dialect-aware job claiming and heartbeat tracking
+    to enable concurrent job processing without Postgres-specific locks.
+    """
 
     def __init__(self):
         """Initialize the commis job processor."""
         self._running = False
         self._task: Optional[asyncio.Task] = None
+        self._stale_reclaim_task: Optional[asyncio.Task] = None
         # Interactive latency matters: commis are typically spawned from chat flows.
         # Keep polling reasonably tight so a queued job starts quickly.
         self._check_interval = 1  # seconds
         self._max_concurrent_jobs = 5  # Process up to 5 jobs concurrently
+        self._worker_id = get_worker_id()
+        # Track running jobs for heartbeat updates
+        self._running_jobs: set[int] = set()
 
     async def start(self) -> None:
         """Start the commis job processor."""
@@ -126,7 +144,8 @@ class CommisJobProcessor:
 
         self._running = True
         self._task = asyncio.create_task(self._process_jobs_loop())
-        logger.info("Commis job processor started")
+        self._stale_reclaim_task = asyncio.create_task(self._stale_reclaim_loop())
+        logger.info(f"Commis job processor started (worker_id={self._worker_id})")
 
     async def stop(self) -> None:
         """Stop the commis job processor."""
@@ -135,6 +154,12 @@ class CommisJobProcessor:
             self._task.cancel()
             try:
                 await self._task
+            except asyncio.CancelledError:
+                pass
+        if self._stale_reclaim_task:
+            self._stale_reclaim_task.cancel()
+            try:
+                await self._stale_reclaim_task
             except asyncio.CancelledError:
                 pass
         logger.info("Commis job processor stopped")
@@ -149,6 +174,46 @@ class CommisJobProcessor:
 
             await asyncio.sleep(self._check_interval)
 
+    async def _stale_reclaim_loop(self) -> None:
+        """Periodically reclaim jobs from dead workers.
+
+        Runs every HEARTBEAT_INTERVAL_SECONDS and reclaims any jobs
+        that haven't received a heartbeat within STALE_THRESHOLD_SECONDS.
+        """
+        while self._running:
+            try:
+                with db_session() as db:
+                    reclaimed = reclaim_stale_jobs(db)
+                    if reclaimed > 0:
+                        logger.info(f"Reclaimed {reclaimed} stale commis jobs")
+            except Exception as e:
+                logger.exception(f"Error in stale job reclaim loop: {e}")
+
+            await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+
+    async def _heartbeat_loop(self, job_id: int) -> None:
+        """Send periodic heartbeats for a running job.
+
+        This runs in parallel with job execution to prove this worker
+        is still alive. If the worker crashes, heartbeats stop, and
+        the stale reclaim loop will reset the job to 'queued'.
+
+        Args:
+            job_id: The job ID to send heartbeats for
+        """
+        while job_id in self._running_jobs:
+            try:
+                with db_session() as db:
+                    success = update_heartbeat(db, job_id, self._worker_id)
+                    if not success:
+                        # Job was cancelled or reclaimed - stop heartbeating
+                        logger.warning(f"Heartbeat failed for job {job_id} - job may have been reclaimed")
+                        break
+            except Exception as e:
+                logger.warning(f"Error updating heartbeat for job {job_id}: {e}")
+
+            await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+
     async def _process_pending_jobs(self) -> None:
         """Process pending commis jobs."""
         if _is_e2e_mode:
@@ -161,41 +226,36 @@ class CommisJobProcessor:
     async def _process_pending_jobs_default(self) -> None:
         """Process pending jobs from default schema (normal mode).
 
-        Uses atomic UPDATE ... RETURNING to prevent race conditions where
-        multiple processors could claim the same job.
+        Uses dialect-aware atomic job claiming:
+        - Postgres: FOR UPDATE SKIP LOCKED
+        - SQLite: BEGIN IMMEDIATE + UPDATE RETURNING
         """
-        job_ids = []
         with db_session() as db:
-            # Atomic job pickup: UPDATE status to 'running' WHERE status='queued'
-            # This prevents race conditions where multiple processors grab the same job
-            from sqlalchemy import text
+            job_ids = claim_jobs(db, self._max_concurrent_jobs, self._worker_id)
 
-            result = db.execute(
-                text("""
-                    UPDATE commis_jobs
-                    SET status = 'running', started_at = NOW()
-                    WHERE id IN (
-                        SELECT id FROM commis_jobs
-                        WHERE status = 'queued'
-                        ORDER BY created_at ASC
-                        LIMIT :limit
-                        FOR UPDATE SKIP LOCKED
-                    )
-                    RETURNING id
-                """),
-                {"limit": self._max_concurrent_jobs},
-            )
-            job_ids = [row[0] for row in result.fetchall()]
-            db.commit()
+        if not job_ids:
+            return
 
-            if not job_ids:
-                return
+        logger.info(f"Claimed {len(job_ids)} queued commis jobs atomically")
 
-            logger.info(f"Claimed {len(job_ids)} queued commis jobs atomically")
+        # Start heartbeat loops and process jobs
+        tasks = []
+        for job_id in job_ids:
+            self._running_jobs.add(job_id)
+            # Start heartbeat task for this job
+            asyncio.create_task(self._heartbeat_loop(job_id))
+            # Process the job
+            tasks.append(asyncio.create_task(self._process_job_with_cleanup(job_id)))
 
-        if job_ids:
-            tasks = [asyncio.create_task(self._process_job_by_id(job_id, already_claimed=True)) for job_id in job_ids]
-            await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _process_job_with_cleanup(self, job_id: int) -> None:
+        """Process a job and clean up tracking state when done."""
+        try:
+            await self._process_job_by_id(job_id, already_claimed=True)
+        finally:
+            # Remove from running jobs set (stops heartbeat loop)
+            self._running_jobs.discard(job_id)
 
     async def _process_pending_jobs_e2e(self) -> None:
         """Process pending jobs from all E2E test schemas.
@@ -203,9 +263,8 @@ class CommisJobProcessor:
         In E2E mode, each Playwright commis gets its own Postgres schema.
         We need to poll all schemas to find queued jobs.
 
-        Uses atomic UPDATE ... RETURNING to prevent race conditions.
+        Uses dialect-aware atomic job claiming.
         """
-        from sqlalchemy import text
         from sqlalchemy.exc import ProgrammingError
 
         # Poll schemas 0-15 (matches Playwright commis count in test setup)
@@ -217,24 +276,7 @@ class CommisJobProcessor:
                 job_ids = []
                 try:
                     with db_session() as db:
-                        # Atomic job pickup for E2E mode
-                        result = db.execute(
-                            text("""
-                                UPDATE commis_jobs
-                                SET status = 'running', started_at = NOW()
-                                WHERE id IN (
-                                    SELECT id FROM commis_jobs
-                                    WHERE status = 'queued'
-                                    ORDER BY created_at ASC
-                                    LIMIT :limit
-                                    FOR UPDATE SKIP LOCKED
-                                )
-                                RETURNING id
-                            """),
-                            {"limit": self._max_concurrent_jobs},
-                        )
-                        job_ids = [row[0] for row in result.fetchall()]
-                        db.commit()
+                        job_ids = claim_jobs(db, self._max_concurrent_jobs, self._worker_id)
 
                         if job_ids:
                             logger.info(f"Claimed {len(job_ids)} queued commis jobs in schema {commis_id}")
@@ -244,13 +286,22 @@ class CommisJobProcessor:
 
                 if job_ids:
                     # Process jobs with the correct commis_id context
-                    tasks = [
-                        asyncio.create_task(self._process_job_by_id_with_context(job_id, commis_id_str, already_claimed=True))
-                        for job_id in job_ids
-                    ]
+                    # Track jobs and start heartbeats
+                    tasks = []
+                    for job_id in job_ids:
+                        self._running_jobs.add(job_id)
+                        asyncio.create_task(self._heartbeat_loop(job_id))
+                        tasks.append(asyncio.create_task(self._process_job_by_id_with_context_and_cleanup(job_id, commis_id_str)))
                     await asyncio.gather(*tasks, return_exceptions=True)
             finally:
                 current_commis_id.reset(token)
+
+    async def _process_job_by_id_with_context_and_cleanup(self, job_id: int, commis_id_str: str) -> None:
+        """Process a job with E2E schema context and clean up tracking state."""
+        try:
+            await self._process_job_by_id_with_context(job_id, commis_id_str, already_claimed=True)
+        finally:
+            self._running_jobs.discard(job_id)
 
     async def _process_job_by_id_with_context(self, job_id: int, commis_id_str: str, *, already_claimed: bool = False) -> None:
         """Process a job with the correct E2E schema context."""

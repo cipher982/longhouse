@@ -23,11 +23,13 @@ class TestSingleRunGuard:
         )
 
         # Should successfully acquire advisory lock for idle fiche
-        assert FicheLockManager.acquire_fiche_lock(db, fiche.id) is True
-        # Re-acquiring within same session should fail
-        assert FicheLockManager.acquire_fiche_lock(db, fiche.id) is False
+        acquired, holder_id = FicheLockManager.acquire_fiche_lock(db, fiche.id)
+        assert acquired is True
+        # Re-acquiring within same session should fail (generates new holder_id)
+        acquired2, _ = FicheLockManager.acquire_fiche_lock(db, fiche.id)
+        assert acquired2 is False
         # Release
-        assert FicheLockManager.release_fiche_lock(db, fiche.id) is True
+        assert FicheLockManager.release_fiche_lock(db, fiche.id, holder_id) is True
 
     def test_acquire_lock_already_held(self, db: Session):
         """Test that acquiring a held advisory lock fails in same session."""
@@ -40,9 +42,11 @@ class TestSingleRunGuard:
             task_instructions="Test task",
             model="gpt-mock",
         )
-        assert FicheLockManager.acquire_fiche_lock(db, fiche.id) is True
-        assert FicheLockManager.acquire_fiche_lock(db, fiche.id) is False
-        FicheLockManager.release_fiche_lock(db, fiche.id)
+        acquired, holder_id = FicheLockManager.acquire_fiche_lock(db, fiche.id)
+        assert acquired is True
+        acquired2, _ = FicheLockManager.acquire_fiche_lock(db, fiche.id)
+        assert acquired2 is False
+        FicheLockManager.release_fiche_lock(db, fiche.id, holder_id)
 
     def test_api_returns_409_for_concurrent_runs(self, client: TestClient, db: Session):
         """Test that the API returns 409 Conflict for concurrent run attempts."""
@@ -90,9 +94,11 @@ class TestSingleRunGuard:
         )
 
         # Acquire lock
-        assert FicheLockManager.acquire_fiche_lock(db, fiche.id) is True
+        acquired, holder_id = FicheLockManager.acquire_fiche_lock(db, fiche.id)
+        assert acquired is True
         # Release
-        assert FicheLockManager.release_fiche_lock(db, fiche.id) is True
+        assert FicheLockManager.release_fiche_lock(db, fiche.id, holder_id) is True
         # Should be able to acquire lock again
-        assert FicheLockManager.acquire_fiche_lock(db, fiche.id) is True
-        FicheLockManager.release_fiche_lock(db, fiche.id)
+        acquired2, holder_id2 = FicheLockManager.acquire_fiche_lock(db, fiche.id)
+        assert acquired2 is True
+        FicheLockManager.release_fiche_lock(db, fiche.id, holder_id2)

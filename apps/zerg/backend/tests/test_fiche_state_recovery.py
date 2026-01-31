@@ -203,9 +203,11 @@ class TestFicheStateRecovery:
 
         # Should have results
         assert "recovered_fiches" in result
-        assert "advisory_locks_available" in result
+        assert "lock_support" in result
         assert fiche.id in result["recovered_fiches"]
-        assert isinstance(result["advisory_locks_available"], bool)
+        assert isinstance(result["lock_support"], dict)
+        # lock_support should have advisory_locks or resource_locks key
+        assert "advisory_locks" in result["lock_support"] or "resource_locks" in result["lock_support"]
 
         # Fiche should be recovered
         recovered_fiche = db_session.query(Fiche).filter(Fiche.id == fiche.id).first()

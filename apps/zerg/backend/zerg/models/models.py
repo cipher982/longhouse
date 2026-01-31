@@ -370,6 +370,13 @@ class CommisJob(Base):
 
     Commis jobs allow oikos agents to delegate long-running tasks
     to background commiss without blocking the oikos's execution flow.
+
+    SQLite-safe concurrency:
+    - worker_id: Identifies which worker claimed the job
+    - claimed_at: When the worker claimed the job
+    - heartbeat_at: Last heartbeat update (proves worker is alive)
+
+    Jobs with stale heartbeats (no update for >2min) are reclaimed.
     """
 
     __tablename__ = "commis_jobs"
@@ -407,6 +414,12 @@ class CommisJob(Base):
     # Execution state
     status = Column(String(20), nullable=False, default="queued")  # queued, running, success, failed, cancelled
     commis_id = Column(String(255), nullable=True, index=True)  # Set when execution starts
+
+    # Worker tracking for SQLite-safe concurrency
+    # These fields enable stale job detection and reclaim without advisory locks
+    worker_id = Column(String(255), nullable=True, index=True)  # hostname:pid of claiming worker
+    claimed_at = Column(DateTime, nullable=True)  # When worker claimed the job
+    heartbeat_at = Column(DateTime, nullable=True)  # Last heartbeat (proves worker is alive)
 
     # Async inbox model - tracks whether oikos has acknowledged this result
     acknowledged = Column(Boolean, nullable=False, default=False, server_default="false")

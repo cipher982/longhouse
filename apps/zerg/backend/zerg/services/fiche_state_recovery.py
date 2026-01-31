@@ -284,38 +284,67 @@ async def perform_startup_runner_job_recovery() -> List[str]:
     return recovered_job_ids
 
 
+def check_advisory_lock_support() -> dict:
+    """
+    Check what locking mechanism is available for this database.
+
+    Returns a dict with:
+    - dialect: "postgresql" or "sqlite"
+    - advisory_locks: True if PostgreSQL advisory locks work
+    - resource_locks: True if SQLite resource_locks table is available
+
+    Returns:
+        Dict with lock support details
+    """
+    from zerg.db_utils import _ensure_resource_locks_table
+    from zerg.db_utils import is_sqlite_session
+
+    session_factory = get_session_factory()
+    result = {
+        "dialect": "unknown",
+        "advisory_locks": False,
+        "resource_locks": False,
+    }
+
+    with session_factory() as db:
+        try:
+            if is_sqlite_session(db):
+                result["dialect"] = "sqlite"
+                # SQLite: ensure resource_locks table exists
+                _ensure_resource_locks_table(db)
+                result["resource_locks"] = True
+                logger.info("SQLite resource_locks table available for locking")
+            else:
+                result["dialect"] = "postgresql"
+                # PostgreSQL: test advisory lock functionality
+                lock_result = db.execute(text("SELECT pg_try_advisory_lock(999999)"))
+                acquired = lock_result.scalar()
+
+                if acquired:
+                    # Release the test lock
+                    db.execute(text("SELECT pg_advisory_unlock(999999)"))
+                    result["advisory_locks"] = True
+                    logger.info("PostgreSQL advisory locks are available")
+                else:
+                    logger.warning("PostgreSQL advisory locks test failed")
+
+        except Exception as e:
+            logger.warning(f"Lock support check failed: {e}")
+
+    return result
+
+
 def check_postgresql_advisory_lock_support() -> bool:
     """
     Check if PostgreSQL advisory locks are available.
 
-    Advisory locks are the proper solution for distributed locking because:
-    1. They automatically release when the session terminates
-    2. They don't rely on persistent data state
-    3. They're designed for exactly this use case
+    This is a backward-compatible wrapper around check_advisory_lock_support().
 
     Returns:
-        True if advisory locks are supported, False otherwise
+        True if advisory locks are supported (or SQLite with resource_locks)
     """
-    session_factory = get_session_factory()
-
-    with session_factory() as db:
-        try:
-            # Test advisory lock functionality
-            result = db.execute(text("SELECT pg_try_advisory_lock(999999)"))
-            acquired = result.scalar()
-
-            if acquired:
-                # Release the test lock
-                db.execute(text("SELECT pg_advisory_unlock(999999)"))
-                logger.info("✅ PostgreSQL advisory locks are available")
-                return True
-            else:
-                logger.warning("⚠️ PostgreSQL advisory locks test failed")
-                return False
-
-        except Exception as e:
-            logger.warning(f"⚠️ PostgreSQL advisory locks not available: {e}")
-            return False
+    support = check_advisory_lock_support()
+    return support.get("advisory_locks", False) or support.get("resource_locks", False)
 
 
 async def initialize_fiche_state_system():
@@ -349,32 +378,35 @@ async def initialize_fiche_state_system():
         # Step 4: Recover fiches LAST (now will correctly see no active runs)
         recovered_fiches = await perform_startup_fiche_recovery()
 
-        # Step 5: Check advisory lock support for future enhancement
-        advisory_locks_available = check_postgresql_advisory_lock_support()
+        # Step 5: Check lock support
+        lock_support = check_advisory_lock_support()
 
         # Log summary
         total_recovered = len(recovered_fiches) + len(recovered_runs) + len(recovered_commis_jobs) + len(recovered_runner_jobs)
 
         if total_recovered > 0:
             logger.info(
-                f"🔧 Startup recovery complete: "
+                f"Startup recovery complete: "
                 f"{len(recovered_fiches)} fiches, "
                 f"{len(recovered_runs)} runs, "
                 f"{len(recovered_commis_jobs)} commis jobs, "
                 f"{len(recovered_runner_jobs)} runner jobs"
             )
 
-        if advisory_locks_available:
-            logger.info("✅ Fiche state system initialized with PostgreSQL advisory lock support")
+        dialect = lock_support.get("dialect", "unknown")
+        if lock_support.get("advisory_locks"):
+            logger.info("Fiche state system initialized with PostgreSQL advisory locks")
+        elif lock_support.get("resource_locks"):
+            logger.info("Fiche state system initialized with SQLite resource_locks")
         else:
-            logger.info("✅ Fiche state system initialized with startup recovery only")
+            logger.info(f"Fiche state system initialized ({dialect}) with startup recovery only")
 
         return {
             "recovered_fiches": recovered_fiches,
             "recovered_runs": recovered_runs,
             "recovered_commis_jobs": recovered_commis_jobs,
             "recovered_runner_jobs": recovered_runner_jobs,
-            "advisory_locks_available": advisory_locks_available,
+            "lock_support": lock_support,
         }
 
     except Exception as e:
