@@ -21,8 +21,9 @@ dependencies = [
     # HTTP client (for jobs)
     "httpx>=0.28.0",
 
-    # LLM client (for AI-powered jobs)
+    # LLM clients (for AI-powered jobs)
     "openai>=1.70.0",
+    "anthropic>=0.40.0",
 
     # Environment
     "python-dotenv>=1.0.0",
