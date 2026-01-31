@@ -234,7 +234,7 @@ Categories: `gotcha`, `pattern`, `design`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-30) [design] Real-time + multi-tenant isolation caused repeated E2E/realtime bug churn; avoid unless free tier is heavily restricted.
 - (2026-01-30) [design] User wants full isolation with low resources; avoid steering back to shared multi-tenant in this thread.
 - (2026-01-30) [gotcha] SQLite URLs are rejected in zerg.database and Agents schema uses Postgres-only UUID/JSONB/partial indexes, so SQLite mode must gate these features.
-- (2026-01-30) [design] VISION.md enforces Postgres-only agents schema today, while LIGHTWEIGHT-OSS-ONBOARDING.md assumes SQLite; align docs before using “pip install + sqlite” as default.
+- (2026-01-30) [design] VISION.md says "No Postgres in core" — SQLite is the only runtime DB. Current codebase still has Postgres dependencies that need migration (see LIGHTWEIGHT-OSS-ONBOARDING.md).
 - (2026-01-30) [gotcha] list_memories shows only short IDs; forget_memory requires full UUID, so deletes fail unless full IDs are exposed or prefix lookup is added.
 - (2026-01-31) [gotcha] DB schemas are hard-coded (DB_SCHEMA="zerg", Agents schema="agents") and raw SQL references schema-qualified tables (e.g., ops.job_queue); SQLite needs schema remapping or SQL changes.
 - (2026-01-31) [test] ScriptedLLM checks for ToolMessage to decide synthesis vs tool-call; multi-run threads accumulate messages, so new scenarios must check "current turn only" (messages after last HumanMessage).
