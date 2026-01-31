@@ -536,6 +536,16 @@ Your personal cloud agent team. Always on. SQLite simple. Actually works.
 
 Curated sources we can lean on when pushing SQLite to its limits, plus the concrete behaviors that matter for Zerg’s design.
 
+### Key Learnings (What we take into the plan)
+
+- **WAL is concurrent but single-writer.** Readers + one writer can coexist; multiple writers serialize. WAL needs shared memory and is unsafe on network filesystems.
+- **Checkpoint starvation is a real operational risk.** Long-lived readers can prevent WAL checkpoints; WAL can grow unbounded without active checkpointing.
+- **BEGIN IMMEDIATE is the right pattern for atomic job claims.** It grabs the write lock up front and fails fast if another writer is active.
+- **busy_timeout is required for reliability under contention.** Set it on every connection so writes wait instead of throwing SQLITE_BUSY.
+- **UPSERT + RETURNING are available.** Use ON CONFLICT for dedupe and RETURNING for atomic claim patterns.
+- **Durability is a tradeoff.** `PRAGMA synchronous` and WAL checkpoint policy directly affect durability vs speed.
+- **JSON1 is good enough for our needs.** JSON operators and functions exist, and JSON5 inputs are supported on newer SQLite builds.
+
 ### Concurrency & Locking Reality
 
 - **WAL improves read/write concurrency, but still single-writer.** Readers and writers can run concurrently, but only one writer at a time. WAL also requires shared memory and does not work over network filesystems.
