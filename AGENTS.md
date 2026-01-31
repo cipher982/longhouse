@@ -8,10 +8,13 @@ Skills-Dir: .agents/skills
 
 ## Philosophy
 
-- VISION.md is the guiding light right now, keep it in your thoughts during all work, ensure we stay on track despite the current task.
+- **Read VISION.md first** — It's the guiding light. Understand the strategic direction before diving into implementation.
+- **Read docs/LIGHTWEIGHT-OSS-ONBOARDING.md** — Details the SQLite pivot plan. Don't invest in Postgres-specific infrastructure.
 - Always commit changes as you go (no lingering uncommitted work).
 
 **"Trust the AI"** — Modern LLMs are smart enough to figure things out. Give them context and autonomy, not rigid decision trees. No keyword routing, no specialized commiss.
+
+**Current Direction (2026-01):** Migrating to SQLite-only for OSS. Postgres is control-plane only. See VISION.md § "No Postgres in core."
 
 ## Task Tracking
 
@@ -180,6 +183,8 @@ Sauron is the centralized ops scheduler, deployed as a standalone service on cli
 
 | Topic | Guide |
 |-------|-------|
+| **Strategic direction** | `VISION.md` — read first! |
+| **SQLite pivot plan** | `docs/LIGHTWEIGHT-OSS-ONBOARDING.md` |
 | Oikos Tools | `apps/zerg/backend/docs/supervisor_tools.md` |
 | Sauron scheduler | `apps/sauron/README.md` |
 
@@ -232,3 +237,5 @@ Categories: `gotcha`, `pattern`, `design`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-30) [design] VISION.md enforces Postgres-only agents schema today, while LIGHTWEIGHT-OSS-ONBOARDING.md assumes SQLite; align docs before using “pip install + sqlite” as default.
 - (2026-01-30) [gotcha] list_memories shows only short IDs; forget_memory requires full UUID, so deletes fail unless full IDs are exposed or prefix lookup is added.
 - (2026-01-31) [gotcha] DB schemas are hard-coded (DB_SCHEMA="zerg", Agents schema="agents") and raw SQL references schema-qualified tables (e.g., ops.job_queue); SQLite needs schema remapping or SQL changes.
+- (2026-01-31) [test] ScriptedLLM checks for ToolMessage to decide synthesis vs tool-call; multi-run threads accumulate messages, so new scenarios must check "current turn only" (messages after last HumanMessage).
+- (2026-01-31) [test] commis_job_processor polls 16 E2E schemas but globalSetup creates only 4 by default; processor now catches ProgrammingError for missing schemas.
