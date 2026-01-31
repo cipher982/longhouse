@@ -571,15 +571,16 @@ def is_postgres() -> bool:
     return default_engine.dialect.name == "postgresql"
 
 
-# Minimum SQLite version for UPSERT support (ON CONFLICT DO NOTHING with index_elements)
-SQLITE_MIN_VERSION = (3, 24, 0)
+# Minimum SQLite version for required features.
+# 3.35+ adds RETURNING, which we'll rely on for SQLite-safe job claiming.
+SQLITE_MIN_VERSION = (3, 35, 0)
 
 
 def check_sqlite_version(engine: Engine) -> tuple[bool, str]:
-    """Check if SQLite version supports required features (UPSERT).
+    """Check if SQLite version supports required features.
 
-    SQLite 3.24+ is required for ON CONFLICT DO NOTHING with explicit conflict targets,
-    which is used for event deduplication in the agents store.
+    SQLite 3.35+ is required for RETURNING (used in SQLite-safe job claiming).
+    We also use UPSERT for event deduplication.
 
     Args:
         engine: SQLAlchemy engine to check
@@ -645,7 +646,7 @@ def initialize_database(engine: Engine = None) -> None:
     # This allows models defined with schema="zerg" or schema="agents" to work
     # without schema prefixes on SQLite (which doesn't support schemas)
     if target_engine is not None and target_engine.dialect.name == "sqlite":
-        # Check SQLite version for UPSERT support
+        # Check SQLite version for required features
         is_compatible, version_str = check_sqlite_version(target_engine)
         if not is_compatible:
             min_ver = ".".join(str(x) for x in SQLITE_MIN_VERSION)

@@ -197,7 +197,7 @@ class AgentsStore:
                     # 1. The 'id' column is auto-generated (no collision possible)
                     # 2. The only other unique constraint is ix_events_dedup
                     #
-                    # Requires SQLite >= 3.24 for UPSERT support (enforced at startup).
+                    # Requires SQLite >= 3.35 for RETURNING support (enforced at startup).
                     stmt = stmt.on_conflict_do_nothing()
 
             # Execute insert
