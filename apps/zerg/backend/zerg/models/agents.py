@@ -36,12 +36,11 @@ if TYPE_CHECKING:
 
 # Separate metadata for agents schema (isolated from main zerg schema)
 # AGENTS_SCHEMA is None for SQLite (no schema support), "agents" for Postgres
-# Import _is_sqlite_url to avoid circular import - it's defined early in database.py
-# before any model imports, so we use late import here
-from zerg.database import _is_sqlite_url
+# Import from db_utils to avoid circular import with database.py
+from zerg.db_utils import is_sqlite_url
 
 _db_url = os.environ.get("DATABASE_URL", "")
-AGENTS_SCHEMA = None if _is_sqlite_url(_db_url) else "agents"
+AGENTS_SCHEMA = None if is_sqlite_url(_db_url) else "agents"
 agents_metadata = MetaData(schema=AGENTS_SCHEMA)
 
 # Separate Base class for agents schema models

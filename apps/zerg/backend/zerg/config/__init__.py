@@ -182,9 +182,14 @@ class Settings:  # noqa: D401 – simple data container
 
     @property
     def db_is_sqlite(self) -> bool:
-        """Return True when DATABASE_URL points at SQLite."""
-        url = (self.database_url or "").strip().lower()
-        return url.startswith("sqlite")
+        """Return True when DATABASE_URL points at SQLite.
+
+        Delegates to db_utils.is_sqlite_url() for proper handling of
+        quoted URLs from .env files.
+        """
+        from zerg.db_utils import is_sqlite_url
+
+        return is_sqlite_url(self.database_url)
 
     @property
     def lite_mode(self) -> bool:
