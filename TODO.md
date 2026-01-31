@@ -46,28 +46,141 @@ Phase 3 — Agents API + Ingest: ✅ DONE (2026-01-31)
 - [x] Timeline UI works end-to-end on SQLite
 - [x] Lite test suite added (`make test` runs SQLite-lite by default)
 
-Phase 4 — Job Queue + Concurrency: 🔲 OPEN
-- [ ] Replace `FOR UPDATE SKIP LOCKED` with `BEGIN IMMEDIATE` + `UPDATE ... RETURNING`
-- [ ] Add heartbeat fields + stale job reclaim logic
-- [ ] Replace advisory locks with status-guarded updates or file locks
-- [ ] Gate `ops.job_queue` behind `not lite_mode`
-- [ ] Test: spawn 3 commis, kill server, restart, jobs resume
+Phase 4 — Job Queue + Concurrency: 🔲 OPEN (see standalone task below)
 
-Phase 5 — Durable Checkpoints: 🔲 OPEN
-- [ ] Replace MemorySaver with `langgraph-checkpoint-sqlite` for SQLite
-- [ ] Ensure migrations/setup idempotent
-- [ ] Test: interrupt run, restart server, resume continues
+Phase 5 — Durable Checkpoints: 🔲 OPEN (see standalone task below)
 
-Phase 6 — CLI + Frontend Bundle: 🔲 OPEN
-- [ ] Add `zerg serve` command (typer, uvicorn with sane defaults)
-- [ ] Bundle frontend `dist` in python package (hatch config)
-- [ ] Update FastAPI static mount to use packaged assets
-- [ ] Test: fresh venv → `pip install zerg` → `zerg serve` → UI works
+Phase 6 — CLI + Frontend Bundle: 🔲 OPEN (see standalone task below)
 
 Phase 7 — Onboarding Smoke + Docs: 🔲 OPEN
 - [ ] Add/extend `make onboarding-smoke` for SQLite boot + API checks
 - [ ] Update README quick-start to default to SQLite
 - [ ] Verify onboarding contract passes
+
+---
+
+## SQLite Job Queue (Phase 4) (5)
+
+Make commis job claiming work on SQLite. Currently uses `FOR UPDATE SKIP LOCKED` which is Postgres-only.
+
+**Why:** Commis can't run concurrently on SQLite without this. Blocks single-process multi-agent use case.
+
+**Files:**
+- `jobs/queue.py` — Main job claim logic
+- `services/commis_job_processor.py` — Uses queue for commis jobs
+
+**Pattern (from LIGHTWEIGHT-OSS-ONBOARDING.md):**
+```python
+def claim_job(db, worker_id):
+    with db.begin_immediate():  # SQLite write lock
+        job = db.execute("""
+            UPDATE jobs
+            SET status='running', worker_id=?, started_at=NOW()
+            WHERE id = (
+                SELECT id FROM jobs WHERE status='pending'
+                ORDER BY priority DESC, created_at ASC LIMIT 1
+            )
+            RETURNING *
+        """, [worker_id]).fetchone()
+    return job
+```
+
+- [ ] Add `claimed_at`, `heartbeat_at` columns to commis_jobs
+- [ ] Create `claim_job_sqlite()` with BEGIN IMMEDIATE pattern
+- [ ] Create `claim_job_postgres()` with FOR UPDATE SKIP LOCKED
+- [ ] Dispatch based on `lite_mode` in queue.py
+- [ ] Add heartbeat update in job processor loop
+- [ ] Add stale job reclaim (no heartbeat for 2min → reset to pending)
+- [ ] Test: concurrent claims don't double-assign
+
+---
+
+## SQLite Advisory Locks (Phase 4b) (4)
+
+Replace Postgres advisory locks with SQLite-safe alternatives. These are used for single-tenant guard, fiche locks, and state recovery.
+
+**Why:** Advisory locks don't exist in SQLite. Need status columns or file locks.
+
+**Files:**
+- `services/single_tenant.py` — Uses `pg_advisory_lock` for instance guard
+- `services/fiche_locks.py` — Uses advisory locks for run exclusion
+- `services/fiche_state_recovery.py` — Uses advisory locks
+
+**Options:**
+1. **Status column + heartbeat** — Add `locked_by`, `locked_at` columns, check/update atomically
+2. **File locks** — `fcntl.flock()` on `~/.zerg/locks/{resource}.lock`
+
+- [ ] Audit all advisory lock callsites
+- [ ] Decide: status columns vs file locks (recommend status for DB resources)
+- [ ] Implement `acquire_lock_sqlite()` / `release_lock_sqlite()` helpers
+- [ ] Update single_tenant.py to use SQLite-safe locking
+- [ ] Update fiche_locks.py to use SQLite-safe locking
+- [ ] Gate ops.job_queue behind `not lite_mode` if not making it SQLite-safe
+- [ ] Test: two processes can't claim same fiche simultaneously
+
+---
+
+## SQLite Checkpoints (Phase 5) (3)
+
+Make LangGraph checkpoints durable on SQLite. Currently uses MemorySaver which loses state on restart.
+
+**Why:** If server restarts mid-run, the run can't resume. Breaks "always-on" promise.
+
+**Files:**
+- `services/checkpointer.py` — Creates checkpointer instance
+- `services/workflow_engine.py` — Uses checkpointer
+- `services/workflow_validator.py` — Uses checkpointer
+
+**Solution:** Use `langgraph-checkpoint-sqlite` package.
+
+```python
+# checkpointer.py
+if lite_mode:
+    from langgraph.checkpoint.sqlite import SqliteSaver
+    checkpointer = SqliteSaver.from_conn_string("~/.zerg/zerg.db")
+else:
+    checkpointer = MemorySaver()  # or Postgres checkpointer
+```
+
+- [ ] Add `langgraph-checkpoint-sqlite` dependency
+- [ ] Update checkpointer.py to detect lite_mode and use SqliteSaver
+- [ ] Verify checkpoint tables created automatically
+- [ ] Test: interrupt run, restart, resume continues from checkpoint
+
+---
+
+## Zerg CLI + Package (Phase 6) (5)
+
+Create `zerg serve` command and pip-installable package. The finish line for OSS onboarding.
+
+**Why:** `pip install zerg && zerg serve` is the north star UX.
+
+**Files:**
+- `apps/zerg/backend/zerg/cli/` — New CLI module (typer)
+- `apps/zerg/backend/pyproject.toml` — Package config
+- `apps/zerg/frontend-web/dist/` — Built frontend to bundle
+
+**Implementation:**
+```python
+# cli/main.py
+import typer
+import uvicorn
+
+app = typer.Typer()
+
+@app.command()
+def serve(host: str = "0.0.0.0", port: int = 8080):
+    """Start the Zerg server."""
+    uvicorn.run("zerg.main:app", host=host, port=port)
+```
+
+- [ ] Create `cli/main.py` with typer
+- [ ] Add `[project.scripts]` entry in pyproject.toml
+- [ ] Configure hatch to bundle `frontend-web/dist/` in package
+- [ ] Update FastAPI static mount to use `importlib.resources` for packaged assets
+- [ ] Add `zerg status` command (show running jobs)
+- [ ] Test: `pip install -e .` → `zerg serve` → UI loads
+- [ ] Test: `pip install zerg` from TestPyPI → same
 
 ---
 
@@ -153,6 +266,10 @@ Workspace commis emit only `commis_started` and `commis_complete` — no tool ev
 
 ## Done (Recent)
 
+- [x] SQLite Phases 0-3 complete (2026-01-31) — Core boot, models, agents API all SQLite-safe
+- [x] SQLite 3.35+ enforcement (2026-01-31) — Startup fails fast if below minimum
+- [x] `db_utils.is_sqlite_url()` helper (2026-01-31) — Handles quoted URLs, used by config + models
+- [x] Lite test suite (2026-01-31) — `make test` runs SQLite tests by default
 - [x] Parallel spawn_commis interrupt fix (2026-01-30) — commit a8264f9d
 - [x] Telegram webhook handler (2026-01-30) — commit 2dc1ee0b, `routers/channels_webhooks.py`
 - [x] Learnings review compacted 33 → 11 (2026-01-30)
