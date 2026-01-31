@@ -45,8 +45,8 @@ def test_check_sqlite_version_not_sqlite():
 
 
 def test_min_version_constant():
-    """Minimum version constant is set correctly."""
-    assert SQLITE_MIN_VERSION == (3, 24, 0)
+    """Minimum version constant is set correctly (3.35+ for RETURNING support)."""
+    assert SQLITE_MIN_VERSION == (3, 35, 0)
 
 
 def test_current_sqlite_version_meets_minimum():

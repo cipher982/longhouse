@@ -48,7 +48,10 @@ Phase 3 — Agents API + Ingest: ✅ DONE (2026-01-31)
 
 Phase 4 — Job Queue + Concurrency: 🔲 OPEN (see standalone task below)
 
-Phase 5 — Durable Checkpoints: 🔲 OPEN (see standalone task below)
+Phase 5 — Durable Checkpoints: ✅ DONE (2026-01-31)
+- [x] SqliteSaver for SQLite (sync, avoids event loop affinity issues)
+- [x] workflow_engine.py uses get_checkpointer() factory
+- [x] Thread-safe caching with _sqlite_cache_lock
 
 Phase 6 — CLI + Frontend Bundle: 🔲 OPEN (see standalone task below)
 
@@ -120,7 +123,7 @@ Replace Postgres advisory locks with SQLite-safe alternatives. These are used fo
 
 ---
 
-## SQLite Checkpoints (Phase 5) (3)
+## SQLite Checkpoints (Phase 5) (3) ✅ DONE (2026-01-31)
 
 Make LangGraph checkpoints durable on SQLite. Currently uses MemorySaver which loses state on restart.
 
@@ -129,23 +132,16 @@ Make LangGraph checkpoints durable on SQLite. Currently uses MemorySaver which l
 **Files:**
 - `services/checkpointer.py` — Creates checkpointer instance
 - `services/workflow_engine.py` — Uses checkpointer
-- `services/workflow_validator.py` — Uses checkpointer
+- `services/workflow_validator.py` — Uses checkpointer (MemorySaver OK for validation)
 
-**Solution:** Use `langgraph-checkpoint-sqlite` package.
+**Solution:** Use `langgraph-checkpoint-sqlite` package with synchronous `SqliteSaver` (not AsyncSqliteSaver to avoid event loop affinity issues).
 
-```python
-# checkpointer.py
-if lite_mode:
-    from langgraph.checkpoint.sqlite import SqliteSaver
-    checkpointer = SqliteSaver.from_conn_string("~/.zerg/zerg.db")
-else:
-    checkpointer = MemorySaver()  # or Postgres checkpointer
-```
-
-- [ ] Add `langgraph-checkpoint-sqlite` dependency
-- [ ] Update checkpointer.py to detect lite_mode and use SqliteSaver
-- [ ] Verify checkpoint tables created automatically
-- [ ] Test: interrupt run, restart, resume continues from checkpoint
+- [x] Add `langgraph-checkpoint-sqlite` dependency (was already in pyproject.toml)
+- [x] Update checkpointer.py to detect lite_mode and use SqliteSaver
+- [x] Thread-safe caching with `_sqlite_cache_lock`
+- [x] Handle URL query params for URI mode (e.g., ?mode=memory&cache=shared)
+- [x] workflow_engine.py uses `get_checkpointer()` factory instead of hardcoded MemorySaver
+- [ ] Test: interrupt run, restart, resume continues from checkpoint (manual verification needed)
 
 ---
 

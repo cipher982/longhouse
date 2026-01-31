@@ -16,7 +16,6 @@ from typing import Optional
 from typing import TypedDict
 from typing import Union
 
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END
 from langgraph.graph import START
 from langgraph.graph import StateGraph
@@ -222,7 +221,11 @@ class WorkflowEngine:
             graph.add_edge(end_node, END)
             logger.info(f"[WorkflowEngine] Connected {end_node} -> END")
 
-        checkpointer = MemorySaver()
+        # Use the centralized checkpointer factory for durable state persistence
+        # This respects lite_mode (SQLite) vs production (Postgres) configuration
+        from zerg.services.checkpointer import get_checkpointer
+
+        checkpointer = get_checkpointer()
         return graph.compile(checkpointer=checkpointer)
 
     async def _execute_graph(self, graph, execution: WorkflowExecution, db, workflow_id: int):

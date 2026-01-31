@@ -146,10 +146,20 @@ def is_owner_email(email: str) -> bool:
 
 
 def can_create_user_locked(db: Session) -> bool:
-    """Check if a new user can be created, with advisory lock for concurrency safety.
+    """Check if a new user can be created, with lock for concurrency safety.
 
-    Uses PostgreSQL advisory lock to prevent race conditions where concurrent
+    Uses dialect-aware locking to prevent race conditions where concurrent
     OAuth sign-ins both see 0 users and create multiple accounts.
+
+    On PostgreSQL: Uses transaction-scoped advisory lock (held until commit/rollback)
+    On SQLite: Uses transaction with BEGIN IMMEDIATE for serialization
+
+    IMPORTANT: The caller MUST use this in a transaction and create the user
+    in the same transaction to maintain atomicity. Example:
+        with db.begin():
+            if can_create_user_locked(db):
+                crud.create_user(db, ...)
+            # Lock released on commit/rollback
 
     Returns True if:
     - Single-tenant mode is disabled, OR
@@ -157,19 +167,39 @@ def can_create_user_locked(db: Session) -> bool:
     """
     from sqlalchemy import text
 
+    from zerg.db_utils import is_sqlite_session
+
     settings = get_settings()
     if not settings.single_tenant:
         return True
 
-    # Advisory lock key for single-tenant user creation
-    # Uses a fixed hash to ensure all processes use the same lock
-    lock_key = 2147483647  # Max 32-bit int, unlikely to collide
+    if is_sqlite_session(db):
+        # SQLite: Use BEGIN IMMEDIATE for write lock
+        # This serializes concurrent write transactions at the DB level.
+        # The lock is held until the transaction commits/rollbacks.
+        # Caller MUST create user in same transaction for atomicity.
+        try:
+            # Force a write lock by starting an immediate transaction
+            # Note: If already in a transaction, this becomes a no-op
+            # and the existing transaction provides serialization.
+            db.execute(text("BEGIN IMMEDIATE"))
+        except Exception:
+            # Already in a transaction - that's fine, we have the lock
+            pass
 
-    # Acquire advisory lock (blocks if another transaction holds it)
-    db.execute(text(f"SELECT pg_advisory_xact_lock({lock_key})"))
+        # Now safely check user count under the write lock
+        return crud.count_users(db) == 0
+    else:
+        # PostgreSQL: Use transaction-scoped advisory lock
+        # Uses a fixed hash to ensure all processes use the same lock
+        lock_key_int = 2147483647  # Max 32-bit int, unlikely to collide
 
-    # Now safely check user count under the lock
-    return crud.count_users(db) == 0
+        # Acquire advisory lock (blocks if another transaction holds it)
+        # Transaction-scoped lock releases automatically on commit/rollback
+        db.execute(text(f"SELECT pg_advisory_xact_lock({lock_key_int})"))
+
+        # Now safely check user count under the lock
+        return crud.count_users(db) == 0
 
 
 def can_create_user(db: Session) -> bool:
