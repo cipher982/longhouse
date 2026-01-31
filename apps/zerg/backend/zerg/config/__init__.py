@@ -180,6 +180,17 @@ class Settings:  # noqa: D401 – simple data container
         """Return True when outbound LLM calls are globally disabled."""
         return _truthy(os.getenv("LLM_DISABLED"))
 
+    @property
+    def db_is_sqlite(self) -> bool:
+        """Return True when DATABASE_URL points at SQLite."""
+        url = (self.database_url or "").strip().lower()
+        return url.startswith("sqlite")
+
+    @property
+    def lite_mode(self) -> bool:
+        """SQLite-only runtime mode (no external dependencies)."""
+        return self.db_is_sqlite
+
     # ------------------------------------------------------------------
     # Dynamic feature helper – evaluates *each time* so tests that tweak the
     # env var at runtime still propagate.

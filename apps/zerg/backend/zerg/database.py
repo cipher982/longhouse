@@ -117,6 +117,28 @@ except ImportError:
     pass
 
 
+def _configure_sqlite_engine(engine: Engine) -> None:
+    """Configure SQLite pragmas for concurrency and durability."""
+    busy_timeout_ms = int(os.getenv("SQLITE_BUSY_TIMEOUT_MS", "5000"))
+    synchronous = os.getenv("SQLITE_SYNCHRONOUS", "NORMAL").strip().upper() or "NORMAL"
+    journal_mode = os.getenv("SQLITE_JOURNAL_MODE", "WAL").strip().upper() or "WAL"
+    foreign_keys = os.getenv("SQLITE_FOREIGN_KEYS", "ON").strip().upper() or "ON"
+    wal_autocheckpoint = os.getenv("SQLITE_WAL_AUTOCHECKPOINT")
+
+    @event.listens_for(engine, "connect")
+    def set_sqlite_pragmas(dbapi_conn, connection_record):
+        cursor = dbapi_conn.cursor()
+        try:
+            cursor.execute(f"PRAGMA journal_mode={journal_mode}")
+            cursor.execute(f"PRAGMA synchronous={synchronous}")
+            cursor.execute(f"PRAGMA foreign_keys={foreign_keys}")
+            cursor.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
+            if wal_autocheckpoint:
+                cursor.execute(f"PRAGMA wal_autocheckpoint={wal_autocheckpoint}")
+        finally:
+            cursor.close()
+
+
 def make_engine(db_url: str, **kwargs) -> Engine:
     """Create a SQLAlchemy engine with the given URL and options.
 
@@ -146,14 +168,20 @@ def make_engine(db_url: str, **kwargs) -> Engine:
         raise ValueError(f"Invalid DATABASE_URL: {e}") from e
 
     if parsed.drivername.startswith("sqlite"):
-        raise ValueError(
-            "SQLite DATABASE_URL is no longer supported. "
-            "Set DATABASE_URL to a Postgres URL (e.g. postgresql+psycopg://user:pass@host:5432/dbname)."
-        )
+        connect_args = kwargs.setdefault("connect_args", {})
+        connect_args.setdefault("check_same_thread", False)
+        if "timeout" not in connect_args:
+            busy_timeout_ms = int(os.getenv("SQLITE_BUSY_TIMEOUT_MS", "5000"))
+            connect_args["timeout"] = busy_timeout_ms / 1000.0
+
+        engine = create_engine(db_url, **kwargs)
+        _configure_sqlite_engine(engine)
+        return engine
 
     if not parsed.drivername.startswith("postgresql"):
         raise ValueError(
-            f"Unsupported DATABASE_URL driver '{parsed.drivername}'. " "Only Postgres is supported (postgresql+psycopg://...)."
+            f"Unsupported DATABASE_URL driver '{parsed.drivername}'. "
+            "Only Postgres and SQLite are supported (postgresql+psycopg://... or sqlite:///...)."
         )
 
     # E2E tests: use conservative pool size to prevent connection explosion.
@@ -181,6 +209,8 @@ def _apply_search_path(db_url: str, schema: str) -> str:
     This keeps raw SQL (unqualified table names) pointed at the correct schema.
     """
     url = make_url(db_url)
+    if url.drivername.startswith("sqlite"):
+        return db_url
     query = dict(url.query)
     existing_options = (query.get("options") or "").strip()
     search_path_opt = f"-csearch_path={schema},public"
