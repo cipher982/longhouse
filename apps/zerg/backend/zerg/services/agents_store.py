@@ -186,9 +186,18 @@ class AgentsStore:
                         index_where=AgentEvent.source_path.isnot(None),
                     )
                 else:
-                    # SQLite: use on_conflict_do_nothing without index_elements
-                    # This works for any unique constraint violation, avoiding the need
-                    # for try/except which would leave the session in a failed state
+                    # SQLite: ON CONFLICT DO NOTHING without explicit conflict target
+                    #
+                    # SQLite doesn't support targeting partial unique indexes directly in
+                    # ON CONFLICT clauses. The ix_events_dedup partial index (with sqlite_where)
+                    # will still prevent duplicates, but we can't explicitly target it.
+                    #
+                    # This means ANY unique constraint violation will be silently ignored,
+                    # not just the dedup index. In practice this is safe because:
+                    # 1. The 'id' column is auto-generated (no collision possible)
+                    # 2. The only other unique constraint is ix_events_dedup
+                    #
+                    # Requires SQLite >= 3.24 for UPSERT support (enforced at startup).
                     stmt = stmt.on_conflict_do_nothing()
 
             # Execute insert

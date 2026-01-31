@@ -18,6 +18,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
 from zerg.config import get_settings
+from zerg.db_utils import is_sqlite_url as _is_sqlite_url
 
 # Thread-safe caches for per-commis engines/sessionmakers --------------------
 
@@ -85,37 +86,6 @@ dotenv.load_dotenv(override=True)
 
 # Default schema for all Zerg tables
 # DB_SCHEMA is None for SQLite (no schema support), "zerg" for Postgres
-
-
-def _is_sqlite_url(url: str) -> bool:
-    """Check if a database URL is SQLite, handling quoted URLs.
-
-    Uses SQLAlchemy's make_url() for proper parsing instead of string matching.
-    This handles cases where the URL has surrounding quotes from .env files.
-
-    Args:
-        url: Database URL string (possibly with surrounding quotes)
-
-    Returns:
-        True if the URL is a SQLite database
-    """
-    url = (url or "").strip()
-    if not url:
-        return False
-
-    # Strip surrounding quotes (common from .env files)
-    if (url.startswith('"') and url.endswith('"')) or (url.startswith("'") and url.endswith("'")):
-        url = url[1:-1].strip()
-
-    if not url:
-        return False
-
-    try:
-        parsed = make_url(url)
-        return parsed.drivername.startswith("sqlite")
-    except Exception:
-        # Fallback to string matching if parsing fails
-        return url.startswith("sqlite")
 
 
 _db_url = os.environ.get("DATABASE_URL", "")
@@ -601,6 +571,34 @@ def is_postgres() -> bool:
     return default_engine.dialect.name == "postgresql"
 
 
+# Minimum SQLite version for UPSERT support (ON CONFLICT DO NOTHING with index_elements)
+SQLITE_MIN_VERSION = (3, 24, 0)
+
+
+def check_sqlite_version(engine: Engine) -> tuple[bool, str]:
+    """Check if SQLite version supports required features (UPSERT).
+
+    SQLite 3.24+ is required for ON CONFLICT DO NOTHING with explicit conflict targets,
+    which is used for event deduplication in the agents store.
+
+    Args:
+        engine: SQLAlchemy engine to check
+
+    Returns:
+        Tuple of (is_compatible, version_string)
+    """
+    if engine.dialect.name != "sqlite":
+        return True, "N/A (not SQLite)"
+
+    import sqlite3
+
+    version_str = sqlite3.sqlite_version
+    version_tuple = tuple(int(x) for x in version_str.split("."))
+
+    is_compatible = version_tuple >= SQLITE_MIN_VERSION
+    return is_compatible, version_str
+
+
 def initialize_database(engine: Engine = None) -> None:
     """Initialize database tables using the given engine.
 
@@ -647,6 +645,13 @@ def initialize_database(engine: Engine = None) -> None:
     # This allows models defined with schema="zerg" or schema="agents" to work
     # without schema prefixes on SQLite (which doesn't support schemas)
     if target_engine is not None and target_engine.dialect.name == "sqlite":
+        # Check SQLite version for UPSERT support
+        is_compatible, version_str = check_sqlite_version(target_engine)
+        if not is_compatible:
+            min_ver = ".".join(str(x) for x in SQLITE_MIN_VERSION)
+            raise RuntimeError(f"SQLite version {version_str} is below minimum {min_ver}. " f"Upgrade SQLite or use Postgres.")
+        logger.debug(f"SQLite version {version_str} meets requirements")
+
         target_engine = target_engine.execution_options(schema_translate_map={"zerg": None, "agents": None})
 
     # Ensure schemas exist for fresh databases (Postgres only)
