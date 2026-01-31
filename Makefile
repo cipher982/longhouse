@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-reset-db reset test test-integration test-unit test-e2e test-e2e-core test-all test-full test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-hatch-agent test-runner-unit test-install-runner test-prompts test-ci test-backend-docker test-backend-ci test-super-fast--unit-backend-frontend-hatch-runner-install--approx-36s test-push-ci--e2e-core-a11y--approx-50s test-pre-merge-or-nightly--evals-live-openai--approx-4m test-validate-contracts-and-lints--approx-10s test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke
+.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-reset-db reset test test-lite test-legacy test-integration test-unit test-e2e test-e2e-core test-all test-full test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-hatch-agent test-runner-unit test-install-runner test-prompts test-ci test-backend-docker test-backend-ci test-super-fast--unit-backend-frontend-hatch-runner-install--approx-36s test-push-ci--e2e-core-a11y--approx-50s test-pre-merge-or-nightly--evals-live-openai--approx-4m test-validate-contracts-and-lints--approx-10s test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke
 
 
 # ---------------------------------------------------------------------------
@@ -188,10 +188,22 @@ E2E_BACKEND_PORT ?= 8001
 E2E_FRONTEND_PORT ?= 8002
 SHIPPER_E2E_URL ?= http://localhost:47300
 
-test: ## Run unit tests (backend + frontend + hatch-agent + runner)
+test: ## Run lite tests by default (set TEST_SUITE=legacy for full suite)
+	@set -e; \
+	if [ "$(TEST_SUITE)" = "legacy" ]; then \
+		$(MAKE) test-legacy; \
+	else \
+		$(MAKE) test-lite; \
+	fi
+
+test-lite: ## Fast SQLite-lite backend tests (no Docker)
+	@echo "🧪 Running lite backend tests (SQLite)..."; \
+	(cd apps/zerg/backend && ./run_backend_tests_lite.sh)
+
+test-legacy: ## Legacy full suite (backend + frontend + hatch-agent + runner)
 	@set -e; \
 	if [ "$(MINIMAL)" = "1" ]; then \
-		echo "🧪 Running unit tests (minimal)..."; \
+		echo "🧪 Running legacy unit tests (minimal)..."; \
 		if [ -n "$(CI_TEST_SCHEMA)" ] && { [ -n "$(DATABASE_URL)" ] || [ -n "$(CI_DATABASE_URL)" ]; }; then \
 			$(MAKE) test-backend-ci; \
 		else \
@@ -202,7 +214,7 @@ test: ## Run unit tests (backend + frontend + hatch-agent + runner)
 		$(MAKE) test-runner-unit; \
 		$(MAKE) test-install-runner; \
 	else \
-		echo "🧪 Running unit tests..."; \
+		echo "🧪 Running legacy unit tests..."; \
 		if [ -n "$(CI_TEST_SCHEMA)" ] && { [ -n "$(DATABASE_URL)" ] || [ -n "$(CI_DATABASE_URL)" ]; }; then \
 			$(MAKE) test-backend-ci; \
 		else \

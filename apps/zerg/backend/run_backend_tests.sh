@@ -1,10 +1,15 @@
 #!/bin/bash
 
-# Zerg Backend Test Runner
-# ========================
+# Zerg Backend Legacy Test Runner
+# ===============================
+# Postgres-heavy legacy suite (enterprise paths).
+#
 # Supports two database modes:
 #   --db-mode=docker   (default) Use testcontainers for ephemeral PostgreSQL
 #   --db-mode=external           Use external PostgreSQL with CI_TEST_SCHEMA
+#
+# For the SQLite-lite suite, use:
+#   ./run_backend_tests_lite.sh
 #
 # Usage:
 #   ./run_backend_tests.sh                        # Docker mode (local dev)

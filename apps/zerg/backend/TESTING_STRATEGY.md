@@ -73,12 +73,26 @@ The two critical bugs you encountered would be **impossible** with proper integr
 
 **Key insight**: Over-mocked tests gave false confidence by testing fake scenarios while real integration points were bypassed.
 
-## Usage
+## Usage (2026-01-31 Lite Pivot)
+
+We now maintain **two** backend suites:
+- **Lite suite** (SQLite, fast) → default for OSS refactor work
+- **Legacy suite** (Postgres, full) → regression coverage for enterprise paths
+
+The lite suite is the default `make test` path. The legacy suite is opt-in.
+
+### Commands
 
 ```bash
-# Full unit test suite (recommended)
+# Default (SQLite-lite, fast)
 make test
 
-# Backend-only unit tests (supports passing extra pytest args)
+# Legacy full suite (Postgres)
+make test-legacy
+
+# Backend-only lite tests (supports passing extra pytest args)
+cd apps/zerg/backend && ./run_backend_tests_lite.sh -k sqlite
+
+# Backend-only legacy tests (supports passing extra pytest args)
 cd apps/zerg/backend && ./run_backend_tests.sh -k oikos_tools
 ```
