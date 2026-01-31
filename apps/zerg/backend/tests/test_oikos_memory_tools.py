@@ -40,17 +40,14 @@ class TestSaveMemory:
         assert "preference" in result
 
     def test_save_memory_with_scope(self, credential_context):
-        """save_memory with scope='fiche' should work (falls back to global without fiche context)."""
-        # Note: Currently fiche scope falls back to global since OikosContext
-        # doesn't track fiche_id. This test documents current behavior.
+        """save_memory with scope='fiche' should fail without fiche context."""
         result = save_memory(
             content="Fiche-scoped note",
             scope="fiche",
         )
 
-        # Falls back to global since no fiche context
-        assert "Memory saved" in result
-        assert "global" in result
+        assert is_error(result)
+        assert result["error_type"] == "validation_error"
 
     def test_save_memory_truncates_long_content(self, credential_context):
         """save_memory should truncate long content in the response."""
@@ -113,6 +110,7 @@ class TestSearchMemory:
 
         # Format is: "1. 2026-01-30 [decision]"
         assert "[decision]" in result
+        assert "id=" in result
         assert "2026" in result or "202" in result  # Year in date
 
     def test_search_memory_empty_query_fails(self, credential_context):

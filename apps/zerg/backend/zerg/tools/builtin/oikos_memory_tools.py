@@ -19,6 +19,8 @@ from zerg.tools.error_envelope import tool_error
 
 logger = logging.getLogger(__name__)
 
+VALID_SCOPES = {"global", "fiche"}
+
 
 def _get_context() -> tuple[int | None, int | None]:
     """Get user_id and fiche_id from execution context.
@@ -80,9 +82,20 @@ async def save_memory_async(
             "Content cannot be empty",
         )
 
+    if scope not in VALID_SCOPES:
+        return tool_error(
+            ErrorType.VALIDATION_ERROR,
+            "Invalid scope. Use 'global' or 'fiche'.",
+        )
+
     # Determine scope
     memory_fiche_id = None
-    if scope == "fiche" and fiche_id:
+    if scope == "fiche":
+        if not fiche_id:
+            return tool_error(
+                ErrorType.VALIDATION_ERROR,
+                "Fiche scope is not available yet. Use scope='global'.",
+            )
         memory_fiche_id = fiche_id
 
     store = get_memory_store()
@@ -166,7 +179,7 @@ async def search_memory_async(
             type_label = f" [{mem.type}]" if mem.type else ""
             scope_label = " (fiche)" if mem.fiche_id else ""
             date_str = mem.created_at.strftime("%Y-%m-%d") if mem.created_at else "?"
-            lines.append(f"{i}. {date_str}{type_label}{scope_label}")
+            lines.append(f"{i}. {date_str}{type_label}{scope_label} id={mem.id}")
             # Truncate long content
             content = mem.content
             if len(content) > 200:
@@ -231,7 +244,7 @@ async def list_memories_async(
             type_label = f" [{mem.type}]" if mem.type else ""
             scope_label = " (fiche)" if mem.fiche_id else ""
             date_str = mem.created_at.strftime("%Y-%m-%d") if mem.created_at else "?"
-            lines.append(f"{i}. {date_str}{type_label}{scope_label}: {mem.id[:8]}...")
+            lines.append(f"{i}. {date_str}{type_label}{scope_label} id={mem.id}")
             # Truncate long content
             content = mem.content
             if len(content) > 150:
