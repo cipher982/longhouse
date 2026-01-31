@@ -10,13 +10,11 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentsBase
 
 
-@pytest.mark.xfail(
-    reason="Agents models still use UUID/JSONB + schema; Phase 2 will make SQLite-safe",
-    strict=True,
-)
 def test_agents_models_roundtrip_sqlite(tmp_path):
     db_path = tmp_path / "agents.db"
     engine = make_engine(f"sqlite:///{db_path}")
+    # Strip schema for SQLite (models use schema="agents" for Postgres)
+    engine = engine.execution_options(schema_translate_map={"agents": None})
     AgentsBase.metadata.create_all(bind=engine)
 
     SessionLocal = sessionmaker(bind=engine)

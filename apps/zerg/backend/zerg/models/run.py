@@ -9,7 +9,6 @@ from sqlalchemy import Index
 from sqlalchemy import Integer
 from sqlalchemy import String
 from sqlalchemy import Text
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -46,8 +45,9 @@ class Run(Base):
     # Phase 1: Correlation ID for tracing requests end-to-end (chat-observability-eval)
     correlation_id = Column(String, nullable=True, index=True)
 
-    # Trace ID for end-to-end debugging (UUID, propagated to commiss and LLM audit)
-    trace_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    # Trace ID for end-to-end debugging (propagated to commiss and LLM audit)
+    # String(36) for SQLite compatibility
+    trace_id = Column(String(36), nullable=True, index=True)
 
     # Model used for this run (for continuation inheritance)
     model = Column(String(100), nullable=True)

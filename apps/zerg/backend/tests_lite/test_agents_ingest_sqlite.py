@@ -11,13 +11,11 @@ from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
 
 
-@pytest.mark.xfail(
-    reason="AgentsStore uses PostgreSQL insert; Phase 3 will add SQLite upsert",
-    strict=True,
-)
 def test_agents_ingest_sqlite(tmp_path):
     db_path = tmp_path / "ingest.db"
     engine = make_engine(f"sqlite:///{db_path}")
+    # Strip schema for SQLite (models use schema="agents" for Postgres)
+    engine = engine.execution_options(schema_translate_map={"agents": None})
     AgentsBase.metadata.create_all(bind=engine)
 
     SessionLocal = sessionmaker(bind=engine)
