@@ -10,14 +10,23 @@
 
 These are the concrete mismatches between today’s codebase and the SQLite-only target. This section is here so we can plan from reality instead of aspiration.
 
-- **SQLite is hard-blocked** in `zerg.database.make_engine()` and startup enforces PostgreSQL only in `zerg.main.lifespan()`.
-- **Schemas are hard-coded** (`DB_SCHEMA="zerg"`, agents schema `"agents"`). SQLite does not support schemas, and there are raw SQL references like `ops.job_queue`.
-- **Postgres-only column types** exist across models (UUID, JSONB, `gen_random_uuid()` defaults, partial indexes).
-- **Agents API is PG-only**: models use UUID/JSONB/schema, `AgentsStore` uses `postgresql.insert`, and endpoints are guarded by `require_postgres()`.
-- **Job claiming uses PG locks** (`FOR UPDATE SKIP LOCKED`) in `commis_job_processor` and `jobs.queue`.
-- **Advisory locks / row locks** are used in multiple paths (`single_tenant`, `fiche_locks`, `commis_resume`, email/sms tools).
-- **Checkpoints are non-durable on SQLite** (MemorySaver only).
-- **CLI lacks `zerg serve` and package bundling**: no server command, and backend expects `static/` at repo root but frontend dist is at `apps/zerg/frontend-web/dist`.
+✅ **Fixed since last update (Phases 1–3 complete):**
+- SQLite URLs allowed in `make_engine`; startup no longer blocks SQLite.
+- Schema handling is conditional (`DB_SCHEMA`/`AGENTS_SCHEMA` become `None` on SQLite) with schema translate map; `_apply_search_path()` is a no-op on SQLite.
+- SQLite pragmas configured (WAL, busy_timeout, foreign_keys, etc).
+- UUID/JSONB compatibility via GUID TypeDecorator + JSON.with_variant; Python-side defaults replace `gen_random_uuid()` on SQLite.
+- Partial indexes include `sqlite_where`.
+- Agents API now SQLite-safe: dialect-agnostic upsert, dedupe with `on_conflict_do_nothing()`, and `require_postgres()` removed.
+- `lite_mode` detection handles quoted DATABASE_URLs via a shared `db_utils.is_sqlite_url()` helper.
+- **SQLite minimum version enforced at startup: 3.35+** (RETURNING support).
+- Lite test suite expanded (SQLite boot, agents ingest/models, GUID round-trips, db_is_sqlite detection, version check).
+
+🔲 **Remaining gaps (Phases 4–7):**
+- Job claiming/concurrency still uses PG locks (`FOR UPDATE SKIP LOCKED`); needs SQLite-safe `BEGIN IMMEDIATE` + `UPDATE ... RETURNING`.
+- Advisory locks / row locks still used in `single_tenant`, `fiche_locks`, `commis_resume`, email/sms tools.
+- Checkpoints are non-durable on SQLite (MemorySaver only).
+- CLI lacks `zerg serve` and package bundling; backend still expects repo `static/`.
+- Onboarding smoke + README default to SQLite.
 
 If we want `pip install zerg && zerg serve` on SQLite, all of the above must be addressed or intentionally gated off in lite mode.
 
@@ -25,10 +34,11 @@ If we want `pip install zerg && zerg serve` on SQLite, all of the above must be 
 
 ## Decisions to Lock (before implementation)
 
-1. **SQLite schema strategy**: recommended = **flat tables, no schemas** (there are no name collisions with agents tables). Postgres keeps schemas.
-2. **Ops job queue scope**: recommended = **disable `ops.job_queue` in lite** (keep it Postgres-only), but make `commis_jobs` SQLite-safe for local concurrency.
-3. **Durable checkpoints**: recommended = **use `langgraph-checkpoint-sqlite`** for SQLite so resumes survive restarts.
-4. **Static frontend packaging**: recommended = **bundle `apps/zerg/frontend-web/dist` in the python package** and mount via FastAPI.
+1. **SQLite minimum version**: **require 3.35+** (RETURNING support). Enforced at startup; fail fast.
+2. **SQLite schema strategy**: recommended = **flat tables, no schemas** (there are no name collisions with agents tables). Postgres keeps schemas.
+3. **Ops job queue scope**: recommended = **disable `ops.job_queue` in lite** (keep it Postgres-only), but make `commis_jobs` SQLite-safe for local concurrency.
+4. **Durable checkpoints**: recommended = **use `langgraph-checkpoint-sqlite`** for SQLite so resumes survive restarts.
+5. **Static frontend packaging**: recommended = **bundle `apps/zerg/frontend-web/dist` in the python package** and mount via FastAPI.
 
 ---
 
@@ -38,19 +48,21 @@ If we want `pip install zerg && zerg serve` on SQLite, all of the above must be 
 
 **Goal:** Establish SQLite vs Postgres mode cleanly so the rest of the system can branch safely.
 
-- Add a computed `lite_mode` (or `db_is_sqlite`) flag in `zerg.config.get_settings()` based on `database_url` scheme.
+- Add a computed `lite_mode` (or `db_is_sqlite`) flag in `zerg.config.get_settings()` based on `database_url` scheme (handles quoted URLs).
+- Enforce SQLite >= 3.35 at startup (RETURNING support).
 - Decide schema strategy (flat tables) and write it down in this doc.
 - Decide job queue scope (disable ops job queue in lite).
 - Decide durable checkpoints (sqlite checkpointer).
 
 ### Phase 1 — Core DB Boot on SQLite
 
-**Goal:** `zerg serve` boots on SQLite without crashing.
+**Goal:** `zerg serve` boots on SQLite without crashing. **Status: ✅ complete**
 
 - **database.py**
   - Allow sqlite URLs (remove hard error).
   - Skip `_apply_search_path()` for sqlite.
   - Make `DB_SCHEMA` and `AGENTS_SCHEMA` conditional; use `None` for sqlite.
+  - Enforce SQLite >= 3.35 at startup (fail fast).
   - Set SQLite pragmas on connect: `journal_mode=WAL`, `busy_timeout`, `foreign_keys=ON`.
 - **main.py**
   - Remove PostgreSQL-only guard in `lifespan()`. Replace with a warning if SQLite (locks/features are degraded).
@@ -61,7 +73,7 @@ If we want `pip install zerg && zerg serve` on SQLite, all of the above must be 
 
 ### Phase 2 — Model Compatibility (Core + Agents)
 
-**Goal:** All tables can be created on SQLite.
+**Goal:** All tables can be created on SQLite. **Status: ✅ complete**
 
 - Replace `UUID` columns with `String(36)` (or `String`) + `uuid4()` defaults.
 - Replace `JSONB` with `JSON().with_variant(JSONB, "postgresql")` or plain `JSON`.
@@ -75,7 +87,7 @@ If we want `pip install zerg && zerg serve` on SQLite, all of the above must be 
 
 ### Phase 3 — Agents API + Ingest
 
-**Goal:** Shipper ingestion + Timeline endpoints work on SQLite.
+**Goal:** Shipper ingestion + Timeline endpoints work on SQLite. **Status: ✅ complete**
 
 - Replace `postgresql.insert` with dialect-agnostic upsert:
   - If sqlite: use `sqlalchemy.dialects.sqlite.insert(...).on_conflict_do_nothing()` or catch `IntegrityError`.
@@ -542,6 +554,7 @@ Curated sources we can lean on when pushing SQLite to its limits, plus the concr
 - **Checkpoint starvation is a real operational risk.** Long-lived readers can prevent WAL checkpoints; WAL can grow unbounded without active checkpointing.
 - **BEGIN IMMEDIATE is the right pattern for atomic job claims.** It grabs the write lock up front and fails fast if another writer is active.
 - **busy_timeout is required for reliability under contention.** Set it on every connection so writes wait instead of throwing SQLITE_BUSY.
+- **Minimum SQLite version: 3.35+.** We require RETURNING for SQLite-safe job claiming.
 - **UPSERT + RETURNING are available.** Use ON CONFLICT for dedupe and RETURNING for atomic claim patterns.
 - **Durability is a tradeoff.** `PRAGMA synchronous` and WAL checkpoint policy directly affect durability vs speed.
 - **JSON1 is good enough for our needs.** JSON operators and functions exist, and JSON5 inputs are supported on newer SQLite builds.
