@@ -17,29 +17,57 @@ Remove Postgres-only guards so the agents schema works on SQLite. Core blocker f
 
 **Why:** VISION.md specifies SQLite-only runtime. Current code hard-rejects SQLite URLs and uses Postgres-specific types (UUID, JSONB, schemas).
 
-**Files:** `database.py`, `models/agents.py`, `routers/agents.py`, `alembic/versions/0002_agents_schema.py`
+**Reference:** `docs/LIGHTWEIGHT-OSS-ONBOARDING.md` has full plan details.
 
-Phase 0 — Audit:
-- [ ] Tag all Postgres-only codepaths (UUID/JSONB/schema/ILIKE)
-- [ ] Define SQLite-compatible schema strategy (no schemas; table prefixes or flat)
-- [ ] Decide: separate migration path or conditional migrations?
- - [ ] Plan details captured in `docs/LIGHTWEIGHT-OSS-ONBOARDING.md` (2026-01-31)
+Phase 0 — Audit: ✅ DONE (2026-01-30)
+- [x] Tag all Postgres-only codepaths (UUID/JSONB/schema/ILIKE)
+- [x] Define SQLite-compatible schema strategy (flat tables, no schemas)
+- [x] Decide: conditional dialect handling in models + services
+- [x] Plan captured in `docs/LIGHTWEIGHT-OSS-ONBOARDING.md`
 
-Phase 1 — Unblock:
-- [ ] Remove SQLite rejection in `database.py`
-- [ ] Replace UUID/JSONB in agents models with SQLite-compatible types
-- [ ] Remove `require_postgres()` guards on agents endpoints
-- [ ] Update `0002_agents_schema.py` to be dialect-aware
+Phase 1 — Core DB Boot: ✅ DONE (2026-01-31)
+- [x] Remove SQLite rejection in `database.py`
+- [x] Skip `_apply_search_path()` for SQLite
+- [x] Make `DB_SCHEMA` and `AGENTS_SCHEMA` conditional (None for SQLite)
+- [x] Enforce SQLite >= 3.35 at startup (RETURNING support)
+- [x] Set SQLite pragmas (WAL, busy_timeout, foreign_keys)
 
-Phase 2 — Verify:
-- [ ] Ingest + demo seed work on SQLite (no schema-qualified queries)
-- [ ] Fix queries using `ILIKE` or schema-qualified names
-- [ ] Timeline UI works end-to-end on SQLite
+Phase 2 — Model Compatibility: ✅ DONE (2026-01-31)
+- [x] Replace UUID columns with GUID TypeDecorator (String(36) + uuid4 defaults)
+- [x] Replace JSONB with JSON.with_variant
+- [x] Replace gen_random_uuid() with Python-side defaults
+- [x] Update partial indexes to include sqlite_where
+- [x] Extract `db_utils.is_sqlite_url()` helper
 
-Phase 3 — Ship:
-- [ ] `make onboarding-smoke` passes
-- [ ] `make onboarding-funnel` passes from fresh clone
-- [ ] README quick start updated to make SQLite the default
+Phase 3 — Agents API + Ingest: ✅ DONE (2026-01-31)
+- [x] Dialect-agnostic upsert (on_conflict_do_nothing for both dialects)
+- [x] Remove `require_postgres()` guard
+- [x] Dedupe works without schema-qualified names
+- [x] Timeline UI works end-to-end on SQLite
+- [x] Lite test suite added (`make test` runs SQLite-lite by default)
+
+Phase 4 — Job Queue + Concurrency: 🔲 OPEN
+- [ ] Replace `FOR UPDATE SKIP LOCKED` with `BEGIN IMMEDIATE` + `UPDATE ... RETURNING`
+- [ ] Add heartbeat fields + stale job reclaim logic
+- [ ] Replace advisory locks with status-guarded updates or file locks
+- [ ] Gate `ops.job_queue` behind `not lite_mode`
+- [ ] Test: spawn 3 commis, kill server, restart, jobs resume
+
+Phase 5 — Durable Checkpoints: 🔲 OPEN
+- [ ] Replace MemorySaver with `langgraph-checkpoint-sqlite` for SQLite
+- [ ] Ensure migrations/setup idempotent
+- [ ] Test: interrupt run, restart server, resume continues
+
+Phase 6 — CLI + Frontend Bundle: 🔲 OPEN
+- [ ] Add `zerg serve` command (typer, uvicorn with sane defaults)
+- [ ] Bundle frontend `dist` in python package (hatch config)
+- [ ] Update FastAPI static mount to use packaged assets
+- [ ] Test: fresh venv → `pip install zerg` → `zerg serve` → UI works
+
+Phase 7 — Onboarding Smoke + Docs: 🔲 OPEN
+- [ ] Add/extend `make onboarding-smoke` for SQLite boot + API checks
+- [ ] Update README quick-start to default to SQLite
+- [ ] Verify onboarding contract passes
 
 ---
 

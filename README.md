@@ -32,7 +32,7 @@ Zerg watches your AI coding sessions and unifies them into a single, searchable 
 
 ## Quick Start
 
-> **Note:** Current dev/runtime uses Postgres. The goal is SQLite-only for the Zerg runtime (no user-managed Postgres). The control plane may use Postgres.
+> **Note:** SQLite is now supported for local development and OSS use (Phases 1-3 complete). Docker path still uses Postgres. The goal is `pip install zerg && zerg serve` with SQLite-only (CLI packaging in progress).
 
 ### Option 1: Docker Compose (Recommended)
 
@@ -47,9 +47,9 @@ docker compose -f docker/docker-compose.dev.yml --profile dev up -d
 # Open http://localhost:30080/timeline
 ```
 
-### Option 2: Local Development
+### Option 2: Local Development (SQLite)
 
-Requires: Node.js 20+, Python 3.11+, PostgreSQL (current). SQLite-only runtime is the target.
+Requires: Node.js 20+, Python 3.11+, SQLite 3.35+
 
 ```bash
 git clone https://github.com/cipher982/zerg.git
@@ -59,14 +59,25 @@ cd zerg
 bun install
 cd apps/zerg/backend && uv sync && cd ../../..
 
-# Configure
+# Configure for SQLite
 cp .env.example .env
-# Edit .env: set DATABASE_URL to your Postgres (current)
+# Edit .env: DATABASE_URL=sqlite:///~/.zerg/zerg.db
 
 # Start everything
 make dev
 
 # Open http://localhost:30080/timeline
+```
+
+### Option 3: Local Development (Postgres)
+
+For full feature set including multi-node job queue.
+
+```bash
+# Same setup as Option 2, but set DATABASE_URL to Postgres
+# Edit .env: DATABASE_URL=postgresql://user:pass@localhost/zerg
+
+make dev
 ```
 
 ---
@@ -130,9 +141,9 @@ docker/                 # Compose files + nginx
 
 - **Backend**: FastAPI + SQLAlchemy
 - **Frontend**: React + React Query
-- **Database**: PostgreSQL (current). SQLite-only runtime is the target.
+- **Database**: SQLite (local/OSS) or PostgreSQL (Docker dev). SQLite 3.35+ required.
 - **Package Managers**: Bun (JS), uv (Python)
- - **Control plane storage**: may use Postgres; runtime instances should not.
+- **Control plane storage**: may use Postgres; runtime instances use SQLite.
 
 ---
 
@@ -142,7 +153,7 @@ Copy `.env.example` to `.env` and configure:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `DATABASE_URL` | Yes | PostgreSQL connection string (current) |
+| `DATABASE_URL` | Yes | SQLite (`sqlite:///path/to/db`) or PostgreSQL connection string |
 | `OPENAI_API_KEY` | No | Enables Oikos chat (optional) |
 | `FERNET_SECRET` | Yes | Encryption key for credentials |
 | `AUTH_DISABLED` | Dev only | Set to `1` for local development |
