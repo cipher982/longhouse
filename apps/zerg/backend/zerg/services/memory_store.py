@@ -14,6 +14,8 @@ from datetime import timezone
 from typing import Protocol
 from uuid import UUID
 
+from sqlalchemy import String
+from sqlalchemy import cast
 from sqlalchemy import or_
 
 from zerg.database import db_session
@@ -256,16 +258,32 @@ class PostgresMemoryStore:
             return [_memory_to_record(m) for m in q.all()]
 
     def delete(self, user_id: int, memory_id: str) -> bool:
-        """Delete a memory by ID."""
+        """Delete a memory by ID or ID prefix."""
         with db_session() as db:
-            memory = (
-                db.query(Memory)
-                .filter(
-                    Memory.user_id == user_id,
-                    Memory.id == UUID(memory_id),
+            memory = None
+
+            # Allow prefix deletion (>= 8 chars) for usability with short IDs.
+            if len(memory_id) < 36:
+                if len(memory_id) < 8:
+                    raise ValueError("Memory ID prefix must be at least 8 characters")
+
+                matches = db.query(Memory).filter(Memory.user_id == user_id).filter(cast(Memory.id, String).ilike(f"{memory_id}%")).all()
+
+                if not matches:
+                    return False
+                if len(matches) > 1:
+                    raise ValueError("Memory ID prefix is ambiguous; provide more characters")
+                memory = matches[0]
+            else:
+                memory = (
+                    db.query(Memory)
+                    .filter(
+                        Memory.user_id == user_id,
+                        Memory.id == UUID(memory_id),
+                    )
+                    .first()
                 )
-                .first()
-            )
+
             if not memory:
                 return False
             db.delete(memory)
