@@ -89,6 +89,17 @@ services:
       LIFE_HUB_API_URL: ${LIFE_HUB_API_URL:-https://data.drose.io}
       LIFE_HUB_API_KEY: ${LIFE_HUB_API_KEY}
 
+      # Life-Hub internal URL (for LLM logging via life-hub-shared network)
+      LIFE_HUB_URL: ${LIFE_HUB_URL:-http://life-hub:8000}
+
+      # Life-Hub DB direct access (for jobs that query life-hub DB)
+      # Mirrors DATABASE_URL for jobs that expect LIFE_HUB_DB_URL
+      LIFE_HUB_DB_URL: ${DATABASE_URL}
+
+      # LLM Provider configuration
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      ZAI_API_KEY: ${ZAI_API_KEY}
+
       # GitHub (for worklog commits)
       GITHUB_TOKEN: ${GITHUB_TOKEN}
 
