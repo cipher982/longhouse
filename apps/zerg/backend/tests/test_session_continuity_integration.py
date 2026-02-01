@@ -1,12 +1,7 @@
-"""Integration tests for session continuity with real Life Hub API.
+"""Integration tests for session continuity with Longhouse API.
 
-These tests require LIFE_HUB_API_KEY to be set and hit the actual Life Hub
-production API. They verify the full end-to-end flow works, not just mocked units.
-
-Run with: uv run pytest tests/test_session_continuity_integration.py -v
-
-Skip in CI without credentials:
-  pytest ... -m "not integration"
+These tests require a running Longhouse backend (make dev).
+They are skipped unless INTEGRATION_ZERG_API=1 is set.
 """
 
 from __future__ import annotations
@@ -17,28 +12,81 @@ from pathlib import Path
 
 import pytest
 
-# Skip entire module if LIFE_HUB_API_KEY not set
+# Skip entire module unless explicitly enabled
 pytestmark = pytest.mark.skipif(
-    not os.getenv("LIFE_HUB_API_KEY"),
-    reason="LIFE_HUB_API_KEY not set - skipping integration tests",
+    os.getenv("INTEGRATION_ZERG_API") != "1",
+    reason="INTEGRATION_ZERG_API != 1 - skipping integration tests",
 )
 
 
+async def _create_test_session() -> str | None:
+    """Create a small test session via the Longhouse ingest API."""
+    import httpx
+    from datetime import datetime, timezone
+
+    api_url = os.getenv("ZERG_API_URL", "http://localhost:47300")
+    now = datetime.now(timezone.utc)
+
+    payload = {
+        "provider": "claude",
+        "environment": "development",
+        "project": "integration-tests",
+        "device_id": "test-device",
+        "cwd": "/tmp/integration-tests",
+        "git_repo": "https://example.com/repo.git",
+        "git_branch": "main",
+        "started_at": now.isoformat(),
+        "ended_at": now.isoformat(),
+        "provider_session_id": "integration-session-1",
+        "events": [
+            {
+                "role": "user",
+                "content_text": "Test message",
+                "timestamp": now.isoformat(),
+            },
+            {
+                "role": "assistant",
+                "content_text": "Test response",
+                "timestamp": now.isoformat(),
+            },
+        ],
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{api_url}/api/agents/ingest",
+                json=payload,
+            )
+    except httpx.HTTPError:
+        pytest.skip(f"Longhouse API not reachable at {api_url}")
+        return None
+
+    if response.status_code in (401, 403):
+        pytest.skip("Agents API requires auth; set AUTH_DISABLED=1 for integration tests")
+        return None
+
+    if response.status_code != 200:
+        pytest.skip(f"Failed to ingest test session (status {response.status_code})")
+        return None
+
+    return response.json().get("session_id")
+
+
 class TestPrepareSessionIntegration:
-    """Integration tests for prepare_session_for_resume against real Life Hub."""
+    """Integration tests for prepare_session_for_resume against Longhouse."""
 
     @pytest.mark.asyncio
-    async def test_fetch_real_session_from_life_hub(self):
-        """Fetch a real session from Life Hub and verify the response structure."""
-        from zerg.services.session_continuity import fetch_session_from_life_hub
+    async def test_fetch_real_session_from_zerg(self):
+        """Fetch a real session from Longhouse and verify the response structure."""
+        from zerg.services.session_continuity import fetch_session_from_zerg
 
-        # Get a recent session ID from Life Hub
-        session_id = await self._get_recent_session_id()
+        session_id = await _create_test_session()
         if not session_id:
-            pytest.skip("No sessions available in Life Hub for testing")
+            pytest.skip("Failed to create test session for integration")
 
         # Fetch the session
-        content, cwd, provider_session_id = await fetch_session_from_life_hub(session_id)
+        content, cwd, provider_session_id = await fetch_session_from_zerg(session_id)
 
         # Verify we got real data
         assert content, "Expected non-empty session content"
@@ -54,12 +102,10 @@ class TestPrepareSessionIntegration:
 
         # First line should be valid JSON
         first_event = json.loads(lines[0])
-        assert "type" in first_event or "message" in first_event, (
-            f"First event missing expected fields: {first_event.keys()}"
-        )
+        assert "role" in first_event or "content" in first_event, f"Unexpected event format: {first_event.keys()}"
 
-        print(f"\n✓ Fetched real session from Life Hub")
-        print(f"  Life Hub session ID: {session_id}")
+        print(f"\n✓ Fetched real session from Longhouse")
+        print(f"  Longhouse session ID: {session_id}")
         print(f"  Provider session ID: {provider_session_id}")
         print(f"  CWD: {cwd}")
         print(f"  Content size: {len(content):,} bytes")
@@ -67,15 +113,15 @@ class TestPrepareSessionIntegration:
 
     @pytest.mark.asyncio
     async def test_prepare_session_creates_correct_file(self):
-        """Full E2E: fetch from Life Hub and write to correct Claude Code path."""
+        """Full E2E: fetch from Longhouse and write to correct Claude Code path."""
         from zerg.services.session_continuity import (
             encode_cwd_for_claude,
             prepare_session_for_resume,
         )
 
-        session_id = await self._get_recent_session_id()
+        session_id = await _create_test_session()
         if not session_id:
-            pytest.skip("No sessions available in Life Hub for testing")
+            pytest.skip("Failed to create test session for integration")
 
         with tempfile.TemporaryDirectory() as workspace:
             workspace_path = Path(workspace)
@@ -126,38 +172,8 @@ class TestPrepareSessionIntegration:
         with pytest.raises((ValueError, Exception)):
             await fetch_session_from_zerg("not-a-valid-uuid")
 
-    async def _get_recent_session_id(self) -> str | None:
-        """Helper to get a recent session ID from Life Hub for testing.
-
-        Filters out tiny sessions (< 10 events) to avoid picking up test data.
-        """
-        import httpx
-
-        api_key = os.getenv("LIFE_HUB_API_KEY")
-        url = os.getenv("LIFE_HUB_URL", "https://data.drose.io")
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                f"{url}/query/fiches/sessions",
-                headers={"X-API-Key": api_key},
-                params={"limit": 10, "provider": "claude"},  # Get more to filter
-            )
-            if response.status_code != 200:
-                return None
-
-            data = response.json()
-            sessions = data.get("data", [])
-
-            # Filter to real sessions (not test data)
-            for session in sessions:
-                if session.get("events_total", 0) >= 10:
-                    return session.get("id")
-
-            return None
-
-
 class TestShipSessionIntegration:
-    """Integration tests for shipping sessions back to Life Hub."""
+    """Integration tests for shipping sessions back to Longhouse."""
 
     @pytest.mark.asyncio
     async def test_ship_empty_workspace_returns_none(self):
@@ -231,14 +247,14 @@ class TestCommisJobProcessorIntegration:
 
     These tests required:
     1. CommisJobProcessor running (available in E2E mode)
-    2. Real Life Hub API (LIFE_HUB_API_KEY in CI secrets)
+    2. Real Longhouse API (local dev server)
     3. Mock hatch CLI (creates session files without running real Claude Code)
 
     Run with: make test-e2e
 
     The E2E tests provide full coverage including:
     - Workspace commis execution with mock hatch
-    - Session fetch from real Life Hub API
+    - Session fetch from real Longhouse API
     - Graceful fallback when session not found
     """
 
@@ -247,7 +263,7 @@ class TestCommisJobProcessorIntegration:
     async def test_commis_with_resume_session_id(self, db_session):
         """Test that passing resume_session_id to a commis prepares the session.
 
-        E2E test sends a chat message with a real Life Hub session ID,
+        E2E test sends a chat message with a real session ID,
         and verifies the workspace commis completes successfully.
         """
         pass
@@ -255,10 +271,10 @@ class TestCommisJobProcessorIntegration:
     @pytest.mark.skip(reason="Covered by E2E: session-continuity.spec.ts::workspace commis executes with mock hatch")
     @pytest.mark.asyncio
     async def test_successful_commis_ships_session(self, db_session):
-        """Test that successful commis completion ships session to Life Hub.
+        """Test that successful commis completion ships session to Longhouse.
 
         E2E test triggers workspace commis, verifies commis_complete event,
-        and can query Life Hub to verify session was shipped.
+        and can query Longhouse to verify session was shipped.
         """
         pass
 
@@ -267,7 +283,7 @@ class TestEndToEndResumeFlow:
     """Full end-to-end test of the resume flow.
 
     This tests the complete scenario:
-    1. Get a real session from Life Hub
+    1. Get a real session from Longhouse
     2. Prepare it for resume in a workspace
     3. Verify the file is in the right place for Claude Code
     4. (Would need actual Claude Code to test resume works)
@@ -282,9 +298,9 @@ class TestEndToEndResumeFlow:
         )
 
         # Get a real session
-        session_id = await self._get_recent_session_id()
+        session_id = await _create_test_session()
         if not session_id:
-            pytest.skip("No sessions available in Life Hub for testing")
+            pytest.skip("Failed to create test session for integration")
 
         with tempfile.TemporaryDirectory() as workspace:
             workspace_path = Path(workspace)
@@ -326,32 +342,3 @@ class TestEndToEndResumeFlow:
                 print(f"  Claude Code path: {claude_code_path}")
                 print(f"  Session size: {claude_code_path.stat().st_size:,} bytes")
                 print(f"  Event count: {len(lines)}")
-
-    async def _get_recent_session_id(self) -> str | None:
-        """Helper to get a recent session ID from Life Hub for testing.
-
-        Filters out tiny sessions (< 10 events) to avoid picking up test data.
-        """
-        import httpx
-
-        api_key = os.getenv("LIFE_HUB_API_KEY")
-        url = os.getenv("LIFE_HUB_URL", "https://data.drose.io")
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                f"{url}/query/fiches/sessions",
-                headers={"X-API-Key": api_key},
-                params={"limit": 10, "provider": "claude"},  # Get more to filter
-            )
-            if response.status_code != 200:
-                return None
-
-            data = response.json()
-            sessions = data.get("data", [])
-
-            # Filter to real sessions (not test data)
-            for session in sessions:
-                if session.get("events_total", 0) >= 10:
-                    return session.get("id")
-
-            return None

@@ -1,5 +1,5 @@
 /**
- * Maps Life Hub sessions to Forum canvas entities.
+ * Maps Longhouse sessions to Forum canvas entities.
  *
  * Converts ActiveSession objects from the API into ForumEntity, ForumTask,
  * and ForumMarker objects for rendering on the canvas.

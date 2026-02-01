@@ -36,7 +36,7 @@ from zerg.database import get_db
 from zerg.routers.oikos_auth import get_current_oikos_user
 from zerg.services.session_continuity import prepare_session_for_resume
 from zerg.services.session_continuity import session_lock_manager
-from zerg.services.session_continuity import ship_session_to_life_hub
+from zerg.services.session_continuity import ship_session_to_zerg
 from zerg.services.session_continuity import workspace_resolver
 
 logger = logging.getLogger(__name__)
@@ -106,7 +106,7 @@ async def stream_claude_output(
     - done: Completion signal
 
     Args:
-        session_id: Life Hub session UUID
+        session_id: Longhouse session UUID
         provider_session_id: Claude Code session ID for --resume
         workspace_path: Working directory for Claude
         message: User's message
@@ -239,16 +239,16 @@ async def stream_claude_output(
                 ),
             ).encode()
         else:
-            # Ship updated session back to Life Hub
+            # Ship updated session back to Longhouse
             try:
-                shipped_id = await ship_session_to_life_hub(
+                shipped_id = await ship_session_to_zerg(
                     workspace_path=workspace_path,
                     commis_id=request_id,
                 )
                 if shipped_id:
-                    logger.info(f"[{request_id}] Shipped session to Life Hub: {shipped_id}")
+                    logger.info(f"[{request_id}] Shipped session to Longhouse: {shipped_id}")
             except Exception as e:
-                logger.warning(f"[{request_id}] Failed to ship session: {e}")
+                logger.warning(f"[{request_id}] Failed to ship session to Longhouse: {e}")
 
         # Send completion
         yield SSEEvent(
@@ -313,7 +313,7 @@ async def chat_with_session(
     4. Prepare session file for --resume
     5. Stream Claude output as SSE
     6. On disconnect: kill process, release lock
-    7. On complete: ship session to Life Hub, release lock
+    7. On complete: ship session to Longhouse, release lock
 
     Returns:
         StreamingResponse with SSE events
