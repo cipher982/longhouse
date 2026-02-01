@@ -50,6 +50,11 @@ COPY apps/zerg/backend/ ./
 # Copy shared config (models.json) - required for model configuration
 COPY config/models.json /config/models.json
 
+# Create placeholder for frontend dist (pyproject.toml force-include expects it)
+# In Docker, frontend is served separately, but hatch build still needs the path
+RUN mkdir -p /repo/apps/zerg/frontend-web/dist && \
+    echo '<!DOCTYPE html><html><body>Frontend served separately</body></html>' > /repo/apps/zerg/frontend-web/dist/index.html
+
 # Install the project itself using cached dependencies
 RUN uv sync --frozen --no-dev
 
