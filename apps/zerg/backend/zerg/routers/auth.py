@@ -57,8 +57,6 @@ GOOGLE_CLIENT_SECRET = _settings.google_client_secret
 
 # Cookie configuration for browser auth
 SESSION_COOKIE_NAME = "longhouse_session"
-# Legacy cookie name for backwards compatibility during transition
-LEGACY_SESSION_COOKIE_NAME = "swarmlet_session"
 SESSION_COOKIE_PATH = "/"
 # Secure=True only in production (HTTPS); False in dev for http://localhost
 SESSION_COOKIE_SECURE = not _settings.auth_disabled and not _settings.testing
@@ -464,11 +462,7 @@ def verify_session(request: Request, db: Session = Depends(get_db)):
     # 1. Check cookie first (browser auth)
     token = request.cookies.get(SESSION_COOKIE_NAME)
 
-    # 2. Check legacy cookie for backwards compatibility
-    if not token:
-        token = request.cookies.get(LEGACY_SESSION_COOKIE_NAME)
-
-    # 3. Fall back to Authorization header (API clients)
+    # 2. Fall back to Authorization header (API clients)
     if not token:
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):

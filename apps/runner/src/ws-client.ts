@@ -78,7 +78,7 @@ export class RunnerWebSocketClient {
     this.isConnecting = true;
 
     // Convert HTTP(S) URL to WS(S) URL
-    let wsUrl = this.config.swarmletUrl;
+    let wsUrl = this.config.longhouseUrl;
     if (wsUrl.startsWith('http://')) {
       wsUrl = wsUrl.replace('http://', 'ws://');
     } else if (wsUrl.startsWith('https://')) {

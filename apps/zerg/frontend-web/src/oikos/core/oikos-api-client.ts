@@ -2,7 +2,7 @@
  * Oikos API Client for Zerg Backend Integration
  *
  * Provides typed client for Oikos-specific endpoints:
- * - Authentication (HttpOnly cookie via swarmlet_session)
+ * - Authentication (HttpOnly cookie via longhouse_session)
  * - Fiche listing
  * - Run history
  * - Task dispatch
@@ -66,7 +66,7 @@ export interface OikosEventData {
 
 /**
  * Prepare fetch options for cookie-based auth.
- * Auth is now handled via HttpOnly swarmlet_session cookie.
+ * Auth is now handled via HttpOnly longhouse_session cookie.
  */
 function withCookieAuth(init: RequestInit = {}): RequestInit {
   const headers = new Headers(init.headers ?? {});

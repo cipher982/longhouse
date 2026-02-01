@@ -132,7 +132,7 @@ export function useWebSocket(
     const base = resolveWsBase().replace(/\/+$/, ''); // Strip trailing slashes
     const url = new URL("/api/ws", base);
 
-    // Auth is handled via HttpOnly cookie (swarmlet_session)
+    // Auth is handled via HttpOnly cookie (longhouse_session)
     // Cookies are automatically sent on WebSocket connections to same-origin
     // No need to pass token as query param anymore
 

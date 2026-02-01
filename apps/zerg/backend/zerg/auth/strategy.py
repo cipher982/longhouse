@@ -34,10 +34,8 @@ from zerg.crud import crud
 from zerg.utils.time import utc_now
 from zerg.utils.time import utc_now_naive
 
-# Cookie names for browser-based auth (must match routers/auth.py)
+# Cookie name for browser-based auth (must match routers/auth.py)
 SESSION_COOKIE_NAME = "longhouse_session"
-# Legacy cookie name for backwards compatibility during transition
-LEGACY_SESSION_COOKIE_NAME = "swarmlet_session"
 
 # ---------------------------------------------------------------------------
 # Minimal HS256 JWT decoding fallback (keeps CI lightweight)
@@ -251,7 +249,6 @@ class JWTAuthStrategy(AuthStrategy):
         Order:
         1. Authorization: Bearer <token> header (for API clients)
         2. longhouse_session cookie (for browser auth)
-        3. swarmlet_session cookie (legacy, for backwards compatibility)
         """
         # 1. Check Authorization header first
         auth_header: str | None = request.headers.get("Authorization")
@@ -261,16 +258,7 @@ class JWTAuthStrategy(AuthStrategy):
                 return token
 
         # 2. Fall back to session cookie (browser auth)
-        cookie_token = request.cookies.get(SESSION_COOKIE_NAME)
-        if cookie_token:
-            return cookie_token
-
-        # 3. Check legacy cookie name for backwards compatibility
-        legacy_cookie_token = request.cookies.get(LEGACY_SESSION_COOKIE_NAME)
-        if legacy_cookie_token:
-            return legacy_cookie_token
-
-        return None
+        return request.cookies.get(SESSION_COOKIE_NAME)
 
     # Public API --------------------------------------------------------
 

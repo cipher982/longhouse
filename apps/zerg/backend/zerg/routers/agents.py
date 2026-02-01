@@ -185,9 +185,8 @@ def verify_agents_read_access(request: Request, db: Session = Depends(get_db)) -
     """Verify read access for agents endpoints (sessions list, detail, events).
 
     Accepts:
-    1. Browser cookie auth (swarmlet_session) - for UI access
+    1. Browser cookie auth (longhouse_session) - for UI access
     2. Device tokens (zdt_...) - for programmatic access
-    3. Legacy AGENTS_API_TOKEN - for backwards compatibility
 
     In dev mode (AUTH_DISABLED=1), allows all requests.
     """
@@ -196,7 +195,7 @@ def verify_agents_read_access(request: Request, db: Session = Depends(get_db)) -
         return
 
     # Check for browser cookie auth first
-    if "swarmlet_session" in request.cookies:
+    if "longhouse_session" in request.cookies:
         from zerg.dependencies.auth import get_current_user
 
         try:

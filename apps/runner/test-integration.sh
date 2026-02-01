@@ -30,7 +30,7 @@ ENROLL_RESPONSE=$(curl -s -X POST "${API_URL}/api/runners/enroll-token" \
     -H "Content-Type: application/json")
 
 ENROLL_TOKEN=$(echo "${ENROLL_RESPONSE}" | jq -r '.enroll_token')
-SWARMLET_URL=$(echo "${ENROLL_RESPONSE}" | jq -r '.swarmlet_url')
+LONGHOUSE_URL=$(echo "${ENROLL_RESPONSE}" | jq -r '.longhouse_url')
 
 if [ "${ENROLL_TOKEN}" = "null" ] || [ -z "${ENROLL_TOKEN}" ]; then
     echo "❌ Failed to create enrollment token"
@@ -75,13 +75,13 @@ echo ""
 echo "Step 3: Starting runner daemon..."
 
 # Convert HTTP URL to WS URL for runner
-WS_URL=$(echo "${SWARMLET_URL}" | sed 's/http:/ws:/')
+WS_URL=$(echo "${LONGHOUSE_URL}" | sed 's/http:/ws:/')
 
 RUNNER_PID_FILE="/tmp/runner-test-${RUNNER_ID}.pid"
 RUNNER_LOG_FILE="/tmp/runner-test-${RUNNER_ID}.log"
 
 # Start runner in background
-SWARMLET_URL="${WS_URL}" \
+LONGHOUSE_URL="${WS_URL}" \
 RUNNER_ID="${RUNNER_ID}" \
 RUNNER_SECRET="${RUNNER_SECRET}" \
 bun run src/index.ts > "${RUNNER_LOG_FILE}" 2>&1 &

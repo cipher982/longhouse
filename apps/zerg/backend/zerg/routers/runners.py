@@ -113,10 +113,9 @@ set -e
 # This script registers a runner and starts it with Docker
 
 # Configuration (can be overridden via env vars)
-# Note: SWARMLET_URL is accepted for backwards compatibility
 ENROLL_TOKEN="${{ENROLL_TOKEN:-{enroll_token}}}"
 RUNNER_NAME="${{RUNNER_NAME:-{default_runner_name}}}"
-LONGHOUSE_URL="${{LONGHOUSE_URL:-${{SWARMLET_URL:-{api_url}}}}}"
+LONGHOUSE_URL="${{LONGHOUSE_URL:-{api_url}}}"
 RUNNER_IMAGE="${{RUNNER_IMAGE:-{runner_image}}}"
 
 # Validate required vars

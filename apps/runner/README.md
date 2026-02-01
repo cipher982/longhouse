@@ -2,8 +2,6 @@
 
 Lightweight daemon that connects to the Longhouse platform and executes commands on user infrastructure.
 
-> **Note:** Environment variables still use `SWARMLET_` prefix during transition. See `LONGHOUSE_URL` alias below.
-
 ## Quick Start
 
 ### Using Bun (Development)
@@ -14,7 +12,7 @@ cd /path/to/repo/root
 bun install
 
 # Set environment variables
-export LONGHOUSE_URL=http://localhost:30080  # or SWARMLET_URL (legacy)
+export LONGHOUSE_URL=http://localhost:30080
 export RUNNER_NAME=my-runner
 export RUNNER_SECRET=your_secret_here
 
@@ -46,7 +44,7 @@ All configuration is via environment variables:
 | Variable                 | Required | Default                | Description                                   |
 | ------------------------ | -------- | ---------------------- | --------------------------------------------- |
 | `LONGHOUSE_URL`          | No       | `ws://localhost:47300` | Longhouse API URL (ws:// or wss://)           |
-| `SWARMLET_URL`           | No       | -                      | Legacy alias for LONGHOUSE_URL                |
+| `LONGHOUSE_URLS`         | No       | -                      | Comma-separated URLs for multi-home mode      |
 | `RUNNER_NAME`            | *        | -                      | Runner name (alternative to RUNNER_ID)        |
 | `RUNNER_ID`              | *        | -                      | Runner ID from registration                   |
 | `RUNNER_SECRET`          | Yes      | -                      | Runner secret from registration               |
@@ -61,7 +59,7 @@ All configuration is via environment variables:
 
 Before running the daemon, you need to register it with the Longhouse platform:
 
-1. Create an enrollment token via the Swarmlet API or UI
+1. Create an enrollment token via the Longhouse API or UI
 2. Use the token to register the runner and get your `RUNNER_ID` and `RUNNER_SECRET`
 3. Configure the daemon with these credentials
 

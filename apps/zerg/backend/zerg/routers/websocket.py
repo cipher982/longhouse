@@ -66,7 +66,7 @@ async def websocket_endpoint(
 
     Auth order:
     1. Query param token (for API clients)
-    2. swarmlet_session cookie (for browser auth)
+    2. longhouse_session cookie (for browser auth)
     """
     client_id = str(uuid.uuid4())
     logger.info(f"New WebSocket connection attempt from client {client_id}")
@@ -80,7 +80,7 @@ async def websocket_endpoint(
     auth_token = token
     if not auth_token:
         # Try to get token from session cookie (browser auth)
-        auth_token = websocket.cookies.get("swarmlet_session")
+        auth_token = websocket.cookies.get("longhouse_session")
 
     with db_session() as db_for_auth:
         user = validate_ws_jwt(auth_token, db_for_auth)

@@ -54,7 +54,7 @@ test.describe('Cross-Origin Authentication - Core', () => {
 
     // For cross-origin to work, cookie needs:
     // - Session cookie present
-    expect(cookieString).toMatch(/swarmlet_session=/);
+    expect(cookieString).toMatch(/longhouse_session=/);
 
     // - SameSite=None (allows cross-origin)
     expect(cookieString).toContain('samesite=none');
@@ -122,7 +122,7 @@ test.describe('Cross-Origin Authentication - Core', () => {
 
     // 2. Get cookies and verify they're set for the right domain
     const cookies = await context.cookies();
-    const sessionCookie = cookies.find((c) => c.name === 'swarmlet_session');
+    const sessionCookie = cookies.find((c) => c.name === 'longhouse_session');
 
     // Note: In local E2E tests (same origin), cookie may not have cross-origin attributes
     // This test is primarily for production smoke testing

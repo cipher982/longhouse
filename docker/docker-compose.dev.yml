@@ -160,7 +160,7 @@ services:
       backend:
         condition: service_started  # Runner reconnects automatically
     environment:
-      SWARMLET_URL: ws://backend:8000
+      LONGHOUSE_URL: ws://backend:8000
       RUNNER_NAME: ${DEV_RUNNER_NAME:-clifford}
       RUNNER_SECRET: ${DEV_RUNNER_SECRET:-dev-runner-secret-clifford-12345}
       RUNNER_CAPABILITIES: ${DEV_RUNNER_CAPABILITIES:-exec.full}
