@@ -236,3 +236,4 @@ Categories: `gotcha`, `pattern`, `design`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-31) [test] `make test` now runs the SQLite-lite suite by default; use `make test-legacy` for full Postgres coverage.
 - (2026-01-31) [gotcha] config.Settings.db_is_sqlite() only checks startswith("sqlite") and ignores quoted DATABASE_URL; can mis-detect lite_mode vs database._is_sqlite_url. **FIXED:** db_is_sqlite() now delegates to _is_sqlite_url().
 - (2026-01-31) [design] SQLite minimum version enforced at startup: 3.35+ (RETURNING required for job claiming).
+- (2026-02-01) [design] Public branding should be a single umbrella name; keep Oikos as the assistant UI and Zerg as internal codename to avoid name sprawl.
