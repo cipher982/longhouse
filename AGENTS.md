@@ -216,3 +216,6 @@ Categories: `gotcha`, `pattern`, `design`, `tool`, `test`, `deploy`, `perf`
 - (2026-02-01) [gotcha] `OIKOS_WORKSPACE_PATH` default is `/var/oikos/workspaces`, which is not OSS-friendly; should default to a user-writable `~/.longhouse` path.
 - (2026-02-01) [design] User preference: don’t ship heuristic status/attention; if truth is missing, redesign the data model instead of guessing.
 - (2026-02-01) [test] E2E infra smoke should use `/api/system/health` (Vite only proxies `/api/*`) and assert timeline/layout instead of `create-fiche-btn`.
+- (2026-02-01) [gotcha] `/agents/sessions/active` derives status from last_activity (<=5m = working, else idle) and sets attention to "auto" for all sessions; Forum UI is effectively heuristic/fake until explicit presence events exist.
+- (2026-02-01) [test] Core E2E must run serially with SQLite; parallel resets can delete commis jobs mid-run and cause message mismatches (use `--workers=1` for core).
+- (2026-02-01) [test] Oikos API key modal blocks E2E runs; set `VITE_E2E=1` to suppress the modal in tests.

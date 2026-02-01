@@ -39,8 +39,14 @@ def detect_role_from_messages(messages: List[BaseMessage]) -> str:
 
     # Otherwise, infer from system prompt length (tests use this heuristic).
     first_system = next((m for m in messages if isinstance(m, SystemMessage)), None)
-    if first_system and len(str(first_system.content)) > 1000:
-        return "oikos"
+    if first_system:
+        system_text = str(first_system.content or "").lower()
+        if "you are a commis" in system_text:
+            return "commis"
+        if "you are oikos" in system_text:
+            return "oikos"
+        if len(system_text) > 1000:
+            return "oikos"
 
     return "commis"
 

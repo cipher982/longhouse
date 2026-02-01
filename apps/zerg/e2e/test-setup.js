@@ -10,6 +10,7 @@
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import net from 'net';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -65,8 +66,25 @@ async function globalSetup(config) {
   // Create temp directory for E2E SQLite databases
   const e2eDbDir = path.join(os.tmpdir(), 'zerg_e2e_dbs');
 
+  const backendPort = Number.parseInt(process.env.BACKEND_PORT ?? "", 10);
+  const backendRunning = await new Promise((resolve) => {
+    if (!Number.isFinite(backendPort) || backendPort <= 0) {
+      resolve(false);
+      return;
+    }
+    const socket = net.createConnection({ host: '127.0.0.1', port: backendPort }, () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.on('error', () => {
+      socket.destroy();
+      resolve(false);
+    });
+  });
+
   // Clean slate - remove any stale databases from previous runs
-  if (fs.existsSync(e2eDbDir)) {
+  // Guard against deleting live DBs if the backend already started.
+  if (!backendRunning && fs.existsSync(e2eDbDir)) {
     fs.rmSync(e2eDbDir, { recursive: true, force: true });
   }
   fs.mkdirSync(e2eDbDir, { recursive: true });
@@ -74,7 +92,11 @@ async function globalSetup(config) {
   // Store the temp dir path for spawn-test-backend.js to use
   process.env.E2E_DB_DIR = e2eDbDir;
 
-  console.log(`E2E setup: Created ${e2eDbDir} for ${workers} workers (SQLite per-worker)`);
+  if (backendRunning) {
+    console.log(`E2E setup: Backend already running on ${backendPort}; skipped DB dir cleanup.`);
+  } else {
+    console.log(`E2E setup: Created ${e2eDbDir} for ${workers} workers (SQLite per-worker)`);
+  }
 }
 
 export default globalSetup;

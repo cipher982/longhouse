@@ -94,11 +94,11 @@ export async function waitForElement(page: Page, selector: string, timeout: numb
  */
 export async function waitForDashboardReady(page: Page): Promise<void> {
   try {
-    await page.goto('/', { waitUntil: 'networkidle' });
+    await page.goto('/dashboard', { waitUntil: 'networkidle' });
 
     // Wait for critical UI elements to be interactive
     await Promise.all([
-      page.waitForSelector('#dashboard:visible', { timeout: 2000 }),
+      page.waitForSelector('#dashboard-container:visible', { timeout: 2000 }),
       page.waitForSelector('[data-testid="create-fiche-btn"]:not([disabled])', { timeout: 2000 })
     ]);
   } catch (error) {

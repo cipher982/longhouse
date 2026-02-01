@@ -94,13 +94,8 @@ export async function createMultipleFiches(
  * CRITICAL: Gets ID from API response, NOT from DOM query (.first() is racy in parallel tests)
  */
 export async function createFicheViaUI(page: Page): Promise<string> {
-  // Navigate to dashboard if not already there
-  try {
-    await page.locator('.header-nav').click();
-    await page.waitForTimeout(500);
-  } catch {
-    // Ignore if already on dashboard or button doesn't exist
-  }
+  // Navigate to dashboard (root redirects to timeline in auth-disabled mode)
+  await page.goto('/dashboard');
 
   const createBtn = page.locator('[data-testid="create-fiche-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });

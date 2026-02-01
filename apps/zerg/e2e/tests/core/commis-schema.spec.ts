@@ -6,8 +6,8 @@
  * 2. Commis jobs can be spawned and processed
  * 3. The system handles commis execution correctly
  */
-import { test, expect } from '../../fixtures';
-import { resetDatabase } from '../../test-utils';
+import { test, expect } from '../fixtures';
+import { resetDatabase } from '../test-utils';
 
 test.describe('Commis Schema', () => {
   test.beforeEach(async ({ request }) => {
