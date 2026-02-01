@@ -30,7 +30,7 @@ from zerg.shared.ssh import run_ssh_command
 logger = logging.getLogger(__name__)
 
 # SSH configuration for cube
-DOCKER_HOST_SSH = "172.29.0.1"  # Gateway from Docker container
+DOCKER_HOST_SSH = "host.docker.internal"  # Docker host alias (stable across networks)
 CUBE_TAILSCALE_IP = "100.104.187.47"
 CUBE_SSH_PORT = 2222
 CUBE_BASTION = f"root@{DOCKER_HOST_SSH}"

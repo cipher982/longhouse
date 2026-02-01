@@ -174,14 +174,26 @@ def serve(
         typer.echo("  Use --workers 1 with SQLite, or switch to Postgres.")
         raise typer.Exit(code=1)
 
+    # Check for bundled frontend
+    from zerg.main import FRONTEND_DIST_DIR
+    from zerg.main import FRONTEND_SOURCE
+
+    has_frontend = FRONTEND_DIST_DIR is not None
+    frontend_source = FRONTEND_SOURCE
+
     typer.echo("Starting Zerg server...")
     typer.echo(f"  Host: {host}")
     typer.echo(f"  Port: {port}")
     typer.echo(f"  Database: {_mask_db_url(db_url)}")
     typer.echo(f"  Mode: {'lite (SQLite)' if is_sqlite else 'full (Postgres)'}")
+    typer.echo(f"  Frontend: {frontend_source}")
     if reload:
         typer.echo("  Reload: enabled")
     typer.echo("")
+
+    if has_frontend:
+        typer.secho(f"  UI available at: http://{host}:{port}/", fg=typer.colors.GREEN)
+        typer.echo("")
 
     uvicorn.run(
         "zerg.main:app",
@@ -284,6 +296,28 @@ def status(
     zerg_home = _get_zerg_home()
     typer.echo(f"  Config: {zerg_home}")
     typer.echo(f"  Workspace: {settings.oikos_workspace_path}")
+
+    typer.echo("")
+
+    # Frontend status
+    typer.echo("Frontend:")
+    try:
+        from zerg.main import FRONTEND_DIST_DIR
+        from zerg.main import FRONTEND_SOURCE
+
+        if FRONTEND_DIST_DIR is not None:
+            if FRONTEND_SOURCE == "bundled":
+                typer.secho("  Source: bundled (pip install)", fg=typer.colors.GREEN)
+            elif FRONTEND_SOURCE == "docker":
+                typer.secho("  Source: docker", fg=typer.colors.GREEN)
+            else:
+                typer.secho("  Source: local (development)", fg=typer.colors.CYAN)
+            typer.echo(f"  Path: {FRONTEND_DIST_DIR}")
+        else:
+            typer.secho("  Source: not found", fg=typer.colors.YELLOW)
+            typer.echo("  (Build frontend or install from pip)")
+    except ImportError:
+        typer.secho("  Source: unknown (import error)", fg=typer.colors.YELLOW)
 
     typer.echo("")
 

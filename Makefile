@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-reset-db reset test test-lite test-legacy test-integration test-unit test-e2e test-e2e-core test-all test-full test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-hatch-agent test-runner-unit test-install-runner test-prompts test-ci test-backend-docker test-backend-ci test-super-fast--unit-backend-frontend-hatch-runner-install--approx-36s test-push-ci--e2e-core-a11y--approx-50s test-pre-merge-or-nightly--evals-live-openai--approx-4m test-validate-contracts-and-lints--approx-10s test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke
+.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-reset-db reset test test-lite test-legacy test-integration test-unit test-e2e test-e2e-core test-all test-full test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-hatch-agent test-runner-unit test-install-runner test-prompts test-ci test-backend-docker test-backend-ci test-super-fast--unit-backend-frontend-hatch-runner-install--approx-36s test-push-ci--e2e-core-a11y--approx-50s test-pre-merge-or-nightly--evals-live-openai--approx-4m test-validate-contracts-and-lints--approx-10s test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite
 
 
 # ---------------------------------------------------------------------------
@@ -751,5 +751,11 @@ trace-coverage: ## @internal Trace coverage report (usage: make trace-coverage [
 onboarding-funnel: ## Run onboarding funnel from README contract (fresh clone)
 	@./scripts/run-onboarding-funnel.sh
 
-onboarding-smoke: ## Quick onboarding smoke (uses current workspace)
+onboarding-smoke: ## Quick onboarding smoke (uses current workspace, Docker)
 	@./scripts/run-onboarding-funnel.sh --workdir $(CURDIR)
+
+onboarding-sqlite: ## SQLite-only onboarding smoke test (no Docker)
+	@echo "Testing SQLite-only onboarding..."
+	@cd apps/zerg/backend && \
+	uv run pytest tests_lite/test_onboarding_sqlite.py -v --tb=short -p no:warnings
+	@echo "SQLite onboarding smoke test passed"
