@@ -10,6 +10,7 @@ Skills-Dir: .agents/skills
 
 - **Read VISION.md first** — It's the guiding light. Understand the strategic direction before diving into implementation.
 - **Read docs/LIGHTWEIGHT-OSS-ONBOARDING.md** — Details the SQLite pivot plan. Don't invest in Postgres-specific infrastructure.
+- **Progressive disclosure** — AGENTS.md should point to deeper docs/runbooks so agents know what they don’t know.
 - Always commit changes as you go (no lingering uncommitted work).
 
 **"Trust the AI"** — Modern LLMs are smart enough to figure things out. Give them context and autonomy, not rigid decision trees. No keyword routing, no specialized commiss.
