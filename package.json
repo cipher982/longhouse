@@ -1,7 +1,7 @@
 {
-  "name": "@swarm/monorepo",
+  "name": "@longhouse/monorepo",
   "version": "1.0.0",
-  "description": "Unified Swarm Platform: Oikos (voice/text UI) + Zerg (agent orchestration backend)",
+  "description": "Longhouse: AI agent orchestration platform with Oikos voice/text UI",
   "private": true,
   "packageManager": "bun@1.2.20",
   "workspaces": [
