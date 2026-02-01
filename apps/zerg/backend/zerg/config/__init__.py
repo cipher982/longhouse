@@ -280,9 +280,10 @@ def resolve_cors_origins(settings: Settings) -> list[str]:
 
 def get_funnel_allowed_hosts(settings: Settings) -> set[str]:
     """Return allowed funnel hosts based on public origins or explicit CORS."""
-    origins = get_public_origins(settings)
+    # Prefer explicit CORS origins if set (most authoritative)
+    origins = _split_csv(settings.allowed_cors_origins)
     if not origins:
-        origins = _split_csv(settings.allowed_cors_origins)
+        origins = get_public_origins(settings)
 
     hosts = _origin_hosts(origins)
     if hosts:
