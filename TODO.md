@@ -30,22 +30,26 @@ Establish a single public brand (Longhouse) while keeping Oikos as assistant UI 
 
 User-facing strings, metadata, and package descriptions must stop mentioning Swarmlet/Zerg as a brand.
 
+**Scope:** 105 occurrences across 28 frontend files, 124 occurrences across 39 backend files (229 total)
+
 **Files:** `apps/zerg/frontend-web/index.html`, `apps/zerg/frontend-web/public/site.webmanifest`, `package.json`, runner docs, email templates
 
-- [ ] Replace “Swarmlet” with “Longhouse” in frontend HTML metadata + webmanifest
+- [ ] Replace "Swarmlet" with "Longhouse" in frontend HTML metadata + webmanifest
 - [ ] Update `package.json` description to Longhouse naming
-- [ ] Update runner README/package metadata to Longhouse (e.g., “Longhouse Runner”)
+- [ ] Update runner README/package metadata to Longhouse (e.g., "Longhouse Runner")
 - [ ] Update email templates / notification copy referencing Swarmlet
 - [ ] Decide domain swap (`swarmlet.com` → `longhouse.ai`) and update hardcoded URLs if approved
 
 ---
 
-## Prod CSP Fixes — Longhouse (1)
+## Prod CSP Fixes — Longhouse (1) ✅
 
 Unblock blob image previews + Cloudflare beacon by updating CSP in frontend nginx entrypoint.
 
 - [x] Allow `blob:` in `img-src`
 - [x] Allow `https://static.cloudflareinsights.com` in `script-src`
+
+**Done 2026-02-01:** CSP headers updated in `entrypoint.sh`.
 
 ---
 
@@ -62,11 +66,13 @@ Eliminate unauth 401 spam and fix funnel 403 after rebrand.
 
 Package and binary naming so OSS users see Longhouse everywhere.
 
+**Scripts needing update:** `install-runner.sh` (2 refs), `smoke-prod.sh` (2 refs), `run-prod-e2e.sh` (2 refs), `product-demo.yaml` (6 refs)
+
 - [x] Decide PyPI package name: `longhouse` vs fallback (`longhouse-ai`) → **`longhouse`**
 - [x] Decide CLI binary name: `longhouse` vs fallback (`longhousectl`) → **`longhouse`**
 - [ ] Decide npm scope/name for runner: `@longhouse/runner` or `longhouse-runner`
 - [ ] Update docker image name for docs/examples (ghcr.io/.../longhouse)
-- [ ] Update any installer text / scripts to new names
+- [ ] Update installer scripts to new names (12 refs across 4 scripts)
 
 ---
 
@@ -84,7 +90,7 @@ Bundle frontend assets into pip package using importlib.resources. Final polish 
 
 ---
 
-## Prompting Pipeline Hardening (6)
+## Prompting Pipeline Hardening (3)
 
 Unify prompt construction across `run_thread`, `run_continuation`, and `run_batch_continuation` to eliminate divergence in tool loading, usage capture, and persistence.
 
@@ -92,11 +98,13 @@ Unify prompt construction across `run_thread`, `run_continuation`, and `run_batc
 
 **Files:** `managers/fiche_runner.py`, related service files
 
-- [ ] Create unified prompt/run helper used by all three flows
-- [ ] Introduce `PromptContext` dataclass (system + conversation + tool_messages + dynamic_context)
-- [ ] Extract single `derive_memory_query(...)` helper for consistent memory behavior
+**Status: ~80% complete.** Infrastructure exists — just needs FicheRunner wiring.
+
+- [x] Introduce `PromptContext` dataclass (system + conversation + tool_messages + dynamic_context) — exists in `prompting/context.py`
+- [x] Create unified `build_prompt()` helper — exists in `prompting/builder.py`
+- [x] Extract single `derive_memory_query(...)` helper — exists in `prompting/memory.py`
+- [ ] Wire PromptContext through FicheRunner flows (run_thread, run_continuation, run_batch_continuation)
 - [ ] Add DB-level idempotency for tool results (unique constraint or `get_or_create`)
-- [ ] Split dynamic context into tagged system messages for clearer auditing
 - [ ] Add prompt snapshot test fixture for regression checks
 
 ---
@@ -135,7 +143,7 @@ Reorder message layout to maximize cache hits. Current layout busts cache by inj
 
 ---
 
-## Live Commis Tool Events via Claude Code Hooks (8)
+## Live Commis Tool Events via Claude Code Hooks (8) ✅
 
 Workspace commis currently emit only `commis_started` and `commis_complete` — no visibility during execution. This task adds **real-time tool event streaming** using Claude Code hooks.
 
@@ -150,15 +158,15 @@ hatch (claude --print)
                                └── SSE: commis_tool_completed → UI
 ```
 
-### Phase 1: Hook Infrastructure
+### Phase 1: Hook Infrastructure ✅
 **Files:** `config/claude-hooks/`, `scripts/deploy-hooks.sh`
 
-- [ ] Create `config/claude-hooks/settings.json` with PreToolUse + PostToolUse hooks
-- [ ] Create `config/claude-hooks/scripts/tool_event.py` — POSTs to Longhouse
-- [ ] Create `scripts/deploy-hooks.sh` — deploys to zerg server
-- [ ] Test locally: verify hooks fire and POST correctly
+- [x] Create `config/claude-hooks/settings.json` with PreToolUse + PostToolUse hooks
+- [x] Create `config/claude-hooks/scripts/tool_event.py` — POSTs to Longhouse
+- [x] Create `scripts/deploy-hooks.sh` — deploys to zerg server
+- [x] Test locally: verify hooks fire and POST correctly
 
-### Phase 2: Backend API
+### Phase 2: Backend API ✅
 **Files:** `routers/oikos_internal.py`, `events/commis_emitter.py`
 
 - [x] Add `POST /api/internal/commis/tool_event` endpoint
@@ -166,29 +174,29 @@ hatch (claude --print)
 - [x] Auth: internal token (X-Internal-Token)
 - [x] Emit SSE events: `commis_tool_started`, `commis_tool_completed`
 
-### Phase 3: Environment Plumbing
+### Phase 3: Environment Plumbing ✅
 **Files:** `services/commis_job_processor.py`, `services/cloud_executor.py`
 
 - [x] Pass env vars to hatch: `LONGHOUSE_CALLBACK_URL`, `COMMIS_JOB_ID`, `COMMIS_CALLBACK_TOKEN`
 - [x] Use internal token for auth (`COMMIS_CALLBACK_TOKEN = INTERNAL_API_SECRET`)
 - [x] Ensure hooks can reach Longhouse API (loopback default; override via `LONGHOUSE_CALLBACK_URL`)
 
-### Phase 4: Frontend
+### Phase 4: Frontend ✅
 **Files:** `frontend-web/src/hooks/`, `frontend-web/src/components/`
 
-- [ ] Handle new SSE events in existing listener
-- [ ] UI component showing live tool calls during commis
-- [ ] Icons/labels per tool type (Edit, Bash, Read, etc.)
+- [x] Handle new SSE events in existing listener
+- [x] UI component showing live tool calls during commis
+- [x] Icons/labels per tool type (Edit, Bash, Read, etc.)
 
-### Phase 5: Polish
+### Phase 5: Polish (optional)
 - [ ] Error handling in hook script (retry, timeout)
 - [ ] Rate limiting (debounce rapid tool calls)
 - [ ] Optional: persist events for replay after completion
 - [ ] Update docs with hook deployment instructions
 
-**Docs:** Claude Code hooks reference: https://docs.anthropic.com/en/docs/claude-code/hooks
+**Done 2026-02-01:** All 4 core phases complete. Hook infrastructure, backend API, env plumbing, and frontend all implemented and working.
 
-**Notes:** Phase 2/3 complete — hook auth uses X-Internal-Token; callback defaults to loopback (`localhost`) with `LONGHOUSE_CALLBACK_URL` override.
+**Docs:** Claude Code hooks reference: https://docs.anthropic.com/en/docs/claude-code/hooks
 
 ---
 
@@ -205,7 +213,7 @@ hatch (claude --print)
 
 ---
 
-## Docker Build: uv sync Failure (2)
+## Docker Build: uv sync Failure (2) ✅
 
 `zerg-api` Coolify deploy fails at `uv sync --frozen --no-install-project --no-dev` (exit code 2).
 
@@ -213,6 +221,8 @@ hatch (claude --print)
 
 **Files:** `docker/backend.dockerfile`, `apps/zerg/backend/uv.lock`, `apps/zerg/backend/pyproject.toml`
 
-- [ ] Investigate uv sync failure — likely lockfile mismatch or missing dependency
-- [ ] Test build locally: `docker build -f docker/backend.dockerfile .`
-- [ ] Fix and redeploy
+- [x] Investigate uv sync failure — likely lockfile mismatch or missing dependency
+- [x] Test build locally: `docker build -f docker/backend.dockerfile .`
+- [x] Fix and redeploy
+
+**Done 2026-02-01:** Docker builds successfully after lockfile fixes.
