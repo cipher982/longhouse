@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 #
-# Swarmlet Runner Installation Script
+# Longhouse Runner Installation Script
 #
-# Installs and configures the Swarmlet runner daemon as a systemd service.
+# Installs and configures the Longhouse runner daemon as a systemd service.
 # Creates a dedicated non-root user, securely stores credentials, and applies
 # systemd hardening for defense in depth.
 #
 # Usage:
-#   curl -sSL https://swarmlet.com/install-runner.sh | bash -s -- \
+#   curl -sSL https://longhouse.ai/install-runner.sh | bash -s -- \
 #     --name cube \
 #     --token <enrollment-token> \
-#     --url wss://api.swarmlet.com \
+#     --url wss://api.longhouse.ai \
 #     --version v0.1.0
 #
 # Options:
 #   --name    Runner name (required)
-#   --token   Enrollment token from Swarmlet platform (required)
-#   --url     Swarmlet API URL (default: wss://api.swarmlet.com)
+#   --token   Enrollment token from Longhouse platform (required)
+#   --url     Longhouse API URL (default: wss://api.longhouse.ai)
 #   --version Runner release tag to install (default: latest)
 #   --insecure  Allow non-WSS URLs (ws://) for local development
 #   --capabilities  Comma-separated capabilities (default: exec.readonly)
@@ -25,11 +25,11 @@
 set -euo pipefail
 
 # ----- Constants -----
-RUNNER_USER="swarmlet"
-INSTALL_DIR="/opt/swarmlet-runner"
-CONFIG_DIR="/etc/swarmlet"
+RUNNER_USER="longhouse"
+INSTALL_DIR="/opt/longhouse-runner"
+CONFIG_DIR="/etc/longhouse"
 CONFIG_FILE="${CONFIG_DIR}/runner.env"
-SERVICE_NAME="swarmlet-runner"
+SERVICE_NAME="longhouse-runner"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 GITHUB_REPO="daverosedavis/zerg"
 RUNNER_VERSION="${RUNNER_VERSION:-latest}"
@@ -187,7 +187,7 @@ install_bun() {
   fi
 }
 
-create_swarmlet_user() {
+create_longhouse_user() {
   if id "$RUNNER_USER" &>/dev/null; then
     log_info "User '$RUNNER_USER' already exists"
   else
@@ -260,7 +260,7 @@ download_runner_code() {
 create_config_file() {
   local runner_name="$1"
   local runner_secret="$2"
-  local swarmlet_url="$3"
+  local longhouse_url="$3"
   local capabilities="${4:-exec.readonly}"
 
   log_info "Creating configuration at $CONFIG_FILE..."
@@ -270,10 +270,12 @@ create_config_file() {
 
   # Write config file
   cat > "$CONFIG_FILE" <<EOF
-# Swarmlet Runner Configuration
+# Longhouse Runner Configuration
 # This file contains sensitive credentials - do not share or commit to version control
 
-SWARMLET_URL=$swarmlet_url
+# LONGHOUSE_URL is the primary env var; SWARMLET_URL kept for backwards compatibility
+LONGHOUSE_URL=$longhouse_url
+SWARMLET_URL=$longhouse_url
 RUNNER_NAME=$runner_name
 RUNNER_SECRET=$runner_secret
 RUNNER_CAPABILITIES=$capabilities
@@ -296,17 +298,17 @@ create_systemd_service() {
 
   cat > "$SERVICE_FILE" <<'EOF'
 [Unit]
-Description=Swarmlet Runner Daemon
-Documentation=https://swarmlet.com/docs/runner
+Description=Longhouse Runner Daemon
+Documentation=https://longhouse.ai/docs/runner
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=swarmlet
-Group=swarmlet
-WorkingDirectory=/opt/swarmlet-runner
-EnvironmentFile=/etc/swarmlet/runner.env
+User=longhouse
+Group=longhouse
+WorkingDirectory=/opt/longhouse-runner
+EnvironmentFile=/etc/longhouse/runner.env
 
 # Start command
 ExecStart=/usr/local/bin/bun run src/index.ts
@@ -320,7 +322,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/opt/swarmlet-runner
+ReadWritePaths=/opt/longhouse-runner
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
@@ -346,12 +348,12 @@ EOF
 enroll_runner() {
   local enrollment_token="$1"
   local runner_name="$2"
-  local swarmlet_url="$3"
+  local longhouse_url="$3"
 
-  log_info "Registering runner with Swarmlet platform..."
+  log_info "Registering runner with Longhouse platform..."
 
   # Convert ws:// or wss:// to http:// or https:// for API
-  local api_url="${swarmlet_url//ws:/http:}"
+  local api_url="${longhouse_url//ws:/http:}"
   api_url="${api_url//wss:/https:}"
 
   # Call registration endpoint
@@ -415,8 +417,8 @@ verify_connection() {
   fi
 
   # Check logs for success message
-  if journalctl -u "$SERVICE_NAME" -n 20 --no-pager | grep -q "Connected to Swarmlet"; then
-    log_success "Runner connected to Swarmlet platform"
+  if journalctl -u "$SERVICE_NAME" -n 20 --no-pager | grep -q "Connected to Longhouse"; then
+    log_success "Runner connected to Longhouse platform"
   else
     log_warn "Service is running but connection status unclear"
     log_info "Check logs with: journalctl -u $SERVICE_NAME -f"
@@ -428,7 +430,7 @@ verify_connection() {
 main() {
   local runner_name=""
   local enrollment_token=""
-  local swarmlet_url="wss://api.swarmlet.com"
+  local longhouse_url="wss://api.longhouse.ai"
   local allow_insecure="false"
   local capabilities="exec.readonly"
   local runner_version="$RUNNER_VERSION"
@@ -445,7 +447,7 @@ main() {
         shift 2
         ;;
       --url)
-        swarmlet_url="$2"
+        longhouse_url="$2"
         shift 2
         ;;
       --version)
@@ -482,14 +484,14 @@ main() {
   # Print banner
   echo ""
   echo "=========================================="
-  echo "  Swarmlet Runner Installation"
+  echo "  Longhouse Runner Installation"
   echo "=========================================="
   echo ""
 
   # Validate inputs
   check_root "$@"
   validate_token "$enrollment_token"
-  validate_url "$swarmlet_url" "$allow_insecure"
+  validate_url "$longhouse_url" "$allow_insecure"
   RUNNER_VERSION="$runner_version"
   validate_runner_version "$RUNNER_VERSION"
 
@@ -497,13 +499,13 @@ main() {
   log_info "Starting installation for runner: $runner_name"
 
   install_bun
-  create_swarmlet_user
+  create_longhouse_user
   download_runner_code
 
   # Enroll with platform to get secret
-  runner_secret=$(enroll_runner "$enrollment_token" "$runner_name" "$swarmlet_url")
+  runner_secret=$(enroll_runner "$enrollment_token" "$runner_name" "$longhouse_url")
 
-  create_config_file "$runner_name" "$runner_secret" "$swarmlet_url" "$capabilities"
+  create_config_file "$runner_name" "$runner_secret" "$longhouse_url" "$capabilities"
   create_systemd_service
   start_and_enable_service
   verify_connection
@@ -515,7 +517,7 @@ main() {
   echo "=========================================="
   echo ""
   echo "Runner Name:    $runner_name"
-  echo "Swarmlet URL:   $swarmlet_url"
+  echo "Longhouse URL:  $longhouse_url"
   echo "Capabilities:   $capabilities"
   echo "Runner Version: $RUNNER_VERSION"
   echo ""

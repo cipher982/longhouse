@@ -1,9 +1,9 @@
 FROM oven/bun:1
 
 # Build from apps/runner directory:
-#   docker build -t swarmlet/runner:latest apps/runner
+#   docker build -t longhouse/runner:latest apps/runner
 # Or from repo root:
-#   docker build -f apps/runner/Dockerfile -t swarmlet/runner:latest apps/runner
+#   docker build -f apps/runner/Dockerfile -t longhouse/runner:latest apps/runner
 WORKDIR /app
 
 # Copy package files and install deps
