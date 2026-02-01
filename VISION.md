@@ -4,6 +4,10 @@ Longhouse is an AI agent orchestration platform where AI does the work and human
 
 This is a living vision doc. It captures both the direction and the reasoning that got us here, so we can make fast decisions without re-litigating the fundamentals.
 
+## Read Next
+
+- **SQLite-only OSS plan:** `docs/LIGHTWEIGHT-OSS-ONBOARDING.md` (canonical for the lightweight pivot)
+
 ## Naming (2026-02)
 
 - **Longhouse** = public product + brand
@@ -27,6 +31,7 @@ This is a living vision doc. It captures both the direction and the reasoning th
 - **Always-on beats cold start** for paid users. Background agents are core; sleeping instances break the product.
 - **Lossless logs are sacred.** The agent session archive is not disposable.
 - **OSS-first story**: easy to explain on HN/Twitter without enterprise jargon.
+- **Progressive disclosure**: keep primary docs short and link to deeper runbooks; AGENTS.md must point to what else to read.
 - **Single-tenant core (enforced)**: build fast, keep code simple, avoid multi-tenant security tax. Agents APIs reject instances with >1 user.
 - **Hosted = convenience**: premium support and "don't think about it" operations.
 - **Users bring their own API keys**. Longhouse is orchestration + UI + data, not LLM compute billing.
