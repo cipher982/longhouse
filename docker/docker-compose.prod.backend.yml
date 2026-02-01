@@ -1,10 +1,10 @@
 # Production Docker Compose - Backend API Only
 # Deploys as separate Coolify app: zerg-api
-# Domain: api.swarmlet.com
+# Domain: api.longhouse.ai
 #
 # Prerequisites:
 #   - Set DATABASE_URL to your Postgres instance
-#   - Set ALLOWED_CORS_ORIGINS=https://swarmlet.com in Coolify env
+#   - Set ALLOWED_CORS_ORIGINS=https://longhouse.ai in Coolify env
 #
 # Use: docker compose -f docker/docker-compose.prod.backend.yml up -d
 

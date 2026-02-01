@@ -84,7 +84,7 @@ services:
     depends_on:
       - backend
     healthcheck:
-      test: ["CMD", "sh", "-c", "curl -f http://localhost:80/ | grep -q 'Swarmlet'"]
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:80/ | grep -q 'Longhouse'"]
       interval: 30s
       timeout: 10s
       retries: 3
