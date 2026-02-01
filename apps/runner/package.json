@@ -1,7 +1,7 @@
 {
-  "name": "@swarmlet/runner",
+  "name": "@longhouse/runner",
   "version": "0.1.0",
-  "description": "Swarmlet runner daemon for executing commands on user infrastructure",
+  "description": "Longhouse runner daemon for executing commands on user infrastructure",
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun --watch run src/index.ts"
