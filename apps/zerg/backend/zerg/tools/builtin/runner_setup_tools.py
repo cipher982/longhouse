@@ -23,7 +23,7 @@ from zerg.database import db_session
 from zerg.schemas.runner_schemas import RunnerResponse
 
 
-def _swarmlet_api_url() -> str:
+def _longhouse_api_url() -> str:
     """Get the public API URL for runner setup commands.
 
     Requires APP_PUBLIC_URL to be set in all environments.
@@ -78,17 +78,17 @@ def runner_create_enroll_token(ttl_minutes: int = 10) -> Dict[str, Any]:
             ttl_minutes=max(1, min(int(ttl_minutes), 60)),
         )
 
-    swarmlet_url = _swarmlet_api_url()
+    api_url = _longhouse_api_url()
     runner_image = _runner_docker_image()
 
     docker_command = (
         f"# Step 1: Register runner (one-time)\n"
-        f"curl -X POST {swarmlet_url}/api/runners/register \\\n"
+        f"curl -X POST {api_url}/api/runners/register \\\n"
         f"  -H 'Content-Type: application/json' \\\n"
         f'  -d \'{{"enroll_token": "{plaintext_token}", "name": "my-runner"}}\'\n\n'
         f"# Step 2: Save the runner_secret from the response, then run:\n"
-        f"docker run -d --name swarmlet-runner \\\n"
-        f"  -e SWARMLET_URL={swarmlet_url} \\\n"
+        f"docker run -d --name longhouse-runner \\\n"
+        f"  -e LONGHOUSE_URL={api_url} \\\n"
         f"  -e RUNNER_NAME=my-runner \\\n"
         f"  -e RUNNER_SECRET=<secret_from_step_1> \\\n"
         f"  {runner_image}"
@@ -101,7 +101,7 @@ def runner_create_enroll_token(ttl_minutes: int = 10) -> Dict[str, Any]:
         "data": {
             "enroll_token": plaintext_token,
             "expires_at": expires_at.isoformat(),
-            "swarmlet_url": swarmlet_url,
+            "longhouse_url": api_url,
             "docker_command": docker_command,
         },
     }

@@ -30,7 +30,7 @@ class EnrollTokenResponse(BaseModel):
 
     enroll_token: str = Field(..., description="One-time enrollment token")
     expires_at: datetime = Field(..., description="Token expiration timestamp")
-    swarmlet_url: str = Field(..., description="Swarmlet API URL for runner connection")
+    longhouse_url: str = Field(..., description="Longhouse API URL for runner connection")
     docker_command: str = Field(..., description="Complete docker run command for easy setup")
     one_liner_install_command: str = Field(..., description="One-liner curl command for automated install")
 

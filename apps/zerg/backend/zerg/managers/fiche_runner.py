@@ -187,7 +187,8 @@ class Runner:  # noqa: D401 – naming follows project conventions
 
     async def run_thread(self, db: Session, thread: ThreadModel) -> Sequence[ThreadMessageModel]:
         """Process unprocessed messages and return created assistant message rows."""
-        from zerg.managers.message_array_builder import MessageArrayBuilder
+        from zerg.managers.prompt_context import build_prompt
+        from zerg.managers.prompt_context import context_to_messages
 
         logger.info(f"[Runner] Starting run_thread for thread {thread.id}, agent {self.agent.id}", extra={"tag": "AGENT"})
 
@@ -205,22 +206,21 @@ class Runner:  # noqa: D401 – naming follows project conventions
             return []  # Return empty list if no work
 
         # ------------------------------------------------------------------
-        # Build message array using MessageArrayBuilder (cache-optimized)
+        # Build message array using build_prompt (unified prompting pipeline)
         # Layout: [system] -> [conversation] -> [dynamic_context]
         # ------------------------------------------------------------------
-        builder_result = (
-            MessageArrayBuilder(db, self.agent)
-            .with_system_prompt(agent_row)
-            .with_conversation(thread.id, thread_service=self.thread_service)
-            .with_dynamic_context(
-                allowed_tools=getattr(agent_row, "allowed_tools", None),
-                unprocessed_rows=unprocessed_rows,
-            )
-            .build()
+        prompt_context = build_prompt(
+            db,
+            self.agent,
+            agent_row,
+            thread_id=thread.id,
+            unprocessed_rows=unprocessed_rows,
+            allowed_tools=getattr(agent_row, "allowed_tools", None),
+            thread_service=self.thread_service,
         )
-        original_msgs = builder_result.messages
-        skill_integration = builder_result.skill_integration
-        messages_with_context = builder_result.message_count_with_context
+        original_msgs = context_to_messages(prompt_context)
+        skill_integration = prompt_context.skill_integration
+        messages_with_context = prompt_context.message_count_with_context
 
         logger.debug(f"[Runner] Built message array: {messages_with_context} messages (system + conversation + dynamic context)")
 
@@ -506,7 +506,8 @@ class Runner:  # noqa: D401 – naming follows project conventions
         from zerg.connectors.context import reset_credential_resolver
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
-        from zerg.managers.message_array_builder import MessageArrayBuilder
+        from zerg.managers.prompt_context import build_prompt
+        from zerg.managers.prompt_context import context_to_messages
         from zerg.services.oikos_react_engine import run_oikos_loop
         from zerg.tools.unified_access import get_tool_resolver
 
@@ -574,26 +575,23 @@ class Runner:  # noqa: D401 – naming follows project conventions
             # The tool_msg was persisted; use it in the prompt without duplication
 
         # ------------------------------------------------------------------
-        # Build message array using MessageArrayBuilder (cache-optimized)
+        # Build message array using build_prompt (unified prompting pipeline)
         # Layout: [system] -> [conversation] -> [dynamic_context]
         # Tool results should appear exactly once in the prompt
         # ------------------------------------------------------------------
-        builder = MessageArrayBuilder(db, self.agent)
-        builder.with_system_prompt(agent_row)
         conversation_msgs = list(db_messages)
-        if tool_msg is not None:
-            conversation_msgs.append(tool_msg)
-        builder.with_conversation_messages(conversation_msgs, filter_system=True)
-
-        builder.with_dynamic_context(
-            allowed_tools=getattr(agent_row, "allowed_tools", None),
+        tool_messages = [tool_msg] if tool_msg is not None else None
+        prompt_context = build_prompt(
+            db,
+            self.agent,
+            agent_row,
             conversation_msgs=conversation_msgs,
+            tool_messages=tool_messages,
+            allowed_tools=getattr(agent_row, "allowed_tools", None),
         )
-
-        builder_result = builder.build()
-        full_messages = builder_result.messages
-        skill_integration = builder_result.skill_integration
-        messages_with_context = builder_result.message_count_with_context
+        full_messages = context_to_messages(prompt_context)
+        skill_integration = prompt_context.skill_integration
+        messages_with_context = prompt_context.message_count_with_context
 
         logger.debug(f"[Runner] Built continuation message array: {messages_with_context} messages")
 
@@ -754,7 +752,8 @@ class Runner:  # noqa: D401 – naming follows project conventions
         from zerg.connectors.context import reset_credential_resolver
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
-        from zerg.managers.message_array_builder import MessageArrayBuilder
+        from zerg.managers.prompt_context import build_prompt
+        from zerg.managers.prompt_context import context_to_messages
         from zerg.services.oikos_react_engine import run_oikos_loop
         from zerg.tools.unified_access import get_tool_resolver
 
@@ -828,24 +827,23 @@ class Runner:  # noqa: D401 – naming follows project conventions
                 tool_msgs_to_inject.append(tool_msg)
 
         # ------------------------------------------------------------------
-        # Build message array using MessageArrayBuilder (cache-optimized)
+        # Build message array using build_prompt (unified prompting pipeline)
         # Layout: [system] -> [conversation] -> [dynamic_context]
         # Tool results should appear exactly once in the prompt
         # ------------------------------------------------------------------
-        builder = MessageArrayBuilder(db, self.agent)
-        builder.with_system_prompt(agent_row)
-        conversation_msgs = list(db_messages) + tool_msgs_to_inject
-        builder.with_conversation_messages(conversation_msgs, filter_system=True)
-
-        builder.with_dynamic_context(
-            allowed_tools=getattr(agent_row, "allowed_tools", None),
+        conversation_msgs = list(db_messages)
+        tool_messages = tool_msgs_to_inject if tool_msgs_to_inject else None
+        prompt_context = build_prompt(
+            db,
+            self.agent,
+            agent_row,
             conversation_msgs=conversation_msgs,
+            tool_messages=tool_messages,
+            allowed_tools=getattr(agent_row, "allowed_tools", None),
         )
-
-        builder_result = builder.build()
-        full_messages = builder_result.messages
-        skill_integration = builder_result.skill_integration
-        messages_with_context = builder_result.message_count_with_context
+        full_messages = context_to_messages(prompt_context)
+        skill_integration = prompt_context.skill_integration
+        messages_with_context = prompt_context.message_count_with_context
 
         logger.debug(f"[Runner] Built batch continuation message array: {messages_with_context} messages")
 

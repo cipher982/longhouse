@@ -1,5 +1,5 @@
 """
-Funnel tracking system for Swarmlet pre-launch.
+Funnel tracking system for Longhouse.
 
 Tracks the complete user journey from page load to conversion:
 1. page_view - HTML was served
