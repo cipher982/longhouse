@@ -1,9 +1,9 @@
-"""Zerg CLI module.
+"""Longhouse CLI module.
 
-Provides command-line tools for interacting with Zerg:
-- zerg serve: Start the Zerg server (SQLite default, zero config)
-- zerg status: Show database and configuration status
-- zerg ship: One-shot sync of Claude Code sessions to Zerg
-- zerg connect: Continuous polling sync of sessions
-- zerg auth: Authenticate with remote Zerg server
+Provides command-line tools for interacting with Longhouse:
+- longhouse serve: Start the Longhouse server (SQLite default, zero config)
+- longhouse status: Show database and configuration status
+- longhouse ship: One-shot sync of Claude Code sessions to Longhouse
+- longhouse connect: Continuous polling sync of sessions
+- longhouse auth: Authenticate with remote Longhouse server
 """

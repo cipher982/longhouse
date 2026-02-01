@@ -130,7 +130,7 @@ def auth(
             url = existing_url
             typer.echo(f"Using stored URL: {url}")
         else:
-            url = typer.prompt("Zerg API URL", default="https://api.swarmlet.com")
+            url = typer.prompt("Longhouse API URL", default="https://api.longhouse.ai")
 
     # Get device name
     if not device_name:
