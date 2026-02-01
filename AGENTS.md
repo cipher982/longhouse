@@ -116,6 +116,7 @@ User message → `OikosService` → `oikos_react_engine` → (spawn_commis) → 
 10. **Sauron job source conflict** — If Zerg backend has `JOB_QUEUE_ENABLED=1` AND `JOBS_GIT_*` vars, it schedules sauron-jobs too. Remove those vars when Sauron is the sole scheduler.
 11. **Master task list lives in `TODO.md`** — keep AGENTS.md lean; update TODO.md before/after work.
 12. **Sauron Docker build** — uses `apps/sauron/pyproject.docker.toml` to avoid editable `../zerg/backend` sources during image builds.
+13. **Caddy routing breaks on deploy** — Container names include timestamps; Caddy config at `/data/coolify/proxy/caddy/dynamic/api-longhouse.caddy` needs manual update after deploy. Fix: set FQDN in Coolify UI so it manages routing automatically.
 
 ## Pushing Changes
 
