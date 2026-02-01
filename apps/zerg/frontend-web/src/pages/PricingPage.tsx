@@ -83,7 +83,7 @@ export default function PricingPage() {
             <h3>Questions?</h3>
             <p>
               Join our <a href="https://discord.gg/h2CWBUrj" target="_blank" rel="noopener noreferrer">Discord</a> or
-              email <a href="mailto:swarmlet@drose.io">swarmlet@drose.io</a>
+              email <a href="mailto:support@longhouse.ai">support@longhouse.ai</a>
             </p>
           </div>
         </div>
