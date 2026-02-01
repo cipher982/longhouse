@@ -1,0 +1,59 @@
+[project]
+name = "sauron"
+version = "2.0.0"
+description = "Centralized ops scheduler - deployed as standalone service on clifford"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    # Core scheduling
+    "apscheduler>=3.10.0,<4.0",
+
+    # API for Jarvis control
+    "fastapi>=0.115.0",
+    "uvicorn>=0.34.0",
+
+    # CLI
+    "typer>=0.15.0",
+
+    # HTTP client (for jobs)
+    "httpx>=0.28.0",
+
+    # LLM clients (for AI-powered jobs)
+    "openai>=1.70.0",
+    "anthropic>=0.40.0",
+
+    # Environment
+    "python-dotenv>=1.0.0",
+
+    # Zerg jobs infrastructure (from monorepo) - includes SQLAlchemy
+    "zerg",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.28.0",  # For TestClient
+    "ruff>=0.8.0",
+]
+
+[project.scripts]
+sauron = "sauron.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["sauron"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
