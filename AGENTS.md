@@ -102,6 +102,7 @@ User message → `OikosService` → `oikos_react_engine` → (spawn_commis) → 
 11. **Master task list lives in `TODO.md`** — keep AGENTS.md lean; update TODO.md before/after work.
 12. **Sauron Docker build** — uses `apps/sauron/pyproject.docker.toml` to avoid editable `../zerg/backend` sources during image builds.
 13. **Coolify Caddy stale route** — If `/data/coolify/proxy/caddy/dynamic/api-longhouse.caddy` exists, it can override docker-proxy labels and stick to stale container; delete file + restart `coolify-proxy`.
+14. **Google OAuth JS origins** — must be updated in Google Cloud Console for `GOOGLE_CLIENT_ID`; gcloud IAM OAuth clients are for workforce identity (no JS origin config).
 
 ## Pushing Changes
 
