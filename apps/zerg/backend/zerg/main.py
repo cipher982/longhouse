@@ -58,6 +58,7 @@ from zerg.routers.admin_bootstrap import router as admin_bootstrap_router
 from zerg.routers.agents import router as agents_router
 from zerg.routers.auth import router as auth_router
 from zerg.routers.channels_webhooks import router as channels_webhooks_router
+from zerg.routers.commis_internal import router as commis_internal_router
 from zerg.routers.connectors import router as connectors_router
 from zerg.routers.contacts import router as contacts_router
 from zerg.routers.device_tokens import router as device_tokens_router
@@ -734,6 +735,7 @@ app.include_router(templates_router, prefix=f"{API_PREFIX}")
 app.include_router(graph_router, prefix=f"{API_PREFIX}")
 app.include_router(oikos_router)  # Oikos integration - includes /api/oikos prefix
 app.include_router(oikos_internal_router, prefix=f"{API_PREFIX}")  # Internal endpoints for run continuation
+app.include_router(commis_internal_router, prefix=f"{API_PREFIX}")  # Internal endpoints for commis hooks
 app.include_router(sync_router)  # Conversation sync - includes /api/oikos/sync prefix
 app.include_router(stream_router)  # Resumable SSE v1 - includes /api/stream prefix
 app.include_router(system_router, prefix=API_PREFIX)
