@@ -19,9 +19,7 @@ mkdir -p "$XDG_CACHE_HOME" "$TMPDIR"
 
 export TESTING=1
 
-# Default to a local SQLite file if DATABASE_URL is not set
-if [ -z "${DATABASE_URL:-}" ]; then
-    export DATABASE_URL="sqlite:///${SCRIPT_DIR}/.lite_test.db"
-fi
+# Always use SQLite for lite tests (ignore any Postgres URL in environment)
+export DATABASE_URL="sqlite:///${SCRIPT_DIR}/.lite_test.db"
 
 uv run pytest tests_lite/ -p no:warnings --tb=short "$@"

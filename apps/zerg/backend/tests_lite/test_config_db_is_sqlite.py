@@ -78,8 +78,6 @@ class TestDbIsSqlite:
             bootstrap_token=None,
             oikos_tool_output_max_chars=8000,
             oikos_tool_output_preview_chars=1200,
-            e2e_use_postgres_schemas=False,
-            e2e_commis_id=None,
         )
 
     def test_unquoted_sqlite_url(self):
