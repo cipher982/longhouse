@@ -1,7 +1,7 @@
 """Tests for session continuity service.
 
 This module tests the cross-environment Claude Code session resumption
-functionality, including path encoding, validation, and Life Hub integration.
+functionality, including path encoding, validation, and Longhouse integration.
 """
 
 from __future__ import annotations

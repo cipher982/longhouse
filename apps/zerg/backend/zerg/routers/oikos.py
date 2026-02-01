@@ -11,7 +11,6 @@ Sub-routers:
 - oikos_internal: Oikos dispatch, events, cancel
 - oikos_chat: Text chat with streaming
 - oikos_tts: Text-to-speech for voice responses
-- oikos_life_hub: Life Hub session listing and preview
 
 Endpoints in this file:
 - /events: General SSE events stream
@@ -53,7 +52,6 @@ from zerg.routers import oikos_dispatch
 # Import sub-routers
 from zerg.routers import oikos_fiches
 from zerg.routers import oikos_internal
-from zerg.routers import oikos_life_hub
 from zerg.routers import oikos_run_dispatch
 from zerg.routers import oikos_runs
 from zerg.routers import oikos_tts
@@ -75,7 +73,6 @@ router.include_router(oikos_internal.router, prefix="", tags=["oikos"])
 router.include_router(oikos_chat.router, prefix="", tags=["oikos"])
 router.include_router(oikos_tts.router, prefix="", tags=["oikos-tts"])
 router.include_router(oikos_voice.router, prefix="", tags=["oikos-voice"])
-router.include_router(oikos_life_hub.router, prefix="", tags=["life-hub"])
 
 # ---------------------------------------------------------------------------
 # Deprecated Authentication Endpoint

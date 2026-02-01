@@ -22,7 +22,7 @@
 
 import { createContext, useContext, useState, useCallback, useRef, useEffect, type ReactNode } from "react";
 import { SessionPickerModal } from "./SessionPickerModal";
-import type { SessionFilters } from "../services/api";
+import type { AgentSessionSummaryFilters } from "../services/api";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -30,7 +30,7 @@ import type { SessionFilters } from "../services/api";
 
 export interface ShowSessionPickerOptions {
   /** Pre-populate filters */
-  filters?: SessionFilters;
+  filters?: AgentSessionSummaryFilters;
   /** Whether to show "Start New Session" button */
   showStartNew?: boolean;
 }
@@ -77,7 +77,7 @@ export function useSessionPicker(): SessionPickerContextValue {
 
 interface ModalState {
   isOpen: boolean;
-  filters?: SessionFilters;
+  filters?: AgentSessionSummaryFilters;
   showStartNew?: boolean;
 }
 

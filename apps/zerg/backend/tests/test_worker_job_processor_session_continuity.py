@@ -1,7 +1,7 @@
 """Tests for CommisJobProcessor session continuity integration.
 
 These tests verify that the workspace job processing correctly integrates
-with session continuity (prepare_session_for_resume and ship_session_to_life_hub).
+with session continuity (prepare_session_for_resume and ship_session_to_zerg).
 """
 
 from __future__ import annotations
@@ -73,7 +73,7 @@ class TestWorkspaceJobSessionContinuity:
             config={
                 "execution_mode": "workspace",
                 "git_repo": "https://github.com/test/repo.git",
-                "resume_session_id": "life-hub-session-123",
+                "resume_session_id": "longhouse-session-123",
             },
             owner_id=1,
         )
@@ -98,7 +98,7 @@ class TestWorkspaceJobSessionContinuity:
                 mock_prepare,
             ),
             patch(
-                "zerg.services.session_continuity.ship_session_to_life_hub",
+                "zerg.services.session_continuity.ship_session_to_zerg",
                 mock_ship,
             ),
             patch("zerg.services.commis_artifact_store.CommisArtifactStore"),
@@ -108,7 +108,7 @@ class TestWorkspaceJobSessionContinuity:
         # Verify prepare_session_for_resume was called with correct args
         mock_prepare.assert_called_once()
         call_args = mock_prepare.call_args
-        assert call_args.kwargs["session_id"] == "life-hub-session-123"
+        assert call_args.kwargs["session_id"] == "longhouse-session-123"
 
         # Verify CloudExecutor.run_commis was called with the prepared session ID
         executor_instance = mock_cloud_executor_class.return_value
@@ -156,7 +156,7 @@ class TestWorkspaceJobSessionContinuity:
                 mock_prepare,
             ),
             patch(
-                "zerg.services.session_continuity.ship_session_to_life_hub",
+                "zerg.services.session_continuity.ship_session_to_zerg",
                 mock_ship,
             ),
             patch("zerg.services.commis_artifact_store.CommisArtifactStore"),
@@ -176,7 +176,7 @@ class TestWorkspaceJobSessionContinuity:
     async def test_workspace_job_ships_session_on_success(
         self, processor, mock_workspace_manager_class, mock_cloud_executor_class, db_session
     ):
-        """Test that ship_session_to_life_hub is called after successful execution."""
+        """Test that ship_session_to_zerg is called after successful execution."""
         from zerg.crud import crud
 
         job = crud.CommisJob(
@@ -205,14 +205,14 @@ class TestWorkspaceJobSessionContinuity:
                 mock_cloud_executor_class,
             ),
             patch(
-                "zerg.services.session_continuity.ship_session_to_life_hub",
+                "zerg.services.session_continuity.ship_session_to_zerg",
                 mock_ship,
             ),
             patch("zerg.services.commis_artifact_store.CommisArtifactStore"),
         ):
             await processor._process_workspace_job(job_id, oikos_run_id=None)
 
-        # Verify ship_session_to_life_hub was called
+        # Verify ship_session_to_zerg was called
         mock_ship.assert_called_once()
         call_args = mock_ship.call_args
         # Commis ID should be generated and passed
@@ -220,7 +220,7 @@ class TestWorkspaceJobSessionContinuity:
 
     @pytest.mark.asyncio
     async def test_workspace_job_no_ship_on_failure(self, processor, mock_workspace_manager_class, db_session):
-        """Test that ship_session_to_life_hub is NOT called when execution fails."""
+        """Test that ship_session_to_zerg is NOT called when execution fails."""
         from zerg.crud import crud
 
         job = crud.CommisJob(
@@ -259,14 +259,14 @@ class TestWorkspaceJobSessionContinuity:
                 mock_executor_class,
             ),
             patch(
-                "zerg.services.session_continuity.ship_session_to_life_hub",
+                "zerg.services.session_continuity.ship_session_to_zerg",
                 mock_ship,
             ),
             patch("zerg.services.commis_artifact_store.CommisArtifactStore"),
         ):
             await processor._process_workspace_job(job_id, oikos_run_id=None)
 
-        # Verify ship_session_to_life_hub was NOT called (only ships on success)
+        # Verify ship_session_to_zerg was NOT called (only ships on success)
         mock_ship.assert_not_called()
 
     @pytest.mark.asyncio
@@ -283,7 +283,7 @@ class TestWorkspaceJobSessionContinuity:
             config={
                 "execution_mode": "workspace",
                 "git_repo": "https://github.com/test/repo.git",
-                "resume_session_id": "life-hub-session-123",
+                "resume_session_id": "longhouse-session-123",
             },
             owner_id=1,
         )
@@ -309,7 +309,7 @@ class TestWorkspaceJobSessionContinuity:
                 mock_prepare,
             ),
             patch(
-                "zerg.services.session_continuity.ship_session_to_life_hub",
+                "zerg.services.session_continuity.ship_session_to_zerg",
                 mock_ship,
             ),
             patch("zerg.services.commis_artifact_store.CommisArtifactStore"),
@@ -327,7 +327,7 @@ class TestWorkspaceJobSessionContinuity:
     async def test_workspace_job_handles_ship_failure_gracefully(
         self, processor, mock_workspace_manager_class, mock_cloud_executor_class, db_session
     ):
-        """Test that job completes even if ship_session_to_life_hub fails."""
+        """Test that job completes even if ship_session_to_zerg fails."""
         from zerg.crud import crud
 
         job = crud.CommisJob(
@@ -357,7 +357,7 @@ class TestWorkspaceJobSessionContinuity:
                 mock_cloud_executor_class,
             ),
             patch(
-                "zerg.services.session_continuity.ship_session_to_life_hub",
+                "zerg.services.session_continuity.ship_session_to_zerg",
                 mock_ship,
             ),
             patch("zerg.services.commis_artifact_store.CommisArtifactStore"),

@@ -10,8 +10,16 @@
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { Button } from "./ui";
-import { useLifeHubSessions, useSessionPreview } from "../hooks/useLifeHubSessions";
-import type { SessionSummary, SessionFilters, SessionMessage } from "../services/api";
+import {
+  useAgentSessionSummaries,
+  useAgentSessionPreview,
+  useAgentSessionFilters,
+} from "../hooks/useAgentSessions";
+import type {
+  AgentSessionSummary,
+  AgentSessionSummaryFilters,
+  AgentSessionPreviewMessage,
+} from "../services/api";
 import "./SessionPickerModal.css";
 
 // ---------------------------------------------------------------------------
@@ -20,7 +28,7 @@ import "./SessionPickerModal.css";
 
 interface SessionPickerModalProps {
   isOpen: boolean;
-  initialFilters?: SessionFilters;
+  initialFilters?: AgentSessionSummaryFilters;
   onClose: () => void;
   onSelect: (sessionId: string) => void;
   onStartNew?: () => void;
@@ -67,7 +75,7 @@ function truncatePath(path: string | null, maxLen: number = 30): string {
 // ---------------------------------------------------------------------------
 
 interface SessionItemProps {
-  session: SessionSummary;
+  session: AgentSessionSummary;
   isSelected: boolean;
   onClick: () => void;
 }
@@ -115,7 +123,7 @@ interface PreviewPanelProps {
 }
 
 function PreviewPanel({ sessionId }: PreviewPanelProps) {
-  const { data, isLoading, error } = useSessionPreview(sessionId);
+  const { data, isLoading, error } = useAgentSessionPreview(sessionId);
 
   if (!sessionId) {
     return (
@@ -152,7 +160,7 @@ function PreviewPanel({ sessionId }: PreviewPanelProps) {
         <span>{data.total_messages} total messages</span>
       </div>
       <div className="preview-messages">
-        {data.messages.map((msg: SessionMessage, idx: number) => (
+        {data.messages.map((msg: AgentSessionPreviewMessage, idx: number) => (
           <div key={idx} className={`preview-message preview-${msg.role}`}>
             <span className="preview-role">{msg.role === "user" ? "You" : "AI"}</span>
             <span className="preview-content">{msg.content}</span>
@@ -167,13 +175,10 @@ function PreviewPanel({ sessionId }: PreviewPanelProps) {
 // Filter Dropdown
 // ---------------------------------------------------------------------------
 
-const PROVIDERS = ["claude", "codex", "gemini"] as const;
-const PROJECTS = ["zerg", "life-hub", "sauron", "hdr", "mytech"] as const;
-
 interface FilterSelectProps {
   label: string;
   value: string;
-  options: readonly string[];
+  options: string[];
   onChange: (value: string) => void;
 }
 
@@ -233,7 +238,7 @@ export function SessionPickerModal({
   }, [searchQuery]);
 
   // Build filters
-  const filters: SessionFilters = useMemo(() => ({
+  const filters: AgentSessionSummaryFilters = useMemo(() => ({
     query: debouncedQuery || undefined,
     project: project || undefined,
     provider: provider || undefined,
@@ -242,9 +247,12 @@ export function SessionPickerModal({
   }), [debouncedQuery, project, provider]);
 
   // Fetch sessions
-  const { data, isLoading, error } = useLifeHubSessions(filters, { enabled: isOpen });
+  const { data, isLoading, error } = useAgentSessionSummaries(filters, { enabled: isOpen });
+  const { data: filterData } = useAgentSessionFilters(90, isOpen);
 
-  const sessions: SessionSummary[] = data?.sessions || [];
+  const sessions: AgentSessionSummary[] = data?.sessions || [];
+  const projectOptions = filterData?.projects ?? [];
+  const providerOptions = filterData?.providers ?? [];
 
   // Update selection when sessions change
   useEffect(() => {
@@ -320,7 +328,7 @@ export function SessionPickerModal({
 
   // Handle session click
   const handleSessionClick = useCallback(
-    (session: SessionSummary, index: number) => {
+    (session: AgentSessionSummary, index: number) => {
       setSelectedIndex(index);
       setSelectedSessionId(session.id);
     },
@@ -387,13 +395,13 @@ export function SessionPickerModal({
               <FilterSelect
                 label="project"
                 value={project}
-                options={PROJECTS}
+                options={projectOptions}
                 onChange={setProject}
               />
               <FilterSelect
                 label="provider"
                 value={provider}
-                options={PROVIDERS}
+                options={providerOptions}
                 onChange={setProvider}
               />
             </div>

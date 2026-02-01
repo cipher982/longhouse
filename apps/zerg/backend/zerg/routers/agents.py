@@ -257,11 +257,78 @@ class SessionResponse(BaseModel):
     tool_calls: int = Field(..., description="Tool call count")
 
 
+class SessionSummaryResponse(BaseModel):
+    """Response for session summaries (picker UI)."""
+
+    id: str = Field(..., description="Session UUID")
+    project: Optional[str] = Field(None, description="Project name")
+    provider: str = Field(..., description="AI provider")
+    cwd: Optional[str] = Field(None, description="Working directory")
+    git_branch: Optional[str] = Field(None, description="Git branch")
+    started_at: datetime = Field(..., description="Session start time")
+    ended_at: Optional[datetime] = Field(None, description="Session end time")
+    duration_minutes: Optional[int] = Field(None, description="Duration in minutes")
+    turn_count: int = Field(..., description="Total user + assistant messages")
+    last_user_message: Optional[str] = Field(None, description="Last user message (truncated)")
+    last_ai_message: Optional[str] = Field(None, description="Last assistant message (truncated)")
+
+
+class SessionsSummaryResponse(BaseModel):
+    """Response for session summary list."""
+
+    sessions: List[SessionSummaryResponse]
+    total: int
+
+
 class SessionsListResponse(BaseModel):
     """Response for session list."""
 
     sessions: List[SessionResponse]
     total: int
+
+
+class SessionPreviewMessage(BaseModel):
+    """Preview message entry for session picker."""
+
+    role: str = Field(..., description="Message role")
+    content: str = Field(..., description="Message content")
+    timestamp: datetime = Field(..., description="Message timestamp")
+
+
+class SessionPreviewResponse(BaseModel):
+    """Response for session preview endpoint."""
+
+    id: str = Field(..., description="Session UUID")
+    messages: List[SessionPreviewMessage] = Field(..., description="Recent messages")
+    total_messages: int = Field(..., description="Total message count")
+
+
+class ActiveSessionResponse(BaseModel):
+    """Response for active session summary (Forum UI)."""
+
+    id: str = Field(..., description="Session UUID")
+    project: Optional[str] = Field(None, description="Project name")
+    provider: str = Field(..., description="AI provider")
+    cwd: Optional[str] = Field(None, description="Working directory")
+    git_branch: Optional[str] = Field(None, description="Git branch")
+    started_at: datetime = Field(..., description="Session start time")
+    ended_at: Optional[datetime] = Field(None, description="Session end time")
+    last_activity_at: datetime = Field(..., description="Most recent event timestamp")
+    status: str = Field(..., description="Session status (working, idle, completed)")
+    attention: str = Field(..., description="Attention level (auto by default)")
+    duration_minutes: int = Field(..., description="Duration in minutes")
+    last_user_message: Optional[str] = Field(None, description="Last user message (truncated)")
+    last_assistant_message: Optional[str] = Field(None, description="Last assistant message (truncated)")
+    message_count: int = Field(..., description="Total user + assistant messages")
+    tool_calls: int = Field(..., description="Tool call count")
+
+
+class ActiveSessionsResponse(BaseModel):
+    """Response for active session list."""
+
+    sessions: List[ActiveSessionResponse]
+    total: int
+    last_refresh: datetime
 
 
 class EventResponse(BaseModel):
@@ -493,6 +560,201 @@ async def list_sessions(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list sessions: {e}",
         )
+
+
+@router.get("/sessions/summary", response_model=SessionsSummaryResponse)
+async def list_session_summaries(
+    project: Optional[str] = Query(None, description="Filter by project"),
+    provider: Optional[str] = Query(None, description="Filter by provider"),
+    environment: Optional[str] = Query(None, description="Filter by environment (production, development, test, e2e)"),
+    include_test: bool = Query(False, description="Include test/e2e sessions (default: False)"),
+    device_id: Optional[str] = Query(None, description="Filter by device ID"),
+    days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
+    query: Optional[str] = Query(None, description="Search query for content"),
+    limit: int = Query(20, ge=1, le=100, description="Max results"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_read_access),
+    _single: None = Depends(require_single_tenant),
+) -> SessionsSummaryResponse:
+    """List session summaries for picker UI."""
+    try:
+        store = AgentsStore(db)
+        since = datetime.now(timezone.utc) - timedelta(days=days_back)
+
+        sessions, total = store.list_sessions(
+            project=project,
+            provider=provider,
+            environment=environment,
+            include_test=include_test,
+            device_id=device_id,
+            since=since,
+            query=query,
+            limit=limit,
+            offset=offset,
+        )
+
+        session_ids = [s.id for s in sessions]
+        last_user = store.get_last_message_map(session_ids, role="user", max_len=200)
+        last_ai = store.get_last_message_map(session_ids, role="assistant", max_len=200)
+
+        summaries: List[SessionSummaryResponse] = []
+        now = datetime.now(timezone.utc)
+        for s in sessions:
+            end_time = s.ended_at or now
+            duration_minutes = int((end_time - s.started_at).total_seconds() / 60) if s.started_at else None
+            turn_count = (s.user_messages or 0) + (s.assistant_messages or 0)
+
+            summaries.append(
+                SessionSummaryResponse(
+                    id=str(s.id),
+                    project=s.project,
+                    provider=s.provider,
+                    cwd=s.cwd,
+                    git_branch=s.git_branch,
+                    started_at=s.started_at,
+                    ended_at=s.ended_at,
+                    duration_minutes=duration_minutes,
+                    turn_count=turn_count,
+                    last_user_message=last_user.get(s.id),
+                    last_ai_message=last_ai.get(s.id),
+                )
+            )
+
+        return SessionsSummaryResponse(sessions=summaries, total=total)
+
+    except Exception as e:
+        logger.exception("Failed to list session summaries")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list session summaries: {e}",
+        )
+
+
+@router.get("/sessions/active", response_model=ActiveSessionsResponse)
+async def list_active_sessions(
+    project: Optional[str] = Query(None, description="Filter by project"),
+    status: Optional[str] = Query(None, description="Filter by status (working, idle, completed)"),
+    attention: Optional[str] = Query(None, description="Filter by attention (auto)"),
+    limit: int = Query(50, ge=1, le=200, description="Max results"),
+    days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_read_access),
+    _single: None = Depends(require_single_tenant),
+) -> ActiveSessionsResponse:
+    """Return session summaries for Forum live mode."""
+    try:
+        store = AgentsStore(db)
+        since = datetime.now(timezone.utc) - timedelta(days=days_back)
+
+        sessions, _total = store.list_sessions(
+            project=project,
+            provider=None,
+            environment=None,
+            include_test=False,
+            device_id=None,
+            since=since,
+            query=None,
+            limit=limit,
+            offset=0,
+        )
+
+        session_ids = [s.id for s in sessions]
+        last_activity = store.get_last_activity_map(session_ids)
+        last_user = store.get_last_message_map(session_ids, role="user", max_len=300)
+        last_ai = store.get_last_message_map(session_ids, role="assistant", max_len=300)
+
+        now = datetime.now(timezone.utc)
+        items: List[ActiveSessionResponse] = []
+        for s in sessions:
+            last_activity_at = last_activity.get(s.id) or s.ended_at or s.started_at
+            if not last_activity_at:
+                last_activity_at = now
+
+            if s.ended_at:
+                derived_status = "completed"
+            else:
+                idle_for = now - last_activity_at
+                derived_status = "working" if idle_for <= timedelta(minutes=5) else "idle"
+
+            attention_level = "auto"
+
+            if status and derived_status != status:
+                continue
+            if attention and attention_level != attention:
+                continue
+
+            end_time = s.ended_at or now
+            duration_minutes = int((end_time - s.started_at).total_seconds() / 60) if s.started_at else 0
+            message_count = (s.user_messages or 0) + (s.assistant_messages or 0)
+
+            items.append(
+                ActiveSessionResponse(
+                    id=str(s.id),
+                    project=s.project,
+                    provider=s.provider,
+                    cwd=s.cwd,
+                    git_branch=s.git_branch,
+                    started_at=s.started_at,
+                    ended_at=s.ended_at,
+                    last_activity_at=last_activity_at,
+                    status=derived_status,
+                    attention=attention_level,
+                    duration_minutes=duration_minutes,
+                    last_user_message=last_user.get(s.id),
+                    last_assistant_message=last_ai.get(s.id),
+                    message_count=message_count,
+                    tool_calls=s.tool_calls or 0,
+                )
+            )
+
+        return ActiveSessionsResponse(
+            sessions=items,
+            total=len(items),
+            last_refresh=now,
+        )
+
+    except Exception as e:
+        logger.exception("Failed to list active sessions")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list active sessions: {e}",
+        )
+
+
+@router.get("/sessions/{session_id}/preview", response_model=SessionPreviewResponse)
+async def preview_session(
+    session_id: UUID,
+    last_n: int = Query(6, ge=2, le=20, description="Number of messages to return"),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_read_access),
+    _single: None = Depends(require_single_tenant),
+) -> SessionPreviewResponse:
+    """Get a preview of a session's recent messages."""
+    store = AgentsStore(db)
+    session = store.get_session(session_id)
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {session_id} not found",
+        )
+
+    events = store.get_session_preview(session_id, last_n)
+    messages = [
+        SessionPreviewMessage(
+            role=e.role,
+            content=e.content_text or "",
+            timestamp=e.timestamp,
+        )
+        for e in events
+    ]
+    total_messages = (session.user_messages or 0) + (session.assistant_messages or 0)
+
+    return SessionPreviewResponse(
+        id=str(session_id),
+        messages=messages,
+        total_messages=total_messages,
+    )
 
 
 @router.get("/filters", response_model=FiltersResponse)

@@ -141,9 +141,6 @@ test.describe('Commis Simplification - Single Execution Mode', () => {
   });
 
   test('workspace commis (spawn_commis with git_repo)', async ({ request, backendUrl, commisId }) => {
-    // Skip if Life Hub credentials not available (required for session shipping)
-    const lifeHubKey = process.env.LIFE_HUB_API_KEY;
-    test.skip(!lifeHubKey, 'LIFE_HUB_API_KEY not set - skipping workspace commis test');
     test.setTimeout(90000);
 
     const startTime = Date.now();

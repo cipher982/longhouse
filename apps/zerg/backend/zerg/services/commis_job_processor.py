@@ -555,17 +555,17 @@ class CommisJobProcessor:
                 logger.warning(f"Failed to capture diff for job {job_id}: {diff_error}")
                 diff = ""  # Ensure diff is empty on error
 
-            # 7. Ship session to Life Hub (best-effort, for future resumption)
+            # 7. Ship session to Longhouse (best-effort, for future resumption)
             if result and result.status == "success":
                 try:
-                    from zerg.services.session_continuity import ship_session_to_life_hub
+                    from zerg.services.session_continuity import ship_session_to_zerg
 
-                    await ship_session_to_life_hub(
+                    await ship_session_to_zerg(
                         workspace_path=workspace.path,
                         commis_id=commis_id,
                     )
                 except Exception as ship_error:
-                    logger.warning(f"Failed to ship session for job {job_id}: {ship_error}")
+                    logger.warning(f"Failed to ship session to Longhouse for job {job_id}: {ship_error}")
 
         except Exception as e:
             logger.exception(f"Cloud execution failed for job {job_id}")

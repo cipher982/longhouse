@@ -1,21 +1,43 @@
 /**
  * Session Continuity E2E Tests
  *
- * Tests session fetch/ship with REAL Life Hub API to eliminate drift risk.
+ * Tests session fetch/ship with Longhouse agents API.
  * Uses mock hatch CLI (can't run real Claude Code fiches in tests).
  *
  * Requires:
- * - LIFE_HUB_API_KEY environment variable
  * - CommisJobProcessor running (included in E2E backend)
  * - mock-hatch in PATH (added by spawn-test-backend.js)
  */
 
+import type { APIRequestContext } from '@playwright/test';
 import { test, expect } from '../fixtures';
 import { postSseAndCollect } from '../helpers/sse';
 import { resetDatabase } from '../test-utils';
 
-const LIFE_HUB_URL = process.env.LIFE_HUB_URL || 'https://data.drose.io';
-const LIFE_HUB_API_KEY = process.env.LIFE_HUB_API_KEY;
+async function createTestSession(request: APIRequestContext) {
+  const now = new Date().toISOString();
+  const payload = {
+    provider: 'claude',
+    environment: 'development',
+    project: 'e2e-session-continuity',
+    device_id: 'e2e-device',
+    cwd: '/tmp/e2e-session-continuity',
+    git_repo: 'https://example.com/repo.git',
+    git_branch: 'main',
+    started_at: now,
+    ended_at: now,
+    provider_session_id: 'e2e-session-1',
+    events: [
+      { role: 'user', content_text: 'Test message', timestamp: now },
+      { role: 'assistant', content_text: 'Test response', timestamp: now },
+    ],
+  };
+
+  const ingestRes = await request.post('/api/agents/ingest', { data: payload });
+  expect(ingestRes.ok()).toBeTruthy();
+  const data = await ingestRes.json();
+  return data.session_id as string;
+}
 
 test.describe('Session Continuity E2E', () => {
   test.beforeEach(async ({ request }) => {
@@ -23,8 +45,6 @@ test.describe('Session Continuity E2E', () => {
   });
 
   test('workspace commis executes with mock hatch', async ({ request, backendUrl, commisId }) => {
-    // Skip if Life Hub credentials not available (local dev without key)
-    test.skip(!LIFE_HUB_API_KEY, 'LIFE_HUB_API_KEY not set - skipping session continuity test');
     test.setTimeout(90000);
 
     const startTime = Date.now();
@@ -109,36 +129,10 @@ test.describe('Session Continuity E2E', () => {
     expect(commisComplete.payload?.status).toBe('success');
   });
 
-  test('workspace commis with resume_session_id fetches from Life Hub', async ({ request, backendUrl, commisId }) => {
-    // Skip if Life Hub credentials not available
-    test.skip(!LIFE_HUB_API_KEY, 'LIFE_HUB_API_KEY not set - skipping session continuity test');
+  test('workspace commis with resume_session_id fetches from Longhouse', async ({ request, backendUrl, commisId }) => {
     test.setTimeout(90000);
 
-    // First, get a real session ID from Life Hub
-    const sessionsRes = await request.fetch(`${LIFE_HUB_URL}/query/fiches/sessions`, {
-      headers: { 'X-API-Key': LIFE_HUB_API_KEY! },
-      params: {
-        limit: '10',
-        provider: 'claude',
-      },
-    });
-
-    if (!sessionsRes.ok()) {
-      test.skip(true, `Failed to query Life Hub: ${sessionsRes.status()}`);
-      return;
-    }
-
-    const sessionsData = await sessionsRes.json();
-    const sessions = sessionsData.data || [];
-
-    // Find a session with meaningful content (>= 10 events)
-    const testSession = sessions.find((s: any) => (s.events_total || 0) >= 10);
-    if (!testSession) {
-      test.skip(true, 'No suitable sessions in Life Hub for testing');
-      return;
-    }
-
-    const testSessionId = testSession.id;
+    const testSessionId = await createTestSession(request);
     const startTime = Date.now();
 
     // Send a message that triggers workspace commis with resume
@@ -212,9 +206,7 @@ test.describe('Session Continuity E2E', () => {
     expect(commisComplete.payload?.status).toBe('success');
   });
 
-  test('graceful fallback when session not found in Life Hub', async ({ request, backendUrl, commisId }) => {
-    // Skip if Life Hub credentials not available
-    test.skip(!LIFE_HUB_API_KEY, 'LIFE_HUB_API_KEY not set - skipping session continuity test');
+  test('graceful fallback when session not found in Longhouse', async ({ request, backendUrl, commisId }) => {
     test.setTimeout(60000);
 
     const startTime = Date.now();
