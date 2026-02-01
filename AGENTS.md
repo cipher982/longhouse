@@ -184,6 +184,7 @@ Sauron is the centralized ops scheduler, deployed as a standalone service on cli
 | **SQLite pivot plan** | `docs/LIGHTWEIGHT-OSS-ONBOARDING.md` |
 | Oikos Tools | `apps/zerg/backend/docs/supervisor_tools.md` |
 | Sauron scheduler | `apps/sauron/README.md` |
+| Sauron job definitions | `~/git/sauron-jobs/` |
 
 ## Misc
 - GH actions use runners on Cube
