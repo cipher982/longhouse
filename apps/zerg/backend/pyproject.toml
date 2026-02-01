@@ -83,6 +83,15 @@ allow-direct-references = true
 [tool.hatch.build]
 packages = ["zerg"]
 
+[tool.hatch.build.targets.wheel.force-include]
+# Bundle the frontend dist into the package for pip install deployment
+# This allows `zerg serve` to serve the UI without needing the repo
+"../frontend-web/dist" = "zerg/_frontend_dist"
+
+[tool.hatch.build.targets.sdist.force-include]
+# Also include frontend in sdist so building from source works
+"../frontend-web/dist" = "zerg/_frontend_dist"
+
 [tool.uv]
 # Keep cache inside repo for hermetic test runs
 cache-dir = "./.uv_cache"

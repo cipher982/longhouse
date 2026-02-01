@@ -27,14 +27,21 @@ dependencies = [
 
     # Environment
     "python-dotenv>=1.0.0",
+
+    # Zerg jobs infrastructure (from monorepo)
+    "zerg",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
+    "httpx>=0.28.0",  # For TestClient
     "ruff>=0.8.0",
 ]
+
+[tool.uv.sources]
+zerg = { path = "../zerg/backend", editable = true }
 
 [project.scripts]
 sauron = "sauron.cli:app"

@@ -60,6 +60,43 @@ class JobRegistry:
     def __init__(self):
         self._jobs: dict[str, JobConfig] = {}
         self._scheduler: AsyncIOScheduler | None = None
+        self._use_queue: bool = False
+
+    def snapshot_jobs(self) -> dict[str, str]:
+        """Snapshot current job IDs and cron expressions for diffing.
+
+        Returns:
+            Dict mapping job_id -> cron expression.
+        """
+        return {job_id: config.cron for job_id, config in self._jobs.items()}
+
+    def clear_manifest_jobs(self, builtin_job_ids: set[str]) -> set[str]:
+        """Remove all jobs that aren't builtin (i.e., from manifest).
+
+        Args:
+            builtin_job_ids: Set of job IDs to preserve (builtin jobs).
+
+        Returns:
+            Set of job IDs that were removed.
+        """
+        removed = set()
+        for job_id in list(self._jobs.keys()):
+            if job_id not in builtin_job_ids:
+                del self._jobs[job_id]
+                removed.add(job_id)
+        return removed
+
+    def unregister(self, job_id: str) -> bool:
+        """Unregister a job from the registry.
+
+        Returns:
+            True if job was found and removed, False otherwise.
+        """
+        if job_id in self._jobs:
+            del self._jobs[job_id]
+            logger.info("Unregistered job: %s", job_id)
+            return True
+        return False
 
     def register(self, config: JobConfig) -> bool:
         """Register a job configuration.
@@ -176,6 +213,75 @@ class JobRegistry:
             error_type=error_type,
         )
 
+    def _schedule_job(self, config: JobConfig) -> bool:
+        """Schedule a single job with the stored scheduler.
+
+        Returns:
+            True if scheduled successfully, False otherwise.
+        """
+        if not self._scheduler:
+            logger.error("No scheduler available to schedule job %s", config.id)
+            return False
+
+        if not config.enabled:
+            logger.debug("Skipping disabled job %s", config.id)
+            return False
+
+        try:
+            job_uses_queue = self._use_queue and config.queue_mode
+
+            if job_uses_queue:
+
+                async def queue_wrapper(job_id: str = config.id) -> None:
+                    from zerg.jobs.commis import enqueue_scheduled_run
+
+                    await enqueue_scheduled_run(job_id)
+
+                self._scheduler.add_job(
+                    queue_wrapper,
+                    CronTrigger.from_crontab(config.cron),
+                    id=f"job_{config.id}",
+                    replace_existing=True,
+                )
+                logger.info("Scheduled job %s with cron: %s (queue mode)", config.id, config.cron)
+            else:
+
+                async def job_wrapper(job_id: str = config.id) -> None:
+                    await self.run_job(job_id)
+
+                self._scheduler.add_job(
+                    job_wrapper,
+                    CronTrigger.from_crontab(config.cron),
+                    id=f"job_{config.id}",
+                    replace_existing=True,
+                )
+                logger.info("Scheduled job %s with cron: %s (direct mode)", config.id, config.cron)
+
+            return True
+
+        except Exception as e:
+            logger.error("Failed to schedule job %s: %s", config.id, e)
+            return False
+
+    def _unschedule_job(self, job_id: str) -> bool:
+        """Remove a job from the scheduler.
+
+        Returns:
+            True if removed successfully, False otherwise.
+        """
+        if not self._scheduler:
+            return False
+
+        scheduler_job_id = f"job_{job_id}"
+        try:
+            self._scheduler.remove_job(scheduler_job_id)
+            logger.info("Unscheduled job %s", job_id)
+            return True
+        except Exception:
+            # Job may not exist in scheduler
+            logger.debug("Job %s not found in scheduler (may not have been scheduled)", job_id)
+            return False
+
     def schedule_all(self, scheduler: AsyncIOScheduler, use_queue: bool = False) -> int:
         """Schedule all enabled jobs with APScheduler.
 
@@ -186,49 +292,72 @@ class JobRegistry:
         Returns count of jobs scheduled.
         """
         self._scheduler = scheduler
+        self._use_queue = use_queue
         count = 0
 
         for config in self._jobs.values():
-            if not config.enabled:
-                continue
-
-            try:
-                # Determine if this job should use queue mode
-                job_uses_queue = use_queue and config.queue_mode
-
-                if job_uses_queue:
-                    # Queue mode: enqueue to durable queue
-                    async def queue_wrapper(job_id: str = config.id) -> None:
-                        from zerg.jobs.commis import enqueue_scheduled_run
-
-                        await enqueue_scheduled_run(job_id)
-
-                    scheduler.add_job(
-                        queue_wrapper,
-                        CronTrigger.from_crontab(config.cron),
-                        id=f"job_{config.id}",
-                        replace_existing=True,
-                    )
-                    logger.info("Scheduled job %s with cron: %s (queue mode)", config.id, config.cron)
-                else:
-                    # Direct mode: run job immediately
-                    async def job_wrapper(job_id: str = config.id) -> None:
-                        await self.run_job(job_id)
-
-                    scheduler.add_job(
-                        job_wrapper,
-                        CronTrigger.from_crontab(config.cron),
-                        id=f"job_{config.id}",
-                        replace_existing=True,
-                    )
-                    logger.info("Scheduled job %s with cron: %s (direct mode)", config.id, config.cron)
-
+            if self._schedule_job(config):
                 count += 1
 
-            except Exception as e:
-                logger.error("Failed to schedule job %s: %s", config.id, e)
-
         return count
+
+    def sync_jobs(self, old_snapshot: dict[str, str]) -> dict[str, int]:
+        """Sync scheduler with registry after manifest reload.
+
+        Compares current registry state against old snapshot and:
+        - Removes jobs that no longer exist
+        - Reschedules jobs with changed cron expressions
+        - Adds jobs that are new
+
+        Args:
+            old_snapshot: Dict from snapshot_jobs() taken before manifest reload.
+
+        Returns:
+            Dict with counts: {"added": N, "removed": N, "rescheduled": N}
+        """
+        if not self._scheduler:
+            logger.warning("No scheduler available for sync")
+            return {"added": 0, "removed": 0, "rescheduled": 0}
+
+        current_jobs = self._jobs
+        old_job_ids = set(old_snapshot.keys())
+        new_job_ids = set(current_jobs.keys())
+
+        # Find differences
+        removed_ids = old_job_ids - new_job_ids
+        added_ids = new_job_ids - old_job_ids
+        common_ids = old_job_ids & new_job_ids
+
+        # Check for cron changes in common jobs
+        rescheduled_ids = set()
+        for job_id in common_ids:
+            old_cron = old_snapshot[job_id]
+            new_cron = current_jobs[job_id].cron
+            if old_cron != new_cron:
+                rescheduled_ids.add(job_id)
+                logger.info("Job %s cron changed: %s -> %s", job_id, old_cron, new_cron)
+
+        # Remove deleted jobs from scheduler
+        for job_id in removed_ids:
+            self._unschedule_job(job_id)
+            logger.info("Removed job %s (no longer in manifest)", job_id)
+
+        # Reschedule jobs with changed cron
+        for job_id in rescheduled_ids:
+            config = current_jobs[job_id]
+            self._schedule_job(config)  # replace_existing=True handles the reschedule
+
+        # Add new jobs
+        for job_id in added_ids:
+            config = current_jobs[job_id]
+            self._schedule_job(config)
+            logger.info("Added new job %s", job_id)
+
+        return {
+            "added": len(added_ids),
+            "removed": len(removed_ids),
+            "rescheduled": len(rescheduled_ids),
+        }
 
 
 # Global job registry

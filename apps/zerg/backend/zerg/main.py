@@ -262,6 +262,51 @@ AVATARS_DIR = STATIC_DIR / "avatars"
 # Create folders on import so they are there in tests and dev.
 AVATARS_DIR.mkdir(parents=True, exist_ok=True)
 
+
+def _get_frontend_dist_path() -> tuple[Path | None, str]:
+    """Locate the frontend dist directory, checking bundled package first, then dev paths.
+
+    Returns:
+        Tuple of (Path to frontend dist directory or None, source label).
+        Source label is one of: "bundled", "local", "docker", "none".
+
+    Resolution order:
+        1. Bundled in package: zerg/_frontend_dist (for pip install deployment)
+        2. Dev repo: ../frontend-web/dist (relative to backend)
+        3. Docker: /app/frontend-web/dist
+    """
+    # 1. Check for bundled assets in installed package
+    try:
+        import importlib.resources
+
+        # For Python 3.9+, use importlib.resources.files()
+        pkg_dist = importlib.resources.files("zerg").joinpath("_frontend_dist")
+        # Convert Traversable to Path - works for filesystem-backed packages
+        # Use str() which is the stable API for Traversable
+        dist_path = Path(str(pkg_dist))
+        if dist_path.is_dir() and (dist_path / "index.html").exists():
+            return dist_path, "bundled"
+    except (ImportError, TypeError, AttributeError, FileNotFoundError, OSError):
+        pass
+
+    # 2. Development mode: relative to backend directory
+    # main.py is at backend/zerg/main.py, frontend is at apps/zerg/frontend-web/dist
+    # parent=zerg, parent.parent=backend, parent.parent.parent=apps/zerg
+    dev_dist = Path(__file__).resolve().parent.parent.parent / "frontend-web" / "dist"
+    if dev_dist.is_dir() and (dev_dist / "index.html").exists():
+        return dev_dist, "local"
+
+    # 3. Docker environment
+    docker_dist = Path("/app/frontend-web/dist")
+    if docker_dist.is_dir() and (docker_dist / "index.html").exists():
+        return docker_dist, "docker"
+
+    return None, "none"
+
+
+# Resolve frontend dist path once at import time
+FRONTEND_DIST_DIR, FRONTEND_SOURCE = _get_frontend_dist_path()
+
 # Set up logging early for lifespan handler
 logger = logging.getLogger(__name__)
 
@@ -725,10 +770,88 @@ except ImportError:  # pragma: no cover – should not happen
 # Note: logger is now defined earlier for lifespan handler usage
 
 
-# Root endpoint
-@app.get("/")
+# ---------------------------------------------------------------------------
+# Frontend static serving for pip install deployment
+# ---------------------------------------------------------------------------
+# When running `zerg serve` from a pip-installed package, serve the bundled
+# frontend directly. In dev mode (nginx proxy), this is bypassed.
+#
+# Mount order matters: API routes are registered above, so they take precedence.
+# The catch-all route only handles requests that don't match any API endpoint.
+# ---------------------------------------------------------------------------
+
+if FRONTEND_DIST_DIR is not None:
+    # Mount frontend assets (JS, CSS, images) at /assets
+    _assets_dir = FRONTEND_DIST_DIR / "assets"
+    if _assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="frontend_assets")
+
+    # Mount root-level static files (favicon, manifest, etc.)
+    # These are served at their exact paths from the dist root
+    app.mount("/frontend-static", StaticFiles(directory=str(FRONTEND_DIST_DIR)), name="frontend_root")
+
+    # Pre-resolve the base path for containment checks
+    _frontend_dist_resolved = FRONTEND_DIST_DIR.resolve()
+
+    # Serve index.html for SPA routes (catch-all for non-API paths)
+    @app.get("/{path:path}", include_in_schema=False)
+    async def serve_spa(path: str):
+        """Serve the SPA index.html for client-side routing.
+
+        This catch-all route serves index.html for any path that:
+        - Doesn't match an API route
+        - Doesn't match a static file
+        - Is likely a client-side route (dashboard, chat, etc.)
+
+        API routes take precedence because they're registered first.
+
+        SECURITY: Path traversal is prevented by resolving paths and checking
+        they remain within FRONTEND_DIST_DIR before serving.
+        """
+        from fastapi.responses import FileResponse
+        from fastapi.responses import RedirectResponse
+
+        # SECURITY: Reject paths with traversal attempts or absolute paths
+        if ".." in path or path.startswith("/"):
+            # For traversal attempts, just serve index.html (SPA fallback)
+            index_path = _frontend_dist_resolved / "index.html"
+            if index_path.is_file():
+                return FileResponse(index_path)
+            return RedirectResponse(url="/")
+
+        # Check if it's a root-level static file (favicon.ico, manifest, etc.)
+        # SECURITY: Resolve and verify path stays within frontend dist
+        try:
+            static_file = (_frontend_dist_resolved / path).resolve()
+            # Containment check: ensure resolved path is within frontend dist
+            if static_file.is_relative_to(_frontend_dist_resolved) and static_file.is_file():
+                return FileResponse(static_file)
+        except (ValueError, OSError):
+            # Invalid path or resolution error - fall through to SPA
+            pass
+
+        # For all other paths, serve index.html (SPA routing)
+        index_path = _frontend_dist_resolved / "index.html"
+        if index_path.is_file():
+            return FileResponse(index_path)
+
+        # Fallback: redirect to root if no index.html
+        return RedirectResponse(url="/")
+
+    logger.info(f"Frontend bundled assets mounted from {FRONTEND_DIST_DIR}")
+
+
+# Root endpoint (API info when frontend not bundled, or HTML when it is)
+@app.get("/", include_in_schema=False)
 async def read_root():
-    """Return a simple message to indicate the API is working."""
+    """Serve frontend index.html or API info message."""
+    if FRONTEND_DIST_DIR is not None:
+        from fastapi.responses import FileResponse
+
+        index_path = FRONTEND_DIST_DIR / "index.html"
+        if index_path.is_file():
+            return FileResponse(index_path)
+
     return {"message": "Fiche Platform API is running"}
 
 

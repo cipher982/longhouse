@@ -117,8 +117,7 @@ User message → `OikosService` → `oikos_react_engine` → (spawn_commis) → 
 9. **Runner name+secret collision** — If two owners seed runners with same name and secret, first-created wins. Use unique secrets per environment.
 10. **SSE event types** — New types must be added to `EventType` enum or `append_run_event()` won't publish live.
 11. **Sauron job source conflict** — If Zerg backend has `JOB_QUEUE_ENABLED=1` AND `JOBS_GIT_*` vars, it schedules sauron-jobs too. Remove those vars when Sauron is the sole scheduler.
-12. **Sauron /sync doesn't reschedule** — Reloads manifest but APScheduler doesn't reschedule. Changes won't run until restart.
-13. **Master task list lives in `TODO.md`** — keep AGENTS.md lean; update TODO.md before/after work.
+12. **Master task list lives in `TODO.md`** — keep AGENTS.md lean; update TODO.md before/after work.
 
 ## Pushing Changes
 

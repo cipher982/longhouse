@@ -73,6 +73,9 @@ class SyncResponse(BaseModel):
     success: bool
     message: str
     sha: str | None
+    jobs_added: int = 0
+    jobs_removed: int = 0
+    jobs_rescheduled: int = 0
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -212,9 +215,23 @@ async def trigger_job(job_id: str) -> TriggerResponse:
 
 @app.post("/sync", response_model=SyncResponse)
 async def force_sync() -> SyncResponse:
-    """Force git sync of the jobs repo and reload manifest."""
-    from zerg.jobs import get_git_sync_service
+    """Force git sync of the jobs repo, reload manifest, and reschedule jobs.
+
+    This endpoint:
+    1. Pulls latest from git repo
+    2. Takes a snapshot of current jobs
+    3. Reloads manifest (clearing old manifest jobs first)
+    4. Diffs old vs new jobs and updates APScheduler:
+       - Removes jobs that no longer exist
+       - Reschedules jobs with changed cron expressions
+       - Adds new jobs
+    5. Publishes updated job definitions to Life-Hub
+    """
+    import asyncio
+
+    from zerg.jobs import get_git_sync_service, job_registry
     from zerg.jobs.loader import load_jobs_manifest
+
     from sauron.job_definitions import publish_job_definitions
 
     git_service = get_git_sync_service()
@@ -226,16 +243,62 @@ async def force_sync() -> SyncResponse:
         )
 
     try:
+        # Pull latest from git
         result = await git_service.refresh()
-        # Reload manifest after sync to pick up new/changed jobs
-        await load_jobs_manifest()
+
+        # Check if refresh succeeded
+        if not result.get("success"):
+            return SyncResponse(
+                success=False,
+                message=f"Git refresh failed: {result.get('error', 'unknown error')}",
+                sha=git_service.current_sha,
+            )
+
+        # Snapshot current jobs before reload
+        old_snapshot = job_registry.snapshot_jobs()
+
+        # Determine builtin job IDs (jobs that existed before any manifest load)
+        # These are jobs registered by importing zerg.jobs.* modules
+        # We identify them by checking which jobs DON'T have manifest metadata
+        from zerg.jobs.loader import get_manifest_metadata
+
+        builtin_ids = {
+            job_id for job_id in old_snapshot.keys() if get_manifest_metadata(job_id) is None
+        }
+
+        # Reload manifest (clears old manifest jobs, preserves builtins)
+        load_success = await load_jobs_manifest(clear_existing=True, builtin_job_ids=builtin_ids)
+
+        # Only sync scheduler if manifest loaded successfully
+        # If load failed, registry may be in inconsistent state - don't propagate to scheduler
+        if not load_success:
+            return SyncResponse(
+                success=False,
+                message="Manifest load failed - scheduler not updated (check logs)",
+                sha=git_service.current_sha,
+            )
+
+        # Sync scheduler with new registry state
+        sync_result = job_registry.sync_jobs(old_snapshot)
+
         # Publish updated definitions to Life-Hub
         await asyncio.to_thread(publish_job_definitions)
-        logger.info(f"Git sync + manifest reload: {git_service.current_sha}")
+
+        logger.info(
+            "Git sync complete: sha=%s, added=%d, removed=%d, rescheduled=%d",
+            git_service.current_sha,
+            sync_result["added"],
+            sync_result["removed"],
+            sync_result["rescheduled"],
+        )
+
         return SyncResponse(
             success=True,
-            message=result.get("message", "Synced and reloaded"),
+            message=result.get("message", "Synced and rescheduled"),
             sha=git_service.current_sha,
+            jobs_added=sync_result["added"],
+            jobs_removed=sync_result["removed"],
+            jobs_rescheduled=sync_result["rescheduled"],
         )
     except Exception as e:
         logger.exception("Git sync failed")

@@ -35,7 +35,7 @@ def set_manifest_metadata(job_id: str, metadata: dict) -> None:
     _manifest_metadata[job_id] = metadata
 
 
-async def load_jobs_manifest() -> bool:
+async def load_jobs_manifest(clear_existing: bool = False, builtin_job_ids: set[str] | None = None) -> bool:
     """
     Load jobs from the private repo's manifest.py.
 
@@ -51,6 +51,12 @@ async def load_jobs_manifest() -> bool:
             func=backup_run,
         ))
 
+    Args:
+        clear_existing: If True, clear all manifest jobs before reloading.
+            This enables proper sync where removed jobs get unregistered.
+        builtin_job_ids: Set of job IDs to preserve when clear_existing=True.
+            If None and clear_existing=True, no jobs are preserved.
+
     Returns:
         True if manifest was loaded successfully, False otherwise.
         Returns False (doesn't raise) so builtin jobs continue working.
@@ -61,6 +67,7 @@ async def load_jobs_manifest() -> bool:
         - Duplicate job IDs are skipped with a warning (not fatal)
     """
     from zerg.jobs.git_sync import get_git_sync_service
+    from zerg.jobs.registry import job_registry
 
     git_service = get_git_sync_service()
     if not git_service:
@@ -75,7 +82,16 @@ async def load_jobs_manifest() -> bool:
         return False
 
     # Acquire read lock to prevent loading during git sync
+    # IMPORTANT: clear_existing must be inside the lock to prevent race conditions
+    # where registry is cleared but then blocks waiting for background sync
     async with git_service.read_lock() as git_sha:
+        # Clear manifest jobs before reload if requested
+        if clear_existing:
+            preserved = builtin_job_ids or set()
+            removed = job_registry.clear_manifest_jobs(preserved)
+            if removed:
+                logger.info("Cleared %d manifest jobs before reload: %s", len(removed), removed)
+
         return _execute_manifest(manifest_path, repo_root, git_sha)
 
 
@@ -133,6 +149,14 @@ def _execute_manifest(manifest_path: Path, repo_root: Path, git_sha: str | None)
 
     except Exception:
         logger.exception("Jobs manifest failed to load: %s", manifest_path)
+        # Rollback: remove any jobs that were partially registered during this failed load
+        # to prevent them from being treated as "builtin" in future syncs
+        jobs_after_error = set(job_registry._jobs.keys())
+        partial_jobs = jobs_after_error - jobs_before
+        if partial_jobs:
+            logger.warning("Rolling back %d partially registered jobs: %s", len(partial_jobs), partial_jobs)
+            for job_id in partial_jobs:
+                job_registry.unregister(job_id)
         return False
 
     finally:

@@ -32,46 +32,57 @@ Zerg watches your AI coding sessions and unifies them into a single, searchable 
 
 ## Quick Start
 
-> **Note:** SQLite is now supported for local development and OSS use (Phases 1-3 complete). Docker path still uses Postgres. The goal is `pip install zerg && zerg serve` with SQLite-only (CLI packaging in progress).
+### Option 1: SQLite (Recommended for OSS)
 
-### Option 1: Docker Compose (Recommended)
+Lightweight setup with minimal dependencies.
 
-```bash
-git clone https://github.com/cipher982/zerg.git
-cd zerg
-cp .env.example .env
-
-# Start the stack
-docker compose -f docker/docker-compose.dev.yml --profile dev up -d
-
-# Open http://localhost:30080/timeline
-```
-
-### Option 2: Local Development (SQLite)
-
-Requires: Node.js 20+, Python 3.11+, SQLite 3.35+
+**Requirements:** Python 3.11+, SQLite 3.35+, [uv](https://docs.astral.sh/uv/) (Python package manager)
 
 ```bash
 git clone https://github.com/cipher982/zerg.git
 cd zerg
 
-# Install dependencies
-bun install
+# Install backend dependencies
 cd apps/zerg/backend && uv sync && cd ../../..
 
-# Configure for SQLite
+# Configure environment
 cp .env.example .env
-# Edit .env: DATABASE_URL=sqlite:///~/.zerg/zerg.db
+# SQLite is the default - no changes needed
 
-# Start everything
+# Boot the server
+cd apps/zerg/backend && uv run uvicorn zerg.main:app --port 8000
+
+# Verify: curl http://localhost:8000/api/system/health
+```
+
+**Verify your setup:**
+```bash
+make onboarding-sqlite  # Runs in-process SQLite smoke tests
+```
+
+### Option 2: Full Development Stack (Docker)
+
+For full UI development with hot reload.
+
+**Requirements:** Docker, Node.js 20+, Bun
+
+```bash
+git clone https://github.com/cipher982/zerg.git
+cd zerg
+cp .env.example .env
+
+# Install JS dependencies
+bun install
+
+# Start the full stack (backend + frontend + nginx)
 make dev
 
 # Open http://localhost:30080/timeline
 ```
 
-### Option 3: Local Development (Postgres)
+### Option 3: PostgreSQL Backend
 
-For full feature set including multi-node job queue.
+For multi-node deployments or production use.
 
 ```bash
 # Same setup as Option 2, but set DATABASE_URL to Postgres
