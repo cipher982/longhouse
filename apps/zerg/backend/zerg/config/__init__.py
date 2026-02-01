@@ -144,9 +144,6 @@ class Settings:  # noqa: D401 – simple data container
     oikos_tool_output_max_chars: int  # Max tool output chars before storing (0 = disabled)
     oikos_tool_output_preview_chars: int  # Preview size for stored tool outputs
 
-    # E2E test settings ------------------------------------------------
-    e2e_commis_id: str | None  # Override commis ID for E2E testing
-
     # Dynamic guards (evaluated at runtime) -----------------------------
     @property
     def llm_available(self) -> bool:
@@ -338,8 +335,6 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         # Oikos tool output storage
         oikos_tool_output_max_chars=int(os.getenv("OIKOS_TOOL_OUTPUT_MAX_CHARS", "8000")),
         oikos_tool_output_preview_chars=int(os.getenv("OIKOS_TOOL_OUTPUT_PREVIEW_CHARS", "1200")),
-        # E2E test settings
-        e2e_commis_id=os.getenv("E2E_COMMIS_ID"),
     )
 
 

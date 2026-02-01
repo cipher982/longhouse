@@ -1,15 +1,11 @@
 """Tests for is_sqlite_url helper function.
 
 Ensures quoted DATABASE_URLs are handled correctly.
-
-Tests both the canonical location (db_utils.is_sqlite_url) and the
-backward-compatible alias (database._is_sqlite_url).
 """
 
 import pytest
 
 from zerg.db_utils import is_sqlite_url
-from zerg.database import _is_sqlite_url
 
 
 class TestIsSqliteUrl:
@@ -67,10 +63,3 @@ class TestIsSqliteUrl:
         """SQLite with async driver (sqlite+aiosqlite) should be detected."""
         assert is_sqlite_url("sqlite+aiosqlite:///test.db") is True
         assert is_sqlite_url('"sqlite+aiosqlite:///test.db"') is True
-
-    def test_backward_compat_alias(self):
-        """database._is_sqlite_url should be an alias for db_utils.is_sqlite_url."""
-        # Verify the alias works identically
-        assert _is_sqlite_url("sqlite:///test.db") is True
-        assert _is_sqlite_url('"sqlite:///test.db"') is True
-        assert _is_sqlite_url("postgresql://host/db") is False

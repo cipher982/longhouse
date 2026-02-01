@@ -83,8 +83,6 @@ def _mock_settings_with_allowlist(allowed_model: str):
         roundabout_llm_timeout=real_settings.roundabout_llm_timeout,
         oikos_tool_output_max_chars=real_settings.oikos_tool_output_max_chars,
         oikos_tool_output_preview_chars=real_settings.oikos_tool_output_preview_chars,
-        e2e_use_postgres_schemas=real_settings.e2e_use_postgres_schemas,
-        e2e_commis_id=real_settings.e2e_commis_id,
         jobs_git_repo_url=real_settings.jobs_git_repo_url,
         jobs_git_branch=real_settings.jobs_git_branch,
         jobs_git_token=real_settings.jobs_git_token,

@@ -112,9 +112,7 @@ def clear_user_data(engine) -> dict[str, any]:
     settings = get_settings()
     # Counting rows for every table adds measurable latency under parallel E2E.
     # It's useful in dev/prod for diagnostics, but unnecessary for tests.
-    should_count_rows = os.getenv("RESET_DB_COUNT_ROWS", "").strip() == "1" or not (
-        settings.testing or settings.e2e_use_postgres_schemas or os.getenv("NODE_ENV") == "test"
-    )
+    should_count_rows = os.getenv("RESET_DB_COUNT_ROWS", "").strip() == "1" or not (settings.testing or os.getenv("NODE_ENV") == "test")
 
     # Discover all tables from SQLAlchemy metadata
     all_tables = {table.name for table in Base.metadata.tables.values()}
