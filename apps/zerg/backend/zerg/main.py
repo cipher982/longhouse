@@ -852,9 +852,10 @@ async def health_db():
                     )
         return {"status": "ready", "tables_verified": required_tables}
     except Exception as e:
+        logger.warning(f"Database readiness check failed: {e}")
         return JSONResponse(
             status_code=503,
-            content={"status": "error", "detail": str(e)},
+            content={"status": "error", "detail": "Database connection failed"},
         )
 
 
