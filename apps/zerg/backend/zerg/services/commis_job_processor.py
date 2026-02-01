@@ -24,6 +24,7 @@ from datetime import datetime
 from datetime import timezone
 from typing import Optional
 
+from zerg.config import get_settings
 from zerg.crud import crud
 from zerg.database import db_session
 from zerg.middleware.commis_db import current_commis_id
@@ -42,6 +43,7 @@ _is_e2e_mode = os.getenv("ENVIRONMENT") == "test:e2e"
 
 # Summary max length
 _SUMMARY_MAX_LENGTH = 150
+_DEFAULT_CALLBACK_PORT = 47300
 
 
 def _extract_summary_from_output(
@@ -114,6 +116,23 @@ def _extract_summary_from_output(
         truncated = truncated[:last_space]
 
     return truncated + "..."
+
+
+def _default_callback_url(*, sandbox: bool) -> str:
+    host = "host.docker.internal" if sandbox else "localhost"
+    return f"http://{host}:{_DEFAULT_CALLBACK_PORT}"
+
+
+def _build_hook_env(job_id: int, *, sandbox: bool) -> dict[str, str]:
+    settings = get_settings()
+    callback_url = os.environ.get("LONGHOUSE_CALLBACK_URL") or _default_callback_url(sandbox=sandbox)
+    env_vars = {
+        "LONGHOUSE_CALLBACK_URL": callback_url,
+        "COMMIS_JOB_ID": str(job_id),
+    }
+    if settings.internal_api_secret:
+        env_vars["COMMIS_CALLBACK_TOKEN"] = settings.internal_api_secret
+    return env_vars
 
 
 class CommisJobProcessor:
@@ -586,12 +605,14 @@ class CommisJobProcessor:
             # 5. Run commis in workspace (LONG-RUNNING - no DB session held!)
             sandbox_mode = "sandboxed" if job_sandbox else "direct"
             logger.info(f"Running workspace commis for job {job_id} in {workspace.path} ({sandbox_mode})")
+            hook_env = _build_hook_env(job_id, sandbox=job_sandbox)
             result = await cloud_executor.run_commis(
                 task=job_task,
                 workspace_path=workspace.path,
                 model=job_model,
                 resume_session_id=prepared_resume_id,
                 sandbox=job_sandbox,
+                env_vars=hook_env,
                 run_id=commis_id,
             )
 

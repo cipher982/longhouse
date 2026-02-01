@@ -7,7 +7,7 @@ and POSTs tool events to Longhouse for real-time visibility.
 Environment variables:
   LONGHOUSE_CALLBACK_URL: Base URL for Longhouse API (e.g., http://localhost:47300)
   COMMIS_JOB_ID: The commis job ID for correlation
-  COMMIS_CALLBACK_TOKEN: Optional auth token for the callback
+  COMMIS_CALLBACK_TOKEN: Optional internal auth token for the callback
 
 The hook reads JSON from stdin with the tool event data and POSTs it to:
   POST {LONGHOUSE_CALLBACK_URL}/api/internal/commis/tool_event
@@ -79,7 +79,7 @@ def main():
         "Content-Type": "application/json",
     }
     if callback_token:
-        headers["Authorization"] = f"Bearer {callback_token}"
+        headers["X-Internal-Token"] = callback_token
 
     try:
         req = urllib.request.Request(

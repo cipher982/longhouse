@@ -260,6 +260,7 @@ class CloudExecutor:
                 workspace_path=workspace_path,
                 model=model,
                 timeout=timeout,
+                env_vars=env_vars,
                 run_id=run_id or "unknown",
             )
 
@@ -439,6 +440,7 @@ class CloudExecutor:
         *,
         model: str | None = None,
         timeout: int = DEFAULT_TIMEOUT_SECONDS,
+        env_vars: dict[str, str] | None = None,
     ) -> CloudExecutionResult:
         """Run commis in a sandboxed Docker container.
 
@@ -527,13 +529,20 @@ class CloudExecutor:
             "-e", f"OPENAI_API_KEY={os.environ.get('OPENAI_API_KEY', '')}",
             "-e", f"GEMINI_API_KEY={os.environ.get('GEMINI_API_KEY', '')}",
             "-e", "HOME=/home/agent",
+        ]
+
+        if env_vars:
+            for key, value in env_vars.items():
+                cmd.extend(["-e", f"{key}={value}"])
+
+        cmd.extend([
             # Image and command
             SANDBOX_IMAGE,
             "-b", backend,
             "--model", model_name,
             "--json",
             "-",  # Read prompt from stdin
-        ]
+        ])
         # fmt: on
 
         try:
