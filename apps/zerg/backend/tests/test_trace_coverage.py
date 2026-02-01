@@ -16,7 +16,7 @@ from zerg.services.trace_coverage import build_trace_coverage_report
 
 def test_trace_coverage_report_counts(db_session, sample_fiche, sample_thread, _dev_user):
     """Report should count trace_id coverage across core tables and events."""
-    trace_id = uuid.uuid4()
+    trace_id = uuid.uuid4()  # GUID TypeDecorator handles UUID↔string
 
     run = Run(
         fiche_id=sample_fiche.id,

@@ -37,11 +37,15 @@ def create_run(
         status_enum = RunStatus(status)
     except ValueError:
         raise ValueError(f"Invalid run status: {status}")
-    resolved_trace_id = trace_id
-    if resolved_trace_id is None:
+    # Generate or validate trace_id (GUID TypeDecorator handles UUID↔string)
+    resolved_trace_id: uuid.UUID | None = None
+    if trace_id is None:
         resolved_trace_id = uuid.uuid4()
-    elif isinstance(resolved_trace_id, str):
-        resolved_trace_id = uuid.UUID(resolved_trace_id)
+    elif isinstance(trace_id, uuid.UUID):
+        resolved_trace_id = trace_id
+    else:
+        # Validate UUID format by parsing
+        resolved_trace_id = uuid.UUID(trace_id)
 
     run_row = Run(
         fiche_id=fiche_id,

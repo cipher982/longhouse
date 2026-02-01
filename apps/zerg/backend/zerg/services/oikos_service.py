@@ -606,7 +606,7 @@ class OikosService:
         effective_trace_id = trace_id or (str(run.trace_id) if run.trace_id else None)
         if not effective_trace_id:
             effective_trace_id = str(uuid.uuid4())
-            # Persist to run for consistency
+            # Persist to run for consistency (GUID TypeDecorator handles UUID↔string)
             run.trace_id = uuid.UUID(effective_trace_id)
             self.db.commit()
 
