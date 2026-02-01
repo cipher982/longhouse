@@ -1,7 +1,7 @@
-"""Connect command for shipping Claude Code sessions to Zerg.
+"""Connect command for shipping Claude Code sessions to Longhouse.
 
 Commands:
-- auth: Authenticate with Zerg and obtain a device token
+- auth: Authenticate with Longhouse and obtain a device token
 - ship: One-shot sync of all sessions
 - connect: Continuous sync (watch mode or polling)
 - connect --install: Install as background service
@@ -38,7 +38,7 @@ from zerg.services.shipper import save_token
 from zerg.services.shipper import save_zerg_url
 from zerg.services.shipper import uninstall_service
 
-app = typer.Typer(help="Ship Claude Code sessions to Zerg")
+app = typer.Typer(help="Ship Claude Code sessions to Longhouse")
 
 # Set up logging
 logging.basicConfig(
@@ -55,7 +55,7 @@ def auth(
         None,
         "--url",
         "-u",
-        help="Zerg API URL (e.g., https://api.swarmlet.com)",
+        help="Longhouse API URL (e.g., https://api.longhouse.ai)",
     ),
     device_name: str = typer.Option(
         None,
@@ -86,18 +86,18 @@ def auth(
         help="Claude config directory (default: ~/.claude)",
     ),
 ) -> None:
-    """Authenticate with Zerg and store a device token.
+    """Authenticate with Longhouse and store a device token.
 
     The token is stored locally and used for all subsequent ship/connect commands.
 
     Authentication methods:
-    1. Browser-based: Opens Zerg web UI to create a token interactively
+    1. Browser-based: Opens Longhouse web UI to create a token interactively
     2. Direct token: Use --token to provide an existing device token
 
     Examples:
-        zerg auth --url https://api.swarmlet.com
-        zerg auth --token zdt_your_token_here
-        zerg auth --clear
+        longhouse auth --url https://api.longhouse.ai
+        longhouse auth --token zdt_your_token_here
+        longhouse auth --clear
     """
     config_dir = Path(claude_dir) if claude_dir else None
 
@@ -201,7 +201,7 @@ def ship(
         None,
         "--url",
         "-u",
-        help="Zerg API URL (uses stored URL if not specified)",
+        help="Longhouse API URL (uses stored URL if not specified)",
     ),
     token: str = typer.Option(
         None,
@@ -223,7 +223,7 @@ def ship(
         help="Enable verbose output",
     ),
 ) -> None:
-    """One-shot: ship all new Claude Code sessions to Zerg."""
+    """One-shot: ship all new Claude Code sessions to Longhouse."""
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
@@ -268,7 +268,7 @@ def connect(
         None,
         "--url",
         "-u",
-        help="Zerg API URL (uses stored URL if not specified)",
+        help="Longhouse API URL (uses stored URL if not specified)",
     ),
     token: str = typer.Option(
         None,
@@ -322,7 +322,7 @@ def connect(
         help="Check the status of the background service",
     ),
 ) -> None:
-    """Continuous: watch and ship sessions to Zerg.
+    """Continuous: watch and ship sessions to Longhouse.
 
     By default uses file watching for sub-second sync.
     Use --poll or --interval for polling mode.
@@ -332,7 +332,7 @@ def connect(
         --uninstall Stop and remove the background service
         --status    Check the status of the background service
 
-    Run 'zerg auth' first to authenticate with Zerg.
+    Run 'longhouse auth' first to authenticate with Longhouse.
     """
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
@@ -448,8 +448,8 @@ def _handle_install(
         typer.echo(f"  Service: {result.get('service', 'N/A')}")
         typer.echo(f"  Config: {result.get('plist_path') or result.get('unit_path', 'N/A')}")
         typer.echo("")
-        typer.echo("To check status: zerg connect --status")
-        typer.echo("To stop service: zerg connect --uninstall")
+        typer.echo("To check status: longhouse connect --status")
+        typer.echo("To stop service: longhouse connect --uninstall")
     except RuntimeError as e:
         typer.secho(f"[ERROR] {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)

@@ -1,7 +1,7 @@
-"""Serve command for starting the Zerg server.
+"""Serve command for starting the Longhouse server.
 
 Commands:
-- serve: Start the Zerg server with uvicorn
+- serve: Start the Longhouse server with uvicorn
 - status: Show current server configuration and lite_mode status
 """
 
@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 import typer
 
-app = typer.Typer(help="Zerg server commands")
+app = typer.Typer(help="Longhouse server commands")
 
 
 def _get_zerg_home() -> Path:
@@ -126,16 +126,16 @@ def serve(
         help="Number of worker processes",
     ),
 ) -> None:
-    """Start the Zerg server.
+    """Start the Longhouse server.
 
     By default, uses SQLite for zero-config startup. For production,
     configure a Postgres DATABASE_URL in your environment.
 
     Examples:
-        zerg serve                           # SQLite on localhost:8080
-        zerg serve --host 0.0.0.0 --port 80  # Bind to all interfaces
-        zerg serve --db postgresql://...     # Use Postgres
-        zerg serve --reload                  # Dev mode with auto-reload
+        longhouse serve                           # SQLite on localhost:8080
+        longhouse serve --host 0.0.0.0 --port 80  # Bind to all interfaces
+        longhouse serve --db postgresql://...     # Use Postgres
+        longhouse serve --reload                  # Dev mode with auto-reload
     """
     import uvicorn
 
@@ -181,7 +181,7 @@ def serve(
     has_frontend = FRONTEND_DIST_DIR is not None
     frontend_source = FRONTEND_SOURCE
 
-    typer.echo("Starting Zerg server...")
+    typer.echo("Starting Longhouse server...")
     typer.echo(f"  Host: {host}")
     typer.echo(f"  Port: {port}")
     typer.echo(f"  Database: {_mask_db_url(db_url)}")
@@ -214,12 +214,12 @@ def status(
         help="Database URL to check (uses defaults if not set)",
     ),
 ) -> None:
-    """Show Zerg configuration and status.
+    """Show Longhouse configuration and status.
 
     Displays the current database configuration, lite_mode status,
     and other relevant settings without starting the server.
 
-    Shows the *effective* configuration that `zerg serve` would use,
+    Shows the *effective* configuration that `longhouse serve` would use,
     including defaults applied for lite mode.
     """
     # Apply the same defaults as serve would
@@ -238,7 +238,7 @@ def status(
         typer.secho("Configuration Issues:", fg=typer.colors.RED)
         typer.echo(f"  {e}")
         typer.echo("")
-        typer.echo("Run 'zerg serve' to auto-configure defaults,")
+        typer.echo("Run 'longhouse serve' to auto-configure defaults,")
         typer.echo("or set the missing environment variables.")
         raise typer.Exit(code=1)
     except Exception as e:
@@ -250,7 +250,7 @@ def status(
     is_sqlite = settings.db_is_sqlite
     lite_mode = settings.lite_mode
 
-    typer.echo("Zerg Configuration (effective)")
+    typer.echo("Longhouse Configuration (effective)")
     typer.echo("=" * 40)
     typer.echo("")
 

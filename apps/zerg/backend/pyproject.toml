@@ -1,8 +1,8 @@
 # Cache bust: 2026-01-26-sauron-jobs-deps
 [project]
-name = "zerg"
+name = "longhouse"
 version = "0.1.0"
-description = "AI Agent Platform Backend"
+description = "Longhouse AI Agent Platform - orchestrate AI agents with voice and text"
 authors = [
     {name = "David Rose", email = "david.github@drose.io"}
 ]
@@ -64,7 +64,7 @@ dependencies = [
 ]
 
 [project.scripts]
-zerg = "zerg.cli.main:main"
+longhouse = "zerg.cli.main:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -78,7 +78,7 @@ packages = ["zerg"]
 
 [tool.hatch.build.targets.wheel.force-include]
 # Bundle the frontend dist into the package for pip install deployment
-# This allows `zerg serve` to serve the UI without needing the repo
+# This allows `longhouse serve` to serve the UI without needing the repo
 "../frontend-web/dist" = "zerg/_frontend_dist"
 
 [tool.hatch.build.targets.sdist.force-include]
