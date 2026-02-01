@@ -102,7 +102,7 @@ async def send_user_signup_alert(user_email: str, user_count: Optional[int] = No
     # Format user count info if provided
     count_info = f" (#{user_count} total)" if user_count else ""
 
-    content = f"@here 🎉 **New User Signup!** {user_email} just joined Swarmlet{count_info}"
+    content = f"@here 🎉 **New User Signup!** {user_email} just joined Longhouse{count_info}"
 
     # Fire-and-forget
     try:
@@ -138,7 +138,7 @@ async def send_waitlist_signup_alert(email: str, source: str, waitlist_count: Op
         threading.Thread(target=lambda: httpx.post(url, json={"content": content}), daemon=True).start()
 
 
-async def send_qa_alert(issue: dict, dashboard_url: str = "https://swarmlet.com/reliability") -> None:
+async def send_qa_alert(issue: dict, dashboard_url: str = "https://longhouse.ai/reliability") -> None:
     """Send a QA chronic issue alert to Discord.
 
     Called when the QA fiche detects a new chronic issue that needs attention.
@@ -169,7 +169,7 @@ async def send_qa_alert(issue: dict, dashboard_url: str = "https://swarmlet.com/
     current_value = issue.get("current_value", "N/A")
     threshold = issue.get("threshold", "N/A")
 
-    content = f"""{emoji} **[SWARMLET QA] Chronic Issue Detected**
+    content = f"""{emoji} **[LONGHOUSE QA] Chronic Issue Detected**
 
 **Issue:** {description}
 **Severity:** {severity}

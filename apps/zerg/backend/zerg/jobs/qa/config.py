@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 
 # API endpoints
-API_URL = os.getenv("QA_API_URL", "https://api.swarmlet.com")
+API_URL = os.getenv("QA_API_URL", "https://api.longhouse.ai")
 API_URL_INTERNAL = os.getenv("QA_API_URL_INTERNAL", "http://localhost:47300")
 
 # Discord webhook (uses main Discord config)
