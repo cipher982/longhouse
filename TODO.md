@@ -49,6 +49,15 @@ Unblock blob image previews + Cloudflare beacon by updating CSP in frontend ngin
 
 ---
 
+## Prod Console Noise — Auth + Funnel (1)
+
+Eliminate unauth 401 spam and fix funnel 403 after rebrand.
+
+- [x] Add `/auth/status` to avoid 401 on initial load
+- [x] Allow `longhouse.ai` origins in funnel tracking
+
+---
+
 ## Longhouse Rebrand — CLI / Packages / Images (7)
 
 Package and binary naming so OSS users see Longhouse everywhere.
