@@ -1,6 +1,6 @@
-# Zerg / Swarmlet
+# Longhouse (codename: Zerg)
 
-AI agent orchestration platform. Oikos = voice/text UI. Swarmlet = product name.
+AI agent orchestration platform. Oikos = voice/text UI. Longhouse = product name.
 
 **Owner**: david010@gmail.com (David Rose)
 
@@ -71,7 +71,7 @@ make test-full     # Full suite (unit + full E2E + evals + visual baselines)
 User → nginx:30080 → FastAPI backend (47300) + React frontend (47200)
 ```
 
-**Database:** Zerg DB is a schema inside Life Hub's Postgres (same server). No separate sync needed for structured data.
+**Database:** Longhouse DB is a schema inside Life Hub's Postgres (same server). No separate sync needed for structured data.
 
 **Oikos/Commis Flow:**
 User message → `OikosService` → `oikos_react_engine` → (spawn_commis) → `AgentInterrupted` → WAITING → commis runs → `commis_resume` → response
@@ -121,7 +121,7 @@ User message → `OikosService` → `oikos_react_engine` → (spawn_commis) → 
 
 ## Pushing Changes
 
-**Prod URLs**: https://swarmlet.com (frontend) | https://api.swarmlet.com (API)
+**Prod URLs**: https://longhouse.ai (frontend) | https://api.longhouse.ai (API)
 
 ### Before Push
 ```bash

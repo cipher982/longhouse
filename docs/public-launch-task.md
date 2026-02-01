@@ -9,7 +9,7 @@ This is the execution checklist and plan for improving the app experience before
 We must follow this doc for scope, finish conditions, and validation steps.
 
 ## Context Summary (So Far)
-- Product vision: Zerg is a unified, lossless agent-session timeline across providers; the timeline is the product.
+- Product vision: Longhouse is a unified, lossless agent-session timeline across providers; the timeline is the product.
 - Current UX is powerful but crowded for a first public release (many tabs, unclear primary surface).
 - Prior art patterns we want to emulate:
   - Trace-first UX (timeline as the core artifact).
@@ -98,7 +98,7 @@ Use these to prove we didn’t regress the experience:
 ## Gaps / Missing Tests
 - No automated test for a full onboarding “happy path”.
 - Docs validation is limited to the onboarding contract (README rewrite not yet enforced).
-- No packaging smoke test for a future `brew install zerg` or `install.sh`.
+- No packaging smoke test for a future `brew install longhouse` or `install.sh`.
 
 ## Decisions (Locked)
 - **Primary surface = Timeline.** The Sessions list is the product; rename it to “Timeline.”
