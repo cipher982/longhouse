@@ -10,6 +10,7 @@ Jobs that need database access should use SQLAlchemy via zerg.database.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime
 from typing import Any
 
@@ -17,8 +18,8 @@ logger = logging.getLogger(__name__)
 
 
 def is_job_queue_db_enabled() -> bool:
-    """Job queue DB is disabled in SQLite-only mode."""
-    return False
+    """Check if job queue DB is enabled via env var."""
+    return os.getenv("JOB_QUEUE_ENABLED", "0") == "1"
 
 
 def get_scheduler_name() -> str:
