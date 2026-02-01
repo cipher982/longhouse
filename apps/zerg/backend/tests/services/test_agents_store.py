@@ -20,16 +20,12 @@ def agents_schema_setup():
     """Create agents schema and tables once per test module."""
     from tests.conftest import test_engine
 
-    # Create the agents schema
-    with test_engine.connect() as conn:
-        conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {AGENTS_SCHEMA}"))
-        conn.commit()
-
-    # Create all agents tables
+    # SQLite doesn't have schemas, so AGENTS_SCHEMA is None
+    # Just create the tables (no schema creation needed)
     agents_metadata.create_all(bind=test_engine)
     yield
 
-    # Optional cleanup (tables persist in docker mode for speed)
+    # Optional cleanup (tables persist for speed)
 
 
 @pytest.fixture
@@ -37,12 +33,12 @@ def agents_db_session(db_session, agents_schema_setup):
     """Provide a db session with agents schema tables ready."""
     from tests.conftest import test_engine
 
-    # Truncate agents tables before each test
+    # Delete data from agents tables before each test
+    # (SQLite doesn't support TRUNCATE, use DELETE instead)
     with test_engine.connect() as conn:
         for table in reversed(agents_metadata.sorted_tables):
-            table_name = f"{AGENTS_SCHEMA}.{table.name}"
             try:
-                conn.execute(text(f"TRUNCATE TABLE {table_name} RESTART IDENTITY CASCADE"))
+                conn.execute(text(f"DELETE FROM {table.name}"))
             except Exception:
                 pass
         conn.commit()

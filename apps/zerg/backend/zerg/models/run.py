@@ -15,6 +15,7 @@ from sqlalchemy.sql import func
 from zerg.database import Base
 from zerg.models.enums import RunStatus
 from zerg.models.enums import RunTrigger
+from zerg.models.types import GUID
 
 
 class Run(Base):
@@ -46,8 +47,8 @@ class Run(Base):
     correlation_id = Column(String, nullable=True, index=True)
 
     # Trace ID for end-to-end debugging (propagated to commiss and LLM audit)
-    # String(36) for SQLite compatibility
-    trace_id = Column(String(36), nullable=True, index=True)
+    # GUID handles UUID↔string conversion for SQLite compatibility
+    trace_id = Column(GUID(), nullable=True, index=True)
 
     # Model used for this run (for continuation inheritance)
     model = Column(String(100), nullable=True)
@@ -59,7 +60,8 @@ class Run(Base):
     # Message ID (UUID) assigned to the assistant message in oikos_started event.
     # Used by continuation runs to look up the original message's ID for
     # continuation_of_message_id (schema requires UUID, not sentinel string).
-    assistant_message_id = Column(String(36), nullable=True)
+    # GUID handles UUID↔string conversion for SQLite compatibility
+    assistant_message_id = Column(GUID(), nullable=True)
 
     # Pending tool_call_id for WAITING runs (async inbox model).
     # When wait_for_commis causes an interrupt, this stores its tool_call_id

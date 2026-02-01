@@ -292,19 +292,19 @@ def test_read_thread_messages_ordered_by_id(client: TestClient, sample_thread: T
         thread_id=sample_thread.id,
         role="user",
         content="First message",
-        sent_at=(base_time + timedelta(seconds=10)).isoformat(),  # Later sent time
+        sent_at=base_time + timedelta(seconds=10),  # Later sent time (datetime, not string)
     )
     msg2 = ThreadMessage(
         thread_id=sample_thread.id,
         role="user",
         content="Second message",
-        sent_at=(base_time + timedelta(seconds=5)).isoformat(),  # Earlier sent time
+        sent_at=base_time + timedelta(seconds=5),  # Earlier sent time (datetime, not string)
     )
     msg3 = ThreadMessage(
         thread_id=sample_thread.id,
         role="user",
         content="Third message",
-        sent_at=(base_time + timedelta(seconds=15)).isoformat(),  # Latest sent time
+        sent_at=base_time + timedelta(seconds=15),  # Latest sent time (datetime, not string)
     )
 
     # Add in reverse order to emphasize that insertion order doesn't matter

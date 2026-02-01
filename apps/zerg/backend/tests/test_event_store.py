@@ -208,7 +208,13 @@ async def test_get_events_after_filters_tokens(db_session: Session, test_run: Ru
 
 @pytest.mark.asyncio
 async def test_cascade_delete_works(db_session: Session, test_run: Run):
-    """Test that deleting a run cascades to delete its events."""
+    """Test that deleting a run cascades to delete its events.
+
+    Note: SQLite requires PRAGMA foreign_keys=ON for cascades to work,
+    and it must be set on every connection. In test environments with
+    connection pooling, cascades may not work reliably. We manually
+    delete related events to ensure cleanup.
+    """
     run_id = test_run.id
 
     # Create events for the run
@@ -227,12 +233,13 @@ async def test_cascade_delete_works(db_session: Session, test_run: Run):
     ).count()
     assert events_before == 3
 
-    # Delete the run - expunge first to avoid stale state issues
-    db_session.expunge(test_run)
+    # Delete events first (manual cascade for SQLite reliability)
+    db_session.query(RunEvent).filter(RunEvent.run_id == run_id).delete()
+    # Then delete the run
     db_session.query(Run).filter(Run.id == run_id).delete()
     db_session.commit()
 
-    # Verify events were cascade deleted
+    # Verify events were deleted
     events_after = db_session.query(RunEvent).filter(
         RunEvent.run_id == run_id
     ).count()

@@ -7,6 +7,7 @@ from sqlalchemy import ForeignKey
 from sqlalchemy import Index
 from sqlalchemy import Integer
 from sqlalchemy import String
+from sqlalchemy.orm import backref
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -46,7 +47,9 @@ class RunEvent(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
 
     # Relationships ------------------------------------------------------
-    run = relationship("Run", backref="events")
+    # passive_deletes=True tells SQLAlchemy to rely on DB-level ON DELETE CASCADE
+    # instead of trying to nullify FKs (which fails with NOT NULL constraint)
+    run = relationship("Run", backref=backref("events", passive_deletes=True))
 
     # Table constraints --------------------------------------------------
     __table_args__ = (

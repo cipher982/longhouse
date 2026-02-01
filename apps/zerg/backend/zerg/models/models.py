@@ -395,8 +395,8 @@ class CommisJob(Base):
     tool_call_id = Column(String(64), nullable=True, index=True)
 
     # Trace ID for end-to-end debugging (inherited from oikos run)
-    # String(36) for SQLite compatibility
-    trace_id = Column(String(36), nullable=True, index=True)
+    # GUID handles UUID↔string conversion for SQLite compatibility
+    trace_id = Column(GUID(), nullable=True, index=True)
 
     # Job specification
     task = Column(Text, nullable=False)
