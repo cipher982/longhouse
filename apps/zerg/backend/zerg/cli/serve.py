@@ -20,7 +20,7 @@ app = typer.Typer(help="Longhouse server commands")
 
 
 def _get_zerg_home() -> Path:
-    """Return the Zerg home directory (~/.zerg), creating if needed."""
+    """Return the Longhouse home directory (~/.zerg), creating if needed."""
     zerg_home = Path.home() / ".zerg"
     zerg_home.mkdir(parents=True, exist_ok=True)
     return zerg_home
