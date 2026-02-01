@@ -20,7 +20,7 @@ test.describe('Dashboard - Core', () => {
   });
 
   test('create fiche button is present', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/dashboard');
 
     // Wait for the create fiche button to be visible and ready
     const createBtn = page.locator('[data-testid="create-fiche-btn"]');

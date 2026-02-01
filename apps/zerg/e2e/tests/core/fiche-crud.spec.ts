@@ -17,7 +17,7 @@ test.beforeEach(async ({ request }) => {
 
 test.describe('Fiche CRUD - Core', () => {
   test('create fiche - fiche appears in dashboard', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/dashboard');
 
     const createBtn = page.locator('[data-testid="create-fiche-btn"]');
     await expect(createBtn).toBeVisible({ timeout: 10000 });

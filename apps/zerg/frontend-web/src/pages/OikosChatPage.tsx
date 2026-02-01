@@ -41,6 +41,7 @@ export default function OikosChatPage() {
   const [initialMessages, setInitialMessages] = useState<ChatMessage[] | undefined>(undefined);
   const [loading, setLoading] = useState(!!threadTitle || !!demoScenario);
   const { showSessionPicker } = useSessionPicker();
+  const isE2E = import.meta.env.VITE_E2E === 'true';
 
   // API key availability state
   const [llmAvailable, setLlmAvailable] = useState<boolean | null>(null);
@@ -56,7 +57,7 @@ export default function OikosChatPage() {
         if (!cancelled) {
           setLlmAvailable(caps.llm_available);
           // Show modal if LLM is not available
-          if (!caps.llm_available) {
+          if (!caps.llm_available && !isE2E) {
             setShowApiKeyModal(true);
           }
         }

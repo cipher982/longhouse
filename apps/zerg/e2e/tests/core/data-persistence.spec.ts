@@ -21,7 +21,7 @@ test.beforeEach(async ({ request }) => {
  * CRITICAL: Gets ID from API response, NOT from DOM query (.first() is racy in parallel tests)
  */
 async function createFicheViaUI(page: Page): Promise<string> {
-  await page.goto('/');
+  await page.goto('/dashboard');
   await waitForPageReady(page, { timeout: 20000 });
 
   const createBtn = page.locator('[data-testid="create-fiche-btn"]');
@@ -102,7 +102,7 @@ test.describe('Data Persistence - Core', () => {
     await expect(messagesContainer).toContainText(testMessage, { timeout: 15000 });
 
     // Navigate away
-    await page.goto('/');
+    await page.goto('/dashboard');
     await waitForPageReady(page, { timeout: 20000 });
     await expect(page.locator('[data-testid="create-fiche-btn"]')).toBeVisible({ timeout: 20000 });
 
@@ -127,7 +127,7 @@ test.describe('Data Persistence - Core', () => {
     const threadUrl = page.url();
 
     // Navigate to dashboard
-    await page.goto('/');
+    await page.goto('/dashboard');
     await waitForPageReady(page, { timeout: 20000 });
     await expect(page.locator('[data-testid="create-fiche-btn"]')).toBeVisible({ timeout: 20000 });
 

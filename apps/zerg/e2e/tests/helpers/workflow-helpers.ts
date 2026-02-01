@@ -32,7 +32,7 @@ export async function createFichesViaDashboard(
   page: Page,
   count: number = 1
 ): Promise<void> {
-  await page.locator('.header-nav').click();
+  await page.goto('/dashboard');
   await page.waitForTimeout(1000);
 
   const createFicheBtn = page.locator('button:has-text("Create Fiche")');

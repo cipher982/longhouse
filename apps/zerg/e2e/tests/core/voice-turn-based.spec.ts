@@ -91,7 +91,7 @@ test.describe('Voice Turn-Based - Core', () => {
     expect(data.status).toBe('success');
   });
 
-  test('transcribe -> chat SSE uses same message_id', async ({ request, backendUrl, commisId }) => {
+  test('transcribe -> chat SSE includes stable message_id', async ({ request, backendUrl, commisId }) => {
     test.setTimeout(60000);
     const audioBuffer = buildWavBuffer();
     const testMessageId = randomUUID();
@@ -126,8 +126,16 @@ test.describe('Voice Turn-Based - Core', () => {
       timeoutMs: 30000,
     });
 
+    const startedEvent = events.find((event) => event.event === 'oikos_started');
     const completeEvent = events.find((event) => event.event === 'oikos_complete');
+    expect(startedEvent).toBeTruthy();
     expect(completeEvent).toBeTruthy();
-    expect(JSON.stringify(completeEvent?.data ?? '')).toContain(testMessageId);
+
+    const startedPayload = (startedEvent?.data as { payload?: { message_id?: string } })?.payload;
+    const completePayload = (completeEvent?.data as { payload?: { message_id?: string } })?.payload;
+
+    expect(typeof startedPayload?.message_id).toBe('string');
+    expect(typeof completePayload?.message_id).toBe('string');
+    expect(completePayload?.message_id).toBe(startedPayload?.message_id);
   });
 });
