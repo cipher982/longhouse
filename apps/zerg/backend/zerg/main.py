@@ -47,6 +47,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from zerg.constants import API_PREFIX
@@ -823,6 +824,38 @@ async def read_root():
             return FileResponse(index_path)
 
     return {"message": "Fiche Platform API is running"}
+
+
+@app.get("/health/db", operation_id="health_db_check")
+async def health_db():
+    """Database readiness check - verifies critical tables are initialized.
+
+    This endpoint is used by Playwright to wait for the database to be fully
+    initialized before starting tests. It only returns 200 when all critical
+    tables exist.
+    """
+    from sqlalchemy import text
+
+    from zerg.database import default_engine
+
+    # Critical tables that must exist for the app to function
+    required_tables = ["users", "fiches", "threads", "runs", "commis_jobs", "sessions", "events"]
+
+    try:
+        with default_engine.connect() as conn:
+            for table in required_tables:
+                result = conn.execute(text(f"SELECT 1 FROM sqlite_master WHERE type='table' AND name='{table}'"))
+                if not result.fetchone():
+                    return JSONResponse(
+                        status_code=503,
+                        content={"status": "initializing", "missing_table": table},
+                    )
+        return {"status": "ready", "tables_verified": required_tables}
+    except Exception as e:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error", "detail": str(e)},
+        )
 
 
 @app.get("/health", operation_id="health_check_get")
