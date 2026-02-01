@@ -281,8 +281,11 @@ async def force_sync() -> SyncResponse:
         # Sync scheduler with new registry state
         sync_result = job_registry.sync_jobs(old_snapshot)
 
-        # Publish updated definitions to Life-Hub
-        await asyncio.to_thread(publish_job_definitions)
+        # Publish updated definitions to Life-Hub (non-fatal if it fails)
+        try:
+            await asyncio.to_thread(publish_job_definitions)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Failed to publish job definitions (non-fatal): %s", e)
 
         logger.info(
             "Git sync complete: sha=%s, added=%d, removed=%d, rescheduled=%d",
