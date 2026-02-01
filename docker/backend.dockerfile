@@ -116,8 +116,8 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 # Expose port
 EXPOSE 8000
 
-# Start the application with migrations
-CMD ["./start.sh"]
+# Start the server - CLI handles database setup and defaults
+CMD ["longhouse", "serve", "--host", "0.0.0.0", "--port", "8000"]
 
 # Development target for local development
 FROM builder AS development
