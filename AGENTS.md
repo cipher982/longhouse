@@ -209,6 +209,7 @@ Categories: `gotcha`, `pattern`, `design`, `tool`, `test`, `deploy`, `perf`
 - (2026-02-01) [design] Durable scheduler queue now uses SQLite via zerg.jobs.queue; set JOB_QUEUE_DB_URL to a dedicated sqlite file to avoid write contention.
 - (2026-02-01) [gotcha] Funnel tracking origin allowlist still referenced Swarmlet domains; add longhouse.ai or /api/funnel/batch returns 403.
 - (2026-02-01) [design] Alpha = no users = no backwards compat. Never add legacy fallbacks, dual cookie names, or migration shims. Clean breaks only.
+- (2026-02-01) [gotcha] Claude Code processes expose no session id in args/env; lsof shows only ~/.claude/history.jsonl + shipper files, so PID→session mapping needs explicit instrumentation (wrapper/env or per-session log).
 - (2026-02-01) [gotcha] Forum + Session Picker still call `/oikos/life-hub/*` endpoints (SQLite-specific) instead of agents API; Life Hub naming still leaks into UI.
 - (2026-02-01) [gotcha] `OIKOS_WORKSPACE_PATH` default is `/var/oikos/workspaces`, which is not OSS-friendly; should default to a user-writable `~/.longhouse` path.
 - (2026-02-01) [design] User preference: don’t ship heuristic status/attention; if truth is missing, redesign the data model instead of guessing.
