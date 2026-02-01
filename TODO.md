@@ -62,6 +62,15 @@ Eliminate unauth 401 spam and fix funnel 403 after rebrand.
 
 ---
 
+## Public Origin Config — Centralize (2)
+
+Make public origins discoverable and derived from config instead of hard-coded lists.
+
+- [x] Add `PUBLIC_SITE_URL`/`PUBLIC_API_URL` to settings and helpers
+- [x] Use helpers for CORS + funnel origin checks and add tests
+
+---
+
 ## Longhouse Rebrand — CLI / Packages / Images (7)
 
 Package and binary naming so OSS users see Longhouse everywhere.

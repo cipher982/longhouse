@@ -28,6 +28,7 @@ from fastapi import APIRouter
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
+from zerg.config import get_funnel_allowed_hosts
 from zerg.config import get_settings
 
 router = APIRouter(prefix="/funnel", tags=["funnel"])
@@ -316,26 +317,20 @@ def _is_valid_origin(request: Request) -> bool:
 
     from urllib.parse import urlparse
 
-    # Exact matches for production
-    allowed_hosts = {
-        "swarmlet.com",
-        "www.swarmlet.com",
-        "swarmlet.ai",
-        "www.swarmlet.ai",
-        "longhouse.ai",
-        "www.longhouse.ai",
-        "localhost",
-        "127.0.0.1",
-    }
+    # Exact matches for production (derived from public origin config)
+    allowed_hosts = get_funnel_allowed_hosts(settings)
 
     def _host_allowed(hostname: str | None) -> bool:
         if not hostname:
             return False
         if hostname in allowed_hosts:
             return True
-        # Allow subdomains
-        if hostname.endswith(".swarmlet.com") or hostname.endswith(".swarmlet.ai") or hostname.endswith(".longhouse.ai"):
-            return True
+        # Allow subdomains of explicitly allowed hosts
+        for host in allowed_hosts:
+            if host in {"localhost", "127.0.0.1"}:
+                continue
+            if hostname.endswith(f".{host}"):
+                return True
         return False
 
     origin = request.headers.get("origin", "")

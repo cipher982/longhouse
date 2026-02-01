@@ -49,6 +49,8 @@ def _mock_settings_with_allowlist(allowed_model: str):
         openai_api_key=real_settings.openai_api_key,
         groq_api_key=real_settings.groq_api_key,
         app_public_url=real_settings.app_public_url,
+        public_site_url=real_settings.public_site_url,
+        public_api_url=real_settings.public_api_url,
         runner_docker_image=real_settings.runner_docker_image,
         pubsub_audience=real_settings.pubsub_audience,
         gmail_pubsub_topic=real_settings.gmail_pubsub_topic,
