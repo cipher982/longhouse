@@ -25,6 +25,35 @@ Make Longhouse the sole source of session truth. Remove Life Hub routes, naming,
 
 ---
 
+## Forum Discovery UX + Explicit Presence Signals (7)
+
+Make the Forum the canonical discovery UI for sessions, with **explicit** state signals (no heuristics).
+
+**Deliverables:** "Active/Needs You/Parked/Completed/Unknown" are driven by emitted events, not inference.
+
+- [ ] Define a session presence/state event model (`session_started`, `heartbeat`, `session_ended`, `needs_user`, `blocked`, `completed`, `parked`, `resumed`) and document it.
+- [ ] Add ingestion + storage for presence events in the agents schema (SQLite-safe).
+- [ ] Update the Forum UI to group by explicit buckets and remove heuristic "idle/working" logic.
+- [ ] Add user actions in Forum: Park, Snooze, Resume, Archive (emit explicit events).
+- [ ] Wire wrappers to emit `session_started`/`heartbeat`/`session_ended` (Claude/Codex first).
+- [ ] Add a single "Unknown" state in UI for sessions without signals (no pretending).
+
+---
+
+## OSS One-Liner Installer + Onboard Wizard (6)
+
+Make the one-liner + TUI wizard the **default** OSS onboarding path.
+
+**Deliverables:** `curl -fsSL https://longhouse.ai/install.sh | bash` installs CLI + Claude shim, verifies PATH, then runs `longhouse onboard`.
+
+- [ ] Create `scripts/install.sh` (one-liner entrypoint) that installs CLI + Claude shim + verification.
+- [ ] Implement `longhouse onboard` TUI (QuickStart default, Manual option; no .env edits).
+- [ ] Add shim verification: check `command -v claude` in a fresh shell; if failed, print one exact fix line.
+- [ ] Update README quickstart + onboarding contract to use the one-liner + wizard.
+- [ ] Add a fallback message for unique shells (fish/other) with exact instructions.
+
+---
+
 ## Longhouse Home Dir + Path Cleanup (4)
 
 Unify local paths under `~/.longhouse` and remove legacy `~/.zerg` naming + env vars.
