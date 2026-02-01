@@ -1,12 +1,14 @@
 <p align="center">
-  <img src="apps/zerg/frontend-web/branding/swarm-logo-master.png" alt="Zerg" width="180" />
+  <img src="apps/zerg/frontend-web/branding/swarm-logo-master.png" alt="Longhouse" width="180" />
 </p>
 
-<h1 align="center">Zerg</h1>
+<h1 align="center">Longhouse</h1>
 
 <p align="center">
   <strong>All your AI coding sessions, unified and searchable.</strong>
 </p>
+
+> Naming note: Longhouse is the public brand; Oikos is the assistant UI. Repo paths still use `zerg` during transition.
 
 <p align="center">
   <a href="#quick-start">Quick Start</a> •
@@ -23,7 +25,7 @@ You use Claude Code, Codex, Gemini, Cursor. Each stores sessions in obscure JSON
 
 ## The Solution
 
-Zerg watches your AI coding sessions and unifies them into a single, searchable timeline. See what you worked on, when, and pick up where you left off.
+Longhouse watches your AI coding sessions and unifies them into a single, searchable timeline. See what you worked on, when, and pick up where you left off.
 
 <!-- Screenshot will go here once we capture it -->
 <!-- ![Timeline Screenshot](apps/zerg/frontend-web/branding/timeline-screenshot.png) -->
@@ -86,7 +88,7 @@ For multi-node deployments or production use.
 
 ```bash
 # Same setup as Option 2, but set DATABASE_URL to Postgres
-# Edit .env: DATABASE_URL=postgresql://user:pass@localhost/zerg
+# Edit .env: DATABASE_URL=postgresql://user:pass@localhost/longhouse
 
 make dev
 ```
@@ -106,7 +108,7 @@ make dev
 ## How It Works
 
 ```
-Your IDE/CLI                    Zerg
+Your IDE/CLI                    Longhouse
 ┌──────────────┐               ┌──────────────────────┐
 │ Claude Code  │──────────────▶│                      │
 │ Codex CLI    │   session     │  Timeline UI         │
@@ -115,7 +117,7 @@ Your IDE/CLI                    Zerg
 └──────────────┘               └──────────────────────┘
 ```
 
-Zerg ingests session files from AI coding tools and presents them in a unified web interface. Sessions are indexed by project, provider, and timestamp.
+Longhouse ingests session files from AI coding tools and presents them in a unified web interface. Sessions are indexed by project, provider, and timestamp.
 
 ---
 

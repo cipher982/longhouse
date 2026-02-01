@@ -1,14 +1,20 @@
-# Zerg Vision (2026)
+# Longhouse Vision (2026)
 
-Zerg is an AI agent orchestration platform where AI does the work and humans manage the system. The product must feel instant, always-on, and magical: your local Claude/Codex/Gemini sessions appear as a clean, queryable timeline inside Zerg with zero friction.
+Longhouse is an AI agent orchestration platform where AI does the work and humans manage the system. The product must feel instant, always-on, and magical: your local Claude/Codex/Gemini sessions appear as a clean, queryable timeline inside Longhouse with zero friction.
 
 This is a living vision doc. It captures both the direction and the reasoning that got us here, so we can make fast decisions without re-litigating the fundamentals.
+
+## Naming (2026-02)
+
+- **Longhouse** = public product + brand
+- **Oikos** = assistant UI inside Longhouse
+- **Zerg** = internal codename/repo (transitional; user-facing docs should say Longhouse)
 
 ---
 
 ## North Star
 
-1. Zero-friction onboarding for OSS builders: `pip install zerg` or `brew install zerg`, SQLite only.
+1. Zero-friction onboarding for OSS builders: `pip install longhouse` or `brew install longhouse`, SQLite only.
 2. Always-on agents: background work continues even when the user is away.
 3. Unified, queryable agent sessions across providers (Claude, Codex, Gemini, Cursor, Oikos).
 4. A hosted option that feels like "I pay $5 and never think about it."
@@ -23,17 +29,17 @@ This is a living vision doc. It captures both the direction and the reasoning th
 - **OSS-first story**: easy to explain on HN/Twitter without enterprise jargon.
 - **Single-tenant core (enforced)**: build fast, keep code simple, avoid multi-tenant security tax. Agents APIs reject instances with >1 user.
 - **Hosted = convenience**: premium support and "don't think about it" operations.
-- **Users bring their own API keys**. Zerg is orchestration + UI + data, not LLM compute billing.
+- **Users bring their own API keys**. Longhouse is orchestration + UI + data, not LLM compute billing.
 - **No Postgres in core**. SQLite is the only DB requirement for OSS and hosted runtime instances.
-- **Hosted architecture = control plane + isolated runtimes**. Control plane is multi-tenant; Zerg app stays single-tenant.
+- **Hosted architecture = control plane + isolated runtimes**. Control plane is multi-tenant; Longhouse app stays single-tenant.
 
 ---
 
 ## What Changed (Reality Check)
 
-- Zerg started as a hand-written ReAct system. It has evolved into an orchestration layer around Claude Code and other CLIs.
-- The "real" session log is the provider JSONL stream. Zerg's internal threads are operational state, not the canonical archive.
-- Life Hub currently owns the agents schema; Zerg should own it so OSS users are self-sufficient.
+- Longhouse started as a hand-written ReAct system. It has evolved into an orchestration layer around Claude Code and other CLIs.
+- The "real" session log is the provider JSONL stream. Longhouse's internal threads are operational state, not the canonical archive.
+- Life Hub currently owns the agents schema; Longhouse should own it so OSS users are self-sufficient.
 
 ---
 
@@ -44,18 +50,18 @@ Oikos session picker threw:
 relation "agents.events" does not exist
 ```
 
-Cause: Zerg was querying `agents.sessions` and `agents.events` in Life Hub's database. Those tables do not exist in Zerg's DB.
+Cause: Longhouse was querying `agents.sessions` and `agents.events` in Life Hub's database. Those tables do not exist in Longhouse's DB.
 
-This revealed the deeper issue: Zerg was not standalone. OSS users who `brew install zerg` would hit Life Hub errors. That is a dead end for adoption.
+This revealed the deeper issue: Longhouse was not standalone. OSS users who `brew install longhouse` would hit Life Hub errors. That is a dead end for adoption.
 
 ---
 
 ## The Core Shift
 
-**Zerg is now primarily an orchestration layer around CLI agents.**
+**Longhouse is now primarily an orchestration layer around CLI agents.**
 
 - Commis runs are mostly Claude Code sessions.
-- The archive of truth is the provider session log, not Zerg's internal thread state.
+- The archive of truth is the provider session log, not Longhouse's internal thread state.
 - The "magic" is taking obscure JSONL logs and turning them into a searchable, unified timeline.
 
 This is the product. Everything else supports it.
@@ -69,7 +75,7 @@ Agent sessions are unified into a single, lossless, queryable database:
 - **sessions**: one row per provider session (metadata, device, project, timestamps)
 - **events**: append-only rows for each message/tool call (raw text + parsed fields)
 
-This schema is already proven in Life Hub. We are moving it to Zerg and making Zerg the source of truth.
+This schema is already proven in Life Hub. We are moving it to Longhouse and making Longhouse the source of truth.
 
 ---
 
@@ -103,15 +109,15 @@ Claude Code on laptop
   -> agents.sessions + agents.events
 ```
 
-**Stream 2: Zerg commis -> Life Hub**
+**Stream 2: Longhouse commis -> Life Hub**
 ```
-Zerg spawns commis
+Longhouse spawns commis
   -> Claude Code runs in container
   -> commis_job_processor ships to Life Hub
   -> same Life Hub tables
 ```
 
-Both end up in Life Hub, so Zerg depends on Life Hub. We are reversing that: Zerg becomes the canonical home for agent sessions, and Life Hub becomes a reader.
+Both end up in Life Hub, so Longhouse depends on Life Hub. We are reversing that: Longhouse becomes the canonical home for agent sessions, and Life Hub becomes a reader.
 
 ---
 
@@ -119,8 +125,8 @@ Both end up in Life Hub, so Zerg depends on Life Hub. We are reversing that: Zer
 
 ### OSS Local (default path)
 ```
-brew install zerg
-zerg up
+brew install longhouse
+longhouse up
 ```
 - Local web UI
 - Local agents DB
@@ -130,7 +136,7 @@ zerg up
 **Local path diagram:**
 ```
 Laptop
-  ├─ Zerg (UI + API)
+  ├─ Longhouse (UI + API)
   ├─ SQLite only (default and core)
   └─ Shipper watches ~/.claude/...
 ```
@@ -146,8 +152,8 @@ Sign in with Google -> provision isolated instance -> always-on
 
 **Hosted path diagram:**
 ```
-User -> Control Plane -> Provision Zerg instance (per-user)
-     -> user.swarmlet.com -> Zerg (UI+API) + DB
+User -> Control Plane -> Provision Longhouse instance (per-user)
+     -> user.longhouse.ai -> Longhouse (UI+API) + DB
 ```
 
 ### Free Trial
@@ -190,10 +196,10 @@ If the README drifts from reality, CI fails. No hidden env flags - everything de
 
 ## Mental Model (Core vs Scheduler vs Jobs)
 
-Zerg is the product. Sauron is the scheduler service. Jobs are the thing it runs.
+Longhouse is the product. Sauron is the scheduler service. Jobs are the thing it runs.
 
-- **Zerg Core**: UI + API + agents. Runs standalone (no scheduler required).
-- **Sauron**: cron/scheduler service. Optional for Zerg overall, but its whole purpose is to run jobs (think “cron for Zerg jobs/commis/fiches”).
+- **Longhouse Core**: UI + API + agents. Runs standalone (no scheduler required).
+- **Sauron**: cron/scheduler service. Optional for Longhouse overall, but its whole purpose is to run jobs (think “cron for Longhouse jobs/commis/fiches”).
 - **Jobs Pack**: the job source Sauron needs. Options: a local template for zero-config OSS, or a private repo for real workloads.
 
 This framing keeps OSS onboarding simple while preserving the “power user” path.
@@ -205,13 +211,13 @@ This framing keeps OSS onboarding simple while preserving the “power user” p
 We do not do "one VM per user." We do:
 
 - **Control plane (tiny)**: signup -> payment -> provision -> route
-- **Runtime**: one container stack per user (Zerg + SQLite) on shared nodes
+- **Runtime**: one container stack per user (Longhouse + SQLite) on shared nodes
 - **Routing**: wildcard DNS + reverse proxy to per-user container
 - **Always-on**: paid instances never sleep
 
 This preserves instant agents while keeping $5-10/month viable.
 
-**Decision:** the control plane is the *only* multi-tenant system. It provisions per-user Zerg instances. The app remains single-tenant.
+**Decision:** the control plane is the *only* multi-tenant system. It provisions per-user Longhouse instances. The app remains single-tenant.
 
 ---
 
@@ -222,20 +228,20 @@ It is multi-tenant by necessity, but it stores only account + provisioning metad
 
 **Signup flow:**
 ```
-1. User visits swarmlet.com
+1. User visits longhouse.ai
 2. "Sign in with Google" -> OAuth
 3. User record created in control plane DB
 4. Stripe checkout for $5/month (or free trial)
 5. On payment success: provision instance
-6. Redirect to alice.swarmlet.com
+6. Redirect to alice.longhouse.ai
 ```
 
 **Provisioning (via Coolify API):**
 ```
 POST /api/applications
 {
-  "name": "zerg-alice",
-  "image": "ghcr.io/cipher982/zerg:latest",
+  "name": "longhouse-alice",
+  "image": "ghcr.io/cipher982/longhouse:latest",
   "env": {
     "DATABASE_URL": "postgres://...",
     "USER_EMAIL": "alice@example.com",
@@ -245,7 +251,7 @@ POST /api/applications
 ```
 
 **Routing:**
-- Wildcard DNS: `*.swarmlet.com -> load balancer IP`
+- Wildcard DNS: `*.longhouse.ai -> load balancer IP`
 - Traefik/Caddy routes by subdomain to correct container
 - Each container exposes on unique internal port
 
@@ -264,25 +270,25 @@ Runners are user-owned daemons that execute commands on infrastructure the user 
 
 **What a runner is:**
 - Node.js daemon installed on user's laptop/server
-- Connects **outbound** to Zerg (no firewall holes needed)
-- Executes shell commands when Zerg requests (`runner_exec` tool)
+- Connects **outbound** to Longhouse (no firewall holes needed)
+- Executes shell commands when Longhouse requests (`runner_exec` tool)
 - Example: run tests, git operations, deploy scripts
 
 **How runners fit with isolated hosting:**
 ```
-User's hosted Zerg instance (always-on)
+User's hosted Longhouse instance (always-on)
          ↕ WebSocket
 User's laptop runner daemon
          ↓
 Local command execution (npm test, etc.)
 ```
 
-Each user's Zerg instance only sees their own runners. Isolation is natural.
+Each user's Longhouse instance only sees their own runners. Isolation is natural.
 
 **Runner registration:**
-- `zerg runner register` generates credentials
+- `longhouse runner register` generates credentials
 - Runner connects with those credentials
-- Zerg validates runner belongs to the user
+- Longhouse validates runner belongs to the user
 
 ---
 
@@ -291,7 +297,7 @@ Each user's Zerg instance only sees their own runners. Isolation is natural.
 Commis (background agent jobs) execute in two modes:
 
 **Standard mode (in-process):**
-- Runs in the Zerg FastAPI process
+- Runs in the Longhouse FastAPI process
 - Direct LLM API calls using user's configured keys
 - Fast, suitable for short tasks (<5 min)
 - No container overhead
@@ -303,8 +309,8 @@ Commis (background agent jobs) execute in two modes:
 - Changes captured as git diff
 
 **What's containerized vs not:**
-- ✅ Containerized: Zerg backend + Postgres (per-user isolation)
-- ❌ Not containerized: Commis execution (runs in Zerg process or as subprocess)
+- ✅ Containerized: Longhouse backend + Postgres (per-user isolation)
+- ❌ Not containerized: Commis execution (runs in Longhouse process or as subprocess)
 - ❌ Not containerized: Runner commands (run on user's own machine)
 
 This keeps the execution model simple while still isolating user data.
@@ -358,22 +364,22 @@ We need real-time sync (not polling). The shipper:
 
 - Watches local provider session files via OS file watching (FSEvents/inotify)
 - Debounces rapid writes (Claude streams to file)
-- Sends incremental events to Zerg in batches
+- Sends incremental events to Longhouse in batches
 - Runs as a background service (launchd/systemd)
 - Falls back to periodic scan to catch missed events/rotations
 - Spools locally when offline, syncs on reconnect
 
 Commands:
-- `zerg connect <url>` installs and starts the shipper for remote hosted instances.
+- `longhouse connect <url>` installs and starts the shipper for remote hosted instances.
 - Local installs auto-detect and run inline.
 
-**Magic moment:** user types in Claude Code -> shipper fires -> session appears in Zerg before they switch tabs.
+**Magic moment:** user types in Claude Code -> shipper fires -> session appears in Longhouse before they switch tabs.
 
 ---
 
 ## Ingest Protocol
 
-The shipper-to-Zerg ingest must be robust:
+The shipper-to-Longhouse ingest must be robust:
 
 **Batching:**
 - Collect events for up to 1 second or 100 events, whichever first
@@ -381,12 +387,12 @@ The shipper-to-Zerg ingest must be robust:
 - Single HTTP POST per batch
 
 **Offline resilience:**
-- Local SQLite spool when Zerg unreachable
+- Local SQLite spool when Longhouse unreachable
 - Replay on reconnect with idempotency keys
 - Dedup by (session_id, source_path, source_offset, event_hash)
 
 **Authentication:**
-- Per-device token issued during `zerg connect`
+- Per-device token issued during `longhouse connect`
 - Token scoped to user's instance
 - Revocable if device compromised
 
@@ -398,7 +404,7 @@ The shipper-to-Zerg ingest must be robust:
 
 ## Agents Schema (Source of Truth)
 
-Adopt the Life Hub schema as Zerg's canonical agent archive, implemented to run on SQLite by default:
+Adopt the Life Hub schema as Longhouse's canonical agent archive, implemented to run on SQLite by default:
 
 - Lossless storage: raw text + raw JSON
 - Queryable: extracted fields for search
@@ -406,7 +412,7 @@ Adopt the Life Hub schema as Zerg's canonical agent archive, implemented to run 
 - Dedup: hash + source offset
 - Optional Postgres/TimescaleDB for scale and advanced search
 
-Zerg owns this data. Life Hub becomes a reader.
+Longhouse owns this data. Life Hub becomes a reader.
 
 ---
 
@@ -415,7 +421,7 @@ Zerg owns this data. Life Hub becomes a reader.
 We avoid most multi-tenant risk by isolating users. Remaining risks:
 
 - **Ingest endpoint**: must authenticate and protect against replay/injection.
-- **Device identity**: issue per-device tokens during `zerg connect`.
+- **Device identity**: issue per-device tokens during `longhouse connect`.
 - **Rate limits**: basic caps per device to prevent abuse.
 - **Data leakage**: isolated instance prevents cross-user leaks by default.
 
@@ -425,7 +431,7 @@ Containerization (Docker/containerd/k3s) protects execution, **not** data isolat
 
 ## API Key Management
 
-Users bring their own LLM API keys. Zerg stores and uses them securely.
+Users bring their own LLM API keys. Longhouse stores and uses them securely.
 
 **Onboarding modal:**
 ```
@@ -455,18 +461,18 @@ Users bring their own LLM API keys. Zerg stores and uses them securely.
 
 ## OSS Packaging
 
-`brew install zerg` must "just work" for the 90% case.
+`brew install longhouse` must "just work" for the 90% case.
 
 **What's in the package:**
-- `zerg` CLI (Python, via pipx or standalone binary)
+- `longhouse` CLI (Python, via pipx or standalone binary)
 - Embeds: FastAPI backend, React frontend (built), shipper
 - Default: SQLite for local DB (zero-config). Postgres is not part of core/runtime.
 
 **Commands:**
 ```bash
-zerg up              # Start local server (SQLite, port 30080)
-zerg connect <url>   # Connect shipper to remote instance
-zerg ship            # One-time manual sync
+longhouse up              # Start local server (SQLite, port 30080)
+longhouse connect <url>   # Connect shipper to remote instance
+longhouse ship            # One-time manual sync
 ```
 
 **Docker alternative:**
@@ -485,10 +491,10 @@ docker compose up    # Full stack with Postgres
 
 **Homebrew formula sketch:**
 ```ruby
-class Zerg < Formula
+class Longhouse < Formula
   desc "AI agent orchestration platform"
-  homepage "https://swarmlet.com"
-  url "https://github.com/cipher982/zerg/releases/..."
+  homepage "https://longhouse.ai"
+  url "https://github.com/cipher982/longhouse/releases/..."
 
   depends_on "python@3.11"
 
@@ -527,24 +533,24 @@ Single-tenant core + isolated hosted instances gives:
 - Security by default
 - Same OSS and hosted codebase
 
-Multi-tenant **inside the Zerg app** is a possible future, not a current requirement. Multi-tenant **in the control plane** is acceptable and minimal.
+Multi-tenant **inside the Longhouse app** is a possible future, not a current requirement. Multi-tenant **in the control plane** is acceptable and minimal.
 
 ---
 
 ## Migration Path (From Today)
 
-1. **Agents schema in Zerg** (alembic migration from Life Hub SQL)
+1. **Agents schema in Longhouse** (alembic migration from Life Hub SQL)
 2. **Ingest API** (`POST /api/agents/ingest`)
 3. **Query API** (`GET /api/agents/sessions`)
-4. **Port shipper** into Zerg CLI
+4. **Port shipper** into Longhouse CLI
 5. **Update commis** to ingest locally
 6. **Backfill** Life Hub history if desired
-7. **Life Hub reads Zerg** (dashboard only)
+7. **Life Hub reads Longhouse** (dashboard only)
 
 **Implementation note:** Schema and APIs are provider-agnostic (Claude, Codex, Gemini, Cursor, Oikos). Phase 1 validation focuses on Claude (session picker), but the ingest/query layer must not hardcode provider assumptions.
 
 Optional safety step:
-- Dual-write during migration (Life Hub + Zerg) then reconcile counts/hashes.
+- Dual-write during migration (Life Hub + Longhouse) then reconcile counts/hashes.
 
 ---
 
@@ -560,7 +566,7 @@ Optional safety step:
    - Breaks always-on agents; bad UX.
 
 4. **Separate "agent-sessions" service**
-   - Adds infra complexity; Zerg should own this data.
+   - Adds infra complexity; Longhouse should own this data.
 
 ---
 
@@ -635,19 +641,19 @@ Optional safety step:
 Life Hub becomes a dashboard consumer, not the data owner.
 
 **API contract:**
-- Life Hub calls Zerg's `/api/agents/sessions` endpoint
+- Life Hub calls Longhouse's `/api/agents/sessions` endpoint
 - Authenticated via service token (not user OAuth)
 - Read-only access to session metadata and events
 
 **What Life Hub displays:**
 - Agent session timeline alongside health, finance, etc.
 - Cross-project analytics (sessions per day, tool usage)
-- Does NOT modify Zerg data
+- Does NOT modify Longhouse data
 
 **Configuration:**
 ```env
 # In Life Hub
-ZERG_API_URL=https://swarmlet.com/api
+ZERG_API_URL=https://longhouse.ai/api
 ZERG_SERVICE_TOKEN=xxx
 ```
 
@@ -657,12 +663,12 @@ This is David's personal integration. OSS users don't need Life Hub at all.
 
 ## Open Questions
 
-1. ~~TimescaleDB support in Zerg deployments?~~ → Fallback to vanilla Postgres with time-based partitioning.
+1. ~~TimescaleDB support in Longhouse deployments?~~ → Fallback to vanilla Postgres with time-based partitioning.
 2. Session resume: store raw JSONL alongside events or reconstruct on demand?
 3. Backfill tooling: how to avoid duplicates and ensure fidelity?
 4. How should Oikos conversations map into sessions (provider="oikos")?
 5. Artifact storage: should file diffs, screenshots, patches be stored alongside events or separate?
-6. Runner daemon packaging: separate install or bundle with `zerg` CLI?
+6. Runner daemon packaging: separate install or bundle with `longhouse` CLI?
 7. Secrets for jobs: job-scoped encrypted bundles (age) vs sops vs external secrets manager?
 8. Jobs pack UX: local template by default vs required private repo from day one?
 
@@ -670,4 +676,4 @@ This is David's personal integration. OSS users don't need Life Hub at all.
 
 ## Summary
 
-Zerg becomes the canonical home for agent sessions. Life Hub becomes a dashboard consumer. The core product is single-tenant and OSS-friendly, while hosted is per-user, always-on, and simple to explain. This unlocks a clean story and fast iteration without betting the company on multi-tenant security.
+Longhouse becomes the canonical home for agent sessions. Life Hub becomes a dashboard consumer. The core product is single-tenant and OSS-friendly, while hosted is per-user, always-on, and simple to explain. This unlocks a clean story and fast iteration without betting the company on multi-tenant security.

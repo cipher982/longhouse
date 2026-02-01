@@ -1,8 +1,9 @@
 # Lightweight OSS Pivot
 
 **Status:** Active
-**Goal:** `pip install zerg && zerg serve` — cloud agent ops center in under 5 minutes (SQLite only)
+**Goal:** `pip install longhouse && longhouse serve` — cloud agent ops center in under 5 minutes (SQLite only)
 **Reality check:** Current codebase still uses Postgres; this doc defines the SQLite-only target state.
+**Naming note:** Public brand is Longhouse; repo paths still use `apps/zerg/` until the code rename lands.
 
 ---
 
@@ -25,10 +26,10 @@ These are the concrete mismatches between today’s codebase and the SQLite-only
 - Job claiming/concurrency still uses PG locks (`FOR UPDATE SKIP LOCKED`); needs SQLite-safe `BEGIN IMMEDIATE` + `UPDATE ... RETURNING`.
 - Advisory locks / row locks still used in `single_tenant`, `fiche_locks`, `commis_resume`, email/sms tools.
 - Checkpoints are non-durable on SQLite (MemorySaver only).
-- CLI lacks `zerg serve` and package bundling; backend still expects repo `static/`.
+- CLI lacks `longhouse serve` and package bundling; backend still expects repo `static/`.
 - Onboarding smoke + README default to SQLite.
 
-If we want `pip install zerg && zerg serve` on SQLite, all of the above must be addressed or intentionally gated off in lite mode.
+If we want `pip install longhouse && longhouse serve` on SQLite, all of the above must be addressed or intentionally gated off in lite mode.
 
 ---
 
@@ -56,7 +57,7 @@ If we want `pip install zerg && zerg serve` on SQLite, all of the above must be 
 
 ### Phase 1 — Core DB Boot on SQLite
 
-**Goal:** `zerg serve` boots on SQLite without crashing. **Status: ✅ complete**
+**Goal:** `longhouse serve` boots on SQLite without crashing. **Status: ✅ complete**
 
 - **database.py**
   - Allow sqlite URLs (remove hard error).
@@ -69,7 +70,7 @@ If we want `pip install zerg && zerg serve` on SQLite, all of the above must be 
 - **initialize_database()**
   - Skip schema creation for sqlite and avoid schema-qualified introspection.
 
-**Test:** `DATABASE_URL=sqlite:///~/.zerg/zerg.db zerg serve` starts and `/health` works.
+**Test:** `DATABASE_URL=sqlite:///~/.longhouse/longhouse.db longhouse serve` starts and `/health` works.
 
 ### Phase 2 — Model Compatibility (Core + Agents)
 
@@ -83,7 +84,7 @@ If we want `pip install zerg && zerg serve` on SQLite, all of the above must be 
 
 **Files:** `models/agents.py`, `models/device_token.py`, `models/llm_audit.py`, `models/run.py`, `models/models.py`
 
-**Test:** `initialize_database()` succeeds on SQLite; `sqlite3 ~/.zerg/zerg.db .tables` shows all tables.
+**Test:** `initialize_database()` succeeds on SQLite; `sqlite3 ~/.longhouse/longhouse.db .tables` shows all tables.
 
 ### Phase 3 — Agents API + Ingest
 
@@ -116,7 +117,7 @@ If we want `pip install zerg && zerg serve` on SQLite, all of the above must be 
 
 **Goal:** Interrupt/resume survives process restart in lite mode.
 
-- Replace MemorySaver for sqlite with `langgraph-checkpoint-sqlite` backed by the same `~/.zerg/zerg.db`.
+- Replace MemorySaver for sqlite with `langgraph-checkpoint-sqlite` backed by the same `~/.longhouse/longhouse.db`.
 - Ensure migrations/setup are idempotent for sqlite.
 
 **Files:** `services/checkpointer.py`
@@ -125,15 +126,15 @@ If we want `pip install zerg && zerg serve` on SQLite, all of the above must be 
 
 ### Phase 6 — CLI + Frontend Bundle
 
-**Goal:** `pip install zerg && zerg serve` is real.
+**Goal:** `pip install longhouse && longhouse serve` is real.
 
-- Add `zerg serve` command (typer) that runs uvicorn with sane defaults (`0.0.0.0:8080`).
+- Add `longhouse serve` command (typer) that runs uvicorn with sane defaults (`0.0.0.0:8080`).
 - Bundle frontend `dist` into the python package (hatch config).
 - Update FastAPI static mount to use packaged assets when available.
 
 **Files:** `cli/main.py`, `pyproject.toml`, `main.py`, `apps/zerg/frontend-web/dist`
 
-**Test:** fresh venv → `pip install zerg` → `zerg serve` → open `/dashboard` and `/chat`.
+**Test:** fresh venv → `pip install longhouse` → `longhouse serve` → open `/dashboard` and `/chat`.
 
 ### Phase 7 — Onboarding Smoke + Docs
 
@@ -155,12 +156,12 @@ If we want `pip install zerg && zerg serve` on SQLite, all of the above must be 
 - Can't check progress from phone
 - Sessions lost if you restart
 
-**The Solution:** Zerg — your always-on agent operations center
+**The Solution:** Longhouse — your always-on agent operations center
 **Alignment:** SQLite is the core and only runtime DB; Postgres is control-plane only (if used).
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  ZERG (runs 24/7 on VPS / homelab / Mac mini)               │
+│  LONGHOUSE (runs 24/7 on VPS / homelab / Mac mini)               │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  Oikos (main chat)           Commis Pool (background)       │
@@ -188,11 +189,11 @@ If we want `pip install zerg && zerg serve` on SQLite, all of the above must be 
 
 ```bash
 # On your VPS / homelab / always-on Mac
-pip install zerg
-zerg serve --host 0.0.0.0 --port 8080
+pip install longhouse
+longhouse serve --host 0.0.0.0 --port 8080
 
 # That's it. Access from anywhere.
-# SQLite at ~/.zerg/zerg.db (default)
+# SQLite at ~/.longhouse/longhouse.db (default)
 # No Postgres in core/runtime; no Docker or external services required
 ```
 
@@ -302,7 +303,7 @@ Multiple workers, SQLite, works fine. Celery does this.
 
 # Option B: File locks for critical sections
 import fcntl
-with open(f"~/.zerg/locks/{resource}.lock", 'w') as f:
+with open(f"~/.longhouse/locks/{resource}.lock", 'w') as f:
     fcntl.flock(f, fcntl.LOCK_EX)
     # ... exclusive access ...
 # Auto-released on close/crash
@@ -314,7 +315,7 @@ with open(f"~/.zerg/locks/{resource}.lock", 'w') as f:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  zerg serve                                             │
+│  longhouse serve                                             │
 ├─────────────────────────────────────────────────────────┤
 │                                                         │
 │  FastAPI (async)                                        │
@@ -331,7 +332,7 @@ with open(f"~/.zerg/locks/{resource}.lock", 'w') as f:
 │  └── Durable, survives restarts                         │
 │                                                         │
 │  SQLite (WAL mode)                                      │
-│  └── ~/.zerg/zerg.db                                    │
+│  └── ~/.longhouse/longhouse.db                                    │
 │                                                         │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -353,7 +354,7 @@ with open(f"~/.zerg/locks/{resource}.lock", 'w') as f:
 
 **Test:**
 ```bash
-DATABASE_URL=sqlite:///~/.zerg/zerg.db zerg serve
+DATABASE_URL=sqlite:///~/.longhouse/longhouse.db longhouse serve
 # Server starts, basic endpoints work
 ```
 
@@ -419,26 +420,26 @@ class CommisPool:
 
 ### Phase 5: CLI + Frontend Bundle (Day 5-6)
 
-**Goal:** `pip install zerg && zerg serve` works
+**Goal:** `pip install longhouse && longhouse serve` works
 
 **CLI:**
 ```bash
-zerg serve              # Start server
-zerg serve --port 8080  # Custom port
-zerg status             # Show running jobs
-zerg logs <job_id>      # Tail job logs
+longhouse serve              # Start server
+longhouse serve --port 8080  # Custom port
+longhouse status             # Show running jobs
+longhouse logs <job_id>      # Tail job logs
 ```
 
 **Frontend:** Pre-built React app served from FastAPI static mount
 
-**Test:** Fresh virtualenv, pip install, zerg serve, open browser, see UI
+**Test:** Fresh virtualenv, pip install, longhouse serve, open browser, see UI
 
 ### Phase 6: PyPI Publishing (Day 6-7)
 
 **Goal:** Available on PyPI
 
 ```bash
-pip install zerg
+pip install longhouse
 ```
 
 ---
@@ -446,16 +447,16 @@ pip install zerg
 ## File Structure (After)
 
 ```
-~/.zerg/
-├── zerg.db              # SQLite database (WAL mode)
+~/.longhouse/
+├── longhouse.db              # SQLite database (WAL mode)
 ├── config.toml          # Optional config overrides
 ├── locks/               # File locks for coordination
 └── logs/                # Job logs
 
-$ zerg serve
+$ longhouse serve
 → http://0.0.0.0:8080
 → 5 commis slots available
-→ SQLite: ~/.zerg/zerg.db
+→ SQLite: ~/.longhouse/longhouse.db
 ```
 
 ---
@@ -480,7 +481,7 @@ $ zerg serve
 ## Config
 
 ```toml
-# ~/.zerg/config.toml (optional — sensible defaults work)
+# ~/.longhouse/config.toml (optional — sensible defaults work)
 
 [server]
 host = "0.0.0.0"
@@ -492,9 +493,9 @@ heartbeat_interval = 30 # Seconds between heartbeats
 stale_threshold = 120   # Reclaim jobs with no heartbeat after this
 
 [database]
-# Default: sqlite:///~/.zerg/zerg.db
+# Default: sqlite:///~/.longhouse/longhouse.db
 # For scale: postgresql://user:pass@host/db
-url = "sqlite:///~/.zerg/zerg.db"
+url = "sqlite:///~/.longhouse/longhouse.db"
 
 [llm]
 anthropic_api_key = "sk-ant-..."
@@ -505,7 +506,7 @@ openai_api_key = "sk-..."
 
 ## Success Criteria
 
-1. **Deploy:** `pip install zerg && zerg serve` on fresh VPS
+1. **Deploy:** `pip install longhouse && longhouse serve` on fresh VPS
 2. **Concurrent:** 5 commis running simultaneously
 3. **Durable:** Kill process, restart, jobs resume
 4. **Mobile:** Access from phone, see agent progress
@@ -515,7 +516,7 @@ openai_api_key = "sk-..."
 
 ## Open Questions
 
-- [ ] Package name: `zerg` available on PyPI?
+- [ ] Package name: `longhouse` available on PyPI?
 - [ ] Frontend bundle size?
 - [ ] Shipper: bundled or separate package?
 - [ ] Auth for remote access: API key? OAuth?
@@ -532,8 +533,8 @@ openai_api_key = "sk-..."
 
 **After:**
 ```
-pip install zerg
-zerg serve
+pip install longhouse
+longhouse serve
 
 # Spawn agents from phone
 # Close laptop, they keep working
@@ -546,7 +547,7 @@ Your personal cloud agent team. Always on. SQLite simple. Actually works.
 
 ## Prior Art & SQLite Best Practices (Sources)
 
-Curated sources we can lean on when pushing SQLite to its limits, plus the concrete behaviors that matter for Zerg’s design.
+Curated sources we can lean on when pushing SQLite to its limits, plus the concrete behaviors that matter for Longhouse’s design.
 
 ### Key Learnings (What we take into the plan)
 

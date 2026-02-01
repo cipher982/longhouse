@@ -1,6 +1,6 @@
 # OSS Onboarding Improvements
 
-**Goal:** Make Zerg go viral like Moltbot. Someone sees it on HN, tries it, finds value, stars/shares.
+**Goal:** Make Longhouse go viral like Moltbot. Someone sees it on HN, tries it, finds value, stars/shares.
 
 **Status:** Research phase
 
@@ -22,14 +22,14 @@
 | Clone | `git clone ...` | `curl ... \| bash` |
 | Configure | Edit 247-line .env | Interactive wizard |
 | Dependencies | Need OpenAI key upfront | Graceful degradation |
-| Run | `make dev` | `zerg up` |
+| Run | `make dev` | `longhouse up` |
 | Time to value | ~10 min if lucky | < 2 min |
 
 ### What We Actually Offer (Hidden Value)
 1. **Sessions Timeline** — All your Claude/Codex/Gemini sessions unified and searchable
 2. **Oikos Chat** — AI assistant with 65+ tools
 3. **Background Agents** — Commis jobs run async while you work
-4. **Shipper** — Real-time sync from laptop to Zerg ("magic moment")
+4. **Shipper** — Real-time sync from laptop to Longhouse ("magic moment")
 
 None of this is visible in the current README.
 
@@ -85,13 +85,13 @@ None of this is visible in the current README.
 
 ---
 
-## Zerg's Unfair Advantages
+## Longhouse's Unfair Advantages
 
 Things Moltbot doesn't have that we do:
 
 1. **Session archive as product** — We're not just another chat assistant. The unified session timeline IS the product.
-2. **StarCraft branding** — "Zerg" is memorable, has built-in community (gamers)
-3. **Shipper magic** — "Your Claude Code session appears in Zerg before you switch tabs"
+2. **Commons brand** — "Longhouse" signals a shared work hall (hub of action + discussion)
+3. **Shipper magic** — "Your Claude Code session appears in Longhouse before you switch tabs"
 4. **Already built** — Sessions UI, shipper, ingest API all working
 
 ---
@@ -101,19 +101,19 @@ Things Moltbot doesn't have that we do:
 ### Phase 1: README Rewrite (Now)
 - [ ] One-sentence hook: "All your AI coding sessions, unified and searchable"
 - [ ] Screenshot of Sessions timeline
-- [ ] Lean into StarCraft: "Spawn your swarm"
+- [ ] Lean into Longhouse: "Bring your agents home"
 - [ ] Three pathways: Quick / Full / Developer
 - [ ] Honest about current state + "coming soon"
 
 ### Phase 2: Reduce Install Friction (Next)
 - [ ] Create `install.sh` that bootstraps everything
-- [ ] Create `zerg onboard` interactive wizard
+- [ ] Create `longhouse onboard` interactive wizard
 - [ ] Add root `docker-compose.yml` that just works
 - [ ] Make UI work without API key (demo mode)
 
 ### Phase 3: One-Liner Install (Soon)
-- [ ] `curl -fsSL https://swarmlet.com/install.sh | bash`
-- [ ] Homebrew formula: `brew install zerg`
+- [ ] `curl -fsSL https://longhouse.ai/install.sh | bash`
+- [ ] Homebrew formula: `brew install longhouse`
 - [ ] npm/pip package for those who prefer
 
 ### Phase 4: Social Proof (After Launch)
@@ -128,11 +128,11 @@ Things Moltbot doesn't have that we do:
 ### From Moltbot
 | Pattern | How We'd Adapt |
 |---------|----------------|
-| One-liner install | `curl -fsSL https://swarmlet.com/install.sh \| bash` |
-| Interactive onboard | `zerg onboard` wizard for API keys, auth |
+| One-liner install | `curl -fsSL https://longhouse.ai/install.sh \| bash` |
+| Interactive onboard | `longhouse onboard` wizard for API keys, auth |
 | Graceful degradation | Show UI even without keys, unlock features progressively |
 | Multiple pathways | Quick start / Full setup / Developer |
-| Personality | StarCraft theming: "spawn", "swarm", "hatchery" |
+| Personality | Longhouse theming: "gather", "convene", "craft", "build" |
 
 ### Credential Handling (from Moltbot)
 
@@ -157,7 +157,7 @@ Things Moltbot doesn't have that we do:
 - Background refresh for OAuth tokens before expiry
 - Cooldown tracking for failed profiles (back off before retry)
 
-**For Zerg:** Could adopt this for `~/.zerg/credentials/` instead of flat env vars
+**For Longhouse:** Could adopt this for `~/.longhouse/credentials/` instead of flat env vars
 
 ### UX Decisions That Reduce Friction
 
@@ -189,8 +189,8 @@ When user chooses TUI after onboarding:
 ### Immediate (High ROI)
 
 1. **QuickStart vs Manual Flow**
-   - `zerg onboard --quick` → auto-detect workspace, use env keys, defaults
-   - `zerg onboard` → full wizard with choices
+   - `longhouse onboard --quick` → auto-detect workspace, use env keys, defaults
+   - `longhouse onboard` → full wizard with choices
    - Reduces decision fatigue for first-time users
 
 2. **Graceful Degradation**
@@ -205,30 +205,30 @@ When user chooses TUI after onboarding:
 
 4. **First-Run "Awakening" Ritual**
    - Frame setup as meeting your agent, not configuring software
-   - `zerg hatch` → interactive first conversation
+   - `longhouse hatch` → interactive first conversation
    - Emotional investment from minute one
 
 ### Medium-term
 
 5. **Profile-based Credentials**
-   - `~/.zerg/auth-profiles.json` instead of flat .env
+   - `~/.longhouse/auth-profiles.json` instead of flat .env
    - Supports multiple API keys per provider
    - `lastGood` tracking for automatic failover
 
 6. **Daemon Lifecycle Management**
-   - `zerg connect --install` already does launchd (shipper)
-   - Extend to full Zerg daemon for background agents
+   - `longhouse connect --install` already does launchd (shipper)
+   - Extend to full Longhouse daemon for background agents
    - Health probes, auto-recovery, status command
 
 7. **Non-Interactive Mode (CI/Docker)**
-   - `zerg onboard --non-interactive --openai-key $KEY`
+   - `longhouse onboard --non-interactive --openai-key $KEY`
    - Deterministic, scriptable
    - Used in Docker images, automated deploys
 
 ### Long-term
 
 8. **Install Script**
-   - `curl -fsSL https://swarmlet.com/install.sh | bash`
+   - `curl -fsSL https://longhouse.ai/install.sh | bash`
    - Detect OS, install deps (Docker/Python), bootstrap
    - One command from zero to running
 
@@ -240,10 +240,10 @@ When user chooses TUI after onboarding:
 
 ```markdown
 <p align="center">
-  <img src="..." alt="Zerg" width="200" />
+  <img src="..." alt="Longhouse" width="200" />
 </p>
 
-<h1 align="center">Zerg</h1>
+<h1 align="center">Longhouse</h1>
 
 <p align="center">
   <strong>All your AI coding sessions, unified and searchable.</strong>
@@ -266,8 +266,8 @@ from last week? Good luck.
 
 ## The Solution
 
-Zerg watches your AI coding sessions and unifies them into a single,
-searchable timeline. The session you're having right now? It's already in Zerg.
+Longhouse watches your AI coding sessions and unifies them into a single,
+searchable timeline. The session you're having right now? It's already in Longhouse.
 
 [SCREENSHOT: Sessions timeline showing Claude/Codex/Gemini unified]
 
@@ -275,14 +275,14 @@ searchable timeline. The session you're having right now? It's already in Zerg.
 
 ### Fastest (2 minutes)
 \`\`\`bash
-curl -fsSL https://swarmlet.com/install.sh | bash
-zerg up
+curl -fsSL https://longhouse.ai/install.sh | bash
+longhouse up
 # Open http://localhost:30080
 \`\`\`
 
 ### Docker (if you prefer)
 \`\`\`bash
-git clone https://github.com/cipher982/zerg && cd zerg
+git clone https://github.com/cipher982/longhouse && cd longhouse
 docker compose up
 \`\`\`
 
@@ -300,10 +300,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full development environment.
 ## How It Works
 
 1. **Shipper** watches `~/.claude/`, `~/.codex/`, etc.
-2. **Zerg** ingests sessions into a unified database
+2. **Longhouse** ingests sessions into a unified database
 3. **Timeline UI** lets you browse, search, and replay
 
-[DIAGRAM: Simple shipper → Zerg → UI flow]
+[DIAGRAM: Simple shipper → Longhouse → UI flow]
 
 ## Status
 
@@ -334,14 +334,14 @@ ISC
 
 ## Onboarding Wizard Design
 
-### `zerg onboard` Flow
+### `longhouse onboard` Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                                                             │
-│   🐙 Welcome to Zerg                                        │
+│   🐙 Welcome to Longhouse                                        │
 │                                                             │
-│   Zerg unifies your AI coding sessions into a searchable    │
+│   Longhouse unifies your AI coding sessions into a searchable    │
 │   timeline. Let's get you set up.                          │
 │                                                             │
 │   ◉ Quick Setup (recommended)                              │
@@ -386,7 +386,7 @@ Step 3: Session Sync
 Step 4: Done
 ┌─────────────────────────────────────────────────────────────┐
 │                                                             │
-│   ✓ Zerg is ready!                                         │
+│   ✓ Longhouse is ready!                                         │
 │                                                             │
 │   Starting server...                                        │
 │   → Web UI: http://localhost:30080                         │
@@ -424,7 +424,7 @@ if flow == "Quick Setup (recommended)":
 
     if provider != "Skip for now":
         key = questionary.password(f"Enter your {provider} API key:").ask()
-        # Validate key, store in ~/.zerg/credentials.json
+        # Validate key, store in ~/.longhouse/credentials.json
 ```
 
 ---
@@ -452,7 +452,7 @@ if flow == "Quick Setup (recommended)":
 │                                                             │
 │  Today                                                      │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │ 🟣 Claude Code — zerg/backend refactor              │   │
+│  │ 🟣 Claude Code — longhouse/backend refactor         │   │
 │  │ 45 messages, 23 tool calls • 2 hours ago            │   │
 │  └─────────────────────────────────────────────────────┘   │
 │  ┌─────────────────────────────────────────────────────┐   │
@@ -474,7 +474,7 @@ Clicking "Chat" tab without API key:
 │                                                             │
 │  [Add OpenAI Key]  [Add Anthropic Key]  [Add Google Key]   │
 │                                                             │
-│  Or run: zerg config --add-key                             │
+│  Or run: longhouse config --add-key                             │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -488,40 +488,37 @@ Clicking "Chat" tab without API key:
 
 ---
 
-## StarCraft Branding Guide
+## Longhouse Branding Guide
 
-### Terminology Mapping
+**Theme:** A shared work hall for action + discussion.
 
-| Generic | StarCraft/Zerg |
-|---------|----------------|
-| Start | Spawn |
-| Create | Hatch |
-| Agent | Zergling / Drone |
-| Background job | Larva |
-| Workspace | Hive |
-| Config | Creep |
-| Main process | Overmind |
+### Terminology (light touch)
 
-### Where to Use (Tasteful)
+| Generic | Longhouse |
+|---------|-----------|
+| Workspace | Workroom |
+| Group | Crew |
+| Meeting | Convene |
+| Start | Begin |
 
-- **CLI commands:** `zerg spawn`, `zerg hatch` (optional aliases)
-- **First-run message:** "Spawning your swarm..."
+### Where to Use
+
+- **Marketing copy:** “gather,” “convene,” “workroom,” “hall”
+- **First-run message:** “Welcome to Longhouse — your shared work hall”
 - **README:** Light touch, not overwhelming
-- **Error messages:** Keep professional, no theming
 
 ### Where NOT to Use
 
-- API endpoints (keep REST-standard)
-- Database schemas
-- Error codes
-- Documentation headings
+- CLI commands (keep neutral: `longhouse up`, `longhouse onboard`)
+- API endpoints and schemas
+- Error codes or low-level logs
 
 ### Example: First Run
 
 ```
 🐙 Spawning your swarm...
 
-✓ Hive initialized at ~/.zerg/
+✓ Hive initialized at ~/.longhouse/
 ✓ Overmind listening on :30080
 ✓ 127 sessions detected, syncing...
 
@@ -532,7 +529,7 @@ Your swarm is ready. Open http://localhost:30080
 
 ## Install Script Design
 
-### `https://swarmlet.com/install.sh`
+### `https://longhouse.ai/install.sh`
 
 ```bash
 #!/bin/bash
@@ -544,7 +541,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-echo "🐙 Installing Zerg..."
+echo "🐙 Installing Longhouse..."
 
 # Detect OS
 case "$OSTYPE" in
@@ -572,36 +569,36 @@ if ! check_dep docker; then
   fi
 fi
 
-# Install Zerg CLI
-if ! check_dep zerg; then
+# Install Longhouse CLI
+if ! check_dep longhouse; then
   if check_dep pipx; then
-    pipx install zerg-cli
+    pipx install longhouse
   elif check_dep pip; then
-    pip install --user zerg-cli
+    pip install --user longhouse
   else
     echo "${RED}Please install Python/pip first${NC}"
     exit 1
   fi
 fi
 
-echo "${GREEN}✓ Zerg installed${NC}"
+echo "${GREEN}✓ Longhouse installed${NC}"
 echo ""
 echo "Next steps:"
-echo "  zerg onboard    # Interactive setup"
-echo "  zerg up         # Start the server"
+echo "  longhouse onboard    # Interactive setup"
+echo "  longhouse up         # Start the server"
 ```
 
 ### What It Does
 
 1. Detect OS (macOS/Linux)
 2. Check for Docker (required for Postgres)
-3. Install `zerg-cli` via pipx/pip
+3. Install `longhouse` via pipx/pip
 4. Print next steps
 
 ### What It Doesn't Do
 
 - Install Python (assume user has it or direct them)
-- Run `zerg onboard` automatically (let user control)
+- Run `longhouse onboard` automatically (let user control)
 - Require sudo (pipx installs to user space)
 
 ---
@@ -614,7 +611,7 @@ echo "  zerg up         # Start the server"
 |--------|---------|--------|----------------|
 | **Time to first session view** | ~10 min | < 3 min | Stopwatch test with fresh machine |
 | **README bounce rate** | Unknown | < 50% | Umami analytics on repo page |
-| **Install completion rate** | Unknown | > 70% | Track `zerg onboard` completions |
+| **Install completion rate** | Unknown | > 70% | Track `longhouse onboard` completions |
 | **GitHub stars** | ~50 | 500+ | GitHub API |
 | **HN front page** | No | Yes | Manual check |
 
@@ -628,7 +625,7 @@ echo "  zerg up         # Start the server"
 
 ### Feedback Collection
 
-- Add `zerg feedback` command (opens GitHub issue with template)
+- Add `longhouse feedback` command (opens GitHub issue with template)
 - Umami events on key actions (onboard complete, first chat, etc.)
 - Discord channel for early adopters
 
@@ -638,19 +635,19 @@ echo "  zerg up         # Start the server"
 
 1. **Demo mode:** Can we show the Sessions UI with sample data, no API key needed?
 2. **OAuth vs API keys:** Should we support Google/GitHub OAuth for LLM providers that offer it?
-3. **Hosted quick-start:** Would `swarmlet.com/demo` (hosted instance) be faster than local install?
-4. **Brand voice:** How much StarCraft theming is too much?
-5. **Python vs Node for CLI:** Moltbot uses Node; Zerg backend is Python. Consistency vs ecosystem?
+3. **Hosted quick-start:** Would `longhouse.ai/demo` (hosted instance) be faster than local install?
+4. **Brand voice:** How much Longhouse theming is too much?
+5. **Python vs Node for CLI:** Moltbot uses Node; Longhouse backend is Python. Consistency vs ecosystem?
 
 ---
 
-## Zerg vs Moltbot Comparison
+## Longhouse vs Moltbot Comparison
 
-| Aspect | Moltbot | Zerg (Current) | Gap |
+| Aspect | Moltbot | Longhouse (Current) | Gap |
 |--------|---------|----------------|-----|
 | **Entry point** | `moltbot onboard` | `make dev` | CLI-first vs dev-first |
 | **Time to value** | ~2-3 min | ~10+ min | Need QuickStart flow |
-| **Default path** | QuickStart (90s) | None | Add `zerg onboard --quick` |
+| **Default path** | QuickStart (90s) | None | Add `longhouse onboard --quick` |
 | **Risk acknowledgement** | Up-front, explicit | None | Add security notice |
 | **Daemon install** | Automatic (systemd/launchd) | Docker Compose | Shipper does launchd already |
 | **Multi-provider auth** | Profile registry | Env vars | Adopt profile pattern |
@@ -675,9 +672,9 @@ echo "  zerg up         # Start the server"
 
 | Task | Files | Effort |
 |------|-------|--------|
-| Create `zerg` CLI package | `apps/zerg/cli/` (new) | 4h |
-| `zerg onboard` wizard | `apps/zerg/cli/onboard.py` | 6h |
-| `zerg up` command | `apps/zerg/cli/up.py` | 2h |
+| Create `longhouse` CLI package | `apps/zerg/cli/` (new) | 4h |
+| `longhouse onboard` wizard | `apps/zerg/cli/onboard.py` | 6h |
+| `longhouse up` command | `apps/zerg/cli/up.py` | 2h |
 | Credential storage | `apps/zerg/cli/credentials.py` | 3h |
 | Integrate with shipper CLI | `apps/zerg/backend/zerg/cli/` | 2h |
 
@@ -686,9 +683,9 @@ echo "  zerg up         # Start the server"
 | Task | Files | Effort |
 |------|-------|--------|
 | Install script | `scripts/install.sh` | 3h |
-| Host install.sh on swarmlet.com | Coolify config | 1h |
+| Host install.sh on longhouse.ai | Coolify config | 1h |
 | Demo mode (sample data) | `apps/zerg/backend/zerg/demo/` | 4h |
-| Landing page update | External (swarmlet.com) | 4h |
+| Landing page update | External (longhouse.ai) | 4h |
 
 ### Week 4: Launch
 
