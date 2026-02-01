@@ -27,23 +27,19 @@ Skills-Dir: .agents/skills
 
 | URL | What |
 |-----|------|
-| localhost:30080/dashboard | Main UI |
-| localhost:30080/chat | Oikos chat |
-| localhost:30080/api/* | Backend API |
-| localhost:30080/traces | Debug traces |
-| localhost:30080/reliability | System health |
+| localhost:47200 | Frontend (dev) |
+| localhost:47300 | Backend API (dev) |
+| localhost:47300/health | Health check |
 
 ## Essential Commands
 
 ```bash
-make dev              # Start everything (interactive, tails logs)
-make stop             # Stop everything
-make test             # Unit tests
+make dev              # Start SQLite dev (backend + frontend, no Docker)
+make stop             # Stop dev services
+make test             # Unit tests (SQLite lite suite)
 make test-e2e         # Core E2E + a11y
 make test-full        # Full suite (full E2E + evals + visual baselines)
-make debug-trace TRACE=<uuid>  # Debug a trace
-make regen-ws         # Regenerate WebSocket types
-make regen-sse        # Regenerate SSE types
+make dev-docker       # Legacy: Docker + Postgres (CI/testing only)
 ```
 
 ## Testing
@@ -69,7 +65,8 @@ make test-full     # Full suite (unit + full E2E + evals + visual baselines)
 ## Architecture
 
 ```
-User → nginx:30080 → FastAPI backend (47300) + React frontend (47200)
+Dev:  User → Frontend (47200) + Backend API (47300) → SQLite (~/.zerg/dev.db)
+Prod: User → nginx → FastAPI backend → SQLite or Postgres
 ```
 
 **Database:** Longhouse DB is a schema inside Life Hub's Postgres (same server). No separate sync needed for structured data.
@@ -107,18 +104,17 @@ User message → `OikosService` → `oikos_react_engine` → (spawn_commis) → 
 
 ## Gotchas
 
-1. **`make dev` is interactive** — tails logs forever. Use `make dev-bg` for background.
-2. **Never use raw `docker compose`** — use Make targets (wrong project names, missing env vars).
+1. **`make dev` is interactive** — runs backend + frontend, Ctrl+C to stop.
+2. **Default is SQLite** — `make dev` uses `~/.zerg/dev.db`, no Docker needed.
 3. **Never run tests directly** — `make test` / `make test-e2e` / `make test-full` only.
-4. **DB routing differs by context** — Docker dev stack uses `postgres:5432` (compose override), host commands use `.env DATABASE_URL` (often cube).
-5. **WebSocket/SSE code must sync** — run `make regen-ws` / `make regen-sse` after schema changes.
-6. **Auth disabled in dev** — `AUTH_DISABLED=1` set in compose.
-7. **Coolify env var changes need redeploy** — restart doesn't pick up new vars.
-8. **AGENTS.md is canonical** — `CLAUDE.md` is a symlink, edit AGENTS.md only.
-9. **Runner name+secret collision** — If two owners seed runners with same name and secret, first-created wins. Use unique secrets per environment.
-10. **SSE event types** — New types must be added to `EventType` enum or `append_run_event()` won't publish live.
-11. **Sauron job source conflict** — If Zerg backend has `JOB_QUEUE_ENABLED=1` AND `JOBS_GIT_*` vars, it schedules sauron-jobs too. Remove those vars when Sauron is the sole scheduler.
-12. **Master task list lives in `TODO.md`** — keep AGENTS.md lean; update TODO.md before/after work.
+4. **WebSocket/SSE code must sync** — run `make regen-ws` / `make regen-sse` after schema changes.
+5. **Auth disabled in dev** — `AUTH_DISABLED=1` set automatically by dev.sh.
+6. **Coolify env var changes need redeploy** — restart doesn't pick up new vars.
+7. **AGENTS.md is canonical** — `CLAUDE.md` is a symlink, edit AGENTS.md only.
+8. **Runner name+secret collision** — If two owners seed runners with same name and secret, first-created wins. Use unique secrets per environment.
+9. **SSE event types** — New types must be added to `EventType` enum or `append_run_event()` won't publish live.
+10. **Sauron job source conflict** — If Zerg backend has `JOB_QUEUE_ENABLED=1` AND `JOBS_GIT_*` vars, it schedules sauron-jobs too. Remove those vars when Sauron is the sole scheduler.
+11. **Master task list lives in `TODO.md`** — keep AGENTS.md lean; update TODO.md before/after work.
 
 ## Pushing Changes
 
