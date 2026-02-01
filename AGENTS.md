@@ -211,3 +211,4 @@ Categories: `gotcha`, `pattern`, `design`, `tool`, `test`, `deploy`, `perf`
 - (2026-02-01) [design] Alpha = no users = no backwards compat. Never add legacy fallbacks, dual cookie names, or migration shims. Clean breaks only.
 - (2026-02-01) [gotcha] Forum + Session Picker still call `/oikos/life-hub/*` endpoints (SQLite-specific) instead of agents API; Life Hub naming still leaks into UI.
 - (2026-02-01) [gotcha] `OIKOS_WORKSPACE_PATH` default is `/var/oikos/workspaces`, which is not OSS-friendly; should default to a user-writable `~/.longhouse` path.
+- (2026-02-01) [test] E2E infra smoke should use `/api/system/health` (Vite only proxies `/api/*`) and assert timeline/layout instead of `create-fiche-btn`.
