@@ -231,6 +231,9 @@ Categories: `gotcha`, `pattern`, `design`, `tool`, `test`, `deploy`, `perf`
 - (2026-01-31) [test] E2E schema mismatch: globalSetup creates 4 schemas, processor polls 16. Fixed: processor catches ProgrammingError for missing schemas.
 - (2026-01-31) [test] `make test` now runs the SQLite-lite suite by default; use `make test-legacy` for full Postgres coverage.
 - (2026-01-31) [gotcha] config.Settings.db_is_sqlite() only checks startswith("sqlite") and ignores quoted DATABASE_URL; can mis-detect lite_mode vs database._is_sqlite_url. **FIXED:** db_is_sqlite() now delegates to _is_sqlite_url().
+- (2026-01-31) [test] Use GUID() TypeDecorator for trace_id columns (not String(36)) so UUID objects auto-convert for SQLite. Passing raw UUID to String column causes "type 'UUID' is not supported" error.
+- (2026-01-31) [test] SQLite cascade deletes unreliable in tests—PRAGMA foreign_keys=ON must be set per connection. Use manual delete order in tests or passive_deletes=True on relationships.
+- (2026-01-31) [test] SQLite DateTime columns require datetime objects, not ISO strings. Test fixtures passing strings fail with "SQLite DateTime type only accepts Python datetime".
 - (2026-01-31) [design] SQLite minimum version enforced at startup: 3.35+ (RETURNING required for job claiming).
 - (2026-02-01) [design] Public branding should be a single umbrella name; keep Oikos as the assistant UI and Zerg as internal codename to avoid name sprawl.
 - (2026-02-01) [tool] Claude Code hooks emit PreToolUse/PostToolUse/PostToolUseFailure; keep hooks async, exit 0, and truncate responses (~10KB) to avoid breaking commis.
