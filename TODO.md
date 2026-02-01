@@ -44,25 +44,25 @@ User-facing strings, metadata, and package descriptions must stop mentioning Swa
 
 Package and binary naming so OSS users see Longhouse everywhere.
 
-- [ ] Decide PyPI package name: `longhouse` vs fallback (`longhouse-ai`)
-- [ ] Decide CLI binary name: `longhouse` vs fallback (`longhousectl`)
+- [x] Decide PyPI package name: `longhouse` vs fallback (`longhouse-ai`) → **`longhouse`**
+- [x] Decide CLI binary name: `longhouse` vs fallback (`longhousectl`) → **`longhouse`**
 - [ ] Decide npm scope/name for runner: `@longhouse/runner` or `longhouse-runner`
 - [ ] Update docker image name for docs/examples (ghcr.io/.../longhouse)
 - [ ] Update any installer text / scripts to new names
 
 ---
 
-## Frontend Bundling for pip Package (2)
+## Frontend Bundling for pip Package (2) ✅
 
 Bundle frontend assets into pip package using importlib.resources. Final polish for SQLite OSS pivot.
 
-**Why:** `pip install zerg && zerg serve` currently works but frontend assets aren't bundled — requires manual setup.
+**Why:** `pip install longhouse && longhouse serve` works with bundled frontend.
 
 **Files:** `apps/zerg/backend/pyproject.toml`, `apps/zerg/backend/zerg/main.py`
 
-- [ ] Configure hatch to include `frontend-web/dist/` in package
-- [ ] Update FastAPI static mount to use `importlib.resources` for packaged assets
-- [ ] Test: `pip install zerg` from TestPyPI → UI loads
+- [x] Configure hatch to include `frontend-web/dist/` in package (force-include in pyproject.toml)
+- [x] Update FastAPI static mount to use `importlib.resources` for packaged assets (main.py)
+- [x] Test: `pip install longhouse` → UI loads (verified locally)
 
 ---
 

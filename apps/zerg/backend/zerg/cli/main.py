@@ -1,11 +1,11 @@
-"""Main CLI entry point for Zerg.
+"""Main CLI entry point for Longhouse.
 
 Usage:
-    zerg serve         # Start the server
-    zerg status        # Show configuration
-    zerg ship          # One-shot sync
-    zerg connect       # Continuous polling
-    zerg --help        # Show help
+    longhouse serve         # Start the server
+    longhouse status        # Show configuration
+    longhouse ship          # One-shot sync
+    longhouse connect       # Continuous polling
+    longhouse --help        # Show help
 """
 
 import typer
@@ -17,8 +17,8 @@ from zerg.cli.serve import status
 
 # Create main app
 app = typer.Typer(
-    name="zerg",
-    help="Zerg AI Agent Platform CLI",
+    name="longhouse",
+    help="Longhouse AI Agent Platform CLI",
     no_args_is_help=True,
 )
 
