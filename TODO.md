@@ -170,7 +170,7 @@ hatch (claude --print)
 
 **Docs:** Claude Code hooks reference: https://docs.anthropic.com/en/docs/claude-code/hooks
 
-**Notes:** Phase 2/3 complete — hook auth uses X-Internal-Token; callback defaults to loopback (`localhost` / `host.docker.internal`) with `LONGHOUSE_CALLBACK_URL` override.
+**Notes:** Phase 2/3 complete — hook auth uses X-Internal-Token; callback defaults to loopback (`localhost`) with `LONGHOUSE_CALLBACK_URL` override.
 
 ---
 
