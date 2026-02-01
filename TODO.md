@@ -11,182 +11,58 @@ Capture list for substantial work. Not quick fixes (do those live).
 
 ---
 
-## SQLite Runtime Shift (9)
+## Longhouse Rebrand — Docs + Naming Map (5)
 
-Remove Postgres-only guards so the agents schema works on SQLite. Core blocker for lightweight OSS onboarding — enables `pip install zerg && zerg serve` without requiring Postgres.
+Establish a single public brand (Longhouse) while keeping Oikos as assistant UI and Zerg as internal codename. Docs must align with VISION + OSS onboarding.
 
-**Why:** VISION.md specifies SQLite-only runtime. Current code hard-rejects SQLite URLs and uses Postgres-specific types (UUID, JSONB, schemas).
+**Deliverables:** clear naming map, updated VISION + OSS docs + README, consistent user-facing language.
 
-**Reference:** `docs/LIGHTWEIGHT-OSS-ONBOARDING.md` has full plan details.
-
-Phase 0 — Audit: ✅ DONE (2026-01-30)
-- [x] Tag all Postgres-only codepaths (UUID/JSONB/schema/ILIKE)
-- [x] Define SQLite-compatible schema strategy (flat tables, no schemas)
-- [x] Decide: conditional dialect handling in models + services
-- [x] Plan captured in `docs/LIGHTWEIGHT-OSS-ONBOARDING.md`
-
-Phase 1 — Core DB Boot: ✅ DONE (2026-01-31)
-- [x] Remove SQLite rejection in `database.py`
-- [x] Skip `_apply_search_path()` for SQLite
-- [x] Make `DB_SCHEMA` and `AGENTS_SCHEMA` conditional (None for SQLite)
-- [x] Enforce SQLite >= 3.35 at startup (RETURNING support)
-- [x] Set SQLite pragmas (WAL, busy_timeout, foreign_keys)
-
-Phase 2 — Model Compatibility: ✅ DONE (2026-01-31)
-- [x] Replace UUID columns with GUID TypeDecorator (String(36) + uuid4 defaults)
-- [x] Replace JSONB with JSON.with_variant
-- [x] Replace gen_random_uuid() with Python-side defaults
-- [x] Update partial indexes to include sqlite_where
-- [x] Extract `db_utils.is_sqlite_url()` helper
-
-Phase 3 — Agents API + Ingest: ✅ DONE (2026-01-31)
-- [x] Dialect-agnostic upsert (on_conflict_do_nothing for both dialects)
-- [x] Remove `require_postgres()` guard
-- [x] Dedupe works without schema-qualified names
-- [x] Timeline UI works end-to-end on SQLite
-- [x] Lite test suite added (`make test` runs SQLite-lite by default)
-
-Phase 4 — Job Queue + Concurrency: ✅ DONE (2026-01-31)
-- [x] Dialect-aware claim_jobs() in commis_job_queue.py
-- [x] worker_id, claimed_at, heartbeat_at columns
-- [x] Heartbeat loop + stale job reclaim
-
-Phase 4b — Advisory Locks: ✅ DONE (2026-01-31)
-- [x] resource_locks table pattern in db_utils.py
-- [x] Updated fiche_locks.py, single_tenant.py
-
-Phase 5 — Durable Checkpoints: ✅ DONE (2026-01-31)
-- [x] SqliteSaver for SQLite (sync, avoids event loop affinity issues)
-- [x] workflow_engine.py uses get_checkpointer() factory
-- [x] Thread-safe caching with _sqlite_cache_lock
-
-Phase 6 — CLI: ✅ DONE (2026-01-31)
-- [x] cli/serve.py with serve and status commands
-- [x] Zero-config: auto FERNET_SECRET, SQLite default
-- [ ] Frontend bundling (importlib.resources) — REMAINING
-
-Phase 7 — Onboarding Smoke + Docs: 🔲 OPEN
-- [ ] Add/extend `make onboarding-smoke` for SQLite boot + API checks
-- [ ] Update README quick-start to default to SQLite
-- [ ] Verify onboarding contract passes
+- [ ] Decide and record naming map: **Longhouse** (umbrella), **Oikos** (assistant), **Zerg** (internal codename only)
+- [ ] Update `VISION.md` to “Longhouse Vision” + add a short naming note (Oikos/Zerg)
+- [ ] Update `docs/LIGHTWEIGHT-OSS-ONBOARDING.md` to Longhouse naming + CLI examples
+- [ ] Update `README.md` to Longhouse branding + domain references
+- [ ] Update `docs/public-launch-task.md` and `docs/oss-onboarding-improvements.md` to reflect Longhouse naming
+- [ ] Add a short `docs/BRANDING.md` with the naming map + do/don’t usage rules
 
 ---
 
-## SQLite Job Queue (Phase 4) (5) ✅ DONE (2026-01-31)
+## Longhouse Rebrand — Product/Meta Strings (6)
 
-Make commis job claiming work on SQLite. Currently uses `FOR UPDATE SKIP LOCKED` which is Postgres-only.
+User-facing strings, metadata, and package descriptions must stop mentioning Swarmlet/Zerg as a brand.
 
-**Why:** Commis can't run concurrently on SQLite without this. Blocks single-process multi-agent use case.
+**Files:** `apps/zerg/frontend-web/index.html`, `apps/zerg/frontend-web/public/site.webmanifest`, `package.json`, runner docs, email templates
 
-**Files:**
-- `jobs/queue.py` — Main job claim logic
-- `services/commis_job_processor.py` — Uses queue for commis jobs
-
-**Pattern (from LIGHTWEIGHT-OSS-ONBOARDING.md):**
-```python
-def claim_job(db, worker_id):
-    with db.begin_immediate():  # SQLite write lock
-        job = db.execute("""
-            UPDATE jobs
-            SET status='running', worker_id=?, started_at=NOW()
-            WHERE id = (
-                SELECT id FROM jobs WHERE status='pending'
-                ORDER BY priority DESC, created_at ASC LIMIT 1
-            )
-            RETURNING *
-        """, [worker_id]).fetchone()
-    return job
-```
-
-- [ ] Add `claimed_at`, `heartbeat_at` columns to commis_jobs
-- [ ] Create `claim_job_sqlite()` with BEGIN IMMEDIATE pattern
-- [ ] Create `claim_job_postgres()` with FOR UPDATE SKIP LOCKED
-- [ ] Dispatch based on `lite_mode` in queue.py
-- [ ] Add heartbeat update in job processor loop
-- [ ] Add stale job reclaim (no heartbeat for 2min → reset to pending)
-- [ ] Test: concurrent claims don't double-assign
+- [ ] Replace “Swarmlet” with “Longhouse” in frontend HTML metadata + webmanifest
+- [ ] Update `package.json` description to Longhouse naming
+- [ ] Update runner README/package metadata to Longhouse (e.g., “Longhouse Runner”)
+- [ ] Update email templates / notification copy referencing Swarmlet
+- [ ] Decide domain swap (`swarmlet.com` → `longhouse.ai`) and update hardcoded URLs if approved
 
 ---
 
-## SQLite Advisory Locks (Phase 4b) (4) ✅ DONE (2026-01-31)
+## Longhouse Rebrand — CLI / Packages / Images (7)
 
-Replace Postgres advisory locks with SQLite-safe alternatives. These are used for single-tenant guard, fiche locks, and state recovery.
+Package and binary naming so OSS users see Longhouse everywhere.
 
-**Why:** Advisory locks don't exist in SQLite. Need status columns or file locks.
-
-**Files:**
-- `services/single_tenant.py` — Uses `pg_advisory_lock` for instance guard
-- `services/fiche_locks.py` — Uses advisory locks for run exclusion
-- `services/fiche_state_recovery.py` — Uses advisory locks
-
-**Options:**
-1. **Status column + heartbeat** — Add `locked_by`, `locked_at` columns, check/update atomically
-2. **File locks** — `fcntl.flock()` on `~/.zerg/locks/{resource}.lock`
-
-- [ ] Audit all advisory lock callsites
-- [ ] Decide: status columns vs file locks (recommend status for DB resources)
-- [ ] Implement `acquire_lock_sqlite()` / `release_lock_sqlite()` helpers
-- [ ] Update single_tenant.py to use SQLite-safe locking
-- [ ] Update fiche_locks.py to use SQLite-safe locking
-- [ ] Gate ops.job_queue behind `not lite_mode` if not making it SQLite-safe
-- [ ] Test: two processes can't claim same fiche simultaneously
+- [ ] Decide PyPI package name: `longhouse` vs fallback (`longhouse-ai`)
+- [ ] Decide CLI binary name: `longhouse` vs fallback (`longhousectl`)
+- [ ] Decide npm scope/name for runner: `@longhouse/runner` or `longhouse-runner`
+- [ ] Update docker image name for docs/examples (ghcr.io/.../longhouse)
+- [ ] Update any installer text / scripts to new names
 
 ---
 
-## SQLite Checkpoints (Phase 5) (3) ✅ DONE (2026-01-31)
+## Frontend Bundling for pip Package (2)
 
-Make LangGraph checkpoints durable on SQLite. Currently uses MemorySaver which loses state on restart.
+Bundle frontend assets into pip package using importlib.resources. Final polish for SQLite OSS pivot.
 
-**Why:** If server restarts mid-run, the run can't resume. Breaks "always-on" promise.
+**Why:** `pip install zerg && zerg serve` currently works but frontend assets aren't bundled — requires manual setup.
 
-**Files:**
-- `services/checkpointer.py` — Creates checkpointer instance
-- `services/workflow_engine.py` — Uses checkpointer
-- `services/workflow_validator.py` — Uses checkpointer (MemorySaver OK for validation)
+**Files:** `apps/zerg/backend/pyproject.toml`, `apps/zerg/backend/zerg/main.py`
 
-**Solution:** Use `langgraph-checkpoint-sqlite` package with synchronous `SqliteSaver` (not AsyncSqliteSaver to avoid event loop affinity issues).
-
-- [x] Add `langgraph-checkpoint-sqlite` dependency (was already in pyproject.toml)
-- [x] Update checkpointer.py to detect lite_mode and use SqliteSaver
-- [x] Thread-safe caching with `_sqlite_cache_lock`
-- [x] Handle URL query params for URI mode (e.g., ?mode=memory&cache=shared)
-- [x] workflow_engine.py uses `get_checkpointer()` factory instead of hardcoded MemorySaver
-- [ ] Test: interrupt run, restart, resume continues from checkpoint (manual verification needed)
-
----
-
-## Zerg CLI + Package (Phase 6) (5) ✅ DONE (2026-01-31)
-
-Create `zerg serve` command and pip-installable package. The finish line for OSS onboarding.
-
-**Why:** `pip install zerg && zerg serve` is the north star UX.
-
-**Files:**
-- `apps/zerg/backend/zerg/cli/` — New CLI module (typer)
-- `apps/zerg/backend/pyproject.toml` — Package config
-- `apps/zerg/frontend-web/dist/` — Built frontend to bundle
-
-**Implementation:**
-```python
-# cli/main.py
-import typer
-import uvicorn
-
-app = typer.Typer()
-
-@app.command()
-def serve(host: str = "0.0.0.0", port: int = 8080):
-    """Start the Zerg server."""
-    uvicorn.run("zerg.main:app", host=host, port=port)
-```
-
-- [ ] Create `cli/main.py` with typer
-- [ ] Add `[project.scripts]` entry in pyproject.toml
-- [ ] Configure hatch to bundle `frontend-web/dist/` in package
+- [ ] Configure hatch to include `frontend-web/dist/` in package
 - [ ] Update FastAPI static mount to use `importlib.resources` for packaged assets
-- [ ] Add `zerg status` command (show running jobs)
-- [ ] Test: `pip install -e .` → `zerg serve` → UI loads
-- [ ] Test: `pip install zerg` from TestPyPI → same
+- [ ] Test: `pip install zerg` from TestPyPI → UI loads
 
 ---
 
@@ -209,6 +85,8 @@ Unify prompt construction across `run_thread`, `run_continuation`, and `run_batc
 
 ## Prompt Cache Optimization (5)
 
+**Depends on:** Prompting Pipeline Hardening (unified helper changes message layout)
+
 Reorder message layout to maximize cache hits. Current layout busts cache by injecting dynamic content early.
 
 **Why:** Cache misses = slower + more expensive. Research shows 10-90% cost reduction with proper ordering.
@@ -225,7 +103,7 @@ Reorder message layout to maximize cache hits. Current layout busts cache by inj
  cached      cached           per-turn only
 ```
 
-**Files:** `managers/fiche_runner.py` lines 340-405
+**Files:** `managers/fiche_runner.py` (search: `_build_messages` and `_inject_dynamic_context`)
 
 **Principles:**
 - Static content at position 0 (tools, system prompt)
@@ -272,10 +150,8 @@ Workspace commis emit only `commis_started` and `commis_complete` — no tool ev
 
 ## Done (Recent)
 
-- [x] SQLite Phases 0-3 complete (2026-01-31) — Core boot, models, agents API all SQLite-safe
-- [x] SQLite 3.35+ enforcement (2026-01-31) — Startup fails fast if below minimum
-- [x] `db_utils.is_sqlite_url()` helper (2026-01-31) — Handles quoted URLs, used by config + models
-- [x] Lite test suite (2026-01-31) — `make test` runs SQLite tests by default
+- [x] **SQLite OSS Pivot** (2026-02-01) — Phases 0-7 complete: DB boot, model compat, agents API, job queue, locks, checkpoints, CLI, onboarding. See `docs/LIGHTWEIGHT-OSS-ONBOARDING.md`
+- [x] SWM-1 swarm protocol test (2026-02-01) — Parallel agent coordination validated
 - [x] Parallel spawn_commis interrupt fix (2026-01-30) — commit a8264f9d
 - [x] Telegram webhook handler (2026-01-30) — commit 2dc1ee0b, `routers/channels_webhooks.py`
 - [x] Learnings review compacted 33 → 11 (2026-01-30)
