@@ -1077,7 +1077,7 @@ class OikosService:
                 run_id=run.id,
                 status="success",
                 summary=result_text[:500] if result_text else None,
-                run_url=f"https://swarmlet.com/runs/{run.id}",
+                run_url=f"https://longhouse.ai/runs/{run.id}",
             )
 
             logger.info(f"Oikos run {run.id} completed in {duration_ms}ms", extra={"tag": "OIKOS"})
@@ -1198,7 +1198,7 @@ class OikosService:
                 run_id=run.id,
                 status="failed",
                 error=str(e),
-                run_url=f"https://swarmlet.com/runs/{run.id}",
+                run_url=f"https://longhouse.ai/runs/{run.id}",
             )
 
             logger.exception(f"Oikos run {run.id} failed: {e}")

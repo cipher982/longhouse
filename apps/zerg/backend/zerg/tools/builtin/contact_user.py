@@ -63,7 +63,7 @@ def _convert_markdown_to_html(text: str) -> str:
 
 
 def _build_email_template(message: str, priority: str, commis_id: str | None = None) -> str:
-    """Build HTML email template with Swarmlet branding.
+    """Build HTML email template with Longhouse branding.
 
     Args:
         message: The notification message
@@ -115,7 +115,7 @@ def _build_email_template(message: str, priority: str, commis_id: str | None = N
 
         <!-- Header -->
         <div style="text-align: center; margin-bottom: 32px;">
-            <h1 style="color: #2563eb; margin: 0; font-size: 24px;">Swarmlet</h1>
+            <h1 style="color: #2563eb; margin: 0; font-size: 24px;">Longhouse</h1>
             <p style="color: #6c757d; margin: 4px 0 0 0; font-size: 14px;">Fiche Notification</p>
         </div>
 
@@ -132,9 +132,9 @@ def _build_email_template(message: str, priority: str, commis_id: str | None = N
         <!-- Footer -->
         <div style="text-align: center; margin-top: 32px; padding-top: 24px;
                     border-top: 1px solid #e5e7eb; color: #6c757d; font-size: 13px;">
-            <p>This notification was sent by your Swarmlet fiche.</p>
+            <p>This notification was sent by your Longhouse fiche.</p>
             <p style="margin-top: 8px;">
-                <a href="https://swarmlet.com" style="color: #2563eb; text-decoration: none;">
+                <a href="https://longhouse.ai" style="color: #2563eb; text-decoration: none;">
                     Visit Dashboard
                 </a>
             </p>
@@ -159,7 +159,7 @@ def contact_user(
     - Important events occur that the user should know about
 
     Args:
-        subject: Email subject (will be prefixed with [Swarmlet])
+        subject: Email subject (will be prefixed with [Longhouse])
         message: Message body (supports basic markdown: #headers, **bold**, *italic*, - lists)
         priority: Priority level - "low", "normal", "high", or "urgent" (default: "normal")
 
@@ -239,7 +239,7 @@ def contact_user(
 
         # Build email content
         priority_emoji = PRIORITY_EMOJI.get(priority, "")
-        full_subject = f"{priority_emoji}[Swarmlet] {subject}"
+        full_subject = f"{priority_emoji}[Longhouse] {subject}"
 
         html_body = _build_email_template(
             message=message,
