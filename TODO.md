@@ -187,13 +187,14 @@ hatch (claude --print)
 
 ---
 
-## Done (Recent)
+## Docker Build: uv sync Failure (2)
 
-- [x] **SQLite OSS Pivot** (2026-02-01) — Phases 0-7 complete: DB boot, model compat, agents API, job queue, locks, checkpoints, CLI, onboarding. See `docs/LIGHTWEIGHT-OSS-ONBOARDING.md`
-- [x] SWM-1 swarm protocol test (2026-02-01) — Parallel agent coordination validated
-- [x] Parallel spawn_commis interrupt fix (2026-01-30) — commit a8264f9d
-- [x] Telegram webhook handler (2026-01-30) — commit 2dc1ee0b, `routers/channels_webhooks.py`
-- [x] Learnings review compacted 33 → 11 (2026-01-30)
-- [x] Sauron gotchas documented (2026-01-30)
-- [x] Life Hub agent migration (2026-01-28) — Zerg owns agents DB
-- [x] Single-tenant enforcement in agents API (2026-01-29)
+`zerg-api` Coolify deploy fails at `uv sync --frozen --no-install-project --no-dev` (exit code 2).
+
+**Error location:** `docker/backend.dockerfile:71`
+
+**Files:** `docker/backend.dockerfile`, `apps/zerg/backend/uv.lock`, `apps/zerg/backend/pyproject.toml`
+
+- [ ] Investigate uv sync failure — likely lockfile mismatch or missing dependency
+- [ ] Test build locally: `docker build -f docker/backend.dockerfile .`
+- [ ] Fix and redeploy
