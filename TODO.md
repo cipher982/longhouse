@@ -143,17 +143,17 @@ hatch (claude --print)
 ### Phase 2: Backend API
 **Files:** `routers/oikos_internal.py`, `events/commis_emitter.py`
 
-- [ ] Add `POST /api/internal/commis/tool_event` endpoint
-- [ ] Validate job_id exists and is running
-- [ ] Auth: internal token or job-specific callback token
-- [ ] Emit SSE events: `commis_tool_started`, `commis_tool_completed`
+- [x] Add `POST /api/internal/commis/tool_event` endpoint
+- [x] Validate job_id exists and is running
+- [x] Auth: internal token (X-Internal-Token)
+- [x] Emit SSE events: `commis_tool_started`, `commis_tool_completed`
 
 ### Phase 3: Environment Plumbing
 **Files:** `services/commis_job_processor.py`, `services/cloud_executor.py`
 
-- [ ] Pass env vars to hatch: `LONGHOUSE_CALLBACK_URL`, `COMMIS_JOB_ID`, `COMMIS_CALLBACK_TOKEN`
-- [ ] Generate per-job callback token for auth
-- [ ] Ensure hooks can reach Longhouse API (network path)
+- [x] Pass env vars to hatch: `LONGHOUSE_CALLBACK_URL`, `COMMIS_JOB_ID`, `COMMIS_CALLBACK_TOKEN`
+- [x] Use internal token for auth (`COMMIS_CALLBACK_TOKEN = INTERNAL_API_SECRET`)
+- [x] Ensure hooks can reach Longhouse API (loopback default; override via `LONGHOUSE_CALLBACK_URL`)
 
 ### Phase 4: Frontend
 **Files:** `frontend-web/src/hooks/`, `frontend-web/src/components/`
@@ -169,6 +169,8 @@ hatch (claude --print)
 - [ ] Update docs with hook deployment instructions
 
 **Docs:** Claude Code hooks reference: https://docs.anthropic.com/en/docs/claude-code/hooks
+
+**Notes:** Phase 2/3 complete — hook auth uses X-Internal-Token; callback defaults to loopback (`localhost` / `host.docker.internal`) with `LONGHOUSE_CALLBACK_URL` override.
 
 ---
 
