@@ -117,7 +117,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 EXPOSE 8000
 
 # Start the server - CLI handles database setup and defaults
-CMD ["longhouse", "serve", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "zerg.cli.main", "serve", "--host", "0.0.0.0", "--port", "8000"]
 
 # Development target for local development
 FROM builder AS development
