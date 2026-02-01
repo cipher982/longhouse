@@ -50,26 +50,12 @@ make test-e2e      # Core E2E + a11y
 make test-full     # Full suite (unit + full E2E + evals + visual baselines)
 ```
 
-**How it works:** External Postgres on cube (configured in `.env`). pytest-xdist spawns 16 workers with isolated schemas. No Docker needed.
-
-**DO NOT:**
-- Set `PYTEST_XDIST_COMMIS=0` — kills parallelism, tests take 10x longer
-- Pass extra env vars — `DATABASE_URL` and `CI_TEST_SCHEMA` are already in `.env`
-- Run pytest directly — always use Make targets
-- Agents: prefer explicit long-named Make aliases (`test-...--`) for tiered runs
-
-**CI Debugging:** Run commands directly, no `&` background, no `|| echo` swallowing. Let it crash, read the first error.
-
-**CI Workflows:** Pushes can trigger multiple workflows; aggregate runs by commit SHA and use `gh run watch` (avoid sleep/poll loops).
-
 ## Architecture
 
 ```
 Dev:  User → Frontend (47200) + Backend API (47300) → SQLite (~/.zerg/dev.db)
 Prod: User → nginx → FastAPI backend → SQLite or Postgres
 ```
-
-**Database:** Longhouse DB is a schema inside Life Hub's Postgres (same server). No separate sync needed for structured data.
 
 **Oikos/Commis Flow:**
 User message → `OikosService` → `oikos_react_engine` → (spawn_commis) → `AgentInterrupted` → WAITING → commis runs → `commis_resume` → response
@@ -106,7 +92,6 @@ User message → `OikosService` → `oikos_react_engine` → (spawn_commis) → 
 
 1. **`make dev` is interactive** — runs backend + frontend, Ctrl+C to stop.
 2. **Default is SQLite** — `make dev` uses `~/.zerg/dev.db`, no Docker needed.
-3. **Never run tests directly** — `make test` / `make test-e2e` / `make test-full` only.
 4. **WebSocket/SSE code must sync** — run `make regen-ws` / `make regen-sse` after schema changes.
 5. **Auth disabled in dev** — `AUTH_DISABLED=1` set automatically by dev.sh.
 6. **Coolify env var changes need redeploy** — restart doesn't pick up new vars.
@@ -116,7 +101,6 @@ User message → `OikosService` → `oikos_react_engine` → (spawn_commis) → 
 10. **Sauron job source conflict** — If Zerg backend has `JOB_QUEUE_ENABLED=1` AND `JOBS_GIT_*` vars, it schedules sauron-jobs too. Remove those vars when Sauron is the sole scheduler.
 11. **Master task list lives in `TODO.md`** — keep AGENTS.md lean; update TODO.md before/after work.
 12. **Sauron Docker build** — uses `apps/sauron/pyproject.docker.toml` to avoid editable `../zerg/backend` sources during image builds.
-13. **Caddy routing breaks on deploy** — Container names include timestamps; Caddy config at `/data/coolify/proxy/caddy/dynamic/api-longhouse.caddy` needs manual update after deploy. Fix: set FQDN in Coolify UI so it manages routing automatically.
 
 ## Pushing Changes
 
@@ -160,21 +144,6 @@ Sauron is the centralized ops scheduler, deployed as a standalone service on cli
 - `Dockerfile` - Builds from monorepo root
 - `docker-compose.yml` - Coolify deployment config
 
-**How it works:**
-1. On startup, clones `cipher982/sauron-jobs` repo via `GitSyncService`
-2. Loads jobs from `manifest.py` using `zerg.jobs.loader`
-3. Schedules jobs with APScheduler
-4. Executes via durable queue (same as Zerg backend)
-
-**API endpoints:**
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/health` | GET | Health check |
-| `/status` | GET | Scheduler + git sync status |
-| `/jobs` | GET | List all jobs |
-| `/jobs/{id}/trigger` | POST | Manual trigger |
-| `/sync` | POST | Force git sync |
-
 **Deploy:** Coolify on clifford, separate from main Zerg deployment.
 
 ## Deep Dives
@@ -189,12 +158,6 @@ Sauron is the centralized ops scheduler, deployed as a standalone service on cli
 
 ## Misc
 - GH actions use runners on Cube
-- **Parallel patrol agents** converge on same ideas unless diversity enforced; use explicit target partitioning + shared dedupe gate
-
-## TODOs (Agent-Tracked)
-
-- [x] **Telegram webhook handler** - Implemented in `routers/channels_webhooks.py` (commit 2dc1ee0b)
-- [x] **Parallel spawn_commis interrupt** - Fixed to return `interrupt_value` dict (commit a8264f9d)
 
 ---
 
