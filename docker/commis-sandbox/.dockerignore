@@ -1,3 +1,0 @@
-# Ignore everything except what's needed for the build
-*
-!Dockerfile

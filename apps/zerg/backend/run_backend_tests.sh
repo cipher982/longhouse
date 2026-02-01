@@ -22,8 +22,8 @@
 # fresh temporary cache directory so test runs are hermetic.
 
 # Create a temporary (per-run) cache directory inside the repository so we
-# avoid permission issues in $HOME which may be read-only inside the sandbox.
-# Use repository-local directories for cache and temp to avoid sandbox
+# avoid permission issues in $HOME which may be read-only in CI environments.
+# Use repository-local directories for cache and temp to avoid CI environment
 # permission issues (e.g. inability to create files under /var/folders on
 # macOS runners).
 export XDG_CACHE_HOME="$(pwd)/.uv_cache"

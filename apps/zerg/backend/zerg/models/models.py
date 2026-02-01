@@ -403,12 +403,12 @@ class CommisJob(Base):
     model = Column(String(100), nullable=False, default=DEFAULT_COMMIS_MODEL_ID)
     reasoning_effort = Column(String(20), nullable=True, default="none")  # none, low, medium, high
 
-    # Flexible execution configuration (cloud execution, git repo, etc.)
-    # Keys: execution_mode ("local" | "cloud"), git_repo (url), base_branch, etc.
+    # Flexible execution configuration (workspace execution, git repo, etc.)
+    # Keys: execution_mode ("standard" | "workspace"), git_repo (url), base_branch, etc.
     config = Column(JSON, nullable=True)
 
-    # Sandbox mode: run in isolated Docker container for autonomous/scheduled tasks
-    # When True, execution uses container isolation with restricted filesystem access
+    # Deprecated: sandbox execution removed. Column retained for DB compatibility.
+    # Always False; code no longer reads this value.
     sandbox = Column(Boolean, nullable=False, default=False, server_default="false")
 
     # Execution state

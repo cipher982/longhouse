@@ -1,11 +1,10 @@
-"""Cloud Executor – run headless commis execution via subprocess or container.
+"""Cloud Executor – run headless commis execution via subprocess.
 
 This service runs commis as headless subprocesses using the `hatch` CLI tool.
 It enables 24/7 cloud execution independent of laptop connectivity.
 
-Supports two execution modes:
-- subprocess (default): Direct hatch execution, fast, trusted environments
-- sandbox: Docker container execution, isolated, for autonomous/scheduled tasks
+Workspace isolation is handled by WorkspaceManager (directory-based isolation
+with git clones). Each commis gets its own working directory and git branch.
 
 Usage:
     executor = CloudExecutor()
@@ -14,13 +13,6 @@ Usage:
         workspace_path="/var/oikos/workspaces/run-123",
         model="bedrock/claude-sonnet",
     )
-
-    # For sandboxed execution:
-    result = await executor.run_commis(
-        task="Fix the typo in README.md",
-        workspace_path="/var/oikos/workspaces/run-123",
-        sandbox=True,
-    )
 """
 
 from __future__ import annotations
@@ -28,9 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 import signal
-import uuid
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import datetime
@@ -45,13 +35,6 @@ DEFAULT_TIMEOUT_SECONDS = 3600
 # Default model for cloud execution (backend/model format)
 # Using z.ai to avoid AWS SSO credential complexity
 DEFAULT_CLOUD_MODEL = "zai/glm-4.7"
-
-# Workspace validation: only allow workspaces under this base directory
-# This prevents arbitrary filesystem access via container mounts
-WORKSPACE_BASE = Path(os.environ.get("COMMIS_WORKSPACE_BASE", "/var/oikos/workspaces"))
-
-# Container image for sandboxed execution
-SANDBOX_IMAGE = os.environ.get("COMMIS_SANDBOX_IMAGE", "ghcr.io/cipher982/commis-sandbox:v1")
 
 CLAUDE_BACKENDS = {"zai", "bedrock"}
 CLAUDE_OUTPUT_FORMAT_ENV = "HATCH_CLAUDE_OUTPUT_FORMAT"
@@ -103,46 +86,6 @@ def normalize_model_id(model: str) -> tuple[str, str]:
 
     # Default to zai backend for unknown models
     return "zai", model
-
-
-def validate_workspace_path(workspace_path: str | Path) -> Path:
-    """Validate workspace is under allowed base directory.
-
-    Security: Prevents arbitrary filesystem access via container mounts.
-    The workspace must exist and be under WORKSPACE_BASE.
-
-    Parameters
-    ----------
-    workspace_path
-        Path to validate
-
-    Returns
-    -------
-    Path
-        Validated, resolved absolute path
-
-    Raises
-    ------
-    ValueError
-        If workspace is not under WORKSPACE_BASE or doesn't exist
-    """
-    path = Path(workspace_path).resolve()
-    if not path.is_relative_to(WORKSPACE_BASE):
-        raise ValueError(f"Workspace path must be under {WORKSPACE_BASE}, got: {path}")
-    if not path.exists():
-        raise ValueError(f"Workspace path does not exist: {path}")
-    return path
-
-
-def _sanitize_container_name(run_id: str) -> str:
-    """Sanitize a run ID for use in Docker container name.
-
-    Docker container names must match [a-zA-Z0-9][a-zA-Z0-9_.-]*
-    """
-    # Remove dashes and take first 12 chars
-    safe = re.sub(r"[^a-zA-Z0-9]", "", run_id)[:12]
-    # Add UUID suffix for uniqueness
-    return f"commis-{safe}-{uuid.uuid4().hex[:8]}"
 
 
 @dataclass
@@ -209,13 +152,11 @@ class CloudExecutor:
         timeout: int = DEFAULT_TIMEOUT_SECONDS,
         env_vars: dict[str, str] | None = None,
         resume_session_id: str | None = None,
-        sandbox: bool = False,
-        run_id: str | None = None,
     ) -> CloudExecutionResult:
         """Execute a task using hatch in the given workspace.
 
         This method:
-        1. Spawns hatch subprocess (or container if sandbox=True) in the workspace
+        1. Spawns hatch subprocess in the workspace
         2. Captures stdout/stderr
         3. Enforces timeout
         4. Returns structured result
@@ -227,17 +168,13 @@ class CloudExecutor:
         workspace_path
             Directory where commis should run (working directory)
         model
-            LLM model to use (default: bedrock/claude-sonnet)
+            LLM model to use (default: zai/glm-4.7)
         timeout
             Maximum execution time in seconds (default: 3600 = 1 hour)
         env_vars
             Additional environment variables for the subprocess
         resume_session_id
             Claude Code session ID to resume (passed to hatch --resume)
-        sandbox
-            If True, run in Docker container for isolation (default: False)
-        run_id
-            Optional run identifier for container naming (used when sandbox=True)
 
         Returns
         -------
@@ -248,22 +185,7 @@ class CloudExecutor:
         -----
         The hatch command is expected to be available on the system PATH
         or at the configured hatch_path. On zerg-vps, installed via uv tool.
-
-        For sandbox=True, the workspace must be under WORKSPACE_BASE and Docker
-        must be available. The container provides process/filesystem isolation
-        but still has network access for LLM API calls.
         """
-        # Route to container execution if sandbox mode requested
-        if sandbox:
-            return await self._run_in_container(
-                task=task,
-                workspace_path=workspace_path,
-                model=model,
-                timeout=timeout,
-                env_vars=env_vars,
-                run_id=run_id or "unknown",
-            )
-
         workspace = Path(workspace_path)
         # Normalize model ID to backend/model tuple for hatch
         raw_model = model or self.default_model
@@ -292,7 +214,7 @@ class CloudExecutor:
             cmd.append("--include-partial-messages")
 
         # Add resume flag for session continuity (Claude backends only)
-        if resume_session_id:
+        if resume_session_id and backend in CLAUDE_BACKENDS:
             cmd.extend(["--resume", resume_session_id])
 
         cmd.append(task)
@@ -432,226 +354,6 @@ class CloudExecutor:
             except ProcessLookupError:
                 pass
 
-    async def _run_in_container(
-        self,
-        task: str,
-        workspace_path: str | Path,
-        run_id: str,
-        *,
-        model: str | None = None,
-        timeout: int = DEFAULT_TIMEOUT_SECONDS,
-        env_vars: dict[str, str] | None = None,
-    ) -> CloudExecutionResult:
-        """Run commis in a sandboxed Docker container.
-
-        Provides process and filesystem isolation for autonomous/scheduled tasks.
-        The container has network access for LLM API calls but limited filesystem
-        access (only the workspace is mounted).
-
-        Security features:
-        - Non-root user inside container
-        - Dropped capabilities (CAP_DROP=ALL)
-        - No new privileges (--security-opt=no-new-privileges)
-        - Resource limits (memory, CPU, pids)
-        - Workspace path validation (must be under WORKSPACE_BASE)
-
-        Parameters
-        ----------
-        task
-            Natural language task for the commis to execute
-        workspace_path
-            Directory to mount as /repo in the container
-        run_id
-            Run identifier for container naming
-        model
-            LLM model to use
-        timeout
-            Maximum execution time in seconds
-
-        Returns
-        -------
-        CloudExecutionResult
-            Structured result with output, status, timing info
-        """
-        raw_model = model or self.default_model
-        backend, model_name = normalize_model_id(raw_model)
-        started_at = datetime.now(timezone.utc)
-
-        # Validate workspace path for security
-        try:
-            validated_path = validate_workspace_path(workspace_path)
-        except ValueError as e:
-            logger.error(f"Workspace validation failed: {e}")
-            return CloudExecutionResult(
-                status="failed",
-                output="",
-                error=str(e),
-                exit_code=-1,
-                model=f"{backend}/{model_name}",
-                started_at=started_at,
-                finished_at=datetime.now(timezone.utc),
-            )
-
-        # Generate unique container name
-        container_name = _sanitize_container_name(run_id)
-
-        # Get host UID/GID for workspace permissions
-        workspace_stat = validated_path.stat()
-        host_uid = workspace_stat.st_uid
-        host_gid = workspace_stat.st_gid
-
-        logger.info(f"Starting sandboxed execution in container {container_name} " f"with backend={backend}, model={model_name}")
-        logger.debug(f"Task: {task[:200]}...")
-
-        # Build docker run command
-        # fmt: off
-        cmd = [
-            "docker", "run", "--rm",
-            "-i",  # Keep stdin open for prompt
-            "--name", container_name,
-            # User mapping for workspace permissions
-            "--user", f"{host_uid}:{host_gid}",
-            # Writable home as tmpfs (container user needs a writable home)
-            "--tmpfs", "/home/agent:rw,exec,size=512m",
-            # Resource limits
-            "--memory", "4g",
-            "--cpus", "2",
-            "--pids-limit", "256",
-            # Security hardening
-            "--security-opt", "no-new-privileges",
-            "--cap-drop", "ALL",
-            # Mount workspace as /repo
-            "-v", f"{validated_path}:/repo:rw",
-            "-w", "/repo",
-            # Pass API keys for LLM access
-            "-e", f"ZAI_API_KEY={os.environ.get('ZAI_API_KEY', '')}",
-            "-e", f"ANTHROPIC_API_KEY={os.environ.get('ANTHROPIC_API_KEY', '')}",
-            "-e", f"OPENAI_API_KEY={os.environ.get('OPENAI_API_KEY', '')}",
-            "-e", f"GEMINI_API_KEY={os.environ.get('GEMINI_API_KEY', '')}",
-            "-e", "HOME=/home/agent",
-        ]
-
-        if env_vars:
-            for key, value in env_vars.items():
-                cmd.extend(["-e", f"{key}={value}"])
-
-        cmd.extend([
-            # Image and command
-            SANDBOX_IMAGE,
-            "-b", backend,
-            "--model", model_name,
-            "--json",
-            "-",  # Read prompt from stdin
-        ])
-        # fmt: on
-
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(input=task.encode()),
-                    timeout=timeout,
-                )
-            except asyncio.TimeoutError:
-                # Kill container on timeout
-                logger.warning(f"Container {container_name} timed out after {timeout}s")
-                await self._kill_container(container_name)
-                finished_at = datetime.now(timezone.utc)
-                duration_ms = int((finished_at - started_at).total_seconds() * 1000)
-
-                return CloudExecutionResult(
-                    status="timeout",
-                    output="",
-                    error=f"Container execution timed out after {timeout} seconds",
-                    exit_code=-1,
-                    duration_ms=duration_ms,
-                    model=f"{backend}/{model_name}",
-                    started_at=started_at,
-                    finished_at=finished_at,
-                )
-            except asyncio.CancelledError:
-                # Kill container on cancellation
-                logger.warning(f"Container {container_name} cancelled, killing")
-                await self._kill_container(container_name)
-                raise
-
-            finished_at = datetime.now(timezone.utc)
-            duration_ms = int((finished_at - started_at).total_seconds() * 1000)
-
-            output = stdout.decode("utf-8", errors="replace") if stdout else ""
-            error_output = stderr.decode("utf-8", errors="replace") if stderr else ""
-
-            if proc.returncode == 0:
-                logger.info(f"Container {container_name} completed successfully in {duration_ms}ms")
-                return CloudExecutionResult(
-                    status="success",
-                    output=output,
-                    error=error_output if error_output else None,
-                    exit_code=proc.returncode,
-                    duration_ms=duration_ms,
-                    model=f"{backend}/{model_name}",
-                    started_at=started_at,
-                    finished_at=finished_at,
-                )
-            else:
-                logger.warning(f"Container {container_name} failed with exit code {proc.returncode}")
-                return CloudExecutionResult(
-                    status="failed",
-                    output=output,
-                    error=error_output or f"Exit code: {proc.returncode}",
-                    exit_code=proc.returncode,
-                    duration_ms=duration_ms,
-                    model=f"{backend}/{model_name}",
-                    started_at=started_at,
-                    finished_at=finished_at,
-                )
-
-        except FileNotFoundError:
-            logger.error("docker not found")
-            return CloudExecutionResult(
-                status="failed",
-                output="",
-                error="docker executable not found",
-                exit_code=-1,
-                model=f"{backend}/{model_name}",
-                started_at=started_at,
-                finished_at=datetime.now(timezone.utc),
-            )
-        except Exception as e:
-            logger.exception(f"Container execution failed: {e}")
-            return CloudExecutionResult(
-                status="failed",
-                output="",
-                error=str(e),
-                exit_code=-1,
-                model=f"{backend}/{model_name}",
-                started_at=started_at,
-                finished_at=datetime.now(timezone.utc),
-            )
-
-    async def _kill_container(self, container_name: str) -> None:
-        """Kill a Docker container by name.
-
-        Best-effort operation - container may have already exited.
-        """
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "docker",
-                "kill",
-                container_name,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await asyncio.wait_for(proc.wait(), timeout=10)
-        except Exception as e:
-            logger.debug(f"Container kill failed (may have already exited): {e}")
-
     async def check_hatch_available(self) -> tuple[bool, str]:
         """Check if hatch is available and working.
 
@@ -682,48 +384,5 @@ class CloudExecutor:
         except Exception as e:
             return False, f"Error checking hatch: {e}"
 
-    async def check_sandbox_available(self) -> tuple[bool, str]:
-        """Check if Docker and sandbox image are available.
 
-        Returns
-        -------
-        tuple[bool, str]
-            (available, message) - whether sandbox execution is available
-        """
-        try:
-            # Check docker is available
-            proc = await asyncio.create_subprocess_exec(
-                "docker",
-                "version",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await asyncio.wait_for(proc.communicate(), timeout=10)
-            if proc.returncode != 0:
-                return False, "docker is not available"
-
-            # Check image exists
-            proc = await asyncio.create_subprocess_exec(
-                "docker",
-                "image",
-                "inspect",
-                SANDBOX_IMAGE,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
-
-            if proc.returncode == 0:
-                return True, f"sandbox image {SANDBOX_IMAGE} is available"
-            else:
-                return False, f"sandbox image {SANDBOX_IMAGE} not found"
-
-        except FileNotFoundError:
-            return False, "docker executable not found"
-        except asyncio.TimeoutError:
-            return False, "docker check timed out"
-        except Exception as e:
-            return False, f"Error checking sandbox: {e}"
-
-
-__all__ = ["CloudExecutor", "CloudExecutionResult", "validate_workspace_path"]
+__all__ = ["CloudExecutor", "CloudExecutionResult"]

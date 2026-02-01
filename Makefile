@@ -253,7 +253,7 @@ test-e2e-core: ## @internal Run core E2E tests only (no retries, must pass 100%)
 		bunx playwright test \
 		tests/core/chat-send.spec.ts \
 		tests/core/commis-flow.spec.ts \
-		tests/core/commis-sandbox.spec.ts \
+		tests/core/commis-schema.spec.ts \
 		tests/core/commis-simplification.spec.ts \
 		tests/core/core-journey.spec.ts \
 		tests/core/cross-origin-auth.spec.ts \

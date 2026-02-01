@@ -1,24 +1,21 @@
 /**
- * E2E tests for CommisJob sandbox (container) execution mode.
+ * E2E tests for CommisJob database schema and flow.
  *
  * These tests verify that:
- * 1. The sandbox column exists in the database schema
- * 2. Commis jobs can be spawned (sandbox flag is internal)
+ * 1. The commis_jobs table schema is correct
+ * 2. Commis jobs can be spawned and processed
  * 3. The system handles commis execution correctly
- *
- * Note: Actual container execution testing is done via integration tests
- * that require Docker. These E2E tests verify the API layer.
  */
 import { test, expect } from '../../fixtures';
 import { resetDatabase } from '../../test-utils';
 
-test.describe('Commis Sandbox Schema', () => {
+test.describe('Commis Schema', () => {
   test.beforeEach(async ({ request }) => {
     await resetDatabase(request);
   });
 
-  test('commis flow works with sandbox column in schema', async ({ request }) => {
-    // This test verifies the database schema includes the sandbox column
+  test('commis flow works with schema', async ({ request }) => {
+    // This test verifies the database schema is correct
     // by running a standard commis flow that would fail if the schema is broken
 
     test.setTimeout(60000);
@@ -77,7 +74,6 @@ test.describe('Commis Sandbox Schema', () => {
       .toBeTruthy();
 
     // The run completing proves the schema migration worked
-    // (if sandbox column was missing, job processor would fail)
     expect(['success', 'failed']).toContain(runStatus?.status);
   });
 });
