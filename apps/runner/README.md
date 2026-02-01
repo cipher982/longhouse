@@ -1,6 +1,8 @@
-# Swarmlet Runner
+# Longhouse Runner
 
-Lightweight daemon that connects to the Swarmlet platform and executes commands on user infrastructure.
+Lightweight daemon that connects to the Longhouse platform and executes commands on user infrastructure.
+
+> **Note:** Environment variables still use `SWARMLET_` prefix during transition. See `LONGHOUSE_URL` alias below.
 
 ## Quick Start
 
@@ -12,15 +14,15 @@ cd /path/to/repo/root
 bun install
 
 # Set environment variables
-export SWARMLET_URL=http://localhost:30080
+export LONGHOUSE_URL=http://localhost:30080  # or SWARMLET_URL (legacy)
 export RUNNER_NAME=my-runner
 export RUNNER_SECRET=your_secret_here
 
 # Run the daemon
-bun run --filter @swarmlet/runner start
+bun run --filter @longhouse/runner start
 
 # Or use watch mode
-bun run --filter @swarmlet/runner dev
+bun run --filter @longhouse/runner dev
 ```
 
 ### Using Docker
@@ -28,13 +30,13 @@ bun run --filter @swarmlet/runner dev
 ```bash
 # Build locally (from repo root)
 cd /path/to/repo/root
-docker build -t swarmlet/runner:latest apps/runner
+docker build -t longhouse/runner:latest apps/runner
 
-docker run -d --name swarmlet-runner \
-  -e SWARMLET_URL=http://localhost:30080 \
+docker run -d --name longhouse-runner \
+  -e LONGHOUSE_URL=http://localhost:30080 \
   -e RUNNER_NAME=my-runner \
   -e RUNNER_SECRET=your_secret_here \
-  swarmlet/runner:latest
+  longhouse/runner:latest
 ```
 
 ## Configuration
@@ -43,7 +45,8 @@ All configuration is via environment variables:
 
 | Variable                 | Required | Default                | Description                                   |
 | ------------------------ | -------- | ---------------------- | --------------------------------------------- |
-| `SWARMLET_URL`           | No       | `ws://localhost:47300` | Swarmlet API URL (ws:// or wss://)            |
+| `LONGHOUSE_URL`          | No       | `ws://localhost:47300` | Longhouse API URL (ws:// or wss://)           |
+| `SWARMLET_URL`           | No       | -                      | Legacy alias for LONGHOUSE_URL                |
 | `RUNNER_NAME`            | *        | -                      | Runner name (alternative to RUNNER_ID)        |
 | `RUNNER_ID`              | *        | -                      | Runner ID from registration                   |
 | `RUNNER_SECRET`          | Yes      | -                      | Runner secret from registration               |
@@ -56,13 +59,13 @@ All configuration is via environment variables:
 
 ## Registration
 
-Before running the daemon, you need to register it with the Swarmlet platform:
+Before running the daemon, you need to register it with the Longhouse platform:
 
 1. Create an enrollment token via the Swarmlet API or UI
 2. Use the token to register the runner and get your `RUNNER_ID` and `RUNNER_SECRET`
 3. Configure the daemon with these credentials
 
-See the main Swarmlet documentation for detailed registration instructions.
+See the main Longhouse documentation for detailed registration instructions.
 
 ## Features
 
@@ -75,7 +78,7 @@ See the main Swarmlet documentation for detailed registration instructions.
 
 ## Protocol
 
-The runner communicates with the Swarmlet platform via WebSocket:
+The runner communicates with the Longhouse platform via WebSocket:
 
 ### Runner → Server
 
