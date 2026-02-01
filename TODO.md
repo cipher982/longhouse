@@ -11,6 +11,55 @@ Capture list for substantial work. Not quick fixes (do those live).
 
 ---
 
+## Life Hub Dependency Removal — Sessions/Forum/Resume (7)
+
+Make Longhouse the sole source of session truth. Remove Life Hub routes, naming, and test dependencies in OSS/runtime.
+
+**Deliverables:** Session picker + Forum + session resume all use Longhouse agents data; no LIFE_HUB_API_KEY needed for OSS/E2E.
+
+- [ ] Replace `/oikos/life-hub/*` endpoints with agents-backed endpoints (or reuse `/api/agents/sessions`); delete `oikos_life_hub.py` router.
+- [ ] Update frontend hooks/components (`useLifeHubSessions`, `useActiveSessions`, `SessionPickerModal`, Forum) to hit the new endpoints and rename to “sessions/timeline”.
+- [ ] Update session-resume flow to call `ship_session_to_zerg`/`fetch_session_from_zerg` directly (remove Life Hub naming in `session_chat`, `oikos_tools`, etc.).
+- [ ] Replace Life Hub integration tests (backend + E2E) with local ingest/export tests; remove LIFE_HUB_API_KEY requirement in OSS runs.
+- [ ] Update docs that still reference Life Hub: `docs/session-resume-design.md`, `docs/experiments/shipper-manual-validation.md`.
+
+---
+
+## Longhouse Home Dir + Path Cleanup (4)
+
+Unify local paths under `~/.longhouse` and remove legacy `~/.zerg` naming + env vars.
+
+**Deliverables:** CLI defaults, shipper state, skills, and workspace paths all use Longhouse naming; no `/var/oikos` defaults in OSS.
+
+- [ ] Rename `~/.zerg` → `~/.longhouse` across CLI defaults (`cli/serve.py`), dev scripts (`scripts/dev.sh`), and skills loader.
+- [ ] Rename shipper state/token/url files in `~/.claude` from `zerg-*` to `longhouse-*`; update `connect`/`shipper` helpers.
+- [ ] Rename env var `ZERG_API_URL` → `LONGHOUSE_API_URL` in session continuity + shipper; update defaults/docs.
+- [ ] Change default workspace base paths from `/var/oikos/workspaces` + `/tmp/zerg-session-workspaces` to `~/.longhouse/workspaces` (server overrides via env).
+
+---
+
+## Memory Store SQLite Pass (3)
+
+Ensure Oikos memory tools are SQLite-safe and do not assume Postgres.
+
+- [ ] Decide keep vs remove memory in OSS; if kept, rename `PostgresMemoryStore` and make queries SQLite-safe.
+- [ ] Add lite tests for memory save/search/delete on SQLite.
+- [ ] Update `oikos_memory_tools.py` examples/copy to remove Postgres references.
+
+---
+
+## OSS Packaging Decisions (3)
+
+Close the remaining open questions from `docs/LIGHTWEIGHT-OSS-ONBOARDING.md`.
+
+- [ ] Confirm PyPI availability for `longhouse` (or pick fallback name) and document final choice.
+- [ ] Decide whether the shipper is bundled with the CLI or shipped as a separate package.
+- [ ] Decide remote auth UX for `longhouse connect` (device token vs OAuth vs API key).
+- [ ] Decide HTTPS story for local OSS (`longhouse serve`) — built-in vs reverse proxy guidance.
+- [ ] Capture current frontend bundle size and set a target budget.
+
+---
+
 ## Longhouse Rebrand — Docs + Naming Map (5)
 
 Establish a single public brand (Longhouse) while keeping Oikos as assistant UI and Zerg as internal codename. Docs must align with VISION + OSS onboarding.
@@ -39,6 +88,8 @@ User-facing strings, metadata, and package descriptions must stop mentioning Swa
 - [ ] Update runner README/package metadata to Longhouse (e.g., "Longhouse Runner")
 - [ ] Update email templates / notification copy referencing Swarmlet
 - [ ] Decide domain swap (`swarmlet.com` → `longhouse.ai`) and update hardcoded URLs if approved
+- [ ] Update landing FAQ + marketing copy that still says “PostgreSQL” or “Swarmlet” (e.g., `TrustSection.tsx`)
+- [ ] Update OpenAPI schema metadata (title/description/servers) to Longhouse and regenerate `openapi.json` + frontend types
 
 ---
 
@@ -249,3 +300,5 @@ E2E tests fail with "no such table: users" / "no such table: commis_jobs". The p
 - [ ] Investigate why globalSetup creates DB files but doesn't run migrations
 - [ ] Ensure `initialize_database()` is called for each per-worker SQLite
 - [ ] Verify E2E tests pass after fix
+- [ ] Remove Postgres schema isolation from E2E (drop `X-Test-Commis` routing + schema-per-worker assumptions)
+- [ ] Update `apps/zerg/e2e/README.md` + helpers to reflect SQLite-only test flow
