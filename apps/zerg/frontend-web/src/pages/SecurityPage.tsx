@@ -98,7 +98,7 @@ export default function SecurityPage() {
             If you discover a security vulnerability, please report it to us:
           </p>
           <ul>
-            <li>Email: <a href="mailto:swarmlet@drose.io">swarmlet@drose.io</a></li>
+            <li>Email: <a href="mailto:support@longhouse.ai">support@longhouse.ai</a></li>
             <li>Include details and steps to reproduce</li>
             <li>Allow reasonable time for us to address it</li>
           </ul>
@@ -107,7 +107,7 @@ export default function SecurityPage() {
             <h3>Questions?</h3>
             <p>
               For security questions, join our <a href="https://discord.gg/h2CWBUrj" target="_blank" rel="noopener noreferrer">Discord</a> or
-              email <a href="mailto:swarmlet@drose.io">swarmlet@drose.io</a>
+              email <a href="mailto:support@longhouse.ai">support@longhouse.ai</a>
             </p>
             <p>
               For privacy questions, see our <Link to="/privacy">Privacy Policy</Link>.

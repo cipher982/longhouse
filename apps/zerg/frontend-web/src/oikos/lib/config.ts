@@ -72,8 +72,8 @@ export function toAbsoluteUrl(url: string): string {
       ? window.location.origin
       : 'http://localhost';
 
-  // Split deployment: API is on different domain (e.g., api.swarmlet.com)
-  // window.API_BASE_URL is set by /config.js (e.g., "https://api.swarmlet.com/api")
+  // Split deployment: API is on different domain (e.g., api.longhouse.ai)
+  // window.API_BASE_URL is set by /config.js (e.g., "https://api.longhouse.ai/api")
   const runtimeApiUrl = typeof window !== 'undefined' && (window as any).API_BASE_URL;
   const isApiPath = url.startsWith('/api/') || url.startsWith('/api');
 
@@ -182,7 +182,7 @@ export function createSyncTransport(headers?: Record<string, string>): SyncTrans
     const initHeaders = new Headers(init.headers ?? {});
     initHeaders.forEach((value, key) => mergedHeaders.set(key, value));
 
-    // SaaS auth: cookie-based auth (swarmlet_session HttpOnly cookie)
+    // SaaS auth: cookie-based auth (longhouse_session HttpOnly cookie)
     // No need to add Authorization header - cookies are sent automatically with credentials: 'include'
 
     return fetch(input, { ...init, headers: mergedHeaders, credentials: 'include' });
@@ -213,7 +213,7 @@ export function getZergApiUrl(): string {
   if (runtimeApiUrl && typeof runtimeApiUrl === 'string') {
     // window.API_BASE_URL includes /api suffix, but OikosAPIClient adds /api/ prefix
     // So we need the base URL without /api suffix
-    // e.g., "https://api.swarmlet.com/api" → "https://api.swarmlet.com"
+    // e.g., "https://api.longhouse.ai/api" → "https://api.longhouse.ai"
     return runtimeApiUrl.replace(/\/api\/?$/, '');
   }
 

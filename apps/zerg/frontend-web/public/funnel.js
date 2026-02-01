@@ -1,5 +1,5 @@
 /**
- * Swarmlet Funnel Tracking
+ * Longhouse Funnel Tracking
  *
  * Tracks the complete user journey:
  * 1. Page view / JS loaded
@@ -13,7 +13,7 @@
     'use strict';
 
     // Configuration
-    // Use API_BASE_URL for split deployment (e.g., api.swarmlet.com)
+    // Use API_BASE_URL for split deployment (e.g., api.longhouse.ai)
     const apiBase = (window.API_BASE_URL && typeof window.API_BASE_URL === 'string')
         ? window.API_BASE_URL.replace(/\/api\/?$/, '')  // Remove /api suffix if present
         : '';
@@ -49,20 +49,20 @@
 
         // Check localStorage first
         try {
-            visitorId = localStorage.getItem('swarmlet_visitor_id');
+            visitorId = localStorage.getItem('longhouse_visitor_id');
             if (visitorId) {
                 // Sync to cookie for server-side access
-                setCookie('swarmlet_visitor_id', visitorId, 365);
+                setCookie('longhouse_visitor_id', visitorId, 365);
                 return visitorId;
             }
         } catch (e) { /* ignore */ }
 
         // Check cookie as fallback
-        visitorId = getCookie('swarmlet_visitor_id');
+        visitorId = getCookie('longhouse_visitor_id');
         if (visitorId) {
             // Sync to localStorage
             try {
-                localStorage.setItem('swarmlet_visitor_id', visitorId);
+                localStorage.setItem('longhouse_visitor_id', visitorId);
             } catch (e) { /* ignore */ }
             return visitorId;
         }
@@ -70,15 +70,15 @@
         // Generate new ID (client-generated, prefixed with 'v_')
         visitorId = 'v_' + crypto.randomUUID();
         try {
-            localStorage.setItem('swarmlet_visitor_id', visitorId);
+            localStorage.setItem('longhouse_visitor_id', visitorId);
         } catch (e) { /* ignore */ }
-        setCookie('swarmlet_visitor_id', visitorId, 365);
+        setCookie('longhouse_visitor_id', visitorId, 365);
         return visitorId;
     }
 
     // ==================== ATTRIBUTION TRACKING ====================
 
-    const ATTRIBUTION_KEY = 'swarmlet_attribution';
+    const ATTRIBUTION_KEY = 'longhouse_attribution';
 
     function captureAttribution() {
         const params = new URLSearchParams(window.location.search);
@@ -302,7 +302,7 @@
     }
 
     // Expose for manual tracking
-    window.SwarmletFunnel = {
+    window.LonghouseFunnel = {
         track: track,
         getVisitorId: getVisitorId,
         flush: flushEvents,
