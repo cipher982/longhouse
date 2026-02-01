@@ -14,12 +14,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 # uv environment variables for optimization
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
-# Set work directory
-WORKDIR /app
+# Set work directory - mirror repo structure for relative path deps
+WORKDIR /repo/apps/zerg/backend
 
 # Cache dependencies separately from app code for better cache hits
-# Paths are relative to repo root (build context)
+# Copy pyproject.toml to correct path so relative deps resolve
 COPY apps/zerg/backend/uv.lock apps/zerg/backend/pyproject.toml ./
+# Copy hatch-agent local package (pyproject.toml references ../../../packages/hatch-agent)
+COPY packages/hatch-agent /repo/packages/hatch-agent
 RUN uv sync --frozen --no-install-project --no-dev
 
 # Builder stage - application with dependencies
@@ -33,10 +35,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # uv environment variables for optimization
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
-WORKDIR /app
+# Mirror repo structure for relative path deps
+WORKDIR /repo/apps/zerg/backend
 
 # Copy virtual environment from dependencies stage
-COPY --from=dependencies /app/.venv /app/.venv
+COPY --from=dependencies /repo/apps/zerg/backend/.venv ./.venv
+
+# Copy hatch-agent for uv sync
+COPY --from=dependencies /repo/packages /repo/packages
 
 # Copy application source (from repo root context)
 COPY apps/zerg/backend/ ./
@@ -73,7 +79,7 @@ RUN useradd --create-home --shell /bin/bash --uid 1000 zerg
 WORKDIR /app
 
 # Copy application and virtual environment from builder
-COPY --from=builder --chown=zerg:zerg /app /app
+COPY --from=builder --chown=zerg:zerg /repo/apps/zerg/backend /app
 
 # Copy config from builder stage
 COPY --from=builder --chown=zerg:zerg /config /config
@@ -124,8 +130,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the virtual environment to /opt/venv to avoid volume mount conflicts
-RUN cp -r /app/.venv /opt/venv && \
-    find /opt/venv/bin -type f -exec sed -i 's|#!/app/.venv/bin/python|#!/opt/venv/bin/python|g' {} \;
+RUN cp -r /repo/apps/zerg/backend/.venv /opt/venv && \
+    find /opt/venv/bin -type f -exec sed -i 's|#!/repo/apps/zerg/backend/.venv/bin/python|#!/opt/venv/bin/python|g' {} \;
 
 # Install dev dependencies using uv (available in builder stage)
 RUN uv sync --frozen
@@ -133,17 +139,20 @@ RUN uv sync --frozen
 # Create non-root user (same as production)
 RUN useradd --create-home --shell /bin/bash --uid 1000 zerg || true
 
+# Set up /app symlink for compatibility
+RUN ln -s /repo/apps/zerg/backend /app
+
 # Create required directories with proper permissions
-RUN mkdir -p /app/static/avatars \
-    && chown zerg:zerg /app/static \
-    && chown zerg:zerg /app/static/avatars
+RUN mkdir -p /repo/apps/zerg/backend/static/avatars \
+    && chown zerg:zerg /repo/apps/zerg/backend/static \
+    && chown zerg:zerg /repo/apps/zerg/backend/static/avatars
 
 # Switch back to non-root user
 USER zerg
 
 # Add virtual environment to PATH for development (using /opt/venv)
 ENV PATH="/opt/venv/bin:$PATH" \
-    PYTHONPATH="/app" \
+    PYTHONPATH="/repo/apps/zerg/backend" \
     PYTHONUNBUFFERED=1
 
 # Development command - run migrations then uvicorn with hot reload
