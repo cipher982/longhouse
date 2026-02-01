@@ -6,8 +6,9 @@ cd "$(dirname "$0")/.."
 
 echo "📦 Setting up SQLite development environment..."
 
-# Set SQLite defaults
-export DATABASE_URL="${DATABASE_URL:-sqlite:///$HOME/.zerg/dev.db}"
+# Force SQLite - ignore any DATABASE_URL from .env
+unset DATABASE_URL
+export DATABASE_URL="sqlite:///$HOME/.zerg/dev.db"
 export AUTH_DISABLED="${AUTH_DISABLED:-1}"
 export SINGLE_TENANT="${SINGLE_TENANT:-1}"
 
