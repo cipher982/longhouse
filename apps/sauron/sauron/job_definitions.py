@@ -16,8 +16,6 @@ from typing import Any
 
 from sqlalchemy import text
 
-from zerg.database import make_engine
-from zerg.database import make_sessionmaker
 from zerg.jobs import get_manifest_metadata
 from zerg.jobs import job_registry
 
@@ -101,6 +99,10 @@ def _publish_job_definitions_sync() -> int:
 
     scheduler_name = os.getenv("JOB_SCHEDULER_NAME", "sauron")
     published = 0
+
+    # Lazy import to avoid pulling in models.json dependency when not needed
+    from zerg.database import make_engine
+    from zerg.database import make_sessionmaker
 
     # Create a SQLAlchemy engine for the ops database
     engine = make_engine(db_url)
