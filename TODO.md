@@ -70,7 +70,7 @@ Establish a single public brand (Longhouse) while keeping Oikos as assistant UI 
 - [x] Update `VISION.md` to “Longhouse Vision” + add a short naming note (Oikos/Zerg)
 - [x] Update `docs/LIGHTWEIGHT-OSS-ONBOARDING.md` to Longhouse naming + CLI examples
 - [x] Update `README.md` to Longhouse branding + domain references
-- [x] Update `docs/public-launch-task.md` and `docs/oss-onboarding-improvements.md` to reflect Longhouse naming
+- [x] Update `docs/public-launch-task.md` and `VISION.md` onboarding section to reflect Longhouse naming
 - [x] Add a short `docs/BRANDING.md` with the naming map + do/don’t usage rules
 
 ---

@@ -809,7 +809,7 @@ def _build_demo_sessions(now: datetime) -> list[SessionIngest]:
         EventIngest(
             role="tool",
             tool_name="Bash",
-            tool_output_text="docs/oss-onboarding-improvements.md\nscripts/validate-setup.sh",
+            tool_output_text="VISION.md\nscripts/validate-setup.sh",
             timestamp=base_one + timedelta(minutes=4),
         ),
         EventIngest(
