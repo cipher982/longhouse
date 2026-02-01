@@ -114,14 +114,13 @@ def _extract_summary_from_output(
     return truncated + "..."
 
 
-def _default_callback_url(*, sandbox: bool) -> str:
-    host = "host.docker.internal" if sandbox else "localhost"
-    return f"http://{host}:{_DEFAULT_CALLBACK_PORT}"
+def _default_callback_url() -> str:
+    return f"http://localhost:{_DEFAULT_CALLBACK_PORT}"
 
 
-def _build_hook_env(job_id: int, *, sandbox: bool) -> dict[str, str]:
+def _build_hook_env(job_id: int) -> dict[str, str]:
     settings = get_settings()
-    callback_url = os.environ.get("LONGHOUSE_CALLBACK_URL") or _default_callback_url(sandbox=sandbox)
+    callback_url = os.environ.get("LONGHOUSE_CALLBACK_URL") or _default_callback_url()
     env_vars = {
         "LONGHOUSE_CALLBACK_URL": callback_url,
         "COMMIS_JOB_ID": str(job_id),
@@ -437,7 +436,6 @@ class CommisJobProcessor:
             job_model = job.model
             job_owner_id = job.owner_id
             job_trace_id = str(job.trace_id) if job.trace_id else None
-            job_sandbox = job.sandbox  # Container isolation flag
             job_config = job.config or {}
             git_repo = job_config.get("git_repo")
             resume_session_id = job_config.get("resume_session_id")
@@ -536,17 +534,14 @@ class CommisJobProcessor:
                     logger.warning(f"Failed to emit commis_started event for job {job_id}: {started_error}")
 
             # 5. Run commis in workspace (LONG-RUNNING - no DB session held!)
-            sandbox_mode = "sandboxed" if job_sandbox else "direct"
-            logger.info(f"Running workspace commis for job {job_id} in {workspace.path} ({sandbox_mode})")
-            hook_env = _build_hook_env(job_id, sandbox=job_sandbox)
+            logger.info(f"Running workspace commis for job {job_id} in {workspace.path}")
+            hook_env = _build_hook_env(job_id)
             result = await cloud_executor.run_commis(
                 task=job_task,
                 workspace_path=workspace.path,
                 model=job_model,
                 resume_session_id=prepared_resume_id,
-                sandbox=job_sandbox,
                 env_vars=hook_env,
-                run_id=commis_id,
             )
 
             # 6. Capture git diff (best-effort, don't fail job on diff errors)

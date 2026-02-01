@@ -314,52 +314,52 @@ Commis (background agent jobs) execute in two modes:
 - Changes captured as git diff
 
 **What's containerized vs not:**
-- ✅ Containerized: Longhouse backend + Postgres (per-user isolation)
-- ❌ Not containerized: Commis execution (runs in Longhouse process or as subprocess)
+- ✅ Containerized: Longhouse backend (per-user isolation in hosted mode)
+- ❌ Not containerized: Commis execution (runs as subprocess with workspace isolation)
 - ❌ Not containerized: Runner commands (run on user's own machine)
 
-This keeps the execution model simple while still isolating user data.
+This keeps the execution model simple. No Docker dependency for OSS users.
 
 ---
 
-## Commis Execution Isolation
+## Commis Workspace Isolation
 
-Workspace mode provides git isolation but NOT process isolation. Current state:
+Workspace mode provides directory-based isolation so multiple commis can work on the same codebase simultaneously without conflicts:
 
 ```
-✓ Git clone isolation (own directory)
+✓ Git clone isolation (own directory per commis)
 ✓ Git branch isolation (oikos/{run_id})
 ✓ Process group isolation (killable on timeout)
-✗ Filesystem isolation (can read /etc, ~/, escape to other repos)
-✗ Network isolation (can exfiltrate data)
-✗ Resource limits (can OOM host)
+✓ Artifact capture (diff, logs accessible to host)
 ```
 
-For autonomous/untrusted agents, this is a blocker. Commis needs two trust levels:
+**How it works:**
 
-**Trusted (interactive, from laptop):**
-- User-initiated via Oikos
-- Runs in subprocess, no container
-- Fast startup, full access to workspace
-- User is accountable for the prompt
+1. `WorkspaceManager` clones repo to `~/.longhouse/workspaces/{commis_id}/`
+2. Creates working branch `oikos/{commis_id}`
+3. Commis executes via `hatch` subprocess
+4. Changes captured as git diff
+5. Artifacts stored for Oikos to reference
+6. Workspace cleaned up (or retained for debugging)
 
-**Untrusted (scheduled, autonomous):**
-- Patrol scans, cron jobs, external triggers
-- Runs in container sandbox:
-  - Read-only filesystem (except /repo workspace)
-  - No network by default
-  - Resource limits (CPU, memory)
-  - User namespace isolation
-- Container overhead (~5-15s) is acceptable for background work
+**Directory structure:**
+```
+~/.longhouse/
+├── workspaces/
+│   ├── ws-123-abc/      # Commis 1's isolated clone
+│   └── ws-456-def/      # Commis 2's isolated clone
+└── artifacts/
+    ├── ws-123-abc/
+    │   └── diff.patch   # Captured changes
+    └── ws-456-def/
+        └── diff.patch
+```
 
-**Implementation:** CloudExecutor gets `sandbox: bool` flag.
-- `sandbox=False`: current subprocess behavior (default)
-- `sandbox=True`: docker/podman with hardened config
+This enables the "multiple agents adding features to the same codebase" pattern. Each commis gets a clean working directory, can create branches and push changes without stepping on other agents' work.
 
-This unlocks:
-- Patrol (autonomous code analysis) as a commis consumer
-- Safe 24/7 background agents
-- Clear trust boundary for OSS users running untrusted prompts
+**No Docker required** — it's just directories and git branches. Fast startup, simple debugging, artifacts accessible to host.
+
+**Security note:** Workspace isolation is about parallel work, not sandboxing untrusted code. Commis run with full host access (same as running `hatch` manually). For OSS users on their own machine, this is the expected trust model
 
 ---
 

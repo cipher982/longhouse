@@ -83,7 +83,7 @@ if [[ -z "$WORKDIR" ]]; then
 fi
 
 if [[ -z "$WORKDIR_OVERRIDE" ]]; then
-  echo "📦 Preparing sandbox at $WORKDIR"
+  echo "📦 Preparing workspace at $WORKDIR"
   if [[ -d "$WORKDIR" ]]; then
     if ! rm -rf "$WORKDIR" 2>/dev/null; then
       true

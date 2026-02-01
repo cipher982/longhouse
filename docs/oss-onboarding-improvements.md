@@ -51,7 +51,7 @@ None of this is visible in the current README.
 - Visual first: WhatsApp screenshot showing real interaction
 - Three pathways: Fastest / Guided / Developer
 - Progressive disclosure: simple → complex
-- Trust upfront: security, local-first, sandbox defaults
+- Trust upfront: security, local-first, workspace isolation
 
 ### Moltbot Install Flow (Deep Dive)
 
