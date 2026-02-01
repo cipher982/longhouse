@@ -117,21 +117,58 @@ Reorder message layout to maximize cache hits. Current layout busts cache by inj
 
 ---
 
-## Workspace Commis Tool Events (4)
+## Live Commis Tool Events via Claude Code Hooks (8)
 
-Workspace commis emit only `commis_started` and `commis_complete` — no tool events during execution. Events exist in hatch session JSONL but aren't extracted.
+Workspace commis currently emit only `commis_started` and `commis_complete` — no visibility during execution. This task adds **real-time tool event streaming** using Claude Code hooks.
 
-**Why:** UI shows black box during workspace commis. Users can't see what tools ran.
+**Why:** UI shows black box during workspace commis (30-60 min). Users can't see what's happening. Live visibility enables monitoring, early cancellation, and debugging.
 
-**Files:** `services/commis_job_processor.py` workspace execution path
+**Approach:** Claude Code hooks (`PostToolUse`, `PreToolUse`) fire during hatch execution and POST events to Longhouse API. Longhouse emits SSE events to UI in real-time.
 
-**Decision needed:** Post-hoc extraction vs accept reduced visibility?
-- Post-hoc: Parse session log on completion, emit `commis_tool_*` events retroactively
-- Status quo: Accept that headless = less visibility
+**Architecture:**
+```
+hatch (claude --print)
+    └── PostToolUse hook → POST /api/internal/commis/tool_event
+                               └── SSE: commis_tool_completed → UI
+```
 
-- [ ] Decide approach
-- [ ] Implement if post-hoc chosen
-- [ ] Update UI to indicate "headless mode" if status quo
+### Phase 1: Hook Infrastructure
+**Files:** `config/claude-hooks/`, `scripts/deploy-hooks.sh`
+
+- [ ] Create `config/claude-hooks/settings.json` with PreToolUse + PostToolUse hooks
+- [ ] Create `config/claude-hooks/scripts/tool_event.py` — POSTs to Longhouse
+- [ ] Create `scripts/deploy-hooks.sh` — deploys to zerg server
+- [ ] Test locally: verify hooks fire and POST correctly
+
+### Phase 2: Backend API
+**Files:** `routers/oikos_internal.py`, `events/commis_emitter.py`
+
+- [ ] Add `POST /api/internal/commis/tool_event` endpoint
+- [ ] Validate job_id exists and is running
+- [ ] Auth: internal token or job-specific callback token
+- [ ] Emit SSE events: `commis_tool_started`, `commis_tool_completed`
+
+### Phase 3: Environment Plumbing
+**Files:** `services/commis_job_processor.py`, `services/cloud_executor.py`
+
+- [ ] Pass env vars to hatch: `LONGHOUSE_CALLBACK_URL`, `COMMIS_JOB_ID`, `COMMIS_CALLBACK_TOKEN`
+- [ ] Generate per-job callback token for auth
+- [ ] Ensure hooks can reach Longhouse API (network path)
+
+### Phase 4: Frontend
+**Files:** `frontend-web/src/hooks/`, `frontend-web/src/components/`
+
+- [ ] Handle new SSE events in existing listener
+- [ ] UI component showing live tool calls during commis
+- [ ] Icons/labels per tool type (Edit, Bash, Read, etc.)
+
+### Phase 5: Polish
+- [ ] Error handling in hook script (retry, timeout)
+- [ ] Rate limiting (debounce rapid tool calls)
+- [ ] Optional: persist events for replay after completion
+- [ ] Update docs with hook deployment instructions
+
+**Docs:** Claude Code hooks reference: https://docs.anthropic.com/en/docs/claude-code/hooks
 
 ---
 
