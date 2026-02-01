@@ -15,7 +15,7 @@ Usage:
     )
 
     # Install and start the service
-    install_service(url="https://api.swarmlet.com", token="xxx")
+    install_service(url="https://api.longhouse.ai", token="xxx")
 
     # Check status
     status = get_service_status()  # "running", "stopped", or "not-installed"
@@ -51,8 +51,8 @@ ServiceStatus = Literal["running", "stopped", "not-installed"]
 
 
 # Service identifiers
-LAUNCHD_LABEL = "com.swarmlet.shipper"
-SYSTEMD_UNIT = "zerg-shipper"
+LAUNCHD_LABEL = "com.longhouse.shipper"
+SYSTEMD_UNIT = "longhouse-shipper"
 
 
 @dataclass
@@ -226,7 +226,7 @@ def _generate_systemd_unit(config: ServiceConfig) -> str:
     log_path = _resolve_claude_dir(config.claude_dir) / "shipper.log"
 
     return f"""[Unit]
-Description=Zerg Shipper - Claude Code Session Sync
+Description=Longhouse Shipper - Claude Code Session Sync
 After=network-online.target
 Wants=network-online.target
 

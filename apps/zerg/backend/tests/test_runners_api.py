@@ -22,7 +22,7 @@ def test_create_enroll_token(client: TestClient, db_session: Session, test_user:
     data = response.json()
     assert "enroll_token" in data
     assert "expires_at" in data
-    assert "swarmlet_url" in data
+    assert "longhouse_url" in data
     assert "docker_command" in data
     assert "one_liner_install_command" in data
 

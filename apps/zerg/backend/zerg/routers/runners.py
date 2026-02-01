@@ -62,21 +62,22 @@ _REGISTER_LOCK = threading.Lock()
 def get_install_script(
     enroll_token: str,
     runner_name: str | None = None,
-    swarmlet_url: str | None = None,
+    swarmlet_url: str | None = None,  # Legacy param name, kept for backwards compatibility
+    longhouse_url: str | None = None,
     runner_image: str | None = None,
 ) -> Response:
     """Return shell script for one-liner runner installation.
 
     This endpoint is designed to be used with curl:
-        curl -fsSL https://api.swarmlet.com/api/runners/install.sh?enroll_token=xxx | bash
+        curl -fsSL https://api.longhouse.ai/api/runners/install.sh?enroll_token=xxx | bash
 
     Or with environment variables:
-        curl -fsSL https://api.swarmlet.com/api/runners/install.sh | \
+        curl -fsSL https://api.longhouse.ai/api/runners/install.sh | \
             ENROLL_TOKEN=xxx RUNNER_NAME=my-runner bash
 
     The script:
     1. Registers the runner using the enroll token
-    2. Saves credentials to ~/.config/swarmlet/runner.env
+    2. Saves credentials to ~/.config/longhouse/runner.env
     3. Starts the runner container with docker run
 
     No authentication required - this is for bootstrapping new runners.
@@ -85,11 +86,12 @@ def get_install_script(
 
     settings = get_settings()
 
-    # Default values from query params or settings
-    if not swarmlet_url:
+    # Prefer longhouse_url, fall back to swarmlet_url (legacy), then settings
+    api_url = longhouse_url or swarmlet_url
+    if not api_url:
         if not settings.app_public_url:
             if settings.testing:
-                swarmlet_url = "http://localhost:30080"
+                api_url = "http://localhost:30080"
             else:
                 return Response(
                     content="Error: APP_PUBLIC_URL not configured on server",
@@ -97,7 +99,7 @@ def get_install_script(
                     status_code=500,
                 )
         else:
-            swarmlet_url = settings.app_public_url
+            api_url = settings.app_public_url
 
     if not runner_image:
         runner_image = settings.runner_docker_image
@@ -107,13 +109,14 @@ def get_install_script(
     script = f"""#!/bin/bash
 set -e
 
-# Swarmlet Runner Installer
+# Longhouse Runner Installer
 # This script registers a runner and starts it with Docker
 
 # Configuration (can be overridden via env vars)
+# Note: SWARMLET_URL is accepted for backwards compatibility
 ENROLL_TOKEN="${{ENROLL_TOKEN:-{enroll_token}}}"
 RUNNER_NAME="${{RUNNER_NAME:-{default_runner_name}}}"
-SWARMLET_URL="${{SWARMLET_URL:-{swarmlet_url}}}"
+LONGHOUSE_URL="${{LONGHOUSE_URL:-${{SWARMLET_URL:-{api_url}}}}}"
 RUNNER_IMAGE="${{RUNNER_IMAGE:-{runner_image}}}"
 
 # Validate required vars
@@ -122,15 +125,15 @@ if [ -z "$ENROLL_TOKEN" ]; then
   exit 1
 fi
 
-if [ -z "$SWARMLET_URL" ]; then
-  echo "Error: SWARMLET_URL is required" >&2
+if [ -z "$LONGHOUSE_URL" ]; then
+  echo "Error: LONGHOUSE_URL is required" >&2
   exit 1
 fi
 
-echo "Registering runner '$RUNNER_NAME' with Swarmlet..."
+echo "Registering runner '$RUNNER_NAME' with Longhouse..."
 
 # Register runner and get credentials
-REGISTER_URL="${{SWARMLET_URL}}/api/runners/register"
+REGISTER_URL="${{LONGHOUSE_URL}}/api/runners/register"
 RESPONSE=$(curl -sf -X POST "$REGISTER_URL" \\
   -H "Content-Type: application/json" \\
   -d "{{\\\"enroll_token\\\": \\\"$ENROLL_TOKEN\\\", \\\"name\\\": \\\"$RUNNER_NAME\\\"}}")
@@ -161,12 +164,12 @@ fi
 echo "Runner registered successfully: $RUNNER_NAME"
 
 # Save credentials to config file
-CONFIG_DIR="$HOME/.config/swarmlet"
+CONFIG_DIR="$HOME/.config/longhouse"
 CONFIG_FILE="$CONFIG_DIR/runner.env"
 
 mkdir -p "$CONFIG_DIR"
 cat > "$CONFIG_FILE" <<EOF
-SWARMLET_URL=$SWARMLET_URL
+LONGHOUSE_URL=$LONGHOUSE_URL
 RUNNER_NAME=$RUNNER_NAME
 RUNNER_SECRET=$RUNNER_SECRET
 EOF
@@ -178,16 +181,16 @@ echo "Credentials saved to $CONFIG_FILE"
 # Start runner container
 echo "Starting runner container..."
 
-docker run -d --name swarmlet-runner \\
+docker run -d --name longhouse-runner \\
   --env-file "$CONFIG_FILE" \\
   --restart unless-stopped \\
   "$RUNNER_IMAGE"
 
 if [ $? -eq 0 ]; then
   echo "Runner container started successfully!"
-  echo "Container name: swarmlet-runner"
+  echo "Container name: longhouse-runner"
   echo ""
-  echo "Check status with: docker logs swarmlet-runner"
+  echo "Check status with: docker logs longhouse-runner"
 else
   echo "Error: Failed to start runner container" >&2
   exit 1
@@ -225,45 +228,45 @@ def create_enroll_token(
         ttl_minutes=10,
     )
 
-    # Get Swarmlet API URL from settings (required in all environments)
+    # Get Longhouse API URL from settings (required in all environments)
     from zerg.config import get_settings
 
     settings = get_settings()
     # In test mode, use a placeholder URL
     if not settings.app_public_url:
         if settings.testing:
-            swarmlet_url = "http://localhost:30080"
+            api_url = "http://localhost:30080"
         else:
             raise HTTPException(
                 status_code=500,
                 detail="APP_PUBLIC_URL not configured. Set this in your environment.",
             )
     else:
-        swarmlet_url = settings.app_public_url
+        api_url = settings.app_public_url
 
     runner_image = settings.runner_docker_image
 
     # Generate two-step setup instructions (legacy, for manual setup)
     docker_command = (
         f"# Step 1: Register runner (one-time)\n"
-        f"curl -X POST {swarmlet_url}/api/runners/register \\\n"
+        f"curl -X POST {api_url}/api/runners/register \\\n"
         f"  -H 'Content-Type: application/json' \\\n"
         f'  -d \'{{"enroll_token": "{plaintext_token}", "name": "my-runner"}}\'\n\n'
         f"# Step 2: Save the runner_secret from the response, then run:\n"
-        f"docker run -d --name swarmlet-runner \\\n"
-        f"  -e SWARMLET_URL={swarmlet_url} \\\n"
+        f"docker run -d --name longhouse-runner \\\n"
+        f"  -e LONGHOUSE_URL={api_url} \\\n"
         f"  -e RUNNER_NAME=my-runner \\\n"
         f"  -e RUNNER_SECRET=<secret_from_step_1> \\\n"
         f"  {runner_image}"
     )
 
     # Generate one-liner install command (recommended method)
-    one_liner_install_command = f"curl -fsSL {swarmlet_url}/api/runners/install.sh?enroll_token={plaintext_token} | bash"
+    one_liner_install_command = f"curl -fsSL {api_url}/api/runners/install.sh?enroll_token={plaintext_token} | bash"
 
     return EnrollTokenResponse(
         enroll_token=plaintext_token,
         expires_at=token_record.expires_at,
-        swarmlet_url=swarmlet_url,
+        longhouse_url=api_url,
         docker_command=docker_command,
         one_liner_install_command=one_liner_install_command,
     )
