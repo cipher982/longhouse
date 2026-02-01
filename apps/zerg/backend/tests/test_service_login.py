@@ -74,7 +74,7 @@ class TestServiceLoginBasics:
         assert data["expires_in"] == 30 * 60  # 30 minutes
 
         # Verify session cookie was set
-        assert "swarmlet_session" in resp.cookies
+        assert "longhouse_session" in resp.cookies
 
     def test_service_login_creates_default_smoke_user(self, monkeypatch, unauthenticated_client: TestClient, db_session):
         """Service login without run ID creates default smoke user."""

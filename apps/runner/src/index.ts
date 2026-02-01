@@ -1,10 +1,10 @@
 /**
- * Swarmlet Runner Daemon
+ * Longhouse Runner Daemon
  *
- * Connects to the Swarmlet platform and executes commands on behalf of workers.
+ * Connects to the Longhouse platform and executes commands on behalf of workers.
  * Enables secure execution without backend access to user SSH keys.
  *
- * Multi-home support: Can connect to multiple backends simultaneously via SWARMLET_URLS.
+ * Multi-home support: Can connect to multiple backends simultaneously via LONGHOUSE_URLS.
  */
 
 import { loadConfig, type RunnerConfig } from './config';
@@ -13,7 +13,7 @@ import { getRunnerMetadata } from './protocol';
 
 async function main() {
   console.log('====================================');
-  console.log('Swarmlet Runner v0.1.0');
+  console.log('Longhouse Runner v0.1.0');
   console.log('====================================');
 
   // Load configuration
@@ -34,17 +34,17 @@ async function main() {
   console.log(`Heartbeat interval: ${config.heartbeatIntervalMs}ms`);
 
   // Log all URLs we're connecting to
-  if (config.swarmletUrls.length === 1) {
-    console.log(`Swarmlet URL: ${config.swarmletUrls[0]}`);
+  if (config.longhouseUrls.length === 1) {
+    console.log(`Longhouse URL: ${config.longhouseUrls[0]}`);
   } else {
-    console.log(`Swarmlet URLs (${config.swarmletUrls.length}):`);
-    config.swarmletUrls.forEach((url, i) => console.log(`  [${i + 1}] ${url}`));
+    console.log(`Longhouse URLs (${config.longhouseUrls.length}):`);
+    config.longhouseUrls.forEach((url, i) => console.log(`  [${i + 1}] ${url}`));
   }
   console.log('====================================\n');
 
   // Create one client per URL
-  const clients = config.swarmletUrls.map((url) => {
-    const clientConfig = { ...config, swarmletUrl: url };
+  const clients = config.longhouseUrls.map((url) => {
+    const clientConfig = { ...config, longhouseUrl: url };
     return new RunnerWebSocketClient(clientConfig, getRunnerMetadata);
   });
 

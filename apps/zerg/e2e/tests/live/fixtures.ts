@@ -152,7 +152,7 @@ export const test = base.extend<LiveFixtures>({
 
     await context.addCookies([
       {
-        name: 'swarmlet_session',
+        name: 'longhouse_session',
         value: authToken,
         domain: apiHost,
         path: '/',

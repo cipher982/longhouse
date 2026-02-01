@@ -273,9 +273,7 @@ create_config_file() {
 # Longhouse Runner Configuration
 # This file contains sensitive credentials - do not share or commit to version control
 
-# LONGHOUSE_URL is the primary env var; SWARMLET_URL kept for backwards compatibility
 LONGHOUSE_URL=$longhouse_url
-SWARMLET_URL=$longhouse_url
 RUNNER_NAME=$runner_name
 RUNNER_SECRET=$runner_secret
 RUNNER_CAPABILITIES=$capabilities
