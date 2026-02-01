@@ -337,10 +337,16 @@ def _reset_database_sync(request: DatabaseResetRequest, current_user):
             try:
                 logger.info(f"Dropping all tables … (attempt {attempt}/{max_attempts})")
                 # SQLite-only: simple drop and recreate
+                # Drop both Base and AgentsBase tables
+                from zerg.models.agents import AgentsBase
+
                 Base.metadata.drop_all(bind=engine)
+                AgentsBase.metadata.drop_all(bind=engine)
 
                 logger.info("Re-creating all tables …")
+                # Recreate both Base and AgentsBase tables
                 Base.metadata.create_all(bind=engine)
+                AgentsBase.metadata.create_all(bind=engine)
 
                 # Count tables immediately after recreation (should be 0)
                 def _safe_count_immediate(table: str) -> int:

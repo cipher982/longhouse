@@ -197,8 +197,9 @@ const config = {
     frontendServer,
     {
       // Start a single backend server; DB isolation happens via X-Test-Commis header
+      // Use url instead of port to wait for /health/db (database readiness), not just TCP port
       command: `node spawn-test-backend.js`,
-      port: BACKEND_PORT,
+      url: `http://127.0.0.1:${BACKEND_PORT}/health/db`,
       cwd: __dirname,
       reuseExistingServer: !process.env.CI, // Allow reusing in development
       timeout: 120_000, // Backend needs time for schema setup
