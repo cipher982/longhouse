@@ -239,3 +239,4 @@ Categories: `gotcha`, `pattern`, `design`, `tool`, `test`, `deploy`, `perf`
 - (2026-02-01) [design] Public branding should be a single umbrella name; keep Oikos as the assistant UI and Zerg as internal codename to avoid name sprawl.
 - (2026-02-01) [tool] Claude Code hooks emit PreToolUse/PostToolUse/PostToolUseFailure; keep hooks async, exit 0, and truncate responses (~10KB) to avoid breaking commis.
 - (2026-02-01) [tool] Commis hook callback expects X-Internal-Token; default callback base is loopback (localhost) unless LONGHOUSE_CALLBACK_URL is set.
+- (2026-02-01) [gotcha] zerg.jobs.queue + ops_db are stubbed in SQLite-only mode; Sauron scheduling in queue mode won’t execute jobs unless you run direct mode or restore a Postgres queue.
