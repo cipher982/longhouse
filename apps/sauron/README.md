@@ -47,7 +47,8 @@ docker build -f apps/sauron/Dockerfile -t sauron:latest ../..
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `DATABASE_URL` | Yes | PostgreSQL URL (same as life-hub) |
+| `JOB_QUEUE_DB_URL` | Yes | SQLite URL for durable queue (e.g. `sqlite:////data/sauron-queue.db`) |
+| `DATABASE_URL` | No | Life Hub PostgreSQL URL (optional; used by some jobs) |
 | `JOBS_GIT_REPO_URL` | Yes | Git URL for sauron-jobs repo |
 | `JOBS_GIT_TOKEN` | Yes | GitHub PAT for private repo |
 | `SSH_PRIVATE_KEY_B64` | No | Base64-encoded SSH key for SSH jobs |
@@ -98,7 +99,8 @@ cd apps/sauron
 uv sync
 
 # Set environment variables
-export DATABASE_URL=postgresql://...
+export JOB_QUEUE_DB_URL=sqlite:///./sauron-queue.db
+export DATABASE_URL=postgresql://...  # optional (jobs that query life-hub)
 export JOBS_GIT_REPO_URL=https://github.com/cipher982/sauron-jobs.git
 export JOBS_GIT_TOKEN=ghp_...
 
@@ -114,7 +116,7 @@ uv run python -m sauron.cli list
 1. **Startup**: Sauron clones `sauron-jobs` repo via `GitSyncService`
 2. **Registration**: `register_all_jobs()` loads builtin jobs + manifest.py
 3. **Scheduling**: APScheduler sets up cron triggers for each job
-4. **Queueing**: When cron fires, job is enqueued to `jobs.queue` table
+4. **Queueing**: When cron fires, job is enqueued to SQLite `job_queue` table
 5. **Execution**: Worker claims job, executes, records to `ops.runs`
 6. **Git Sync**: Background loop pulls repo updates every 5 minutes
 7. **Definitions**: Publish job definitions directly to `ops.jobs` for the ops dashboard (avoids Life Hub API)

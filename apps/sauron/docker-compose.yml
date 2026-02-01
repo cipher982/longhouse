@@ -45,9 +45,11 @@ services:
       JOBS_DIR: /home/sauron/jobs
       JOBS_REFRESH_INTERVAL_SECONDS: ${JOBS_REFRESH_INTERVAL_SECONDS:-300}
 
-      # === Database (job queue + ops.runs) ===
-      # Same as life-hub DB - uses ops.* and jobs.* schemas
+      # === Databases ===
+      # Life Hub DB (optional; used by jobs that query life-hub directly)
       DATABASE_URL: ${DATABASE_URL}
+      # Durable job queue (SQLite file)
+      JOB_QUEUE_DB_URL: ${JOB_QUEUE_DB_URL:-sqlite:////data/sauron-queue.db}
       JOB_QUEUE_ENABLED: "1"
       JOB_SCHEDULER_NAME: ${JOB_SCHEDULER_NAME:-sauron}
 

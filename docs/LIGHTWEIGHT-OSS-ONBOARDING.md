@@ -37,7 +37,7 @@ These are the concrete mismatches between today’s codebase and the SQLite-only
 
 1. **SQLite minimum version**: **require 3.35+** (RETURNING support). Enforced at startup; fail fast.
 2. **SQLite schema strategy**: recommended = **flat tables, no schemas** (there are no name collisions with agents tables). Postgres keeps schemas.
-3. **Ops job queue scope**: recommended = **disable `ops.job_queue` in lite** (keep it Postgres-only), but make `commis_jobs` SQLite-safe for local concurrency.
+3. **Durable job queue**: **SQLite-backed `zerg.jobs.queue`** for OSS/Sauron. `ops.job_queue` (Postgres) is not required in lite.
 4. **Durable checkpoints**: recommended = **use `langgraph-checkpoint-sqlite`** for SQLite so resumes survive restarts.
 5. **Static frontend packaging**: recommended = **bundle `apps/zerg/frontend-web/dist` in the python package** and mount via FastAPI.
 

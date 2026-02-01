@@ -38,6 +38,7 @@ class SauronSettings:
 
     # Feature flags
     job_queue_enabled: bool = True
+    job_queue_db_url: str | None = None
 
     # Log level
     log_level: str = "INFO"
@@ -68,6 +69,7 @@ def get_settings() -> SauronSettings:
         database_url=os.getenv("DATABASE_URL"),
         # Feature flags
         job_queue_enabled=os.getenv("JOB_QUEUE_ENABLED", "1").lower() in ("1", "true", "yes"),
+        job_queue_db_url=os.getenv("JOB_QUEUE_DB_URL"),
         # Logging
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
     )

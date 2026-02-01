@@ -55,11 +55,18 @@ async def run_scheduler() -> None:
     logger.info("Starting Sauron scheduler v2.0")
     logger.info(f"Jobs repo: {settings.jobs_git_repo_url}")
     logger.info(f"Jobs dir: {settings.jobs_dir}")
-    logger.info(f"Database: {'configured' if settings.database_url else 'NOT CONFIGURED'}")
+    queue_db_url = settings.job_queue_db_url or settings.database_url
+    logger.info(f"Job queue DB: {'configured' if queue_db_url else 'NOT CONFIGURED'}")
+    logger.info(f"Life Hub DB: {'configured' if settings.database_url else 'NOT CONFIGURED'}")
     logger.info("=" * 60)
 
-    if not settings.database_url:
-        logger.error("DATABASE_URL is required for job queue; exiting.")
+    if not queue_db_url:
+        logger.error("JOB_QUEUE_DB_URL (or sqlite DATABASE_URL) is required for job queue; exiting.")
+        raise SystemExit(1)
+    from zerg.db_utils import is_sqlite_url
+
+    if not is_sqlite_url(queue_db_url):
+        logger.error("Job queue DB must be sqlite (set JOB_QUEUE_DB_URL=sqlite:////data/sauron-queue.db)")
         raise SystemExit(1)
 
     # Initialize git sync service if repo URL is configured
