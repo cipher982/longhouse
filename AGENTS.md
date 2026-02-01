@@ -207,3 +207,4 @@ Categories: `gotcha`, `pattern`, `design`, `tool`, `test`, `deploy`, `perf`
 - (2026-02-01) [tool] Commis hook callback expects X-Internal-Token; default callback base is loopback (localhost) unless LONGHOUSE_CALLBACK_URL is set.
 - (2026-02-01) [gotcha] zerg.jobs.queue + ops_db are stubbed in SQLite-only mode; Sauron scheduling in queue mode won’t execute jobs unless you run direct mode or restore a Postgres queue.
 - (2026-02-01) [design] Durable scheduler queue now uses SQLite via zerg.jobs.queue; set JOB_QUEUE_DB_URL to a dedicated sqlite file to avoid write contention.
+- (2026-02-01) [gotcha] Funnel tracking origin allowlist still referenced Swarmlet domains; add longhouse.ai or /api/funnel/batch returns 403.
