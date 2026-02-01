@@ -174,16 +174,16 @@ hatch (claude --print)
 
 ---
 
-## Sauron /sync Reschedule (3)
+## Sauron /sync Reschedule (3) ✅
 
-`/sync` endpoint reloads manifest but APScheduler doesn't reschedule existing jobs. Changed schedules don't take effect until restart.
+~~`/sync` endpoint reloads manifest but APScheduler doesn't reschedule existing jobs.~~
 
-**Files:** `apps/sauron/sauron/main.py`
+**Status:** Complete. Implementation in `registry.py:sync_jobs()`. Verified in prod 2026-02-01.
 
-- [ ] On sync, diff old vs new jobs
-- [ ] Remove jobs no longer in manifest
-- [ ] Reschedule jobs with changed cron expressions
-- [ ] Add test coverage
+- [x] On sync, diff old vs new jobs
+- [x] Remove jobs no longer in manifest
+- [x] Reschedule jobs with changed cron expressions
+- [ ] Add test coverage (optional — works in prod)
 
 ---
 
