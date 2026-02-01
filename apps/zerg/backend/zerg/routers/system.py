@@ -35,6 +35,8 @@ def system_info() -> Dict[str, Any]:
         "google_client_id": _settings.google_client_id,
         # Surface public URL so frontend can compute callback routes when needed
         "app_public_url": _settings.app_public_url,
+        "public_site_url": _settings.public_site_url,
+        "public_api_url": _settings.public_api_url,
     }
 
 

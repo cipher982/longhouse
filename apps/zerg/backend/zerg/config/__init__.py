@@ -14,6 +14,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -75,7 +76,11 @@ class Settings:  # noqa: D401 – simple data container
     openai_api_key: Any
     groq_api_key: Any
     # Public URL --------------------------------------------------------
+    # Legacy name (kept for backwards compatibility)
     app_public_url: str | None
+    # Single source of truth for public origins
+    public_site_url: str | None
+    public_api_url: str | None
     runner_docker_image: str
     # Pub/Sub OIDC audience --------------------------------------------
     pubsub_audience: str | None
@@ -210,6 +215,110 @@ class Settings:  # noqa: D401 – simple data container
 
 
 # ---------------------------------------------------------------------------
+# Public origin helpers (single source of truth)
+# ---------------------------------------------------------------------------
+
+
+def _origin_from_url(raw_url: str | None) -> str | None:
+    """Return scheme://host[:port] from a URL or None if invalid."""
+    if not raw_url:
+        return None
+    parsed = urlparse(raw_url)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _split_csv(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _origin_hosts(origins: list[str]) -> set[str]:
+    hosts: set[str] = set()
+    for origin in origins:
+        parsed = urlparse(origin)
+        if parsed.hostname:
+            hosts.add(parsed.hostname)
+    return hosts
+
+
+def get_public_origins(settings: Settings) -> list[str]:
+    """Return configured public origins (site + API), normalized."""
+    origins: list[str] = []
+    site_origin = _origin_from_url(settings.public_site_url)
+    api_origin = _origin_from_url(settings.public_api_url)
+    if site_origin:
+        origins.append(site_origin)
+    if api_origin and api_origin not in origins:
+        origins.append(api_origin)
+    return origins
+
+
+def resolve_cors_origins(settings: Settings) -> list[str]:
+    """Resolve CORS origins with explicit env taking priority."""
+    cors_env = settings.allowed_cors_origins.strip()
+    if cors_env:
+        return _split_csv(cors_env)
+
+    public_origins = get_public_origins(settings)
+    if public_origins:
+        return public_origins
+
+    if settings.auth_disabled:
+        return [
+            "http://localhost:30080",
+            "http://localhost:8080",
+            "http://localhost:5173",
+            "https://localhost:30080",
+            "http://127.0.0.1:30080",
+            "http://127.0.0.1:8080",
+            "http://127.0.0.1:5173",
+        ]
+
+    return ["http://localhost:30080"]
+
+
+def get_funnel_allowed_hosts(settings: Settings) -> set[str]:
+    """Return allowed funnel hosts based on public origins or explicit CORS."""
+    origins = get_public_origins(settings)
+    if not origins:
+        origins = _split_csv(settings.allowed_cors_origins)
+
+    hosts = _origin_hosts(origins)
+    if hosts:
+        return hosts
+
+    # Legacy fallback (kept to avoid hard failures if config is missing)
+    return {
+        "swarmlet.com",
+        "www.swarmlet.com",
+        "swarmlet.ai",
+        "www.swarmlet.ai",
+        "longhouse.ai",
+        "www.longhouse.ai",
+        "localhost",
+        "127.0.0.1",
+    }
+
+
+def validate_public_origin_config(settings: Settings, cors_origins: list[str]) -> list[str]:
+    """Return warnings when public origin config is missing or inconsistent."""
+    warnings: list[str] = []
+    public_site_origin = _origin_from_url(settings.public_site_url)
+    if public_site_origin and public_site_origin not in cors_origins:
+        warnings.append(
+            "PUBLIC_SITE_URL/APP_PUBLIC_URL does not appear in CORS origins. " "Set ALLOWED_CORS_ORIGINS or PUBLIC_SITE_URL to match."
+        )
+
+    if not public_site_origin and not settings.allowed_cors_origins and not settings.auth_disabled:
+        warnings.append(
+            "PUBLIC_SITE_URL (or APP_PUBLIC_URL) is not set and ALLOWED_CORS_ORIGINS is empty. " "CORS will default to localhost."
+        )
+
+    return warnings
+
+
+# ---------------------------------------------------------------------------
 # Singleton accessor – values loaded only once per interpreter
 # ---------------------------------------------------------------------------
 
@@ -291,7 +400,9 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         allowed_cors_origins=os.getenv("ALLOWED_CORS_ORIGINS", ""),
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         groq_api_key=os.getenv("GROQ_API_KEY"),
-        app_public_url=os.getenv("APP_PUBLIC_URL"),
+        app_public_url=os.getenv("APP_PUBLIC_URL") or os.getenv("PUBLIC_SITE_URL"),
+        public_site_url=os.getenv("PUBLIC_SITE_URL") or os.getenv("APP_PUBLIC_URL"),
+        public_api_url=os.getenv("PUBLIC_API_URL"),
         runner_docker_image=os.getenv("RUNNER_DOCKER_IMAGE", "ghcr.io/cipher982/zerg-runner:latest"),
         pubsub_audience=os.getenv("PUBSUB_AUDIENCE"),
         gmail_pubsub_topic=os.getenv("GMAIL_PUBSUB_TOPIC"),

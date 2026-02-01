@@ -14,6 +14,8 @@ _is_test_env = _testing or ("test" in _env) or ("e2e" in _env)
 load_dotenv(override=not _is_test_env)
 
 from zerg.config import get_settings
+from zerg.config import resolve_cors_origins
+from zerg.config import validate_public_origin_config
 
 _settings = get_settings()
 
@@ -638,33 +640,20 @@ app.openapi = custom_openapi
 # with auth disabled on production domains). Otherwise fall back to defaults.
 # ------------------------------------------------------------------
 
-cors_origins_env = _settings.allowed_cors_origins.strip()
-
-if cors_origins_env:
-    # Explicit CORS origins set - use them (works with auth enabled or disabled)
-    cors_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+cors_origins = resolve_cors_origins(_settings)
+if _settings.allowed_cors_origins.strip():
     logger.info(f"CORS configured with explicit origins: {cors_origins}")
 elif _settings.auth_disabled:
-    # Dev mode with no explicit origins: Allow localhost variants for local development
-    cors_origins = [
-        # localhost variants
-        "http://localhost:30080",
-        "http://localhost:8080",
-        "http://localhost:5173",
-        "https://localhost:30080",
-        # 127.0.0.1 variants (used by Playwright/e2e runners)
-        "http://127.0.0.1:30080",
-        "http://127.0.0.1:8080",
-        "http://127.0.0.1:5173",
-    ]
+    logger.info(f"CORS configured for dev defaults: {cors_origins}")
 else:
-    # Prod with auth enabled but no explicit ALLOWED_CORS_ORIGINS - warn and use restrictive default
     logger.warning(
         "ALLOWED_CORS_ORIGINS is not set with auth enabled. "
-        "CORS will only allow http://localhost:30080. "
-        "Set ALLOWED_CORS_ORIGINS=https://your-domain.com for production."
+        "CORS is derived from PUBLIC_SITE_URL/APP_PUBLIC_URL if present, "
+        "otherwise defaults to localhost."
     )
-    cors_origins = ["http://localhost:30080"]
+
+for warning in validate_public_origin_config(_settings, cors_origins):
+    logger.warning(warning)
 
 app.add_middleware(
     CORSMiddleware,

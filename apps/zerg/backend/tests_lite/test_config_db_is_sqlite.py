@@ -40,6 +40,8 @@ class TestDbIsSqlite:
             openai_api_key=None,
             groq_api_key=None,
             app_public_url=None,
+            public_site_url=None,
+            public_api_url=None,
             runner_docker_image="test",
             pubsub_audience=None,
             gmail_pubsub_topic=None,

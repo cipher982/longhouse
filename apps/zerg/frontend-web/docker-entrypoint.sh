@@ -1,16 +1,20 @@
 #!/bin/sh
 # Frontend entrypoint - generates runtime config.js from env vars
 #
-# For split deploy: Pass API_BASE_URL and WS_BASE_URL env vars
+# For split deploy: Pass API_BASE_URL/WS_BASE_URL (or PUBLIC_API_URL/PUBLIC_WS_URL)
 # For monolithic: Don't pass env vars, uses same-origin /api defaults
 
 CONFIG_FILE="/usr/share/nginx/html/config.js"
 CSP_FILE="/etc/nginx/csp.conf"
 
+# Prefer API_BASE_URL / WS_BASE_URL, fall back to PUBLIC_API_URL / PUBLIC_WS_URL
+API_ENV="${API_BASE_URL:-${PUBLIC_API_URL:-}}"
+WS_ENV="${WS_BASE_URL:-${PUBLIC_WS_URL:-}}"
+
 # If cross-origin env vars are set, generate config.js for split deploy
-if [ -n "$API_BASE_URL" ] || [ -n "$WS_BASE_URL" ]; then
-  API="${API_BASE_URL:-/api}"
-  WS="${WS_BASE_URL:-}"
+if [ -n "$API_ENV" ] || [ -n "$WS_ENV" ]; then
+  API="${API_ENV:-/api}"
+  WS="${WS_ENV:-}"
 
   # Normalize: strip trailing slashes
   API="${API%/}"
