@@ -226,3 +226,17 @@ hatch (claude --print)
 - [x] Fix and redeploy
 
 **Done 2026-02-01:** Docker builds successfully after lockfile fixes.
+
+---
+
+## E2E SQLite Database Init Failure (2)
+
+E2E tests fail with "no such table: users" / "no such table: commis_jobs". The per-worker SQLite databases aren't being initialized with schema.
+
+**Error:** `sqlite3.OperationalError: no such table: users`
+
+**Files:** `apps/zerg/e2e/global-setup.ts`, `apps/zerg/e2e/playwright.config.ts`
+
+- [ ] Investigate why globalSetup creates DB files but doesn't run migrations
+- [ ] Ensure `initialize_database()` is called for each per-worker SQLite
+- [ ] Verify E2E tests pass after fix
