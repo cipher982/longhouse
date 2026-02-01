@@ -89,6 +89,9 @@ async def record_commis_tool_event(
     if not job:
         return {"status": "ignored", "reason": "job not found"}
 
+    if job.status != "running":
+        return {"status": "ignored", "reason": f"job not running (status={job.status})"}
+
     if not job.oikos_run_id:
         return {"status": "ignored", "reason": "job has no oikos_run_id"}
 
