@@ -23,10 +23,8 @@ jobs:
     runs-on: cube
     name: "🧪 Extended CI (Full Suite)"
     env:
-      # Use dedicated CI Postgres (not Life Hub production)
-      DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
+      # E2E tests use per-backend SQLite databases (no Postgres needed)
       FERNET_SECRET: ${{ secrets.FERNET_SECRET }}
-      E2E_USE_POSTGRES_SCHEMAS: "1"
       # Life Hub credentials for session continuity tests
       LIFE_HUB_API_KEY: ${{ secrets.LIFE_HUB_API_KEY }}
       LIFE_HUB_URL: https://data.drose.io

@@ -16,8 +16,6 @@ from datetime import datetime
 from datetime import timezone
 from typing import List
 
-from sqlalchemy import text
-
 from zerg.database import get_session_factory
 from zerg.models.enums import RunStatus
 from zerg.models.models import CommisJob
@@ -289,44 +287,26 @@ def check_advisory_lock_support() -> dict:
     Check what locking mechanism is available for this database.
 
     Returns a dict with:
-    - dialect: "postgresql" or "sqlite"
-    - advisory_locks: True if PostgreSQL advisory locks work
-    - resource_locks: True if SQLite resource_locks table is available
+    - dialect: "sqlite"
+    - resource_locks: True if resource_locks table is available
 
     Returns:
         Dict with lock support details
     """
     from zerg.db_utils import _ensure_resource_locks_table
-    from zerg.db_utils import is_sqlite_session
 
     session_factory = get_session_factory()
     result = {
-        "dialect": "unknown",
-        "advisory_locks": False,
+        "dialect": "sqlite",
         "resource_locks": False,
     }
 
     with session_factory() as db:
         try:
-            if is_sqlite_session(db):
-                result["dialect"] = "sqlite"
-                # SQLite: ensure resource_locks table exists
-                _ensure_resource_locks_table(db)
-                result["resource_locks"] = True
-                logger.info("SQLite resource_locks table available for locking")
-            else:
-                result["dialect"] = "postgresql"
-                # PostgreSQL: test advisory lock functionality
-                lock_result = db.execute(text("SELECT pg_try_advisory_lock(999999)"))
-                acquired = lock_result.scalar()
-
-                if acquired:
-                    # Release the test lock
-                    db.execute(text("SELECT pg_advisory_unlock(999999)"))
-                    result["advisory_locks"] = True
-                    logger.info("PostgreSQL advisory locks are available")
-                else:
-                    logger.warning("PostgreSQL advisory locks test failed")
+            # Ensure resource_locks table exists
+            _ensure_resource_locks_table(db)
+            result["resource_locks"] = True
+            logger.info("SQLite resource_locks table available for locking")
 
         except Exception as e:
             logger.warning(f"Lock support check failed: {e}")
@@ -336,15 +316,15 @@ def check_advisory_lock_support() -> dict:
 
 def check_postgresql_advisory_lock_support() -> bool:
     """
-    Check if PostgreSQL advisory locks are available.
+    Check if locking is available.
 
     This is a backward-compatible wrapper around check_advisory_lock_support().
 
     Returns:
-        True if advisory locks are supported (or SQLite with resource_locks)
+        True if resource_locks table is available
     """
     support = check_advisory_lock_support()
-    return support.get("advisory_locks", False) or support.get("resource_locks", False)
+    return support.get("resource_locks", False)
 
 
 async def initialize_fiche_state_system():
@@ -393,13 +373,10 @@ async def initialize_fiche_state_system():
                 f"{len(recovered_runner_jobs)} runner jobs"
             )
 
-        dialect = lock_support.get("dialect", "unknown")
-        if lock_support.get("advisory_locks"):
-            logger.info("Fiche state system initialized with PostgreSQL advisory locks")
-        elif lock_support.get("resource_locks"):
+        if lock_support.get("resource_locks"):
             logger.info("Fiche state system initialized with SQLite resource_locks")
         else:
-            logger.info(f"Fiche state system initialized ({dialect}) with startup recovery only")
+            logger.info("Fiche state system initialized with startup recovery only")
 
         return {
             "recovered_fiches": recovered_fiches,

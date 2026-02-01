@@ -1,9 +1,13 @@
+"""SQLite-only database configuration and session management.
+
+This module provides database connection and session management for Zerg.
+The codebase is SQLite-only for OSS deployment simplicity.
+"""
+
 import logging
 import os
-import threading
 from contextlib import contextmanager
 from typing import Any
-from typing import Dict
 from typing import Iterator
 
 import dotenv
@@ -15,68 +19,10 @@ from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool
 
 from zerg.config import get_settings
-from zerg.db_utils import is_sqlite_url as _is_sqlite_url
 
-# Thread-safe caches for per-commis engines/sessionmakers --------------------
-
-_COMMIS_ENGINES: Dict[str, Engine] = {}
-_COMMIS_SESSIONMAKERS: Dict[str, sessionmaker] = {}
-# Per-commis init locks prevent cross-commis serialization during E2E startup.
-_COMMIS_INIT_LOCKS: Dict[str, threading.Lock] = {}
-# Use RLock (reentrant) since _get_postgres_schema_session is called while lock is held
-_COMMIS_LOCK = threading.RLock()
 logger = logging.getLogger(__name__)
-
-
-def clear_commis_caches():
-    """Clear cached commis engines and sessionmakers.
-
-    This is needed for E2E tests to ensure session factories are created
-    with the correct configuration after environment variables are set.
-    """
-    global _COMMIS_ENGINES, _COMMIS_SESSIONMAKERS, _COMMIS_INIT_LOCKS
-    with _COMMIS_LOCK:
-        _COMMIS_ENGINES.clear()
-        _COMMIS_SESSIONMAKERS.clear()
-        _COMMIS_INIT_LOCKS.clear()
-
-
-def _get_commis_init_lock(commis_id: str) -> threading.Lock:
-    """Get (or create) a per-commis init lock.
-
-    This avoids serializing initialization for *different* Playwright commis
-    behind a single global lock while still preventing double-init for the same
-    commis_id.
-    """
-    with _COMMIS_LOCK:
-        lock = _COMMIS_INIT_LOCKS.get(commis_id)
-        if lock is None:
-            lock = threading.Lock()
-            _COMMIS_INIT_LOCKS[commis_id] = lock
-        return lock
-
-
-# ---------------------------------------------------------------------------
-# Playwright commis-based DB isolation (E2E tests)
-# ---------------------------------------------------------------------------
-
-# We *dynamically* route each HTTP/WebSocket request to a commis-specific
-# Postgres schema during Playwright runs. The current commis id is injected by
-# middleware and stored in a context variable. Importing here avoids a
-# circular dependency (middleware imports *this* module). The conditional
-# import keeps the overhead negligible for production usage.
-
-try:
-    from zerg.middleware.commis_db import current_commis_id
-
-except ModuleNotFoundError:
-    import contextvars
-
-    current_commis_id = contextvars.ContextVar("current_commis_id", default=None)
-
 
 _settings = get_settings()
 
@@ -84,19 +30,13 @@ _settings = get_settings()
 dotenv.load_dotenv(override=True)
 
 
-# Default schema for all Zerg tables
-# DB_SCHEMA is None for SQLite (no schema support), "zerg" for Postgres
-
-
-_db_url = os.environ.get("DATABASE_URL", "")
-DB_SCHEMA = None if _is_sqlite_url(_db_url) else "zerg"
-_metadata = MetaData(schema=DB_SCHEMA) if DB_SCHEMA else MetaData()
+# SQLite-only: no schema support
+_metadata = MetaData()
 
 # Create Base class
 Base = declarative_base(metadata=_metadata)
 
 # Import all models at module level to ensure they are registered with Base
-# This prevents "no such table" errors when commis databases are created
 try:
     from zerg.models.models import CanvasLayout  # noqa: F401
     from zerg.models.models import Connector  # noqa: F401
@@ -159,71 +99,29 @@ def make_engine(db_url: str, **kwargs) -> Engine:
         raise ValueError("DATABASE_URL is not set (empty)")
 
     # Some environments / Makefile exporters include surrounding quotes from `.env`
-    # (e.g. DATABASE_URL="postgresql://..."). Be forgiving here.
     if (db_url.startswith('"') and db_url.endswith('"')) or (db_url.startswith("'") and db_url.endswith("'")):
         db_url = db_url[1:-1].strip()
 
-    # Common footgun: many platforms emit `postgres://...` but SQLAlchemy expects `postgresql://...`.
-    if db_url.startswith("postgres://"):
-        db_url = "postgresql://" + db_url[len("postgres://") :]
-
     try:
         parsed = make_url(db_url)
-    except Exception as e:  # pragma: no cover - defensive, depends on SQLAlchemy parsing
+    except Exception as e:
         raise ValueError(f"Invalid DATABASE_URL: {e}") from e
 
-    if parsed.drivername.startswith("sqlite"):
-        connect_args = kwargs.setdefault("connect_args", {})
-        connect_args.setdefault("check_same_thread", False)
-        if "timeout" not in connect_args:
-            busy_timeout_ms = int(os.getenv("SQLITE_BUSY_TIMEOUT_MS", "5000"))
-            connect_args["timeout"] = busy_timeout_ms / 1000.0
-
-        engine = create_engine(db_url, **kwargs)
-        _configure_sqlite_engine(engine)
-        return engine
-
-    if not parsed.drivername.startswith("postgresql"):
+    if not parsed.drivername.startswith("sqlite"):
         raise ValueError(
-            f"Unsupported DATABASE_URL driver '{parsed.drivername}'. "
-            "Only Postgres and SQLite are supported (postgresql+psycopg://... or sqlite:///...)."
+            f"Unsupported DATABASE_URL driver '{parsed.drivername}'. " "Only SQLite is supported (sqlite:///path/to/db.sqlite)."
         )
 
-    # E2E tests: use conservative pool size to prevent connection explosion.
-    # With multiple uvicorn commis, each process creates per-commis engines.
-    # Worst case: uvicorn_commis × playwright_commis × (pool_size + max_overflow)
-    # Example: 6 uvicorn × 16 playwright × 4 = 384 connections (under 500 limit)
-    # Configure via E2E_DB_POOL_SIZE and E2E_DB_MAX_OVERFLOW env vars.
-    if _settings.e2e_use_postgres_schemas:
-        pool_size = int(os.environ.get("E2E_DB_POOL_SIZE", "2"))
-        max_overflow = int(os.environ.get("E2E_DB_MAX_OVERFLOW", "2"))
-        kwargs.setdefault("pool_size", pool_size)
-        kwargs.setdefault("max_overflow", max_overflow)
+    # SQLite configuration
+    connect_args = kwargs.setdefault("connect_args", {})
+    connect_args.setdefault("check_same_thread", False)
+    if "timeout" not in connect_args:
+        busy_timeout_ms = int(os.getenv("SQLITE_BUSY_TIMEOUT_MS", "5000"))
+        connect_args["timeout"] = busy_timeout_ms / 1000.0
 
-    # Connection pool health: pre_ping verifies connections before use,
-    # pool_recycle closes connections after 5 minutes to handle DB restarts
-    kwargs.setdefault("pool_pre_ping", True)
-    kwargs.setdefault("pool_recycle", 300)
-
-    return create_engine(db_url, **kwargs)
-
-
-def _apply_search_path(db_url: str, schema: str) -> str:
-    """Ensure Postgres connections default to the Zerg schema.
-
-    This keeps raw SQL (unqualified table names) pointed at the correct schema.
-    """
-    url = make_url(db_url)
-    if url.drivername.startswith("sqlite"):
-        return db_url
-    query = dict(url.query)
-    existing_options = (query.get("options") or "").strip()
-    search_path_opt = f"-csearch_path={schema},public"
-
-    if "search_path" not in existing_options:
-        query["options"] = f"{existing_options} {search_path_opt}".strip() if existing_options else search_path_opt
-
-    return url.set(query=query).render_as_string(hide_password=False)
+    engine = create_engine(db_url, **kwargs)
+    _configure_sqlite_engine(engine)
+    return engine
 
 
 def make_sessionmaker(engine: Engine) -> sessionmaker:
@@ -235,36 +133,17 @@ def make_sessionmaker(engine: Engine) -> sessionmaker:
     Returns:
         A sessionmaker class
     """
-    # `expire_on_commit=False` keeps attributes accessible after a commit,
-    # preventing DetachedInstanceError in situations where objects outlive the
-    # session lifecycle (e.g. during test helpers that commit and then access
-    # attributes after other background DB activity).
-    # ``expire_on_commit=True`` forces SQLAlchemy to *reload* objects from the
-    # database the next time they are accessed after a commit.  This prevents
-    # stale identity-map rows from surviving across the test-suite's
-    # reset-database calls where we truncate all tables without restarting the
-    # backend process.
-
     # Determine expire_on_commit based on environment
-    # For E2E tests, we need expire_on_commit=False to prevent DetachedInstanceError
-    # when objects are returned from API endpoints
     environment = os.getenv("ENVIRONMENT", "")
 
     # Check multiple indicators for E2E testing context
-    is_e2e = (
-        environment.startswith("test:e2e")
-        or os.getenv("TEST_TYPE") == "e2e"
-        or
-        # The test_main.py module is only used for E2E tests
-        "test_main" in str(engine.url)
-    )
+    is_e2e = environment.startswith("test:e2e") or os.getenv("TEST_TYPE") == "e2e" or "test_main" in str(engine.url)
 
     # Use expire_on_commit=False for E2E tests to keep objects accessible
     # after session closes, but True for unit tests to prevent stale data
     if is_e2e:
         expire_on_commit = False
     elif environment == "test" or environment.startswith("test:"):
-        # Other test types need expire_on_commit=True for proper isolation
         expire_on_commit = True
     else:
         # Production/development default to False for better performance
@@ -278,129 +157,6 @@ def make_sessionmaker(engine: Engine) -> sessionmaker:
     )
 
 
-def _get_postgres_schema_session(commis_id: str) -> sessionmaker:
-    """Get session factory that uses commis-specific Postgres schema.
-
-    Each commis gets its own Postgres schema (e.g., e2e_commis_0) for full isolation.
-    Uses connection event listeners to set search_path on every connection.
-
-    SECURITY: This is only enabled when E2E_USE_POSTGRES_SCHEMAS=1 (test environments).
-    The X-Test-Commis header allows schema churning, so never enable in production.
-
-    Args:
-        commis_id: Commis ID to use for schema naming
-
-    Returns:
-        A sessionmaker configured for the commis's schema
-    """
-    # Fast-path: cached sessionmaker
-    with _COMMIS_LOCK:
-        cached = _COMMIS_SESSIONMAKERS.get(commis_id)
-    if cached is not None:
-        return cached
-
-    # Use the main DATABASE_URL (Postgres)
-    db_url = (_settings.database_url or "").strip()
-    if (db_url.startswith('"') and db_url.endswith('"')) or (db_url.startswith("'") and db_url.endswith("'")):
-        db_url = db_url[1:-1].strip()
-
-    from sqlalchemy import text
-
-    from zerg.e2e_schema_manager import ensure_commis_schema
-    from zerg.e2e_schema_manager import get_schema_name
-
-    schema_name = get_schema_name(commis_id)
-
-    # Avoid doing full create_all(checkfirst=True) work on every cold start when
-    # schemas are already pre-created in Playwright globalSetup.
-    #
-    # If the schema is missing (e.g., globalSetup dropped schemas while a backend
-    # process was still running), we fall back to the full ensure.
-    admin_engine = create_engine(db_url, poolclass=NullPool)
-    schema_exists = False
-    try:
-        with admin_engine.connect() as conn:
-            schema_exists = bool(
-                conn.execute(
-                    text("SELECT 1 FROM information_schema.schemata WHERE schema_name = :schema"),
-                    {"schema": schema_name},
-                ).fetchone()
-            )
-            conn.commit()
-    except Exception:
-        schema_exists = False
-
-    if not schema_exists:
-        ensure_commis_schema(admin_engine, commis_id)
-
-    # Dispose the admin engine (releases any remaining connections). With NullPool
-    # this is mostly a no-op but good hygiene.
-    try:
-        admin_engine.dispose()
-    except Exception:
-        pass
-
-    # Create schema-routed engine for this commis.
-    #
-    # NOTE: We prefer wiring schema routing into the *connection itself*
-    # (libpq `options=-csearch_path=...`) rather than relying solely on runtime
-    # `SET search_path` calls. This prevents subtle cases where a pooled
-    # connection might retain a default search_path and write to public instead
-    # of the commis schema.
-    url = make_url(db_url)
-    query = dict(url.query)
-    existing_options = (query.get("options") or "").strip()
-    schema_options = f"-csearch_path={schema_name},public"
-    query["options"] = f"{existing_options} {schema_options}".strip() if existing_options else schema_options
-    engine = make_engine(url.set(query=query).render_as_string(hide_password=False))
-    engine = engine.execution_options(schema_translate_map={DB_SCHEMA: schema_name})
-
-    # Create test user for foreign key constraints (E2E tests need a user for fiche creation)
-    # Use ON CONFLICT DO NOTHING to handle any unique constraint (email or id) under
-    # concurrent initialization or dev user creation in the same schema.
-    with engine.connect() as conn:
-        conn.execute(text(f"SET search_path TO {schema_name}, public"))
-        logger.debug("Commis %s (Postgres schema) ensuring test user exists...", commis_id)
-        conn.execute(
-            text("""
-                INSERT INTO users (id, email, role, is_active, provider, provider_user_id,
-                                  display_name, context, created_at, updated_at)
-                VALUES (1, 'test@example.com', 'ADMIN', true, 'dev', 'test-user-1',
-                       'Test User', '{}', NOW(), NOW())
-                ON CONFLICT DO NOTHING
-            """)
-        )
-        # Advance the sequence past id=1 to avoid conflicts with auto-generated IDs
-        # when DevAuthStrategy creates the dev user with auto-generated ID
-        conn.execute(text("SELECT setval('users_id_seq', GREATEST(COALESCE((SELECT MAX(id) FROM users), 0), 1))"))
-        conn.commit()
-        logger.debug("Commis %s (Postgres schema) test user ensured", commis_id)
-
-    # Add event listener to set search_path on every connection
-    @event.listens_for(engine, "connect")
-    def set_search_path(dbapi_conn, connection_record):
-        cursor = dbapi_conn.cursor()
-        cursor.execute(f"SET search_path TO {schema_name}, public")
-        cursor.close()
-
-    session_factory = make_sessionmaker(engine)
-
-    with _COMMIS_LOCK:
-        # Another thread could have initialized while we were creating (unlikely
-        # with per-commis lock, but keep this safe).
-        existing = _COMMIS_SESSIONMAKERS.get(commis_id)
-        if existing is not None:
-            try:
-                engine.dispose()
-            except Exception:
-                pass
-            return existing
-
-        _COMMIS_ENGINES[commis_id] = engine
-        _COMMIS_SESSIONMAKERS[commis_id] = session_factory
-        return session_factory
-
-
 def get_session_factory() -> sessionmaker:
     """Get the default session factory for the application.
 
@@ -409,71 +165,25 @@ def get_session_factory() -> sessionmaker:
     Returns:
         A sessionmaker instance
     """
-    # ------------------------------------------------------------------
-    # Playwright E2E tests: isolate database per commis ------------------
-    # ------------------------------------------------------------------
-    # When the *CommisDBMiddleware* sets `current_commis_id` we route to
-    # a commis-specific Postgres schema for full isolation.
-    #
-    # Outside the E2E test context (commis_id is None), we use the
-    # default engine for unit tests, dev server, and production.
-    # ------------------------------------------------------------------
+    if default_session_factory is not None:
+        return default_session_factory
 
-    commis_id = current_commis_id.get()
+    # Fallback for edge cases where module loaded before DATABASE_URL set
+    db_url = _settings.database_url
+    if not db_url:
+        raise ValueError("DATABASE_URL not set in environment")
 
-    if commis_id is None:
-        # --- Default behaviour for non-E2E contexts ---
-        # CRITICAL: Reuse the cached default_session_factory to prevent
-        # engine proliferation. Creating a new engine per call exhausts
-        # Postgres connections under load.
-        if default_session_factory is not None:
-            return default_session_factory
-
-        # Fallback for edge cases where module loaded before DATABASE_URL set
-        # (e.g., during test discovery). This should rarely be hit in practice.
-        db_url = _settings.database_url
-        if not db_url:
-            raise ValueError("DATABASE_URL not set in environment")
-
-        logger.warning("get_session_factory() creating engine on-demand (default_session_factory was None)")
-        engine = make_engine(_apply_search_path(db_url, DB_SCHEMA))
-        return make_sessionmaker(engine)
-
-    # --- Per-commis Postgres schema isolation (E2E tests) ---
-    cached = _COMMIS_SESSIONMAKERS.get(commis_id)
-    if cached is not None:
-        return cached
-
-    # Lazily build the engine (per-commis lock avoids cross-commis serialization)
-    init_lock = _get_commis_init_lock(commis_id)
-    with init_lock:
-        cached = _COMMIS_SESSIONMAKERS.get(commis_id)
-        if cached is not None:
-            return cached
-
-        # Route to Postgres schema isolation
-        if _settings.e2e_use_postgres_schemas:
-            return _get_postgres_schema_session(commis_id)
-
-        # If schema isolation is disabled, something is misconfigured
-        raise ValueError(
-            f"Commis ID '{commis_id}' detected but E2E_USE_POSTGRES_SCHEMAS is not enabled. "
-            "Enable Postgres schema isolation for E2E tests."
-        )
+    logger.warning("get_session_factory() creating engine on-demand (default_session_factory was None)")
+    engine = make_engine(db_url)
+    return make_sessionmaker(engine)
 
 
 # Default engine and sessionmaker instances for app usage
-# For unit tests using testcontainers, DATABASE_URL will be set by conftest.py
-# which also patches default_engine/default_session_factory after startup.
-# For dev/prod, DATABASE_URL must be set in .env file.
-
-# Create a placeholder engine that will be overridden by tests or used in production
 if _settings.database_url:
-    default_engine = make_engine(_apply_search_path(_settings.database_url, DB_SCHEMA))
+    default_engine = make_engine(_settings.database_url)
     default_session_factory = make_sessionmaker(default_engine)
 else:
     # Unit tests will override these in conftest.py before any actual usage
-    # This allows the module to be imported during test discovery without crashing
     logger.warning("DATABASE_URL not set - using placeholder (will be overridden by tests)")
     default_engine = None  # type: ignore[assignment]
     default_session_factory = None  # type: ignore[assignment]
@@ -496,29 +206,13 @@ def get_db(session_factory: Any = None) -> Iterator[Session]:
         try:
             db.close()
         except Exception:
-            # Ignore errors during session close, such as when the database
-            # connection has been terminated unexpectedly (e.g., during reset operations)
             pass
-
-
-# ============================================================================
-# Carmack-Style Unified Session Management
-# ============================================================================
 
 
 @contextmanager
 def db_session(session_factory: Any = None):
     """
-    Carmack-style database session context manager.
-
-    Single way to manage database sessions in services and background tasks.
-    Handles all error cases automatically - impossible to leak connections.
-
-    Key principles:
-    1. Auto-commit on success
-    2. Auto-rollback on error
-    3. Always close session
-    4. Clear error messages
+    Database session context manager with automatic commit/rollback.
 
     Usage:
         with db_session() as db:
@@ -538,41 +232,19 @@ def db_session(session_factory: Any = None):
 
     try:
         yield session
-        session.commit()  # Auto-commit on success
+        session.commit()
 
     except Exception as e:
-        session.rollback()  # Auto-rollback on error
+        session.rollback()
         logging.error(f"Database session rolled back due to error: {e}")
-        raise  # Re-raise the original exception
+        raise
 
     finally:
-        session.close()  # Always close
-
-
-# Legacy alias for backward compatibility
-def get_db_session(session_factory: Any = None):
-    """
-    Legacy alias for db_session() - DEPRECATED.
-
-    Use db_session() directly for better clarity.
-    """
-    logging.warning("get_db_session() is deprecated - use db_session() instead")
-    return db_session(session_factory)
-
-
-def is_postgres() -> bool:
-    """Check if the default database engine is PostgreSQL.
-
-    Returns:
-        True if PostgreSQL, False otherwise (SQLite, etc.)
-    """
-    if default_engine is None:
-        return False
-    return default_engine.dialect.name == "postgresql"
+        session.close()
 
 
 # Minimum SQLite version for required features.
-# 3.35+ adds RETURNING, which we'll rely on for SQLite-safe job claiming.
+# 3.35+ adds RETURNING, which we rely on for SQLite-safe job claiming.
 SQLITE_MIN_VERSION = (3, 35, 0)
 
 
@@ -580,7 +252,6 @@ def check_sqlite_version(engine: Engine) -> tuple[bool, str]:
     """Check if SQLite version supports required features.
 
     SQLite 3.35+ is required for RETURNING (used in SQLite-safe job claiming).
-    We also use UPSERT for event deduplication.
 
     Args:
         engine: SQLAlchemy engine to check
@@ -608,18 +279,7 @@ def initialize_database(engine: Engine = None) -> None:
     Args:
         engine: Optional engine to use, defaults to default_engine
     """
-    if os.getenv("TESTING") == "1":
-        if os.getenv("E2E_USE_POSTGRES_SCHEMAS") == "1":
-            logger.info("Skipping initialize_database for E2E schema isolation")
-            return
-        if os.getenv("CI_TEST_SCHEMA"):
-            logger.info("Skipping initialize_database for external test schema")
-            return
-
     # Import all models to ensure they are registered with Base
-    # We need to import the models explicitly to ensure they're registered
-    # Import agents models for OSS standalone deployment
-    from zerg.models.agents import AGENTS_SCHEMA
     from zerg.models.agents import AgentsBase
     from zerg.models.models import CanvasLayout  # noqa: F401
     from zerg.models.models import Connector  # noqa: F401
@@ -642,37 +302,28 @@ def initialize_database(engine: Engine = None) -> None:
 
     target_engine = engine or default_engine
 
-    # For SQLite, strip schemas using schema_translate_map
-    # This allows models defined with schema="zerg" or schema="agents" to work
-    # without schema prefixes on SQLite (which doesn't support schemas)
-    if target_engine is not None and target_engine.dialect.name == "sqlite":
-        # Check SQLite version for required features
-        is_compatible, version_str = check_sqlite_version(target_engine)
-        if not is_compatible:
-            min_ver = ".".join(str(x) for x in SQLITE_MIN_VERSION)
-            raise RuntimeError(f"SQLite version {version_str} is below minimum {min_ver}. " f"Upgrade SQLite or use Postgres.")
-        logger.debug(f"SQLite version {version_str} meets requirements")
+    if target_engine is None:
+        raise ValueError("No engine provided and default_engine is None")
 
-        target_engine = target_engine.execution_options(schema_translate_map={"zerg": None, "agents": None})
+    # Check SQLite version for required features
+    is_compatible, version_str = check_sqlite_version(target_engine)
+    if not is_compatible:
+        min_ver = ".".join(str(x) for x in SQLITE_MIN_VERSION)
+        raise RuntimeError(f"SQLite version {version_str} is below minimum {min_ver}. " f"Upgrade SQLite to use this application.")
+    logger.debug(f"SQLite version {version_str} meets requirements")
 
-    # Ensure schemas exist for fresh databases (Postgres only)
-    if target_engine is not None and target_engine.dialect.name == "postgresql":
-        from sqlalchemy import text
-
-        with target_engine.connect() as conn:
-            conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {DB_SCHEMA}"))
-            conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {AGENTS_SCHEMA}"))
-            conn.commit()
+    # Strip any schema references for SQLite (which doesn't support schemas)
+    target_engine = target_engine.execution_options(schema_translate_map={"zerg": None, "agents": None})
 
     # Debug: Check what tables will be created
     if os.getenv("NODE_ENV") == "test":
         table_names = [table.name for table in Base.metadata.tables.values()]
         logger.debug("Creating tables: %s", sorted(table_names))
 
-    # Create main zerg tables
+    # Create main tables
     Base.metadata.create_all(bind=target_engine)
 
-    # Create agents tables (for OSS standalone deployment)
+    # Create agents tables
     AgentsBase.metadata.create_all(bind=target_engine)
 
     # Debug: Verify tables were created
@@ -680,8 +331,5 @@ def initialize_database(engine: Engine = None) -> None:
         from sqlalchemy import inspect
 
         inspector = inspect(target_engine)
-        if target_engine.dialect.name == "postgresql":
-            tables = inspector.get_table_names(schema=DB_SCHEMA)
-        else:
-            tables = inspector.get_table_names()
+        tables = inspector.get_table_names()
         logger.debug("Tables created in database: %s", sorted(tables))

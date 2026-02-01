@@ -167,39 +167,25 @@ def can_create_user_locked(db: Session) -> bool:
     """
     from sqlalchemy import text
 
-    from zerg.db_utils import is_sqlite_session
-
     settings = get_settings()
     if not settings.single_tenant:
         return True
 
-    if is_sqlite_session(db):
-        # SQLite: Use BEGIN IMMEDIATE for write lock
-        # This serializes concurrent write transactions at the DB level.
-        # The lock is held until the transaction commits/rollbacks.
-        # Caller MUST create user in same transaction for atomicity.
-        try:
-            # Force a write lock by starting an immediate transaction
-            # Note: If already in a transaction, this becomes a no-op
-            # and the existing transaction provides serialization.
-            db.execute(text("BEGIN IMMEDIATE"))
-        except Exception:
-            # Already in a transaction - that's fine, we have the lock
-            pass
+    # SQLite: Use BEGIN IMMEDIATE for write lock
+    # This serializes concurrent write transactions at the DB level.
+    # The lock is held until the transaction commits/rollbacks.
+    # Caller MUST create user in same transaction for atomicity.
+    try:
+        # Force a write lock by starting an immediate transaction
+        # Note: If already in a transaction, this becomes a no-op
+        # and the existing transaction provides serialization.
+        db.execute(text("BEGIN IMMEDIATE"))
+    except Exception:
+        # Already in a transaction - that's fine, we have the lock
+        pass
 
-        # Now safely check user count under the write lock
-        return crud.count_users(db) == 0
-    else:
-        # PostgreSQL: Use transaction-scoped advisory lock
-        # Uses a fixed hash to ensure all processes use the same lock
-        lock_key_int = 2147483647  # Max 32-bit int, unlikely to collide
-
-        # Acquire advisory lock (blocks if another transaction holds it)
-        # Transaction-scoped lock releases automatically on commit/rollback
-        db.execute(text(f"SELECT pg_advisory_xact_lock({lock_key_int})"))
-
-        # Now safely check user count under the lock
-        return crud.count_users(db) == 0
+    # Now safely check user count under the write lock
+    return crud.count_users(db) == 0
 
 
 def can_create_user(db: Session) -> bool:

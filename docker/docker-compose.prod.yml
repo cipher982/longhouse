@@ -1,7 +1,5 @@
-# Production Docker Compose - Optimized for production deployment
+# Production Docker Compose - Optimized for production deployment (SQLite)
 # Use: docker compose -f docker/docker-compose.prod.yml up
-
-# Docker Compose for Swarmlet - Production Mode
 
 # Production-specific logging settings
 x-logging: &default-logging
@@ -11,26 +9,7 @@ x-logging: &default-logging
     max-file: "3"
 
 services:
-  # PostgreSQL Database
-  postgres:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-zerg}
-      POSTGRES_USER: ${POSTGRES_USER:-zerg}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-zerg} -d ${POSTGRES_DB:-zerg}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - zerg-network
-    logging: *default-logging
-
-  # Backend API Service
+  # Backend API Service (SQLite)
   backend:
     build:
       context: .
@@ -39,13 +18,11 @@ services:
       args:
         BUILD_ENV: production
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
       ENVIRONMENT: production
       MODELS_CONFIG_PATH: /config/models.json
-      DATABASE_URL: postgresql://${POSTGRES_USER:-zerg}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-zerg}
+      # SQLite database in persistent volume
+      DATABASE_URL: sqlite:////data/longhouse.db
       JWT_SECRET: ${JWT_SECRET}
       FERNET_SECRET: ${FERNET_SECRET}
       TRIGGER_SIGNING_SECRET: ${TRIGGER_SIGNING_SECRET}
@@ -56,7 +33,7 @@ services:
       ALLOWED_CORS_ORIGINS: ${ALLOWED_CORS_ORIGINS}
       LLM_TOKEN_STREAM: ${LLM_TOKEN_STREAM:-true}
       DEV_ADMIN: ${DEV_ADMIN:-0}
-      # Job queue (durable job execution via ops schema)
+      # Job queue (durable job execution)
       JOB_QUEUE_ENABLED: ${JOB_QUEUE_ENABLED:-0}
       # Runner seeding (opt-in for production)
       SEED_RUNNERS: ${SEED_RUNNERS:-0}
@@ -66,12 +43,10 @@ services:
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
     volumes:
       - backend_static:/app/static
-      # Writable data directory (container root is read-only)
+      # Writable data directory (container root is read-only) - includes SQLite database
       - backend_data:/data
       # SSH key access for worker infrastructure tools (ssh_exec)
       - ${HOME}/.ssh:/home/zerg/.ssh:ro
-      # Note: ~/.config/zerg volume removed - use bootstrap API instead
-      # (volume mounts are brittle in Coolify; API seeding is more reliable)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]
       interval: 30s
@@ -160,8 +135,6 @@ networks:
         - subnet: 172.20.0.0/16
 
 volumes:
-  postgres_data:
-    driver: local
   backend_static:
     driver: local
   backend_data:

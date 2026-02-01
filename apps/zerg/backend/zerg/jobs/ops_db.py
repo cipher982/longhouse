@@ -1,231 +1,58 @@
-"""Direct database client for job queue operations.
+"""Stub module for asyncpg-based ops database functionality.
 
-Fire-and-forget pattern: jobs continue even if DB is unreachable.
-Writes directly to the ops.* tables for run history.
+This module previously provided asyncpg connection pooling for the ops
+database (job runs, telemetry). In the SQLite-only migration, this
+functionality has been removed.
 
-Uses the main DATABASE_URL (single Postgres source of truth).
+Jobs that need database access should use SQLAlchemy via zerg.database.
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
-import os
 from datetime import datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Connection pool (lazy init)
-_pool: Any = None
-_runs_columns: list[str] | None = None
+
+def is_job_queue_db_enabled() -> bool:
+    """Job queue DB is disabled in SQLite-only mode."""
+    return False
 
 
 def get_scheduler_name() -> str:
-    """Resolve scheduler name for ops.runs job_key prefix."""
-    return os.getenv("JOB_SCHEDULER_NAME", "zerg")
+    """Return scheduler name for job runs."""
+    import socket
 
-
-def get_job_queue_db_url() -> str | None:
-    """Get the database URL for the job queue (uses DATABASE_URL)."""
-    from zerg.config import get_settings
-
-    return get_settings().database_url or None
-
-
-def is_job_queue_db_enabled() -> bool:
-    """Feature flag: enabled only if job queue is on and DB URL is configured."""
-    from zerg.config import get_settings
-
-    settings = get_settings()
-    return settings.job_queue_enabled and bool(settings.database_url)
-
-
-def _get_emit_timeout_seconds() -> int:
-    """Get overall emit timeout from environment."""
-    return int(os.getenv("JOB_EMIT_TIMEOUT_SECONDS", "30"))
-
-
-def _job_key(job_id: str, scheduler: str = "zerg") -> str:
-    """Generate a stable job key for ops.runs queries."""
-    return f"{scheduler}:{job_id}"
+    return f"sched-{socket.gethostname()[:8]}"
 
 
 async def get_pool():
-    """Get or create connection pool."""
-    global _pool
-    if _pool is None:
-        import asyncpg
-
-        db_url = get_job_queue_db_url()
-        if not db_url:
-            raise RuntimeError("DATABASE_URL not configured")
-        _pool = await asyncpg.create_pool(
-            db_url,
-            min_size=1,
-            max_size=3,
-            command_timeout=10,
-        )
-    return _pool
+    """Connection pool not available in SQLite-only mode."""
+    raise NotImplementedError("asyncpg pool not available in SQLite-only mode")
 
 
-async def _get_runs_columns(conn) -> list[str]:
-    """Fetch and cache ops.runs columns for schema compatibility."""
-    global _runs_columns
-    if _runs_columns is not None:
-        return _runs_columns
-
-    rows = await conn.fetch(
-        """
-        SELECT column_name
-        FROM information_schema.columns
-        WHERE table_schema = 'ops'
-          AND table_name = 'runs'
-        ORDER BY ordinal_position
-        """
-    )
-    _runs_columns = [row["column_name"] for row in rows]
-    return _runs_columns
+async def close_pool() -> None:
+    """No-op: pool not used in SQLite-only mode."""
+    pass
 
 
 async def emit_job_run(
     job_id: str,
     status: str,
-    *,
     started_at: datetime,
-    ended_at: datetime | None = None,
-    duration_ms: int | None = None,
-    exit_code: int | None = None,
+    ended_at: datetime,
+    duration_ms: int,
     error_message: str | None = None,
-    error_type: str | None = None,
-    summary: str | None = None,
-    stdout_tail: str | None = None,
     tags: list[str] | None = None,
     project: str | None = None,
+    scheduler: str | None = None,
     metadata: dict[str, Any] | None = None,
-    job_key: str | None = None,
-    scheduler: str = "zerg",
-) -> bool:
-    """Emit job run status to ops.runs table.
-
-    Fire-and-forget: logs on failure, never raises.
-
-    Natural key is (job_key, started_at) - idempotent for retries.
-    """
-    if not is_job_queue_db_enabled():
-        raise RuntimeError("emit_job_run called but job queue is disabled or DATABASE_URL is missing.")
-
-    try:
-        pool = await get_pool()
-        resolved_job_key = job_key or _job_key(job_id, scheduler)
-
-        # Prepare metadata as JSON string
-        metadata_json = json.dumps(metadata) if metadata else None
-
-        async with pool.acquire() as conn:
-            available = await _get_runs_columns(conn)
-
-            values: dict[str, Any] = {
-                "job_key": resolved_job_key,
-                "job_id": job_id,
-                "started_at": started_at,
-                "ended_at": ended_at,
-                "duration_ms": duration_ms,
-                "status": status,
-                "exit_code": exit_code,
-                "error_message": error_message[:5000] if error_message else None,
-                "error_type": error_type,
-                "summary": summary,
-                "stdout_tail": stdout_tail[:5000] if stdout_tail else None,
-                "tags": tags or [],
-                "project": project,
-                "source_host": scheduler,
-                "metadata": metadata_json,
-            }
-
-            columns = [col for col in values.keys() if col in available]
-            if not columns:
-                logger.error("ops.runs has no compatible columns; skipping emit")
-                return False
-
-            params = []
-            for idx, col in enumerate(columns, start=1):
-                if col == "metadata":
-                    params.append(f"${idx}::jsonb")
-                else:
-                    params.append(f"${idx}")
-
-            conflict_target = None
-            if "job_key" in columns and "started_at" in columns:
-                conflict_target = "(job_key, started_at)"
-            elif "job_id" in columns and "started_at" in columns:
-                conflict_target = "(job_id, started_at)"
-
-            on_conflict = f"ON CONFLICT {conflict_target} DO NOTHING" if conflict_target else ""
-
-            sql = f"INSERT INTO ops.runs ({', '.join(columns)}) VALUES ({', '.join(params)}) {on_conflict}"
-
-            params_values = [values[col] for col in columns]
-            try:
-                await conn.execute(sql, *params_values)
-            except Exception as e:
-                message = str(e)
-                if on_conflict and "no unique or exclusion constraint" in message.lower():
-                    sql_no_conflict = f"INSERT INTO ops.runs ({', '.join(columns)}) VALUES ({', '.join(params)})"
-                    await conn.execute(sql_no_conflict, *params_values)
-                else:
-                    raise
-
-        logger.info(f"Emitted job run: {resolved_job_key} ({status})")
-        return True
-
-    except Exception as e:
-        logger.error(f"Failed to emit job run: {e}")
-        return False
-
-
-async def emit_job_run_fire_and_forget(
-    job_id: str,
-    status: str,
-    **kwargs: Any,
 ) -> None:
-    """Emit job run status without blocking.
+    """Emit job run to ops database (no-op in SQLite-only mode).
 
-    Spawns a background task. The calling job continues immediately.
+    In SQLite-only mode, job runs are not persisted to the ops database.
+    Use zerg.database for local persistence if needed.
     """
-    asyncio.create_task(
-        _emit_with_timeout(job_id, status, **kwargs),
-        name=f"emit-{job_id}",
-    )
-
-
-async def emit_job_run_with_timeout(
-    job_id: str,
-    status: str,
-    **kwargs: Any,
-) -> None:
-    """Emit job run status and wait for completion (with timeout)."""
-    await _emit_with_timeout(job_id, status, **kwargs)
-
-
-async def _emit_with_timeout(job_id: str, status: str, **kwargs: Any) -> None:
-    """Emit with overall timeout to prevent hanging forever."""
-    timeout_seconds = _get_emit_timeout_seconds()
-    try:
-        await asyncio.wait_for(
-            emit_job_run(job_id, status, **kwargs),
-            timeout=timeout_seconds,
-        )
-    except TimeoutError:
-        logger.error(f"Job run emit timed out after {timeout_seconds}s: {job_id}")
-    except Exception as e:
-        logger.exception(f"Job run emit failed: {e}")
-
-
-async def close_pool() -> None:
-    """Close connection pool on shutdown."""
-    global _pool
-    if _pool is not None:
-        await _pool.close()
-        _pool = None
+    logger.debug("emit_job_run skipped (SQLite-only mode): job_id=%s status=%s", job_id, status)

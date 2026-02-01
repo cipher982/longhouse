@@ -35,7 +35,7 @@ def _redact_config(cfg: Dict[str, Any] | None) -> Dict[str, Any] | None:
     return redacted
 
 
-@router.get("/", status_code=status.HTTP_200_OK)
+@router.get("", status_code=status.HTTP_200_OK)
 def list_connectors(db: Session = Depends(get_db), current_user: Any = Depends(get_current_user)) -> List[Dict[str, Any]]:
     rows = crud.get_connectors(db, owner_id=current_user.id)
     out: List[Dict[str, Any]] = []

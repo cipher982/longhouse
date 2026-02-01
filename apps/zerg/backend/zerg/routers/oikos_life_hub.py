@@ -3,9 +3,8 @@
 Provides endpoints to list and preview past AI sessions.
 Used by the Session Picker modal to enable resuming past sessions.
 
-Queries the agents.sessions and agents.events tables in Zerg's local database.
-These tables are populated by the shipper service which syncs session data
-from local AI coding tools (Claude Code, Codex, Gemini, etc).
+Queries the sessions and events tables which are populated by the
+shipper service which syncs session data from local AI coding tools.
 """
 
 import logging
@@ -26,7 +25,6 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
-from zerg.routers.agents import require_postgres
 from zerg.routers.agents import require_single_tenant
 from zerg.routers.oikos_auth import get_current_oikos_user
 
@@ -94,7 +92,6 @@ async def list_sessions(
     limit: int = Query(20, ge=1, le=100, description="Max results to return"),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_oikos_user),
-    _pg: None = Depends(require_postgres),
     _single: None = Depends(require_single_tenant),
 ) -> SessionsListResponse:
     """List past AI sessions.
@@ -104,11 +101,11 @@ async def list_sessions(
     by most recent first.
     """
     try:
-        # Check if agents schema exists
-        schema_check = db.execute(text("SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'agents'"))
-        if not schema_check.fetchone():
-            # Return empty results if agents schema doesn't exist yet
-            logger.warning("agents schema not found - returning empty session list")
+        # Check if sessions table exists
+        table_check = db.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'"))
+        if not table_check.fetchone():
+            # Return empty results if sessions table doesn't exist yet
+            logger.warning("sessions table not found - returning empty session list")
             return SessionsListResponse(sessions=[], total=0)
 
         # Build the SQL query
@@ -116,10 +113,10 @@ async def list_sessions(
 
         # Base query with optional filters
         where_clauses = ["s.started_at >= :since_date"]
-        params = {"since_date": since_date, "limit": limit}
+        params = {"since_date": since_date.isoformat(), "limit": limit}
 
         if project:
-            where_clauses.append("s.project ILIKE :project")
+            where_clauses.append("s.project LIKE :project")
             params["project"] = f"%{project}%"
 
         if provider:
@@ -133,49 +130,45 @@ async def list_sessions(
         # Query-based content search (searches in events)
         if query:
             params["query_pattern"] = f"%{query}%"
-            where_clauses.append(
-                "EXISTS (" "SELECT 1 FROM agents.events eq " "WHERE eq.session_id = s.id AND eq.content_text ILIKE :query_pattern" ")"
-            )
+            where_clauses.append("EXISTS (SELECT 1 FROM events eq WHERE eq.session_id = s.id AND eq.content_text LIKE :query_pattern)")
 
         where_sql = " AND ".join(where_clauses)
 
-        # Main query - get sessions with last messages via window functions
+        # Main query - SQLite-compatible
         sql = text(f"""
-            WITH session_messages AS (
+            WITH last_user AS (
                 SELECT
-                    e.session_id,
-                    e.role,
-                    LEFT(e.content_text, 200) as content_preview,
-                    e.timestamp,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY e.session_id, e.role
-                        ORDER BY e.timestamp DESC
-                    ) as rn
-                FROM agents.events e
-                WHERE e.role IN ('user', 'assistant')
-                    AND e.content_text IS NOT NULL
+                    session_id,
+                    SUBSTR(content_text, 1, 200) as content_preview
+                FROM events
+                WHERE role = 'user' AND content_text IS NOT NULL
+                GROUP BY session_id
+                HAVING timestamp = MAX(timestamp)
+            ),
+            last_ai AS (
+                SELECT
+                    session_id,
+                    SUBSTR(content_text, 1, 200) as content_preview
+                FROM events
+                WHERE role = 'assistant' AND content_text IS NOT NULL
+                GROUP BY session_id
+                HAVING timestamp = MAX(timestamp)
             )
             SELECT
-                s.id::text,
+                s.id,
                 s.project,
                 s.provider,
                 s.cwd,
                 s.git_branch,
                 s.started_at,
                 s.ended_at,
-                EXTRACT(EPOCH FROM (COALESCE(s.ended_at, NOW()) - s.started_at)) / 60 as duration_minutes,
+                CAST((julianday(COALESCE(s.ended_at, datetime('now'))) - julianday(s.started_at)) * 24 * 60 AS INTEGER) as duration_minutes,
                 COALESCE(s.user_messages, 0) + COALESCE(s.assistant_messages, 0) as turn_count,
                 last_user.content_preview as last_user_message,
                 last_ai.content_preview as last_ai_message
-            FROM agents.sessions s
-            LEFT JOIN session_messages last_user
-                ON last_user.session_id = s.id
-                AND last_user.role = 'user'
-                AND last_user.rn = 1
-            LEFT JOIN session_messages last_ai
-                ON last_ai.session_id = s.id
-                AND last_ai.role = 'assistant'
-                AND last_ai.rn = 1
+            FROM sessions s
+            LEFT JOIN last_user ON last_user.session_id = s.id
+            LEFT JOIN last_ai ON last_ai.session_id = s.id
             WHERE {where_sql}
             ORDER BY s.started_at DESC
             LIMIT :limit
@@ -190,13 +183,13 @@ async def list_sessions(
         for row in rows:
             sessions.append(
                 SessionSummary(
-                    id=row[0],
+                    id=str(row[0]),
                     project=row[1],
                     provider=row[2],
                     cwd=row[3],
                     git_branch=row[4],
-                    started_at=row[5],
-                    ended_at=row[6],
+                    started_at=row[5] if isinstance(row[5], datetime) else datetime.fromisoformat(row[5]),
+                    ended_at=row[6] if row[6] is None or isinstance(row[6], datetime) else datetime.fromisoformat(row[6]),
                     duration_minutes=int(row[7]) if row[7] else None,
                     turn_count=row[8] or 0,
                     last_user_message=row[9],
@@ -207,7 +200,7 @@ async def list_sessions(
         # Get total count (for pagination info)
         count_sql = text(f"""
             SELECT COUNT(DISTINCT s.id)
-            FROM agents.sessions s
+            FROM sessions s
             WHERE {where_sql}
         """)
         count_result = db.execute(count_sql, params)
@@ -231,7 +224,6 @@ async def preview_session(
     last_n: int = Query(6, ge=2, le=20, description="Number of messages to return"),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_oikos_user),
-    _pg: None = Depends(require_postgres),
     _single: None = Depends(require_single_tenant),
 ) -> SessionPreview:
     """Get a preview of a session's recent messages.
@@ -240,19 +232,19 @@ async def preview_session(
     Default is 6 messages (3 exchanges).
     """
     try:
-        # Check if agents schema exists
-        schema_check = db.execute(text("SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'agents'"))
-        if not schema_check.fetchone():
+        # Check if sessions table exists
+        table_check = db.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'"))
+        if not table_check.fetchone():
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Session {session_id} not found (agents schema not initialized)",
+                detail=f"Session {session_id} not found (sessions table not initialized)",
             )
 
         # Validate session exists
         session_sql = text("""
             SELECT id, COALESCE(user_messages, 0) + COALESCE(assistant_messages, 0) as total_messages
-            FROM agents.sessions
-            WHERE id::text = :session_id
+            FROM sessions
+            WHERE id = :session_id
         """)
         session_result = db.execute(session_sql, {"session_id": session_id})
         session_row = session_result.fetchone()
@@ -269,10 +261,10 @@ async def preview_session(
         messages_sql = text("""
             SELECT
                 role,
-                LEFT(content_text, 500) as content,
+                SUBSTR(content_text, 1, 500) as content,
                 timestamp
-            FROM agents.events
-            WHERE session_id::text = :session_id
+            FROM events
+            WHERE session_id = :session_id
                 AND role IN ('user', 'assistant')
                 AND content_text IS NOT NULL
             ORDER BY timestamp DESC
@@ -284,11 +276,14 @@ async def preview_session(
         # Convert to response (reverse to get chronological order)
         messages = []
         for row in reversed(rows):
+            ts = row[2]
+            if isinstance(ts, str):
+                ts = datetime.fromisoformat(ts)
             messages.append(
                 SessionMessage(
                     role=row[0],
                     content=row[1] or "",
-                    timestamp=row[2],
+                    timestamp=ts,
                 )
             )
 

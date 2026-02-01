@@ -1,10 +1,12 @@
-"""SQLite-safe commis job queue operations.
+"""SQLite commis job queue operations.
 
-This module provides dialect-aware job claiming and heartbeat operations
-that work on both Postgres and SQLite.
+This module provides job claiming and heartbeat operations for the
+commis job processor using SQLite.
 
-Postgres uses: FOR UPDATE SKIP LOCKED (row-level locking)
-SQLite uses: BEGIN IMMEDIATE + UPDATE ... RETURNING (write lock on tx start)
+SQLite's write transactions serialize at the statement level. The UPDATE
+statement acquires a reserved lock that blocks other writers until commit.
+Combined with UPDATE ... RETURNING (SQLite 3.35+), this provides atomic
+job claiming without explicit BEGIN IMMEDIATE.
 
 Key concepts:
 - claimed_at: When a worker claimed the job (for stale detection)
@@ -41,78 +43,27 @@ def get_worker_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"
 
 
-def _is_sqlite(db: Session) -> bool:
-    """Check if the current database session is SQLite."""
-    return db.bind is not None and db.bind.dialect.name == "sqlite"
-
-
-def claim_jobs_postgres(
+def claim_jobs(
     db: Session,
     limit: int,
-    worker_id: str,
+    worker_id: str | None = None,
 ) -> list[int]:
-    """Claim pending jobs using Postgres FOR UPDATE SKIP LOCKED.
+    """Claim pending commis jobs atomically.
 
-    This is the most efficient approach for Postgres - it atomically selects
-    and locks rows in a single query, preventing race conditions.
+    Uses UPDATE ... RETURNING (SQLite 3.35+) to atomically claim jobs.
+    The UPDATE statement acquires a write lock that blocks other writers.
 
     Args:
         db: Database session
         limit: Maximum number of jobs to claim
-        worker_id: Identifier for this worker
+        worker_id: Optional worker identifier (defaults to hostname:pid)
 
     Returns:
         List of claimed job IDs
     """
-    # ORDER BY id ASC as tie-breaker for deterministic FIFO when timestamps match
-    result = db.execute(
-        text("""
-            UPDATE commis_jobs
-            SET status = 'running',
-                started_at = NOW(),
-                claimed_at = NOW(),
-                heartbeat_at = NOW(),
-                worker_id = :worker_id
-            WHERE id IN (
-                SELECT id FROM commis_jobs
-                WHERE status = 'queued'
-                ORDER BY created_at ASC, id ASC
-                LIMIT :limit
-                FOR UPDATE SKIP LOCKED
-            )
-            RETURNING id
-        """),
-        {"limit": limit, "worker_id": worker_id},
-    )
-    job_ids = [row[0] for row in result.fetchall()]
-    db.commit()
-    return job_ids
+    if worker_id is None:
+        worker_id = get_worker_id()
 
-
-def claim_jobs_sqlite(
-    db: Session,
-    limit: int,
-    worker_id: str,
-) -> list[int]:
-    """Claim pending jobs using SQLite UPDATE RETURNING.
-
-    SQLite's write transactions serialize at the statement level. The UPDATE
-    statement acquires a reserved lock that blocks other writers until commit.
-    Combined with UPDATE ... RETURNING (SQLite 3.35+), this provides atomic
-    job claiming without explicit BEGIN IMMEDIATE.
-
-    Note: SQLite's default DEFERRED transaction mode is sufficient because
-    the UPDATE statement itself acquires the necessary write lock.
-
-    Args:
-        db: Database session
-        limit: Maximum number of jobs to claim
-        worker_id: Identifier for this worker
-
-    Returns:
-        List of claimed job IDs
-    """
-    # SQLite uses datetime() for current timestamp
     # ORDER BY id ASC as tie-breaker for deterministic FIFO when timestamps match
     result = db.execute(
         text("""
@@ -137,32 +88,6 @@ def claim_jobs_sqlite(
     return job_ids
 
 
-def claim_jobs(
-    db: Session,
-    limit: int,
-    worker_id: str | None = None,
-) -> list[int]:
-    """Claim pending commis jobs atomically (dialect-aware).
-
-    Dispatches to the appropriate implementation based on database dialect.
-
-    Args:
-        db: Database session
-        limit: Maximum number of jobs to claim
-        worker_id: Optional worker identifier (defaults to hostname:pid)
-
-    Returns:
-        List of claimed job IDs
-    """
-    if worker_id is None:
-        worker_id = get_worker_id()
-
-    if _is_sqlite(db):
-        return claim_jobs_sqlite(db, limit, worker_id)
-    else:
-        return claim_jobs_postgres(db, limit, worker_id)
-
-
 def update_heartbeat(db: Session, job_id: int, worker_id: str) -> bool:
     """Update heartbeat for a running job.
 
@@ -177,30 +102,17 @@ def update_heartbeat(db: Session, job_id: int, worker_id: str) -> bool:
     Returns:
         True if heartbeat was updated, False if job is no longer owned
     """
-    if _is_sqlite(db):
-        result = db.execute(
-            text("""
-                UPDATE commis_jobs
-                SET heartbeat_at = datetime('now'),
-                    updated_at = datetime('now')
-                WHERE id = :job_id
-                  AND status = 'running'
-                  AND worker_id = :worker_id
-            """),
-            {"job_id": job_id, "worker_id": worker_id},
-        )
-    else:
-        result = db.execute(
-            text("""
-                UPDATE commis_jobs
-                SET heartbeat_at = NOW(),
-                    updated_at = NOW()
-                WHERE id = :job_id
-                  AND status = 'running'
-                  AND worker_id = :worker_id
-            """),
-            {"job_id": job_id, "worker_id": worker_id},
-        )
+    result = db.execute(
+        text("""
+            UPDATE commis_jobs
+            SET heartbeat_at = datetime('now'),
+                updated_at = datetime('now')
+            WHERE id = :job_id
+              AND status = 'running'
+              AND worker_id = :worker_id
+        """),
+        {"job_id": job_id, "worker_id": worker_id},
+    )
     db.commit()
     return result.rowcount > 0
 
@@ -223,45 +135,23 @@ def reclaim_stale_jobs(db: Session) -> int:
     """
     threshold = STALE_THRESHOLD_SECONDS
 
-    if _is_sqlite(db):
-        result = db.execute(
-            text("""
-                UPDATE commis_jobs
-                SET status = 'queued',
-                    worker_id = NULL,
-                    claimed_at = NULL,
-                    heartbeat_at = NULL,
-                    started_at = NULL,
-                    updated_at = datetime('now')
-                WHERE status = 'running'
-                  AND (
-                      heartbeat_at IS NULL
-                      OR heartbeat_at < datetime('now', '-' || :threshold || ' seconds')
-                  )
-            """),
-            {"threshold": str(threshold)},
-        )
-    else:
-        # Postgres: use interval arithmetic with proper parameter binding
-        # Note: INTERVAL doesn't support parameter binding directly, so use
-        # timestamp arithmetic with MAKE_INTERVAL()
-        result = db.execute(
-            text("""
-                UPDATE commis_jobs
-                SET status = 'queued',
-                    worker_id = NULL,
-                    claimed_at = NULL,
-                    heartbeat_at = NULL,
-                    started_at = NULL,
-                    updated_at = NOW()
-                WHERE status = 'running'
-                  AND (
-                      heartbeat_at IS NULL
-                      OR heartbeat_at < NOW() - MAKE_INTERVAL(secs => :threshold)
-                  )
-            """),
-            {"threshold": threshold},
-        )
+    result = db.execute(
+        text("""
+            UPDATE commis_jobs
+            SET status = 'queued',
+                worker_id = NULL,
+                claimed_at = NULL,
+                heartbeat_at = NULL,
+                started_at = NULL,
+                updated_at = datetime('now')
+            WHERE status = 'running'
+              AND (
+                  heartbeat_at IS NULL
+                  OR heartbeat_at < datetime('now', '-' || :threshold || ' seconds')
+              )
+        """),
+        {"threshold": str(threshold)},
+    )
     db.commit()
     count = result.rowcount
     if count > 0:

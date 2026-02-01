@@ -679,27 +679,6 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # ---------------------------------------------------------------------------
-# Playwright commis database isolation – attach middleware early so every
-# request, including those made during router setup, carries the correct
-# context.
-#
-# SECURITY: Only enable when E2E_USE_POSTGRES_SCHEMAS=1. In prod/dev, a request
-# with X-Test-Commis header would otherwise try to access commis schemas that
-# don't exist, causing 500 errors (potential DoS vector).
-# ---------------------------------------------------------------------------
-
-if _settings.e2e_use_postgres_schemas:
-    # We import lazily so local *unit-tests* that do not include the middleware
-    # file in their truncated import tree continue to work.
-    from importlib import import_module
-
-    try:
-        CommisDBMiddleware = getattr(import_module("zerg.middleware.commis_db"), "CommisDBMiddleware")
-        app.add_middleware(CommisDBMiddleware)
-    except Exception:  # pragma: no cover – keep startup resilient
-        logger.exception("Failed to register CommisDBMiddleware while E2E_USE_POSTGRES_SCHEMAS=1")
-
-# ---------------------------------------------------------------------------
 # SafeErrorResponseMiddleware - MUST be added LAST to be the outermost wrapper.
 # In Starlette, add_middleware() inserts at the START of the list, so the last
 # middleware added becomes the outermost layer that sees requests first and

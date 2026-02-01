@@ -3,13 +3,9 @@
 These models store sessions from all AI coding assistants (Claude Code, Codex,
 Gemini, Cursor, Oikos) in a provider-agnostic format.
 
-The schema lives in the 'agents' schema (not 'zerg') to enable:
-1. OSS users to run Zerg standalone without Life Hub
-2. Cross-provider session tracking in a unified format
-3. Session continuity for Claude Code --resume
+For SQLite-only mode, these tables live in the main database.
 """
 
-import os
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -23,7 +19,6 @@ from sqlalchemy import Integer
 from sqlalchemy import MetaData
 from sqlalchemy import String
 from sqlalchemy import Text
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -34,13 +29,8 @@ if TYPE_CHECKING:
     pass
 
 
-# Separate metadata for agents schema (isolated from main zerg schema)
-# AGENTS_SCHEMA is None for SQLite (no schema support), "agents" for Postgres
-# Import from db_utils to avoid circular import with database.py
-from zerg.db_utils import is_sqlite_url
-
-_db_url = os.environ.get("DATABASE_URL", "")
-AGENTS_SCHEMA = None if is_sqlite_url(_db_url) else "agents"
+# SQLite-only: no schema support, tables live in main database
+AGENTS_SCHEMA = None
 agents_metadata = MetaData(schema=AGENTS_SCHEMA)
 
 # Separate Base class for agents schema models
@@ -111,9 +101,8 @@ class AgentEvent(AgentsBase):
 
     __tablename__ = "events"
 
-    # Primary key - Integer with BigInteger variant for Postgres (BIGSERIAL)
-    # SQLite requires INTEGER PRIMARY KEY for auto-increment
-    id = Column(Integer().with_variant(BigInteger, "postgresql"), primary_key=True, autoincrement=True)
+    # Primary key - INTEGER for SQLite auto-increment
+    id = Column(Integer, primary_key=True, autoincrement=True)
 
     # Foreign key to session - GUID TypeDecorator handles UUID/String conversion
     # ForeignKey reference is dynamic based on schema (None for SQLite, "agents" for Postgres)
@@ -131,7 +120,7 @@ class AgentEvent(AgentsBase):
 
     # Tool call data (when role='assistant' and this is a tool call)
     tool_name = Column(String(100), nullable=True, index=True)  # e.g., 'Edit', 'Bash', 'Read'
-    tool_input_json = Column(JSON().with_variant(JSONB, "postgresql"), nullable=True)  # Tool call parameters
+    tool_input_json = Column(JSON(), nullable=True)  # Tool call parameters
     tool_output_text = Column(Text, nullable=True)  # Tool result (when role='tool')
 
     # Timing
