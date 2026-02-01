@@ -87,8 +87,6 @@ def _configure_sqlite_engine(engine: Engine) -> None:
 def make_engine(db_url: str, **kwargs) -> Engine:
     """Create a SQLAlchemy engine with the given URL and options.
 
-    Supports both SQLite (preferred for OSS) and PostgreSQL (for production).
-
     Args:
         db_url: Database connection URL
         **kwargs: Additional arguments for create_engine
@@ -109,28 +107,21 @@ def make_engine(db_url: str, **kwargs) -> Engine:
     except Exception as e:
         raise ValueError(f"Invalid DATABASE_URL: {e}") from e
 
-    if parsed.drivername.startswith("sqlite"):
-        # SQLite configuration
-        connect_args = kwargs.setdefault("connect_args", {})
-        connect_args.setdefault("check_same_thread", False)
-        if "timeout" not in connect_args:
-            busy_timeout_ms = int(os.getenv("SQLITE_BUSY_TIMEOUT_MS", "5000"))
-            connect_args["timeout"] = busy_timeout_ms / 1000.0
-
-        engine = create_engine(db_url, **kwargs)
-        _configure_sqlite_engine(engine)
-        return engine
-    elif parsed.drivername.startswith("postgresql"):
-        # PostgreSQL configuration for production
-        kwargs.setdefault("pool_pre_ping", True)
-        kwargs.setdefault("pool_size", 10)
-        kwargs.setdefault("max_overflow", 20)
-        engine = create_engine(db_url, **kwargs)
-        return engine
-    else:
+    if not parsed.drivername.startswith("sqlite"):
         raise ValueError(
-            f"Unsupported DATABASE_URL driver '{parsed.drivername}'. " "Supported: sqlite:///path/to/db.sqlite or postgresql://..."
+            f"Unsupported DATABASE_URL driver '{parsed.drivername}'. " "Only SQLite is supported (sqlite:///path/to/db.sqlite)."
         )
+
+    # SQLite configuration
+    connect_args = kwargs.setdefault("connect_args", {})
+    connect_args.setdefault("check_same_thread", False)
+    if "timeout" not in connect_args:
+        busy_timeout_ms = int(os.getenv("SQLITE_BUSY_TIMEOUT_MS", "5000"))
+        connect_args["timeout"] = busy_timeout_ms / 1000.0
+
+    engine = create_engine(db_url, **kwargs)
+    _configure_sqlite_engine(engine)
+    return engine
 
 
 def make_sessionmaker(engine: Engine) -> sessionmaker:
