@@ -203,7 +203,7 @@ def _reserve_rate_limit(user_id: int, recipient_count: int, db) -> tuple[bool, s
     Uses INSERT ON CONFLICT to handle concurrent counter creation.
     Returns (allowed, error_message).
     """
-    from sqlalchemy.dialects.postgresql import insert
+    from sqlalchemy.dialects.sqlite import insert
 
     today = datetime.now(timezone.utc).date()
 

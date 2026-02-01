@@ -12,9 +12,6 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn>=0.34.0",
 
-    # Database
-    "asyncpg>=0.30.0",
-
     # CLI
     "typer>=0.15.0",
 
@@ -28,7 +25,7 @@ dependencies = [
     # Environment
     "python-dotenv>=1.0.0",
 
-    # Zerg jobs infrastructure (from monorepo)
+    # Zerg jobs infrastructure (from monorepo) - includes SQLAlchemy
     "zerg",
 ]
 

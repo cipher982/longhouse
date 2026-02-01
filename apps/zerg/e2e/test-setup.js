@@ -1,14 +1,12 @@
 /**
  * Global test setup - runs once before all tests
  *
- * Pre-creates Postgres schemas for all Playwright commis.
- * This ensures schemas exist before tests run, eliminating race conditions
- * from lazy schema creation during test execution.
+ * SQLite-based E2E isolation: Creates per-worker SQLite databases
+ * in a temp directory. No Postgres schemas needed.
  *
- * See: docs/work/e2e-test-infrastructure-redesign.md
+ * See: docs/LIGHTWEIGHT-OSS-ONBOARDING.md
  */
 
-import { spawn, execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -53,84 +51,30 @@ async function globalSetup(config) {
   process.env.NODE_ENV = 'test';
   process.env.TESTING = '1';
 
-  // Calculate commis count (must match playwright.config.js logic).
-  // Prefer resolved config.workers so schema pre-creation aligns with actual runner count.
+  // Calculate worker count (must match playwright.config.js logic)
   const resolvedWorkers = typeof config?.workers === 'number' ? config.workers : undefined;
-  const envCommis = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? "", 10);
-  const defaultLocalCommis = 4;
-  const defaultCICommis = 4;
-  const commis = Number.isFinite(resolvedWorkers) && resolvedWorkers > 0
+  const envWorkers = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? "", 10);
+  const defaultLocalWorkers = 4;
+  const defaultCIWorkers = 4;
+  const workers = Number.isFinite(resolvedWorkers) && resolvedWorkers > 0
     ? resolvedWorkers
-    : (Number.isFinite(envCommis) && envCommis > 0
-        ? envCommis
-        : (process.env.CI ? defaultCICommis : defaultLocalCommis));
+    : (Number.isFinite(envWorkers) && envWorkers > 0
+        ? envWorkers
+        : (process.env.CI ? defaultCIWorkers : defaultLocalWorkers));
 
-  // Pre-create one schema per Playwright commis id (0..commis-1).
-  // Other tests may use custom non-numeric commis IDs (e.g. guardrail_a) which are
-  // created lazily by the backend when first requested.
-  const schemaCount = commis;
+  // Create temp directory for E2E SQLite databases
+  const e2eDbDir = path.join(os.tmpdir(), 'zerg_e2e_dbs');
 
-  // Quiet setup - only show count
-  process.stdout.write(`Setting up ${schemaCount} schemas for ${commis} commis... `);
-
-  try {
-    // Use uv run python to ensure correct venv with all deps
-    // (system python may not have SQLAlchemy, psycopg, etc.)
-    const backendDir = path.resolve(__dirname, '../backend');
-
-    // Call Python to drop stale schemas and pre-create fresh ones
-    // This ensures all schemas exist before any tests run
-    //
-    // E2E_SCHEMA_PREFIX controls schema naming:
-    //   - Local dev: e2e_commis_ (default)
-    //   - CI: e2e_{run_id}_{attempt}_ (per-run isolation)
-    const schemaPrefix = process.env.E2E_SCHEMA_PREFIX || 'e2e_commis_';
-
-    const cleanup = spawn('uv', ['run', 'python', '-c', `
-import os
-import sys
-# TESTING=1 bypasses validation that requires OPENAI_API_KEY etc.
-os.environ['TESTING'] = '1'
-os.environ['E2E_USE_POSTGRES_SCHEMAS'] = '1'
-# Pass through schema prefix for per-CI-run isolation
-os.environ['E2E_SCHEMA_PREFIX'] = '${schemaPrefix}'
-
-from zerg.database import default_engine
-from zerg.e2e_schema_manager import drop_all_e2e_schemas, ensure_commis_schema, SCHEMA_PREFIX
-
-# Clean slate - drop any stale schemas matching our prefix
-dropped = drop_all_e2e_schemas(default_engine)
-if dropped > 0:
-    print(f"  Dropped {dropped} stale schemas (prefix: {SCHEMA_PREFIX})", file=sys.stderr)
-
-# Pre-create one schema per Playwright commis id (0..commis-1).
-for i in range(${schemaCount}):
-    ensure_commis_schema(default_engine, str(i))
-
-print(f"  {${schemaCount}} commis schemas ready (prefix: {SCHEMA_PREFIX})")
-    `], {
-      cwd: backendDir,
-      stdio: 'inherit',
-      env: { ...process.env, E2E_USE_POSTGRES_SCHEMAS: '1', TESTING: '1', E2E_SCHEMA_PREFIX: schemaPrefix }
-    });
-
-    await new Promise((resolve, reject) => {
-      cleanup.on('close', (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`Schema setup failed with code ${code}`));
-        }
-      });
-    });
-  } catch (error) {
-    // Fail fast - if schemas can't be created, tests will definitely fail
-    console.log('FAILED');
-    console.error('Schema pre-creation failed:', error.message);
-    throw error;
+  // Clean slate - remove any stale databases from previous runs
+  if (fs.existsSync(e2eDbDir)) {
+    fs.rmSync(e2eDbDir, { recursive: true, force: true });
   }
+  fs.mkdirSync(e2eDbDir, { recursive: true });
 
-  console.log('done');
+  // Store the temp dir path for spawn-test-backend.js to use
+  process.env.E2E_DB_DIR = e2eDbDir;
+
+  console.log(`E2E setup: Created ${e2eDbDir} for ${workers} workers (SQLite per-worker)`);
 }
 
 export default globalSetup;

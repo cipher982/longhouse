@@ -45,7 +45,6 @@ from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
 from zerg.database import get_db
-from zerg.database import is_postgres
 from zerg.models.agents import AgentSession
 from zerg.models.device_token import DeviceToken
 from zerg.services.agents_store import AgentsStore
@@ -209,22 +208,6 @@ def verify_agents_read_access(request: Request, db: Session = Depends(get_db)) -
 
     # Fall back to device token / API token auth
     verify_agents_token(request, db)
-
-
-def require_postgres() -> None:
-    """Ensure agents endpoints only work with PostgreSQL.
-
-    The agents schema uses PostgreSQL-specific features (UUID, JSONB, partial indexes).
-    This check provides a clear error message for OSS users running with SQLite.
-
-    Raises:
-        HTTPException(501): If the database is not PostgreSQL
-    """
-    if not is_postgres():
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Agents API requires PostgreSQL. SQLite is not supported for this feature.",
-        )
 
 
 def require_single_tenant(db: Session = Depends(get_db)) -> None:

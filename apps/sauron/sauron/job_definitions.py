@@ -1,4 +1,9 @@
-"""Publish job definitions to Life-Hub for ops dashboard."""
+"""Publish job definitions to Life-Hub for ops dashboard.
+
+In SQLite-only mode, this module is a no-op since there's no external
+ops database to publish to. When DATABASE_URL points to PostgreSQL,
+it publishes job definitions for the ops dashboard.
+"""
 
 from __future__ import annotations
 
@@ -9,15 +14,23 @@ import logging
 import os
 from typing import Any
 
-import asyncpg
+from sqlalchemy import text
 
-from zerg.jobs import get_manifest_metadata, job_registry
+from zerg.database import make_engine
+from zerg.database import make_sessionmaker
+from zerg.jobs import get_manifest_metadata
+from zerg.jobs import job_registry
 
 logger = logging.getLogger(__name__)
 
 
 def _database_url() -> str | None:
     return os.getenv("DATABASE_URL") or os.getenv("LIFE_HUB_DB_URL")
+
+
+def _is_postgres_url(url: str) -> bool:
+    """Check if URL is a PostgreSQL connection string."""
+    return url.startswith("postgresql://") or url.startswith("postgres://")
 
 
 def _build_definition(job: Any, scheduler_name: str) -> dict[str, Any]:
@@ -75,32 +88,44 @@ def _definition_hash(defn: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-async def _publish_job_definitions() -> int:
+def _publish_job_definitions_sync() -> int:
+    """Synchronous implementation using SQLAlchemy."""
     db_url = _database_url()
     if not db_url:
         logger.info("DATABASE_URL not set; skipping job definition publish")
         return 0
 
+    if not _is_postgres_url(db_url):
+        logger.info("SQLite mode; skipping job definition publish (requires PostgreSQL)")
+        return 0
+
     scheduler_name = os.getenv("JOB_SCHEDULER_NAME", "sauron")
     published = 0
 
-    conn = await asyncpg.connect(db_url)
-    try:
+    # Create a SQLAlchemy engine for the ops database
+    engine = make_engine(db_url)
+    SessionLocal = make_sessionmaker(engine)
+
+    with SessionLocal() as session:
         for job in job_registry.list_jobs():
             payload = _build_definition(job, scheduler_name)
             definition_hash = _definition_hash(payload)
             metadata_json = json.dumps(payload.get("metadata")) if payload.get("metadata") else None
             config_json = json.dumps(payload.get("config")) if payload.get("config") else None
 
-            await conn.execute(
-                """
+            # Use SQLAlchemy text() for raw SQL with PostgreSQL-specific features
+            session.execute(
+                text("""
                 INSERT INTO ops.jobs (
                     job_key, job_id, scheduler, project, cron, timezone,
                     enabled, timeout_seconds, tags, source_host,
                     next_run_at, last_seen_at, definition_hash, metadata,
                     script_source, entrypoint, config
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), $12, $13, $14, $15, $16)
+                VALUES (:job_key, :job_id, :scheduler, :project, :cron, :timezone,
+                        :enabled, :timeout_seconds, :tags, :source_host,
+                        :next_run_at, NOW(), :definition_hash, :metadata,
+                        :script_source, :entrypoint, :config)
                 ON CONFLICT (job_key) DO UPDATE SET
                     job_id = EXCLUDED.job_id,
                     scheduler = EXCLUDED.scheduler,
@@ -119,57 +144,69 @@ async def _publish_job_definitions() -> int:
                     entrypoint = EXCLUDED.entrypoint,
                     config = EXCLUDED.config,
                     updated_at = NOW()
-                """,
-                payload.get("job_key"),
-                payload.get("job_id"),
-                payload.get("scheduler"),
-                payload.get("project"),
-                payload.get("cron"),
-                payload.get("timezone"),
-                payload.get("enabled"),
-                payload.get("timeout_seconds"),
-                payload.get("tags") or [],
-                payload.get("source_host"),
-                payload.get("next_run_at"),
-                definition_hash,
-                metadata_json,
-                payload.get("script_source"),
-                payload.get("entrypoint"),
-                config_json,
+                """),
+                {
+                    "job_key": payload.get("job_key"),
+                    "job_id": payload.get("job_id"),
+                    "scheduler": payload.get("scheduler"),
+                    "project": payload.get("project"),
+                    "cron": payload.get("cron"),
+                    "timezone": payload.get("timezone"),
+                    "enabled": payload.get("enabled"),
+                    "timeout_seconds": payload.get("timeout_seconds"),
+                    "tags": payload.get("tags") or [],
+                    "source_host": payload.get("source_host"),
+                    "next_run_at": payload.get("next_run_at"),
+                    "definition_hash": definition_hash,
+                    "metadata": metadata_json,
+                    "script_source": payload.get("script_source"),
+                    "entrypoint": payload.get("entrypoint"),
+                    "config": config_json,
+                },
             )
 
-            await conn.execute(
-                """
+            session.execute(
+                text("""
                 INSERT INTO ops.job_definitions (
                     job_key, definition_hash,
                     job_id, scheduler, project, cron, timezone,
                     enabled, timeout_seconds, tags, source_host, metadata
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                VALUES (:job_key, :definition_hash, :job_id, :scheduler, :project,
+                        :cron, :timezone, :enabled, :timeout_seconds, :tags,
+                        :source_host, :metadata)
                 ON CONFLICT (job_key, definition_hash) DO NOTHING
-                """,
-                payload.get("job_key"),
-                definition_hash,
-                payload.get("job_id"),
-                payload.get("scheduler"),
-                payload.get("project"),
-                payload.get("cron"),
-                payload.get("timezone"),
-                payload.get("enabled"),
-                payload.get("timeout_seconds"),
-                payload.get("tags") or [],
-                payload.get("source_host"),
-                metadata_json,
+                """),
+                {
+                    "job_key": payload.get("job_key"),
+                    "definition_hash": definition_hash,
+                    "job_id": payload.get("job_id"),
+                    "scheduler": payload.get("scheduler"),
+                    "project": payload.get("project"),
+                    "cron": payload.get("cron"),
+                    "timezone": payload.get("timezone"),
+                    "enabled": payload.get("enabled"),
+                    "timeout_seconds": payload.get("timeout_seconds"),
+                    "tags": payload.get("tags") or [],
+                    "source_host": payload.get("source_host"),
+                    "metadata": metadata_json,
+                },
             )
 
             published += 1
-    finally:
-        await conn.close()
 
+        session.commit()
+
+    engine.dispose()
     logger.info("Published %d job definitions to Life-Hub", published)
     return published
 
 
+async def _publish_job_definitions() -> int:
+    """Async wrapper for compatibility with existing callers."""
+    return await asyncio.to_thread(_publish_job_definitions_sync)
+
+
 def publish_job_definitions() -> int:
     """Publish current job definitions to Life-Hub ops.jobs."""
-    return asyncio.run(_publish_job_definitions())
+    return _publish_job_definitions_sync()

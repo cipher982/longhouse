@@ -123,7 +123,7 @@ def _reserve_rate_limit(user_id: int, db) -> tuple[bool, str]:
     from datetime import datetime
     from datetime import timezone
 
-    from sqlalchemy.dialects.postgresql import insert
+    from sqlalchemy.dialects.sqlite import insert
 
     today = datetime.now(timezone.utc).date()
 

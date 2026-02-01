@@ -1,3 +1,7 @@
+"""SQLite-based test configuration for Zerg.
+
+Uses in-memory SQLite with per-worker isolation for pytest-xdist.
+"""
 import atexit
 import os
 from pathlib import Path
@@ -9,12 +13,12 @@ os.environ["TESTING"] = "1"
 os.environ["SINGLE_TENANT"] = "0"
 
 # Crypto – provide deterministic Fernet key for tests *before* any zerg imports.
-# (Some modules import zerg.utils.crypto at import time.)
 if not os.environ.get("FERNET_SECRET"):
     os.environ["FERNET_SECRET"] = "Mj7MFJspDPjiFBGHZJ5hnx70XAFJ_En6ofIEhn3BoXw="
 
 import asyncio
 import sys
+import tempfile
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
@@ -24,56 +28,14 @@ from fastapi.testclient import TestClient
 
 
 # ---------------------------------------------------------------------------
-# Register custom CLI options for live integration tests and DB mode
+# Register custom CLI options
 # ---------------------------------------------------------------------------
 def pytest_addoption(parser):
     parser.addoption("--live-url", action="store", default="http://localhost:30080", help="Base URL for live server")
     parser.addoption("--live-token", action="store", help="JWT Token for live server (optional)")
-    # Explicit database mode selection
-    parser.addoption(
-        "--db-mode",
-        choices=["docker", "external"],
-        default=None,
-        help="Database strategy: docker=testcontainers (local), external=provided URL (CI)"
-    )
-    parser.addoption(
-        "--db-url-env",
-        default="DATABASE_URL",
-        help="Env var name containing DATABASE_URL (for external mode)"
-    )
-    parser.addoption(
-        "--db-schema",
-        default=None,
-        help="Schema name to use (for external mode, required)"
-    )
-    parser.addoption(
-        "--db-cleanup",
-        choices=["drop", "keep"],
-        default="drop",
-        help="Schema cleanup strategy after tests (for external mode)"
-    )
 
 
-import zerg.database as _db_mod
-import zerg.routers.websocket as _ws_router
-from zerg.database import Base
-from zerg.database import DB_SCHEMA
-from zerg.database import get_db
-from zerg.database import _apply_search_path
-from zerg.database import make_engine
-from zerg.database import make_sessionmaker
-from zerg.events import EventType
-from zerg.events import event_bus
-from zerg.models.models import Fiche
-from zerg.models.models import FicheMessage
-from zerg.models.models import Thread
-from zerg.models.models import ThreadMessage
-from zerg.services.scheduler_service import scheduler_service
-from zerg.websocket.manager import topic_manager
-
-# Disable LangSmith/LangChain tracing for all tests.
-# LangChain can treat the *presence* of these env vars as "enabled" (even if set to "false"),
-# so we explicitly unset them to avoid tracer initialization during tests.
+# Disable LangSmith/LangChain tracing for all tests
 for _k in (
     "LANGCHAIN_TRACING_V2",
     "LANGCHAIN_ENDPOINT",
@@ -86,35 +48,29 @@ for _k in (
 
 # ---------------------------------------------------------------------------
 # Stub *cryptography* so zerg.utils.crypto can import Fernet without the real
-# wheel present.  We only need the API surface used in tests: ``encrypt`` and
-# ``decrypt`` should round-trip the plaintext.
+# wheel present
 # ---------------------------------------------------------------------------
 
-if "cryptography" not in sys.modules:  # guard in case real package installed
+if "cryptography" not in sys.modules:
     import types as _types
 
     _crypto_mod = _types.ModuleType("cryptography")
     _fernet_mod = _types.ModuleType("cryptography.fernet")
 
-    class _FakeFernet:  # noqa: D401 – minimal stub
+    class _FakeFernet:
         def __init__(self, _key):
             self._key = _key
 
-        # Keep encryption a **no-op** inside the unit-test environment so
-        # assertions that inspect raw values (e.g. auth tokens) still match.
-        def encrypt(self, data: bytes):  # noqa: D401 – mimic API
-            return data  # type: ignore[return-value]
+        def encrypt(self, data: bytes):
+            return data
 
-        def decrypt(self, token: bytes):  # noqa: D401
+        def decrypt(self, token: bytes):
             return token
 
-    _fernet_mod.Fernet = _FakeFernet  # type: ignore[attr-defined]
+    _fernet_mod.Fernet = _FakeFernet
     sys.modules["cryptography"] = _crypto_mod
     sys.modules["cryptography.fernet"] = _fernet_mod
 
-# ---------------------------------------------------------------------------
-# Crypto – note: FERNET_SECRET is set above, before any project imports.
-# ---------------------------------------------------------------------------
 # Mock the LangSmith client to prevent any actual API calls
 mock_langsmith = MagicMock()
 mock_langsmith_client = MagicMock()
@@ -122,276 +78,67 @@ mock_langsmith.Client.return_value = mock_langsmith_client
 sys.modules["langsmith"] = mock_langsmith
 sys.modules["langsmith.client"] = MagicMock()
 
-# Load .env from monorepo root (5 levels up from conftest.py)
-_REPO_ROOT = Path(__file__).resolve().parents[4]  # tests -> backend -> zerg -> apps -> repo_root
+# Load .env from monorepo root
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 _env_path = _REPO_ROOT / ".env"
 if _env_path.exists():
     dotenv.load_dotenv(_env_path)
 else:
-    # Tests can run without .env if all required env vars are already set
     dotenv.load_dotenv()
 
 
 # ---------------------------------------------------------------------------
-# Database mode detection and setup
+# SQLite test database setup
 # ---------------------------------------------------------------------------
-# Explicit mode (--db-mode) takes precedence over environment detection.
-# Default: auto-detect based on CI_TEST_SCHEMA env var presence.
-#
-# IMPORTANT: This runs at import time (before pytest_configure), so we need
-# to detect the mode early. The CLI options are validated later in a fixture.
+# Each pytest-xdist worker gets its own SQLite file for isolation
 
-import hashlib
+_XDIST_WORKER = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
 
-def _get_worktree_id() -> str:
-    """Generate stable 8-char ID unique to this git worktree.
+# Create per-worker SQLite database file
+_TEST_DB_DIR = Path(tempfile.gettempdir()) / "zerg_tests"
+_TEST_DB_DIR.mkdir(exist_ok=True)
+_TEST_DB_FILE = _TEST_DB_DIR / f"test_{_XDIST_WORKER}.db"
 
-    Uses hash of absolute repo path - deterministic per worktree location.
-    Moving a worktree changes its ID (acceptable tradeoff for simplicity).
-    """
-    repo_root = Path(__file__).resolve().parents[4]  # tests -> backend -> zerg -> apps -> repo
-    return hashlib.md5(str(repo_root).encode()).hexdigest()[:8]
+# Set DATABASE_URL for this test worker BEFORE importing zerg.database
+os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB_FILE}"
 
-_WORKTREE_ID = _get_worktree_id()
-_XDIST_WORKER = os.environ.get("PYTEST_XDIST_WORKER", "")
+import zerg.database as _db_mod
+import zerg.routers.websocket as _ws_router
+from zerg.database import Base
+from zerg.database import get_db
+from zerg.database import make_engine
+from zerg.database import make_sessionmaker
+from zerg.events import EventType
+from zerg.events import event_bus
+from zerg.models.models import Fiche
+from zerg.models.models import FicheMessage
+from zerg.models.models import Thread
+from zerg.models.models import ThreadMessage
+from zerg.services.scheduler_service import scheduler_service
+from zerg.websocket.manager import topic_manager
 
-def _get_test_schema_name() -> str:
-    """Generate schema name: zerg_test_wt_{worktree8}__{gw}"""
-    base = f"zerg_test_wt_{_WORKTREE_ID}"
-    if _XDIST_WORKER:
-        return f"{base}__{_XDIST_WORKER}"
-    return base
+# Create test engine and session factory
+SQLALCHEMY_DATABASE_URL = f"sqlite:///{_TEST_DB_FILE}"
+test_engine = make_engine(SQLALCHEMY_DATABASE_URL)
+TestingSessionLocal = make_sessionmaker(test_engine)
 
-def _get_application_name() -> str:
-    """Generate application_name for connection tracking: zerg-tests:{worktree8}:{gw}"""
-    if _XDIST_WORKER:
-        return f"zerg-tests:{_WORKTREE_ID}:{_XDIST_WORKER}"
-    return f"zerg-tests:{_WORKTREE_ID}:main"
-
-def _get_connection_options(schema: str) -> str:
-    """PostgreSQL connection options for test safety.
-
-    Includes search_path to ensure unqualified SQL uses the correct schema.
-    """
-    return (
-        f"-c search_path={schema},public "
-        f"-c application_name={_get_application_name()} "
-        "-c idle_in_transaction_session_timeout=60s "
-        "-c lock_timeout=10s "
-        "-c statement_timeout=180s"
-    )
-
-def _detect_db_mode():
-    """Detect database mode from CLI args or environment.
-
-    Priority:
-    1. CLI flag: --db-mode=docker|external
-    2. Env var: ZERG_TEST_DB_MODE=docker|external
-    3. Legacy: CI_TEST_SCHEMA set → external (backwards compat)
-    4. Default: docker (testcontainers)
-    """
-    # Check for explicit --db-mode in sys.argv (early detection before pytest parses)
-    if "--db-mode=external" in sys.argv or any(a.startswith("--db-mode") and "external" in a for a in sys.argv):
-        return "external"
-    if "--db-mode=docker" in sys.argv or any(a.startswith("--db-mode") and "docker" in a for a in sys.argv):
-        return "docker"
-
-    # Check env var
-    env_mode = os.environ.get("ZERG_TEST_DB_MODE", "").lower()
-    if env_mode == "external":
-        return "external"
-    if env_mode == "docker":
-        return "docker"
-
-    # Legacy: CI_TEST_SCHEMA triggers external mode (backwards compat for CI)
-    if os.environ.get("CI_TEST_SCHEMA"):
-        return "external"
-
-    # Default to docker (testcontainers) for local development
-    return "docker"
-
-_DB_MODE = _detect_db_mode()
-
-# Placeholders for test database setup
-_pg_container = None
-SQLALCHEMY_DATABASE_URL = None
-test_engine = None
-TestingSessionLocal = None
-_CI_TEST_SCHEMA = None
-
-if _DB_MODE == "docker":
-    # ---------------------------------------------------------------------------
-    # Docker mode: Use testcontainers with reuse for fast local iteration
-    # ---------------------------------------------------------------------------
-    # Container stays running between test runs for speed. Schema isolation
-    # prevents cross-worktree interference. Use `docker stop zerg-test-postgres`
-    # for a clean slate.
-
-    # Ensure docker-py can reach Docker Desktop on macOS where the socket lives
-    # under ~/.docker/run/docker.sock when /var/run/docker.sock is absent.
-    if not os.environ.get("DOCKER_HOST"):
-        _sock = Path.home() / ".docker/run/docker.sock"
-        if _sock.exists():
-            os.environ["DOCKER_HOST"] = f"unix://{_sock}"
-
-    from docker import from_env as _docker_from_env
-    from testcontainers.postgres import PostgresContainer
-
-    # Start a single Postgres container for the entire test session early so
-    # subsequent imports (e.g. routers) see the correct session factory.
-    try:
-        _docker_from_env().ping()
-    except Exception as _e:
-        raise RuntimeError(
-            "Docker is required to run tests with --db-mode=docker. "
-            "Either start Docker Desktop, or use --db-mode=external with CI_TEST_SCHEMA and DATABASE_URL."
-        ) from _e
-
-    # Enable testcontainers reuse - keeps container running between test runs.
-    # First run: ~8s startup. Subsequent runs: instant.
-    # Set TESTCONTAINERS_REUSE_ENABLE=false to disable (CI should disable).
-    os.environ.setdefault("TESTCONTAINERS_REUSE_ENABLE", "true")
-
-    # Configure Postgres for maximum test speed (unsafe for production!)
-    # Note: reuse is controlled by TESTCONTAINERS_REUSE_ENABLE env var (set above)
-    _pg_container = PostgresContainer(
-        "postgres:16-alpine",
-        driver="psycopg",
-    ).with_command(
-        "postgres "
-        "-c fsync=off "                    # Don't sync to disk (huge speedup)
-        "-c synchronous_commit=off "       # Don't wait for WAL write
-        "-c full_page_writes=off "         # Skip full page writes after checkpoint
-        "-c random_page_cost=1.1 "         # Assume fast storage (SSD/RAM)
-        "-c effective_io_concurrency=200 " # Allow more parallel I/O
-    )
-    _pg_container.start()
-
-    # DON'T register atexit cleanup when reusing - we want container to persist
-    # Container can be manually stopped with: docker stop <container_id>
-
-    # Schema for this worktree (isolates parallel worktrees)
-    _CI_TEST_SCHEMA = _get_test_schema_name()
-
-    # Prefer psycopg v3 driver in SQLAlchemy URL
-    # Note: search_path is set in connect_args via _get_connection_options()
-    SQLALCHEMY_DATABASE_URL = _pg_container.get_connection_url().replace("psycopg2", "psycopg")
-
-    # Create test engine and session factory bound to Postgres
-    from sqlalchemy.pool import NullPool
-
-    _base_engine = make_engine(
-        SQLALCHEMY_DATABASE_URL,
-        pool_pre_ping=True,
-        poolclass=NullPool,
-        connect_args={"options": _get_connection_options(_CI_TEST_SCHEMA)},
-    )
-
-    # Apply schema_translate_map so ORM models (which use schema="zerg")
-    # correctly map to our worktree-scoped schema
-    test_engine = _base_engine.execution_options(
-        schema_translate_map={DB_SCHEMA: _CI_TEST_SCHEMA}
-    )
-
-    TestingSessionLocal = make_sessionmaker(test_engine)
-
-elif _DB_MODE == "external":
-    # ---------------------------------------------------------------------------
-    # External mode: Use provided DATABASE_URL with per-worktree schema isolation
-    # ---------------------------------------------------------------------------
-    # Schema naming: zerg_test_wt_{worktree8}__{gw}
-    # This allows multiple worktrees to run tests in parallel without collision.
-
-    _CI_TEST_SCHEMA = _get_test_schema_name()
-
-    # Safety check: only allow zerg_test_wt_ prefixed schemas (our naming convention)
-    if not _CI_TEST_SCHEMA.startswith("zerg_test_wt_"):
-        raise RuntimeError(
-            f"Unsafe schema name: {_CI_TEST_SCHEMA}. "
-            "Schema must start with zerg_test_wt_ to prevent accidental production data loss."
-        )
-
-    _db_url_env = os.environ.get("DB_URL_ENV", "DATABASE_URL")
-    SQLALCHEMY_DATABASE_URL = os.environ.get(_db_url_env)
-    if not SQLALCHEMY_DATABASE_URL:
-        raise RuntimeError(
-            f"External DB mode requires {_db_url_env} environment variable. "
-            f"Set {_db_url_env}=postgresql://... to connect to the CI database."
-        )
-
-    # Note: search_path is set in connect_args via _get_connection_options()
-
-    from sqlalchemy.pool import NullPool
-    from sqlalchemy import text
-
-    # Create base engine first (without schema translation) for bootstrap operations
-    _base_engine = make_engine(
-        SQLALCHEMY_DATABASE_URL,
-        pool_pre_ping=True,
-        poolclass=NullPool,
-        connect_args={"options": _get_connection_options(_CI_TEST_SCHEMA)},
-    )
-
-    # Preflight cleanup: terminate stale connections for THIS worktree only
-    # This prevents "idle in transaction" connections from old crashed runs
-    # from blocking TRUNCATE in new runs. Scoped to worktree to avoid killing
-    # active tests in other worktrees.
-    with _base_engine.connect() as conn:
-        conn.execute(text(f"""
-            SELECT pg_terminate_backend(pid)
-            FROM pg_stat_activity
-            WHERE application_name LIKE 'zerg-tests:{_WORKTREE_ID}:%'
-              AND state = 'idle in transaction'
-              AND now() - xact_start > interval '60 seconds'
-              AND pid != pg_backend_pid()
-        """))
-        conn.commit()
-
-    # Advisory lock to serialize schema bootstrap across xdist workers
-    # This prevents races where multiple workers try to CREATE SCHEMA + migrate simultaneously
-    _schema_lock_id = int(hashlib.md5(f"zerg_test_wt_{_WORKTREE_ID}".encode()).hexdigest()[:8], 16)
-
-    with _base_engine.connect() as conn:
-        # Acquire advisory lock (blocks until available)
-        conn.execute(text(f"SELECT pg_advisory_lock({_schema_lock_id})"))
-
-        try:
-            # Create schema if it doesn't exist (first worker wins)
-            conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {_CI_TEST_SCHEMA}"))
-            conn.commit()
-        finally:
-            # Release advisory lock
-            conn.execute(text(f"SELECT pg_advisory_unlock({_schema_lock_id})"))
-            conn.commit()
-
-    # Now create the actual test engine with schema_translate_map
-    # This translates "zerg" schema references in ORM models to our per-worker schema
-    test_engine = _base_engine.execution_options(
-        schema_translate_map={DB_SCHEMA: _CI_TEST_SCHEMA}
-    )
-
-    TestingSessionLocal = make_sessionmaker(test_engine)
-
-# Override default engine/factory so all app code uses Postgres in tests
+# Override default engine/factory so all app code uses the test database
 _db_mod.default_engine = test_engine
 _db_mod.default_session_factory = TestingSessionLocal
-_db_mod.get_session_factory = lambda: TestingSessionLocal  # type: ignore[assignment]
+_db_mod.get_session_factory = lambda: TestingSessionLocal
 
-# Ensure websocket router uses the same Postgres session factory
-_ws_router.get_session_factory = lambda: TestingSessionLocal  # type: ignore[attr-defined]
+# Ensure websocket router uses the same session factory
+_ws_router.get_session_factory = lambda: TestingSessionLocal
 
 # Mock the OpenAI module before importing main app
 # EXCEPTION: When EVAL_MODE=live, skip mocking to allow real API calls
-import os as _os_early
-
-_eval_mode_early = _os_early.environ.get("EVAL_MODE", "hermetic")
+_eval_mode_early = os.environ.get("EVAL_MODE", "hermetic")
 if _eval_mode_early != "live":
     mock_openai = MagicMock()
     mock_client = MagicMock()
     mock_chat = MagicMock()
     mock_completions = MagicMock()
 
-    # Configure the mock to return a string for the content
     mock_message = MagicMock()
     mock_message.content = "This is a mock response from the LLM"
     mock_choice = MagicMock()
@@ -408,36 +155,23 @@ if _eval_mode_early != "live":
     sys.modules["openai"] = MagicMock()
     sys.modules["openai.OpenAI"] = mock_openai
 
-# Don't completely mock langgraph, just patch specific functionality
-# This allows importing langgraph and accessing attributes like __version__
-# while still mocking functionality used in tests
-# First import the real modules to preserve their behavior
-# The real modules are imported so we can selectively patch.
-import langchain_openai  # noqa: E402
-import langgraph  # noqa: E402
-import langgraph.graph  # noqa: E402
-import langgraph.graph.message  # noqa: E402
+# Import langgraph for patching
+import langchain_openai
+import langgraph
+import langgraph.graph
+import langgraph.graph.message
 
-# ---------------------------------------------------------------------------
-# Async-friendly stub for ChatOpenAI
-# ---------------------------------------------------------------------------
-from langchain_core.messages import AIMessage  # noqa: E402
+from langchain_core.messages import AIMessage
 
 
 class _StubLlm:
-    """Stub LLM that returns deterministic response for both sync and async APIs.
-
-    When tools are bound, returns a tool call for the first tool.
-    When no tools are bound, returns a plain text response.
-    """
+    """Stub LLM that returns deterministic response for both sync and async APIs."""
 
     def __init__(self, tools=None):
         self._tools = tools or []
 
     def _make_response(self, messages):
         """Generate a response based on bound tools and user message."""
-        # Check if there's already a tool response in the messages
-        # If so, return a plain text response (task complete)
         has_tool_response = False
         for msg in messages:
             msg_type = getattr(msg, "type", None)
@@ -446,32 +180,25 @@ class _StubLlm:
                 break
 
         if has_tool_response:
-            # Tool has been executed, return completion response
             return AIMessage(content="Task completed successfully.")
 
-        # Look for the last human message (the actual user request, not system context)
         user_content = ""
         for msg in reversed(messages):
             if hasattr(msg, "content") and hasattr(msg, "type") and msg.type == "human":
                 content = msg.content
-                # Skip system context injection (starts with <current_time>)
                 if content and not content.strip().startswith("<current_time>"):
                     user_content = content
                     break
 
-        # Only return tool calls for tool integration tests (fiches with ALL oikos tools)
-        # This prevents e2e tests from accidentally triggering background commis
         if self._tools:
             import re
 
             tool_names = [t.name if hasattr(t, "name") else str(t) for t in self._tools]
             oikos_tools = {"spawn_commis", "list_commiss", "read_commis_result"}
 
-            # Only make tool calls if fiche has ALL oikos tools (tool integration tests)
             if oikos_tools.issubset(set(tool_names)) and user_content:
                 user_lower = user_content.lower()
 
-                # Select tool based on keywords in user message
                 tool_name = None
                 if any(kw in user_lower for kw in ["list", "show", "recent"]):
                     tool_name = "list_commiss"
@@ -503,134 +230,52 @@ class _StubLlm:
 
         return AIMessage(content="stub-response")
 
-    def invoke(self, messages, **_kwargs):  # noqa: D401 – sync path used in production
+    def invoke(self, messages, **_kwargs):
         return self._make_response(messages)
 
-    async def ainvoke(self, messages, **_kwargs):  # noqa: D401 – preferred async method
+    async def ainvoke(self, messages, **_kwargs):
         return self._make_response(messages)
 
-    async def invoke_async(self, messages, **_kwargs):  # noqa: D401 – legacy async method
+    async def invoke_async(self, messages, **_kwargs):
         return self._make_response(messages)
 
 
 class _StubChatOpenAI:
     """Replacement for ChatOpenAI constructor used in tests."""
 
-    def __init__(self, *args, **kwargs):  # noqa: D401 – signature irrelevant
+    def __init__(self, *args, **kwargs):
         pass
 
-    def bind_tools(self, tools):  # noqa: D401
+    def bind_tools(self, tools):
         return _StubLlm(tools=tools)
 
 
-# Then patch specific classes or functions rather than entire modules
-# ----------------------------------------------------------------------
-# LangGraph / LLM stubs
-# ----------------------------------------------------------------------
-
-
-class _FakeRunnable:
-    """Minimal runnable that returns a deterministic assistant reply."""
-
-    def invoke(self, _state):  # noqa: D401 – interface mimic
-        return {"messages": [AIMessage(content="stub-response")]}
-
-
-class _FakeStateGraph(MagicMock):
-    """Replacement for ``langgraph.graph.StateGraph`` used in tests.
-
-    We inherit from MagicMock so existing attribute access patterns in the
-    fiche definition code still work (``add_node``, ``add_edge``, etc.), but
-    we override ``compile`` to return our deterministic runnable instead of a
-    plain MagicMock.  This removes the need for *any* fallback logic in
-    production code.
-    """
-
-    def compile(self):  # noqa: D401 – mimic real API
-        return _FakeRunnable()
-
-
-# Patch the modules
-# We now run the *real* LangGraph StateGraph implementation so the fiche
-# definition code executes unmodified.  We only patch *ChatOpenAI* because it
-# performs an external network call.  ``add_messages`` is a pure helper; no
-# need to mock it.
-
-# Remove previous mocks if they were set by earlier lines in this file.
-try:
-    import importlib
-
-    # Re-import the real sub-module to ensure we restored original symbols.
-    importlib.reload(langgraph.graph)
-    importlib.reload(langgraph.func)
-    importlib.reload(langgraph.graph.message)
-except Exception:  # pragma: no cover – defensive; tests still proceed
-    pass
-
-# Don't stub LangGraph StateGraph - let it execute real workflows
-# We'll stub only the LLM calls within FicheRunner instead
-
 # Patch ChatOpenAI so no external network call happens
-# Replace with async-friendly stub so that code under test can *await* LLM responses.
-#
-# EXCEPTION: When EVAL_MODE=live, skip the stub to allow real LLM calls for eval testing.
-import os as _os
-
-_eval_mode = _os.environ.get("EVAL_MODE", "hermetic")
+_eval_mode = os.environ.get("EVAL_MODE", "hermetic")
 if _eval_mode != "live":
-    langchain_openai.ChatOpenAI = _StubChatOpenAI  # type: ignore[attr-defined]
+    langchain_openai.ChatOpenAI = _StubChatOpenAI
 
-    # Ensure already-imported oikos engine uses the stub as well.
-    # We overwrite it here defensively so no test ever triggers an external network call.
-    import sys as _sys
-
-    _sre_module = _sys.modules.get("zerg.services.oikos_react_engine")
-    if _sre_module is not None:  # pragma: no cover – depends on import order
-        _sre_module.ChatOpenAI = _StubChatOpenAI  # type: ignore[attr-defined]
-
-# Don't mock FicheRunner globally - let individual tests mock it if needed
+    _sre_module = sys.modules.get("zerg.services.oikos_react_engine")
+    if _sre_module is not None:
+        _sre_module.ChatOpenAI = _StubChatOpenAI
 
 # Import app after all engine setup and mocks are in place
-from zerg.main import app  # noqa: E402
-
-
-# Container lifecycle management
-# With reuse=True, we DON'T stop the container on session end - it persists for fast re-runs.
-# Schema cleanup is handled by _db_schema fixture (unless ZERG_KEEP_TEST_DB=1).
-# To fully reset: `docker stop $(docker ps -q --filter ancestor=postgres:16-alpine)`
-@pytest.fixture(scope="session", autouse=True)
-def _shutdown_pg_container():
-    yield
-    # Container cleanup is intentionally skipped when using reuse=True
-    # Schema cleanup happens in _db_schema fixture
-    if _DB_MODE == "docker" and _pg_container and not os.environ.get("TESTCONTAINERS_REUSE_ENABLE", "true").lower() == "true":
-        try:
-            _pg_container.stop()
-        except Exception:
-            pass
+from zerg.main import app
 
 
 @pytest.fixture(scope="session", autouse=True)
 def disable_langsmith_tracing():
-    """
-    Fixture to disable LangSmith tracing for all tests.
-    This is more robust than setting environment variables.
-    """
-    # First try patching internal classes that control tracing
+    """Fixture to disable LangSmith tracing for all tests."""
     with (
         patch("langsmith.client.Client") as mock_client,
         patch("langsmith._internal._background_thread.tracing_control_thread_func") as mock_thread,
     ):
-        # Disable tracing in the client
         mock_client_instance = MagicMock()
         mock_client_instance.sync_trace.return_value = MagicMock()
         mock_client_instance.trace.return_value = MagicMock()
         mock_client.return_value = mock_client_instance
-
-        # Disable the background thread
         mock_thread.return_value = None
 
-        # Also disable the tracing wrapper API
         with patch("langsmith.wrappers.wrap_openai") as mock_wrap:
             mock_wrap.return_value = lambda *args, **kwargs: args[0]
             yield
@@ -638,27 +283,16 @@ def disable_langsmith_tracing():
 
 @pytest.fixture(scope="session", autouse=True)
 def cleanup_global_resources(request):
-    """
-    Ensure global resources like topic_manager are cleaned up after the session.
-    This is crucial because topic_manager subscribes to event_bus at import time.
-    """
-    yield  # Run all tests
+    """Ensure global resources are cleaned up after the session."""
+    yield
 
-    # Teardown logic after all tests in the session have run
     print("\nPerforming session cleanup...")
 
-    # 1. Clear topic_manager state
-    #    Resetting internal dicts to break potential reference cycles
-    #    and ensure no lingering client data.
     topic_manager.active_connections.clear()
     topic_manager.topic_subscriptions.clear()
     topic_manager.client_topics.clear()
     print("Cleared topic_manager state.")
 
-    # 2. Unsubscribe topic_manager handlers from event_bus
-    #    This is important to prevent errors if event_bus tries to call
-    #    handlers on a potentially partially garbage-collected topic_manager.
-    #    Assuming event_bus.unsubscribe is synchronous.
     try:
         event_bus.unsubscribe(EventType.FICHE_CREATED, topic_manager._handle_fiche_event)
         event_bus.unsubscribe(EventType.FICHE_UPDATED, topic_manager._handle_fiche_event)
@@ -671,23 +305,16 @@ def cleanup_global_resources(request):
     except Exception as e:
         print(f"Error during topic_manager unsubscribe: {e}")
 
-    # 3. Explicitly stop the scheduler service
     try:
-        # Need to run the async stop method
         async def _stop_scheduler():
             await scheduler_service.stop()
 
-        # Try to use existing event loop, otherwise create a new one
-        # This handles both pytest-asyncio and non-async test scenarios
         if scheduler_service._initialized:
             try:
-                # Try to get running loop first (for async test contexts)
                 loop = asyncio.get_running_loop()
-                # If we're in a running loop, schedule the stop as a task
                 loop.create_task(_stop_scheduler())
                 print("Scheduled scheduler service stop.")
             except RuntimeError:
-                # No running loop, safe to use asyncio.run()
                 asyncio.run(_stop_scheduler())
                 print("Stopped scheduler service.")
         else:
@@ -695,130 +322,70 @@ def cleanup_global_resources(request):
     except Exception as e:
         print(f"Error stopping scheduler service during cleanup: {e}")
 
-    # 4. Optionally, clear event_bus subscribers if necessary (use with caution)
-    # event_bus._subscribers.clear()
-    # print("Cleared event_bus subscribers.")
-
     print("Session cleanup complete.")
 
 
 # ---------------------------------------------------------------------------
-# Database schema management - create once per session, TRUNCATE per test
+# Database schema management - create tables at session start
 # ---------------------------------------------------------------------------
-# This is dramatically faster than CREATE/DROP per test (2572 DDL ops → 1 + fast TRUNCATEs)
 
 @pytest.fixture(scope="session")
 def _db_schema():
-    """Create database schema once for the entire test session.
-
-    Schema naming: zerg_test_wt_{worktree8}__{gw}
-    - Isolates parallel worktrees from each other
-    - Isolates xdist workers within a worktree
-    - Advisory lock serializes schema bootstrap across workers
-    """
+    """Create database tables once for the entire test session."""
     from sqlalchemy import text
 
-    # Both docker and external modes now use worktree-scoped schemas
-    schema_name = _CI_TEST_SCHEMA
+    # Import agents models
+    from zerg.models.agents import AgentsBase
 
-    # Advisory lock to prevent race conditions during schema creation + migration
-    _schema_lock_id = int(hashlib.md5(f"zerg_test_wt_{_WORKTREE_ID}".encode()).hexdigest()[:8], 16)
-
-    if test_engine.dialect.name == "postgresql":
-        with test_engine.connect() as conn:
-            # Acquire advisory lock (blocks until available)
-            conn.execute(text(f"SELECT pg_advisory_lock({_schema_lock_id})"))
-
-            try:
-                conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_name}"))
-                conn.commit()
-
-                # Create tables using test_engine (which already has schema_translate_map)
-                # This maps ORM's "zerg" schema references to our worktree schema
-                Base.metadata.create_all(bind=test_engine)
-            finally:
-                # Release advisory lock
-                conn.execute(text(f"SELECT pg_advisory_unlock({_schema_lock_id})"))
-                conn.commit()
-    else:
-        # Non-Postgres (e.g., SQLite for quick local tests)
-        Base.metadata.create_all(bind=test_engine)
+    # Create all tables
+    Base.metadata.create_all(bind=test_engine)
+    AgentsBase.metadata.create_all(bind=test_engine)
 
     yield
 
-    # Cleanup: drop schema unless ZERG_KEEP_TEST_DB=1 (useful for debugging)
-    if os.environ.get("ZERG_KEEP_TEST_DB") == "1":
-        print(f"\nZERG_KEEP_TEST_DB=1: keeping schema {schema_name} for inspection")
-    elif test_engine.dialect.name == "postgresql":
+    # Cleanup: delete test database file
+    if os.environ.get("ZERG_KEEP_TEST_DB") != "1":
         try:
-            with test_engine.connect() as conn:
-                conn.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE"))
-                conn.commit()
+            _TEST_DB_FILE.unlink(missing_ok=True)
+            # Also clean up WAL and SHM files
+            Path(str(_TEST_DB_FILE) + "-wal").unlink(missing_ok=True)
+            Path(str(_TEST_DB_FILE) + "-shm").unlink(missing_ok=True)
         except Exception:
-            pass  # Best effort cleanup
+            pass
 
 
-def _truncate_all_tables(connection, schema_name: str):
-    """Truncate all tables efficiently using a single statement.
-
-    Each xdist worker operates in its own isolated schema. Tables are explicitly
-    schema-qualified to ensure we only truncate the worker's own tables, avoiding
-    any cross-schema interference or deadlocks.
-
-    No advisory lock is needed because:
-    1. Each worker has its own schema (e.g., zerg_test_wt_xxx__gw0)
-    2. Schema-qualified names ensure isolation
-    3. Workers never touch each other's tables
-    """
+def _truncate_all_tables(connection):
+    """Delete all rows from all tables."""
     from sqlalchemy import text
 
-    # Get all table names in dependency order (reverse for truncation)
+    # Get all table names in dependency order (reverse for deletion)
     table_names = [t.name for t in reversed(Base.metadata.sorted_tables)]
-    if not table_names:
-        return
 
-    # Explicitly schema-qualify each table to ensure we only touch this worker's schema.
-    # This prevents any possibility of cross-schema interference that could cause deadlocks.
-    qualified_tables = [f"{schema_name}.{name}" for name in table_names]
-    tables_str = ", ".join(qualified_tables)
-
-    # Use TRUNCATE ... CASCADE for speed (single statement, minimal WAL)
-    # RESTART IDENTITY resets sequences for predictable IDs
-    connection.execute(text(f"TRUNCATE TABLE {tables_str} RESTART IDENTITY CASCADE"))
+    # Disable foreign keys temporarily for truncation
+    connection.execute(text("PRAGMA foreign_keys = OFF"))
+    for table in table_names:
+        connection.execute(text(f'DELETE FROM "{table}"'))
+    connection.execute(text("PRAGMA foreign_keys = ON"))
     connection.commit()
 
 
 @pytest.fixture
 def db_session(_db_schema):
-    """
-    Provide a clean database session for each test.
-
-    Uses TRUNCATE instead of DROP/CREATE for massive speedup.
-    Schema is created once per session, tables are truncated per test.
-    """
+    """Provide a clean database session for each test."""
     # TRUNCATE all tables BEFORE the test to ensure clean state
-    # Pass schema name explicitly to ensure proper isolation
     with test_engine.connect() as conn:
-        _truncate_all_tables(conn, _CI_TEST_SCHEMA)
+        _truncate_all_tables(conn)
 
     db = TestingSessionLocal()
 
     # Seed a deterministic user with id=1 to satisfy FK constraints in tests
     try:
         from zerg.models.models import User
-        from sqlalchemy import text
 
         dev = User(id=1, email="dev@local")
         db.add(dev)
         db.commit()
-
-        # Advance sequence past seeded user so auto-generated IDs don't conflict
-        # Uses MAX(id) so it self-heals if seed changes
-        # Schema-qualify to ensure we're targeting this worker's sequence
-        db.execute(text(f"SELECT setval('{_CI_TEST_SCHEMA}.users_id_seq', COALESCE((SELECT MAX(id) FROM {_CI_TEST_SCHEMA}.users), 1))"))
-        db.commit()
     except Exception:
-        # If seeding fails, continue; individual tests may create their own users
         db.rollback()
 
     try:
@@ -829,9 +396,7 @@ def db_session(_db_schema):
 
 @pytest.fixture
 def client(db_session, auth_headers):
-    """
-    Create a FastAPI TestClient with the test database dependency and auth headers.
-    """
+    """Create a FastAPI TestClient with the test database dependency and auth headers."""
 
     def override_get_db():
         try:
@@ -850,9 +415,7 @@ def client(db_session, auth_headers):
 
 @pytest.fixture
 def unauthenticated_client(db_session):
-    """
-    Create a FastAPI TestClient without authentication headers.
-    """
+    """Create a FastAPI TestClient without authentication headers."""
 
     def override_get_db():
         try:
@@ -870,9 +433,7 @@ def unauthenticated_client(db_session):
 
 @pytest.fixture
 def unauthenticated_client_no_raise(db_session):
-    """
-    Create a FastAPI TestClient that returns error responses instead of raising.
-    """
+    """Create a FastAPI TestClient that returns error responses instead of raising."""
 
     def override_get_db():
         try:
@@ -890,9 +451,7 @@ def unauthenticated_client_no_raise(db_session):
 
 @pytest.fixture
 def test_client(db_session):
-    """
-    Create a FastAPI TestClient with WebSocket support
-    """
+    """Create a FastAPI TestClient with WebSocket support."""
 
     def override_get_db():
         try:
@@ -910,11 +469,7 @@ def test_client(db_session):
 
 @pytest.fixture
 def test_session_factory(db_session):
-    """
-    Returns a session factory using the test database.
-    Used for cases where a service requires a session factory.
-    Ensures all database operations in a test use the same connection.
-    """
+    """Returns a session factory using the test database."""
 
     def get_test_session():
         return db_session
@@ -923,15 +478,14 @@ def test_session_factory(db_session):
 
 
 # ---------------------------------------------------------------------------
-# Model fixtures - centralized model constants for tests
+# Model fixtures
 # ---------------------------------------------------------------------------
 from zerg.models_config import DEFAULT_MODEL_ID
 from zerg.models_config import TEST_MODEL_ID
 
-# Re-export as module-level constants for tests that need direct import
-TEST_MODEL = DEFAULT_MODEL_ID  # "gpt-5.2" - for tests needing best quality
-TEST_COMMIS_MODEL = TEST_MODEL_ID  # "gpt-5-nano" - distinct model for allowlist tests
-TEST_MODEL_CHEAP = TEST_MODEL_ID  # "gpt-5-nano" - for CI tests needing speed/cost
+TEST_MODEL = DEFAULT_MODEL_ID
+TEST_COMMIS_MODEL = TEST_MODEL_ID
+TEST_MODEL_CHEAP = TEST_MODEL_ID
 
 
 @pytest.fixture
@@ -943,7 +497,7 @@ def test_model():
 @pytest.fixture
 def test_commis_model():
     """Default model for test commis (lighter weight)."""
-    return DEFAULT_COMMIS_MODEL_ID
+    return TEST_MODEL_ID
 
 
 # ---------------------------------------------------------------------------
@@ -954,7 +508,6 @@ def test_commis_model():
 @pytest.fixture
 def _dev_user(db_session):
     """Return the deterministic *dev@local* user used when AUTH is disabled."""
-
     from zerg.crud import crud as _crud
 
     user = _crud.get_user_by_email(db_session, "dev@local")
@@ -965,9 +518,7 @@ def _dev_user(db_session):
 
 @pytest.fixture
 def sample_fiche(db_session, _dev_user):
-    """
-    Create a sample fiche in the database
-    """
+    """Create a sample fiche in the database."""
     fiche = Fiche(
         owner_id=_dev_user.id,
         name="Test Fiche",
@@ -982,13 +533,9 @@ def sample_fiche(db_session, _dev_user):
     return fiche
 
 
-
-
 @pytest.fixture
 def sample_messages(db_session, sample_fiche):
-    """
-    Create sample messages for the sample fiche
-    """
+    """Create sample messages for the sample fiche."""
     messages = [
         FicheMessage(fiche_id=sample_fiche.id, role="system", content="You are a test assistant"),
         FicheMessage(fiche_id=sample_fiche.id, role="user", content="Hello, test assistant"),
@@ -999,15 +546,12 @@ def sample_messages(db_session, sample_fiche):
         db_session.add(message)
 
     db_session.commit()
-
     return messages
 
 
 @pytest.fixture
 def sample_thread(db_session, sample_fiche):
-    """
-    Create a sample thread in the database
-    """
+    """Create a sample thread in the database."""
     thread = Thread(
         fiche_id=sample_fiche.id,
         title="Test Thread",
@@ -1023,9 +567,7 @@ def sample_thread(db_session, sample_fiche):
 
 @pytest.fixture
 def sample_thread_messages(db_session, sample_thread):
-    """
-    Create sample messages for the sample thread
-    """
+    """Create sample messages for the sample thread."""
     messages = [
         ThreadMessage(
             thread_id=sample_thread.id,
@@ -1057,37 +599,20 @@ def sample_thread_messages(db_session, sample_thread):
 
 
 @pytest.fixture()
-def auth_headers():  # noqa: D401 – pytest fixture naming
-    """Return minimal **empty** headers dict for tests that inject auth.
-
-    Most API endpoints depend on :pyfunc:`zerg.dependencies.auth.get_current_user`
-    which, in *test mode*, bypasses JWT validation entirely (``AUTH_DISABLED``
-    is implicitly enabled via the ``TESTING=1`` env flag set at the top of
-    this file).  The tests for the MCP server router still expect a
-    ``headers`` fixture so we provide a **no-op** implementation – an empty
-    dict is sufficient because the middleware does not look at the headers
-    in this scenario.
-    """
-
-    # Provide a dummy bearer token so routes that still check for the header
-    # despite *AUTH_DISABLED* being in effect treat the request as
-    # *authenticated*.  The token is **not** validated in dev-mode so the
-    # value is irrelevant.
-
+def auth_headers():
+    """Return minimal headers dict for tests that inject auth."""
     return {"Authorization": "Bearer test-token"}
 
 
 @pytest.fixture()
-def db(db_session):  # noqa: D401 – passthrough alias
+def db(db_session):
     """Provide a short alias for the shared test database session."""
-
     return db_session
 
 
 @pytest.fixture()
-def test_user(_dev_user):  # noqa: D401 – passthrough alias
+def test_user(_dev_user):
     """Return the deterministic dev user for tests."""
-
     return _dev_user
 
 
@@ -1104,29 +629,18 @@ def other_user(db_session):
 
 @pytest.fixture
 def mock_langgraph_state_graph():
-    """
-    Mock the StateGraph class from LangGraph directly.
-
-    Note: Previously mocked from zerg.fiches which has been removed.
-    Now mocks langgraph.graph.StateGraph directly.
-    """
+    """Mock the StateGraph class from LangGraph directly."""
     with patch("langgraph.graph.StateGraph") as mock_state_graph:
-        # Create a mock graph
         mock_graph = MagicMock()
         mock_state_graph.return_value = mock_graph
-
-        # Mock the compile method to return a graph instance
         compiled_graph = MagicMock()
         mock_graph.compile.return_value = compiled_graph
-
         yield mock_state_graph
 
 
 @pytest.fixture
 def mock_langchain_openai():
-    """
-    Mock the LangChain OpenAI integration
-    """
+    """Mock the LangChain OpenAI integration."""
     with patch("langchain_openai.ChatOpenAI") as mock_chat_openai:
         mock_chat = MagicMock()
         mock_chat_openai.return_value = mock_chat
@@ -1139,14 +653,8 @@ def mock_langchain_openai():
 
 
 @pytest.fixture(autouse=True)
-def _cleanup_tool_registry():  # noqa: D401 – internal helper
-    """Clear runtime-registered tools before & after each test.
-
-    Several tests register mock tools on-the-fly.  Without cleanup later
-    tests would see duplicates which either raise validation errors or –
-    worse – make failures flaky and hard to trace.
-    """
-
+def _cleanup_tool_registry():
+    """Clear runtime-registered tools before & after each test."""
     from zerg.tools.registry import get_registry
 
     reg = get_registry()
@@ -1162,13 +670,8 @@ def _cleanup_tool_registry():  # noqa: D401 – internal helper
 
 @pytest.fixture(autouse=True, scope="session")
 def _shutdown_llm_audit_logger():
-    """Gracefully stop the LLM audit logger at the end of the test session.
-
-    The audit logger runs a background task that writes to DB. Without cleanup,
-    the task is destroyed while pending when the event loop closes, causing
-    noisy "Task was destroyed but it is pending!" warnings.
-    """
-    yield  # run tests
+    """Gracefully stop the LLM audit logger at the end of the test session."""
+    yield
 
     try:
         from zerg.services.llm_audit import audit_logger
@@ -1177,12 +680,9 @@ def _shutdown_llm_audit_logger():
             await audit_logger.shutdown()
 
         try:
-            # Try to get running loop first (for async test contexts)
             loop = asyncio.get_running_loop()
             loop.create_task(_stop_audit_logger())
         except RuntimeError:
-            # No running loop, safe to use asyncio.run()
             asyncio.run(_stop_audit_logger())
     except Exception:
-        # Logger already stopped or event-loop closed – no action needed
         pass

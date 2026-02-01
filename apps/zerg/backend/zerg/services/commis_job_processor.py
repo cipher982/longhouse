@@ -27,7 +27,6 @@ from typing import Optional
 from zerg.config import get_settings
 from zerg.crud import crud
 from zerg.database import db_session
-from zerg.middleware.commis_db import current_commis_id
 from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.services.commis_job_queue import HEARTBEAT_INTERVAL_SECONDS
 from zerg.services.commis_job_queue import claim_jobs
@@ -37,9 +36,6 @@ from zerg.services.commis_job_queue import update_heartbeat
 from zerg.services.commis_runner import CommisRunner
 
 logger = logging.getLogger(__name__)
-
-# E2E test mode detection
-_is_e2e_mode = os.getenv("ENVIRONMENT") == "test:e2e"
 
 # Summary max length
 _SUMMARY_MAX_LENGTH = 150
@@ -234,15 +230,6 @@ class CommisJobProcessor:
             await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
 
     async def _process_pending_jobs(self) -> None:
-        """Process pending commis jobs."""
-        if _is_e2e_mode:
-            # E2E mode: poll all test schemas for jobs
-            await self._process_pending_jobs_e2e()
-        else:
-            # Normal mode: poll default schema
-            await self._process_pending_jobs_default()
-
-    async def _process_pending_jobs_default(self) -> None:
         """Process pending jobs from default schema (normal mode).
 
         Uses dialect-aware atomic job claiming:
@@ -275,60 +262,6 @@ class CommisJobProcessor:
         finally:
             # Remove from running jobs set (stops heartbeat loop)
             self._running_jobs.discard(job_id)
-
-    async def _process_pending_jobs_e2e(self) -> None:
-        """Process pending jobs from all E2E test schemas.
-
-        In E2E mode, each Playwright commis gets its own Postgres schema.
-        We need to poll all schemas to find queued jobs.
-
-        Uses dialect-aware atomic job claiming.
-        """
-        from sqlalchemy.exc import ProgrammingError
-
-        # Poll schemas 0-15 (matches Playwright commis count in test setup)
-        # This is fast because empty schemas return immediately
-        for commis_id in range(16):
-            commis_id_str = str(commis_id)
-            token = current_commis_id.set(commis_id_str)
-            try:
-                job_ids = []
-                try:
-                    with db_session() as db:
-                        job_ids = claim_jobs(db, self._max_concurrent_jobs, self._worker_id)
-
-                        if job_ids:
-                            logger.info(f"Claimed {len(job_ids)} queued commis jobs in schema {commis_id}")
-                except ProgrammingError:
-                    # Schema doesn't exist yet (race with globalSetup) - skip silently
-                    continue
-
-                if job_ids:
-                    # Process jobs with the correct commis_id context
-                    # Track jobs and start heartbeats
-                    tasks = []
-                    for job_id in job_ids:
-                        self._running_jobs.add(job_id)
-                        asyncio.create_task(self._heartbeat_loop(job_id))
-                        tasks.append(asyncio.create_task(self._process_job_by_id_with_context_and_cleanup(job_id, commis_id_str)))
-                    await asyncio.gather(*tasks, return_exceptions=True)
-            finally:
-                current_commis_id.reset(token)
-
-    async def _process_job_by_id_with_context_and_cleanup(self, job_id: int, commis_id_str: str) -> None:
-        """Process a job with E2E schema context and clean up tracking state."""
-        try:
-            await self._process_job_by_id_with_context(job_id, commis_id_str, already_claimed=True)
-        finally:
-            self._running_jobs.discard(job_id)
-
-    async def _process_job_by_id_with_context(self, job_id: int, commis_id_str: str, *, already_claimed: bool = False) -> None:
-        """Process a job with the correct E2E schema context."""
-        token = current_commis_id.set(commis_id_str)
-        try:
-            await self._process_job_by_id(job_id, already_claimed=already_claimed)
-        finally:
-            current_commis_id.reset(token)
 
     async def _process_job_by_id(self, job_id: int, *, already_claimed: bool = False) -> None:
         """Process a single commis job by ID with its own database session.

@@ -3,8 +3,8 @@
 /**
  * Spawn isolated test backend for E2E tests
  *
- * This script spawns a dedicated backend server for each Playwright commis,
- * ensuring complete test isolation without shared state.
+ * SQLite-based isolation: Each E2E test run uses a dedicated SQLite database
+ * in a temp directory. No Postgres required.
  */
 
 import crypto from 'crypto';
@@ -77,61 +77,54 @@ function getBackendPort() {
     return port;
 }
 
-// Optional commis ID from command line argument (legacy mode)
-const commisId = process.argv[2];
+// Optional worker ID from command line argument (legacy mode)
+const workerId = process.argv[2];
 const BACKEND_PORT = getBackendPort();
 
-const port = commisId ? BACKEND_PORT + parseInt(commisId) : BACKEND_PORT;
+const port = workerId ? BACKEND_PORT + parseInt(workerId) : BACKEND_PORT;
 
-// E2E tests use per-Playwright-commis Postgres schemas routed via X-Test-Commis header.
-// Schemas are pre-created in test-setup.js, so we can safely use multiple uvicorn commis.
-// Pinned defaults for reproducible test runs:
-// - Local: 8 uvicorn commis (bumped from 6 to reduce race conditions with 16 Playwright commis)
-// - CI: 2 uvicorn commis (conservative for shared runners)
-// Override with UVICORN_WORKERS env var if needed.
-const defaultLocalUvicornCommis = 8;   // Bumped: better concurrency for 16 Playwright commis
-const defaultCIUvicornCommis = 2;
-const envUvicornCommis = Number.parseInt(process.env.UVICORN_WORKERS ?? "", 10);
-const uvicornCommis = commisId
-  ? 1  // Legacy per-commis backend mode (deprecated)
-  : (Number.isFinite(envUvicornCommis) && envUvicornCommis > 0
-      ? envUvicornCommis
-      : (process.env.CI ? defaultCIUvicornCommis : defaultLocalUvicornCommis));
+// E2E tests now use SQLite per-backend-instance for isolation
+// No need for multiple uvicorn workers since SQLite is single-writer
+const uvicornWorkers = 1;
 
-if (commisId) {
-    console.log(`[spawn-backend] Starting isolated backend for commis ${commisId} on port ${port}`);
-} else {
-    console.log(`[spawn-backend] Starting single backend on port ${port} with ${uvicornCommis} commis (per-commis DB isolation via header)`);
+// Create E2E SQLite database path
+const e2eDbDir = process.env.E2E_DB_DIR || path.join(os.tmpdir(), 'zerg_e2e_dbs');
+if (!fs.existsSync(e2eDbDir)) {
+    fs.mkdirSync(e2eDbDir, { recursive: true });
 }
+const dbPath = path.join(e2eDbDir, `e2e_${port}.db`);
+const databaseUrl = `sqlite:///${dbPath}`;
+
+console.log(`[spawn-backend] Starting E2E backend on port ${port} with SQLite: ${dbPath}`);
 
 // Spawn the test backend with E2E configuration
 const backend = spawn('uv', [
     'run', 'python', '-m', 'uvicorn', 'zerg.main:app',
     `--host=127.0.0.1`,
     `--port=${port}`,
-    `--workers=${uvicornCommis}`,
+    `--workers=${uvicornWorkers}`,
     '--log-level=error'  // Only show errors, not INFO logs (reduces output from 26K to ~100 lines)
 ], {
     env: {
         ...process.env,
-        // Add e2e/bin to PATH for mock-hatch CLI (used by workspace commis in E2E)
+        // Add e2e/bin to PATH for mock-hatch CLI (used by workspace agents in E2E)
         PATH: `${join(__dirname, 'bin')}:${process.env.PATH || ''}`,
         ENVIRONMENT: 'test:e2e',  // Use E2E test config for real models
-        TEST_WORKER_ID: commisId || '0',
+        TEST_WORKER_ID: workerId || '0',
         NODE_ENV: 'test',
         TESTING: '1',  // Enable testing mode for database reset
         AUTH_DISABLED: '1',  // Disable auth for E2E tests
         DEV_ADMIN: process.env.DEV_ADMIN || '1',
         ADMIN_EMAILS: process.env.ADMIN_EMAILS || 'dev@local',
-        E2E_USE_POSTGRES_SCHEMAS: '1',  // Enable Postgres schema isolation
-        // DATABASE_URL inherited from environment (Postgres)
+        // SQLite database for this E2E backend instance
+        DATABASE_URL: databaseUrl,
         LLM_TOKEN_STREAM: process.env.LLM_TOKEN_STREAM || 'true',  // Enable token streaming for E2E tests
         // LIFE_HUB_URL and LIFE_HUB_API_KEY inherited from environment (for session continuity tests)
-        // Workspace path for workspace commis (use temp dir in E2E, not /var/oikos)
+        // Workspace path for workspace agents (use temp dir in E2E, not /var/oikos)
         OIKOS_WORKSPACE_PATH: process.env.OIKOS_WORKSPACE_PATH || os.tmpdir() + '/zerg-e2e-workspaces',
         // Claude config dir for session files (use temp dir in E2E)
         CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR || os.tmpdir() + '/zerg-e2e-claude',
-        // Mock hatch CLI for workspace commis in E2E (can't run real Claude Code fiches)
+        // Mock hatch CLI for workspace agents in E2E (can't run real Claude Code fiches)
         E2E_HATCH_PATH: join(__dirname, 'bin', 'hatch'),
         // Suppress Python logging noise for E2E tests
         LOG_LEVEL: 'ERROR',
@@ -143,23 +136,23 @@ const backend = spawn('uv', [
 
 // Handle backend process events
 backend.on('error', (error) => {
-    console.error(`[spawn-backend] Commis ${commisId} backend error:`, error);
+    console.error(`[spawn-backend] Worker ${workerId} backend error:`, error);
     process.exit(1);
 });
 
 backend.on('close', (code) => {
-    console.log(`[spawn-backend] Commis ${commisId} backend exited with code ${code}`);
+    console.log(`[spawn-backend] Worker ${workerId} backend exited with code ${code}`);
     process.exit(code);
 });
 
 // Forward signals to backend process
 process.on('SIGTERM', () => {
-    console.log(`[spawn-backend] Commis ${commisId} received SIGTERM, shutting down backend`);
+    console.log(`[spawn-backend] Worker ${workerId} received SIGTERM, shutting down backend`);
     backend.kill('SIGTERM');
 });
 
 process.on('SIGINT', () => {
-    console.log(`[spawn-backend] Commis ${commisId} received SIGINT, shutting down backend`);
+    console.log(`[spawn-backend] Worker ${workerId} received SIGINT, shutting down backend`);
     backend.kill('SIGINT');
 });
 

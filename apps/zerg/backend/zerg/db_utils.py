@@ -4,7 +4,7 @@ This module contains low-level database helpers that need to be importable
 without triggering circular dependencies. Specifically, these functions
 are used by both config/__init__.py and database.py during module load.
 
-Also provides dialect-aware locking helpers for SQLite/Postgres compatibility.
+Also provides locking helpers using SQLite resource_locks table pattern.
 """
 
 from __future__ import annotations
@@ -79,29 +79,15 @@ def is_sqlite_url(url: str) -> bool:
         return url.startswith("sqlite")
 
 
-def is_sqlite_session(db: "Session") -> bool:
-    """Check if a database session is using SQLite.
-
-    Args:
-        db: SQLAlchemy Session
-
-    Returns:
-        True if the session is connected to SQLite
-    """
-    return db.bind.dialect.name == "sqlite"
-
-
 # =============================================================================
-# Dialect-Aware Advisory Locking
+# SQLite Advisory Locking via resource_locks table
 # =============================================================================
 #
-# PostgreSQL provides advisory locks (pg_advisory_lock, pg_try_advisory_lock)
-# which are ideal for distributed locking. SQLite doesn't have these, so we
-# use a status column pattern with timestamps for atomicity.
+# SQLite doesn't have native advisory locks, so we use a status column pattern
+# with timestamps for atomicity.
 #
-# The SQLite approach uses:
+# Uses:
 # - A `resource_locks` table with (lock_type, lock_key, holder_id, acquired_at, heartbeat_at)
-# - BEGIN IMMEDIATE transaction mode for write locks
 # - UPDATE ... WHERE with timestamp checks for stale lock detection
 #
 # =============================================================================
@@ -111,63 +97,24 @@ def is_sqlite_session(db: "Session") -> bool:
 STALE_LOCK_TIMEOUT_SECONDS = int(os.getenv("STALE_LOCK_TIMEOUT_SECONDS", "120"))
 
 
-def acquire_lock_postgres(
-    db: "Session",
-    lock_key: int,
-    blocking: bool = True,
-) -> bool:
-    """Acquire a PostgreSQL advisory lock.
-
-    Args:
-        db: SQLAlchemy Session
-        lock_key: Integer lock key (must be consistent across processes)
-        blocking: If True, block until lock acquired. If False, return immediately.
-
-    Returns:
-        True if lock acquired, False if not (only possible when blocking=False)
-    """
-    if blocking:
-        # Blocking advisory lock (session-scoped, auto-released on disconnect)
-        db.execute(text("SELECT pg_advisory_lock(:key)"), {"key": lock_key})
-        return True
-    else:
-        # Non-blocking attempt
-        result = db.execute(text("SELECT pg_try_advisory_lock(:key)"), {"key": lock_key})
-        return bool(result.scalar())
-
-
-def release_lock_postgres(db: "Session", lock_key: int) -> bool:
-    """Release a PostgreSQL advisory lock.
-
-    Args:
-        db: SQLAlchemy Session
-        lock_key: Integer lock key
-
-    Returns:
-        True if lock was held and released, False if not held
-    """
-    result = db.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": lock_key})
-    return bool(result.scalar())
-
-
-def acquire_lock_sqlite(
+def acquire_lock(
     db: "Session",
     lock_type: str,
     lock_key: str,
     holder_id: str,
     blocking: bool = False,
 ) -> bool:
-    """Acquire a SQLite-compatible lock using status column pattern.
+    """Acquire a lock using the resource_locks table pattern.
 
-    Uses the `resource_locks` table to track lock ownership. Stale locks
-    (no heartbeat update for STALE_LOCK_TIMEOUT_SECONDS) can be taken over.
+    Uses INSERT ... ON CONFLICT DO UPDATE for atomic lock acquisition.
+    Stale locks (no heartbeat update for STALE_LOCK_TIMEOUT_SECONDS) can be taken over.
 
     Args:
         db: SQLAlchemy Session
         lock_type: Type of resource being locked (e.g., 'fiche', 'user_creation')
         lock_key: Unique key within the lock type (e.g., fiche_id as string)
         holder_id: Identifier for this lock holder (e.g., process ID, worker ID)
-        blocking: If True, keep retrying (CAUTION: can deadlock). Usually False.
+        blocking: Unused, for API compatibility only
 
     Returns:
         True if lock acquired, False if held by another active holder
@@ -175,7 +122,7 @@ def acquire_lock_sqlite(
     now = datetime.now(timezone.utc)
     stale_threshold = now - timedelta(seconds=STALE_LOCK_TIMEOUT_SECONDS)
 
-    # Ensure resource_locks table exists (created by migrations, but be safe)
+    # Ensure resource_locks table exists
     _ensure_resource_locks_table(db)
 
     # Try to insert a new lock row or update a stale one
@@ -206,7 +153,7 @@ def acquire_lock_sqlite(
     db.commit()
 
     if acquired:
-        logger.debug(f"Acquired SQLite lock: {lock_type}/{lock_key} (holder={holder_id})")
+        logger.debug(f"Acquired lock: {lock_type}/{lock_key} (holder={holder_id})")
     else:
         # Check who holds the lock
         existing = db.execute(
@@ -217,18 +164,18 @@ def acquire_lock_sqlite(
             {"lock_type": lock_type, "lock_key": lock_key},
         ).fetchone()
         if existing:
-            logger.debug(f"SQLite lock {lock_type}/{lock_key} held by {existing[0]} " f"(last heartbeat: {existing[1]})")
+            logger.debug(f"Lock {lock_type}/{lock_key} held by {existing[0]} (last heartbeat: {existing[1]})")
 
     return acquired
 
 
-def release_lock_sqlite(
+def release_lock(
     db: "Session",
     lock_type: str,
     lock_key: str,
     holder_id: str,
 ) -> bool:
-    """Release a SQLite-compatible lock.
+    """Release a lock.
 
     Args:
         db: SQLAlchemy Session
@@ -256,20 +203,20 @@ def release_lock_sqlite(
 
     released = result.rowcount > 0
     if released:
-        logger.debug(f"Released SQLite lock: {lock_type}/{lock_key} (holder={holder_id})")
+        logger.debug(f"Released lock: {lock_type}/{lock_key} (holder={holder_id})")
     else:
-        logger.debug(f"SQLite lock {lock_type}/{lock_key} not held by {holder_id}")
+        logger.debug(f"Lock {lock_type}/{lock_key} not held by {holder_id}")
 
     return released
 
 
-def update_lock_heartbeat_sqlite(
+def update_lock_heartbeat(
     db: "Session",
     lock_type: str,
     lock_key: str,
     holder_id: str,
 ) -> bool:
-    """Update the heartbeat timestamp for a held SQLite lock.
+    """Update the heartbeat timestamp for a held lock.
 
     Should be called periodically (e.g., every 30s) to prevent stale lock takeover.
 
@@ -303,14 +250,10 @@ def update_lock_heartbeat_sqlite(
 
 
 def _ensure_resource_locks_table(db: "Session") -> None:
-    """Ensure the resource_locks table exists (for SQLite runtime creation).
+    """Ensure the resource_locks table exists.
 
-    For Postgres, this table should be created by migrations.
-    For SQLite in lite_mode, we create it on-demand.
+    Creates the table on-demand for SQLite.
     """
-    if not is_sqlite_session(db):
-        return
-
     db.execute(
         text("""
             CREATE TABLE IF NOT EXISTS resource_locks (
@@ -327,7 +270,7 @@ def _ensure_resource_locks_table(db: "Session") -> None:
 
 
 # =============================================================================
-# Unified Locking Interface
+# Unified Locking Interface (for compatibility)
 # =============================================================================
 
 
@@ -338,29 +281,19 @@ def acquire_resource_lock(
     holder_id: str,
     blocking: bool = False,
 ) -> bool:
-    """Acquire a resource lock (dialect-aware).
-
-    For PostgreSQL, uses advisory locks with the lock_key as an integer.
-    For SQLite, uses the resource_locks table.
+    """Acquire a resource lock.
 
     Args:
         db: SQLAlchemy Session
         lock_type: Type of resource (e.g., 'fiche', 'user_creation')
-        lock_key: Unique key (int for Postgres advisory, string for SQLite)
+        lock_key: Unique key
         holder_id: Identifier for this lock holder
-        blocking: If True, block until acquired (Postgres only, SQLite ignores)
+        blocking: Unused, for API compatibility
 
     Returns:
         True if lock acquired
     """
-    if is_sqlite_session(db):
-        return acquire_lock_sqlite(db, lock_type, str(lock_key), holder_id, blocking)
-    else:
-        # For Postgres, convert lock_type + lock_key to a unique integer
-        # Using hash ensures consistent key across processes
-        combined = f"{lock_type}:{lock_key}"
-        int_key = hash(combined) & 0x7FFFFFFFFFFFFFFF  # Keep positive 64-bit
-        return acquire_lock_postgres(db, int_key, blocking)
+    return acquire_lock(db, lock_type, str(lock_key), holder_id, blocking)
 
 
 def release_resource_lock(
@@ -369,23 +302,18 @@ def release_resource_lock(
     lock_key: str | int,
     holder_id: str,
 ) -> bool:
-    """Release a resource lock (dialect-aware).
+    """Release a resource lock.
 
     Args:
         db: SQLAlchemy Session
         lock_type: Type of resource
         lock_key: Unique key
-        holder_id: Identifier for this lock holder (used by SQLite)
+        holder_id: Identifier for this lock holder
 
     Returns:
         True if lock was held and released
     """
-    if is_sqlite_session(db):
-        return release_lock_sqlite(db, lock_type, str(lock_key), holder_id)
-    else:
-        combined = f"{lock_type}:{lock_key}"
-        int_key = hash(combined) & 0x7FFFFFFFFFFFFFFF
-        return release_lock_postgres(db, int_key)
+    return release_lock(db, lock_type, str(lock_key), holder_id)
 
 
 @contextmanager
@@ -396,7 +324,7 @@ def resource_lock(
     holder_id: str,
     blocking: bool = False,
 ) -> Generator[bool, None, None]:
-    """Context manager for dialect-aware resource locking.
+    """Context manager for resource locking.
 
     Usage:
         with resource_lock(db, "fiche", fiche_id, worker_id) as acquired:
@@ -411,7 +339,7 @@ def resource_lock(
         lock_type: Type of resource being locked
         lock_key: Unique key for the resource
         holder_id: Identifier for this lock holder
-        blocking: If True, block until acquired (Postgres only)
+        blocking: Unused, for API compatibility
 
     Yields:
         bool: True if lock was acquired
@@ -424,8 +352,8 @@ def resource_lock(
             release_resource_lock(db, lock_type, lock_key, holder_id)
 
 
-def get_active_locks_sqlite(db: "Session", lock_type: str | None = None) -> list[dict]:
-    """Get list of active SQLite locks.
+def get_active_locks(db: "Session", lock_type: str | None = None) -> list[dict]:
+    """Get list of active locks.
 
     Args:
         db: SQLAlchemy Session
@@ -434,9 +362,6 @@ def get_active_locks_sqlite(db: "Session", lock_type: str | None = None) -> list
     Returns:
         List of dicts with lock_type, lock_key, holder_id, acquired_at, heartbeat_at
     """
-    if not is_sqlite_session(db):
-        return []
-
     _ensure_resource_locks_table(db)
 
     if lock_type:

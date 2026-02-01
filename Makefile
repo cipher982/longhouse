@@ -85,7 +85,7 @@ env-check-prod: ## Validate production environment variables
 # ---------------------------------------------------------------------------
 dev: ## ⭐ Start development environment (SQLite native, no Docker)
 	@echo "🚀 Starting development environment (SQLite)..."
-	@./scripts/dev.sh
+	@env -u DATABASE_URL ./scripts/dev.sh
 
 stop: ## Stop development services
 	@echo "Stopping development services..."

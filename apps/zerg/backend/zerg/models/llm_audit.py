@@ -5,7 +5,6 @@ from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
 from sqlalchemy import String
 from sqlalchemy import Text
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 
 from zerg.database import Base
@@ -25,20 +24,19 @@ class LLMAuditLog(Base):
     owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     # Tracing - for end-to-end debugging
-    # GUID: UUID for Postgres, CHAR(36) for SQLite
     trace_id = Column(GUID(), nullable=True, index=True)  # End-to-end trace correlation
     span_id = Column(GUID(), nullable=True)  # Unique ID for this LLM call
 
     # Request
     phase = Column(String(50))  # initial, tool_iteration, synthesis
     model = Column(String(100))
-    messages = Column(JSON().with_variant(JSONB, "postgresql"))  # Full messages array
+    messages = Column(JSON())  # Full messages array
     message_count = Column(Integer)
     input_tokens = Column(Integer)
 
     # Response
     response_content = Column(Text)
-    response_tool_calls = Column(JSON().with_variant(JSONB, "postgresql"))
+    response_tool_calls = Column(JSON())
     output_tokens = Column(Integer)
     reasoning_tokens = Column(Integer)
 

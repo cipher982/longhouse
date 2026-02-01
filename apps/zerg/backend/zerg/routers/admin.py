@@ -9,7 +9,6 @@ from fastapi import APIRouter
 from fastapi import APIRouter as _AR
 from fastapi import Depends
 from fastapi import FastAPI as _FastAPI
-from fastapi import Header
 from fastapi import HTTPException
 from fastapi import Query
 from fastapi.responses import JSONResponse
@@ -18,7 +17,6 @@ from sqlalchemy.orm import Session
 
 # Centralised settings
 from zerg.config import get_settings
-from zerg.database import DB_SCHEMA
 
 # Database helpers
 from zerg.database import Base
@@ -43,15 +41,6 @@ router = APIRouter(
 )
 
 logger = logging.getLogger(__name__)
-
-try:
-    # When E2E_USE_POSTGRES_SCHEMAS=1, CommisDBMiddleware populates this
-    # contextvar so zerg.database.get_session_factory can route to the correct
-    # commis schema. We explicitly set it inside threadpool work to avoid
-    # relying on contextvar propagation implementation details.
-    from zerg.middleware.commis_db import current_commis_id as _current_commis_id
-except Exception:  # pragma: no cover - middleware not present in some contexts
-    _current_commis_id = None  # type: ignore[assignment]
 
 
 class ResetType(str, Enum):
@@ -235,7 +224,6 @@ def full_schema_rebuild(engine, settings, is_production, diagnostics) -> dict[st
 @router.post("/reset-database")
 async def reset_database(
     request: DatabaseResetRequest,
-    x_test_commis: str | None = Header(default=None, alias="X-Test-Commis"),
     current_user=Depends(require_super_admin),
 ):
     """Reset the database by dropping all tables and recreating them.
@@ -244,7 +232,7 @@ async def reset_database(
     In production environments, requires additional password confirmation.
     """
     # Run synchronously so the HTTP response reflects a completed commit.
-    return _reset_database_sync(request, current_user, x_test_commis)
+    return _reset_database_sync(request, current_user)
 
 
 @router.post("/seed-scenario")
@@ -264,7 +252,7 @@ async def seed_scenario_data(
     return JSONResponse(content=result)
 
 
-def _reset_database_sync(request: DatabaseResetRequest, current_user, commis_id: str | None):
+def _reset_database_sync(request: DatabaseResetRequest, current_user):
     settings = get_settings()
 
     # Log the reset attempt for audit purposes
@@ -293,10 +281,6 @@ def _reset_database_sync(request: DatabaseResetRequest, current_user, commis_id:
         logger.warning("Attempted to reset database in unsupported environment")
         raise HTTPException(status_code=403, detail="Database reset is only available in development and production environments")
 
-    token = None
-    if _current_commis_id is not None and commis_id is not None:
-        token = _current_commis_id.set(commis_id)
-
     try:
         # Obtain the *current* engine – respects Playwright commis isolation
         session_factory = get_session_factory()
@@ -322,91 +306,8 @@ def _reset_database_sync(request: DatabaseResetRequest, current_user, commis_id:
             "dialect": getattr(engine.dialect, "name", "unknown"),
         }
 
-        if engine.dialect.name == "postgresql" and is_production:
-            logger.info("Production PostgreSQL detected - terminating all other DB connections and applying timeouts")
-
-            from sqlalchemy import text
-
-            # Terminate any other connections to the current database (regardless of state)
-            # and apply conservative timeouts to avoid indefinite blocking on locks.
-            with engine.connect() as conn:
-                db_name = conn.execute(text("SELECT current_database()")).scalar()
-
-                # Set timeouts for all subsequent statements on this session
-                # - lock_timeout: how long to wait to acquire DDL locks
-                # - statement_timeout: overall guardrail for the drop/create operations
-                conn.execute(text("SET lock_timeout = '3s'"))
-                conn.execute(text("SET statement_timeout = '30s'"))
-                conn.execute(text("SET client_min_messages = WARNING"))
-
-                # Count other connections before termination for diagnostics
-                pre_count = (
-                    conn.execute(
-                        text(
-                            """
-                        SELECT COUNT(*)
-                        FROM pg_stat_activity
-                        WHERE datname = :db_name AND pid <> pg_backend_pid()
-                        """
-                        ),
-                        {"db_name": db_name},
-                    ).scalar()
-                    or 0
-                )
-
-                logger.info(f"Terminating other connections to database: {db_name} (pre={pre_count})")
-                result = conn.execute(
-                    text(
-                        """
-                        SELECT pg_terminate_backend(pid)
-                        FROM pg_stat_activity
-                        WHERE datname = :db_name
-                          AND pid <> pg_backend_pid()
-                        """
-                    ),
-                    {"db_name": db_name},
-                )
-                conn.commit()
-                try:
-                    terminated = result.rowcount if result.rowcount is not None else pre_count
-                except Exception:
-                    terminated = pre_count
-                diagnostics["terminated_connections"] = int(terminated)
-
-        # Safer + faster for SQLite: disable FK checks, truncate every table,
-        # then re-enable.  Avoids losing autoincrement counters that some
-        # tests rely on for deterministic IDs.
-
-        # ------------------------------------------------------------------
-        # SQLAlchemy's *global* ``close_all_sessions()`` helper invalidates
-        # **every** Session that exists in the current process – even the
-        # ones that belong to a *different* Playwright commis using another
-        # database file.  When multiple E2E commis run in parallel this
-        # leads to race-conditions where an ongoing request suddenly loses
-        # its Session mid-flight and subsequent ORM access explodes with
-        # ``InvalidRequestError: Instance … is not persistent within this
-        # Session``.
-        #
-        # Because each Playwright commis is already fully isolated via its
-        # *own* SQLite engine (handled by CommisDBMiddleware &
-        # zerg.database) it is safe – and *necessary* – to avoid closing
-        # foreign Sessions.  Instead we:
-        #   1. Dispose the *current* commis's engine after we are done.  This
-        #      releases connections that *belong to this engine only*.
-        #   2. Rely on the fact that every incoming HTTP request obtains a
-        #      **fresh** Session, so no stale identity maps can leak across
-        #      requests.
-        #
-        # Hence: **do not** call ``close_all_sessions()`` here.
-
         # Drop & recreate schema so **new columns** land automatically when
-        # models change during active dev work (e.g. `workflow_id`).  Safer
-        # than DELETE-rows because SQLite cannot ALTER TABLE with multiple
-        # columns easily.
-
-        # Execute drop/create with a short retry loop in Postgres to ride out
-        # late-arriving connections (e.g. healthchecks) that might momentarily
-        # contend for locks. SQLite path is unchanged.
+        # models change during active dev work.
         import time
 
         start_counts_ts = time.perf_counter()
@@ -431,101 +332,37 @@ def _reset_database_sync(request: DatabaseResetRequest, current_user, commis_id:
         diagnostics["pre_count_ms"] = int((time.perf_counter() - start_counts_ts) * 1000)
 
         start_reset_ts = time.perf_counter()
-        max_attempts = 3 if engine.dialect.name == "postgresql" else 1
+        max_attempts = 1  # SQLite doesn't need retries
         last_err: Exception | None = None
 
         for attempt in range(1, max_attempts + 1):
             try:
                 logger.info(f"Dropping all tables … (attempt {attempt}/{max_attempts})")
-                # Execute DDL on a single connection so session-level timeouts apply
-                if engine.dialect.name == "postgresql":
-                    from sqlalchemy import text as _t
+                # SQLite-only: simple drop and recreate
+                Base.metadata.drop_all(bind=engine)
 
-                    with engine.connect() as ddl_conn:
-                        ddl_conn.execute(_t("SET lock_timeout = '3s'"))
-                        ddl_conn.execute(_t("SET statement_timeout = '30s'"))
-                        current_schema = ddl_conn.execute(_t("SELECT current_schema()")).scalar() or DB_SCHEMA
+                logger.info("Re-creating all tables …")
+                Base.metadata.create_all(bind=engine)
 
-                        # Log tables before drop
-                        tables_before_drop = ddl_conn.execute(
-                            _t("""
-                            SELECT tablename FROM pg_tables
-                            WHERE schemaname = :schema AND tablename NOT LIKE 'pg_%'
-                        """),
-                            {"schema": current_schema},
-                        ).fetchall()
-                        logger.info(f"Tables before drop: {[t[0] for t in tables_before_drop]}")
+                # Count tables immediately after recreation (should be 0)
+                def _safe_count_immediate(table: str) -> int:
+                    try:
+                        with engine.connect() as conn:
+                            from sqlalchemy import text as _t2
 
-                        Base.metadata.drop_all(bind=ddl_conn)
+                            res = conn.execute(_t2(f'SELECT COUNT(*) FROM "{table}"'))
+                            return int(res.scalar() or 0)
+                    except Exception:
+                        return 0
 
-                        # Log tables after drop
-                        tables_after_drop = ddl_conn.execute(
-                            _t("""
-                            SELECT tablename FROM pg_tables
-                            WHERE schemaname = :schema AND tablename NOT LIKE 'pg_%'
-                        """),
-                            {"schema": current_schema},
-                        ).fetchall()
-                        logger.info(f"Tables after drop: {[t[0] for t in tables_after_drop]}")
-
-                        logger.info("Re-creating all tables …")
-                        Base.metadata.create_all(bind=ddl_conn)
-
-                        # Explicitly commit the DDL operations
-                        ddl_conn.commit()
-
-                        # Count tables immediately after recreation (should be 0)
-                        def _safe_count_immediate(table: str) -> int:
-                            try:
-                                res = ddl_conn.execute(_t(f'SELECT COUNT(*) FROM "{table}"'))
-                                return int(res.scalar() or 0)
-                            except Exception:
-                                return 0
-
-                        tables_after_immediate = {t: _safe_count_immediate(t) for t in key_tables}
-
-                else:
-                    Base.metadata.drop_all(bind=engine)
-
-                    logger.info("Re-creating all tables …")
-                    Base.metadata.create_all(bind=engine)
-
-                    # Count tables immediately after recreation (should be 0)
-                    def _safe_count_immediate(table: str) -> int:
-                        try:
-                            with engine.connect() as conn:
-                                from sqlalchemy import text as _t2
-
-                                res = conn.execute(_t2(f'SELECT COUNT(*) FROM "{table}"'))
-                                return int(res.scalar() or 0)
-                        except Exception:
-                            return 0
-
-                    tables_after_immediate = {t: _safe_count_immediate(t) for t in key_tables}
+                tables_after_immediate = {t: _safe_count_immediate(t) for t in key_tables}
 
                 last_err = None
                 break
             except Exception as e:  # pragma: no cover – operational guardrail
                 last_err = e
                 logger.warning(f"Drop/create failed on attempt {attempt}: {e!s}")
-                # Small backoff before retry; try to clear straggler connections
                 time.sleep(1.0)
-                if engine.dialect.name == "postgresql":
-                    from sqlalchemy import text
-
-                    with engine.connect() as conn:
-                        db_name = conn.execute(text("SELECT current_database()")).scalar()
-                        conn.execute(
-                            text(
-                                """
-                                SELECT pg_terminate_backend(pid)
-                                FROM pg_stat_activity
-                                WHERE datname = :db_name AND pid <> pg_backend_pid()
-                                """
-                            ),
-                            {"db_name": db_name},
-                        )
-                        conn.commit()
 
         reset_ms = int((time.perf_counter() - start_reset_ts) * 1000)
         diagnostics["drop_create_ms"] = reset_ms
@@ -591,9 +428,6 @@ def _reset_database_sync(request: DatabaseResetRequest, current_user, commis_id:
         if "UNIQUE constraint failed: users.email" in str(e):
             return {"message": "Database reset successfully (existing user)"}
         return JSONResponse(status_code=500, content={"detail": f"Failed to reset database: {str(e)}"})
-    finally:
-        if token is not None and _current_commis_id is not None:
-            _current_commis_id.reset(token)
 
 
 # ---------------------------------------------------------------------------
@@ -639,58 +473,31 @@ async def fix_database_schema():
 
             # Check if updated_at column exists
             inspector = sa.inspect(engine)
-            current_schema = session.execute(text("SELECT current_schema()")).scalar() or DB_SCHEMA
-            if not inspector.has_table("connectors", schema=current_schema):
+            if not inspector.has_table("connectors"):
                 return {"message": "Connectors table does not exist"}
 
-            columns = [col["name"] for col in inspector.get_columns("connectors", schema=current_schema)]
+            columns = [col["name"] for col in inspector.get_columns("connectors")]
 
             if "updated_at" in columns:
                 return {"message": "updated_at column already exists"}
 
-            # Add the missing column
+            # Add the missing column (SQLite approach)
             logger.info("Adding missing updated_at column to connectors table")
 
-            if engine.dialect.name == "postgresql":
-                # PostgreSQL approach
-                session.execute(
-                    text("""
-                    ALTER TABLE connectors
-                    ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                """)
-                )
+            session.execute(
+                text("""
+                ALTER TABLE connectors
+                ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            """)
+            )
 
-                session.execute(
-                    text("""
-                    UPDATE connectors
-                    SET updated_at = created_at
-                    WHERE updated_at IS NULL
-                """)
-                )
-
-                session.execute(
-                    text("""
-                    ALTER TABLE connectors
-                    ALTER COLUMN updated_at SET NOT NULL
-                """)
-                )
-
-            elif engine.dialect.name == "sqlite":
-                # SQLite approach
-                session.execute(
-                    text("""
-                    ALTER TABLE connectors
-                    ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                """)
-                )
-
-                session.execute(
-                    text("""
-                    UPDATE connectors
-                    SET updated_at = created_at
-                    WHERE updated_at IS NULL
-                """)
-                )
+            session.execute(
+                text("""
+                UPDATE connectors
+                SET updated_at = created_at
+                WHERE updated_at IS NULL
+            """)
+            )
 
             session.commit()
 
@@ -715,11 +522,10 @@ class ConfigureTestModelRequest(BaseModel):
 @router.get("/debug/db-schema")
 async def debug_db_schema(
     db: Session = Depends(get_db),
-    x_test_commis: str | None = Header(default=None, alias="X-Test-Commis"),
 ):
-    """Debug endpoint: returns current_schema + search_path for this request.
+    """Debug endpoint: returns database info.
 
-    TESTING-only. Useful to validate Postgres schema routing (X-Test-Commis).
+    TESTING-only. Returns table counts for debugging.
     """
     settings = get_settings()
     if not settings.testing:
@@ -727,20 +533,15 @@ async def debug_db_schema(
 
     from sqlalchemy import text
 
-    current_schema = db.execute(text("SELECT current_schema()")).scalar()
-    search_path = db.execute(text("SHOW search_path")).scalar()
-    fiches_unqualified = db.execute(text("SELECT to_regclass('fiches')")).scalar()
-    fiches_public = db.execute(text("SELECT to_regclass('public.fiches')")).scalar()
-    fiches_count = db.execute(text("SELECT COUNT(*) FROM fiches")).scalar() if fiches_unqualified else None
-    fiches_public_count = db.execute(text("SELECT COUNT(*) FROM public.fiches")).scalar() if fiches_public else None
+    # Check if fiches table exists and get count
+    tables_check = db.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='fiches'")).fetchone()
+    fiches_exists = tables_check is not None
+    fiches_count = db.execute(text("SELECT COUNT(*) FROM fiches")).scalar() if fiches_exists else None
+
     return {
-        "current_schema": current_schema,
-        "search_path": search_path,
-        "fiches_unqualified": fiches_unqualified,
-        "fiches_public": fiches_public,
+        "dialect": "sqlite",
+        "fiches_exists": fiches_exists,
         "fiches_count": fiches_count,
-        "fiches_public_count": fiches_public_count,
-        "x_test_commis": x_test_commis,
     }
 
 
@@ -854,10 +655,9 @@ async def get_user_usage_details(
 @_legacy_router.post("/reset-database")
 async def _legacy_reset_database(
     request: DatabaseResetRequest,
-    x_test_commis: str | None = Header(default=None, alias="X-Test-Commis"),
     current_user=Depends(require_super_admin),
 ):  # noqa: D401 – thin wrapper
-    return _reset_database_sync(request, current_user, x_test_commis)  # noqa: WPS110 – re-use logic
+    return _reset_database_sync(request, current_user)  # noqa: WPS110 – re-use logic
 
 
 # mount the legacy router without the global /api prefix

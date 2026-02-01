@@ -144,8 +144,7 @@ class Settings:  # noqa: D401 – simple data container
     oikos_tool_output_max_chars: int  # Max tool output chars before storing (0 = disabled)
     oikos_tool_output_preview_chars: int  # Preview size for stored tool outputs
 
-    # E2E test database isolation --------------------------------------
-    e2e_use_postgres_schemas: bool  # Use Postgres schemas for E2E test isolation (vs SQLite files)
+    # E2E test settings ------------------------------------------------
     e2e_commis_id: str | None  # Override commis ID for E2E testing
 
     # Dynamic guards (evaluated at runtime) -----------------------------
@@ -339,8 +338,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         # Oikos tool output storage
         oikos_tool_output_max_chars=int(os.getenv("OIKOS_TOOL_OUTPUT_MAX_CHARS", "8000")),
         oikos_tool_output_preview_chars=int(os.getenv("OIKOS_TOOL_OUTPUT_PREVIEW_CHARS", "1200")),
-        # E2E test database isolation
-        e2e_use_postgres_schemas=_truthy(os.getenv("E2E_USE_POSTGRES_SCHEMAS")),
+        # E2E test settings
         e2e_commis_id=os.getenv("E2E_COMMIS_ID"),
     )
 
@@ -368,14 +366,6 @@ def _validate_required(settings: Settings) -> None:  # noqa: D401 – helper
             f"CRITICAL: ZERG_TOOL_STUBS_PATH is set ('{tool_stubs_path}') but TESTING is not enabled. "
             f"Tool stubbing is TEST-ONLY infrastructure and must not be used in production. "
             f"Either unset ZERG_TOOL_STUBS_PATH or set TESTING=1."
-        )
-
-    # SAFETY GATE: E2E Postgres schema isolation relies on request-controlled routing
-    # (via the X-Test-Commis header). It must never be enabled outside tests.
-    if settings.e2e_use_postgres_schemas and not settings.testing:
-        raise RuntimeError(
-            "CRITICAL: E2E_USE_POSTGRES_SCHEMAS=1 but TESTING is not enabled. "
-            "Per-commis schema routing is TEST-ONLY infrastructure; unset E2E_USE_POSTGRES_SCHEMAS or set TESTING=1."
         )
 
     if settings.testing:  # Unit-/integration tests run with stubbed LLMs

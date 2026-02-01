@@ -886,11 +886,6 @@ Example: "Backup completed 157GB in 17s, no errors found"
             Commis job ID (required for barrier pattern)
         """
         try:
-            # Capture commis_id for E2E schema isolation - must happen BEFORE asyncio.create_task
-            # which runs with an empty context (to prevent emitter leakage)
-            from zerg.middleware.commis_db import current_commis_id
-
-            captured_commis_id = current_commis_id.get()
 
             async def _run_resume_async():
                 """Background task to resume with fresh DB session."""
@@ -902,12 +897,6 @@ Example: "Backup completed 157GB in 17s, no errors found"
                 from zerg.services.commis_resume import resume_oikos_batch
                 from zerg.services.commis_resume import resume_oikos_with_commis_result
                 from zerg.services.commis_resume import trigger_commis_inbox_run
-
-                # Restore commis_id context for E2E schema routing
-                # (asyncio.create_task with Context() clears all contextvars)
-                token = None
-                if captured_commis_id is not None:
-                    token = current_commis_id.set(captured_commis_id)
 
                 session_factory = get_session_factory()
                 fresh_db = session_factory()
@@ -1023,9 +1012,6 @@ Example: "Backup completed 157GB in 17s, no errors found"
                     logger.exception(f"Background resume failed for run {run_id}: {e}")
                 finally:
                     fresh_db.close()
-                    # Clean up the commis_id context
-                    if token is not None:
-                        current_commis_id.reset(token)
 
             # IMPORTANT: create_task() captures current contextvars.
             #
