@@ -40,6 +40,15 @@ User-facing strings, metadata, and package descriptions must stop mentioning Swa
 
 ---
 
+## Prod CSP Fixes — Longhouse (1)
+
+Unblock blob image previews + Cloudflare beacon by updating CSP in frontend nginx entrypoint.
+
+- [x] Allow `blob:` in `img-src`
+- [x] Allow `https://static.cloudflareinsights.com` in `script-src`
+
+---
+
 ## Longhouse Rebrand — CLI / Packages / Images (7)
 
 Package and binary naming so OSS users see Longhouse everywhere.
