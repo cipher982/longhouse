@@ -73,19 +73,22 @@ async function loginWithGoogle(idToken: string): Promise<{ access_token: string;
   return response.json();
 }
 
-async function getCurrentUser(): Promise<User> {
-  const response = await fetch(`${config.apiBaseUrl}/users/me`, {
+type AuthStatusResponse = {
+  authenticated: boolean;
+  user: User | null;
+};
+
+async function getCurrentUser(): Promise<User | null> {
+  const response = await fetch(`${config.apiBaseUrl}/auth/status`, {
     credentials: 'include', // Use cookie for auth
   });
 
   if (!response.ok) {
-    if (response.status === 401) {
-      throw new HttpError('Authentication expired', 401);
-    }
-    throw new HttpError(`Failed to get user profile (${response.status})`, response.status);
+    throw new HttpError(`Failed to get auth status (${response.status})`, response.status);
   }
 
-  return response.json();
+  const data = (await response.json()) as AuthStatusResponse;
+  return data.authenticated ? data.user : null;
 }
 
 async function logoutFromServer(): Promise<void> {
@@ -114,7 +117,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, []);
 
   // Check auth status via cookie on mount (always enabled - cookie determines auth)
-  const { data: userData, isLoading, error, refetch } = useQuery<User>({
+  const { data: userData, isLoading, error, refetch } = useQuery<User | null>({
     queryKey: ['current-user'],
     queryFn: getCurrentUser,
     enabled: true, // Always try - cookie auth is checked server-side
@@ -144,7 +147,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
     if (userData) {
       setUser(userData);
       setIsAuthenticated(true);
-    } else if (error) {
+      return;
+    }
+
+    if (userData === null || error) {
       setUser(null);
       setIsAuthenticated(false);
     }

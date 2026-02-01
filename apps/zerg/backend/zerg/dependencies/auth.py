@@ -96,6 +96,28 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
     return _get_strategy().get_current_user(request, db)
 
 
+def get_optional_user(request: Request, db: Session = Depends(get_db)):
+    """Return the authenticated *User* row or **None**.
+
+    This is a non-throwing variant for endpoints that need to detect auth
+    status without spamming 401s in the browser console.
+    """
+    # In dev mode, auth is disabled and the strategy always returns a user.
+    if AUTH_DISABLED:
+        return _get_strategy().get_current_user(request, db)
+
+    has_bearer = "Authorization" in request.headers
+    has_cookie = "swarmlet_session" in request.cookies
+
+    if not has_bearer and not has_cookie:
+        return None
+
+    try:
+        return _get_strategy().get_current_user(request, db)
+    except HTTPException:
+        return None
+
+
 def require_admin(current_user=Depends(get_current_user)):
     """FastAPI dependency that ensures the user has role == ``ADMIN``."""
 
@@ -179,6 +201,7 @@ _strategy = _get_strategy
 
 __all__ = [
     "get_current_user",
+    "get_optional_user",
     "require_admin",
     "require_super_admin",
     "require_internal_call",

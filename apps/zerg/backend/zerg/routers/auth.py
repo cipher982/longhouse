@@ -21,6 +21,7 @@ from zerg.config import get_settings
 from zerg.crud import crud
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
+from zerg.dependencies.auth import get_optional_user
 from zerg.schemas.schemas import TokenOut
 
 # Use override=True to ensure proper quote stripping even if vars are inherited from parent process
@@ -487,6 +488,30 @@ def verify_session(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
 
     # Valid token and user - 204 response handled by status_code
+
+
+@router.get("/status")
+def auth_status(request: Request, db: Session = Depends(get_db)):
+    """Return auth status without throwing 401 (browser-friendly)."""
+    user = get_optional_user(request, db)
+    if not user:
+        return {"authenticated": False, "user": None}
+
+    return {
+        "authenticated": True,
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "display_name": getattr(user, "display_name", None),
+            "avatar_url": getattr(user, "avatar_url", None),
+            "is_active": getattr(user, "is_active", True),
+            "created_at": getattr(user, "created_at", None),
+            "last_login": getattr(user, "last_login", None),
+            "prefs": getattr(user, "prefs", None),
+            "role": getattr(user, "role", "USER"),
+            "gmail_connected": getattr(user, "gmail_connected", False),
+        },
+    }
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)

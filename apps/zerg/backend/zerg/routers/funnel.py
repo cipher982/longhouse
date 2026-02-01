@@ -322,6 +322,8 @@ def _is_valid_origin(request: Request) -> bool:
         "www.swarmlet.com",
         "swarmlet.ai",
         "www.swarmlet.ai",
+        "longhouse.ai",
+        "www.longhouse.ai",
         "localhost",
         "127.0.0.1",
     }
@@ -332,7 +334,7 @@ def _is_valid_origin(request: Request) -> bool:
         if hostname in allowed_hosts:
             return True
         # Allow subdomains
-        if hostname.endswith(".swarmlet.com") or hostname.endswith(".swarmlet.ai"):
+        if hostname.endswith(".swarmlet.com") or hostname.endswith(".swarmlet.ai") or hostname.endswith(".longhouse.ai"):
             return True
         return False
 
