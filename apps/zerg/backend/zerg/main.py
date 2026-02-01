@@ -336,7 +336,7 @@ async def lifespan(app: FastAPI):
         # Single-tenant enforcement and owner bootstrap
         # Must run after DB init but before other services
         if _settings.single_tenant and not _settings.testing:
-            from zerg.database import SessionLocal
+            from zerg.database import db_session
             from zerg.services.single_tenant import SingleTenantViolation
             from zerg.services.single_tenant import bootstrap_owner_user
             from zerg.services.single_tenant import validate_single_tenant
@@ -349,7 +349,7 @@ async def lifespan(app: FastAPI):
                 app.state.single_tenant_violation = config_error
 
             # Then validate and bootstrap in DB
-            with SessionLocal() as db:
+            with db_session() as db:
                 try:
                     validate_single_tenant(db)
                     bootstrap_owner_user(db)
