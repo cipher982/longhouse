@@ -7,6 +7,7 @@ This is a living vision doc. It captures both the direction and the reasoning th
 ## Read Next
 
 - **SQLite-only OSS plan:** `docs/LIGHTWEIGHT-OSS-ONBOARDING.md` (canonical for the lightweight pivot)
+- **OSS onboarding plan:** this doc (see "Onboarding UX" below)
 
 ## Naming (2026-02)
 
@@ -196,6 +197,18 @@ README contains an `onboarding-contract` JSON block that CI executes:
 - CTA selectors to verify (e.g., `[data-testid='demo-cta']`)
 
 If the README drifts from reality, CI fails. No hidden env flags - everything declared in the contract.
+
+**OSS install + onboarding (canonical):**
+- **One-liner install is the primary path:** `curl -fsSL https://longhouse.ai/install.sh | bash`
+- The installer must:
+  - Install the `longhouse` CLI
+  - Install a Claude shim (PATH-based) so sessions show up without user retraining
+  - Verify the shim in a fresh shell and **report if it failed** with an exact fix line
+- **Interactive wizard:** `longhouse onboard`
+  - QuickStart by default; Manual for power users
+  - No 200-line `.env` edits
+  - Graceful degradation: UI works without API keys; chat unlocks later
+- **Goal:** time-to-value < 2 minutes and a visible session in the Forum
 
 ---
 
