@@ -86,3 +86,4 @@ EXPOSE 8080
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python", "-m", "sauron.main"]
+# Trigger redeploy 1769921690
