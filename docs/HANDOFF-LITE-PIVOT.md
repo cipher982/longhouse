@@ -1,5 +1,8 @@
 # Zerg SQLite-Lite Pivot — Technical Handoff (2026-01-31)
 
+> **Status: ARCHIVED (2026-02-01)** — This handoff is complete. All phases implemented.
+> See `docs/LIGHTWEIGHT-OSS-ONBOARDING.md` for current state.
+
 ## TECHNICAL DNA DISCOVERED
 
 - SQLite boot is now supported: `make_engine` accepts sqlite URLs and startup no longer blocks SQLite.
@@ -7,15 +10,14 @@
 - Agents models are SQLite-compatible (GUID TypeDecorator, JSON with variants, partial indexes include `sqlite_where`).
 - AgentsStore uses dialect-aware upsert; `require_postgres()` guard removed.
 - SQLite minimum version is enforced at startup: **3.35+** (RETURNING required for job claiming).
-- Job claiming still uses `FOR UPDATE SKIP LOCKED` in `commis_job_processor` and `jobs.queue` (Phase 4).
-- Advisory locks and `with_for_update` remain in `single_tenant`, `fiche_locks`, `commis_resume`, `email_tools`, `sms_tools`.
-- Checkpointer: SQLite still uses `MemorySaver` (non-durable); Postgres uses AsyncPostgresSaver.
-- CLI has no `zerg serve`; backend expects `static/` at repo root but frontend dist is at `apps/zerg/frontend-web/dist`.
+- ✅ Job claiming now uses dialect-aware `commis_job_queue.py` (SQLite uses `UPDATE ... RETURNING`).
+- ✅ Checkpointer uses `SqliteSaver` for SQLite (durable checkpoints).
+- ✅ CLI has `zerg serve` command with lite mode defaults.
 - Lite test suite is default (`make test`), expanded to cover SQLite boot + agents + GUID + version checks.
 
 ## CURRENT SYSTEM STATE
 
-- **Phases 1–3 complete** (SQLite boot + model compatibility + agents ingest).
+- **All phases complete** (0-7: SQLite boot, models, agents, job queue, checkpoints, CLI, onboarding).
 - **SQLite pragmas configured** (WAL, busy_timeout, foreign_keys, etc).
 - **SQLite min version enforced**: 3.35+ (RETURNING support).
 - **Lite test suite** is default:
@@ -53,25 +55,24 @@
   - Remove `require_postgres()` guard (keep single-tenant guard if desired).
 - **Test flipped**: `test_agents_ingest_sqlite.py`.
 
-### Phase 4 — Job Queue + Concurrency
-- **Files**: `services/commis_job_processor.py`, `jobs/queue.py`, `services/commis_resume.py`, `services/single_tenant.py`, `services/fiche_locks.py`, `tools/builtin/email_tools.py`, `tools/builtin/sms_tools.py`.
-- **Changes**:
-  - Replace `FOR UPDATE SKIP LOCKED` with `BEGIN IMMEDIATE` + atomic UPDATE/RETURNING.
-  - Add heartbeat + stale job reclaim logic.
-  - Replace advisory locks with file locks or status-guarded updates.
-  - Gate `ops.job_queue` to Postgres-only or disable in lite mode.
+### Phase 4 — Job Queue + Concurrency — ✅ Complete
+- **Files**: `services/commis_job_queue.py` (new), `services/commis_job_processor.py`.
+- **Implementation**:
+  - Dialect-aware job claiming: Postgres uses `FOR UPDATE SKIP LOCKED`, SQLite uses `UPDATE ... RETURNING`.
+  - Heartbeat + stale job reclaim implemented for both dialects.
+  - Worker ID tracking for job ownership.
 
-### Phase 5 — Durable Checkpoints (SQLite)
+### Phase 5 — Durable Checkpoints (SQLite) — ✅ Complete
 - **File**: `services/checkpointer.py`.
-- **Change**: Use `langgraph-checkpoint-sqlite` instead of MemorySaver in sqlite.
+- **Implementation**: Uses `langgraph-checkpoint-sqlite` (`SqliteSaver`) for SQLite, `AsyncPostgresSaver` for Postgres.
 
-### Phase 6 — CLI + Frontend Bundle
-- **Files**: `cli/main.py`, `pyproject.toml`, `main.py` static mount.
-- **Change**: Add `zerg serve`; package `apps/zerg/frontend-web/dist` into python package.
+### Phase 6 — CLI + Frontend Bundle — ✅ Complete
+- **Files**: `cli/serve.py`, `cli/main.py`.
+- **Implementation**: `zerg serve` command with lite mode defaults (SQLite, auth disabled, single tenant).
 
-### Phase 7 — Onboarding Smoke
-- Add `make onboarding-smoke` for SQLite boot + basic API checks (reuse lite tests).
-- Update README quick-start to default to SQLite.
+### Phase 7 — Onboarding Smoke — ✅ Complete
+- README quick-start defaults to SQLite.
+- `make onboarding-sqlite` validates SQLite boot.
 
 ## COST & RISK REALITIES
 

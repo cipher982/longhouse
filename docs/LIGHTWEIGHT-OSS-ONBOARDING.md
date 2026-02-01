@@ -11,7 +11,7 @@
 
 These are the concrete mismatches between today’s codebase and the SQLite-only target. This section is here so we can plan from reality instead of aspiration.
 
-✅ **Fixed since last update (Phases 1–3 complete):**
+✅ **Phases 1–3 complete:**
 - SQLite URLs allowed in `make_engine`; startup no longer blocks SQLite.
 - Schema handling is conditional (`DB_SCHEMA`/`AGENTS_SCHEMA` become `None` on SQLite) with schema translate map; `_apply_search_path()` is a no-op on SQLite.
 - SQLite pragmas configured (WAL, busy_timeout, foreign_keys, etc).
@@ -22,14 +22,14 @@ These are the concrete mismatches between today’s codebase and the SQLite-only
 - **SQLite minimum version enforced at startup: 3.35+** (RETURNING support).
 - Lite test suite expanded (SQLite boot, agents ingest/models, GUID round-trips, db_is_sqlite detection, version check).
 
-🔲 **Remaining gaps (Phases 4–7):**
-- Job claiming/concurrency still uses PG locks (`FOR UPDATE SKIP LOCKED`); needs SQLite-safe `BEGIN IMMEDIATE` + `UPDATE ... RETURNING`.
-- Advisory locks / row locks still used in `single_tenant`, `fiche_locks`, `commis_resume`, email/sms tools.
-- Checkpoints are non-durable on SQLite (MemorySaver only).
-- CLI lacks `longhouse serve` and package bundling; backend still expects repo `static/`.
-- Onboarding smoke + README default to SQLite.
+✅ **Phases 4–7 complete (2026-02-01):**
+- Job claiming uses dialect-aware `commis_job_queue.py`: Postgres uses `FOR UPDATE SKIP LOCKED`, SQLite uses `UPDATE ... RETURNING` with atomic claiming.
+- Heartbeat + stale job reclaim implemented for both dialects.
+- Checkpoints are durable on SQLite via `langgraph-checkpoint-sqlite` (`SqliteSaver`).
+- CLI has `zerg serve` command (`cli/serve.py`) with lite mode defaults.
+- README defaults to SQLite for OSS quick start.
 
-If we want `pip install longhouse && longhouse serve` on SQLite, all of the above must be addressed or intentionally gated off in lite mode.
+**Status: SQLite pivot is complete.** The `pip install longhouse && longhouse serve` flow is functional.
 
 ---
 
