@@ -367,9 +367,6 @@ export default function SessionsPage() {
     setSearchQuery("");
   }, []);
 
-  const handleConnectShipper = useCallback(() => {
-    navigate("/settings/integrations");
-  }, [navigate]);
 
   const hasFilters = project || provider || daysBack !== 14 || searchQuery;
   const showGuidedEmptyState = sessions.length === 0 && !hasFilters;
@@ -460,35 +457,31 @@ export default function SessionsPage() {
         {showGuidedEmptyState ? (
           <div className="timeline-empty">
             <div className="timeline-empty__intro">
-              <h3>Welcome to your Timeline</h3>
+              <h3>No sessions yet</h3>
               <p>
-                This is where your Claude, Codex, Gemini, and Oikos sessions live. Start with a demo
-                timeline or connect your shipper for live sync.
+                Your Claude Code sessions appear here when synced via the shipper.
               </p>
             </div>
-            <div className="timeline-empty__steps">
-              <Card className="timeline-step">
-                <div className="timeline-step__header">
-                  <span className="timeline-step__badge">1</span>
-                  <div>
-                    <h4>Connect your shipper</h4>
-                    <p>Optional: sync real sessions from your laptop.</p>
-                  </div>
-                </div>
-                <Button variant="secondary" onClick={handleConnectShipper}>
-                  Open Integrations
-                </Button>
-              </Card>
-              <Card className="timeline-step">
-                <div className="timeline-step__header">
-                  <span className="timeline-step__badge">2</span>
-                  <div>
-                    <h4>Explore the timeline</h4>
-                    <p>Filter by provider, project, or search across sessions.</p>
-                  </div>
-                </div>
-              </Card>
+            <div className="timeline-empty__setup">
+              <h4>Setup</h4>
+              <ol className="timeline-empty__steps-list">
+                <li>
+                  <strong>Install the CLI</strong>
+                  <code className="timeline-empty__code">pip install longhouse</code>
+                </li>
+                <li>
+                  <strong>Authenticate</strong>
+                  <code className="timeline-empty__code">longhouse auth</code>
+                </li>
+                <li>
+                  <strong>Start syncing</strong>
+                  <code className="timeline-empty__code">longhouse connect --install</code>
+                </li>
+              </ol>
             </div>
+            <p className="timeline-empty__hint">
+              Already running the shipper? Check <code>longhouse connect --status</code> to verify it's connected.
+            </p>
           </div>
         ) : sessions.length === 0 ? (
           <EmptyState
