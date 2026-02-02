@@ -158,8 +158,8 @@ Make Longhouse the sole source of session truth. Remove Life Hub routes, naming,
 - [x] Replace `/oikos/life-hub/*` endpoints — routers deleted, frontend uses agents API
 - [x] Update frontend hooks/components — all migrated to agents API
 - [x] Update session-resume flow — uses Zerg-native endpoints
-- [ ] **Disable Gmail sync for OSS** — conditionally skip if `LIFE_HUB_API_KEY` not set
-- [ ] Clean up stale `.pyc` files in routers/__pycache__/
+- [x] **Disable Gmail sync for OSS** — conditionally skip if `LIFE_HUB_API_KEY` not set ✅ 2026-02-02
+- [x] Clean up stale `.pyc` files in routers/__pycache__/ ✅ 2026-02-02
 - [x] Update VISION session-resume section to remove Life Hub flow (doc consolidated).
 
 ---
@@ -230,9 +230,9 @@ Unify local paths under `~/.longhouse` and remove legacy `~/.zerg` naming + env 
 
 - [x] Rename `~/.zerg` → `~/.longhouse` in CLI — done with migration logic
 - [x] Skills loader updated — uses `~/.longhouse/skills` with fallback
-- [ ] Fix `scripts/dev-demo.sh` to use `~/.longhouse` (lines 19-20)
-- [ ] Rename env var `ZERG_API_URL` → `LONGHOUSE_API_URL` as primary (keep fallback)
-- [ ] Update OpenAPI prod URL from `api.zerg.ai` → `api.longhouse.ai` (serve.py line 615)
+- [x] Fix `scripts/dev-demo.sh` to use `~/.longhouse` ✅ 2026-02-02
+- [x] Rename env var `ZERG_API_URL` → `LONGHOUSE_API_URL` as primary (keep fallback) ✅ 2026-02-02
+- [x] Update OpenAPI prod URL from `api.zerg.ai` → `api.longhouse.ai` ✅ 2026-02-02
 
 ---
 
@@ -245,8 +245,8 @@ Ensure Oikos memory tools are SQLite-safe and do not assume Postgres.
 - [x] Memory store uses SQLAlchemy abstractions only (`.ilike()`, standard filters) — no pg_trgm, no JSONB operators
 - [x] GUID TypeDecorator handles UUID ↔ CHAR(36) conversion transparently
 - [x] Tests in `test_oikos_memory_store.py` account for SQLite timestamp precision
-- [ ] Rename `PostgresMemoryStore` → `MemoryStore` (cosmetic, low priority)
-- [ ] Add explicit lite tests for memory save/search/delete (optional — main tests work on SQLite)
+- [x] Rename `PostgresMemoryStore` → `SQLMemoryStore` (with backwards-compatible alias) ✅ 2026-02-02
+- [x] Tests verify both names work (14 tests passing)
 
 ---
 
