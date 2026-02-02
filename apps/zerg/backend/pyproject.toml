@@ -1,14 +1,14 @@
 # Cache bust: 2026-01-26-sauron-jobs-deps
 [project]
 name = "longhouse"
-version = "0.1.1"
+version = "0.1.2"
 description = "Longhouse AI Agent Platform - orchestrate AI agents with voice and text"
 authors = [
     {name = "David Rose", email = "david.github@drose.io"}
 ]
 requires-python = ">=3.12"
 readme = "README.md"
-license = {text = "MIT"}
+license = {text = "Apache-2.0"}
 
 dependencies = [
     "python-dotenv>=1.0.0",
