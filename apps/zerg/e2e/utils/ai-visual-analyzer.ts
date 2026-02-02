@@ -439,7 +439,7 @@ ${Object.keys(data.screenshots).map(name => `- **${name}**: ${data.screenshots[n
 }
 
 // Default UI variants for the Zerg platform
-export const ZERG_UI_VARIANTS: UIVariant[] = [
+export const LONGHOUSE_UI_VARIANTS: UIVariant[] = [
   {
     name: 'rust-dashboard',
     url: '/',

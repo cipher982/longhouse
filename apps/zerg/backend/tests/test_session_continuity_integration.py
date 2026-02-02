@@ -1,7 +1,7 @@
 """Integration tests for session continuity with Longhouse API.
 
 These tests require a running Longhouse backend (make dev).
-They are skipped unless INTEGRATION_ZERG_API=1 is set.
+They are skipped unless INTEGRATION_LONGHOUSE_API=1 is set.
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ import pytest
 
 # Skip entire module unless explicitly enabled
 pytestmark = pytest.mark.skipif(
-    os.getenv("INTEGRATION_ZERG_API") != "1",
-    reason="INTEGRATION_ZERG_API != 1 - skipping integration tests",
+    os.getenv("INTEGRATION_LONGHOUSE_API") != "1",
+    reason="INTEGRATION_LONGHOUSE_API != 1 - skipping integration tests",
 )
 
 

@@ -69,7 +69,7 @@ class TestGetToolStubs:
             assert get_tool_stubs() is None
 
     def test_nonexistent_file_returns_none(self):
-        with patch.dict(os.environ, {"ZERG_TOOL_STUBS_PATH": "/nonexistent/path.json"}):
+        with patch.dict(os.environ, {"LONGHOUSE_TOOL_STUBS_PATH": "/nonexistent/path.json"}):
             clear_stubs_cache()
             assert get_tool_stubs() is None
 
@@ -82,7 +82,7 @@ class TestGetToolStubs:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump(stubs, f)
             f.flush()
-            with patch.dict(os.environ, {"ZERG_TOOL_STUBS_PATH": f.name}):
+            with patch.dict(os.environ, {"LONGHOUSE_TOOL_STUBS_PATH": f.name}):
                 clear_stubs_cache()
                 loaded = get_tool_stubs()
                 assert loaded is not None
@@ -93,7 +93,7 @@ class TestGetToolStubs:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             f.write("not valid json {{{")
             f.flush()
-            with patch.dict(os.environ, {"ZERG_TOOL_STUBS_PATH": f.name}):
+            with patch.dict(os.environ, {"LONGHOUSE_TOOL_STUBS_PATH": f.name}):
                 clear_stubs_cache()
                 assert get_tool_stubs() is None
             os.unlink(f.name)
@@ -119,7 +119,7 @@ class TestMatchStub:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump(stubs, f)
             f.flush()
-            with patch.dict(os.environ, {"ZERG_TOOL_STUBS_PATH": f.name}):
+            with patch.dict(os.environ, {"LONGHOUSE_TOOL_STUBS_PATH": f.name}):
                 clear_stubs_cache()
                 result = match_stub("ssh_exec", {"host": "cube", "command": "df -h"})
                 assert result is not None
@@ -132,7 +132,7 @@ class TestMatchStub:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump(stubs, f)
             f.flush()
-            with patch.dict(os.environ, {"ZERG_TOOL_STUBS_PATH": f.name}):
+            with patch.dict(os.environ, {"LONGHOUSE_TOOL_STUBS_PATH": f.name}):
                 clear_stubs_cache()
                 result = match_stub("ssh_exec", {"host": "clifford", "command": "df"})
                 assert result is None
@@ -148,7 +148,7 @@ class TestMatchStub:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump(stubs, f)
             f.flush()
-            with patch.dict(os.environ, {"ZERG_TOOL_STUBS_PATH": f.name}):
+            with patch.dict(os.environ, {"LONGHOUSE_TOOL_STUBS_PATH": f.name}):
                 clear_stubs_cache()
                 result = match_stub("ssh_exec", {"host": "cube", "command": "any"})
                 assert result["data"]["stdout"] == "first"
@@ -172,7 +172,7 @@ class TestStubbingEnabled:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump(stubs, f)
             f.flush()
-            with patch.dict(os.environ, {"ZERG_TOOL_STUBS_PATH": f.name}):
+            with patch.dict(os.environ, {"LONGHOUSE_TOOL_STUBS_PATH": f.name}):
                 clear_stubs_cache()
                 assert get_tool_stubs() is not None
             os.unlink(f.name)

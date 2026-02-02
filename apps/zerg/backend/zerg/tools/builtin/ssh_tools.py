@@ -277,7 +277,7 @@ def ssh_exec(
             "-o",
             "ConnectTimeout=5",
             "-o",
-            "UserKnownHostsFile=/tmp/zerg_known_hosts",
+            "UserKnownHostsFile=/tmp/longhouse_known_hosts",
             "-o",
             "GlobalKnownHostsFile=/dev/null",
             "-o",
