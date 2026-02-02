@@ -41,7 +41,7 @@ Lightweight setup with minimal dependencies.
 **Requirements:** Python 3.11+, SQLite 3.35+, [uv](https://docs.astral.sh/uv/) (Python package manager)
 
 ```bash
-git clone https://github.com/cipher982/zerg.git
+git clone https://github.com/cipher982/longhouse.git
 cd zerg
 
 # Install backend dependencies
@@ -69,7 +69,7 @@ For full UI development with hot reload.
 **Requirements:** Docker, Node.js 20+, Bun
 
 ```bash
-git clone https://github.com/cipher982/zerg.git
+git clone https://github.com/cipher982/longhouse.git
 cd zerg
 cp .env.example .env
 

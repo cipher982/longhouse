@@ -37,13 +37,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/cipher982/zerg.git"
+    "url": "git+https://github.com/cipher982/longhouse.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/cipher982/zerg/issues"
+    "url": "https://github.com/cipher982/longhouse/issues"
   },
-  "homepage": "https://github.com/cipher982/zerg#readme"
+  "homepage": "https://github.com/cipher982/longhouse#readme"
 }
