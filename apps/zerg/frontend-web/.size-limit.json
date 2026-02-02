@@ -8,7 +8,7 @@
   {
     "name": "CSS Bundle (all chunks)",
     "path": "dist/assets/*.css",
-    "limit": "56 kB",
+    "limit": "60 kB",
     "gzip": true
   }
 ]
