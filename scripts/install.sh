@@ -107,8 +107,8 @@ install_python() {
 install_longhouse() {
     step "Installing Longhouse CLI"
 
-    # Package source - defaults to GitHub, can be overridden for PyPI once published
-    local pkg_source="${LONGHOUSE_PKG_SOURCE:-git+https://github.com/cipher982/longhouse.git#subdirectory=apps/zerg/backend}"
+    # Package source - defaults to PyPI, can be overridden for dev installs
+    local pkg_source="${LONGHOUSE_PKG_SOURCE:-longhouse}"
 
     # Install the longhouse package as a tool
     if uv tool list 2>/dev/null | grep -q "^longhouse"; then
