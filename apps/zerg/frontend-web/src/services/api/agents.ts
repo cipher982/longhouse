@@ -36,6 +36,7 @@ export interface AgentSessionSummary {
   project: string | null;
   provider: string;
   cwd: string | null;
+  git_repo: string | null;
   git_branch: string | null;
   started_at: string;
   ended_at: string | null;
@@ -70,6 +71,7 @@ export interface AgentActiveSession {
   project: string | null;
   provider: string;
   cwd: string | null;
+  git_repo: string | null;
   git_branch: string | null;
   started_at: string;
   ended_at: string | null;

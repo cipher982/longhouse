@@ -27,6 +27,9 @@ from typing import Optional
 from zerg.config import get_settings
 from zerg.crud import crud
 from zerg.database import db_session
+from zerg.database import list_test_commis_ids
+from zerg.database import reset_test_commis_id
+from zerg.database import set_test_commis_id
 from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.services.commis_job_queue import HEARTBEAT_INTERVAL_SECONDS
 from zerg.services.commis_job_queue import claim_jobs
@@ -147,8 +150,8 @@ class CommisJobProcessor:
         self._check_interval = 1  # seconds
         self._max_concurrent_jobs = 5  # Process up to 5 jobs concurrently
         self._worker_id = get_worker_id()
-        # Track running jobs for heartbeat updates
-        self._running_jobs: set[int] = set()
+        # Track running jobs for heartbeat updates (commis_id, job_id)
+        self._running_jobs: set[tuple[str | None, int]] = set()
 
     async def start(self) -> None:
         """Start the commis job processor."""
@@ -196,16 +199,23 @@ class CommisJobProcessor:
         """
         while self._running:
             try:
-                with db_session() as db:
-                    reclaimed = reclaim_stale_jobs(db)
-                    if reclaimed > 0:
-                        logger.info(f"Reclaimed {reclaimed} stale commis jobs")
+                for commis_id in self._iter_commis_ids():
+                    token = set_test_commis_id(commis_id) if commis_id else None
+                    try:
+                        with db_session() as db:
+                            reclaimed = reclaim_stale_jobs(db)
+                            if reclaimed > 0:
+                                label = commis_id or "default"
+                                logger.info(f"Reclaimed {reclaimed} stale commis jobs (db={label})")
+                    finally:
+                        if token is not None:
+                            reset_test_commis_id(token)
             except Exception as e:
                 logger.exception(f"Error in stale job reclaim loop: {e}")
 
             await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
 
-    async def _heartbeat_loop(self, job_id: int) -> None:
+    async def _heartbeat_loop(self, commis_id: str | None, job_id: int) -> None:
         """Send periodic heartbeats for a running job.
 
         This runs in parallel with job execution to prove this worker
@@ -215,18 +225,23 @@ class CommisJobProcessor:
         Args:
             job_id: The job ID to send heartbeats for
         """
-        while job_id in self._running_jobs:
-            try:
-                with db_session() as db:
-                    success = update_heartbeat(db, job_id, self._worker_id)
-                    if not success:
-                        # Job was cancelled or reclaimed - stop heartbeating
-                        logger.warning(f"Heartbeat failed for job {job_id} - job may have been reclaimed")
-                        break
-            except Exception as e:
-                logger.warning(f"Error updating heartbeat for job {job_id}: {e}")
+        token = set_test_commis_id(commis_id) if commis_id else None
+        try:
+            while (commis_id, job_id) in self._running_jobs:
+                try:
+                    with db_session() as db:
+                        success = update_heartbeat(db, job_id, self._worker_id)
+                        if not success:
+                            # Job was cancelled or reclaimed - stop heartbeating
+                            logger.warning(f"Heartbeat failed for job {job_id} - job may have been reclaimed")
+                            break
+                except Exception as e:
+                    logger.warning(f"Error updating heartbeat for job {job_id}: {e}")
 
-            await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+                await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+        finally:
+            if token is not None:
+                reset_test_commis_id(token)
 
     async def _process_pending_jobs(self) -> None:
         """Process pending jobs from default schema (normal mode).
@@ -235,32 +250,53 @@ class CommisJobProcessor:
         - Postgres: FOR UPDATE SKIP LOCKED
         - SQLite: BEGIN IMMEDIATE + UPDATE RETURNING
         """
-        with db_session() as db:
-            job_ids = claim_jobs(db, self._max_concurrent_jobs, self._worker_id)
-
-        if not job_ids:
-            return
-
-        logger.info(f"Claimed {len(job_ids)} queued commis jobs atomically")
-
-        # Start heartbeat loops and process jobs
         tasks = []
-        for job_id in job_ids:
-            self._running_jobs.add(job_id)
-            # Start heartbeat task for this job
-            asyncio.create_task(self._heartbeat_loop(job_id))
-            # Process the job
-            tasks.append(asyncio.create_task(self._process_job_with_cleanup(job_id)))
+        total_claimed = 0
+
+        for commis_id in self._iter_commis_ids():
+            token = set_test_commis_id(commis_id) if commis_id else None
+            try:
+                with db_session() as db:
+                    job_ids = claim_jobs(db, self._max_concurrent_jobs, self._worker_id)
+            finally:
+                if token is not None:
+                    reset_test_commis_id(token)
+
+            if not job_ids:
+                continue
+
+            total_claimed += len(job_ids)
+            label = commis_id or "default"
+            logger.info(f"Claimed {len(job_ids)} queued commis jobs atomically (db={label})")
+
+            for job_id in job_ids:
+                self._running_jobs.add((commis_id, job_id))
+                asyncio.create_task(self._heartbeat_loop(commis_id, job_id))
+                tasks.append(asyncio.create_task(self._process_job_with_cleanup(commis_id, job_id)))
+
+        if not tasks:
+            return
 
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _process_job_with_cleanup(self, job_id: int) -> None:
+    async def _process_job_with_cleanup(self, commis_id: str | None, job_id: int) -> None:
         """Process a job and clean up tracking state when done."""
+        token = set_test_commis_id(commis_id) if commis_id else None
         try:
             await self._process_job_by_id(job_id, already_claimed=True)
         finally:
             # Remove from running jobs set (stops heartbeat loop)
-            self._running_jobs.discard(job_id)
+            self._running_jobs.discard((commis_id, job_id))
+            if token is not None:
+                reset_test_commis_id(token)
+
+    def _iter_commis_ids(self) -> list[str | None]:
+        """Return commis IDs to process in E2E; include default DB."""
+        settings = get_settings()
+        if settings.testing and settings.environment == "test:e2e":
+            ids = list_test_commis_ids()
+            return [None, *ids] if ids else [None]
+        return [None]
 
     async def _process_job_by_id(self, job_id: int, *, already_claimed: bool = False) -> None:
         """Process a single commis job by ID with its own database session.

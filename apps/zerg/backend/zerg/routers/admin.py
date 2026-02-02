@@ -537,15 +537,34 @@ async def debug_db_schema(
 
     from sqlalchemy import text
 
+    from zerg.database import get_session_factory
+    from zerg.database import get_test_commis_id
+
     # Check if fiches table exists and get count
     tables_check = db.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='fiches'")).fetchone()
     fiches_exists = tables_check is not None
     fiches_count = db.execute(text("SELECT COUNT(*) FROM fiches")).scalar() if fiches_exists else None
 
+    # Capture current DB url/path (use session factory bind to reflect commis routing)
+    db_url = None
+    db_path = None
+    try:
+        session_factory = get_session_factory()
+        with session_factory() as _tmp_session:  # type: ignore[arg-type]
+            engine = _tmp_session.get_bind()
+            if engine is not None:
+                db_url = str(engine.url)
+                db_path = engine.url.database
+    except Exception:
+        pass
+
     return {
         "dialect": "sqlite",
         "fiches_exists": fiches_exists,
         "fiches_count": fiches_count,
+        "commis_id": get_test_commis_id(),
+        "db_url": db_url,
+        "db_path": db_path,
     }
 
 

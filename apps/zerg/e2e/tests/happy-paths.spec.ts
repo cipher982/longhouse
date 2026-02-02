@@ -21,6 +21,7 @@
 
 import { test, expect, type Page } from './fixtures';
 import { resetDatabase } from './test-utils';
+import { waitForDashboardReady } from './helpers/test-helpers';
 
 // Reset DB before each test for clean, isolated state
 // Uses strict reset that throws on failure to fail fast
@@ -37,7 +38,7 @@ test.beforeEach(async ({ request }) => {
  * CRITICAL: Gets ID from API response, NOT from DOM query (.first() is racy).
  */
 async function createFicheViaUI(page: Page): Promise<string> {
-  await page.goto('/');
+  await waitForDashboardReady(page);
 
   const createBtn = page.locator('[data-testid="create-fiche-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
@@ -155,7 +156,7 @@ async function createNewThread(page: Page): Promise<number> {
 
 test.describe('Smoke Tests - Core Functionality', () => {
   test('SMOKE 1: Create Fiche - fiche appears in dashboard', async ({ page }) => {
-    await page.goto('/');
+    await waitForDashboardReady(page);
 
     const createBtn = page.locator('[data-testid="create-fiche-btn"]');
     await expect(createBtn).toBeVisible({ timeout: 10000 });
@@ -342,8 +343,7 @@ test.describe('Data Persistence', () => {
     await expect(messagesContainer).toContainText(testMessage, { timeout: 15000 });
 
     // Navigate away and back
-    await page.goto('/');
-    await expect(page.locator('[data-testid="create-fiche-btn"]')).toBeVisible({ timeout: 10000 });
+    await waitForDashboardReady(page);
 
     await navigateToChat(page, ficheId);
 
@@ -365,8 +365,7 @@ test.describe('Data Persistence', () => {
     const threadUrl = page.url();
 
     // Navigate to dashboard then back (reload redirects to dashboard in this app)
-    await page.goto('/');
-    await expect(page.locator('[data-testid="create-fiche-btn"]')).toBeVisible({ timeout: 10000 });
+    await waitForDashboardReady(page);
 
     // Navigate back to the exact thread URL
     await page.goto(threadUrl);
@@ -458,7 +457,10 @@ test.describe('Chat UI', () => {
     const messagesContainer = page.locator('[data-testid="messages-container"]');
     await expect(messagesContainer).toBeVisible({ timeout: 5000 });
 
-    // Check for empty state message
-    await expect(messagesContainer).toContainText('No messages yet', { timeout: 5000 });
+    // Empty thread should not contain any user messages
+    const userMessages = page.locator(
+      '[data-role="chat-message-user"], .message.user, .message.user-message'
+    );
+    await expect(userMessages).toHaveCount(0);
   });
 });

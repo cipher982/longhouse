@@ -1,7 +1,7 @@
 /**
  * HowItWorksSection
  *
- * Simple 3-step explanation of how Swarmlet works.
+ * Simple 3-step explanation of how Longhouse works.
  * Replaces the heavier ScenariosSection.
  */
 

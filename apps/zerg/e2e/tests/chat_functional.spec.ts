@@ -20,7 +20,7 @@ test.beforeEach(async ({ request }) => {
 });
 
 async function createFicheAndGetId(page: Page): Promise<string> {
-  await page.goto('/');
+  await page.goto('/dashboard');
 
   const createBtn = page.locator('[data-testid="create-fiche-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });

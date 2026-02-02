@@ -34,7 +34,7 @@ export function DemoVideoPlaceholder({
             <div className="demo-video-icon">▶</div>
             <div className="demo-video-text">
               <h3>Demo Video Coming Soon</h3>
-              <p>See Swarmlet in action</p>
+              <p>See Longhouse in action</p>
             </div>
           </div>
         </div>

@@ -20,6 +20,7 @@ import { test, expect } from './fixtures';
  */
 
 import { resetDatabase } from './test-utils';
+import { waitForDashboardReady } from './helpers/test-helpers';
 
 // Reset DB before each test for clean state
 // Uses strict reset that throws on failure to fail fast
@@ -57,8 +58,7 @@ test.describe('Commis Database Isolation', () => {
     console.log(`✅ Can see own fiche (total fiches in this commis: ${fiches.length})`);
 
     // Navigate to dashboard and verify fiche appears in UI
-    await page.goto('/');
-    await page.waitForLoadState('domcontentloaded');
+    await waitForDashboardReady(page);
 
     // Wait for fiche row to be visible (deterministic)
     const ficheRow = page.locator(`tr[data-fiche-id="${fiche.id}"]`);
@@ -183,8 +183,7 @@ test.describe('Commis Database Isolation', () => {
       console.log('🔌 WebSocket connected:', url);
     });
 
-    await page.goto('/');
-    await page.waitForLoadState('domcontentloaded');
+    await waitForDashboardReady(page);
 
     // Wait for at least one WebSocket connection (deterministic polling)
     // fixtures.ts:113-136 injects commis=<id> into all WebSocket URLs

@@ -140,6 +140,7 @@ export async function getFicheRowCount(page: Page): Promise<number> {
  * CRITICAL: Gets ID from API response, NOT from DOM query (.first() is racy in parallel tests)
  */
 export async function createFicheViaUI(page: Page): Promise<string> {
+  await waitForDashboardReady(page);
   const createBtn = page.locator('[data-testid="create-fiche-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
   await expect(createBtn).toBeEnabled({ timeout: 5000 });

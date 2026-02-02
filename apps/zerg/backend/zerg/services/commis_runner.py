@@ -885,11 +885,17 @@ Example: "Backup completed 157GB in 17s, no errors found"
         job_id
             Commis job ID (required for barrier pattern)
         """
+        from zerg.database import get_test_commis_id
+
+        test_commis_id = get_test_commis_id()
+
         try:
 
-            async def _run_resume_async():
+            async def _run_resume_async(commis_id: str | None):
                 """Background task to resume with fresh DB session."""
                 from zerg.database import get_session_factory
+                from zerg.database import reset_test_commis_id
+                from zerg.database import set_test_commis_id
                 from zerg.models.commis_barrier import CommisBarrier
                 from zerg.models.enums import RunStatus
                 from zerg.models.models import Run
@@ -898,6 +904,7 @@ Example: "Backup completed 157GB in 17s, no errors found"
                 from zerg.services.commis_resume import resume_oikos_with_commis_result
                 from zerg.services.commis_resume import trigger_commis_inbox_run
 
+                token = set_test_commis_id(commis_id) if commis_id else None
                 session_factory = get_session_factory()
                 fresh_db = session_factory()
                 try:
@@ -1012,6 +1019,8 @@ Example: "Backup completed 157GB in 17s, no errors found"
                     logger.exception(f"Background resume failed for run {run_id}: {e}")
                 finally:
                     fresh_db.close()
+                    if token is not None:
+                        reset_test_commis_id(token)
 
             # IMPORTANT: create_task() captures current contextvars.
             #
@@ -1022,7 +1031,7 @@ Example: "Backup completed 157GB in 17s, no errors found"
             # nested tool inside the spawn_commis card).
             import contextvars
 
-            coro = _run_resume_async()
+            coro = _run_resume_async(test_commis_id)
             try:
                 asyncio.create_task(coro, context=contextvars.Context())
             except Exception:

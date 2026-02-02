@@ -9,7 +9,7 @@ test.describe('Prod Live Chat Smoke', () => {
 
     const agentId = await createAgentViaAPI(request);
 
-    await page.goto(`/agent/${agentId}/thread`);
+    await page.goto(`/fiche/${agentId}/thread`);
     await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 20_000 });
 
     const message = `Smoke test ${Date.now()}: please acknowledge this message in one short sentence.`;

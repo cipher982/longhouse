@@ -2,9 +2,10 @@
 // scope selector is switched to "All fiches".
 
 import { test, expect } from './fixtures';
+import { waitForDashboardReady } from './helpers/test-helpers';
 
 test('Owner column toggles with scope selector', async ({ page }) => {
-  await page.goto('/');
+  await waitForDashboardReady(page);
 
   // The checkbox is visually hidden - click the parent label.scope-toggle instead
   const scopeCheckbox = page.locator('[data-testid="dashboard-scope-toggle"]');

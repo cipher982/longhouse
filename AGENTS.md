@@ -194,6 +194,7 @@ Categories: `gotcha`, `pattern`, `design`, `tool`, `test`, `deploy`, `perf`
 ### Learnings
 
 <!-- Agents: append below this line. Human compacts weekly. -->
+- (2026-02-02) [test] Commis resume tasks must set test commis context; otherwise barrier jobs stay queued and Oikos never resumes in E2E.
 - (2026-01-30) [gotcha] Multi-tenant mode disables Agents API via require_single_tenant(); schema routing in commis_db is test-only and blocked in prod.
 - (2026-01-31) [test] ScriptedLLM checks for ToolMessage to decide synthesis vs tool-call; multi-run threads accumulate messages, so new scenarios must check "current turn only" (messages after last HumanMessage).
 - (2026-01-31) [test] E2E schema mismatch: globalSetup creates 4 schemas, processor polls 16. Fixed: processor catches ProgrammingError for missing schemas.
@@ -219,3 +220,4 @@ Categories: `gotcha`, `pattern`, `design`, `tool`, `test`, `deploy`, `perf`
 - (2026-02-01) [gotcha] `/agents/sessions/active` derives status from last_activity (<=5m = working, else idle) and sets attention to "auto" for all sessions; Forum UI is effectively heuristic/fake until explicit presence events exist.
 - (2026-02-01) [test] Core E2E must run serially with SQLite; parallel resets can delete commis jobs mid-run and cause message mismatches (use `--workers=1` for core).
 - (2026-02-01) [test] Oikos API key modal blocks E2E runs; set `VITE_E2E=1` to suppress the modal in tests.
+- (2026-02-01) [design] Demo data should live in a seeded SQLite file so the whole app feels alive; avoid UI-only replay fakes.

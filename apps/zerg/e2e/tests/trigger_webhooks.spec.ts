@@ -10,7 +10,7 @@ test.beforeEach(async ({ request }) => {
 
 test.describe.skip('Webhook trigger management', () => {
   async function openTriggersTab(page) {
-    await page.goto('/');
+    await page.goto('/dashboard');
     await page.locator('[data-testid="create-fiche-btn"]').click();
     const id = await page.locator('tr[data-fiche-id]').first().getAttribute('data-fiche-id');
     await page.locator(`[data-testid="edit-fiche-${id}"]`).click();

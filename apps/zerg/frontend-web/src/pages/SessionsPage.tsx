@@ -299,7 +299,7 @@ export default function SessionsPage() {
   const [demoSeedError, setDemoSeedError] = useState<string | null>(null);
 
   // Fetch dynamic filter options
-  const { data: filtersData, isLoading: filtersLoading } = useAgentFilters(daysBack);
+  const { data: filtersData, isLoading: filtersLoading, refetch: refetchFilters } = useAgentFilters(daysBack);
   const projectOptions = filtersData?.projects || [];
   const providerOptions = filtersData?.providers || [];
 
@@ -382,6 +382,7 @@ export default function SessionsPage() {
       await seedAgentDemoSessions();
       setDemoSeedStatus("done");
       await refetch();
+      await refetchFilters();
     } catch (err) {
       setDemoSeedStatus("error");
       setDemoSeedError(err instanceof Error ? err.message : "Failed to seed demo sessions.");

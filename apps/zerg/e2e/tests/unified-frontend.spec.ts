@@ -28,7 +28,7 @@ const UNIFIED_URL = process.env.UNIFIED_BASE_URL || 'http://localhost:30080';
 // Check if unified proxy is available before running tests
 test.beforeAll(async ({ request }) => {
   try {
-    const response = await request.get(`${UNIFIED_URL}/health`, { timeout: 5000 });
+    const response = await request.get(`${UNIFIED_URL}/api/system/health`, { timeout: 5000 });
     if (!response.ok()) {
       test.skip(true, `Unified proxy not available at ${UNIFIED_URL}`);
     }
@@ -117,7 +117,7 @@ test.describe('Unified Frontend Navigation', () => {
   });
 
   test('API health check via unified proxy', async ({ page }) => {
-    const response = await page.request.get(`${UNIFIED_URL}/health`);
+    const response = await page.request.get(`${UNIFIED_URL}/api/system/health`);
     expect(response.status()).toBe(200);
   });
 

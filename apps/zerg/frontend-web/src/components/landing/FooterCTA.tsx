@@ -35,7 +35,7 @@ export function FooterCTA() {
         <div className="landing-footer-links">
           <div className="landing-footer-brand">
             <SwarmLogo size={32} />
-            <span className="landing-footer-name">Swarmlet</span>
+            <span className="landing-footer-name">Longhouse</span>
           </div>
 
           <nav className="landing-footer-nav">
@@ -62,7 +62,7 @@ export function FooterCTA() {
         </div>
 
         <div className="landing-footer-bottom">
-          <p>© {currentYear} Swarmlet. All rights reserved.</p>
+          <p>© {currentYear} Longhouse. All rights reserved.</p>
         </div>
       </div>
     </footer>
