@@ -15,6 +15,22 @@ This is a living vision doc. It captures both the direction and the reasoning th
 - **Oikos** = assistant UI inside Longhouse
 - **Zerg** = internal codename/repo (transitional; user-facing docs should say Longhouse)
 
+### Branding Usage Rules
+
+**Do:**
+- Use **Longhouse** in marketing, UI, and docs
+- Use **Oikos** only for the assistant feature
+- Keep CLI verbs neutral (`longhouse up`, `longhouse onboard`, `longhouse connect`)
+
+**Don't:**
+- Mix Longhouse and Zerg in user-facing copy
+- Use Swarmlet or StarCraft theming in new docs
+- Apply themed verbs to APIs/CLI commands
+
+**Transition notes:**
+- Repo paths still live under `apps/zerg/` until the code rename lands
+- Some env vars / schema names may still use `ZERG_` during transition
+
 ---
 
 ## North Star
@@ -420,6 +436,116 @@ The shipper-to-Longhouse ingest must be robust:
 
 ---
 
+## Forum Drop-In Session Resume (Design)
+
+Transform Forum from passive session visualization into an interactive session multiplexer.
+Click an agent session (Claude/Codex/Gemini) and chat with that session in real time.
+
+**Goal:** Resume a provider session turn-by-turn without breaking the canonical archive in Longhouse.
+
+### Turn-by-Turn Resume Pattern
+
+Each user message spawns a fresh provider process with context restoration:
+
+```
+User Message
+    ↓
+Backend: POST /api/sessions/{id}/chat
+    ↓
+1. Validate session ownership & provider
+2. Acquire per-session lock (or 409)
+3. Resolve workspace (local or temp clone)
+4. Prepare session file from Longhouse archive
+    ↓
+5. Spawn: claude --resume {id} -p "message" --output-format stream-json
+    ↓
+6. Stream SSE events to frontend
+    ↓
+7. On complete: ingest session updates back into Longhouse
+```
+
+### Key Components
+
+#### Backend
+
+**`routers/session_chat.py`**
+- `POST /sessions/{session_id}/chat` - SSE streaming endpoint
+- `GET /sessions/{session_id}/lock` - Check lock status
+- `DELETE /sessions/{session_id}/lock` - Force release (admin)
+
+**`services/session_continuity.py`**
+- `SessionLockManager` - In-memory async locks with TTL
+- `WorkspaceResolver` - Clone repo to temp if workspace unavailable
+- `prepare_session_for_resume()` - Build provider session file from Longhouse events
+- `ingest_session_updates()` - Ingest new events into Longhouse
+
+#### Frontend
+
+**`components/SessionChat.tsx`**
+- Message list with streaming assistant response
+- Cancel button (AbortController)
+- Lock status indicators
+
+**`pages/ForumPage.tsx`**
+- Chat mode toggle when session selected
+- SessionChat replaces metadata panel in chat mode
+
+### SSE Event Types
+
+| Event | Data | Description |
+|-------|------|-------------|
+| `system` | `{type, session_id, workspace}` | Session info, status updates |
+| `assistant_delta` | `{text, accumulated}` | Streaming text chunks |
+| `tool_use` | `{name, id}` | Tool call notification |
+| `tool_result` | `{result}` | Tool execution result |
+| `error` | `{error, details?}` | Error message |
+| `done` | `{exit_code, total_text_length}` | Completion signal |
+
+### Security Considerations
+
+**Path traversal prevention**
+- Workspace path derived server-side from session metadata
+- Client never provides workspace path
+- Session IDs validated with strict pattern
+
+**Concurrent access**
+- Per-session async locks prevent simultaneous resumes
+- 409 response when session locked, with fork option (future)
+- TTL-based expiration (5 min default) for crash recovery
+
+**Process management**
+- Process terminated on client disconnect
+- AbortController propagates cancellation
+- Cleanup of temp workspaces on completion/error
+
+### Workspace Resolution
+
+Priority order:
+1. **Original path exists locally** → Use directly
+2. **Git repo in session metadata** → Clone to temp dir
+3. **Neither available** → Error (chat-only future option)
+
+Temp workspaces:
+- Location: `~/.longhouse/workspaces/session-{id[:12]}`
+- Shallow clone (`--depth=1`) for speed
+- Cleaned up after chat completion
+
+### Performance Characteristics
+
+Based on lab testing:
+- TTFT: ~8-12 seconds (context reload + first token)
+- Context growth: ~1.3 KB per turn
+- Session file updated and re-ingested after each turn
+
+### Future Enhancements
+
+1. **Fork sessions** - Create new session from locked session's state
+2. **Chat-only mode** - Allow conversation without workspace (no tools)
+3. **Tool execution warnings** - Confirm before destructive operations
+4. **Multi-session view** - Chat with multiple sessions in tabs
+
+---
+
 ## Agents Schema (Source of Truth)
 
 Adopt the Life Hub schema as Longhouse's canonical agent archive, implemented to run on SQLite by default:
@@ -641,6 +767,37 @@ Optional safety step:
 - Simple status page: "Your instance is healthy"
 - Last sync time from shipper
 - Recent commis job outcomes
+
+---
+
+## Prompt Cache Optimization (LLM Cost/Latency)
+
+**Current state:** `MessageArrayBuilder` already follows good cache patterns:
+1) Static system content first
+2) Conversation history next
+3) Dynamic context last
+
+This maximizes prefix cache hits for providers that support prompt caching.
+
+### Cache-Busting Issues
+
+1. **Timestamp precision** (high impact)
+   - Current dynamic context uses full timestamps; changes every request.
+   - **Fix:** reduce granularity (minute or date) or inject time separately.
+
+2. **Memory context variance** (medium impact)
+   - Memory search results vary per query and are embedded in the same dynamic block.
+   - **Fix:** cache memory results per query or separate into its own message.
+
+3. **Connector status JSON ordering** (low impact)
+   - Unstable key order can bust cache.
+   - **Fix:** `json.dumps(..., sort_keys=True)` for deterministic output.
+
+### Recommended Quick Wins
+
+- Sort connector status keys for deterministic output.
+- Reduce timestamp granularity in dynamic context.
+- Split dynamic context into separate SystemMessages (time, connector status, memory).
 
 ---
 
