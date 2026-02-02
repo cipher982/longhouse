@@ -61,7 +61,9 @@ class ScenarioSeedRequest(BaseModel):
     """Request model for seeding deterministic scenario data."""
 
     name: str
-    clean: bool = True
+    target: str = "dev"
+    namespace: str = "test"
+    clean: bool = False
 
 
 class SuperAdminStatusResponse(BaseModel):
@@ -234,7 +236,14 @@ async def seed_scenario_data(
 
     from zerg.scenarios.seed import seed_scenario
 
-    result = seed_scenario(db, request.name, owner_id=current_user.id, clean=request.clean)
+    result = seed_scenario(
+        db,
+        request.name,
+        owner_id=current_user.id,
+        target=request.target,
+        namespace=request.namespace,
+        clean=request.clean,
+    )
     return JSONResponse(content=result)
 
 

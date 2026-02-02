@@ -1062,3 +1062,48 @@ class EmailSendLog(Base):
         # Index for querying user's sent emails by time
         Index("ix_email_send_log_user_sent", "user_id", "sent_at"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Scenario Seeding – Track seeded scenarios for idempotency
+# ---------------------------------------------------------------------------
+
+
+class SeedRegistry(Base):
+    """Registry of seeded scenarios for deterministic, idempotent seeding.
+
+    Tracks which scenarios have been seeded to prevent duplicates.
+    Uses deterministic UUIDs (uuid5) for all seeded entities.
+    """
+
+    __tablename__ = "seed_registry"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Seed key: unique identifier for this seeded entity
+    # Format: "{scenario_name}:{entity_type}:{entity_ref}"
+    # Example: "swarm-mvp:thread:thread-1"
+    seed_key = Column(String(255), nullable=False)
+
+    # Target: where this was seeded (db path or identifier)
+    # Examples: "dev", "test", "demo_db", "/path/to/db.sqlite"
+    target = Column(String(255), nullable=False)
+
+    # Namespace: category of seeding operation
+    # Examples: "demo", "test", "marketing"
+    namespace = Column(String(50), nullable=False, server_default="test")
+
+    # Entity details
+    entity_type = Column(String(50), nullable=False)  # thread, run, message, event, etc.
+    entity_id = Column(String(255), nullable=True)  # The actual ID of the created entity
+
+    # Timestamps
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    __table_args__ = (
+        # Ensure each seed_key is unique per target
+        UniqueConstraint("seed_key", "target", name="uq_seed_registry_key_target"),
+        Index("ix_seed_registry_namespace", "namespace"),
+        Index("ix_seed_registry_target", "target"),
+    )

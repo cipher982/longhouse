@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Any
 from typing import Iterable
 from typing import Optional
+from uuid import NAMESPACE_DNS
+from uuid import UUID
+from uuid import uuid5
 
 import yaml
 from sqlalchemy.orm import Session
@@ -20,6 +23,7 @@ from zerg.models.enums import RunTrigger
 from zerg.models.enums import ThreadType
 from zerg.models.models import CommisJob
 from zerg.models.models import Run
+from zerg.models.models import SeedRegistry
 from zerg.models.models import Thread
 from zerg.models.models import ThreadMessage
 from zerg.models.run_event import RunEvent
@@ -27,6 +31,9 @@ from zerg.services.oikos_service import OikosService
 from zerg.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
+
+# Namespace for deterministic UUID generation
+SEED_NAMESPACE = uuid5(NAMESPACE_DNS, "longhouse.ai.seed")
 
 SCENARIO_DIR = Path(__file__).resolve().parent / "data"
 SCENARIO_TITLE_PREFIX = "[scenario:"
@@ -56,19 +63,82 @@ def load_scenario(name: str) -> dict[str, Any]:
     return data
 
 
+def deterministic_uuid(seed_key: str) -> UUID:
+    """Generate deterministic UUID from seed key using uuid5."""
+    return uuid5(SEED_NAMESPACE, seed_key)
+
+
+def check_seed_registry(
+    db: Session,
+    seed_key: str,
+    target: str,
+) -> Optional[SeedRegistry]:
+    """Check if a seed_key has already been seeded to this target."""
+    return (
+        db.query(SeedRegistry)
+        .filter(
+            SeedRegistry.seed_key == seed_key,
+            SeedRegistry.target == target,
+        )
+        .first()
+    )
+
+
+def register_seed(
+    db: Session,
+    seed_key: str,
+    target: str,
+    namespace: str,
+    entity_type: str,
+    entity_id: Optional[str] = None,
+) -> SeedRegistry:
+    """Register a seeded entity in the registry."""
+    existing = check_seed_registry(db, seed_key, target)
+    if existing:
+        # Update timestamp
+        existing.updated_at = utc_now().replace(tzinfo=None)
+        return existing
+
+    entry = SeedRegistry(
+        seed_key=seed_key,
+        target=target,
+        namespace=namespace,
+        entity_type=entity_type,
+        entity_id=entity_id,
+    )
+    db.add(entry)
+    return entry
+
+
 def seed_scenario(
     db: Session,
     scenario_name: str,
     *,
     owner_id: int,
-    clean: bool = True,
+    target: str = "dev",
+    namespace: str = "test",
+    clean: bool = False,
 ) -> dict[str, Any]:
+    """Seed a scenario with idempotency support.
+
+    Args:
+        db: Database session
+        scenario_name: Name of the scenario YAML file (without .yaml extension)
+        owner_id: User ID who owns the seeded data
+        target: Target identifier (e.g., "dev", "test", "demo_db", or DB path)
+        namespace: Namespace for categorization (e.g., "demo", "test", "marketing")
+        clean: If True, delete existing scenario data before seeding (breaks idempotency)
+
+    Returns:
+        Dict with counts of seeded entities
+    """
     scenario = load_scenario(scenario_name)
     runs = scenario.get("runs") or []
     if not isinstance(runs, list):
         raise ScenarioError("Scenario 'runs' must be a list")
 
     if clean:
+        logger.warning("clean=True breaks idempotency - deleting existing scenario data")
         cleanup_scenario(db, scenario_name)
 
     oikos_fiche = OikosService(db).get_or_create_oikos_fiche(owner_id)
@@ -80,13 +150,21 @@ def seed_scenario(
         if parsed_base is not None:
             base_time = parsed_base
 
-    counts = {"runs": 0, "messages": 0, "events": 0, "commis_jobs": 0}
+    counts = {"runs": 0, "messages": 0, "events": 0, "commis_jobs": 0, "skipped": 0}
 
     for index, run_data in enumerate(runs, start=1):
         if not isinstance(run_data, dict):
             raise ScenarioError("Each run entry must be a mapping")
 
         run_ref = run_data.get("id") or f"run-{index}"
+        run_seed_key = f"{scenario_name}:run:{run_ref}"
+
+        # Check if this run has already been seeded to this target
+        if check_seed_registry(db, run_seed_key, target):
+            logger.debug("Skipping already-seeded run: %s (target=%s)", run_seed_key, target)
+            counts["skipped"] += 1
+            continue
+
         title = run_data.get("title") or run_data.get("thread_title") or run_ref
         thread_type = _coerce_enum(ThreadType, run_data.get("thread_type", ThreadType.CHAT.value)).value
         thread = Thread(
@@ -197,10 +275,27 @@ def seed_scenario(
             )
             counts["commis_jobs"] += 1
 
+        # Register this run in the seed registry for idempotency
+        register_seed(
+            db,
+            seed_key=run_seed_key,
+            target=target,
+            namespace=namespace,
+            entity_type="run",
+            entity_id=str(run.id),
+        )
+
         counts["runs"] += 1
 
     db.commit()
-    return {"scenario": scenario_name, **counts}
+    logger.info(
+        "Seeded scenario '%s' to target '%s' (namespace=%s): %s",
+        scenario_name,
+        target,
+        namespace,
+        counts,
+    )
+    return {"scenario": scenario_name, "target": target, "namespace": namespace, **counts}
 
 
 def cleanup_scenario(db: Session, scenario_name: Optional[str]) -> dict[str, int]:
