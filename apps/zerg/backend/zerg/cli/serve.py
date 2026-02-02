@@ -2,6 +2,8 @@
 
 Commands:
 - serve: Start the Longhouse server with uvicorn
+- serve --daemon: Start as background daemon
+- serve --stop: Stop running daemon
 - status: Show current server configuration and lite_mode status
 """
 
@@ -10,6 +12,8 @@ from __future__ import annotations
 import base64
 import os
 import secrets
+import signal
+import sys
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -19,32 +23,56 @@ import typer
 app = typer.Typer(help="Longhouse server commands")
 
 
-def _get_zerg_home() -> Path:
-    """Return the Longhouse home directory (~/.zerg), creating if needed."""
-    zerg_home = Path.home() / ".zerg"
-    zerg_home.mkdir(parents=True, exist_ok=True)
-    return zerg_home
+def _get_longhouse_home() -> Path:
+    """Return the Longhouse home directory (~/.longhouse), creating if needed.
+
+    On first run, if ~/.zerg exists but ~/.longhouse doesn't, migrates data.
+    """
+    longhouse_home = Path.home() / ".longhouse"
+    old_home = Path.home() / ".zerg"
+
+    # Migrate data from old path on first run
+    if old_home.exists() and not longhouse_home.exists():
+        import shutil
+
+        shutil.copytree(old_home, longhouse_home)
+        # Rename old DB file if it exists
+        old_db = longhouse_home / "zerg.db"
+        new_db = longhouse_home / "longhouse.db"
+        if old_db.exists() and not new_db.exists():
+            old_db.rename(new_db)
+
+    longhouse_home.mkdir(parents=True, exist_ok=True)
+    return longhouse_home
 
 
 def _get_default_db_path() -> Path:
     """Return the default SQLite database path."""
-    return _get_zerg_home() / "zerg.db"
+    return _get_longhouse_home() / "longhouse.db"
 
 
 def _get_or_create_fernet_secret() -> str:
     """Get or create a persistent FERNET_SECRET for lite mode.
 
-    Stores the secret in ~/.zerg/fernet.key for persistence across restarts.
+    Stores the secret in ~/.longhouse/fernet.key for persistence across restarts.
+    Uses secure file creation to avoid permission race conditions.
     """
-    secret_file = _get_zerg_home() / "fernet.key"
+    secret_file = _get_longhouse_home() / "fernet.key"
 
     if secret_file.exists():
         return secret_file.read_text().strip()
 
     # Generate a new Fernet-compatible key (32 bytes, URL-safe base64)
     key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
-    secret_file.write_text(key)
-    secret_file.chmod(0o600)  # Owner read/write only
+
+    # Secure file creation: open with O_CREAT|O_EXCL and 0600 permissions
+    # This avoids the race condition of write-then-chmod
+    fd = os.open(str(secret_file), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(fd, key.encode())
+    finally:
+        os.close(fd)
+
     return key
 
 
@@ -71,7 +99,7 @@ def _apply_lite_mode_defaults() -> None:
     """Apply default environment variables for lite (SQLite) mode.
 
     Sets up sensible defaults for zero-config OSS startup:
-    - SQLite database in ~/.zerg/zerg.db
+    - SQLite database in ~/.longhouse/longhouse.db
     - Auth disabled (single-user local install)
     - Single-tenant mode
     - Auto-generated FERNET_SECRET (persisted)
@@ -92,6 +120,83 @@ def _apply_lite_mode_defaults() -> None:
     # FERNET_SECRET (required by crypto module)
     if not os.environ.get("FERNET_SECRET"):
         os.environ["FERNET_SECRET"] = _get_or_create_fernet_secret()
+
+
+def _get_pid_file() -> Path:
+    """Get the path to the server PID file."""
+    return _get_longhouse_home() / "server.pid"
+
+
+def _get_log_file() -> Path:
+    """Get the path to the server log file."""
+    return _get_longhouse_home() / "server.log"
+
+
+def _is_server_running() -> tuple[bool, int | None]:
+    """Check if server is already running.
+
+    Returns:
+        Tuple of (is_running, pid)
+    """
+    pid_file = _get_pid_file()
+    if not pid_file.exists():
+        return False, None
+
+    try:
+        pid = int(pid_file.read_text().strip())
+        # Check if process exists
+        os.kill(pid, 0)
+        return True, pid
+    except (ValueError, OSError, ProcessLookupError):
+        # PID file exists but process is gone
+        pid_file.unlink(missing_ok=True)
+        return False, None
+
+
+def _daemonize() -> None:
+    """Fork into background daemon process (Unix only)."""
+    # First fork
+    try:
+        pid = os.fork()
+        if pid > 0:
+            # Parent exits
+            sys.exit(0)
+    except OSError as e:
+        raise RuntimeError(f"First fork failed: {e}")
+
+    # Decouple from parent environment
+    os.chdir("/")
+    os.setsid()
+    # Use restrictive umask for security (owner read/write only)
+    os.umask(0o077)
+
+    # Second fork
+    try:
+        pid = os.fork()
+        if pid > 0:
+            # Parent exits
+            sys.exit(0)
+    except OSError as e:
+        raise RuntimeError(f"Second fork failed: {e}")
+
+    # Redirect standard file descriptors
+    sys.stdout.flush()
+    sys.stderr.flush()
+
+    log_file = _get_log_file()
+    with open("/dev/null", "r") as devnull:
+        os.dup2(devnull.fileno(), sys.stdin.fileno())
+
+    # Open log file with secure permissions (0600)
+    log_fd = os.open(str(log_file), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    os.dup2(log_fd, sys.stdout.fileno())
+    os.dup2(log_fd, sys.stderr.fileno())
+    os.close(log_fd)
+
+    # Write PID file
+    pid_file = _get_pid_file()
+    pid_file.write_text(str(os.getpid()))
+    pid_file.chmod(0o600)
 
 
 @app.command()
@@ -117,13 +222,23 @@ def serve(
         None,
         "--db",
         "-d",
-        help="Database URL (default: sqlite:///~/.zerg/zerg.db)",
+        help="Database URL (default: sqlite:///~/.longhouse/longhouse.db)",
     ),
     workers: int = typer.Option(
         1,
         "--workers",
         "-w",
         help="Number of worker processes",
+    ),
+    daemon: bool = typer.Option(
+        False,
+        "--daemon",
+        help="Run as background daemon",
+    ),
+    stop: bool = typer.Option(
+        False,
+        "--stop",
+        help="Stop running daemon",
     ),
 ) -> None:
     """Start the Longhouse server.
@@ -133,11 +248,40 @@ def serve(
 
     Examples:
         longhouse serve                           # SQLite on localhost:8080
+        longhouse serve --daemon                  # Run in background
+        longhouse serve --stop                    # Stop background server
         longhouse serve --host 0.0.0.0 --port 80  # Bind to all interfaces
         longhouse serve --db postgresql://...     # Use Postgres
         longhouse serve --reload                  # Dev mode with auto-reload
     """
     import uvicorn
+
+    # Handle --stop flag
+    if stop:
+        is_running, pid = _is_server_running()
+        if not is_running:
+            typer.echo("Server is not running")
+            return
+
+        try:
+            os.kill(pid, signal.SIGTERM)
+            typer.secho(f"Stopped server (PID {pid})", fg=typer.colors.GREEN)
+            _get_pid_file().unlink(missing_ok=True)
+        except OSError as e:
+            typer.secho(f"Failed to stop server: {e}", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+        return
+
+    # Check if already running when starting daemon
+    if daemon:
+        is_running, existing_pid = _is_server_running()
+        if is_running:
+            typer.secho(
+                f"Server already running (PID {existing_pid})",
+                fg=typer.colors.YELLOW,
+            )
+            typer.echo("Use 'longhouse serve --stop' to stop it first")
+            raise typer.Exit(code=1)
 
     # Set database URL if explicitly provided
     if db:
@@ -174,6 +318,14 @@ def serve(
         typer.echo("  Use --workers 1 with SQLite, or switch to Postgres.")
         raise typer.Exit(code=1)
 
+    # Daemon mode incompatible with reload
+    if daemon and reload:
+        typer.secho(
+            "ERROR: --daemon and --reload cannot be used together",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
     # Check for bundled frontend
     from zerg.main import FRONTEND_DIST_DIR
     from zerg.main import FRONTEND_SOURCE
@@ -187,6 +339,8 @@ def serve(
     typer.echo(f"  Database: {_mask_db_url(db_url)}")
     typer.echo(f"  Mode: {'lite (SQLite)' if is_sqlite else 'full (Postgres)'}")
     typer.echo(f"  Frontend: {frontend_source}")
+    if daemon:
+        typer.echo("  Daemon: yes")
     if reload:
         typer.echo("  Reload: enabled")
     typer.echo("")
@@ -194,6 +348,19 @@ def serve(
     if has_frontend:
         typer.secho(f"  UI available at: http://{host}:{port}/", fg=typer.colors.GREEN)
         typer.echo("")
+
+    # Daemonize if requested (Unix only)
+    if daemon:
+        if sys.platform == "win32":
+            typer.secho(
+                "ERROR: Daemon mode not supported on Windows",
+                fg=typer.colors.RED,
+            )
+            typer.echo("  Use a service manager like NSSM instead")
+            raise typer.Exit(code=1)
+
+        typer.echo(f"Starting daemon... (log: {_get_log_file()})")
+        _daemonize()
 
     uvicorn.run(
         "zerg.main:app",
@@ -293,8 +460,8 @@ def status(
 
     # Paths (only show if they exist to avoid side effects)
     typer.echo("Paths:")
-    zerg_home = _get_zerg_home()
-    typer.echo(f"  Config: {zerg_home}")
+    longhouse_home = _get_longhouse_home()
+    typer.echo(f"  Config: {longhouse_home}")
     typer.echo(f"  Workspace: {settings.oikos_workspace_path}")
 
     typer.echo("")

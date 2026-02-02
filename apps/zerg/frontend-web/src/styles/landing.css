@@ -1,6 +1,6 @@
 /* ============================================================
    LANDING PAGE STYLES
-   A beautiful, conversion-optimized landing page for Swarmlet
+   A beautiful, conversion-optimized landing page for Longhouse
    ============================================================ */
 
 /* Note: particle.css and buttons.css are imported via app.css */
@@ -1353,6 +1353,154 @@
   }
 
   /* --------------------------------------------------------
+   INSTALL SECTION (CLI one-liner)
+   -------------------------------------------------------- */
+
+  .install-section {
+    margin-top: var(--space-8);
+    max-width: 540px;
+  }
+
+  .landing-hero-install {
+    margin-left: 0;
+    margin-right: auto;
+  }
+
+  .install-header {
+    margin-bottom: var(--space-4);
+  }
+
+  .install-header h3 {
+    font-family: var(--font-family-display);
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+    margin: 0 0 var(--space-1);
+  }
+
+  .install-header p {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+    margin: 0;
+  }
+
+  .install-tabs {
+    display: flex;
+    gap: var(--space-1);
+    margin-bottom: var(--space-3);
+  }
+
+  .install-tab {
+    padding: var(--space-2) var(--space-4);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-muted);
+    background: transparent;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all var(--motion-duration-fast);
+  }
+
+  .install-tab:hover {
+    color: var(--color-text-secondary);
+    border-color: var(--color-border-default);
+  }
+
+  .install-tab.active {
+    color: var(--color-text-primary);
+    background: var(--color-surface-card);
+    border-color: var(--color-brand-primary);
+  }
+
+  .install-command-container {
+    display: flex;
+    align-items: center;
+    background: var(--color-surface-section);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    transition: border-color var(--motion-duration-fast);
+  }
+
+  .install-command-container:hover {
+    border-color: var(--color-brand-primary);
+  }
+
+  .install-command {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-4);
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+    overflow-x: auto;
+  }
+
+  .install-prompt {
+    color: var(--color-brand-primary);
+    font-weight: var(--font-weight-bold);
+    user-select: none;
+  }
+
+  .install-text {
+    color: var(--color-text-primary);
+    white-space: nowrap;
+  }
+
+  .install-copy-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    background: var(--color-surface-card);
+    border: none;
+    border-left: 1px solid var(--color-border-subtle);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: all var(--motion-duration-fast);
+    flex-shrink: 0;
+  }
+
+  .install-copy-btn:hover {
+    color: var(--color-text-primary);
+    background: var(--color-surface-hover);
+  }
+
+  .install-copy-btn.copied {
+    color: var(--color-intent-success);
+  }
+
+  .install-note {
+    margin-top: var(--space-2);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+  }
+
+  .install-features {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+    margin-top: var(--space-4);
+  }
+
+  .install-feature {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+  }
+
+  .install-feature svg {
+    color: var(--color-intent-success);
+    flex-shrink: 0;
+  }
+
+  /* --------------------------------------------------------
    RESPONSIVE
    -------------------------------------------------------- */
 
@@ -1391,6 +1539,19 @@
     .landing-hero-ctas .ui-button--lg {
       width: 100%;
       align-self: stretch;
+    }
+
+    .landing-hero-install {
+      margin: var(--space-8) auto 0;
+      max-width: 100%;
+    }
+
+    .install-tabs {
+      justify-content: center;
+    }
+
+    .install-features {
+      justify-content: center;
     }
 
     .landing-section-title {

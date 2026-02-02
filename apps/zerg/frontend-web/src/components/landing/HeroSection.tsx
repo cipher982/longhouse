@@ -4,6 +4,7 @@ import { Button } from "../ui";
 import { useAuth } from "../../lib/auth";
 import config from "../../lib/config";
 import { AppScreenshotFrame } from "./AppScreenshotFrame";
+import { InstallSection } from "./InstallSection";
 
 interface HeroSectionProps {
   onScrollToHowItWorks: () => void;
@@ -102,14 +103,17 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
               See How It Works <span className="landing-cta-arrow">↓</span>
             </Button>
           </div>
+
+          {/* Install command section */}
+          <InstallSection className="landing-hero-install" />
         </div>
 
         {/* Right: Product screenshot */}
         <div className="landing-hero-visual">
           <AppScreenshotFrame
             src="/images/landing/chat-preview.png"
-            alt="Swarmlet AI chat interface"
-            title="Swarmlet"
+            alt="Longhouse AI chat interface"
+            title="Longhouse"
             aspectRatio="4/3"
             showChrome={true}
             className="landing-hero-screenshot"
@@ -125,7 +129,7 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
               ×
             </button>
             <SwarmLogo size={48} className="landing-login-logo" />
-            <h2>Welcome to Swarmlet</h2>
+            <h2>Welcome to Longhouse</h2>
             <p className="landing-login-subtext">Sign in to start building your personal AI</p>
 
             <div className="landing-login-buttons">

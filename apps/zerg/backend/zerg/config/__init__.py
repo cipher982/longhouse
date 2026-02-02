@@ -419,7 +419,10 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         discord_daily_digest_cron=os.getenv("DISCORD_DAILY_DIGEST_CRON", "0 8 * * *"),
         db_reset_password=os.getenv("DB_RESET_PASSWORD"),
         oikos_device_secret=os.getenv("OIKOS_DEVICE_SECRET"),
-        oikos_workspace_path=os.getenv("OIKOS_WORKSPACE_PATH", "/var/oikos/workspaces"),
+        oikos_workspace_path=os.getenv(
+            "OIKOS_WORKSPACE_PATH",
+            str(Path.home() / ".longhouse" / "workspaces"),
+        ),
         notification_webhook=os.getenv("NOTIFICATION_WEBHOOK"),
         smoke_test_secret=os.getenv("SMOKE_TEST_SECRET"),
         agents_api_token=os.getenv("AGENTS_API_TOKEN"),

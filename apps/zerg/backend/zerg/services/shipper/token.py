@@ -26,7 +26,22 @@ def get_token_path(claude_config_dir: Path | None = None) -> Path:
     if claude_config_dir is None:
         config_dir = os.getenv("CLAUDE_CONFIG_DIR")
         if config_dir:
-            claude_config_dir = Path(config_dir)
+            claude_config_dir = Path(config_dir).expanduser()
+        else:
+            claude_config_dir = Path.home() / ".claude"
+
+    return claude_config_dir / "longhouse-device-token"
+
+
+def _get_legacy_token_path(claude_config_dir: Path | None = None) -> Path:
+    """Get the path to the legacy device token file (zerg-device-token).
+
+    Used for migration from old installations.
+    """
+    if claude_config_dir is None:
+        config_dir = os.getenv("CLAUDE_CONFIG_DIR")
+        if config_dir:
+            claude_config_dir = Path(config_dir).expanduser()
         else:
             claude_config_dir = Path.home() / ".claude"
 
@@ -36,6 +51,8 @@ def get_token_path(claude_config_dir: Path | None = None) -> Path:
 def load_token(claude_config_dir: Path | None = None) -> str | None:
     """Load the device token from local storage.
 
+    Checks new path first, falls back to legacy path for migration.
+
     Args:
         claude_config_dir: Optional override for Claude config directory.
 
@@ -44,20 +61,35 @@ def load_token(claude_config_dir: Path | None = None) -> str | None:
     """
     token_path = get_token_path(claude_config_dir)
 
-    if not token_path.exists():
-        return None
+    # Try new path first
+    if token_path.exists():
+        try:
+            token = token_path.read_text().strip()
+            if token:
+                return token
+        except (OSError, IOError):
+            pass
 
-    try:
-        token = token_path.read_text().strip()
-        return token if token else None
-    except (OSError, IOError):
-        return None
+    # Fall back to legacy path for existing installations
+    legacy_path = _get_legacy_token_path(claude_config_dir)
+    if legacy_path.exists():
+        try:
+            token = legacy_path.read_text().strip()
+            if token:
+                # Migrate to new path
+                save_token(token, claude_config_dir)
+                return token
+        except (OSError, IOError):
+            pass
+
+    return None
 
 
 def save_token(token: str, claude_config_dir: Path | None = None) -> None:
     """Save a device token to local storage.
 
     Creates the config directory if it doesn't exist.
+    Uses secure file creation to avoid permission race conditions.
 
     Args:
         token: The token to save.
@@ -66,20 +98,39 @@ def save_token(token: str, claude_config_dir: Path | None = None) -> None:
     Raises:
         OSError: If unable to write the token file.
     """
+    import sys
+    import tempfile
+
     token_path = get_token_path(claude_config_dir)
 
     # Ensure parent directory exists
     token_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Write token with restricted permissions (owner read/write only)
-    token_path.write_text(token.strip() + "\n")
+    content = token.strip() + "\n"
 
-    # Set file permissions to 600 (owner read/write only)
-    try:
-        token_path.chmod(0o600)
-    except OSError:
-        # Windows doesn't support chmod the same way, ignore
-        pass
+    if sys.platform == "win32":
+        # Windows: simple write, chmod not fully supported
+        token_path.write_text(content)
+    else:
+        # Unix: atomic write with secure permissions
+        # Write to temp file then rename for atomicity
+        fd, tmp_path = tempfile.mkstemp(
+            dir=token_path.parent,
+            prefix=".token-",
+            suffix=".tmp",
+        )
+        try:
+            os.write(fd, content.encode())
+            os.fchmod(fd, 0o600)
+            os.close(fd)
+            os.rename(tmp_path, token_path)
+        except Exception:
+            os.close(fd)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
 
 def clear_token(claude_config_dir: Path | None = None) -> bool:
@@ -125,7 +176,9 @@ def clear_zerg_url(claude_config_dir: Path | None = None) -> bool:
 
 
 def get_zerg_url(claude_config_dir: Path | None = None) -> str | None:
-    """Load the configured Zerg API URL from local storage.
+    """Load the configured Longhouse API URL from local storage.
+
+    Checks new path first, falls back to legacy path for migration.
 
     Args:
         claude_config_dir: Optional override for Claude config directory.
@@ -135,37 +188,94 @@ def get_zerg_url(claude_config_dir: Path | None = None) -> str | None:
     """
     url_path = _get_url_path(claude_config_dir)
 
-    if not url_path.exists():
-        return None
+    # Try new path first
+    if url_path.exists():
+        try:
+            url = url_path.read_text().strip()
+            if url:
+                return url
+        except (OSError, IOError):
+            pass
 
-    try:
-        url = url_path.read_text().strip()
-        return url if url else None
-    except (OSError, IOError):
-        return None
+    # Fall back to legacy path for existing installations
+    legacy_path = _get_legacy_url_path(claude_config_dir)
+    if legacy_path.exists():
+        try:
+            url = legacy_path.read_text().strip()
+            if url:
+                # Migrate to new path
+                save_zerg_url(url, claude_config_dir)
+                return url
+        except (OSError, IOError):
+            pass
+
+    return None
 
 
 def save_zerg_url(url: str, claude_config_dir: Path | None = None) -> None:
-    """Save the Zerg API URL to local storage.
+    """Save the Longhouse API URL to local storage.
+
+    Uses secure file creation to avoid permission race conditions.
 
     Args:
         url: The URL to save.
         claude_config_dir: Optional override for Claude config directory.
     """
+    import sys
+    import tempfile
+
     url_path = _get_url_path(claude_config_dir)
 
     # Ensure parent directory exists
     url_path.parent.mkdir(parents=True, exist_ok=True)
 
-    url_path.write_text(url.strip() + "\n")
+    content = url.strip() + "\n"
+
+    if sys.platform == "win32":
+        # Windows: simple write, chmod not fully supported
+        url_path.write_text(content)
+    else:
+        # Unix: atomic write with secure permissions
+        fd, tmp_path = tempfile.mkstemp(
+            dir=url_path.parent,
+            prefix=".url-",
+            suffix=".tmp",
+        )
+        try:
+            os.write(fd, content.encode())
+            os.fchmod(fd, 0o600)
+            os.close(fd)
+            os.rename(tmp_path, url_path)
+        except Exception:
+            os.close(fd)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
 
 def _get_url_path(claude_config_dir: Path | None = None) -> Path:
-    """Get the path to the Zerg URL file."""
+    """Get the path to the Longhouse URL file."""
     if claude_config_dir is None:
         config_dir = os.getenv("CLAUDE_CONFIG_DIR")
         if config_dir:
-            claude_config_dir = Path(config_dir)
+            claude_config_dir = Path(config_dir).expanduser()
+        else:
+            claude_config_dir = Path.home() / ".claude"
+
+    return claude_config_dir / "longhouse-url"
+
+
+def _get_legacy_url_path(claude_config_dir: Path | None = None) -> Path:
+    """Get the path to the legacy URL file (zerg-url).
+
+    Used for migration from old installations.
+    """
+    if claude_config_dir is None:
+        config_dir = os.getenv("CLAUDE_CONFIG_DIR")
+        if config_dir:
+            claude_config_dir = Path(config_dir).expanduser()
         else:
             claude_config_dir = Path.home() / ".claude"
 
