@@ -10,16 +10,70 @@ Skills-Dir: .agents/skills
 
 - **Read VISION.md first** — It's the guiding light. Understand the strategic direction before diving into implementation.
 - **Read VISION.md (SQLite-only OSS Pivot section)** — Details the SQLite pivot plan. Don't invest in Postgres-specific infrastructure.
-- **Progressive disclosure** — AGENTS.md should point to deeper docs/runbooks so agents know what they don’t know.
+- **Progressive disclosure** — AGENTS.md should point to deeper docs/runbooks so agents know what they don't know.
 - Always commit changes as you go (no lingering uncommitted work).
 
 **"Trust the AI"** — Modern LLMs are smart enough to figure things out. Give them context and autonomy, not rigid decision trees. No keyword routing, no specialized commiss.
 
 **Current Direction (2026-01):** Migrating to SQLite-only for OSS. Postgres is control-plane only. See VISION.md § "No Postgres in core."
 
+## Autonomy Levels
+
+Adjust your behavior based on user signals:
+
+**Level 1: Collaborative (default)**
+- Propose approach, get approval before significant changes
+- Ask clarifying questions when ambiguous
+- Show work as you go
+
+**Level 2: Engineer Mode**
+- User says: "you're the engineer", "run everything yourself", "report back when done"
+- **Execute end-to-end:** Start services, fix blockers, run scripts, verify results yourself
+- **Own the pipeline:** Don't ask permission for intermediate steps (fixing imports, creating missing files, running tests)
+- **Self-verify:** View screenshots yourself, test URLs yourself, check prod health yourself
+- **Report comprehensively:** Live URLs, what works, what's blocked, metrics
+- Only ask if genuinely blocked (auth needed, ambiguous requirements)
+
+**Level 3: PM Review Mode**
+- User says: "act as PM", "audit this", "what's missing?"
+- Analyze from user perspective
+- Identify gaps in UX, docs, onboarding
+- Propose prioritized roadmap
+- Don't implement unless asked
+
 ## Task Tracking
 
-- Master task list: `TODO.md` (update before/after work; use this for agent handoffs and status)
+- **Master task list:** `TODO.md` (update BEFORE starting work and AFTER completing work)
+- **Mark progress:** Check off subtasks as you complete them so next agent knows state
+- **Document blockers:** If you can't finish, add notes under the task explaining why
+
+## Proactive Patterns (Do These Without Being Asked)
+
+1. **Create infrastructure when missing**
+   - Example: Need screenshots? Create reusable Playwright capture script, not manual screenshots
+   - Example: Need to test something repeatedly? Add `make` target or package.json script
+   - Principle: Leave things better than you found them
+
+2. **Self-verify before reporting**
+   - Don't just push code—verify it works in prod
+   - View actual URLs, check health endpoints, look at screenshots yourself
+   - Report with evidence: "✅ Live at https://... - I checked it"
+
+3. **Fix blockers in your path**
+   - Missing file? Create it
+   - Wrong env var? Fix it
+   - Import error? Resolve it
+   - Don't ask permission for obvious fixes
+
+4. **Update documentation as you learn**
+   - Found a gotcha? Append to learnings section
+   - Created new script? Add usage to README
+   - Changed workflow? Update TODO.md
+
+5. **Think like a PM while executing**
+   - "Is this HN-ready?" → Check the full user journey
+   - "Will this confuse users?" → Test the happy path
+   - "Does this look professional?" → View it yourself before declaring done
 
 ## Quick Reference
 
@@ -90,8 +144,9 @@ User message → `OikosService` → `oikos_react_engine` → (spawn_commis) → 
 
 ## Gotchas
 
-1. **`make dev` is interactive** — runs backend + frontend, Ctrl+C to stop.
-2. **Default is SQLite** — `make dev` uses `~/.zerg/dev.db`, no Docker needed.
+1. **`make dev` is interactive** — runs backend + frontend, Ctrl+C to stop. Use `run_in_background=true` in Bash tool.
+2. **Default is SQLite** — `make dev` uses `~/.longhouse/dev.db` (was `~/.zerg/dev.db`), no Docker needed.
+3. **.env can override defaults** — DATABASE_URL in .env overrides make dev; comment it out for SQLite dev.
 4. **WebSocket/SSE code must sync** — run `make regen-ws` / `make regen-sse` after schema changes.
 5. **Auth disabled in dev** — `AUTH_DISABLED=1` set automatically by dev.sh.
 6. **Coolify env var changes need redeploy** — restart doesn't pick up new vars.
@@ -103,6 +158,7 @@ User message → `OikosService` → `oikos_react_engine` → (spawn_commis) → 
 12. **Sauron Docker build** — uses `apps/sauron/pyproject.docker.toml` to avoid editable `../zerg/backend` sources during image builds.
 13. **Coolify Caddy stale route** — If `/data/coolify/proxy/caddy/dynamic/api-longhouse.caddy` exists, it can override docker-proxy labels and stick to stale container; delete file + restart `coolify-proxy`.
 14. **Google OAuth JS origins** — must be updated in Google Cloud Console for `GOOGLE_CLIENT_ID`; gcloud IAM OAuth clients are for workforce identity (no JS origin config).
+15. **Backend README required** — pyproject.toml references README.md; hatch build fails without it. Create minimal `apps/zerg/backend/README.md` if missing.
 
 ## Pushing Changes
 
@@ -163,6 +219,32 @@ Sauron is the centralized ops scheduler, deployed as a standalone service on cli
 
 ---
 
+## Anti-Patterns (Don't Do This)
+
+1. **Asking permission for obvious fixes**
+   - ❌ "Should I create a missing README?"
+   - ✅ Just create it and mention in commit
+
+2. **Reporting without verification**
+   - ❌ "I pushed the changes, should be live"
+   - ✅ "Pushed and verified prod: https://... shows X"
+
+3. **Manual processes for repeatable tasks**
+   - ❌ "I'll manually capture screenshots each release"
+   - ✅ Create script so next agent (or CI) can repeat it
+
+4. **Stopping at first blocker**
+   - ❌ "Import failed, waiting for help"
+   - ✅ Check what's imported, find the right function, fix it
+
+5. **Incomplete handoffs**
+   - ❌ Commit message: "fixed stuff"
+   - ✅ Comprehensive: what/why/where, with live URLs
+
+6. **Assuming things work**
+   - ❌ "README updated (didn't check GitHub)"
+   - ✅ "README updated, verified on GitHub: [url]"
+
 ## Agent Self-Improvement
 
 **Agents: append learnings here.** Human reviews weekly to promote or compact.
@@ -194,6 +276,11 @@ Categories: `gotcha`, `pattern`, `design`, `tool`, `test`, `deploy`, `perf`
 ### Learnings
 
 <!-- Agents: append below this line. Human compacts weekly. -->
+- (2026-02-02) [pattern] When asked to "run everything yourself", execute full pipeline: start services, fix blockers, run scripts, view results, verify prod, write comprehensive report. Don't ask permission for obvious fixes (missing README, wrong env vars).
+- (2026-02-02) [pattern] Screenshot automation > manual: create Playwright capture script that's repeatable, version-controlled, and CI-ready instead of one-off manual captures.
+- (2026-02-02) [gotcha] .env DATABASE_URL can override make dev SQLite default; comment it out or unset it explicitly in dev.sh.
+- (2026-02-02) [gotcha] License mismatches across files (LICENSE vs README vs pyproject.toml) confuse users; unify to single source of truth (LICENSE file).
+- (2026-02-02) [deploy] PyPI trusted publishing workflow queues in GitHub Actions; can take 2-5 min for environment approval + publish to complete.
 - (2026-02-02) [test] Commis resume tasks must set test commis context; otherwise barrier jobs stay queued and Oikos never resumes in E2E.
 - (2026-01-30) [gotcha] Multi-tenant mode disables Agents API via require_single_tenant(); schema routing in commis_db is test-only and blocked in prod.
 - (2026-01-31) [test] ScriptedLLM checks for ToolMessage to decide synthesis vs tool-call; multi-run threads accumulate messages, so new scenarios must check "current turn only" (messages after last HumanMessage).
