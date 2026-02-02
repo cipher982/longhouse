@@ -16,7 +16,8 @@
     "generate-sdk": "make generate-sdk",
     "validate:css": "node scripts/validate-css-classes.js",
     "validate:all": "bun run validate:css && ./scripts/fast-contract-check.sh",
-    "verify:react": "node scripts/verify-single-react.mjs"
+    "verify:react": "node scripts/verify-single-react.mjs",
+    "capture:screenshots": "bun run apps/zerg/e2e/scripts/capture-marketing-screenshots.ts"
   },
   "devDependencies": {
     "@asyncapi/cli": "^3.1.0",
