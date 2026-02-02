@@ -38,8 +38,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Longhouse API configuration (local by default)
-# Supports both LONGHOUSE_API_URL (preferred) and LONGHOUSE_API_URL (legacy) for backwards compatibility
-LONGHOUSE_API_URL = os.getenv("LONGHOUSE_API_URL") or os.getenv("LONGHOUSE_API_URL", "http://localhost:47300")
+LONGHOUSE_API_URL = os.getenv("LONGHOUSE_API_URL", "http://localhost:47300")
 
 # Valid session ID pattern (alphanumeric, dashes, underscores only)
 # Prevents path traversal attacks via malicious session IDs
