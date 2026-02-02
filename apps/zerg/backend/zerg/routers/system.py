@@ -85,3 +85,34 @@ def health() -> Dict[str, Any]:
         "db": {"status": "ok" if db_ok else "error"},
         "ws": ws_stats,
     }
+
+
+@router.post("/seed-demo-sessions")
+async def seed_demo_sessions() -> Dict[str, Any]:
+    """Seed demo agent sessions for marketing/onboarding.
+
+    Public endpoint (no auth) for dev/demo purposes.
+    Disabled in production.
+    """
+    if _settings.environment and _settings.environment.lower() == "production":
+        return {"error": "Demo seeding disabled in production"}
+
+    from zerg.services.agents_store import ingest_session
+    from zerg.services.demo_sessions import build_demo_agent_sessions
+
+    session_factory = get_session_factory()
+
+    # Build demo sessions
+    demo_sessions = build_demo_agent_sessions()
+
+    # Ingest each session
+    with session_factory() as db:  # type: ignore[arg-type]
+        for session in demo_sessions:
+            ingest_session(db, session)
+        db.commit()
+
+    return {
+        "status": "ok",
+        "sessions_seeded": len(demo_sessions),
+        "message": "Demo sessions seeded successfully",
+    }

@@ -133,18 +133,12 @@ def clear_user_data(engine) -> dict[str, any]:
         return {"message": "No user data tables found to clear", "tables_cleared": [], "rows_cleared": 0}
 
     start_time = time.perf_counter()
-    max_attempts = 3 if engine.dialect.name == "postgresql" else 1
+    max_attempts = 1
     last_err: Exception | None = None
 
     for attempt in range(1, max_attempts + 1):
         try:
             with engine.connect() as conn:
-                # CRITICAL: Set timeouts to fail fast if locks can't be acquired
-                # This prevents hanging when SSE connections hold transactions open
-                if engine.dialect.name == "postgresql":
-                    conn.execute(text("SET lock_timeout = '3s'"))  # Reduced from 5s for faster retry
-                    conn.execute(text("SET statement_timeout = '15s'"))  # Reduced from 30s
-
                 total_before: int | None = None
                 if should_count_rows:
                     # Count rows before clearing (best-effort; for diagnostics only)
@@ -156,20 +150,14 @@ def clear_user_data(engine) -> dict[str, any]:
                         except Exception:
                             pass
 
-                if engine.dialect.name == "postgresql":
-                    # PostgreSQL: Use TRUNCATE CASCADE for efficiency.
-                    if clear_tables:
-                        tables_list = ", ".join(f'"{table}"' for table in sorted(clear_tables))
-                        conn.execute(text(f"TRUNCATE TABLE {tables_list} RESTART IDENTITY CASCADE"))
-                else:
-                    # SQLite: Disable FK checks and DELETE
-                    conn.execute(text("PRAGMA foreign_keys = OFF"))
-                    for table in sorted(clear_tables):
-                        try:
-                            conn.execute(text(f'DELETE FROM "{table}"'))
-                        except Exception as e:
-                            logger.warning(f"Failed to clear table {table}: {e}")
-                    conn.execute(text("PRAGMA foreign_keys = ON"))
+                # SQLite: Disable FK checks and DELETE
+                conn.execute(text("PRAGMA foreign_keys = OFF"))
+                for table in sorted(clear_tables):
+                    try:
+                        conn.execute(text(f'DELETE FROM "{table}"'))
+                    except Exception as e:
+                        logger.warning(f"Failed to clear table {table}: {e}")
+                conn.execute(text("PRAGMA foreign_keys = ON"))
 
                 conn.commit()
 

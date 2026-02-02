@@ -825,18 +825,6 @@ wheels = [
 ]
 
 [[package]]
-name = "hatch-agent"
-version = "0.1.0"
-source = { directory = "../../../packages/hatch-agent" }
-
-[package.metadata]
-requires-dist = [
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
-]
-provides-extras = ["dev"]
-
-[[package]]
 name = "hpack"
 version = "4.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1204,7 +1192,7 @@ wheels = [
 
 [[package]]
 name = "longhouse"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
@@ -1217,7 +1205,6 @@ dependencies = [
     { name = "fastapi" },
     { name = "google-ads" },
     { name = "google-auth" },
-    { name = "hatch-agent" },
     { name = "httpx", extra = ["http2"] },
     { name = "jsonschema" },
     { name = "langchain-core" },
@@ -1265,7 +1252,6 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.110.0" },
     { name = "google-ads", specifier = ">=26.0.0" },
     { name = "google-auth", specifier = ">=2.40.3" },
-    { name = "hatch-agent", directory = "../../../packages/hatch-agent" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.27.0" },
     { name = "jsonschema", specifier = ">=4.23.0" },
     { name = "langchain-core", specifier = ">=1.2.5" },

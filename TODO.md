@@ -140,6 +140,19 @@ Ensure launch readiness without relying on scattered docs.
 
 ---
 
+## README Test CI (Readme-Contract) (5)
+
+Automate README command verification with explicit, opt-in contracts. Use cube ARC runners where possible.
+
+- [ ] Define `readme-test` JSON block spec (steps, workdir, env, mode, timeout, cleanup).
+- [ ] Implement `scripts/run-readme-tests.sh` (extract + run in temp clone, fail fast, save logs).
+- [ ] Add `make test-readmes` target (smoke vs full mode flags).
+- [ ] Add GitHub Actions workflow using `runs-on: cube` for PR smoke and nightly full.
+- [ ] Add `readme-test` blocks to root README + runner/sauron/hatch-agent READMEs.
+- [ ] Optional: failure triage via `hatch` agent (summarize logs, suggest fix).
+
+---
+
 ## Life Hub Dependency Removal — Sessions/Forum/Resume (7)
 
 Make Longhouse the sole source of session truth. Remove Life Hub routes, naming, and test dependencies in OSS/runtime.

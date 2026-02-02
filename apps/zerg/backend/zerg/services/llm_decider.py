@@ -6,8 +6,7 @@ This module provides the LLM-based decision layer for roundabout monitoring.
 The oikos polls commis status ("glancing at a second monitor") and the LLM
 interprets what it sees to decide: wait, exit early, cancel, or peek.
 
-This is the v2.0 default approach. Heuristic mode is deprecated but kept for
-backwards compatibility.
+This is the v2.0 approach: LLM-only decision making.
 
 The LLM decider is gated by hard guardrails (not heuristics):
 - Poll interval (only call every N polls) - rate limiting
@@ -35,12 +34,9 @@ class DecisionMode(Enum):
     """Decision mode for roundabout monitoring.
 
     v2.0 default: LLM mode (trust the AI to interpret status)
-    Deprecated: HEURISTIC mode (pre-programmed decision engine)
     """
 
-    HEURISTIC = "heuristic"  # DEPRECATED: Rules-based only (v1.0 approach)
     LLM = "llm"  # v2.0 default: LLM interprets status and decides
-    HYBRID = "hybrid"  # DEPRECATED: Heuristic first, then LLM for ambiguous cases
 
 
 # Default configuration (v2.0: Trust the AI)
