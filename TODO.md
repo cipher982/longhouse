@@ -55,17 +55,37 @@ Make the Forum the canonical discovery UI for sessions, with **explicit** state 
 
 ---
 
-## OSS One-Liner Installer + Onboard Wizard (6)
+## OSS One-Liner Installer + Onboard Wizard (6) ✅
 
 Make the one-liner + TUI wizard the **default** OSS onboarding path.
 
-**Deliverables:** `curl -fsSL https://longhouse.ai/install.sh | bash` installs CLI + Claude shim, verifies PATH, then runs `longhouse onboard`.
+**Deliverables:** `curl -fsSL https://get.longhouse.ai/install.sh | bash` installs CLI + Claude shim, verifies PATH, then runs `longhouse onboard`.
 
-- [ ] Create `scripts/install.sh` (one-liner entrypoint) that installs CLI + Claude shim + verification.
-- [ ] Implement `longhouse onboard` TUI (QuickStart default, Manual option; no .env edits).
-- [ ] Add shim verification: check `command -v claude` in a fresh shell; if failed, print one exact fix line.
-- [ ] Update README quickstart + onboarding contract to use the one-liner + wizard.
-- [ ] Add a fallback message for unique shells (fish/other) with exact instructions.
+- [x] Create `scripts/install.sh` (one-liner entrypoint) that installs CLI + Claude shim + verification.
+- [x] Implement `longhouse onboard` TUI (QuickStart default, Manual option; no .env edits).
+- [x] Add shim verification: check `command -v claude` in a fresh shell; if failed, print one exact fix line.
+- [x] Update README quickstart + onboarding contract to use the one-liner + wizard.
+- [x] Add a fallback message for unique shells (fish/other) with exact instructions.
+- [x] Publish `longhouse` package to PyPI (v0.1.1 live)
+- [x] Set up trusted publishing workflow (GitHub Actions → PyPI via OIDC)
+- [x] Set up vanity URL redirect (get.longhouse.ai → raw GitHub)
+- [x] Cross-platform installer CI (Ubuntu 22/24, macOS Intel/ARM)
+
+**Done 2026-02-02:** Core onboarding flow complete. PyPI package published, installer working on all platforms.
+
+---
+
+## OSS First-Run UX Polish (5)
+
+Eliminate the "empty timeline" anticlimactic moment and improve discovery for users without Claude Code.
+
+**Deliverables:** New users see value immediately; timeline isn't empty; clear next steps regardless of setup.
+
+- [ ] Seed demo session data on first `longhouse onboard` run (shows what the timeline looks like)
+- [ ] Add README screenshot/gif showing the timeline UI (visual proof of value)
+- [ ] Improve "No Claude Code" guidance in onboard wizard (link to alternatives, explain what to do next)
+- [ ] Add "Getting Started" card in empty timeline state (instead of just blank screen)
+- [ ] Consider demo mode flag for `longhouse serve --demo` (starts with pre-loaded sessions for exploration)
 
 ---
 
