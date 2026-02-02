@@ -16,7 +16,6 @@ import { useAgentSessions, useAgentFilters } from "../hooks/useAgentSessions";
 import {
   type AgentSession,
   type AgentSessionFilters,
-  seedAgentDemoSessions,
 } from "../services/api/agents";
 import {
   Button,
@@ -368,22 +367,9 @@ export default function SessionsPage() {
     setSearchQuery("");
   }, []);
 
-  // Demo seeding state
-  const [isSeeding, setIsSeeding] = useState(false);
-
-  const handleLoadDemo = useCallback(async () => {
-    setIsSeeding(true);
-    try {
-      await seedAgentDemoSessions();
-      // Refresh the sessions list and filters
-      refetch();
-      refetchFilters();
-    } catch (err) {
-      console.error("Failed to seed demo sessions:", err);
-    } finally {
-      setIsSeeding(false);
-    }
-  }, [refetch, refetchFilters]);
+  const handleConnectShipper = useCallback(() => {
+    navigate("/settings/integrations");
+  }, [navigate]);
 
   const hasFilters = project || provider || daysBack !== 14 || searchQuery;
   const showGuidedEmptyState = sessions.length === 0 && !hasFilters;
@@ -476,7 +462,8 @@ export default function SessionsPage() {
             <div className="timeline-empty__intro">
               <h3>Welcome to your Timeline</h3>
               <p>
-                This is where your Claude, Codex, Gemini, and Oikos sessions live.
+                This is where your Claude, Codex, Gemini, and Oikos sessions live. Start with a demo
+                timeline or connect your shipper for live sync.
               </p>
             </div>
             <div className="timeline-empty__steps">
@@ -484,23 +471,22 @@ export default function SessionsPage() {
                 <div className="timeline-step__header">
                   <span className="timeline-step__badge">1</span>
                   <div>
-                    <h4>Try the demo</h4>
-                    <p>Load sample sessions to explore the timeline.</p>
+                    <h4>Connect your shipper</h4>
+                    <p>Optional: sync real sessions from your laptop.</p>
                   </div>
                 </div>
-                <Button variant="primary" onClick={handleLoadDemo} disabled={isSeeding}>
-                  {isSeeding ? "Loading..." : "Load Demo Timeline"}
+                <Button variant="secondary" onClick={handleConnectShipper}>
+                  Open Integrations
                 </Button>
               </Card>
               <Card className="timeline-step">
                 <div className="timeline-step__header">
                   <span className="timeline-step__badge">2</span>
                   <div>
-                    <h4>Sync real sessions</h4>
-                    <p>Install the shipper CLI to sync from your machine.</p>
+                    <h4>Explore the timeline</h4>
+                    <p>Filter by provider, project, or search across sessions.</p>
                   </div>
                 </div>
-                <code className="timeline-step__code">pip install longhouse-shipper</code>
               </Card>
             </div>
           </div>
