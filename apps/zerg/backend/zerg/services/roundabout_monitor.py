@@ -12,7 +12,6 @@ This is v2.0's "trust the AI" approach:
 - Polling (oikos checking status) = GOOD (like glancing at second monitor)
 - LLM interprets status and decides = GOOD (trust the AI's judgment)
 - Hard guardrails (timeouts, rate limits) = GOOD (safety boundaries, not heuristics)
-- Heuristic decision engine = DEPRECATED (pre-programs LLM decisions)
 
 Implementation:
 - Polling loop every 5 seconds (oikos checking status)
@@ -23,10 +22,8 @@ Implementation:
 - Returns structured result when commis completes
 - Logs monitoring checks for audit trail
 
-Decision modes (v2.0 default: LLM):
-- LLM (v2.0 default): LLM interprets status and decides
-- Heuristic (DEPRECATED): Pre-programmed decision rules (v1.0 approach)
-- Hybrid (DEPRECATED): Heuristic first, then LLM for ambiguous cases
+Decision mode (v2.0 default: LLM):
+- LLM: LLM interprets status and decides
 """
 
 import asyncio
@@ -228,18 +225,12 @@ class RoundaboutMonitor:
 
     When the commis completes (or times out), it returns a structured result.
 
-    Decision modes (v2.0 default: LLM):
-    - LLM (v2.0 default): Let the AI interpret status and decide
-    - Heuristic (DEPRECATED): Pre-programmed rules-based decisions (v1.0 approach)
-    - Hybrid (DEPRECATED): Heuristic first, LLM for ambiguous cases
+    Decision mode (v2.0 default: LLM):
+    - LLM: Let the AI interpret status and decide
 
     Usage:
         # v2.0 default: LLM mode (trust the AI)
         monitor = RoundaboutMonitor(db, job_id, owner_id)
-        result = await monitor.wait_for_completion()
-
-        # Override to use deprecated heuristic mode (not recommended)
-        monitor = RoundaboutMonitor(db, job_id, owner_id, decision_mode=DecisionMode.HEURISTIC)
         result = await monitor.wait_for_completion()
     """
 
@@ -264,19 +255,6 @@ class RoundaboutMonitor:
 
         # Phase 5: LLM decision configuration (v2.0 default: LLM mode)
         self.decision_mode = decision_mode
-
-        # Warn if using deprecated heuristic mode
-        if decision_mode in (DecisionMode.HEURISTIC, DecisionMode.HYBRID):
-            import warnings
-
-            warnings.warn(
-                f"DecisionMode.{decision_mode.name} is deprecated. "
-                "v2.0 uses DecisionMode.LLM (trust the AI to interpret status). "
-                "Heuristic decision engines pre-program the LLM's decisions, which goes against "
-                "the v2.0 philosophy of trusting the AI.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
         self.llm_poll_interval = llm_poll_interval
         self.llm_max_calls = llm_max_calls
         self.llm_timeout_seconds = llm_timeout_seconds
@@ -298,10 +276,7 @@ class RoundaboutMonitor:
         self._llm_calls_made = 0  # Track calls for budget enforcement
 
     async def _make_decision(self, ctx: DecisionContext) -> tuple[RoundaboutDecision, str]:
-        """Make a decision using the configured mode.
-
-        This method integrates heuristic and LLM decision making based on
-        the configured decision_mode.
+        """Make a decision using LLM.
 
         Args:
             ctx: Decision context with current state
@@ -309,30 +284,7 @@ class RoundaboutMonitor:
         Returns:
             Tuple of (decision, reason)
         """
-        # Mode: heuristic only
-        if self.decision_mode == DecisionMode.HEURISTIC:
-            return make_heuristic_decision(ctx)
-
-        # Mode: LLM only
-        if self.decision_mode == DecisionMode.LLM:
-            return await self._make_llm_decision(ctx)
-
-        # Mode: hybrid - heuristic first, LLM for ambiguous cases
-        heuristic_decision, heuristic_reason = make_heuristic_decision(ctx)
-
-        # If heuristic says anything other than WAIT, use it
-        if heuristic_decision != RoundaboutDecision.WAIT:
-            return heuristic_decision, f"[heuristic] {heuristic_reason}"
-
-        # Heuristic says WAIT - optionally consult LLM
-        llm_decision, llm_reason = await self._make_llm_decision(ctx)
-
-        # If LLM says something actionable, use it
-        if llm_decision != RoundaboutDecision.WAIT:
-            return llm_decision, f"[llm] {llm_reason}"
-
-        # Both say wait
-        return RoundaboutDecision.WAIT, f"[hybrid] {heuristic_reason}"
+        return await self._make_llm_decision(ctx)
 
     async def _make_llm_decision(self, ctx: DecisionContext) -> tuple[RoundaboutDecision, str]:
         """Make a decision using the LLM decider.

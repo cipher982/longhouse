@@ -59,18 +59,10 @@ def publish_event_fire_and_forget(event_type: EventType, data: Dict[str, Any]) -
         from zerg.utils.async_runner import run_in_shared_loop
 
         # Run the event publishing in the shared loop (blocks until complete)
-        run_in_shared_loop(_publish_event_safe(event_type, data))
+        run_in_shared_loop(publish_event(event_type, data))
 
     except Exception as e:
         # Handle any errors with task execution
-        logger.error(f"Failed to publish fire-and-forget event {event_type}: {e}")
-
-
-async def _publish_event_safe(event_type: EventType, data: Dict[str, Any]) -> None:
-    """Internal safe event publishing."""
-    try:
-        await event_bus.publish(event_type, data)
-    except Exception as e:
         logger.error(f"Failed to publish fire-and-forget event {event_type}: {e}")
 
 
@@ -92,18 +84,3 @@ def get_active_task_count() -> int:
     synchronously, so this always returns 0.
     """
     return 0
-
-
-# Legacy compatibility - remove after migration
-async def publish_event_safe(event_type: EventType, data: Dict[str, Any], *, fire_and_forget: bool = False) -> None:
-    """
-    Legacy compatibility function - DEPRECATED.
-
-    Use publish_event() or publish_event_fire_and_forget() instead.
-    """
-    logger.warning("publish_event_safe is deprecated - use publish_event() or publish_event_fire_and_forget()")
-
-    if fire_and_forget:
-        publish_event_fire_and_forget(event_type, data)
-    else:
-        await publish_event(event_type, data)

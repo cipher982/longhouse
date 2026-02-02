@@ -61,8 +61,7 @@ function parseArgs(): CaptureOptions {
 async function seedDemoData(baseUrl: string): Promise<void> {
   console.log("  Seeding demo data via API...");
 
-  // Call demo data seed endpoint (you'll need to add this)
-  const response = await fetch(`${baseUrl}/api/admin/seed-demo-data`, {
+  const response = await fetch(`${baseUrl}/api/system/seed-demo-sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
   });
@@ -71,7 +70,8 @@ async function seedDemoData(baseUrl: string): Promise<void> {
     console.warn(`  Warning: Demo seed failed with ${response.status}`);
     console.warn("  Continuing anyway - screenshots may show empty state");
   } else {
-    console.log("  ✓ Demo data seeded");
+    const result = await response.json();
+    console.log(`  ✓ Demo data seeded: ${result.sessions_seeded} sessions`);
   }
 }
 
