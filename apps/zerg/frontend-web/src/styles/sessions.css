@@ -149,18 +149,6 @@
     font-size: var(--font-size-xs);
   }
 
-  .timeline-step__code {
-    display: block;
-    padding: var(--space-3);
-    background: var(--surface-glass-2);
-    border: 1px solid var(--border-glass-1);
-    border-radius: var(--radius-md);
-    font-family: var(--font-family-mono);
-    font-size: var(--font-size-sm);
-    color: var(--color-text-secondary);
-    user-select: all;
-  }
-
   /* ---------------------------------------------------------------------------
    * Session Groups
    * ---------------------------------------------------------------------------*/
