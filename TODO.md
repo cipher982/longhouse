@@ -11,6 +11,21 @@ Capture list for substantial work. Not quick fixes (do those live).
 
 ---
 
+## Public Launch Checklist (from archived doc) (6)
+
+Ensure launch readiness without relying on scattered docs.
+
+- [ ] Rewrite README to center Timeline value and 3 install paths.
+- [ ] Add CTA from Chat to “View session trace” after a run.
+- [ ] Improve Timeline detail header (goal, repo/project, duration, status).
+- [ ] Add basic metrics (tool count, duration, latency if available).
+- [ ] Add filters within detail view (user/assistant/tool) + search.
+- [ ] Core UI smoke snapshots pass (`make qa-ui-smoke`).
+- [ ] Shipper smoke test passes (if shipper path is enabled).
+- [ ] Add packaging smoke test for future install.sh/brew path (if shipped).
+
+---
+
 ## Life Hub Dependency Removal — Sessions/Forum/Resume (7)
 
 Make Longhouse the sole source of session truth. Remove Life Hub routes, naming, and test dependencies in OSS/runtime.
@@ -21,7 +36,7 @@ Make Longhouse the sole source of session truth. Remove Life Hub routes, naming,
 - [ ] Update frontend hooks/components (`useLifeHubSessions`, `useActiveSessions`, `SessionPickerModal`, Forum) to hit the new endpoints and rename to “sessions/timeline”.
 - [ ] Update session-resume flow to call `ship_session_to_zerg`/`fetch_session_from_zerg` directly (remove Life Hub naming in `session_chat`, `oikos_tools`, etc.).
 - [ ] Replace Life Hub integration tests (backend + E2E) with local ingest/export tests; remove LIFE_HUB_API_KEY requirement in OSS runs.
-- [ ] Update docs that still reference Life Hub: `docs/session-resume-design.md`, `docs/experiments/shipper-manual-validation.md`.
+- [x] Update VISION session-resume section to remove Life Hub flow (doc consolidated).
 
 ---
 
@@ -99,8 +114,8 @@ Establish a single public brand (Longhouse) while keeping Oikos as assistant UI 
 - [x] Update `VISION.md` to “Longhouse Vision” + add a short naming note (Oikos/Zerg)
 - [x] Update VISION.md (SQLite-only OSS Pivot section) to Longhouse naming + CLI examples
 - [x] Update `README.md` to Longhouse branding + domain references
-- [x] Update `docs/public-launch-task.md` and `VISION.md` onboarding section to reflect Longhouse naming
-- [x] Add a short `docs/BRANDING.md` with the naming map + do/don’t usage rules
+- [x] Update VISION onboarding section (and TODO checklist) to reflect Longhouse naming
+- [x] Add branding usage rules to VISION naming section
 
 ---
 
