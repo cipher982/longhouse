@@ -24,24 +24,8 @@ app = typer.Typer(help="Longhouse server commands")
 
 
 def _get_longhouse_home() -> Path:
-    """Return the Longhouse home directory (~/.longhouse), creating if needed.
-
-    On first run, if ~/.zerg exists but ~/.longhouse doesn't, migrates data.
-    """
+    """Return the Longhouse home directory (~/.longhouse), creating if needed."""
     longhouse_home = Path.home() / ".longhouse"
-    old_home = Path.home() / ".zerg"
-
-    # Migrate data from old path on first run
-    if old_home.exists() and not longhouse_home.exists():
-        import shutil
-
-        shutil.copytree(old_home, longhouse_home)
-        # Rename old DB file if it exists
-        old_db = longhouse_home / "zerg.db"
-        new_db = longhouse_home / "longhouse.db"
-        if old_db.exists() and not new_db.exists():
-            old_db.rename(new_db)
-
     longhouse_home.mkdir(parents=True, exist_ok=True)
     return longhouse_home
 

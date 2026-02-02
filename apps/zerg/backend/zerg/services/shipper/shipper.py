@@ -46,7 +46,7 @@ class RateLimitExhaustedError(Exception):
 class ShipperConfig:
     """Configuration for the session shipper."""
 
-    zerg_api_url: str = "http://localhost:47300"
+    api_url: str = "http://localhost:47300"
     claude_config_dir: Path | None = None  # Defaults to ~/.claude
     scan_interval_seconds: int = 30
     batch_size: int = 100
@@ -370,7 +370,7 @@ class SessionShipper:
         - Gzip compression for efficient network transfer
         - HTTP 429 handling with exponential backoff and Retry-After support
         """
-        url = f"{self.config.zerg_api_url}/api/agents/ingest"
+        url = f"{self.config.api_url}/api/agents/ingest"
 
         headers = {"Content-Type": "application/json"}
         if self.config.api_token:

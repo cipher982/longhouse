@@ -68,7 +68,7 @@ class SkillLoader:
 
         Args:
             bundled_dir: Directory for bundled skills (default: zerg/skills/bundled)
-            user_dir: Directory for user-managed skills (default: ~/.zerg/skills)
+            user_dir: Directory for user-managed skills (default: ~/.longhouse/skills)
             extra_dirs: Additional directories to scan for skills
         """
         self.bundled_dir = bundled_dir or BUNDLED_SKILLS_DIR

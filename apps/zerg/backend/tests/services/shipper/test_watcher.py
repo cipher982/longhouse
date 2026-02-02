@@ -135,7 +135,7 @@ class TestSessionWatcher:
     def mock_shipper(self, temp_claude_dir):
         """Create a mock shipper with temp directory."""
         config = ShipperConfig(
-            zerg_api_url="http://localhost:47300",
+            api_url="http://localhost:47300",
             claude_config_dir=temp_claude_dir,
         )
         shipper = SessionShipper(config=config)
@@ -269,7 +269,7 @@ class TestWatcherIntegration:
             projects_dir.mkdir()
 
             config = ShipperConfig(
-                zerg_api_url="http://localhost:47300",
+                api_url="http://localhost:47300",
                 claude_config_dir=tmpdir,
             )
 

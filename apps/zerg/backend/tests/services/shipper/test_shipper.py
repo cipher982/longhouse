@@ -59,7 +59,7 @@ def mock_projects_dir(tmp_path: Path) -> Path:
 def shipper_config(mock_projects_dir: Path) -> ShipperConfig:
     """Create shipper config pointing to mock directory."""
     return ShipperConfig(
-        zerg_api_url="http://test:47300",
+        api_url="http://test:47300",
         claude_config_dir=mock_projects_dir,
     )
 
@@ -76,7 +76,7 @@ class TestShipperConfig:
     def test_default_config(self):
         """Default config uses ~/.claude."""
         config = ShipperConfig()
-        assert config.zerg_api_url == "http://localhost:47300"
+        assert config.api_url == "http://localhost:47300"
         assert config.scan_interval_seconds == 30
         assert config.batch_size == 100
 
@@ -287,7 +287,7 @@ class TestSessionShipper:
     ):
         """API token is included in request headers when configured."""
         config = ShipperConfig(
-            zerg_api_url="http://test:47300",
+            api_url="http://test:47300",
             claude_config_dir=mock_projects_dir,
             api_token="test-secret-token",
         )
@@ -326,7 +326,7 @@ class TestSessionShipper:
     ):
         """No auth header when api_token is not configured."""
         config = ShipperConfig(
-            zerg_api_url="http://test:47300",
+            api_url="http://test:47300",
             claude_config_dir=mock_projects_dir,
             api_token=None,  # Explicitly no token
         )
@@ -378,7 +378,7 @@ class TestGzipCompression:
         import gzip as gzip_module
 
         config = ShipperConfig(
-            zerg_api_url="http://test:47300",
+            api_url="http://test:47300",
             claude_config_dir=mock_projects_dir,
             enable_gzip=True,
         )
@@ -425,7 +425,7 @@ class TestGzipCompression:
     ):
         """Payloads are not compressed when enable_gzip is False."""
         config = ShipperConfig(
-            zerg_api_url="http://test:47300",
+            api_url="http://test:47300",
             claude_config_dir=mock_projects_dir,
             enable_gzip=False,
         )
@@ -475,7 +475,7 @@ class TestHttp429Handling:
     ):
         """Shipper respects Retry-After header on 429 response."""
         config = ShipperConfig(
-            zerg_api_url="http://test:47300",
+            api_url="http://test:47300",
             claude_config_dir=mock_projects_dir,
             max_retries_429=2,
             base_backoff_seconds=0.01,  # Fast backoff for testing
@@ -525,7 +525,7 @@ class TestHttp429Handling:
     ):
         """Shipper uses exponential backoff on repeated 429 without Retry-After."""
         config = ShipperConfig(
-            zerg_api_url="http://test:47300",
+            api_url="http://test:47300",
             claude_config_dir=mock_projects_dir,
             max_retries_429=2,
             base_backoff_seconds=0.01,  # Fast backoff for testing
@@ -575,7 +575,7 @@ class TestHttp429Handling:
     ):
         """Shipper spools events after max retries on persistent 429."""
         config = ShipperConfig(
-            zerg_api_url="http://test:47300",
+            api_url="http://test:47300",
             claude_config_dir=mock_projects_dir,
             max_retries_429=2,
             base_backoff_seconds=0.01,
