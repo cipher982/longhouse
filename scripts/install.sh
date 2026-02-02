@@ -312,10 +312,21 @@ run_onboard() {
 
     # Run the onboard command
     if has_command longhouse; then
-        longhouse onboard || {
-            warn "Onboarding wizard exited with error"
-            warn "You can run it again with: longhouse onboard"
-        }
+        # When piped from curl, stdin is not a TTY - use quick mode
+        if [[ -t 0 ]]; then
+            # Interactive terminal available
+            longhouse onboard || {
+                warn "Onboarding wizard exited with error"
+                warn "You can run it again with: longhouse onboard"
+            }
+        else
+            # Non-interactive (piped from curl) - use quick mode
+            info "Non-interactive mode detected, using QuickStart defaults"
+            longhouse onboard --quick || {
+                warn "Onboarding wizard exited with error"
+                warn "You can run it again with: longhouse onboard"
+            }
+        fi
     else
         warn "longhouse command not found, skipping wizard"
     fi
