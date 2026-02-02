@@ -1416,7 +1416,7 @@
   .install-command-container {
     display: flex;
     align-items: center;
-    background: var(--color-surface-section);
+    background: rgb(17 17 17);
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-lg);
     overflow: hidden;
@@ -1456,7 +1456,7 @@
     justify-content: center;
     width: 48px;
     height: 48px;
-    background: var(--color-surface-card);
+    background: rgb(30 30 30);
     border: none;
     border-left: 1px solid var(--color-border-subtle);
     color: var(--color-text-muted);
@@ -1467,7 +1467,7 @@
 
   .install-copy-btn:hover {
     color: var(--color-text-primary);
-    background: var(--color-surface-hover);
+    background: rgb(45 45 45);
   }
 
   .install-copy-btn.copied {
