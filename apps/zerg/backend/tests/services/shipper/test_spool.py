@@ -258,7 +258,7 @@ class TestShipperSpoolIntegration:
             session_file.write_text(json.dumps(event_data) + "\n")
 
             config = ShipperConfig(
-                zerg_api_url="http://localhost:47300",
+                api_url="http://localhost:47300",
                 claude_config_dir=tmpdir,
             )
 

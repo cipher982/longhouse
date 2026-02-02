@@ -236,7 +236,7 @@ def ship(
         token = load_token(config_dir)
 
     config = ShipperConfig(
-        zerg_api_url=url,
+        api_url=url,
         claude_config_dir=config_dir,
         api_token=token,
     )
@@ -362,7 +362,7 @@ def connect(
 
     # Normal connect mode - run in foreground
     config = ShipperConfig(
-        zerg_api_url=url,
+        api_url=url,
         claude_config_dir=config_dir,
         scan_interval_seconds=interval,
         api_token=token,

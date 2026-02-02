@@ -54,7 +54,7 @@ async def test_watcher_real_time_sync(tmp_path: Path):
     projects_dir.mkdir(parents=True)
 
     config = ShipperConfig(
-        zerg_api_url=BASE_URL,
+        api_url=BASE_URL,
         claude_config_dir=claude_dir,
         api_token=os.getenv("SHIPPER_E2E_TOKEN"),
     )
