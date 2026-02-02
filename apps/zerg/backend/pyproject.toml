@@ -1,7 +1,7 @@
 # Cache bust: 2026-01-26-sauron-jobs-deps
 [project]
 name = "longhouse"
-version = "0.1.0"
+version = "0.1.1"
 description = "Longhouse AI Agent Platform - orchestrate AI agents with voice and text"
 authors = [
     {name = "David Rose", email = "david.github@drose.io"}
@@ -49,8 +49,7 @@ dependencies = [
     # Text-to-speech for Oikos voice responses
     "edge-tts>=7.0.0",
     # Hatch CLI for workspace execution (runs coding agents headlessly)
-    # Local package from packages/hatch-agent (source of truth for agent runner)
-    "hatch-agent",
+    # NOTE: hatch-agent removed for PyPI publish - add back when published separately
     # Telegram Bot API integration for channel plugins
     "python-telegram-bot>=21.0",
     # External job dependencies (sauron-jobs migration)
@@ -90,7 +89,7 @@ packages = ["zerg"]
 cache-dir = "./.uv_cache"
 
 [tool.uv.sources]
-hatch-agent = { path = "../../../packages/hatch-agent" }
+# hatch-agent = { path = "../../../packages/hatch-agent" }  # Removed for PyPI
 
 [tool.ruff]
 line-length = 140
