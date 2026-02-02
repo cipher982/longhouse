@@ -6,7 +6,8 @@ Usage (run from backend directory):
     uv run python scripts/seed_scenario.py --list
     uv run python scripts/seed_scenario.py swarm-mvp
     uv run python scripts/seed_scenario.py swarm-mvp --owner-email dev@local
-    uv run python scripts/seed_scenario.py swarm-mvp --no-clean
+    uv run python scripts/seed_scenario.py swarm-mvp --target demo_db --namespace demo
+    uv run python scripts/seed_scenario.py swarm-mvp --db /path/to/custom.db
 """
 
 from __future__ import annotations
@@ -52,11 +53,14 @@ def ensure_owner(db, email: str) -> User:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Seed deterministic scenario data")
+    parser = argparse.ArgumentParser(description="Seed deterministic scenario data with idempotency")
     parser.add_argument("scenario", nargs="?", help="Scenario name (YAML file without extension)")
     parser.add_argument("--list", action="store_true", help="List available scenarios")
     parser.add_argument("--owner-email", default="dev@local", help="Owner email for seeded runs")
-    parser.add_argument("--no-clean", action="store_true", help="Skip cleanup of prior scenario runs")
+    parser.add_argument("--target", default="dev", help="Target identifier (e.g., dev, test, demo_db)")
+    parser.add_argument("--namespace", default="test", help="Namespace for categorization (e.g., demo, test, marketing)")
+    parser.add_argument("--db", help="Custom SQLite database path (overrides default)")
+    parser.add_argument("--clean", action="store_true", help="Delete existing scenario data before seeding (breaks idempotency)")
 
     args = parser.parse_args()
 
@@ -73,12 +77,35 @@ def main() -> int:
     if not args.scenario:
         parser.error("scenario is required unless --list is provided")
 
-    session_factory = get_session_factory()
-    db = session_factory()
+    # If custom DB path provided, use it
+    if args.db:
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        db_url = f"sqlite:///{args.db}"
+        engine = create_engine(db_url)
+        SessionLocal = sessionmaker(bind=engine)
+        db = SessionLocal()
+
+        # Create tables if they don't exist
+        from zerg.database import Base
+        Base.metadata.create_all(bind=engine)
+    else:
+        session_factory = get_session_factory()
+        db = session_factory()
+
     try:
         owner = ensure_owner(db, args.owner_email)
-        result = seed_scenario(db, args.scenario, owner_id=owner.id, clean=not args.no_clean)
-        print(f"Seeded scenario '{result['scenario']}' -> runs={result['runs']}, messages={result['messages']}, events={result['events']}")
+        result = seed_scenario(
+            db,
+            args.scenario,
+            owner_id=owner.id,
+            target=args.target,
+            namespace=args.namespace,
+            clean=args.clean,
+        )
+        print(f"Seeded scenario '{result['scenario']}' to target '{result['target']}' (namespace={result['namespace']})")
+        print(f"  runs={result['runs']}, messages={result['messages']}, events={result['events']}, skipped={result.get('skipped', 0)}")
     except ScenarioError as exc:
         print(f"Scenario error: {exc}")
         return 2

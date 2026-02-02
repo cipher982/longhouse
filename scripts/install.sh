@@ -310,25 +310,33 @@ run_onboard() {
     step "Running onboarding wizard"
     echo ""
 
-    # Run the onboard command
-    if has_command longhouse; then
-        # When piped from curl, stdin is not a TTY - use quick mode
-        if [[ -t 0 ]]; then
-            # Interactive terminal available
-            longhouse onboard || {
-                warn "Onboarding wizard exited with error"
-                warn "You can run it again with: longhouse onboard"
-            }
-        else
-            # Non-interactive (piped from curl) - use quick mode
-            info "Non-interactive mode detected, using QuickStart defaults"
-            longhouse onboard --quick || {
-                warn "Onboarding wizard exited with error"
-                warn "You can run it again with: longhouse onboard"
-            }
-        fi
-    else
+    if ! has_command longhouse; then
         warn "longhouse command not found, skipping wizard"
+        return 0
+    fi
+
+    # When piped from curl, stdin is consumed by the pipe.
+    # Try to reconnect to the real terminal via /dev/tty.
+    if [[ -t 0 ]]; then
+        # Interactive terminal available directly
+        longhouse onboard || {
+            warn "Onboarding wizard exited with error"
+            warn "You can run it again with: longhouse onboard"
+        }
+    elif [[ -e /dev/tty ]]; then
+        # Stdin is pipe but TTY available - redirect from /dev/tty
+        info "Reconnecting to terminal for interactive setup..."
+        longhouse onboard < /dev/tty || {
+            warn "Onboarding wizard exited with error"
+            warn "You can run it again with: longhouse onboard"
+        }
+    else
+        # No TTY available (Docker, CI, headless) - use non-interactive mode
+        info "No TTY available, using QuickStart defaults"
+        longhouse onboard --quick || {
+            warn "Onboarding wizard exited with error"
+            warn "You can run it again with: longhouse onboard"
+        }
     fi
 }
 

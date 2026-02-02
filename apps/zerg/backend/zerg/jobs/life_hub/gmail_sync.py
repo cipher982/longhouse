@@ -116,15 +116,19 @@ async def run() -> dict:
     return result
 
 
-# Register job - runs every 30 minutes as backup to Pub/Sub
-job_registry.register(
-    JobConfig(
-        id="gmail-sync",
-        cron="*/30 * * * *",  # Every 30 minutes
-        func=run,
-        timeout_seconds=60,
-        tags=["life-hub", "emails", "sync"],
-        project="life-hub",
-        description="Trigger Gmail sync and renew Pub/Sub watch",
+# Register job only if LIFE_HUB_API_KEY is set
+# This job hits external Life Hub API and is not needed for OSS users
+if os.getenv("LIFE_HUB_API_KEY"):
+    job_registry.register(
+        JobConfig(
+            id="gmail-sync",
+            cron="*/30 * * * *",  # Every 30 minutes
+            func=run,
+            timeout_seconds=60,
+            tags=["life-hub", "emails", "sync"],
+            project="life-hub",
+            description="Trigger Gmail sync and renew Pub/Sub watch",
+        )
     )
-)
+else:
+    logger.debug("gmail-sync job skipped: LIFE_HUB_API_KEY not set")

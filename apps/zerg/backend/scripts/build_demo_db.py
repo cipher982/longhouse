@@ -83,8 +83,16 @@ def main() -> int:
         owner = ensure_owner(db, args.owner_email)
 
         if not args.skip_scenario:
-            seed_scenario(db, args.scenario, owner_id=owner.id, clean=True)
+            seed_scenario(
+                db,
+                args.scenario,
+                owner_id=owner.id,
+                target="demo_db",
+                namespace="demo",
+                clean=True,  # Demo DB is built fresh, so clean is OK
+            )
 
+        # Seed demo agent sessions (AI session timeline)
         store = AgentsStore(db)
         for session in build_demo_agent_sessions():
             store.ingest_session(session)
