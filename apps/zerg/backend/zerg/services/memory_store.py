@@ -138,8 +138,12 @@ def _memory_to_record(memory: Memory) -> MemoryRecord:
     )
 
 
-class PostgresMemoryStore:
-    """PostgreSQL implementation of memory store."""
+class SQLMemoryStore:
+    """SQLAlchemy-based memory store implementation (SQLite and PostgreSQL compatible).
+
+    Note: Despite the previous name (PostgresMemoryStore), this implementation
+    uses only SQLAlchemy abstractions and works with both SQLite and PostgreSQL.
+    """
 
     def save(
         self,
@@ -294,13 +298,16 @@ class PostgresMemoryStore:
             return True
 
 
+# Backwards-compatible alias (deprecated)
+PostgresMemoryStore = SQLMemoryStore
+
 # Singleton instance
-_store: PostgresMemoryStore | None = None
+_store: SQLMemoryStore | None = None
 
 
-def get_memory_store() -> PostgresMemoryStore:
+def get_memory_store() -> SQLMemoryStore:
     """Get the singleton memory store instance."""
     global _store
     if _store is None:
-        _store = PostgresMemoryStore()
+        _store = SQLMemoryStore()
     return _store

@@ -1,4 +1,7 @@
-"""Tests for PostgresMemoryStore (Oikos memory system)."""
+"""Tests for SQLMemoryStore (Oikos memory system).
+
+The SQLMemoryStore is database-agnostic and works with both SQLite and PostgreSQL.
+"""
 
 from datetime import datetime
 from datetime import timedelta
@@ -7,16 +10,22 @@ from datetime import timezone
 import pytest
 
 from zerg.models.models import Memory
-from zerg.services.memory_store import PostgresMemoryStore
+from zerg.services.memory_store import SQLMemoryStore
+from zerg.services.memory_store import PostgresMemoryStore  # backwards-compatible alias
 
 
-class TestPostgresMemoryStore:
-    """Tests for the PostgresMemoryStore implementation."""
+class TestSQLMemoryStore:
+    """Tests for the SQLMemoryStore implementation."""
 
     @pytest.fixture
     def store(self):
         """Create a fresh store instance."""
-        return PostgresMemoryStore()
+        return SQLMemoryStore()
+
+    def test_backwards_compatible_alias(self):
+        """PostgresMemoryStore alias should still work for backwards compatibility."""
+        store = PostgresMemoryStore()
+        assert isinstance(store, SQLMemoryStore)
 
     @pytest.fixture
     def user_id(self, test_user):
