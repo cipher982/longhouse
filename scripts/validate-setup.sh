@@ -154,7 +154,7 @@ KEY_FILES=(
     "apps/zerg/frontend-web/src/pages/OikosChatPage.tsx"
     "apps/zerg/frontend-web/src/oikos/lib/state-manager.ts"
     "apps/zerg/backend/scripts/seed_oikos_fiches.py"
-    "docs/DEPLOYMENT.md"
+    "VISION.md"
 )
 
 for file in "${KEY_FILES[@]}"; do

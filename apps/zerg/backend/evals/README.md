@@ -351,7 +351,6 @@ testing the tool infrastructure but don't validate fiche reasoning.
 
 ## References
 
-- **Spec:** `docs/specs/eval-dataset.md`
 - **Asserters:** `evals/asserters.py`
 - **Runner:** `evals/runner.py`
 - **Comparison:** `evals/compare.py`

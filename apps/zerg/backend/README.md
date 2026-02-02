@@ -24,4 +24,5 @@ make test
 ## Docs
 
 - `AGENTS.md` (repo root) — current architecture + commands
-- `docs/DEVELOPMENT.md` — local dev guide
+- `VISION.md` (repo root) — product direction and SQLite-first guidance
+- `README.md` (repo root) — developer onboarding

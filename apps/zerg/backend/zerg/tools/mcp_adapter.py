@@ -20,7 +20,6 @@ Key changes compared to the PoC version:
     both asynchronous and synchronous code paths.
 4.  ✅  Dual transport support: HTTP (default) and stdio (subprocess-based).
 
-See `docs/mcp_integration_requirements.md` for the end-to-end design.
 """
 
 import asyncio
@@ -509,9 +508,8 @@ class MCPManager:
 async def load_mcp_tools(mcp_configs: List[Dict[str, Any]]) -> None:  # noqa: D401
     """Async bulk loader.
 
-    *mcp_configs* follows the schema documented in
-    `docs/mcp_integration_requirements.md` (list of dicts where each dict is
-    either a complete server config or contains a "preset" key).
+    *mcp_configs* follows the MCP config schema (list of dicts where each dict
+    is either a complete server config or contains a "preset" key).
     """
     if not mcp_configs:
         return

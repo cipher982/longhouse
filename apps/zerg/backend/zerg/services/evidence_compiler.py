@@ -10,9 +10,6 @@ Philosophy (from TRACE_FIRST_NORTH_STAR.md):
 - Prioritize failures first, then most recent outputs
 - Use head+tail truncation to preserve context and final results
 
-References:
-- docs/specs/TRACE_FIRST_NORTH_STAR.md
-- docs/specs/MOUNT_REASON_PRUNE_IMPLEMENTATION.md
 """
 
 from __future__ import annotations

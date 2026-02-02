@@ -244,6 +244,3 @@ echo "  Keeps connections alive longer"
 echo
 echo "Option D: Upgrade Coolify (if older than beta.458)"
 echo "  Newer versions have better contention handling"
-echo
-echo "For more details, see:"
-echo "  docs/investigations/coolify-ssh-255.md"

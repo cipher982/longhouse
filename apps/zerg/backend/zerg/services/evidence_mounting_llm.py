@@ -18,7 +18,6 @@ Architecture:
 - Transparent to the rest of the system (pass-through if no markers/context)
 
 References:
-- docs/specs/MOUNT_REASON_PRUNE_IMPLEMENTATION.md
 - zerg/services/evidence_compiler.py (Phase 1)
 """
 

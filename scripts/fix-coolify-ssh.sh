@@ -227,7 +227,6 @@ if [[ "$DRY_RUN" == "false" ]]; then
     echo "3. Run diagnostics: ./diagnose-coolify-ssh.sh $SERVER"
     echo
     echo "If issues persist:"
-    echo "- Check docs/investigations/coolify-ssh-255.md"
     echo "- Consider upgrading Coolify to latest version"
     echo "- Review recent Coolify logs: ssh $SERVER 'docker logs $CONTAINER --tail 100'"
 else

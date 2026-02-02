@@ -10,7 +10,6 @@ Tests verify:
 
 NOTE: The continuation pattern was replaced by the LangGraph-free oikos
 resume path in Jan 2026 (FicheInterrupted + FicheRunner.run_continuation).
-See: docs/work/oikos-continuation-refactor.md
 """
 
 import asyncio

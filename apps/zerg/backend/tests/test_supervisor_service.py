@@ -308,7 +308,6 @@ class TestCommisOikosCorrelation:
     # NOTE: test_run_continuation_inherits_model was removed during the oikos
     # resume refactor (Jan 2026). The continuation pattern now uses
     # FicheInterrupted + FicheRunner.run_continuation instead of separate runs.
-    # See: docs/work/oikos-continuation-refactor.md
 
 
 class TestRecentCommisHistoryInjection:
