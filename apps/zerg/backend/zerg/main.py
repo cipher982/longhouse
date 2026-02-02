@@ -331,7 +331,7 @@ async def lifespan(app: FastAPI):
             if not _settings.testing and default_engine is not None and default_engine.dialect.name == "sqlite":
                 logger.warning(
                     "SQLite mode enabled: single-writer concurrency and reduced locking guarantees. "
-                    "See docs/LIGHTWEIGHT-OSS-ONBOARDING.md for constraints."
+                    "See VISION.md (SQLite-only OSS Pivot section) for constraints."
                 )
         except Exception as _e:
             logger.error(str(_e))

@@ -9,7 +9,7 @@ Skills-Dir: .agents/skills
 ## Philosophy
 
 - **Read VISION.md first** — It's the guiding light. Understand the strategic direction before diving into implementation.
-- **Read docs/LIGHTWEIGHT-OSS-ONBOARDING.md** — Details the SQLite pivot plan. Don't invest in Postgres-specific infrastructure.
+- **Read VISION.md (SQLite-only OSS Pivot section)** — Details the SQLite pivot plan. Don't invest in Postgres-specific infrastructure.
 - **Progressive disclosure** — AGENTS.md should point to deeper docs/runbooks so agents know what they don’t know.
 - Always commit changes as you go (no lingering uncommitted work).
 
@@ -153,7 +153,7 @@ Sauron is the centralized ops scheduler, deployed as a standalone service on cli
 | Topic | Guide |
 |-------|-------|
 | **Strategic direction** | `VISION.md` — read first! |
-| **SQLite pivot plan** | `docs/LIGHTWEIGHT-OSS-ONBOARDING.md` |
+| **SQLite pivot plan** | `VISION.md` (SQLite-only OSS Pivot section) |
 | Oikos Tools | `apps/zerg/backend/docs/supervisor_tools.md` |
 | Sauron scheduler | `apps/sauron/README.md` |
 | Sauron job definitions | `~/git/sauron-jobs/` |

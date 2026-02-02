@@ -79,7 +79,7 @@ Ensure Oikos memory tools are SQLite-safe and do not assume Postgres.
 
 ## OSS Packaging Decisions (3)
 
-Close the remaining open questions from `docs/LIGHTWEIGHT-OSS-ONBOARDING.md`.
+Close the remaining open questions from VISION.md (SQLite-only OSS Pivot section).
 
 - [ ] Confirm PyPI availability for `longhouse` (or pick fallback name) and document final choice.
 - [ ] Decide whether the shipper is bundled with the CLI or shipped as a separate package.
@@ -97,7 +97,7 @@ Establish a single public brand (Longhouse) while keeping Oikos as assistant UI 
 
 - [x] Decide and record naming map: **Longhouse** (umbrella), **Oikos** (assistant), **Zerg** (internal codename only)
 - [x] Update `VISION.md` to “Longhouse Vision” + add a short naming note (Oikos/Zerg)
-- [x] Update `docs/LIGHTWEIGHT-OSS-ONBOARDING.md` to Longhouse naming + CLI examples
+- [x] Update VISION.md (SQLite-only OSS Pivot section) to Longhouse naming + CLI examples
 - [x] Update `README.md` to Longhouse branding + domain references
 - [x] Update `docs/public-launch-task.md` and `VISION.md` onboarding section to reflect Longhouse naming
 - [x] Add a short `docs/BRANDING.md` with the naming map + do/don’t usage rules
