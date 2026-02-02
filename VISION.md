@@ -851,7 +851,7 @@ This is David's personal integration. OSS users don't need Life Hub at all.
 
 ## SQLite-only OSS Pivot (Consolidated)
 
-_This section consolidates the former `docs/LIGHTWEIGHT-OSS-ONBOARDING.md` so VISION is the single source of truth._
+_This section consolidates the former standalone SQLite pivot doc so VISION is the single source of truth._
 
 
 **Status:** Active

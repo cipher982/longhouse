@@ -73,7 +73,6 @@ export class ApiClient {
       'Content-Type': 'application/json',
       // CRITICAL: X-Test-Commis header routes requests to commis-specific Postgres schema
       // Without this, requests hit the default schema and can cross-contaminate commis
-      // See: docs/work/e2e-test-infrastructure-redesign.md
       'X-Test-Commis': commisId,
     };
   }

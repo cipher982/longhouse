@@ -9,8 +9,6 @@ This covers the master/commis flow used by Oikos chat using the LangGraph-free r
 NOTE: This was rewritten during the oikos refactor (Jan 2026). The old
 continuation pattern (DEFERRED + run_continuation) was replaced with
 interrupt/resume via FicheInterrupted + DB-based continuation.
-
-See: docs/work/oikos-continuation-refactor.md
 """
 
 from __future__ import annotations
