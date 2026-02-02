@@ -17,63 +17,11 @@ Skills-Dir: .agents/skills
 
 **Current Direction (2026-01):** Migrating to SQLite-only for OSS. Postgres is control-plane only. See VISION.md § "No Postgres in core."
 
-## Autonomy Levels
-
-Adjust your behavior based on user signals:
-
-**Level 1: Collaborative (default)**
-- Propose approach, get approval before significant changes
-- Ask clarifying questions when ambiguous
-- Show work as you go
-
-**Level 2: Engineer Mode**
-- User says: "you're the engineer", "run everything yourself", "report back when done"
-- **Execute end-to-end:** Start services, fix blockers, run scripts, verify results yourself
-- **Own the pipeline:** Don't ask permission for intermediate steps (fixing imports, creating missing files, running tests)
-- **Self-verify:** View screenshots yourself, test URLs yourself, check prod health yourself
-- **Report comprehensively:** Live URLs, what works, what's blocked, metrics
-- Only ask if genuinely blocked (auth needed, ambiguous requirements)
-
-**Level 3: PM Review Mode**
-- User says: "act as PM", "audit this", "what's missing?"
-- Analyze from user perspective
-- Identify gaps in UX, docs, onboarding
-- Propose prioritized roadmap
-- Don't implement unless asked
-
 ## Task Tracking
 
 - **Master task list:** `TODO.md` (update BEFORE starting work and AFTER completing work)
 - **Mark progress:** Check off subtasks as you complete them so next agent knows state
 - **Document blockers:** If you can't finish, add notes under the task explaining why
-
-## Proactive Patterns (Do These Without Being Asked)
-
-1. **Create infrastructure when missing**
-   - Example: Need screenshots? Create reusable Playwright capture script, not manual screenshots
-   - Example: Need to test something repeatedly? Add `make` target or package.json script
-   - Principle: Leave things better than you found them
-
-2. **Self-verify before reporting**
-   - Don't just push code—verify it works in prod
-   - View actual URLs, check health endpoints, look at screenshots yourself
-   - Report with evidence: "✅ Live at https://... - I checked it"
-
-3. **Fix blockers in your path**
-   - Missing file? Create it
-   - Wrong env var? Fix it
-   - Import error? Resolve it
-   - Don't ask permission for obvious fixes
-
-4. **Update documentation as you learn**
-   - Found a gotcha? Append to learnings section
-   - Created new script? Add usage to README
-   - Changed workflow? Update TODO.md
-
-5. **Think like a PM while executing**
-   - "Is this HN-ready?" → Check the full user journey
-   - "Will this confuse users?" → Test the happy path
-   - "Does this look professional?" → View it yourself before declaring done
 
 ## Quick Reference
 
@@ -185,34 +133,6 @@ Sauron is the centralized ops scheduler, deployed as a standalone service on cli
 
 ## Misc
 - GH actions use runners on Cube
-
----
-
-## Anti-Patterns (Don't Do This)
-
-1. **Asking permission for obvious fixes**
-   - ❌ "Should I create a missing README?"
-   - ✅ Just create it and mention in commit
-
-2. **Reporting without verification**
-   - ❌ "I pushed the changes, should be live"
-   - ✅ "Pushed and verified prod: https://... shows X"
-
-3. **Manual processes for repeatable tasks**
-   - ❌ "I'll manually capture screenshots each release"
-   - ✅ Create script so next agent (or CI) can repeat it
-
-4. **Stopping at first blocker**
-   - ❌ "Import failed, waiting for help"
-   - ✅ Check what's imported, find the right function, fix it
-
-5. **Incomplete handoffs**
-   - ❌ Commit message: "fixed stuff"
-   - ✅ Comprehensive: what/why/where, with live URLs
-
-6. **Assuming things work**
-   - ❌ "README updated (didn't check GitHub)"
-   - ✅ "README updated, verified on GitHub: [url]"
 
 ## Learnings (Recent - Human compacts weekly)
 
