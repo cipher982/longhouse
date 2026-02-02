@@ -34,50 +34,35 @@ Longhouse watches your AI coding sessions and unifies them into a single, search
 
 ## Quick Start
 
-### Option 1: SQLite (Recommended for OSS)
+### One-Liner Install
 
-Lightweight setup with minimal dependencies.
+```bash
+pip install longhouse
+longhouse onboard
+```
 
-**Requirements:** Python 3.11+, SQLite 3.35+, [uv](https://docs.astral.sh/uv/) (Python package manager)
+Or with the full installer (includes Python/uv setup):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cipher982/longhouse/main/scripts/install.sh | bash
+```
+
+That's it. The wizard starts the server and opens your browser.
+
+### What You Get
+
+- **`longhouse serve`** - Start the server (localhost:8080)
+- **`longhouse connect`** - Sync your Claude Code sessions
+- **`longhouse onboard`** - Re-run the setup wizard
+
+### For Contributors
+
+Full dev setup with hot reload:
 
 ```bash
 git clone https://github.com/cipher982/longhouse.git
-cd zerg
-
-# Install backend dependencies
-cd apps/zerg/backend && uv sync && cd ../../..
-
-# Configure environment
-cp .env.example .env
-# SQLite is the default - no changes needed
-
-# Boot the server
-cd apps/zerg/backend && uv run uvicorn zerg.main:app --port 8000
-
-# Verify: curl http://localhost:8000/api/system/health
-```
-
-**Verify your setup:**
-```bash
-make onboarding-sqlite  # Runs in-process SQLite smoke tests
-```
-
-### Option 2: Full Development Stack (Docker)
-
-For full UI development with hot reload.
-
-**Requirements:** Docker, Node.js 20+, Bun
-
-```bash
-git clone https://github.com/cipher982/longhouse.git
-cd zerg
-cp .env.example .env
-
-# Install JS dependencies
-bun install
-
-# Start the full stack (backend + frontend + nginx)
-make dev
+cd longhouse
+make dev  # Starts backend + frontend
 
 # Open http://localhost:30080/timeline
 ```
