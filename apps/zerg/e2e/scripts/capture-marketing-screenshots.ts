@@ -149,52 +149,20 @@ async function main() {
   // Define screenshots to capture
   const screenshots: Screenshot[] = [
     {
+      name: "Landing Page",
+      path: "landing-hero.png",
+      url: `${options.baseUrl}/landing`,
+      viewport: { width: 1600, height: 1000 },
+      waitFor: 2000,
+      description: "Landing page hero section with install command",
+    },
+    {
       name: "Timeline Hero",
       path: "timeline-screenshot.png",
       url: `${options.baseUrl}/timeline`,
-      viewport: { width: 1920, height: 1080 },
-      waitFor: "[data-testid='timeline-sessions']",
-      description: "Main timeline view with sessions",
-    },
-    {
-      name: "Session Detail",
-      path: "session-detail-screenshot.png",
-      url: `${options.baseUrl}/timeline`,
-      viewport: { width: 1920, height: 1080 },
-      waitFor: "[data-testid='timeline-sessions']",
-      setup: async (page) => {
-        // Click first session to open detail view
-        const firstSession = page.locator("[data-testid='session-card']").first();
-        if (await firstSession.count() > 0) {
-          await firstSession.click();
-          await page.waitForTimeout(500);
-        }
-      },
-      description: "Session detail with messages and tool calls",
-    },
-    {
-      name: "Search",
-      path: "search-screenshot.png",
-      url: `${options.baseUrl}/timeline`,
-      viewport: { width: 1920, height: 1080 },
-      waitFor: "[data-testid='timeline-sessions']",
-      setup: async (page) => {
-        // Open search and type query
-        const searchInput = page.locator("[data-testid='search-input']");
-        if (await searchInput.count() > 0) {
-          await searchInput.fill("authentication");
-          await page.waitForTimeout(500);
-        }
-      },
-      description: "Search in action filtering sessions",
-    },
-    {
-      name: "Landing Page",
-      path: "landing-hero.png",
-      url: `${options.baseUrl}/`,
-      viewport: { width: 1920, height: 1080 },
-      waitFor: 1000,
-      description: "Landing page hero section",
+      viewport: { width: 1600, height: 1000 },
+      waitFor: 3000,
+      description: "Main timeline view with demo sessions",
     },
   ];
 
