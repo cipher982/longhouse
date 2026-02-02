@@ -344,7 +344,7 @@ def _db_schema():
     yield
 
     # Cleanup: delete test database file
-    if os.environ.get("ZERG_KEEP_TEST_DB") != "1":
+    if os.environ.get("LONGHOUSE_KEEP_TEST_DB") != "1":
         try:
             _TEST_DB_FILE.unlink(missing_ok=True)
             # Also clean up WAL and SHM files

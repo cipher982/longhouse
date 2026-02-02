@@ -95,7 +95,7 @@ def get_funnel_db_path() -> Path:
     # Use settings.data_dir which handles environment-specific roots correctly
     if settings.testing:
         # In tests, use temp directory
-        data_dir = Path("/tmp/zerg_test_data")
+        data_dir = Path("/tmp/longhouse_test_data")
         data_dir.mkdir(parents=True, exist_ok=True)
     else:
         # Use shared data directory

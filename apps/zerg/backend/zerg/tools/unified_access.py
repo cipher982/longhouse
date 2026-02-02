@@ -16,7 +16,7 @@ Key improvements over the old scattered approach:
 
 Test Infrastructure:
 - Tool stubbing is applied at construction time (not per-call)
-- Stubs are loaded once when ZERG_TOOL_STUBS_PATH is set
+- Stubs are loaded once when LONGHOUSE_TOOL_STUBS_PATH is set
 - Safety gate in config prevents stubs from being enabled in production
 """
 
@@ -273,7 +273,7 @@ def _create_stubbed_tool(original_tool: StructuredTool, stub_matcher: Callable[[
 
 
 def _load_stub_config() -> Optional[tuple[Callable[[str, Dict], Any], Set[str]]]:
-    """Load stub matcher and stubbed tool names from ZERG_TOOL_STUBS_PATH if configured.
+    """Load stub matcher and stubbed tool names from LONGHOUSE_TOOL_STUBS_PATH if configured.
 
     Returns None if stubbing is not enabled or not in test mode.
     Explicitly checks settings.testing to prevent any possibility of
@@ -282,7 +282,7 @@ def _load_stub_config() -> Optional[tuple[Callable[[str, Dict], Any], Set[str]]]
     Returns:
         Tuple of (stub_matcher function, set of tool names with stubs) or None
     """
-    stubs_path = os.getenv("ZERG_TOOL_STUBS_PATH")
+    stubs_path = os.getenv("LONGHOUSE_TOOL_STUBS_PATH")
     if not stubs_path:
         return None
 
@@ -294,7 +294,7 @@ def _load_stub_config() -> Optional[tuple[Callable[[str, Dict], Any], Set[str]]]
     if not settings.testing:
         # This should never happen if config safety gate is working,
         # but we check anyway to be absolutely safe
-        logger.error("ZERG_TOOL_STUBS_PATH is set but TESTING=1 is not. " "Refusing to load stubs. This is a safety violation.")
+        logger.error("LONGHOUSE_TOOL_STUBS_PATH is set but TESTING=1 is not. " "Refusing to load stubs. This is a safety violation.")
         return None
 
     # Import stub matching logic (only when actually needed and in test mode)
@@ -304,7 +304,7 @@ def _load_stub_config() -> Optional[tuple[Callable[[str, Dict], Any], Set[str]]]
     # Verify stubs can be loaded
     stubs = get_tool_stubs()
     if stubs is None:
-        logger.warning(f"ZERG_TOOL_STUBS_PATH set to '{stubs_path}' but stubs could not be loaded")
+        logger.warning(f"LONGHOUSE_TOOL_STUBS_PATH set to '{stubs_path}' but stubs could not be loaded")
         return None
 
     # Extract the set of tool names that have stubs defined (filter out metadata keys like $comment)
@@ -318,7 +318,7 @@ def get_tool_resolver() -> ToolResolver:
     Get the global tool resolver instance.
 
     Lazy initialization from the production registry.
-    If ZERG_TOOL_STUBS_PATH is set (and TESTING=1), tools will be wrapped
+    If LONGHOUSE_TOOL_STUBS_PATH is set (and TESTING=1), tools will be wrapped
     with stubbing logic at construction time.
 
     For testing, use create_tool_resolver() with custom registry.

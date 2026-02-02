@@ -8,7 +8,7 @@
  */
 
 import { chromium } from 'playwright';
-import AIVisualAnalyzer, { ZERG_UI_VARIANTS } from './utils/ai-visual-analyzer.ts';
+import AIVisualAnalyzer, { LONGHOUSE_UI_VARIANTS } from './utils/ai-visual-analyzer.ts';
 import fs from 'fs';
 
 async function runVisualTest() {
@@ -45,7 +45,7 @@ async function runVisualTest() {
 
     // Capture screenshots of both UI variants
     console.log('\n📸 Capturing UI Screenshots...');
-    const screenshots = await analyzer.captureUIVariants(page, ZERG_UI_VARIANTS);
+    const screenshots = await analyzer.captureUIVariants(page, LONGHOUSE_UI_VARIANTS);
 
     console.log(`✅ Captured ${Object.keys(screenshots).length} screenshots`);
     Object.keys(screenshots).forEach(name => {
@@ -71,7 +71,7 @@ async function runVisualTest() {
 
     const result = await analyzer.analyzeUIComparison(
       screenshots,
-      ZERG_UI_VARIANTS,
+      LONGHOUSE_UI_VARIANTS,
       analysisOptions
     );
 
@@ -96,7 +96,7 @@ async function runVisualTest() {
 
     const responsiveResults = await analyzer.analyzeResponsiveDesign(
       page,
-      ZERG_UI_VARIANTS,
+      LONGHOUSE_UI_VARIANTS,
       viewports
     );
 

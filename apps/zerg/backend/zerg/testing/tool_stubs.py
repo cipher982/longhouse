@@ -4,7 +4,7 @@ This module provides a way to stub tool outputs (like ssh_exec, runner_exec)
 in tests without requiring real servers or external dependencies.
 
 Usage:
-    1. Set env var: ZERG_TOOL_STUBS_PATH=/path/to/stubs.json
+    1. Set env var: LONGHOUSE_TOOL_STUBS_PATH=/path/to/stubs.json
     2. Create stubs file with format:
         {
             "ssh_exec": [
@@ -36,7 +36,7 @@ _stubs_loaded: bool = False
 def get_tool_stubs() -> dict[str, Any] | None:
     """Load tool stubs from the env var path if configured.
 
-    Returns None if ZERG_TOOL_STUBS_PATH is not set or file doesn't exist.
+    Returns None if LONGHOUSE_TOOL_STUBS_PATH is not set or file doesn't exist.
     Caches the result for efficiency.
     """
     global _stubs_cache, _stubs_loaded
@@ -45,14 +45,14 @@ def get_tool_stubs() -> dict[str, Any] | None:
         return _stubs_cache
 
     _stubs_loaded = True
-    stubs_path = os.environ.get("ZERG_TOOL_STUBS_PATH")
+    stubs_path = os.environ.get("LONGHOUSE_TOOL_STUBS_PATH")
 
     if not stubs_path:
         return None
 
     path = Path(stubs_path)
     if not path.exists():
-        logger.warning(f"ZERG_TOOL_STUBS_PATH set but file not found: {stubs_path}")
+        logger.warning(f"LONGHOUSE_TOOL_STUBS_PATH set but file not found: {stubs_path}")
         return None
 
     try:

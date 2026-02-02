@@ -246,7 +246,7 @@ class TestSshExecExecution:
         assert "-o" in call_args
         assert "StrictHostKeyChecking=no" in call_args
         assert "ConnectTimeout=5" in call_args
-        assert "UserKnownHostsFile=/tmp/zerg_known_hosts" in call_args
+        assert "UserKnownHostsFile=/tmp/longhouse_known_hosts" in call_args
         assert "GlobalKnownHostsFile=/dev/null" in call_args
         assert "-p" in call_args
         assert "22" in call_args  # default port

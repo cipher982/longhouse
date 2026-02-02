@@ -36,10 +36,8 @@ CUBE_SSH_PORT = 2222
 CUBE_BASTION = f"root@{DOCKER_HOST_SSH}"
 
 # State directory for persisting CRC error counts between runs.
-# NOTE: Changed from /tmp/sauron-state to /tmp/zerg-state during migration.
-# If using a volume mount for persistence, update the deployment config to match.
-# Can be overridden via ZERG_STATE_DIR environment variable.
-STATE_DIR = Path(os.getenv("ZERG_STATE_DIR", "/tmp/zerg-state"))
+# Can be overridden via LONGHOUSE_STATE_DIR environment variable.
+STATE_DIR = Path(os.getenv("LONGHOUSE_STATE_DIR", "/tmp/longhouse-state"))
 STATE_FILE = STATE_DIR / "cube-disk-health.json"
 
 
