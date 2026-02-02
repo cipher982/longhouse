@@ -24,7 +24,7 @@ async def _create_test_session() -> str | None:
     import httpx
     from datetime import datetime, timezone
 
-    api_url = os.getenv("LONGHOUSE_API_URL") or os.getenv("ZERG_API_URL", "http://localhost:47300")
+    api_url = os.getenv("LONGHOUSE_API_URL", "http://localhost:47300")
     now = datetime.now(timezone.utc)
 
     payload = {

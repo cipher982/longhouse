@@ -11,7 +11,6 @@ import pytest
 
 from zerg.models.models import Memory
 from zerg.services.memory_store import SQLMemoryStore
-from zerg.services.memory_store import PostgresMemoryStore  # backwards-compatible alias
 
 
 class TestSQLMemoryStore:
@@ -21,11 +20,6 @@ class TestSQLMemoryStore:
     def store(self):
         """Create a fresh store instance."""
         return SQLMemoryStore()
-
-    def test_backwards_compatible_alias(self):
-        """PostgresMemoryStore alias should still work for backwards compatibility."""
-        store = PostgresMemoryStore()
-        assert isinstance(store, SQLMemoryStore)
 
     @pytest.fixture
     def user_id(self, test_user):

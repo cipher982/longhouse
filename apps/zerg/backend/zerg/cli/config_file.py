@@ -128,8 +128,8 @@ def load_config(config_path: Path | None = None) -> LonghouseConfig:
     if os.getenv("LONGHOUSE_SHIPPER_MODE"):
         config.shipper.mode = os.environ["LONGHOUSE_SHIPPER_MODE"]
         sources["shipper.mode"] = "env"
-    if os.getenv("LONGHOUSE_API_URL") or os.getenv("ZERG_API_URL"):
-        config.shipper.api_url = os.getenv("LONGHOUSE_API_URL") or os.environ["ZERG_API_URL"]
+    if os.getenv("LONGHOUSE_API_URL"):
+        config.shipper.api_url = os.environ["LONGHOUSE_API_URL"]
         sources["shipper.api_url"] = "env"
     if os.getenv("LONGHOUSE_SHIPPER_INTERVAL"):
         try:

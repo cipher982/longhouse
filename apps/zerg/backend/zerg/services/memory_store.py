@@ -298,9 +298,6 @@ class SQLMemoryStore:
             return True
 
 
-# Backwards-compatible alias (deprecated)
-PostgresMemoryStore = SQLMemoryStore
-
 # Singleton instance
 _store: SQLMemoryStore | None = None
 

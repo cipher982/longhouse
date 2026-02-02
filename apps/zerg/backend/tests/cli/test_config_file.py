@@ -71,28 +71,13 @@ port = 9000
         assert config._sources["server.host"] == "env"
         assert config._sources["server.port"] == "env"
 
-    def test_zerg_api_url_fallback(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test ZERG_API_URL fallback for backwards compatibility."""
+    def test_longhouse_api_url_from_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test LONGHOUSE_API_URL is read from environment."""
         from zerg.cli.config_file import load_config
 
         config_file = tmp_path / "config.toml"
 
-        # Set old env var
-        monkeypatch.setenv("ZERG_API_URL", "https://old.api.zerg.ai")
-
-        config = load_config(config_file)
-
-        assert config.shipper.api_url == "https://old.api.zerg.ai"
-
-    def test_longhouse_api_url_priority(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test LONGHOUSE_API_URL takes priority over ZERG_API_URL."""
-        from zerg.cli.config_file import load_config
-
-        config_file = tmp_path / "config.toml"
-
-        # Set both env vars - LONGHOUSE should win
         monkeypatch.setenv("LONGHOUSE_API_URL", "https://api.longhouse.ai")
-        monkeypatch.setenv("ZERG_API_URL", "https://old.api.zerg.ai")
 
         config = load_config(config_file)
 
