@@ -23,6 +23,8 @@ from sqlalchemy.orm import sessionmaker
 
 from zerg.database import db_session
 from zerg.database import get_session_factory
+from zerg.database import reset_test_commis_id
+from zerg.database import set_test_commis_id
 
 # Auth helper --------------------------------------------------------------
 from zerg.dependencies.auth import validate_ws_jwt
@@ -69,6 +71,9 @@ async def websocket_endpoint(
     2. longhouse_session cookie (for browser auth)
     """
     client_id = str(uuid.uuid4())
+    # E2E: capture commis id from query params to route DB sessions.
+    commis_id = websocket.query_params.get("commis")
+    commis_token = set_test_commis_id(commis_id) if commis_id else None
     logger.info(f"New WebSocket connection attempt from client {client_id}")
 
     # ------------------------------------------------------------------
@@ -93,6 +98,8 @@ async def websocket_endpoint(
         # clean 4401 closure code.  (4401 chosen to mirror HTTP 401.)
         logger.info("WebSocket auth failed – closing connection for client %s", client_id)
         await websocket.close(code=4401, reason="Unauthorized")
+        if commis_token is not None:
+            reset_test_commis_id(commis_token)
         return
 
     logger.debug("WebSocket auth succeeded for user %s (client %s)", user_id or "?", client_id)
@@ -143,4 +150,6 @@ async def websocket_endpoint(
             pass
     finally:
         await topic_manager.disconnect(client_id)
+        if commis_token is not None:
+            reset_test_commis_id(commis_token)
         logger.info(f"Cleaned up connection for client {client_id}")

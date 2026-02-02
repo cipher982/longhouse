@@ -1,22 +1,17 @@
 import React from "react";
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { render, screen, waitFor, cleanup } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen, cleanup } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import ForumPage from "../ForumPage";
 import { TestRouter } from "../../test/test-utils";
-import { eventBus } from "../../oikos/lib/event-bus";
 
 vi.mock("../../forum/ForumCanvas", () => ({
   ForumCanvas: () => <div data-testid="forum-canvas" />,
 }));
 
+const useActiveSessionsMock = vi.fn();
 vi.mock("../../hooks/useActiveSessions", () => ({
-  useActiveSessions: () => ({
-    data: null,
-    isLoading: false,
-    error: null,
-  }),
+  useActiveSessions: (options: unknown) => useActiveSessionsMock(options),
 }));
 
 const createTestQueryClient = () =>
@@ -31,11 +26,16 @@ const createTestQueryClient = () =>
 describe("ForumPage", () => {
   afterEach(() => {
     cleanup();
-    eventBus.clear();
+    useActiveSessionsMock.mockReset();
   });
 
-  it("renders live events into the task list", async () => {
-    const user = userEvent.setup();
+  it("shows empty state and demo seed option", async () => {
+    useActiveSessionsMock.mockReturnValue({
+      data: { sessions: [], total: 0, last_refresh: new Date().toISOString() },
+      isLoading: false,
+      error: null,
+    });
+
     const queryClient = createTestQueryClient();
 
     render(
@@ -47,33 +47,50 @@ describe("ForumPage", () => {
     );
 
     expect(await screen.findByTestId("forum-canvas")).toBeInTheDocument();
+    expect(screen.getByText(/No sessions found/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Load demo data/i })).toBeInTheDocument();
+  });
 
-    const modeToggle = await screen.findByRole("button", { name: "Replay Mode" });
-    await user.click(modeToggle);
-
-    await waitFor(() => {
-      expect(screen.getByText("Live")).toBeInTheDocument();
-      expect(screen.getByText(/No active sessions found/i)).toBeInTheDocument();
+  it("renders sessions in the list", async () => {
+    useActiveSessionsMock.mockReturnValue({
+      data: {
+        sessions: [
+          {
+            id: "session-1",
+            project: "longhouse-demo",
+            provider: "claude",
+            cwd: "/Users/demo/longhouse",
+            git_branch: "main",
+            started_at: new Date().toISOString(),
+            ended_at: null,
+            last_activity_at: new Date().toISOString(),
+            status: "working",
+            attention: "auto",
+            duration_minutes: 12,
+            last_user_message: "Scan the repo",
+            last_assistant_message: "On it",
+            message_count: 3,
+            tool_calls: 1,
+          },
+        ],
+        total: 1,
+        last_refresh: new Date().toISOString(),
+      },
+      isLoading: false,
+      error: null,
     });
 
-    eventBus.emit("oikos:started", {
-      runId: 1,
-      task: "Ship logs",
-      timestamp: 1000,
-    });
+    const queryClient = createTestQueryClient();
 
-    await waitFor(() => {
-      expect(screen.getByText("Ship logs")).toBeInTheDocument();
-    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TestRouter initialEntries={["/forum"]}>
+          <ForumPage />
+        </TestRouter>
+      </QueryClientProvider>,
+    );
 
-    eventBus.emit("oikos:commis_spawned", {
-      jobId: 7,
-      task: "Lint repo",
-      timestamp: 1100,
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText("Lint repo")).toBeInTheDocument();
-    });
+    expect(await screen.findByTestId("forum-canvas")).toBeInTheDocument();
+    expect(screen.getByText(/Scan the repo/i)).toBeInTheDocument();
   });
 });

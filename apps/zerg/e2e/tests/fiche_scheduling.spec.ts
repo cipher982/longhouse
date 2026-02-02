@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures';
 import { resetDatabase } from './test-utils';
+import { waitForDashboardReady } from './helpers/test-helpers';
 
 test.describe('Fiche scheduling UI', () => {
   // Uses strict reset that throws on failure to fail fast
@@ -12,7 +13,7 @@ test.describe('Fiche scheduling UI', () => {
   });
 
   async function createAndOpenConfig(page) {
-    await page.goto('/');
+    await waitForDashboardReady(page);
     const createBtn = page.locator('[data-testid="create-fiche-btn"]');
     await expect(createBtn).toBeVisible({ timeout: 10000 });
 

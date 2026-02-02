@@ -1,5 +1,6 @@
 import { test, expect, type Page } from './fixtures';
 import { resetDatabase } from './test-utils';
+import { waitForDashboardReady } from './helpers/test-helpers';
 
 /**
  * AUTOMATION HISTORY E2E TESTS
@@ -25,7 +26,7 @@ test.beforeEach(async ({ request }) => {
  * CRITICAL: Gets ID from API response, NOT from DOM query (.first() is racy).
  */
 async function createFicheAndGetId(page: Page): Promise<string> {
-  await page.goto('/');
+  await waitForDashboardReady(page);
 
   const createBtn = page.locator('[data-testid="create-fiche-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });

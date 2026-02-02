@@ -24,7 +24,7 @@ const faqs: FAQ[] = [
   },
   {
     question: "What LLM do you use?",
-    answer: "Swarmlet currently uses OpenAI models (default: GPT-5.2). You can pick from the available models depending on your quality/cost needs."
+    answer: "Longhouse currently uses OpenAI models (default: GPT-5.2). You can pick from the available models depending on your quality/cost needs."
   }
 ];
 

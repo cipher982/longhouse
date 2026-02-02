@@ -1,76 +1,93 @@
 /**
  * Maps Longhouse sessions to Forum canvas entities.
- *
- * Converts ActiveSession objects from the API into ForumEntity, ForumTask,
- * and ForumMarker objects for rendering on the canvas.
  */
 
-import type { ActiveSession, AttentionLevel, SessionStatus } from "../hooks/useActiveSessions";
+import type { ActiveSession } from "../hooks/useActiveSessions";
 import type {
   ForumEntity,
-  ForumEntityStatus,
   ForumGridPoint,
-  ForumMarker,
+  ForumMapLayout,
   ForumRoom,
-  ForumTask,
-  ForumTaskStatus,
 } from "./types";
+import { createForumState, type ForumMapState } from "./state";
 
-/**
- * Map session status to entity status for canvas rendering.
- */
-function mapSessionStatusToEntityStatus(status: SessionStatus): ForumEntityStatus {
-  switch (status) {
-    case "working":
-      return "working";
-    case "thinking":
-      return "working";
-    case "idle":
-      return "idle";
-    case "completed":
-      return "disabled";
-    case "active":
-      return "moving";
-    default:
-      return "idle";
-  }
+const ROOM_SIZE = 8; // Grid units per room
+const ROOM_PADDING = 3;
+
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
-/**
- * Map session status to task status for the task list.
- */
-function mapSessionStatusToTaskStatus(status: SessionStatus, attention: AttentionLevel): ForumTaskStatus {
-  if (attention === "hard") return "failed";
-  switch (status) {
-    case "working":
-    case "thinking":
-      return "running";
-    case "idle":
-      return "waiting";
-    case "completed":
-      return "success";
-    case "active":
-      return "running";
-    default:
-      return "queued";
+function truncate(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 3).trim()}...`;
+}
+
+function repoNameFromUrl(url: string | null): string | null {
+  if (!url) return null;
+  const cleaned = url.replace(/\.git$/, "");
+  const parts = cleaned.split("/");
+  return parts[parts.length - 1] || null;
+}
+
+function cwdBasename(cwd: string | null): string | null {
+  if (!cwd) return null;
+  const parts = cwd.split("/").filter(Boolean);
+  return parts[parts.length - 1] || null;
+}
+
+export function getSessionRoomLabel(session: ActiveSession): string {
+  return (
+    session.project?.trim() ||
+    repoNameFromUrl(session.git_repo) ||
+    cwdBasename(session.cwd) ||
+    "misc"
+  );
+}
+
+export function getSessionDisplayTitle(session: ActiveSession): string {
+  const candidate = (session.last_user_message || session.last_assistant_message || "").trim();
+  if (candidate) {
+    return truncate(candidate.replace(/\s+/g, " "), 32);
   }
+  return (
+    session.project?.trim() ||
+    repoNameFromUrl(session.git_repo) ||
+    cwdBasename(session.cwd) ||
+    session.provider
+  );
+}
+
+function createForumLayout(roomCount: number): ForumMapLayout {
+  const roomsPerRow = Math.max(1, Math.ceil(Math.sqrt(roomCount)));
+  const rows = Math.max(1, Math.ceil(roomCount / roomsPerRow));
+  const cols = Math.max(16, roomsPerRow * (ROOM_SIZE + ROOM_PADDING));
+  const gridRows = Math.max(12, rows * (ROOM_SIZE + ROOM_PADDING));
+
+  return {
+    id: "layout-main",
+    name: "Forum",
+    grid: { cols, rows: gridRows },
+    tile: { width: 64, height: 32 },
+    origin: { x: cols * 18, y: 40 },
+  };
 }
 
 /**
  * Compute a deterministic position within a room based on session index.
- * Arranges entities in a grid pattern within the room bounds.
  */
 function computePositionInRoom(room: ForumRoom, index: number, total: number): ForumGridPoint {
   const { bounds, center } = room;
   const width = bounds.maxCol - bounds.minCol;
   const height = bounds.maxRow - bounds.minRow;
 
-  // Arrange in a grid around the center
   const cols = Math.max(1, Math.ceil(Math.sqrt(total)));
   const row = Math.floor(index / cols);
   const col = index % cols;
 
-  // Offset from center
   const offsetCol = col - Math.floor(cols / 2);
   const offsetRow = row - Math.floor(total / cols / 2);
 
@@ -81,42 +98,40 @@ function computePositionInRoom(room: ForumRoom, index: number, total: number): F
 }
 
 /**
- * Group sessions by project and create rooms for each project.
+ * Group sessions by project/repo and create rooms.
  */
 export function createRoomsFromSessions(sessions: ActiveSession[]): Map<string, ForumRoom> {
-  const projects = new Set<string>();
+  const projects = new Map<string, string>();
   for (const session of sessions) {
-    projects.add(session.project || "misc");
+    const label = getSessionRoomLabel(session);
+    projects.set(label, label);
   }
 
   const rooms = new Map<string, ForumRoom>();
-  const projectList = Array.from(projects);
-
-  // Arrange rooms in a grid
-  const cols = Math.max(1, Math.ceil(Math.sqrt(projectList.length)));
-  const roomSize = 8; // Grid units per room
-  const padding = 2;
+  const projectList = Array.from(projects.values()).sort((a, b) => a.localeCompare(b));
+  const cols = Math.max(1, Math.ceil(Math.sqrt(projectList.length || 1)));
 
   projectList.forEach((project, i) => {
     const gridCol = i % cols;
     const gridRow = Math.floor(i / cols);
-    const minCol = gridCol * (roomSize + padding);
-    const minRow = gridRow * (roomSize + padding);
+    const minCol = gridCol * (ROOM_SIZE + ROOM_PADDING);
+    const minRow = gridRow * (ROOM_SIZE + ROOM_PADDING);
+    const roomId = `room-${slugify(project) || i}`;
 
     rooms.set(project, {
-      id: `room-${project}`,
+      id: roomId,
       name: project,
       workspaceId: "workspace-main",
       repoGroupId: "repo-main",
       bounds: {
         minCol,
         minRow,
-        maxCol: minCol + roomSize,
-        maxRow: minRow + roomSize,
+        maxCol: minCol + ROOM_SIZE,
+        maxRow: minRow + ROOM_SIZE,
       },
       center: {
-        col: minCol + Math.floor(roomSize / 2),
-        row: minRow + Math.floor(roomSize / 2),
+        col: minCol + Math.floor(ROOM_SIZE / 2),
+        row: minRow + Math.floor(ROOM_SIZE / 2),
       },
     });
   });
@@ -133,36 +148,40 @@ export function mapSessionsToEntities(
 ): Map<string, ForumEntity> {
   const entities = new Map<string, ForumEntity>();
 
-  // Group sessions by project for positioning
-  const byProject = new Map<string, ActiveSession[]>();
+  const byRoom = new Map<string, ActiveSession[]>();
   for (const session of sessions) {
-    const project = session.project || "misc";
-    if (!byProject.has(project)) {
-      byProject.set(project, []);
+    const roomKey = getSessionRoomLabel(session);
+    if (!byRoom.has(roomKey)) {
+      byRoom.set(roomKey, []);
     }
-    byProject.get(project)!.push(session);
+    byRoom.get(roomKey)!.push(session);
   }
 
-  // Create entity for each session
-  for (const [project, projectSessions] of byProject) {
-    const room = rooms.get(project);
+  for (const [roomKey, roomSessions] of byRoom) {
+    const room = rooms.get(roomKey);
     if (!room) continue;
 
-    projectSessions.forEach((session, index) => {
-      const position = computePositionInRoom(room, index, projectSessions.length);
+    const sorted = [...roomSessions].sort(
+      (a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime(),
+    );
+
+    sorted.forEach((session, index) => {
+      const position = computePositionInRoom(room, index, sorted.length);
+      const label = getSessionDisplayTitle(session);
+      const subtitleParts = [session.provider, session.git_branch].filter(Boolean) as string[];
+      const subtitle = subtitleParts.join(" | ");
 
       entities.set(session.id, {
         id: session.id,
         type: "commis",
         roomId: room.id,
         position,
-        status: mapSessionStatusToEntityStatus(session.status),
-        label: `${session.provider}`,
+        status: session.ended_at ? "disabled" : "idle",
+        label,
         meta: {
           provider: session.provider,
-          attention: session.attention,
-          project: session.project,
-          lastMessage: session.last_assistant_message,
+          room: room.name,
+          subtitle: subtitle || undefined,
         },
       });
     });
@@ -171,74 +190,13 @@ export function mapSessionsToEntities(
   return entities;
 }
 
-/**
- * Map sessions to tasks for the task list panel.
- */
-export function mapSessionsToTasks(sessions: ActiveSession[], rooms: Map<string, ForumRoom>): Map<string, ForumTask> {
-  const tasks = new Map<string, ForumTask>();
+export function buildForumStateFromSessions(sessions: ActiveSession[]): ForumMapState {
+  const rooms = createRoomsFromSessions(sessions);
+  const layout = createForumLayout(Math.max(rooms.size, 1));
+  const base = createForumState({ layout, rooms: Array.from(rooms.values()) });
 
-  for (const session of sessions) {
-    const project = session.project || "misc";
-    const room = rooms.get(project);
-    if (!room) continue;
+  base.entities = mapSessionsToEntities(sessions, rooms);
+  base.now = Date.now();
 
-    // Compute progress based on status
-    let progress = 0;
-    if (session.status === "completed") {
-      progress = 1;
-    } else if (session.status === "working" || session.status === "thinking") {
-      progress = 0.5;
-    } else if (session.status === "idle") {
-      progress = 0.3;
-    }
-
-    // Title: project + last message snippet
-    const lastMsg = session.last_assistant_message || session.last_user_message || "";
-    const title = lastMsg.length > 60 ? `${lastMsg.slice(0, 57)}...` : lastMsg || `${project} session`;
-
-    tasks.set(session.id, {
-      id: session.id,
-      title,
-      status: mapSessionStatusToTaskStatus(session.status, session.attention),
-      roomId: room.id,
-      entityId: session.id,
-      progress,
-      createdAt: new Date(session.started_at).getTime(),
-      updatedAt: new Date(session.last_activity_at).getTime(),
-    });
-  }
-
-  return tasks;
-}
-
-/**
- * Create attention markers for sessions that need attention.
- */
-export function createAttentionMarkers(
-  sessions: ActiveSession[],
-  entities: Map<string, ForumEntity>,
-): Map<string, ForumMarker> {
-  const markers = new Map<string, ForumMarker>();
-  const now = Date.now();
-
-  for (const session of sessions) {
-    if (session.attention !== "hard" && session.attention !== "needs") {
-      continue;
-    }
-
-    const entity = entities.get(session.id);
-    if (!entity) continue;
-
-    markers.set(`attention-${session.id}`, {
-      id: `attention-${session.id}`,
-      type: session.attention === "hard" ? "ping" : "focus",
-      roomId: entity.roomId,
-      position: entity.position,
-      label: session.attention === "hard" ? "!" : "?",
-      createdAt: now,
-      expiresAt: now + 60000, // 1 minute
-    });
-  }
-
-  return markers;
+  return base;
 }

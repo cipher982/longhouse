@@ -13,7 +13,7 @@ import { test, expect } from './fixtures';
 test.describe('Infrastructure Smoke Test', () => {
 
   test('backend health check responds', async ({ request }) => {
-    const response = await request.get('/health');
+    const response = await request.get('/api/system/health');
     expect(response.status()).toBe(200);
 
     const body = await response.json();
@@ -21,7 +21,7 @@ test.describe('Infrastructure Smoke Test', () => {
   });
 
   test('React frontend loads successfully', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/dashboard');
 
     // Wait for app to render - use a single unique element
     await expect(page.locator('[data-testid="create-fiche-btn"]')).toBeVisible({ timeout: 15000 });
@@ -47,7 +47,7 @@ test.describe('Infrastructure Smoke Test', () => {
   });
 
   test('visual testing dependencies available', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/dashboard');
 
     // Wait for app to be ready
     await expect(page.locator('[data-testid="create-fiche-btn"]')).toBeVisible({ timeout: 15000 });

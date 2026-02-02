@@ -13,7 +13,7 @@ type RequestFactory = { newContext: (options?: { baseURL?: string; timeout?: num
 
 /**
  * Wait for the API to be healthy before running tests.
- * Polls /health until status is "ok" twice consecutively.
+ * Polls /api/system/health until status is "ok" twice consecutively.
  * This prevents flaky tests during deploy windows.
  */
 export async function waitForHealthy(
@@ -35,7 +35,7 @@ export async function waitForHealthy(
     while (Date.now() - startTime < timeoutMs) {
       attempt++;
       try {
-        const response = await healthRequest.get('/health');
+        const response = await healthRequest.get('/api/system/health');
         if (response.ok()) {
           const data = await response.json();
           if (data.status === 'healthy' || data.status === 'ok') {
@@ -101,6 +101,10 @@ export const test = base.extend<LiveFixtures>({
   },
 
   authToken: async ({ apiBaseUrl, runId, playwright }, use) => {
+    if (!process.env.RUN_LIVE_E2E) {
+      test.skip(true, 'RUN_LIVE_E2E not set; skipping live prod E2E');
+    }
+
     const secret = normalizeSecret(process.env.SMOKE_TEST_SECRET);
     if (!secret) {
       test.skip(true, 'SMOKE_TEST_SECRET not set; skipping live prod E2E');

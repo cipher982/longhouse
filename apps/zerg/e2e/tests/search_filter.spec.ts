@@ -2,7 +2,7 @@ import { test, expect } from './fixtures';
 
 test.describe('Fiche search & filtering', () => {
   test('Search fiches by name', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/dashboard');
     // Ensure at least one fiche exists
     await page.locator('[data-testid="create-fiche-btn"]').click();
 

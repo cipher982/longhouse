@@ -14,7 +14,6 @@ import "../styles/forum-map.css";
 
 export type ForumCanvasProps = {
   state: ForumMapState;
-  timeMs: number;
   selectedEntityId?: string | null;
   focusEntityId?: string | null;
   onSelectEntity?: (entityId: string | null) => void;
@@ -38,6 +37,10 @@ const ENTITY_COLORS: Record<ForumEntity["type"], string> = {
   task_node: "#36EBA8",
 };
 
+const DESK_WIDTH = 28;
+const DESK_HEIGHT = 16;
+const DESK_HIT_PADDING = 8;
+
 const ALERT_COLORS: Record<ForumAlert["level"], string> = {
   L0: "#46E2F2",
   L1: "#F7C055",
@@ -47,7 +50,6 @@ const ALERT_COLORS: Record<ForumAlert["level"], string> = {
 
 export function ForumCanvas({
   state,
-  timeMs,
   selectedEntityId,
   focusEntityId,
   onSelectEntity,
@@ -72,7 +74,7 @@ export function ForumCanvas({
 
   useEffect(() => {
     scheduleDraw();
-  }, [scheduleDraw, state, timeMs, selectedEntityId]);
+  }, [scheduleDraw, state, selectedEntityId]);
 
   useEffect(() => {
     return () => {
@@ -204,7 +206,7 @@ export function ForumCanvas({
     viewportRef.current.offsetX = width / 2 - iso.x * viewportRef.current.scale;
     viewportRef.current.offsetY = height / 2 - iso.y * viewportRef.current.scale;
     scheduleDraw();
-  }, [focusEntityId, timeMs, scheduleDraw, state.layout, state.entities]);
+  }, [focusEntityId, scheduleDraw, state.layout, state.entities]);
 
   return (
     <div
@@ -221,10 +223,6 @@ export function ForumCanvas({
         <div className="forum-map-hud-row">
           <span>Zoom</span>
           <strong>{hudScale.toFixed(2)}x</strong>
-        </div>
-        <div className="forum-map-hud-row">
-          <span>t</span>
-          <strong>{Math.round(timeMs / 100) / 10}s</strong>
         </div>
       </div>
     </div>
@@ -314,6 +312,14 @@ function drawRooms(ctx: CanvasRenderingContext2D, rooms: Map<string, ForumRoom>,
     ctx.strokeStyle = "rgba(120, 160, 220, 0.18)";
     ctx.lineWidth = 2;
     ctx.stroke();
+
+    const label = room.name || room.id;
+    const labelPoint = gridToIso(room.center, layout);
+    ctx.fillStyle = "rgba(210, 230, 255, 0.7)";
+    ctx.font = "12px \"Space Grotesk\", \"Helvetica Neue\", sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, labelPoint.x, labelPoint.y - 24);
     index += 1;
   });
 }
@@ -326,17 +332,36 @@ function drawEntities(
 ) {
   entities.forEach((entity) => {
     const iso = gridToIso(entity.position, layout);
-    const color = ENTITY_COLORS[entity.type] || "#7B7CFF";
-    ctx.beginPath();
+    const isDisabled = entity.status === "disabled";
+    const color = isDisabled ? "rgba(130, 150, 190, 0.35)" : ENTITY_COLORS[entity.type] || "#7B7CFF";
+    const deskX = iso.x - DESK_WIDTH / 2;
+    const deskY = iso.y - DESK_HEIGHT / 2;
+
     ctx.fillStyle = color;
-    ctx.arc(iso.x, iso.y, entity.type === "structure" ? 8 : 6, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(10, 12, 18, 0.7)";
+    ctx.lineWidth = 2;
+    beginRoundedRect(ctx, deskX, deskY, DESK_WIDTH, DESK_HEIGHT, 4);
     ctx.fill();
+    ctx.stroke();
+
+    const label = entity.label ?? entity.id;
+    const subtitle = typeof entity.meta?.subtitle === "string" ? (entity.meta.subtitle as string) : null;
+    ctx.fillStyle = "rgba(235, 245, 255, 0.9)";
+    ctx.font = "11px \"Space Grotesk\", \"Helvetica Neue\", sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, iso.x, iso.y + DESK_HEIGHT / 2 + 12);
+
+    if (subtitle) {
+      ctx.fillStyle = "rgba(180, 200, 230, 0.7)";
+      ctx.font = "9px \"Space Grotesk\", \"Helvetica Neue\", sans-serif";
+      ctx.fillText(subtitle, iso.x, iso.y + DESK_HEIGHT / 2 + 24);
+    }
 
     if (selectedEntityId === entity.id) {
       ctx.strokeStyle = "rgba(255, 255, 255, 0.7)";
       ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(iso.x, iso.y, 12, 0, Math.PI * 2);
+      beginRoundedRect(ctx, deskX - 4, deskY - 4, DESK_WIDTH + 8, DESK_HEIGHT + 8, 6);
       ctx.stroke();
     }
   });
@@ -437,11 +462,44 @@ function pickEntityAtPoint(
     const iso = gridToIso(entity.position, state.layout);
     const screenX = iso.x * viewport.scale + viewport.offsetX;
     const screenY = iso.y * viewport.scale + viewport.offsetY;
+    const halfWidth = (DESK_WIDTH / 2 + DESK_HIT_PADDING) * viewport.scale;
+    const halfHeight = (DESK_HEIGHT / 2 + DESK_HIT_PADDING) * viewport.scale;
+    const within =
+      x >= screenX - halfWidth &&
+      x <= screenX + halfWidth &&
+      y >= screenY - halfHeight &&
+      y <= screenY + halfHeight;
     const distance = Math.hypot(screenX - x, screenY - y);
-    if (distance <= 18 && distance < closestDistance) {
+    if (within && distance < closestDistance) {
       closest = entity;
       closestDistance = distance;
     }
   });
   return closest ?? null;
+}
+
+function beginRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  ctx.beginPath();
+  const roundRect = (ctx as { roundRect?: (...args: any[]) => void }).roundRect;
+  if (typeof roundRect === "function") {
+    roundRect.call(ctx, x, y, width, height, radius);
+    return;
+  }
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
 }

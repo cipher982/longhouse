@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures';
 import { resetDatabase } from './test-utils';
+import { waitForDashboardReady } from './helpers/test-helpers';
 
 test.describe('Fiche Creation', () => {
   // Uses strict reset that throws on failure to fail fast
@@ -8,8 +9,7 @@ test.describe('Fiche Creation', () => {
   });
 
   test('creates fiches with "New Fiche" placeholder name', async ({ page }) => {
-    await page.goto('/');
-    await page.waitForLoadState('domcontentloaded');
+    await waitForDashboardReady(page);
 
     // Wait for create button to be ready
     await expect(page.locator('[data-testid="create-fiche-btn"]')).toBeVisible({ timeout: 5000 });

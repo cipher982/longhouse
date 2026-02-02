@@ -55,6 +55,7 @@ from zerg.constants import FICHES_PREFIX
 from zerg.constants import MODELS_PREFIX
 from zerg.constants import THREADS_PREFIX
 from zerg.database import initialize_database
+from zerg.middleware.test_commis_context import TestCommisContextMiddleware
 from zerg.routers.account_connectors import router as account_connectors_router
 from zerg.routers.admin import router as admin_router
 from zerg.routers.admin_bootstrap import router as admin_bootstrap_router
@@ -664,6 +665,9 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+# Test-only commis DB routing (E2E isolation).
+app.add_middleware(TestCommisContextMiddleware)
 
 # Mount /static for avatars (and any future assets served by the backend)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

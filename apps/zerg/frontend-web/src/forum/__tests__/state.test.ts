@@ -1,33 +1,95 @@
 import { describe, expect, it } from "vitest";
-import { generateForumReplay } from "../replay";
 import { applyForumEvents, createForumState } from "../state";
 import type { ForumAlert, ForumMarker } from "../types";
 
-const scenario = generateForumReplay({
-  seed: "state-seed",
-  durationMs: 2000,
-  tickMs: 1000,
-  roomCount: 2,
-  unitsPerRoom: 1,
-  tasksPerRoom: 1,
-  commissPerRoom: 1,
-});
+const layout = {
+  id: "layout-test",
+  name: "Forum",
+  grid: { cols: 12, rows: 12 },
+  tile: { width: 64, height: 32 },
+  origin: { x: 0, y: 0 },
+};
+
+const room = {
+  id: "room-1",
+  name: "Room 1",
+  workspaceId: "ws-1",
+  repoGroupId: "rg-1",
+  bounds: { minCol: 0, minRow: 0, maxCol: 5, maxRow: 5 },
+  center: { col: 2, row: 2 },
+};
 
 describe("forum state", () => {
   it("applies events idempotently", () => {
     const state = createForumState({
-      layout: scenario.layout,
-      workspaces: scenario.workspaces,
-      repoGroups: scenario.repoGroups,
-      rooms: scenario.rooms,
+      layout,
+      rooms: [room],
     });
 
-    applyForumEvents(state, scenario.events);
+    applyForumEvents(state, [
+      {
+        id: "evt-entity-add",
+        seq: 0,
+        t: 0,
+        type: "entity.add",
+        entity: {
+          id: "entity-1",
+          type: "commis",
+          roomId: room.id,
+          position: room.center,
+          status: "idle",
+        },
+      },
+      {
+        id: "evt-task-add",
+        seq: 1,
+        t: 1,
+        type: "task.add",
+        task: {
+          id: "task-1",
+          title: "Test task",
+          status: "queued",
+          roomId: room.id,
+          progress: 0,
+          createdAt: 0,
+          updatedAt: 0,
+        },
+      },
+    ]);
     const entitiesAfterFirst = state.entities.size;
     const tasksAfterFirst = state.tasks.size;
     const alertsAfterFirst = state.alerts.size;
 
-    applyForumEvents(state, scenario.events);
+    applyForumEvents(state, [
+      {
+        id: "evt-entity-add",
+        seq: 0,
+        t: 0,
+        type: "entity.add",
+        entity: {
+          id: "entity-1",
+          type: "commis",
+          roomId: room.id,
+          position: room.center,
+          status: "idle",
+        },
+      },
+      {
+        id: "evt-task-add",
+        seq: 1,
+        t: 1,
+        type: "task.add",
+        task: {
+          id: "task-1",
+          title: "Test task",
+          status: "queued",
+          roomId: room.id,
+          progress: 0,
+          createdAt: 0,
+          updatedAt: 0,
+        },
+      },
+    ]);
     expect(state.entities.size).toBe(entitiesAfterFirst);
     expect(state.tasks.size).toBe(tasksAfterFirst);
     expect(state.alerts.size).toBe(alertsAfterFirst);
@@ -35,13 +97,10 @@ describe("forum state", () => {
 
   it("adds and clears alerts and markers", () => {
     const state = createForumState({
-      layout: scenario.layout,
-      workspaces: scenario.workspaces,
-      repoGroups: scenario.repoGroups,
-      rooms: scenario.rooms,
+      layout,
+      rooms: [room],
     });
 
-    const room = scenario.rooms[0];
     const alert: ForumAlert = {
       id: "alert-1",
       level: "L1",

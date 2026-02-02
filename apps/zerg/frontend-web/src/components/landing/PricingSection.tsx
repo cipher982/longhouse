@@ -71,7 +71,7 @@ function WaitlistModal({ onClose }: WaitlistModalProps) {
           <>
             <h2>Join the Pro Waitlist</h2>
             <p className="landing-login-subtext">
-              Be the first to know when Swarmlet Pro launches with unlimited fiches and advanced
+              Be the first to know when Longhouse Pro launches with unlimited fiches and advanced
               workflows.
             </p>
 

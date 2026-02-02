@@ -7,6 +7,9 @@ The codebase is SQLite-only for OSS deployment simplicity.
 import logging
 import os
 from contextlib import contextmanager
+from contextvars import ContextVar
+from pathlib import Path
+from threading import Lock
 from typing import Any
 from typing import Iterator
 
@@ -25,6 +28,86 @@ from zerg.config import get_settings
 logger = logging.getLogger(__name__)
 
 _settings = get_settings()
+
+# ---------------------------------------------------------------------------
+# Test-only commis DB routing (E2E isolation)
+# ---------------------------------------------------------------------------
+
+_test_commis_id: ContextVar[str | None] = ContextVar("test_commis_id", default=None)
+_commis_session_factories: dict[str, sessionmaker] = {}
+_commis_factories_lock = Lock()
+
+
+def set_test_commis_id(commis_id: str | None):
+    """Set the current test commis id for DB routing (E2E only)."""
+    return _test_commis_id.set(commis_id)
+
+
+def reset_test_commis_id(token) -> None:
+    """Reset the current test commis id to the previous value."""
+    _test_commis_id.reset(token)
+
+
+def get_test_commis_id() -> str | None:
+    """Return the current test commis id (E2E only)."""
+    return _test_commis_id.get()
+
+
+def list_test_commis_ids() -> list[str]:
+    """Return known test commis ids for E2E DB routing."""
+    return list(_commis_session_factories.keys())
+
+
+def _safe_commis_id(commis_id: str) -> str:
+    # Keep filenames stable + safe (allow digits, letters, dash, underscore).
+    return "".join(ch for ch in commis_id if ch.isalnum() or ch in {"-", "_"}).strip() or "0"
+
+
+def _commis_db_url(commis_id: str) -> str:
+    base_url = _settings.database_url
+    if not base_url:
+        raise ValueError("DATABASE_URL not set in environment")
+
+    parsed = make_url(base_url)
+    db_path = parsed.database or ""
+    if not db_path:
+        raise ValueError("DATABASE_URL missing sqlite path")
+
+    # Allow explicit override for E2E db root (handy for temp dirs)
+    e2e_db_dir = os.getenv("E2E_DB_DIR")
+    if e2e_db_dir:
+        base_dir = Path(e2e_db_dir)
+        base_name = Path(db_path).stem
+    else:
+        base_dir = Path(db_path).expanduser().resolve().parent
+        base_name = Path(db_path).stem
+
+    safe_id = _safe_commis_id(commis_id)
+    commis_path = base_dir / f"{base_name}_commis_{safe_id}.db"
+    return f"sqlite:///{commis_path}"
+
+
+def _get_or_create_commis_session_factory(commis_id: str) -> sessionmaker:
+    safe_id = _safe_commis_id(commis_id)
+    existing = _commis_session_factories.get(safe_id)
+    if existing is not None:
+        return existing
+
+    with _commis_factories_lock:
+        existing = _commis_session_factories.get(safe_id)
+        if existing is not None:
+            return existing
+
+        db_url = _commis_db_url(safe_id)
+        engine = make_engine(db_url)
+        factory = make_sessionmaker(engine)
+
+        # Initialize schema for this commis DB (SQLite-only)
+        initialize_database(engine)
+
+        _commis_session_factories[safe_id] = factory
+        return factory
+
 
 # Use override=True to ensure proper quote stripping even if vars are inherited from parent process
 dotenv.load_dotenv(override=True)
@@ -165,6 +248,12 @@ def get_session_factory() -> sessionmaker:
     Returns:
         A sessionmaker instance
     """
+    # In E2E, route DB sessions by commis id (X-Test-Commis header / ws param).
+    if _settings.testing:
+        commis_id = get_test_commis_id()
+        if commis_id:
+            return _get_or_create_commis_session_factory(commis_id)
+
     if default_session_factory is not None:
         return default_session_factory
 

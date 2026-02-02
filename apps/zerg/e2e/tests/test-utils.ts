@@ -10,15 +10,15 @@
 import { expect, type Page, type APIRequestContext } from '@playwright/test';
 
 /**
- * Create an agent via UI and return its ID.
+ * Create a fiche via UI and return its ID.
  *
  * CRITICAL: Gets ID from API response, NOT from DOM query.
  * This prevents race conditions where .first() returns a stale row.
  */
 export async function createAgentViaUI(page: Page): Promise<string> {
-  await page.goto('/');
+  await page.goto('/dashboard');
 
-  const createBtn = page.locator('[data-testid="create-agent-btn"]');
+  const createBtn = page.locator('[data-testid="create-fiche-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
   await expect(createBtn).toBeEnabled({ timeout: 5000 });
 
@@ -39,8 +39,8 @@ export async function createAgentViaUI(page: Page): Promise<string> {
     throw new Error(`Failed to get agent ID from API response: ${JSON.stringify(body)}`);
   }
 
-  // Wait for THIS SPECIFIC agent's row to appear in DOM (not just any row)
-  const row = page.locator(`tr[data-agent-id="${agentId}"]`);
+  // Wait for THIS SPECIFIC fiche's row to appear in DOM (not just any row)
+  const row = page.locator(`tr[data-fiche-id="${agentId}"]`);
   await expect(row).toBeVisible({ timeout: 10000 });
 
   return agentId;
@@ -67,16 +67,16 @@ export async function createAgentViaAPI(request: APIRequestContext): Promise<str
 }
 
 /**
- * Navigate to chat for an agent.
+ * Navigate to chat for a fiche.
  * Waits for URL change and chat UI to be fully ready.
  */
 export async function navigateToChat(page: Page, agentId: string): Promise<void> {
-  const chatBtn = page.locator(`[data-testid="chat-agent-${agentId}"]`);
+  const chatBtn = page.locator(`[data-testid="chat-fiche-${agentId}"]`);
   await expect(chatBtn).toBeVisible({ timeout: 10000 });
   await chatBtn.click();
 
-  // Wait for URL to change to the agent's chat
-  await page.waitForURL((url) => url.pathname.includes(`/agent/${agentId}/thread`), { timeout: 10000 });
+  // Wait for URL to change to the fiche's chat
+  await page.waitForURL((url) => url.pathname.includes(`/fiche/${agentId}/thread`), { timeout: 10000 });
 
   // Wait for chat UI to be fully interactive
   await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
@@ -87,10 +87,10 @@ export async function navigateToChat(page: Page, agentId: string): Promise<void>
  * Navigate to dashboard and wait for it to be ready
  */
 export async function navigateToDashboard(page: Page): Promise<void> {
-  await page.goto('/');
+  await page.goto('/dashboard');
 
   // Wait for dashboard to be fully loaded - the create button is a reliable signal
-  const createBtn = page.locator('[data-testid="create-agent-btn"]');
+  const createBtn = page.locator('[data-testid="create-fiche-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
   await expect(createBtn).toBeEnabled({ timeout: 5000 });
 }
