@@ -48,12 +48,12 @@ Make Longhouse ready for Hacker News launch. The product works but the story/UX 
   - ✅ Bullet points with concrete use cases
   - ✅ Added "Why Longhouse?" section (logs metaphor)
 
-- [ ] **Empty state UI** (1 hour) - Blocked by Worker 3 (frontend)
-  - Replace blank timeline with "Getting Started" card when no sessions exist
-  - Show: "1. Install complete ✓  2. Connect Claude Code  3. Start coding"
-  - Link to setup guide
-  - Show demo data option: "Or explore with demo sessions"
-  - File: `apps/zerg/frontend-web/src/pages/TimelinePage.tsx` (or wherever timeline lives)
+- [x] **Empty state UI** (1 hour) ✅ DONE 2026-02-02
+  - ✅ Implemented in `SessionsPage.tsx` (lines 478-528)
+  - ✅ Shows "Welcome to your Timeline" when no sessions exist
+  - ✅ 3-step onboarding: Connect shipper → Load demo → Explore timeline
+  - ✅ "Load demo timeline" button calls `seedAgentDemoSessions()`
+  - ✅ Error handling for demo seed failures
 
 ### High Priority (Polish Before Launch)
 
@@ -148,10 +148,18 @@ Make Longhouse the sole source of session truth. Remove Life Hub routes, naming,
 
 **Deliverables:** Session picker + Forum + session resume all use Longhouse agents data; no LIFE_HUB_API_KEY needed for OSS/E2E.
 
-- [ ] Replace `/oikos/life-hub/*` endpoints with agents-backed endpoints (or reuse `/api/agents/sessions`); delete `oikos_life_hub.py` router.
-- [ ] Update frontend hooks/components (`useLifeHubSessions`, `useActiveSessions`, `SessionPickerModal`, Forum) to hit the new endpoints and rename to “sessions/timeline”.
-- [ ] Update session-resume flow to call `ship_session_to_zerg`/`fetch_session_from_zerg` directly (remove Life Hub naming in `session_chat`, `oikos_tools`, etc.).
-- [ ] Replace Life Hub integration tests (backend + E2E) with local ingest/export tests; remove LIFE_HUB_API_KEY requirement in OSS runs.
+**Current State (verified 2026-02-02):**
+- ✅ Frontend migrated — `useActiveSessions` uses agents API, no `useLifeHubSessions`
+- ✅ Session continuity uses Zerg-native endpoints (`fetch_session_from_zerg`, `ship_session_to_zerg`)
+- ✅ Router source files deleted (`oikos_life_hub.py` removed)
+- ⚠️ **Gmail sync job still active** — `jobs/life_hub/gmail_sync.py` hits external Life Hub API every 30min
+- ⚠️ Stale `.pyc` files in `routers/__pycache__/` (harmless but messy)
+
+- [x] Replace `/oikos/life-hub/*` endpoints — routers deleted, frontend uses agents API
+- [x] Update frontend hooks/components — all migrated to agents API
+- [x] Update session-resume flow — uses Zerg-native endpoints
+- [ ] **Disable Gmail sync for OSS** — conditionally skip if `LIFE_HUB_API_KEY` not set
+- [ ] Clean up stale `.pyc` files in routers/__pycache__/
 - [x] Update VISION session-resume section to remove Life Hub flow (doc consolidated).
 
 ---
@@ -197,10 +205,12 @@ Eliminate the "empty timeline" anticlimactic moment and improve discovery for us
 
 **Deliverables:** New users see value immediately; timeline isn't empty; clear next steps regardless of setup.
 
+**Current State (verified 2026-02-02):** Most items done via HN Launch work.
+
 - [ ] Seed demo session data on first `longhouse onboard` run (shows what the timeline looks like)
-- [ ] Add README screenshot/gif showing the timeline UI (visual proof of value)
+- [x] Add README screenshot/gif showing the timeline UI — `timeline-screenshot.png` embedded
 - [ ] Improve "No Claude Code" guidance in onboard wizard (link to alternatives, explain what to do next)
-- [ ] Add "Getting Started" card in empty timeline state (instead of just blank screen)
+- [x] Add "Getting Started" card in empty timeline state — implemented in `SessionsPage.tsx`
 - [ ] Consider demo mode flag for `longhouse serve --demo` (starts with pre-loaded sessions for exploration)
 
 ---
@@ -211,20 +221,32 @@ Unify local paths under `~/.longhouse` and remove legacy `~/.zerg` naming + env 
 
 **Deliverables:** CLI defaults, shipper state, skills, and workspace paths all use Longhouse naming; no `/var/oikos` defaults in OSS.
 
-- [ ] Rename `~/.zerg` → `~/.longhouse` across CLI defaults (`cli/serve.py`), dev scripts (`scripts/dev.sh`), and skills loader.
-- [ ] Rename shipper state/token/url files in `~/.claude` from `zerg-*` to `longhouse-*`; update `connect`/`shipper` helpers.
-- [ ] Rename env var `ZERG_API_URL` → `LONGHOUSE_API_URL` in session continuity + shipper; update defaults/docs.
-- [ ] Change default workspace base paths from `/var/oikos/workspaces` + `/tmp/zerg-session-workspaces` to `~/.longhouse/workspaces` (server overrides via env).
+**Current State (verified 2026-02-02):**
+- ✅ `cli/serve.py` uses `~/.longhouse` with auto-migration from `~/.zerg` (lines 29-43)
+- ✅ Skills loader uses `~/.longhouse/skills` with legacy fallback
+- ✅ Config uses `~/.longhouse/config.toml`
+- ⚠️ `ZERG_API_URL` still primary env var (dual support exists in config_file.py)
+- ⚠️ `scripts/dev-demo.sh` still uses `~/.zerg`
+
+- [x] Rename `~/.zerg` → `~/.longhouse` in CLI — done with migration logic
+- [x] Skills loader updated — uses `~/.longhouse/skills` with fallback
+- [ ] Fix `scripts/dev-demo.sh` to use `~/.longhouse` (lines 19-20)
+- [ ] Rename env var `ZERG_API_URL` → `LONGHOUSE_API_URL` as primary (keep fallback)
+- [ ] Update OpenAPI prod URL from `api.zerg.ai` → `api.longhouse.ai` (serve.py line 615)
 
 ---
 
-## Memory Store SQLite Pass (3)
+## Memory Store SQLite Pass (3) ✅
 
 Ensure Oikos memory tools are SQLite-safe and do not assume Postgres.
 
-- [ ] Decide keep vs remove memory in OSS; if kept, rename `PostgresMemoryStore` and make queries SQLite-safe.
-- [ ] Add lite tests for memory save/search/delete on SQLite.
-- [ ] Update `oikos_memory_tools.py` examples/copy to remove Postgres references.
+**Status: ALREADY COMPATIBLE.** Verified 2026-02-02 — `PostgresMemoryStore` name is misleading but code is DB-agnostic.
+
+- [x] Memory store uses SQLAlchemy abstractions only (`.ilike()`, standard filters) — no pg_trgm, no JSONB operators
+- [x] GUID TypeDecorator handles UUID ↔ CHAR(36) conversion transparently
+- [x] Tests in `test_oikos_memory_store.py` account for SQLite timestamp precision
+- [ ] Rename `PostgresMemoryStore` → `MemoryStore` (cosmetic, low priority)
+- [ ] Add explicit lite tests for memory save/search/delete (optional — main tests work on SQLite)
 
 ---
 
@@ -232,7 +254,7 @@ Ensure Oikos memory tools are SQLite-safe and do not assume Postgres.
 
 Close the remaining open questions from VISION.md (SQLite-only OSS Pivot section).
 
-- [ ] Confirm PyPI availability for `longhouse` (or pick fallback name) and document final choice.
+- [x] Confirm PyPI availability for `longhouse` — **published as `longhouse` on PyPI** (v0.1.1 live)
 - [ ] Decide whether the shipper is bundled with the CLI or shipped as a separate package.
 - [ ] Decide remote auth UX for `longhouse connect` (device token vs OAuth vs API key).
 - [ ] Decide HTTPS story for local OSS (`longhouse serve`) — built-in vs reverse proxy guidance.
@@ -330,22 +352,24 @@ Bundle frontend assets into pip package using importlib.resources. Final polish 
 
 ---
 
-## Prompting Pipeline Hardening (3)
+## Prompting Pipeline Hardening (3) ✅
 
 Unify prompt construction across `run_thread`, `run_continuation`, and `run_batch_continuation` to eliminate divergence in tool loading, usage capture, and persistence.
 
 **Why:** Current flows have subtle differences that cause bugs. Memory query behavior varies, tool results can duplicate.
 
-**Files:** `managers/fiche_runner.py`, related service files
+**Files:** `managers/prompt_context.py`, `managers/message_array_builder.py`
 
-**Status: ~80% complete.** Infrastructure exists — just needs FicheRunner wiring.
+**Status: COMPLETE.** All flows use unified `build_prompt()` with comprehensive tests.
 
-- [x] Introduce `PromptContext` dataclass (system + conversation + tool_messages + dynamic_context) — exists in `prompting/context.py`
-- [x] Create unified `build_prompt()` helper — exists in `prompting/builder.py`
-- [x] Extract single `derive_memory_query(...)` helper — exists in `prompting/memory.py`
-- [ ] Wire PromptContext through FicheRunner flows (run_thread, run_continuation, run_batch_continuation)
-- [ ] Add DB-level idempotency for tool results (unique constraint or `get_or_create`)
-- [ ] Add prompt snapshot test fixture for regression checks
+- [x] Introduce `PromptContext` dataclass (system + conversation + tool_messages + dynamic_context) — `managers/prompt_context.py:43-65`
+- [x] Create unified `build_prompt()` helper — `managers/prompt_context.py:266-354`
+- [x] Extract single `derive_memory_query(...)` helper — `managers/prompt_context.py:90-130`
+- [x] Wire PromptContext through FicheRunner flows (run_thread, run_continuation, run_batch_continuation) ✅ All 3 flows use build_prompt()
+- [x] Add DB-level idempotency for tool results — `get_or_create_tool_message()` at lines 138-210
+- [x] Add prompt snapshot test fixture — `tests/managers/test_prompt_context.py` with consistency checks
+
+**Done 2026-02-02:** Verified all flows wired. Guard at line 311 prevents silent tool_message loss.
 
 ---
 
