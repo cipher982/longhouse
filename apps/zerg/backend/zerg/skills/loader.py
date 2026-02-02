@@ -32,7 +32,10 @@ logger = logging.getLogger(__name__)
 BUNDLED_SKILLS_DIR = Path(__file__).parent / "bundled"
 
 # User skills directory
-USER_SKILLS_DIR = Path.home() / ".zerg" / "skills"
+USER_SKILLS_DIR = Path.home() / ".longhouse" / "skills"
+
+# Legacy user skills directory (for migration)
+LEGACY_USER_SKILLS_DIR = Path.home() / ".zerg" / "skills"
 
 
 def _check_binary_exists(binary: str) -> bool:
@@ -196,8 +199,17 @@ class SkillLoader:
         return self.load_from_directory(self.bundled_dir, SkillSource.BUNDLED)
 
     def load_user_skills(self) -> List[Skill]:
-        """Load user-managed skills from ~/.zerg/skills."""
-        return self.load_from_directory(self.user_dir, SkillSource.USER)
+        """Load user-managed skills from ~/.longhouse/skills.
+
+        Falls back to ~/.zerg/skills for legacy installations.
+        """
+        skills = self.load_from_directory(self.user_dir, SkillSource.USER)
+
+        # Also check legacy directory for existing installations
+        if not skills and LEGACY_USER_SKILLS_DIR.exists():
+            skills = self.load_from_directory(LEGACY_USER_SKILLS_DIR, SkillSource.USER)
+
+        return skills
 
     def load_user_skills_db(
         self,
