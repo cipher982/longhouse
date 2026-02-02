@@ -1,0 +1,29 @@
+name: Test Installer
+
+on:
+  push:
+    paths:
+      - 'scripts/install.sh'
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  test-install:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-22.04, macos-latest, macos-13]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run installer
+        run: bash scripts/install.sh
+        env:
+          LONGHOUSE_NO_WIZARD: "1"  # Skip interactive wizard
+
+      - name: Verify installation
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          which longhouse
+          longhouse --help
+          longhouse serve --help
