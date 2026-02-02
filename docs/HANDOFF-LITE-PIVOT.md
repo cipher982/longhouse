@@ -1,7 +1,7 @@
 # Zerg SQLite-Lite Pivot — Technical Handoff (2026-01-31)
 
 > **Status: ARCHIVED (2026-02-01)** — This handoff is complete. All phases implemented.
-> See `docs/LIGHTWEIGHT-OSS-ONBOARDING.md` for current state.
+> See `VISION.md` (SQLite-only OSS Pivot section) for current state.
 
 ## TECHNICAL DNA DISCOVERED
 
