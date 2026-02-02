@@ -323,8 +323,8 @@ run_onboard() {
             warn "Onboarding wizard exited with error"
             warn "You can run it again with: longhouse onboard"
         }
-    elif [[ -e /dev/tty ]]; then
-        # Stdin is pipe but TTY available - redirect from /dev/tty
+    elif : < /dev/tty 2>/dev/null; then
+        # Stdin is pipe but TTY is accessible - redirect from /dev/tty
         info "Reconnecting to terminal for interactive setup..."
         longhouse onboard < /dev/tty || {
             warn "Onboarding wizard exited with error"
