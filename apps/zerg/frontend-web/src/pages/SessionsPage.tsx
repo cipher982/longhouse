@@ -14,7 +14,6 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate, useSearchParams, useLocation } from "react-router-dom";
 import { useAgentSessions, useAgentFilters } from "../hooks/useAgentSessions";
 import {
-  seedAgentDemoSessions,
   type AgentSession,
   type AgentSessionFilters,
 } from "../services/api/agents";
@@ -295,8 +294,6 @@ export default function SessionsPage() {
 
   // Pagination state
   const [limit, setLimit] = useState(PAGE_SIZE);
-  const [demoSeedStatus, setDemoSeedStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
-  const [demoSeedError, setDemoSeedError] = useState<string | null>(null);
 
   // Fetch dynamic filter options
   const { data: filtersData, isLoading: filtersLoading, refetch: refetchFilters } = useAgentFilters(daysBack);
@@ -373,21 +370,6 @@ export default function SessionsPage() {
   const handleConnectShipper = useCallback(() => {
     navigate("/settings/integrations");
   }, [navigate]);
-
-  const handleSeedDemo = useCallback(async () => {
-    if (demoSeedStatus === "loading") return;
-    setDemoSeedStatus("loading");
-    setDemoSeedError(null);
-    try {
-      await seedAgentDemoSessions();
-      setDemoSeedStatus("done");
-      await refetch();
-      await refetchFilters();
-    } catch (err) {
-      setDemoSeedStatus("error");
-      setDemoSeedError(err instanceof Error ? err.message : "Failed to seed demo sessions.");
-    }
-  }, [demoSeedStatus, refetch]);
 
   const hasFilters = project || provider || daysBack !== 14 || searchQuery;
   const showGuidedEmptyState = sessions.length === 0 && !hasFilters;
@@ -500,24 +482,6 @@ export default function SessionsPage() {
               <Card className="timeline-step">
                 <div className="timeline-step__header">
                   <span className="timeline-step__badge">2</span>
-                  <div>
-                    <h4>Load demo timeline</h4>
-                    <p>No API key required. Seeds a couple of example sessions.</p>
-                  </div>
-                </div>
-                <Button
-                  variant="primary"
-                  onClick={handleSeedDemo}
-                  disabled={demoSeedStatus === "loading"}
-                  data-testid="demo-cta"
-                >
-                  {demoSeedStatus === "loading" ? "Loading demo..." : "Load demo"}
-                </Button>
-                {demoSeedError && <div className="timeline-step__error">{demoSeedError}</div>}
-              </Card>
-              <Card className="timeline-step">
-                <div className="timeline-step__header">
-                  <span className="timeline-step__badge">3</span>
                   <div>
                     <h4>Explore the timeline</h4>
                     <p>Filter by provider, project, or search across sessions.</p>

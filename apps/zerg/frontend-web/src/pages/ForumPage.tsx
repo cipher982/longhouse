@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { Badge, Button, Card, PageShell, SectionHeader, Spinner } from "../components/ui";
@@ -10,7 +10,6 @@ import {
   getSessionDisplayTitle,
   getSessionRoomLabel,
 } from "../forum/session-mapper";
-import { seedAgentDemoSessions } from "../services/api";
 import "../styles/forum.css";
 
 function formatRelativeTime(timestamp: string): string {
@@ -37,7 +36,6 @@ export default function ForumPage() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [focusEntityId, setFocusEntityId] = useState<string | null>(null);
   const [chatMode, setChatMode] = useState(false);
-  const [seedingDemo, setSeedingDemo] = useState(false);
 
   const { data: sessionsData, isLoading: sessionsLoading } = useActiveSessions({
     pollInterval: 5000,
@@ -87,18 +85,6 @@ export default function ForumPage() {
     setFocusEntityId((prev) => (prev === selectedSessionId ? null : selectedSessionId));
   };
 
-  const handleSeedDemo = useCallback(async () => {
-    setSeedingDemo(true);
-    try {
-      await seedAgentDemoSessions();
-      await queryClient.invalidateQueries({ queryKey: ["active-sessions"], exact: false });
-    } catch (error) {
-      console.warn("Failed to seed demo sessions", error);
-    } finally {
-      setSeedingDemo(false);
-    }
-  }, [queryClient]);
-
   return (
     <PageShell size="full" className="forum-map-page">
       <SectionHeader
@@ -135,18 +121,6 @@ export default function ForumPage() {
             {sessions.length === 0 ? (
               <div className="forum-task-empty">
                 {sessionsLoading ? "Loading sessions..." : "No sessions found in the last 7 days."}
-                {!sessionsLoading && (
-                  <div className="forum-empty-actions">
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={handleSeedDemo}
-                      disabled={seedingDemo}
-                    >
-                      {seedingDemo ? "Seeding demo data..." : "Load demo data"}
-                    </Button>
-                  </div>
-                )}
               </div>
             ) : (
               sessions.map((session) => (
