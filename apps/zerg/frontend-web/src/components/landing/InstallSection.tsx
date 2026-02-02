@@ -5,15 +5,15 @@ type Platform = "macos" | "linux" | "windows";
 const installCommands: Record<Platform, { label: string; command: string; note?: string }> = {
   macos: {
     label: "macOS",
-    command: "curl -fsSL https://get.longhouse.ai/install.sh | bash",
+    command: "curl -fsSL https://raw.githubusercontent.com/cipher982/longhouse/main/scripts/install.sh | bash",
   },
   linux: {
     label: "Linux",
-    command: "curl -fsSL https://get.longhouse.ai/install.sh | bash",
+    command: "curl -fsSL https://raw.githubusercontent.com/cipher982/longhouse/main/scripts/install.sh | bash",
   },
   windows: {
     label: "Windows (WSL)",
-    command: "curl -fsSL https://get.longhouse.ai/install.sh | bash",
+    command: "curl -fsSL https://raw.githubusercontent.com/cipher982/longhouse/main/scripts/install.sh | bash",
     note: "Run in WSL terminal. Native Windows coming soon.",
   },
 };
