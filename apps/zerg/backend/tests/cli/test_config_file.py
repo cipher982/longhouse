@@ -84,6 +84,20 @@ port = 9000
 
         assert config.shipper.api_url == "https://old.api.zerg.ai"
 
+    def test_longhouse_api_url_priority(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test LONGHOUSE_API_URL takes priority over ZERG_API_URL."""
+        from zerg.cli.config_file import load_config
+
+        config_file = tmp_path / "config.toml"
+
+        # Set both env vars - LONGHOUSE should win
+        monkeypatch.setenv("LONGHOUSE_API_URL", "https://api.longhouse.ai")
+        monkeypatch.setenv("ZERG_API_URL", "https://old.api.zerg.ai")
+
+        config = load_config(config_file)
+
+        assert config.shipper.api_url == "https://api.longhouse.ai"
+
     def test_save_config_creates_dir(self, tmp_path: Path) -> None:
         """Test save_config creates parent directory if needed."""
         from zerg.cli.config_file import save_config

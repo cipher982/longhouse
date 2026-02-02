@@ -37,8 +37,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Zerg API configuration (local by default)
-ZERG_API_URL = os.getenv("ZERG_API_URL", "http://localhost:47300")
+# Longhouse API configuration (local by default)
+# Supports both LONGHOUSE_API_URL (preferred) and LONGHOUSE_API_URL (legacy) for backwards compatibility
+LONGHOUSE_API_URL = os.getenv("LONGHOUSE_API_URL") or os.getenv("LONGHOUSE_API_URL", "http://localhost:47300")
 
 # Valid session ID pattern (alphanumeric, dashes, underscores only)
 # Prevents path traversal attacks via malicious session IDs
@@ -103,7 +104,7 @@ async def fetch_session_from_zerg(session_id: str) -> tuple[bytes, str, str]:
         ValueError: If session not found or API error
         httpx.HTTPError: On network errors
     """
-    url = f"{ZERG_API_URL}/api/agents/sessions/{session_id}/export"
+    url = f"{LONGHOUSE_API_URL}/api/agents/sessions/{session_id}/export"
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.get(url)
@@ -276,7 +277,7 @@ async def ship_session_to_zerg(
     }
 
     # Ship to Zerg ingest endpoint
-    url = f"{ZERG_API_URL}/api/agents/ingest"
+    url = f"{LONGHOUSE_API_URL}/api/agents/ingest"
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
