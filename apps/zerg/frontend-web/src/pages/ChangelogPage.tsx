@@ -46,7 +46,7 @@ export default function ChangelogPage() {
           </p>
           <p className="changelog-empty-links">
             Follow development on{" "}
-            <a href="https://github.com/cipher982/zerg" target="_blank" rel="noopener noreferrer">
+            <a href="https://github.com/cipher982/longhouse" target="_blank" rel="noopener noreferrer">
               GitHub
             </a>
             {" "}to see commits and releases in real time.

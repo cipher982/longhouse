@@ -172,7 +172,7 @@ Instructions and context for the agent.`}</code></pre>
             <MessageCircleIcon width={16} height={16} className="docs-inline-icon" />
             Questions? Join our <a href="https://discord.gg/h2CWBUrj" target="_blank" rel="noopener noreferrer">Discord</a>,
             email <a href="mailto:support@longhouse.ai">support@longhouse.ai</a>, or
-            open an issue on <a href="https://github.com/cipher982/zerg" target="_blank" rel="noopener noreferrer">GitHub</a>.
+            open an issue on <a href="https://github.com/cipher982/longhouse" target="_blank" rel="noopener noreferrer">GitHub</a>.
           </p>
         </section>
       </main>
