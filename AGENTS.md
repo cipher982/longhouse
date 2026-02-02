@@ -106,30 +106,7 @@ make test-full     # Full suite (unit + full E2E + evals + visual baselines)
 
 ## Architecture
 
-```
-Dev:  User → Frontend (47200) + Backend API (47300) → SQLite (~/.zerg/dev.db)
-Prod: User → nginx → FastAPI backend → SQLite or Postgres
-```
-
-**Oikos/Commis Flow:**
-User message → `OikosService` → `oikos_react_engine` → (spawn_commis) → `AgentInterrupted` → WAITING → commis runs → `commis_resume` → response
-
-**Key Files:**
-| File | Purpose |
-|------|---------|
-| `services/oikos_react_engine.py` | Core ReAct loop |
-| `managers/fiche_runner.py` | `run_thread()` entry point |
-| `services/commis_runner.py` | Executes commis jobs |
-| `tools/builtin/oikos_tools.py` | `spawn_commis`, `get_commis_evidence` |
-| `tools/tool_search.py` | Semantic tool search |
-
-**Lazy Tool Loading:** 65+ tools available, ~12 core tools pre-bound. Others discovered via `search_tools()`.
-
-**Oikos UX ("Human PA" model):** Kick off tasks, move on, don't block. Commiss report back async. Input re-enables on `oikos_complete`, not waiting for commiss.
-
-**Single Brain:** OikosService enforces one `ThreadType.SUPER` thread per user; each message creates a Run tied to that thread.
-
-**System Prompt Injection:** FicheRunner filters DB-stored system messages; prompt is injected fresh from `fiche.system_instructions` every run to prevent staleness. Dynamic context (connector status, RAG) should go late in the message array for cache efficiency.
+**Stack:** FastAPI + SQLAlchemy + SQLite (dev/OSS) or Postgres (prod control-plane). React frontend. See `VISION.md` for details.
 
 ## Conventions
 
@@ -144,21 +121,13 @@ User message → `OikosService` → `oikos_react_engine` → (spawn_commis) → 
 
 ## Gotchas
 
-1. **`make dev` is interactive** — runs backend + frontend, Ctrl+C to stop. Use `run_in_background=true` in Bash tool.
-2. **Default is SQLite** — `make dev` uses `~/.longhouse/dev.db` (was `~/.zerg/dev.db`), no Docker needed.
-3. **.env can override defaults** — DATABASE_URL in .env overrides make dev; comment it out for SQLite dev.
-4. **WebSocket/SSE code must sync** — run `make regen-ws` / `make regen-sse` after schema changes.
-5. **Auth disabled in dev** — `AUTH_DISABLED=1` set automatically by dev.sh.
-6. **Coolify env var changes need redeploy** — restart doesn't pick up new vars.
-7. **AGENTS.md is canonical** — `CLAUDE.md` is a symlink, edit AGENTS.md only.
-8. **Runner name+secret collision** — If two owners seed runners with same name and secret, first-created wins. Use unique secrets per environment.
-9. **SSE event types** — New types must be added to `EventType` enum or `append_run_event()` won't publish live.
-10. **Sauron job source conflict** — If Zerg backend has `JOB_QUEUE_ENABLED=1` AND `JOBS_GIT_*` vars, it schedules sauron-jobs too. Remove those vars when Sauron is the sole scheduler.
-11. **Master task list lives in `TODO.md`** — keep AGENTS.md lean; update TODO.md before/after work.
-12. **Sauron Docker build** — uses `apps/sauron/pyproject.docker.toml` to avoid editable `../zerg/backend` sources during image builds.
-13. **Coolify Caddy stale route** — If `/data/coolify/proxy/caddy/dynamic/api-longhouse.caddy` exists, it can override docker-proxy labels and stick to stale container; delete file + restart `coolify-proxy`.
-14. **Google OAuth JS origins** — must be updated in Google Cloud Console for `GOOGLE_CLIENT_ID`; gcloud IAM OAuth clients are for workforce identity (no JS origin config).
-15. **Backend README required** — pyproject.toml references README.md; hatch build fails without it. Create minimal `apps/zerg/backend/README.md` if missing.
+1. **`make dev` is interactive** — Use `run_in_background=true` in Bash tool.
+2. **.env can override** — DATABASE_URL in .env breaks SQLite dev; comment it out.
+3. **AGENTS.md is canonical** — `CLAUDE.md` is a symlink, edit AGENTS.md only.
+4. **Auth disabled in dev** — `AUTH_DISABLED=1` set by dev.sh.
+5. **Coolify env var changes need redeploy** — restart doesn't pick up new vars.
+6. **Master task list:** `TODO.md` — update before/after work.
+7. **Backend README required** — pyproject.toml needs it; create minimal if missing.
 
 ## Pushing Changes
 
@@ -245,68 +214,11 @@ Sauron is the centralized ops scheduler, deployed as a standalone service on cli
    - ❌ "README updated (didn't check GitHub)"
    - ✅ "README updated, verified on GitHub: [url]"
 
-## Agent Self-Improvement
+## Learnings (Recent - Human compacts weekly)
 
-**Agents: append learnings here.** Human reviews weekly to promote or compact.
-
-### When to Append
-
-- **User corrects you** — Record what you assumed wrong
-- **Non-obvious constraint discovered** — Something not in docs that bit you
-- **Workaround found** — Errors/failures and what fixed them
-- **Pattern that worked well** — Approaches worth repeating
-
-### Format
-
-```
-- (YYYY-MM-DD) [category] Specific insight. "X caused Y, fix is Z"
-```
-
-Categories: `gotcha`, `pattern`, `design`, `tool`, `test`, `deploy`, `perf`
-
-### Rules
-
-1. **Be specific** — Not "had issues with X" but "X fails when Y, use Z instead"
-2. **One line per insight** — Keep atomic, date it
-3. **Don't delete others' entries** — Human compacts weekly
-4. **Propose promotions** — If something keeps being useful, suggest moving to main docs
-
----
-
-### Learnings
-
-<!-- Agents: append below this line. Human compacts weekly. -->
-- (2026-02-02) [pattern] When asked to "run everything yourself", execute full pipeline: start services, fix blockers, run scripts, view results, verify prod, write comprehensive report. Don't ask permission for obvious fixes (missing README, wrong env vars).
-- (2026-02-02) [pattern] Screenshot automation > manual: create Playwright capture script that's repeatable, version-controlled, and CI-ready instead of one-off manual captures.
-- (2026-02-02) [gotcha] .env DATABASE_URL can override make dev SQLite default; comment it out or unset it explicitly in dev.sh.
-- (2026-02-02) [gotcha] License mismatches across files (LICENSE vs README vs pyproject.toml) confuse users; unify to single source of truth (LICENSE file).
-- (2026-02-02) [deploy] PyPI trusted publishing workflow queues in GitHub Actions; can take 2-5 min for environment approval + publish to complete.
-- (2026-02-02) [test] Commis resume tasks must set test commis context; otherwise barrier jobs stay queued and Oikos never resumes in E2E.
-- (2026-01-30) [gotcha] Multi-tenant mode disables Agents API via require_single_tenant(); schema routing in commis_db is test-only and blocked in prod.
-- (2026-01-31) [test] ScriptedLLM checks for ToolMessage to decide synthesis vs tool-call; multi-run threads accumulate messages, so new scenarios must check "current turn only" (messages after last HumanMessage).
-- (2026-01-31) [test] E2E schema mismatch: globalSetup creates 4 schemas, processor polls 16. Fixed: processor catches ProgrammingError for missing schemas.
-- (2026-01-31) [test] `make test` now runs the SQLite-lite suite by default; use `make test-legacy` for full Postgres coverage.
-- (2026-01-31) [gotcha] config.Settings.db_is_sqlite() only checks startswith("sqlite") and ignores quoted DATABASE_URL; can mis-detect lite_mode vs database._is_sqlite_url. **FIXED:** db_is_sqlite() now delegates to _is_sqlite_url().
-- (2026-01-31) [test] Use GUID() TypeDecorator for trace_id columns (not String(36)) so UUID objects auto-convert for SQLite. Passing raw UUID to String column causes "type 'UUID' is not supported" error.
-- (2026-01-31) [test] SQLite cascade deletes unreliable in tests—PRAGMA foreign_keys=ON must be set per connection. Use manual delete order in tests or passive_deletes=True on relationships.
-- (2026-01-31) [test] SQLite DateTime columns require datetime objects, not ISO strings. Test fixtures passing strings fail with "SQLite DateTime type only accepts Python datetime".
-- (2026-01-31) [design] SQLite minimum version enforced at startup: 3.35+ (RETURNING required for job claiming).
-- (2026-02-01) [design] Public branding should be a single umbrella name; keep Oikos as the assistant UI and Zerg as internal codename to avoid name sprawl.
-- (2026-02-01) [tool] Claude Code hooks emit PreToolUse/PostToolUse/PostToolUseFailure; keep hooks async, exit 0, and truncate responses (~10KB) to avoid breaking commis.
-- (2026-02-01) [tool] Commis hook callback expects X-Internal-Token; default callback base is loopback (localhost) unless LONGHOUSE_CALLBACK_URL is set.
-- (2026-02-01) [gotcha] zerg.jobs.queue + ops_db are stubbed in SQLite-only mode; Sauron scheduling in queue mode won’t execute jobs unless you run direct mode or restore a Postgres queue.
-- (2026-02-01) [design] Durable scheduler queue now uses SQLite via zerg.jobs.queue; set JOB_QUEUE_DB_URL to a dedicated sqlite file to avoid write contention.
-- (2026-02-01) [gotcha] Funnel tracking origin allowlist still referenced Swarmlet domains; add longhouse.ai or /api/funnel/batch returns 403.
-- (2026-02-01) [design] Alpha = no users = no backwards compat. Never add legacy fallbacks, dual cookie names, or migration shims. Clean breaks only.
-- (2026-02-01) [gotcha] Claude Code processes expose no session id in args/env; lsof shows only ~/.claude/history.jsonl + shipper files, so PID→session mapping needs explicit instrumentation (wrapper/env or per-session log).
-- (2026-02-01) [pattern] OSS onboarding guidance should live in VISION; avoid a separate onboarding doc.
-- (2026-02-01) [gotcha] Forum + Session Picker still call `/oikos/life-hub/*` endpoints (SQLite-specific) instead of agents API; Life Hub naming still leaks into UI.
-- (2026-02-01) [gotcha] `OIKOS_WORKSPACE_PATH` default is `/var/oikos/workspaces`, which is not OSS-friendly; should default to a user-writable `~/.longhouse` path.
-- (2026-02-01) [design] User preference: don’t ship heuristic status/attention; if truth is missing, redesign the data model instead of guessing.
-- (2026-02-01) [test] E2E infra smoke should use `/api/system/health` (Vite only proxies `/api/*`) and assert timeline/layout instead of `create-fiche-btn`.
-- (2026-02-01) [gotcha] `/agents/sessions/active` derives status from last_activity (<=5m = working, else idle) and sets attention to "auto" for all sessions; Forum UI is effectively heuristic/fake until explicit presence events exist.
-- (2026-02-01) [test] Core E2E must run serially with SQLite; parallel resets can delete commis jobs mid-run and cause message mismatches (use `--workers=1` for core).
-- (2026-02-01) [test] Oikos API key modal blocks E2E runs; set `VITE_E2E=1` to suppress the modal in tests.
-- (2026-02-01) [design] Demo data should live in a seeded SQLite file so the whole app feels alive; avoid UI-only replay fakes.
-- (2026-02-02) [tool] Prefer GitHub Actions runs-on: `cube` (ARC runner) whenever possible to use free compute.
-- (2026-02-02) [test] Removing heuristic decision modes requires updating roundabout tests that still reference DecisionMode.HEURISTIC/HYBRID.
+<!-- Agents: append below. Keep last 7 days or 10 entries max. -->
+- (2026-02-02) [pattern] Autonomous mode: execute full pipeline, fix blockers, verify prod, report comprehensively. Don't ask for obvious fixes.
+- (2026-02-02) [pattern] Automation > manual: create repeatable scripts instead of one-off work.
+- (2026-02-02) [gotcha] .env DATABASE_URL overrides make dev; comment it out for SQLite.
+- (2026-02-01) [design] Alpha = clean breaks. No legacy fallbacks or backwards compat.
+- (2026-02-01) [test] Core E2E serial only (`--workers=1`); parallel causes SQLite race conditions.
