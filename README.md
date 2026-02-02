@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://github.com/cipher982/longhouse/actions"><img src="https://github.com/cipher982/longhouse/workflows/Web%20Quality/badge.svg" alt="Tests"></a>
   <a href="https://pypi.org/project/longhouse/"><img src="https://img.shields.io/pypi/v/longhouse" alt="PyPI"></a>
-  <a href="https://github.com/cipher982/longhouse/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-ISC-blue.svg" alt="License"></a>
+  <a href="https://github.com/cipher982/longhouse/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"></a>
   <a href="https://github.com/cipher982/longhouse"><img src="https://img.shields.io/badge/python-3.12+-blue.svg" alt="Python"></a>
 </p>
 
@@ -141,7 +141,7 @@ Each session is a log 🪵 in your timeline.
 
 ## License
 
-ISC - see LICENSE file
+Apache-2.0 - see LICENSE file
 
 ---
 
