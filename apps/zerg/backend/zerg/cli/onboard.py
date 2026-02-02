@@ -168,11 +168,6 @@ def onboard(
         "--no-shipper",
         help="Skip shipper installation",
     ),
-    skip_demo: bool = typer.Option(
-        False,
-        "--skip-demo",
-        help="Skip demo session seeding (show empty timeline)",
-    ),
 ) -> None:
     """Run the Longhouse onboarding wizard.
 
@@ -312,30 +307,6 @@ def onboard(
             typer.secho("  [OK] Test event shipped successfully", fg=typer.colors.GREEN)
         else:
             typer.secho("  [WARN] Test event failed (server may need auth)", fg=typer.colors.YELLOW)
-
-        # Seed demo sessions for first-run experience
-        if not skip_demo:
-            typer.echo("  Seeding demo sessions...")
-            try:
-                with httpx.Client(timeout=10) as client:
-                    response = client.post(f"{api_url}/api/system/seed-demo-sessions")
-                    if response.status_code == 200:
-                        result = response.json()
-                        typer.secho(
-                            f"  ✓ {result['sessions_seeded']} demo sessions loaded",
-                            fg=typer.colors.GREEN,
-                        )
-                    else:
-                        typer.secho(
-                            "  ⚠ Could not load demo sessions (optional)",
-                            fg=typer.colors.YELLOW,
-                        )
-            except Exception as e:
-                # Don't fail onboard if demo seeding fails
-                typer.secho(
-                    f"  ⚠ Demo seeding skipped: {e}",
-                    fg=typer.colors.YELLOW,
-                )
     else:
         typer.echo("  Skipping verification (server not running)")
 
@@ -367,8 +338,7 @@ def onboard(
     # Step 6: Open browser (if GUI available)
     if _has_gui() and _check_server_health(host, port):
         if quick or typer.confirm("Open Longhouse in browser?", default=True):
-            message = "  Opening browser to view your timeline..." if not skip_demo else f"  Opening {api_url}..."
-            typer.echo(message)
+            typer.echo(f"  Opening {api_url}...")
             try:
                 webbrowser.open(api_url)
             except Exception:
