@@ -1,13 +1,13 @@
 # E2E Tests (Playwright)
 
-Playwright E2E tests for the unified Swarmlet SPA (`/`, `/dashboard`, `/chat`) and the Zerg backend.
+Playwright E2E tests for the React dashboard + chat (`/dashboard`, `/fiche/...`) and the Zerg backend.
 
 ## Run (recommended)
 
 From repo root:
 
 ```bash
-make test-e2e        # core + a11y
+make test-e2e        # core + a11y (core runs serially)
 make test-zerg-e2e   # full suite (non-core)
 make test-e2e-ui
 make test-e2e-single TEST=tests/unified-frontend.spec.ts
@@ -18,7 +18,9 @@ make test-e2e-grep GREP="Oikos"
 
 - Playwright starts an isolated backend (`apps/zerg/e2e/spawn-test-backend.js`) and a frontend dev server.
 - Default ports are `BACKEND_PORT=8001` and `FRONTEND_PORT=8002` (override via env).
-- Database isolation is per-Playwright-commis (Postgres schema per commis, routed by the `X-Test-Commis` header).
+- Database isolation is per-Playwright-commis **SQLite file** (routed by `X-Test-Commis` header + `commis` ws param).
+- SQLite files live under `$E2E_DB_DIR` (temp dir) and are cleaned in global teardown.
+- Core suite runs with `--workers=1` because SQLite resets + commis jobs can race under parallelism.
 
 ## Setup
 
@@ -37,6 +39,7 @@ cd apps/zerg/e2e && bunx playwright install
 
 - `apps/zerg/e2e/playwright.config.js` — ports, web servers, reporters
 - `apps/zerg/e2e/spawn-test-backend.js` — starts backend for tests (uv + uvicorn)
+- `apps/zerg/e2e/tests/fixtures.ts` — injects `X-Test-Commis` and websocket `commis` param
 - `apps/zerg/e2e/tests/unified-frontend.spec.ts` — quick smoke suite
 - `apps/zerg/e2e/tests/chat_*.spec.ts` — Oikos chat-focused tests
 
@@ -46,16 +49,8 @@ cd apps/zerg/e2e && bunx playwright install
 cd apps/zerg/e2e
 bunx playwright show-report
 ```
-    const commisId = getCommisIdFromTest(testInfo);
 
-    // Test implementation
-    const fiche = await createFicheViaAPI(commisId);
-    // ... rest of test
-  });
-});
-```
-
-### 2. Update Test Runner (if needed)
+### Update Test Runner (if needed)
 
 Add to `run_e2e_tests.sh`:
 
@@ -66,7 +61,7 @@ basic)
     ;;
 ```
 
-### 3. Use Helper Libraries
+### Use Helper Libraries
 
 - Import from `./helpers/` directory
 - Use consistent patterns for commis ID handling
@@ -76,10 +71,11 @@ basic)
 
 ### Common Issues
 
-1. **Database isolation**: Ensure using `testInfo.commisIndex` for commis ID
-2. **Server startup**: Check ports 8001/8002 are available
-3. **Element timing**: Use `waitForStableElement()` for dynamic content
-4. **Test cleanup**: Verify database reset between tests
+1. **Database isolation**: Use `testInfo.parallelIndex` (commisIndex can exceed configured commis count)
+2. **Health checks**: Use `/api/system/health` (Vite only proxies `/api/*`)
+3. **Server startup**: Check ports 8001/8002 are available
+4. **Element timing**: Use `waitForStableElement()` for dynamic content
+5. **Test cleanup**: Verify database reset between tests
 
 ### Debug Commands
 
@@ -98,7 +94,7 @@ npx playwright test --trace on
 
 - **Test output**: Console logs with timestamps
 - **Playwright traces**: Visual debugging in browser
-- **Database logs**: PostgreSQL query logs (if enabled)
+- **Database logs**: SQLite files under `$E2E_DB_DIR`
 - **Network logs**: HTTP request/response details
 
 ## 📚 Dependencies
@@ -126,11 +122,11 @@ npx playwright test --trace on
 ## 🤝 Contributing
 
 1. **Follow existing patterns** in helper libraries
-2. **Use consistent commis ID handling** via `testInfo.commisIndex`
+2. **Use consistent commis ID handling** via `testInfo.parallelIndex`
 3. **Add comprehensive logging** for debugging
 4. **Include error handling** for flaky operations
 5. **Document new patterns** in helper libraries
 
 ---
 
-**Architecture Status**: ✅ Database isolation working, ✅ Commis management stable, ✅ Helper libraries consolidated
+**Architecture Status**: ✅ SQLite isolation working, ✅ Commis management stable, ✅ Helper libraries consolidated

@@ -329,6 +329,6 @@ E2E tests fail with "no such table: users" / "no such table: commis_jobs". The p
 - [x] Investigate why globalSetup creates DB files but doesn't run migrations (2026-02-01: Added /health/db endpoint)
 - [x] Ensure `initialize_database()` is called for each per-worker SQLite (2026-02-01: Playwright now waits for /health/db)
 - [x] Fix reset-database to include AgentsBase tables (2026-02-01: Added to admin.py)
-- [ ] Verify E2E tests pass after fix (UI locator issues remain - separate from DB init)
-- [ ] Remove Postgres schema isolation from E2E (drop `X-Test-Commis` routing + schema-per-worker assumptions)
-- [ ] Update `apps/zerg/e2e/README.md` + helpers to reflect SQLite-only test flow
+- [x] Verify E2E tests pass after fix (2026-02-02)
+- [x] Remove Postgres schema isolation assumptions; keep `X-Test-Commis` for SQLite routing (2026-02-02)
+- [x] Update `apps/zerg/e2e/README.md` + helpers to reflect SQLite-only test flow (2026-02-02)
