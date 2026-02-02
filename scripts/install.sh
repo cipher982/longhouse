@@ -107,13 +107,21 @@ install_python() {
 install_longhouse() {
     step "Installing Longhouse CLI"
 
+    # Package source - defaults to GitHub, can be overridden for PyPI once published
+    local pkg_source="${LONGHOUSE_PKG_SOURCE:-git+https://github.com/cipher982/zerg.git#subdirectory=apps/zerg/backend}"
+
     # Install the longhouse package as a tool
     if uv tool list 2>/dev/null | grep -q "^longhouse"; then
         info "Upgrading existing longhouse installation..."
-        uv tool upgrade longhouse
+        uv tool upgrade longhouse || {
+            # If upgrade fails (e.g., installed from different source), reinstall
+            info "Reinstalling from source..."
+            uv tool uninstall longhouse 2>/dev/null || true
+            uv tool install "$pkg_source"
+        }
     else
-        info "Installing longhouse..."
-        uv tool install longhouse
+        info "Installing longhouse from source..."
+        uv tool install "$pkg_source"
     fi
 
     # Ensure uv tools bin is in PATH
