@@ -612,7 +612,7 @@ def custom_openapi():
     # Add server information
     openapi_schema["servers"] = [
         {"url": "http://localhost:8001", "description": "Development server"},
-        {"url": "https://api.zerg.ai", "description": "Production server"},
+        {"url": "https://api.longhouse.ai", "description": "Production server"},
     ]
 
     # Export schema to file for CI consumption

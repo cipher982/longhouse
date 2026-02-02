@@ -16,8 +16,8 @@ export SINGLE_TENANT="${SINGLE_TENANT:-1}"
 
 # Generate Fernet key if not set
 if [ -z "$FERNET_SECRET" ]; then
-    FERNET_KEY_FILE="$HOME/.zerg/fernet.key"
-    mkdir -p "$HOME/.zerg"
+    FERNET_KEY_FILE="$HOME/.longhouse/fernet.key"
+    mkdir -p "$HOME/.longhouse"
     if [ -f "$FERNET_KEY_FILE" ]; then
         export FERNET_SECRET=$(cat "$FERNET_KEY_FILE")
     else
