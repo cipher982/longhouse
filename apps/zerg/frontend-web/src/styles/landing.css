@@ -1437,6 +1437,8 @@
     font-size: var(--font-size-sm);
     cursor: pointer;
     overflow-x: auto;
+    background: transparent;
+    border: none;
   }
 
   .install-prompt {
