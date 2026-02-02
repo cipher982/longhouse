@@ -11,6 +11,120 @@ Capture list for substantial work. Not quick fixes (do those live).
 
 ---
 
+## HN Launch Readiness — Zero to Ship (8)
+
+Make Longhouse ready for Hacker News launch. The product works but the story/UX isn't ready for public scrutiny.
+
+**Problem:** User journey has critical gaps. Install works, but then what? Empty timeline = "Is this broken?" No screenshot = no trust. Value prop unclear.
+
+**Goal:** HN reader can install, see value immediately, understand what problem this solves, and start using it.
+
+### Critical (Blockers — Must Fix Before HN)
+
+- [ ] **Screenshot/GIF in README** (30 min)
+  - Capture timeline with 3-4 realistic sessions showing different tools (Claude Code, Codex)
+  - Show search in action, detail view, tool calls
+  - Place at top of README (replace comment "Screenshot will go here")
+  - Also add to landing page hero section
+  - File: `apps/zerg/frontend-web/branding/timeline-screenshot.png` (or .gif)
+
+- [ ] **Seed demo sessions on first run** (1 hour)
+  - Create `services/demo_sessions.py` with 2-3 pre-canned realistic sessions
+  - Topics: "debug authentication bug", "add new API endpoint", "refactor database queries"
+  - Trigger on `longhouse onboard` if timeline is empty
+  - Make it obvious they're demos (badge or "Demo" label in UI)
+  - Add flag to skip: `LONGHOUSE_SKIP_DEMO=1`
+
+- [ ] **Fix README branding** (15 min)
+  - Replace `swarm-logo-master.png` with actual Longhouse logo
+  - Remove naming note ("Longhouse is the public brand; Oikos is the assistant UI...")
+  - Update install URL from raw GitHub to `get.longhouse.ai`
+  - Files: `README.md`, `apps/zerg/frontend-web/branding/`
+
+- [ ] **Rewrite value proposition** (30 min)
+  - Replace "All your AI coding sessions, unified and searchable" with concrete use case
+  - Show BEFORE/AFTER (old way vs new way)
+  - Example: "Ever waste 30min trying to find that Claude conversation from last Tuesday? Longhouse is your searchable timeline for all AI coding sessions."
+  - Add "Why this matters" section with real scenarios:
+    - Resume work from last week
+    - Debug: "What did the AI suggest when I fixed that auth bug?"
+    - Learn: "How many times did I refactor this component?"
+  - Files: `README.md`, landing page copy
+
+- [ ] **Empty state UI** (1 hour)
+  - Replace blank timeline with "Getting Started" card when no sessions exist
+  - Show: "1. Install complete ✓  2. Connect Claude Code  3. Start coding"
+  - Link to setup guide
+  - Show demo data option: "Or explore with demo sessions"
+  - File: `apps/zerg/frontend-web/src/pages/TimelinePage.tsx` (or wherever timeline lives)
+
+### High Priority (Polish Before Launch)
+
+- [ ] **Add GitHub badges** (15 min)
+  - Tests passing badge (link to GitHub Actions)
+  - Version badge (link to PyPI)
+  - License badge
+  - Python version badge
+  - Add to top of README
+
+- [ ] **"What happens next" section in README** (20 min)
+  - After install, guide user through:
+    1. Opens browser automatically (or `longhouse serve` + visit localhost:8080)
+    2. You'll see your timeline (or demo data)
+    3. Install Claude Code if you haven't
+    4. Run `longhouse connect` to start syncing
+  - Add troubleshooting subsection
+
+- [ ] **Landing page / product story alignment** (1 hour)
+  - Landing says "Your Personal AI Hub" but product is timeline viewer
+  - Pick ONE story: Timeline focus OR hub focus
+  - Recommendation: Timeline = clearer, more focused value prop
+  - Update landing hero, meta descriptions, copy
+  - Files: `apps/zerg/frontend-web/src/components/landing/HeroSection.tsx`, meta tags
+
+- [ ] **Demo mode flag** (2 hours)
+  - Add `longhouse serve --demo` flag that starts with pre-loaded sessions
+  - Allows exploration without Claude Code setup
+  - Show banner: "Demo Mode - exploring sample data"
+  - File: `apps/zerg/backend/zerg/cli/serve.py`
+
+- [ ] **HN post title + copy** (30 min)
+  - Draft 3-5 title options:
+    - "Show HN: Longhouse – Search across all your AI coding sessions"
+    - "Show HN: Never lose a Claude Code conversation again"
+    - "Show HN: Timeline view for Claude, Cursor, Codex sessions"
+  - Write launch comment (3-4 paragraphs):
+    - Problem (losing conversations, scattered files)
+    - Solution (unified timeline, search)
+    - Tech stack (Python, SQLite, React)
+    - Current state (works with Claude Code, more coming)
+  - File: Create `docs/HN_LAUNCH.md` with drafts
+
+### Medium Priority (Nice to Have)
+
+- [ ] **Social proof** (if available)
+  - Add testimonial or "Built by X" to README
+  - Show usage stats if you have any early users
+  - Link to personal Twitter/GitHub for credibility
+
+- [ ] **Video walkthrough** (optional, 2 hours)
+  - 60-90 second Loom showing:
+    1. The problem (searching through JSONL files)
+    2. Install in one line
+    3. Timeline appears with sessions
+    4. Search + detail view
+  - Add to README + landing page
+  - More engaging than screenshot alone
+
+- [ ] **Comparison table** (30 min)
+  - Show how Longhouse compares to:
+    - grep through JSONL files (old way)
+    - Claude Code built-in history (limited)
+    - Not tracking at all (disaster)
+  - Table showing: searchable, cross-tool, persistent, visual timeline
+
+---
+
 ## Public Launch Checklist (from archived doc) (6)
 
 Ensure launch readiness without relying on scattered docs.
