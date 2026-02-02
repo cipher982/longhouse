@@ -137,6 +137,9 @@ Sauron is the centralized ops scheduler, deployed as a standalone service on cli
 ## Learnings (Recent - Human compacts weekly)
 
 <!-- Agents: append below. Keep last 7 days or 10 entries max. -->
+- (2026-02-02) [arch] Scenario seed engine (scenarios/seed.py) now idempotent via SeedRegistry table + uuid5 deterministic IDs.
+- (2026-02-02) [arch] AgentsStore (timeline) and Oikos (threads/runs) are separate schemas - don't force consolidation across different data models.
+- (2026-02-02) [ux] Removed "Load demo" UI buttons - fake data should never write to dev DB from live UI paths.
 - (2026-02-02) [pattern] Autonomous mode: execute full pipeline, fix blockers, verify prod, report comprehensively. Don't ask for obvious fixes.
 - (2026-02-02) [pattern] Automation > manual: create repeatable scripts instead of one-off work.
 - (2026-02-02) [gotcha] .env DATABASE_URL overrides make dev; comment it out for SQLite.
