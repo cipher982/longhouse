@@ -1,7 +1,7 @@
 import { devices } from '@playwright/test';
 
-const frontendBaseUrl = process.env.PLAYWRIGHT_BASE_URL || process.env.E2E_FRONTEND_URL || 'https://swarmlet.com';
-const apiBaseUrl = process.env.PLAYWRIGHT_API_BASE_URL || process.env.E2E_API_URL || 'https://api.swarmlet.com';
+const frontendBaseUrl = process.env.PLAYWRIGHT_BASE_URL || process.env.E2E_FRONTEND_URL || 'https://longhouse.ai';
+const apiBaseUrl = process.env.PLAYWRIGHT_API_BASE_URL || process.env.E2E_API_URL || 'https://api.longhouse.ai';
 
 // Expose to tests (fixtures read these env vars).
 process.env.PLAYWRIGHT_BASE_URL = frontendBaseUrl;
