@@ -114,6 +114,14 @@ function loadConfig(): AppConfig {
     ? window.WS_BASE_URL
     : (import.meta.env.VITE_WS_BASE_URL || (isDevelopment && typeof window !== 'undefined' ? 'ws://localhost:47300' : ''));
 
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname.toLowerCase();
+    if (host === 'david.longhouse.ai') {
+      apiBaseUrl = 'https://api-david.longhouse.ai/api';
+      wsBaseUrl = 'wss://api-david.longhouse.ai/api/ws';
+    }
+  }
+
   // When running behind the Vite proxy (e.g., Playwright E2E), force relative API paths
   // to avoid CORS and ensure X-Test-Commis routing works.
   if (import.meta.env.VITE_PROXY_TARGET && !isProduction) {

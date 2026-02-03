@@ -74,7 +74,11 @@ export function toAbsoluteUrl(url: string): string {
 
   // Split deployment: API is on different domain (e.g., api.longhouse.ai)
   // window.API_BASE_URL is set by /config.js (e.g., "https://api.longhouse.ai/api")
-  const runtimeApiUrl = typeof window !== 'undefined' && (window as any).API_BASE_URL;
+  const hostOverride =
+    typeof window !== 'undefined' && window.location.hostname.toLowerCase() === 'david.longhouse.ai'
+      ? 'https://api-david.longhouse.ai/api'
+      : null;
+  const runtimeApiUrl = hostOverride || (typeof window !== 'undefined' && (window as any).API_BASE_URL);
   const isApiPath = url.startsWith('/api/') || url.startsWith('/api');
 
   // Determine the correct origin for this URL

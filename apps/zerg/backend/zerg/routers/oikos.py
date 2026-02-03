@@ -109,6 +109,15 @@ def oikos_auth(
     )
 
 
+@router.get("/agents", response_model=List[oikos_fiches.OikosFicheSummary])
+def list_oikos_agents(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_oikos_user),
+) -> List[oikos_fiches.OikosFicheSummary]:
+    """Compatibility alias for fiche listing (historical /agents path)."""
+    return oikos_fiches.list_oikos_fiches(db=db, current_user=current_user)
+
+
 # ---------------------------------------------------------------------------
 # General SSE Events Endpoint
 # ---------------------------------------------------------------------------
