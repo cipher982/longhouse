@@ -19,3 +19,11 @@
 - [Docs] HN_LAUNCH.md says demo data seeds on first run; current behavior requires `--demo/--demo-fresh` or calling the demo seed endpoint.
 - [Docs] VISION repeatedly references `brew install longhouse`, but there is no Homebrew formula in repo or release workflow.
 - [Docs conflict] LAUNCH-PLAN hosted beta suggests provisioning via Coolify API; VISION explicitly says not to use Coolify for dynamic provisioning.
+- [Docs vs code] VISION onboarding-contract example is Docker-centric (`cp .env.example`, `docker compose up`), but README’s contract runs bun+uv + `longhouse serve`; VISION’s example is stale.
+- [Docs vs code] VISION says `longhouse connect <url>` installs and starts the shipper; actual CLI only installs when `--install` is passed (default runs foreground watch/poll).
+- [Docs vs code] VISION says device token is issued during `longhouse connect`; actual flow requires manual token creation in UI (`/dashboard/settings/devices`) and paste into CLI.
+- [Docs vs code] VISION specifies shipper batching “1 second or 100 events”; implementation ships per file with no time-window batching (only `batch_size` for spool replay).
+- [Docs vs code] VISION says shipper replay uses idempotency keys; shipper does not send idempotency keys/headers (dedupe relies on DB unique index).
+- [Docs vs UI] “Resume from anywhere / Timeline resume” is not in Timeline UI; resume is only implemented in Forum Drop‑In (Claude-only) and not exposed on `/timeline`.
+- [Docs vs code] VISION lists Oikos discovery tools (`search_sessions`, `grep_sessions`, `filter_sessions`, `get_session_detail`) but no such tool implementations exist.
+- [Docs vs code] VISION says cross‑subdomain auth tokens are one‑time with nonce stored server‑side and validated via control plane/JWKS; current `POST /api/auth/accept-token` just validates JWT and sets cookie (no nonce/one‑time guard).
