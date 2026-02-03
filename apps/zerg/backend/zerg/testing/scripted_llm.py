@@ -225,6 +225,16 @@ class ScriptedChatLLM(BaseChatModel):
         bound._call_counts = self._call_counts  # Share call counts across bindings
         return bound
 
+    async def ainvoke(self, messages: List[Any], **kwargs: Any) -> AIMessage:  # noqa: D401 - match BaseChatModel
+        """Async invoke returning native AIMessage.
+
+        Bypasses LangChain's internal message coercion so native zerg.types
+        messages (including SystemMessage) are accepted in E2E runs.
+        """
+        # Keep a tiny await to preserve async scheduling semantics.
+        await asyncio.sleep(0.0)
+        return self._generate_native(messages)
+
     def _get_sequenced_response(self, prompt: str) -> Optional[AIMessage]:
         """Return a sequenced response if one matches the prompt and call count.
 
@@ -272,13 +282,8 @@ class ScriptedChatLLM(BaseChatModel):
         """Reset call counts for a fresh test run."""
         self._call_counts.clear()
 
-    def _generate(
-        self,
-        messages: List[Any],
-        stop: Optional[List[str]] = None,  # noqa: ARG002 - unused (deterministic)
-        run_manager: Optional[CallbackManagerForLLMRun] = None,  # noqa: ARG002 - unused
-        **kwargs: Any,  # noqa: ARG002 - unused
-    ) -> ChatResult:
+    def _generate_native(self, messages: List[Any]) -> AIMessage:
+        """Generate a native AIMessage without LangChain coercion."""
         role = detect_role_from_messages(messages)
         last_user = next((m for m in reversed(messages) if _is_human_message(m)), None)
         prompt = str(last_user.content) if last_user else ""
@@ -286,7 +291,7 @@ class ScriptedChatLLM(BaseChatModel):
         # Check for sequenced response first (enables replay behavior testing)
         sequenced_response = self._get_sequenced_response(prompt)
         if sequenced_response is not None:
-            return ChatResult(generations=[ChatGeneration(message=sequenced_response)])
+            return sequenced_response
 
         # Check deterministic scenarios EARLY - they are unambiguous and should always
         # trigger their specific tool calls regardless of stale ToolMessages from
@@ -294,8 +299,7 @@ class ScriptedChatLLM(BaseChatModel):
         # from a prior run cause ScriptedLLM to take the "tool result synthesis" path.
         scenario = find_matching_scenario(prompt, role)
         if scenario and scenario.get("name") == "math_simple":
-            ai_message = AIMessage(content="4", tool_calls=[])
-            return ChatResult(generations=[ChatGeneration(message=ai_message)])
+            return AIMessage(content="4", tool_calls=[])
 
         # Memory E2E scenarios should also bypass the "tool result" check, but only if
         # the memory tool hasn't already been executed *in this turn* (i.e., after the
@@ -319,8 +323,7 @@ class ScriptedChatLLM(BaseChatModel):
                     if "Memory" in content or "Found" in content or "deleted" in content
                     else "Task completed successfully."
                 )
-                ai_message = AIMessage(content=final_text, tool_calls=[])
-                return ChatResult(generations=[ChatGeneration(message=ai_message)])
+                return AIMessage(content=final_text, tool_calls=[])
 
             action = scenario.get("action")
             tool_name = None
@@ -346,8 +349,7 @@ class ScriptedChatLLM(BaseChatModel):
                     "name": tool_name,
                     "args": args,
                 }
-                ai_message = AIMessage(content="", tool_calls=[tool_call])
-                return ChatResult(generations=[ChatGeneration(message=ai_message)])
+                return AIMessage(content="", tool_calls=[tool_call])
 
         # If tool results are present, emit final synthesis (no more tool calls).
         tool_msg = next((m for m in reversed(messages) if _is_tool_message(m)), None)
@@ -373,8 +375,7 @@ class ScriptedChatLLM(BaseChatModel):
                 else:
                     final_text = "Task completed successfully."
 
-            ai_message = AIMessage(content=final_text, tool_calls=[])
-            return ChatResult(generations=[ChatGeneration(message=ai_message)])
+            return AIMessage(content=final_text, tool_calls=[])
 
         # Workspace commis scenario: spawns spawn_workspace_commis with git repo and optional resume
         if role == "oikos" and scenario and scenario.get("name") == "workspace_commis_oikos":
@@ -392,8 +393,7 @@ class ScriptedChatLLM(BaseChatModel):
                 "name": "spawn_workspace_commis",
                 "args": args,
             }
-            ai_message = AIMessage(content="", tool_calls=[tool_call])
-            return ChatResult(generations=[ChatGeneration(message=ai_message)])
+            return AIMessage(content="", tool_calls=[tool_call])
 
         if role == "oikos" and scenario and scenario.get("name") == "disk_space_parallel_oikos":
             tasks = [
@@ -409,8 +409,7 @@ class ScriptedChatLLM(BaseChatModel):
                 }
                 for task in tasks
             ]
-            ai_message = AIMessage(content="", tool_calls=tool_calls)
-            return ChatResult(generations=[ChatGeneration(message=ai_message)])
+            return AIMessage(content="", tool_calls=tool_calls)
 
         if role == "oikos" and scenario and scenario.get("name") == "disk_space_oikos":
             tool_call = {
@@ -418,8 +417,7 @@ class ScriptedChatLLM(BaseChatModel):
                 "name": "spawn_commis",
                 "args": {"task": "Check disk space on cube and identify what is using space"},
             }
-            ai_message = AIMessage(content="", tool_calls=[tool_call])
-            return ChatResult(generations=[ChatGeneration(message=ai_message)])
+            return AIMessage(content="", tool_calls=[tool_call])
 
         if role == "commis" and scenario and scenario.get("name") == "disk_space_commis":
             tool_call = {
@@ -427,10 +425,18 @@ class ScriptedChatLLM(BaseChatModel):
                 "name": "get_current_time",
                 "args": {},
             }
-            ai_message = AIMessage(content="", tool_calls=[tool_call])
-            return ChatResult(generations=[ChatGeneration(message=ai_message)])
+            return AIMessage(content="", tool_calls=[tool_call])
 
-        ai_message = AIMessage(content="ok", tool_calls=[])
+        return AIMessage(content="ok", tool_calls=[])
+
+    def _generate(
+        self,
+        messages: List[Any],
+        stop: Optional[List[str]] = None,  # noqa: ARG002 - unused (deterministic)
+        run_manager: Optional[CallbackManagerForLLMRun] = None,  # noqa: ARG002 - unused
+        **kwargs: Any,  # noqa: ARG002 - unused
+    ) -> ChatResult:
+        ai_message = self._generate_native(messages)
         return ChatResult(generations=[ChatGeneration(message=ai_message)])
 
     async def _agenerate(
