@@ -523,6 +523,67 @@ def logout(response: Response):
     _clear_session_cookie(response)
 
 
+@router.post("/accept-token", response_model=TokenOut)
+def accept_token(response: Response, body: dict[str, str], db: Session = Depends(get_db)) -> TokenOut:
+    """Accept a JWT token from cross-subdomain auth redirect.
+
+    This endpoint validates the token and sets a session cookie.
+    Used when OAuth happens on longhouse.ai and user is redirected
+    back to their subdomain (e.g., david.longhouse.ai) with a token.
+
+    Expected JSON body: `{ "token": "<JWT>" }`.
+    """
+    from zerg.auth.strategy import _decode_jwt_fallback
+
+    token = body.get("token")
+    if not token or not isinstance(token, str):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="token must be provided",
+        )
+
+    # Validate the JWT (checks signature and expiry)
+    try:
+        payload = _decode_jwt_fallback(token, JWT_SECRET)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+        )
+
+    # Verify user exists
+    try:
+        user_id = int(payload.get("sub"))
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token payload",
+        )
+
+    user = crud.get_user(db, user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+        )
+
+    # Calculate remaining expiry time
+    import time
+
+    exp = payload.get("exp", 0)
+    remaining = max(0, int(exp - time.time()))
+    if remaining == 0:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired",
+        )
+
+    # Set session cookie
+    _set_session_cookie(response, token, remaining)
+
+    return TokenOut(access_token=token, expires_in=remaining)
+
+
 # ---------------------------------------------------------------------------
 # Gmail connection endpoint (Phase-2 Email Triggers)
 # ---------------------------------------------------------------------------

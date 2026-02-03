@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
-import config from "../lib/config";
+import config, { isUserSubdomain } from "../lib/config";
 import { SwarmLogo } from "../components/SwarmLogo";
 import { usePublicPageScroll } from "../hooks/usePublicPageScroll";
 import "../styles/landing.css";
@@ -102,8 +102,9 @@ function LandingPerfHud({
 }
 
 export default function LandingPage() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, refreshAuth } = useAuth();
   const navigate = useNavigate();
+  const [isAcceptingToken, setIsAcceptingToken] = useState(false);
 
   const { fxEnabled, showPerfHud } = useMemo(() => getLandingFxFromUrl(), []);
   const particlesEnabled = fxEnabled.has("particles");
@@ -111,6 +112,43 @@ export default function LandingPage() {
 
   // Enable normal document scrolling (app shell locks root by default)
   usePublicPageScroll();
+
+  // Handle cross-subdomain auth: accept token from URL parameter
+  // When user is redirected from longhouse.ai after OAuth with ?auth_token=xxx
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const authToken = params.get('auth_token');
+
+    if (!authToken || !isUserSubdomain()) return;
+
+    setIsAcceptingToken(true);
+
+    // Call backend to validate token and set cookie
+    fetch(`${config.apiBaseUrl}/auth/accept-token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ token: authToken }),
+    })
+      .then(async (response) => {
+        if (response.ok) {
+          // Token accepted, cookie set - refresh auth state and redirect
+          if (refreshAuth) await refreshAuth();
+          // Clean URL and redirect to timeline
+          window.location.href = '/timeline';
+        } else {
+          console.error('Token acceptance failed:', await response.text());
+          // Clean the URL parameter on failure
+          params.delete('auth_token');
+          window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`);
+          setIsAcceptingToken(false);
+        }
+      })
+      .catch((error) => {
+        console.error('Token acceptance error:', error);
+        setIsAcceptingToken(false);
+      });
+  }, [refreshAuth]);
 
   // Control global UI effects based on landing page effects
   useEffect(() => {
@@ -140,11 +178,12 @@ export default function LandingPage() {
     }
   }, [isAuthenticated, isLoading, navigate]);
 
-  // Show loading while checking auth
-  if (isLoading) {
+  // Show loading while checking auth or accepting token
+  if (isLoading || isAcceptingToken) {
     return (
       <div className="landing-loading">
         <SwarmLogo size={64} className="landing-loading-logo" />
+        {isAcceptingToken && <p style={{ marginTop: '1rem', color: 'var(--color-text-secondary)' }}>Signing in...</p>}
       </div>
     );
   }
