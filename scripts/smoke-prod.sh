@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Production Smoke Test for Swarmlet (split frontend/backend)
+# Production Smoke Test for Longhouse (split frontend/backend)
 #
 # Usage:
 #   ./scripts/smoke-prod.sh           # default: public + auth + basic LLM
@@ -583,7 +583,7 @@ fi
 
 echo ""
 echo "================================================"
-echo "  Swarmlet Production Smoke Test"
+echo "  Longhouse Production Smoke Test"
 echo "================================================"
 echo "  Frontend: $FRONTEND_URL"
 echo "  API:      $API_URL"
