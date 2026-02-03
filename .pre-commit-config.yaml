@@ -1,4 +1,4 @@
-# Pre-commit configuration for Zerg/Swarmlet
+# Pre-commit configuration for Longhouse (codename: Zerg)
 #
 # Philosophy: Fast, comprehensive guardrails for AI agents
 # - Tier 1 (pre-commit): < 15s, catches type errors and format issues
