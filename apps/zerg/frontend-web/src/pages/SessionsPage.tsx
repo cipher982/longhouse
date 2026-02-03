@@ -455,34 +455,10 @@ export default function SessionsPage() {
 
         {/* Timeline List */}
         {showGuidedEmptyState ? (
-          <div className="timeline-empty">
-            <div className="timeline-empty__intro">
-              <h3>No sessions yet</h3>
-              <p>
-                Sessions sync automatically from Claude Code on your machine.
-              </p>
-            </div>
-            <div className="timeline-empty__troubleshoot">
-              <h4>Troubleshooting</h4>
-              <ul className="timeline-empty__checklist">
-                <li>
-                  <strong>Shipper running?</strong>
-                  <code className="timeline-empty__code">longhouse connect --status</code>
-                </li>
-                <li>
-                  <strong>Have Claude sessions?</strong>
-                  <code className="timeline-empty__code">ls ~/.claude/projects/</code>
-                </li>
-                <li>
-                  <strong>Force sync</strong>
-                  <code className="timeline-empty__code">longhouse ship</code>
-                </li>
-              </ul>
-            </div>
-            <p className="timeline-empty__hint">
-              New install? Run <code>longhouse onboard</code> to set up the shipper.
-            </p>
-          </div>
+          <EmptyState
+            title="No sessions yet"
+            description="Sessions sync from Claude Code. Run 'longhouse ship' to sync now."
+          />
         ) : sessions.length === 0 ? (
           <EmptyState
             title="No timeline sessions found"
