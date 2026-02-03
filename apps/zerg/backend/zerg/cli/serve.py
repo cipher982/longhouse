@@ -257,6 +257,11 @@ def serve(
         "--demo",
         help="Use demo database with sample data",
     ),
+    demo_fresh: bool = typer.Option(
+        False,
+        "--demo-fresh",
+        help="Rebuild demo database with sample data (implies --demo)",
+    ),
 ) -> None:
     """Start the Longhouse server.
 
@@ -266,6 +271,7 @@ def serve(
     Examples:
         longhouse serve                           # SQLite on localhost:8080
         longhouse serve --demo                    # Start with sample data
+        longhouse serve --demo-fresh              # Rebuild demo data on start
         longhouse serve --daemon                  # Run in background
         longhouse serve --stop                    # Stop background server
         longhouse serve --host 0.0.0.0 --port 80  # Bind to all interfaces
@@ -302,8 +308,11 @@ def serve(
             raise typer.Exit(code=1)
 
     # Handle demo mode
-    if demo:
+    if demo or demo_fresh:
         demo_db_path = _get_longhouse_home() / "demo.db"
+        if demo_fresh and demo_db_path.exists():
+            demo_db_path.unlink()
+
         if not demo_db_path.exists():
             typer.echo("Building demo database with sample data...")
             _build_demo_db(demo_db_path)

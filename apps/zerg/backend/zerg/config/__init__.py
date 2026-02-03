@@ -52,6 +52,7 @@ class Settings:  # noqa: D401 – simple data container
     # Secrets & IDs -----------------------------------------------------
     jwt_secret: str
     longhouse_password: str  # Simple password auth for OSS self-hosters (LONGHOUSE_PASSWORD)
+    longhouse_password_hash: str  # Hashed password auth (LONGHOUSE_PASSWORD_HASH)
     internal_api_secret: str
     google_client_id: Any
     google_client_secret: Any
@@ -387,6 +388,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         single_tenant=_truthy(os.getenv("SINGLE_TENANT", "1")),
         jwt_secret=os.getenv("JWT_SECRET", "dev-secret"),
         longhouse_password=os.getenv("LONGHOUSE_PASSWORD", ""),
+        longhouse_password_hash=os.getenv("LONGHOUSE_PASSWORD_HASH", ""),
         internal_api_secret=os.getenv("INTERNAL_API_SECRET", "dev-internal-secret"),
         google_client_id=os.getenv("GOOGLE_CLIENT_ID"),
         google_client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),

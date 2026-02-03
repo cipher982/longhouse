@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import hmac
 import secrets
+import time
+from collections import defaultdict
+from collections import deque
 from datetime import datetime
 from datetime import timedelta
 from typing import Any
@@ -91,6 +96,117 @@ def _clear_session_cookie(response: Response) -> None:
         httponly=True,
         secure=SESSION_COOKIE_SECURE,
         samesite="lax",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Password auth helpers (OSS self-hosters)
+# ---------------------------------------------------------------------------
+
+
+_PASSWORD_RATE_LIMIT_MAX_ATTEMPTS = 5
+_PASSWORD_RATE_LIMIT_WINDOW_SECONDS = 60
+_PASSWORD_RATE_LIMIT_BUCKETS: dict[str, deque[float]] = defaultdict(deque)
+
+
+def _get_client_ip(request: Request) -> str:
+    """Best-effort client IP for rate limiting."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _check_password_rate_limit(key: str) -> int | None:
+    """Return retry-after seconds if rate limited, else None."""
+    now = time.monotonic()
+    window_start = now - _PASSWORD_RATE_LIMIT_WINDOW_SECONDS
+    bucket = _PASSWORD_RATE_LIMIT_BUCKETS[key]
+    while bucket and bucket[0] < window_start:
+        bucket.popleft()
+    if len(bucket) >= _PASSWORD_RATE_LIMIT_MAX_ATTEMPTS:
+        retry_after = int(_PASSWORD_RATE_LIMIT_WINDOW_SECONDS - (now - bucket[0])) + 1
+        return max(retry_after, 1)
+    return None
+
+
+def _record_password_failure(key: str) -> None:
+    _PASSWORD_RATE_LIMIT_BUCKETS[key].append(time.monotonic())
+
+
+def _clear_password_failures(key: str) -> None:
+    _PASSWORD_RATE_LIMIT_BUCKETS.pop(key, None)
+
+
+def _verify_pbkdf2_sha256(password: str, stored: str) -> bool:
+    """Verify pbkdf2_sha256$iterations$salt$hash (base64)."""
+    try:
+        _, iterations_str, salt_b64, hash_b64 = stored.split("$", 3)
+        iterations = int(iterations_str)
+        salt = base64.b64decode(salt_b64.encode("utf-8"))
+        expected = base64.b64decode(hash_b64.encode("utf-8"))
+    except Exception as exc:
+        raise ValueError("Invalid pbkdf2_sha256 hash format") from exc
+
+    derived = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return secrets.compare_digest(derived, expected)
+
+
+def _verify_password_hash(password: str, stored: str) -> bool:
+    """Verify a stored password hash in common formats."""
+    if stored.startswith("pbkdf2_sha256$"):
+        try:
+            return _verify_pbkdf2_sha256(password, stored)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Invalid LONGHOUSE_PASSWORD_HASH format",
+            ) from exc
+
+    if stored.startswith("$argon2"):
+        try:
+            from argon2 import PasswordHasher  # type: ignore
+            from argon2.exceptions import InvalidHash  # type: ignore
+            from argon2.exceptions import VerifyMismatchError  # type: ignore
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="argon2-cffi not installed for LONGHOUSE_PASSWORD_HASH",
+            ) from exc
+
+        hasher = PasswordHasher()
+        try:
+            return hasher.verify(stored, password)
+        except VerifyMismatchError:
+            return False
+        except InvalidHash as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Invalid LONGHOUSE_PASSWORD_HASH format",
+            ) from exc
+
+    if stored.startswith("$2"):
+        try:
+            import bcrypt  # type: ignore
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="bcrypt not installed for LONGHOUSE_PASSWORD_HASH",
+            ) from exc
+
+        try:
+            return bcrypt.checkpw(password.encode("utf-8"), stored.encode("utf-8"))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Invalid LONGHOUSE_PASSWORD_HASH format",
+            ) from exc
+
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Unsupported LONGHOUSE_PASSWORD_HASH format",
     )
 
 
@@ -597,7 +713,7 @@ def get_auth_methods():
     settings = get_settings()
     return {
         "google": bool(settings.google_client_id),
-        "password": bool(settings.longhouse_password),
+        "password": bool(settings.longhouse_password or settings.longhouse_password_hash),
     }
 
 
@@ -606,17 +722,40 @@ class PasswordLoginRequest(BaseModel):
 
 
 @router.post("/password", response_model=TokenOut)
-def password_login(response: Response, body: PasswordLoginRequest, db: Session = Depends(get_db)) -> TokenOut:
+def password_login(
+    request: Request,
+    response: Response,
+    body: PasswordLoginRequest,
+    db: Session = Depends(get_db),
+) -> TokenOut:
     """Simple password auth for self-hosters.
 
     Expected JSON body: `{ "password": "<configured password>" }`.
     Returns a JWT token and sets session cookie on success.
     """
     settings = get_settings()
-    if not settings.longhouse_password:
+    if not settings.longhouse_password and not settings.longhouse_password_hash:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password auth not configured")
-    if not secrets.compare_digest(body.password, settings.longhouse_password):
+
+    client_ip = _get_client_ip(request)
+    retry_after = _check_password_rate_limit(client_ip)
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many password attempts. Try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    if settings.longhouse_password_hash:
+        password_ok = _verify_password_hash(body.password, settings.longhouse_password_hash)
+    else:
+        password_ok = secrets.compare_digest(body.password, settings.longhouse_password)
+
+    if not password_ok:
+        _record_password_failure(client_ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid password")
+
+    _clear_password_failures(client_ip)
 
     # Get or create default user for password auth
     user = crud.get_user_by_email(db, "local@longhouse")

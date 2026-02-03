@@ -18,10 +18,10 @@ Capture list for substantial work. Not quick fixes (do those live).
 ### P0 — OSS GA (Required)
 | Priority | Task | Est |
 |----------|------|-----|
-| 1 | OSS Password Auth | 1 day |
-| 2 | Demo mode flag | 0.5 day |
-| 3 | Landing Page CTAs (self-hosted primary) | 0.5 day |
-| 4 | README rewrite (Timeline + install paths) | 0.5 day |
+| 1 | OSS Password Auth ✅ | 1 day |
+| 2 | Demo mode flag ✅ | 0.5 day |
+| 3 | Landing Page CTAs (self-hosted primary) ✅ | 0.5 day |
+| 4 | README rewrite (Timeline + install paths) ✅ | 0.5 day |
 
 ### P1 — Hosted Beta (Stretch)
 | Priority | Task | Est |
@@ -32,6 +32,15 @@ Capture list for substantial work. Not quick fixes (do those live).
 | 4 | Cross-subdomain Auth | 0.5 day |
 
 **Minimum for launch:** P0 only (self-hosted works end-to-end).
+
+---
+
+## Post-GA Follow-ups (From 2026-02-03 Swarm)
+
+- [x] Add rate limiting on `POST /auth/password`
+- [x] Support `LONGHOUSE_PASSWORD_HASH` (bcrypt/argon2)
+- [x] UI fallback if `/auth/methods` fails
+- [x] Add `--demo-fresh` flag to rebuild demo DB
 
 ---
 
@@ -62,16 +71,16 @@ See `/docs/LAUNCH-PLAN.md` for detailed analysis.
 
 **Solution:** Add simple password auth via environment variable.
 
-- [ ] Add `LONGHOUSE_PASSWORD` config var in `apps/zerg/backend/zerg/config/__init__.py`
-- [ ] Add `POST /api/auth/password` endpoint in `routers/auth.py`
+- [x] Add `LONGHOUSE_PASSWORD` config var in `apps/zerg/backend/zerg/config/__init__.py`
+- [x] Add `POST /api/auth/password` endpoint in `routers/auth.py`
   - If `LONGHOUSE_PASSWORD` is set, enable password login
   - If not set + localhost, auto-authenticate (current dev behavior)
   - If not set + remote, require password or Google OAuth
-- [ ] Add password login UI to `HeroSection.tsx` login modal
+- [x] Add password login UI to `HeroSection.tsx` login modal
   - Show password field when `LONGHOUSE_PASSWORD` is configured
   - Keep Google OAuth as alternative
-- [ ] Update frontend config to detect password auth availability
-- [ ] Test full OSS flow: `pip install` → `longhouse serve` → password login → timeline
+- [x] Update frontend config to detect password auth availability
+- [x] Test full OSS flow: `pip install` → `longhouse serve` → password login → timeline
 
 **Files:** `config/__init__.py`, `routers/auth.py`, `HeroSection.tsx`, `config.ts`
 
