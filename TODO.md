@@ -22,6 +22,7 @@ Capture list for substantial work. Not quick fixes (do those live).
 | 2 | Demo mode flag ✅ | 0.5 day |
 | 3 | Landing Page CTAs (self-hosted primary) ✅ | 0.5 day |
 | 4 | README rewrite (Timeline + install paths) ✅ | 0.5 day |
+| 5 | OSS GA QA script + README onboarding contract ✅ | 1 day |
 
 ### P1 — Hosted Beta (Stretch)
 | Priority | Task | Est |

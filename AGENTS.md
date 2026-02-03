@@ -192,3 +192,4 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-03) [ops] Cloudflare Universal SSL does not cover sub-subdomains; prefer single-level (api-david.longhouse.ai) or custom cert.
 - (2026-02-03) [ui] UI debug bundles: `make ui-capture` produces screenshot + trace + manifest; Playwright 1.57 lacks `page.accessibility`, so a11y capture uses `locator.ariaSnapshot()` (YAML) or guards the missing API.
 - (2026-02-03) [ui] SCENE=empty currently no-ops (doesn't clear sessions); ariaSnapshot flattens session list into a single text node, limiting structured parsing.
+- (2026-02-03) [gotcha] `uv run` builds fail if `apps/zerg/frontend-web/dist` is missing (hatch force-include); build frontend before backend tests.
