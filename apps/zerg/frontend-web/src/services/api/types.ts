@@ -123,6 +123,18 @@ export type RotateSecretResponse = {
   message: string;
 };
 
+export type RunnerStatusItem = {
+  name: string;
+  status: string;
+};
+
+export type RunnerStatusResponse = {
+  total: number;
+  online: number;
+  offline: number;
+  runners: RunnerStatusItem[];
+};
+
 export type KnowledgeSource = Schemas["KnowledgeSource"];
 export type KnowledgeSourceCreate = Schemas["KnowledgeSourceCreate"];
 export type KnowledgeSourceUpdate = Schemas["KnowledgeSourceUpdate"];

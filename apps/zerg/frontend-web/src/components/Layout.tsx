@@ -1,10 +1,12 @@
 import clsx from "clsx";
 import { useState, useEffect, useCallback, type PropsWithChildren } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../lib/auth";
 import { useShelf } from "../lib/useShelfState";
 import { useWebSocket, ConnectionStatusIndicator } from "../lib/useWebSocket";
 import { useConfirm } from "./confirm";
+import { fetchRunnerStatus } from "../services/api";
 import "../styles/layout.css";
 import { SidebarIcon, XIcon } from "./icons";
 import { getNavItems } from "./navigation/navItems";
@@ -274,6 +276,42 @@ function WelcomeHeader() {
   );
 }
 
+function RunnerStatusIndicator() {
+  const { data: runnerStatus } = useQuery({
+    queryKey: ["runnerStatus"],
+    queryFn: fetchRunnerStatus,
+    refetchInterval: 30000, // Poll every 30 seconds
+    staleTime: 15000,
+    retry: false, // Don't retry on failure - just show stale data
+  });
+
+  if (!runnerStatus || runnerStatus.total === 0) {
+    return null; // Don't show anything if no runners configured
+  }
+
+  const allOnline = runnerStatus.online === runnerStatus.total;
+  const color = allOnline ? "#10b981" : "#f59e0b"; // green or yellow
+
+  return (
+    <span
+      style={{ display: "flex", alignItems: "center", gap: "4px", marginLeft: "12px" }}
+      title={runnerStatus.runners.map((r) => `${r.name}: ${r.status}`).join("\n")}
+    >
+      <span
+        style={{
+          width: "6px",
+          height: "6px",
+          borderRadius: "50%",
+          backgroundColor: color,
+        }}
+      />
+      <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+        Runners {runnerStatus.online}/{runnerStatus.total}
+      </span>
+    </span>
+  );
+}
+
 function StatusFooter() {
   // Use a background WebSocket connection for general status monitoring
   const { connectionStatus } = useWebSocket(true, {
@@ -286,6 +324,7 @@ function StatusFooter() {
     <footer className="status-bar" data-testid="status-footer" aria-live="polite">
       <div className="packet-counter">
         <ConnectionStatusIndicator status={connectionStatus} />
+        <RunnerStatusIndicator />
       </div>
     </footer>
   );

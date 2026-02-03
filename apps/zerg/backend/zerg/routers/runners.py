@@ -37,6 +37,8 @@ from zerg.schemas.runner_schemas import RunnerRegisterRequest
 from zerg.schemas.runner_schemas import RunnerRegisterResponse
 from zerg.schemas.runner_schemas import RunnerResponse
 from zerg.schemas.runner_schemas import RunnerRotateSecretResponse
+from zerg.schemas.runner_schemas import RunnerStatusItem
+from zerg.schemas.runner_schemas import RunnerStatusResponse
 from zerg.schemas.runner_schemas import RunnerSuccessResponse
 from zerg.schemas.runner_schemas import RunnerUpdate
 from zerg.services.runner_connection_manager import get_runner_connection_manager
@@ -351,6 +353,29 @@ def register_runner(
 # ---------------------------------------------------------------------------
 # Runner Management Endpoints
 # ---------------------------------------------------------------------------
+
+
+@router.get("/status", response_model=RunnerStatusResponse)
+def get_runner_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> RunnerStatusResponse:
+    """Get runner health summary for status indicators.
+
+    Returns a lightweight summary of runner status for UI health indicators.
+    Useful for detecting broken runner connections early.
+    """
+    runners = runner_crud.get_runners(db=db, owner_id=current_user.id)
+
+    online_count = sum(1 for r in runners if r.status == "online")
+    offline_count = sum(1 for r in runners if r.status in ("offline", "revoked"))
+
+    return RunnerStatusResponse(
+        total=len(runners),
+        online=online_count,
+        offline=offline_count,
+        runners=[RunnerStatusItem(name=r.name, status=r.status) for r in runners],
+    )
 
 
 @router.get("/", response_model=RunnerListResponse)
