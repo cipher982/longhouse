@@ -24,7 +24,7 @@ This is a living vision doc. It captures both the direction and the reasoning th
 
 **Don't:**
 - Mix Longhouse and Zerg in user-facing copy
-- Use Swarmlet or StarCraft theming in new docs
+- Use Zerg/StarCraft theming in user-facing docs
 - Apply themed verbs to APIs/CLI commands
 
 **Transition notes:**

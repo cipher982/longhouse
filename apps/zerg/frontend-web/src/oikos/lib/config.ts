@@ -80,7 +80,7 @@ export function toAbsoluteUrl(url: string): string {
   // Determine the correct origin for this URL
   let origin = pageOrigin;
   if (isApiPath && runtimeApiUrl && typeof runtimeApiUrl === 'string') {
-    // Extract origin from API_BASE_URL (e.g., "https://api.swarmlet.com/api" → "https://api.swarmlet.com")
+    // Extract origin from API_BASE_URL (e.g., "https://api.longhouse.ai/api" → "https://api.longhouse.ai")
     try {
       const apiUrl = new URL(runtimeApiUrl);
       origin = apiUrl.origin;
