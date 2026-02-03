@@ -20,7 +20,7 @@
 
 import { chromium, type BrowserContext, type Page } from "playwright";
 import { execSync } from "child_process";
-import { mkdirSync, writeFileSync, existsSync } from "fs";
+import { mkdirSync, writeFileSync } from "fs";
 import path from "path";
 
 const PAGES = ["timeline", "chat", "dashboard", "settings"] as const;
@@ -39,9 +39,21 @@ interface Options {
   all: boolean;
 }
 
+type A11yFormat = "json" | "yaml" | "none";
+
 interface CaptureResult {
-  screenshotPath: string;
-  a11yPath: string;
+  screenshotPath?: string;
+  a11yPath?: string;
+  a11yFormat: A11yFormat;
+  error?: string;
+}
+
+function formatError(error: unknown): { message: string; detail: string } {
+  if (error instanceof Error) {
+    return { message: error.message, detail: error.stack ?? error.message };
+  }
+  const message = String(error);
+  return { message, detail: message };
 }
 
 function parseArgs(): Options {
@@ -88,16 +100,31 @@ async function seedScene(scene: SceneName, backendUrl: string): Promise<void> {
       // No-op: empty state
       break;
     case "demo":
-      await fetch(`${backendUrl}/api/system/seed-demo-sessions`, {
-        method: "POST",
-      });
+      try {
+        const response = await fetch(`${backendUrl}/api/system/seed-demo-sessions`, {
+          method: "POST",
+        });
+        if (!response.ok) {
+          console.warn(
+            `  Warning: seed-demo-sessions failed (${response.status} ${response.statusText})`
+          );
+        }
+      } catch (error) {
+        const { message } = formatError(error);
+        console.warn(`  Warning: seed-demo-sessions failed (${message})`);
+      }
       break;
     case "onboarding-modal":
       // Reset user state to trigger onboarding (if endpoint exists)
       try {
-        await fetch(`${backendUrl}/api/system/reset-onboarding`, {
+        const response = await fetch(`${backendUrl}/api/system/reset-onboarding`, {
           method: "POST",
         });
+        if (!response.ok) {
+          console.warn(
+            `  Warning: reset-onboarding failed (${response.status} ${response.statusText})`
+          );
+        }
       } catch {
         console.warn("  Warning: reset-onboarding endpoint not available");
       }
@@ -150,12 +177,30 @@ async function captureBundle(
   console.log(`  Screenshot: ${screenshotPath}`);
 
   // Capture accessibility snapshot
-  const a11yPath = path.join(outputDir, `${pageName}-a11y.json`);
-  const a11yTree = await page.accessibility.snapshot();
-  writeFileSync(a11yPath, JSON.stringify(a11yTree, null, 2));
-  console.log(`  A11y tree: ${a11yPath}`);
+  let a11yPath: string | undefined;
+  let a11yFormat: A11yFormat = "none";
+  try {
+    const accessibilitySnapshot =
+      (page as unknown as { accessibility?: { snapshot?: () => Promise<unknown> } }).accessibility
+        ?.snapshot;
+    if (typeof accessibilitySnapshot === "function") {
+      const a11yTree = await accessibilitySnapshot();
+      a11yPath = path.join(outputDir, `${pageName}-a11y.json`);
+      writeFileSync(a11yPath, JSON.stringify(a11yTree, null, 2));
+      a11yFormat = "json";
+    } else {
+      const ariaSnapshot = await page.locator("body").ariaSnapshot();
+      a11yPath = path.join(outputDir, `${pageName}-a11y.yml`);
+      writeFileSync(a11yPath, `${ariaSnapshot.trimEnd()}\n`);
+      a11yFormat = "yaml";
+    }
+    console.log(`  A11y (${a11yFormat}): ${a11yPath}`);
+  } catch (error) {
+    const { message } = formatError(error);
+    console.warn(`  Warning: a11y snapshot failed: ${message}`);
+  }
 
-  return { screenshotPath, a11yPath };
+  return { screenshotPath, a11yPath, a11yFormat };
 }
 
 function getGitInfo(): { sha: string; branch: string; dirty: boolean } {
@@ -196,97 +241,129 @@ async function main() {
   // Get git info
   const gitInfo = getGitInfo();
 
-  // Launch browser
-  console.log("\nLaunching browser...");
-  const browser = await chromium.launch();
-  const context = await browser.newContext({
-    viewport: { width: 1280, height: 720 },
-    reducedMotion: "reduce",
-    timezoneId: "America/Los_Angeles",
-    locale: "en-US",
-  });
-
-  // Start tracing if enabled
-  if (opts.trace) {
-    await context.tracing.start({ screenshots: true, snapshots: true });
-  }
-
-  const page = await context.newPage();
-
-  // Capture console logs
   const consoleLogs: string[] = [];
-  page.on("console", (msg) => {
-    const text = `[${msg.type().toUpperCase()}] ${msg.text()}`;
-    consoleLogs.push(text);
-  });
-
-  // Capture page errors
-  page.on("pageerror", (err) => {
-    consoleLogs.push(`[PAGE_ERROR] ${err.message}`);
-  });
-
-  // Capture request failures
-  page.on("requestfailed", (request) => {
-    consoleLogs.push(
-      `[REQUEST_FAILED] ${request.method()} ${request.url()} - ${request.failure()?.errorText}`
-    );
-  });
-
-  // Determine which pages to capture
-  const pagesToCapture = opts.all ? [...PAGES] : [opts.page];
+  const errors: string[] = [];
   const artifacts: Record<string, CaptureResult> = {};
-
-  console.log("\nCapturing pages...");
-  for (const pageName of pagesToCapture) {
-    console.log(`\n${pageName}:`);
-    artifacts[pageName] = await captureBundle(
-      context,
-      page,
-      pageName,
-      outputDir,
-      opts.baseUrl
-    );
-  }
-
-  // Stop tracing
+  const pagesToCapture = opts.all ? [...PAGES] : [opts.page];
   let tracePath: string | undefined;
-  if (opts.trace) {
-    tracePath = path.join(outputDir, "trace.zip");
-    await context.tracing.stop({ path: tracePath });
-    console.log(`\nTrace: ${tracePath}`);
-  }
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  let context: BrowserContext | undefined;
 
-  // Write console logs
-  const consoleLogPath = path.join(outputDir, "console.log");
-  writeFileSync(consoleLogPath, consoleLogs.join("\n"));
-  console.log(`Console logs: ${consoleLogPath}`);
-
-  // Write manifest
-  const manifest = {
-    timestamp: new Date().toISOString(),
-    git: gitInfo,
-    scene: opts.scene,
-    pages: pagesToCapture,
-    artifacts: {
-      ...artifacts,
-      trace: tracePath,
-      console: consoleLogPath,
-    },
-    config: {
-      baseUrl: opts.baseUrl,
-      backendUrl: opts.backendUrl,
+  try {
+    // Launch browser
+    console.log("\nLaunching browser...");
+    browser = await chromium.launch();
+    context = await browser.newContext({
       viewport: { width: 1280, height: 720 },
-    },
-  };
+      reducedMotion: "reduce",
+      timezoneId: "America/Los_Angeles",
+      locale: "en-US",
+    });
 
-  const manifestPath = path.join(outputDir, "manifest.json");
-  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    // Start tracing if enabled
+    if (opts.trace) {
+      await context.tracing.start({ screenshots: true, snapshots: true });
+    }
 
-  console.log(`\nManifest: ${manifestPath}`);
-  console.log("\nBundle complete!");
-  console.log(`\nTo view trace: npx playwright show-trace ${tracePath}`);
+    const page = await context.newPage();
 
-  await browser.close();
+    // Capture console logs
+    page.on("console", (msg) => {
+      const text = `[${msg.type().toUpperCase()}] ${msg.text()}`;
+      consoleLogs.push(text);
+    });
+
+    // Capture page errors
+    page.on("pageerror", (err) => {
+      consoleLogs.push(`[PAGE_ERROR] ${err.message}`);
+    });
+
+    // Capture request failures
+    page.on("requestfailed", (request) => {
+      consoleLogs.push(
+        `[REQUEST_FAILED] ${request.method()} ${request.url()} - ${request.failure()?.errorText}`
+      );
+    });
+
+    console.log("\nCapturing pages...");
+    for (const pageName of pagesToCapture) {
+      console.log(`\n${pageName}:`);
+      try {
+        artifacts[pageName] = await captureBundle(
+          context,
+          page,
+          pageName,
+          outputDir,
+          opts.baseUrl
+        );
+      } catch (error) {
+        const { message, detail } = formatError(error);
+        errors.push(`[${pageName}] ${message}`);
+        consoleLogs.push(`[CAPTURE_ERROR] ${detail}`);
+        artifacts[pageName] = { a11yFormat: "none", error: message };
+      }
+    }
+  } catch (error) {
+    const { message, detail } = formatError(error);
+    errors.push(`[FATAL] ${message}`);
+    consoleLogs.push(`[FATAL] ${detail}`);
+  } finally {
+    if (context && opts.trace) {
+      tracePath = path.join(outputDir, "trace.zip");
+      try {
+        await context.tracing.stop({ path: tracePath });
+        console.log(`\nTrace: ${tracePath}`);
+      } catch (error) {
+        const { message, detail } = formatError(error);
+        errors.push(`[TRACE] ${message}`);
+        consoleLogs.push(`[TRACE_ERROR] ${detail}`);
+        tracePath = undefined;
+      }
+    }
+
+    if (context) {
+      await context.close();
+    }
+    if (browser) {
+      await browser.close();
+    }
+
+    const consoleLogPath = path.join(outputDir, "console.log");
+    writeFileSync(consoleLogPath, consoleLogs.join("\n"));
+    console.log(`Console logs: ${consoleLogPath}`);
+
+    const manifest = {
+      timestamp: new Date().toISOString(),
+      git: gitInfo,
+      scene: opts.scene,
+      pages: pagesToCapture,
+      artifacts: {
+        ...artifacts,
+        trace: tracePath,
+        console: consoleLogPath,
+      },
+      errors,
+      config: {
+        baseUrl: opts.baseUrl,
+        backendUrl: opts.backendUrl,
+        viewport: { width: 1280, height: 720 },
+      },
+    };
+
+    const manifestPath = path.join(outputDir, "manifest.json");
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+    console.log(`\nManifest: ${manifestPath}`);
+    if (tracePath) {
+      console.log(`\nTo view trace: bunx playwright show-trace ${tracePath}`);
+    }
+    if (errors.length > 0) {
+      console.error(`\nBundle complete with ${errors.length} error(s).`);
+      process.exitCode = 1;
+    } else {
+      console.log("\nBundle complete!");
+    }
+  }
 }
 
 main().catch((e) => {

@@ -24,9 +24,9 @@ make ui-capture ALL=1                     # All pages
 ```
 
 **Output:** `artifacts/ui-capture/<timestamp>/`
-- `timeline.png` - Screenshot
-- `timeline-a11y.json` - Accessibility tree
-- `trace.zip` - Playwright trace (open with `npx playwright show-trace`)
+- `<page>.png` - Screenshot
+- `<page>-a11y.json|yml` - Accessibility snapshot (JSON if available, YAML via ariaSnapshot fallback)
+- `trace.zip` - Playwright trace (open with `bunx playwright show-trace`)
 - `console.log` - Console output
 - `manifest.json` - Metadata + paths
 
@@ -38,8 +38,9 @@ Read(file_path="artifacts/ui-capture/<timestamp>/manifest.json")
 # View screenshot
 Read(file_path="artifacts/ui-capture/<timestamp>/timeline.png")
 
-# Check accessibility tree for structure
+# Check accessibility snapshot for structure (one of these will exist)
 Read(file_path="artifacts/ui-capture/<timestamp>/timeline-a11y.json")
+Read(file_path="artifacts/ui-capture/<timestamp>/timeline-a11y.yml")
 ```
 
 ## Scenes (Deterministic States)
@@ -61,5 +62,5 @@ make qa-ui-baseline-update    # Update baselines
 - Dev must be running: `curl localhost:47300/health`
 - Local dev has AUTH_DISABLED=1 (auto-logged-in)
 - Animations disabled via CSS injection
-- Trace files: `npx playwright show-trace trace.zip` to debug
+- Trace files: `bunx playwright show-trace trace.zip` to debug
 - Output is in `artifacts/ui-capture/` (gitignored)
