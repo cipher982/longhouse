@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { SwarmLogo } from "../SwarmLogo";
 import { Button } from "../ui";
 import { useAuth } from "../../lib/auth";
-import config from "../../lib/config";
+import config, { isUserSubdomain, buildAuthRedirectUrl } from "../../lib/config";
 import { AppScreenshotFrame } from "./AppScreenshotFrame";
 import { InstallSection } from "./InstallSection";
 
@@ -140,7 +140,21 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
             <p className="landing-login-subtext">Sign in to access your session timeline</p>
 
             <div className="landing-login-buttons">
-              <GoogleSignInButtonWrapper />
+              {/* On user subdomain, redirect to main domain for OAuth */}
+              {isUserSubdomain() ? (
+                <Button
+                  variant="primary"
+                  size="lg"
+                  className="landing-google-redirect"
+                  onClick={() => {
+                    window.location.href = buildAuthRedirectUrl();
+                  }}
+                >
+                  Sign in with Google
+                </Button>
+              ) : (
+                <GoogleSignInButtonWrapper />
+              )}
 
               {config.isDevelopment && (
                 <>
@@ -181,7 +195,8 @@ function GoogleSignInButtonWrapper() {
       }
 
       try {
-        await login(response.credential);
+        // Login returns the token data
+        const tokenData = await login(response.credential);
 
         // Track signup completed and stitch visitor to user
         if (window.LonghouseFunnel) {
@@ -189,18 +204,29 @@ function GoogleSignInButtonWrapper() {
           window.LonghouseFunnel.track('signup_completed', { method: 'google_oauth' });
 
           // Stitch visitor to user (fire and forget)
-          // Use email as user_id since login() doesn't return user object
           fetch(config.apiBaseUrl + '/funnel/stitch-visitor', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               visitor_id: visitorId,
-              user_id: 'google_oauth_user'  // Placeholder, will be backfilled from auth token
+              user_id: 'google_oauth_user'
             })
           }).catch(() => {});
         }
 
-        window.location.href = '/timeline';
+        // Check if we need to redirect back to a subdomain (cross-domain auth)
+        const params = new URLSearchParams(window.location.search);
+        const authReturn = params.get('auth_return');
+
+        if (authReturn && tokenData?.access_token) {
+          // Redirect back to the subdomain with the token
+          const returnUrl = new URL(decodeURIComponent(authReturn));
+          returnUrl.searchParams.set('auth_token', tokenData.access_token);
+          window.location.href = returnUrl.toString();
+        } else {
+          // Normal flow - go to timeline
+          window.location.href = '/timeline';
+        }
       } catch (error) {
         console.error('Login failed:', error);
       } finally {

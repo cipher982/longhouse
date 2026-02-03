@@ -18,13 +18,19 @@ interface User {
   role?: string; // ADMIN or USER
 }
 
+interface TokenData {
+  access_token: string;
+  expires_in: number;
+}
+
 interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (idToken: string) => Promise<void>;
+  login: (idToken: string) => Promise<TokenData>;
   logout: () => void;
   getToken: () => string | null;
+  refreshAuth?: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -112,7 +118,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       user: null,
       isAuthenticated: false,
       isLoading: false,
-      login: async () => {},
+      login: async () => ({ access_token: '', expires_in: 0 }),
       logout: () => {},
       getToken: () => null,
     };
@@ -173,8 +179,9 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     }
   }, [userData, error]);
 
-  const login = async (idToken: string) => {
-    await loginMutation.mutateAsync(idToken);
+  const login = async (idToken: string): Promise<TokenData> => {
+    const result = await loginMutation.mutateAsync(idToken);
+    return result;
   };
 
   const logout = async () => {
@@ -190,6 +197,11 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     return null;
   };
 
+  const refreshAuth = async () => {
+    // Refetch auth status from server
+    await refetch();
+  };
+
   const value: AuthContextType = {
     user,
     isAuthenticated,
@@ -197,6 +209,7 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     login,
     logout,
     getToken,
+    refreshAuth,
   };
 
   return (
