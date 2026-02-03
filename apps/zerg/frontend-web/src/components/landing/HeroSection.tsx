@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { SwarmLogo } from "../SwarmLogo";
 import { Button } from "../ui";
-import { useAuth } from "../../lib/auth";
+import { useAuth, getAuthMethods, loginWithPassword, type AuthMethods } from "../../lib/auth";
 import config from "../../lib/config";
 import { AppScreenshotFrame } from "./AppScreenshotFrame";
 import { InstallSection } from "./InstallSection";
@@ -14,6 +14,10 @@ interface HeroSectionProps {
 export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _heroAnimationsEnabled }: HeroSectionProps) {
   const [showLogin, setShowLogin] = useState(false);
   const [isDevLoginLoading, setIsDevLoginLoading] = useState(false);
+  const [authMethods, setAuthMethods] = useState<AuthMethods | null>(null);
+  const [password, setPassword] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [isPasswordLoading, setIsPasswordLoading] = useState(false);
 
   const handleGetStarted = () => {
     if (config.marketingOnly) {
@@ -32,9 +36,44 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
     }
 
     setShowLogin(true);
+    // Reset password state when opening modal
+    setPassword("");
+    setPasswordError("");
+    // Fetch auth methods when modal opens
+    getAuthMethods().then(setAuthMethods);
     // Track modal opened
     if (window.LonghouseFunnel) {
       window.LonghouseFunnel.track('signup_modal_opened');
+    }
+  };
+
+  const handlePasswordLogin = async () => {
+    if (!password.trim()) {
+      setPasswordError("Please enter a password");
+      return;
+    }
+    setIsPasswordLoading(true);
+    setPasswordError("");
+    // Track signup submitted (password)
+    if (window.LonghouseFunnel) {
+      window.LonghouseFunnel.track('signup_submitted', { method: 'password' });
+    }
+    try {
+      const success = await loginWithPassword(password);
+      if (success) {
+        // Track signup completed
+        if (window.LonghouseFunnel) {
+          window.LonghouseFunnel.track('signup_completed', { method: 'password' });
+        }
+        window.location.href = '/timeline';
+      } else {
+        setPasswordError("Invalid password");
+      }
+    } catch (error) {
+      setPasswordError("Login failed. Please try again.");
+      console.error('Password login failed:', error);
+    } finally {
+      setIsPasswordLoading(false);
     }
   };
 
@@ -140,7 +179,40 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
             <p className="landing-login-subtext">Sign in to access your session timeline</p>
 
             <div className="landing-login-buttons">
-              <GoogleSignInButtonWrapper />
+              {/* Password login - shown when backend enables it */}
+              {authMethods?.password && (
+                <div className="landing-password-login">
+                  <input
+                    type="password"
+                    placeholder="Enter password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handlePasswordLogin()}
+                    className="landing-password-input"
+                    disabled={isPasswordLoading}
+                  />
+                  <Button
+                    variant="primary"
+                    size="lg"
+                    className="landing-password-submit"
+                    onClick={handlePasswordLogin}
+                    disabled={isPasswordLoading || !password.trim()}
+                  >
+                    {isPasswordLoading ? 'Signing in...' : 'Sign In'}
+                  </Button>
+                  {passwordError && (
+                    <p className="landing-password-error">{passwordError}</p>
+                  )}
+                  {authMethods?.google && (
+                    <div className="landing-login-divider">
+                      <span>or</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Google OAuth - shown when enabled */}
+              {authMethods?.google !== false && <GoogleSignInButtonWrapper />}
 
               {config.isDevelopment && (
                 <>

@@ -23,6 +23,7 @@ class TestDbIsSqlite:
             auth_disabled=True,
             single_tenant=True,
             jwt_secret="test-secret",
+            longhouse_password="",
             internal_api_secret="test-internal-secret",
             google_client_id=None,
             google_client_secret=None,

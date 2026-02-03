@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import secrets
 from datetime import datetime
 from datetime import timedelta
 from typing import Any
@@ -15,6 +16,7 @@ from fastapi import HTTPException
 from fastapi import Request
 from fastapi import Response
 from fastapi import status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
@@ -582,6 +584,56 @@ def accept_token(response: Response, body: dict[str, str], db: Session = Depends
     _set_session_cookie(response, token, remaining)
 
     return TokenOut(access_token=token, expires_in=remaining)
+
+
+# ---------------------------------------------------------------------------
+# Password auth for OSS self-hosters
+# ---------------------------------------------------------------------------
+
+
+@router.get("/methods")
+def get_auth_methods():
+    """Return available auth methods for frontend."""
+    settings = get_settings()
+    return {
+        "google": bool(settings.google_client_id),
+        "password": bool(settings.longhouse_password),
+    }
+
+
+class PasswordLoginRequest(BaseModel):
+    password: str
+
+
+@router.post("/password", response_model=TokenOut)
+def password_login(response: Response, body: PasswordLoginRequest, db: Session = Depends(get_db)) -> TokenOut:
+    """Simple password auth for self-hosters.
+
+    Expected JSON body: `{ "password": "<configured password>" }`.
+    Returns a JWT token and sets session cookie on success.
+    """
+    settings = get_settings()
+    if not settings.longhouse_password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password auth not configured")
+    if not secrets.compare_digest(body.password, settings.longhouse_password):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid password")
+
+    # Get or create default user for password auth
+    user = crud.get_user_by_email(db, "local@longhouse")
+    if not user:
+        user = crud.create_user(db, email="local@longhouse", display_name="Local User", provider="password")
+
+    # Issue token and set cookie
+    expires_in = 30 * 60  # 30 minutes
+    access_token = _issue_access_token(
+        user.id,
+        user.email,
+        display_name=user.display_name or "Local User",
+        avatar_url=user.avatar_url,
+    )
+    _set_session_cookie(response, access_token, expires_in)
+
+    return TokenOut(access_token=access_token, expires_in=expires_in)
 
 
 # ---------------------------------------------------------------------------
