@@ -11,14 +11,89 @@ Capture list for substantial work. Not quick fixes (do those live).
 
 ---
 
+## 🎯 HN Launch Priority (This Week)
+
+**Decision:** OSS GA + Hosted Beta (optional). Hosted tasks only if P0 is done.
+
+### P0 — OSS GA (Required)
+| Priority | Task | Est |
+|----------|------|-----|
+| 1 | OSS Password Auth | 1 day |
+| 2 | Demo mode flag | 0.5 day |
+| 3 | Landing Page CTAs (self-hosted primary) | 0.5 day |
+| 4 | README rewrite (Timeline + install paths) | 0.5 day |
+
+### P1 — Hosted Beta (Stretch)
+| Priority | Task | Est |
+|----------|------|-----|
+| 1 | Control Plane Scaffold | 1 day |
+| 2 | Stripe Integration | 1 day |
+| 3 | Docker Provisioning | 1 day |
+| 4 | Cross-subdomain Auth | 0.5 day |
+
+**Minimum for launch:** P0 only (self-hosted works end-to-end).
+
+---
+
+## ⚠️ Architecture Reality Check (Read First)
+
+**VISION.md describes per-user isolated instances. That doesn't exist YET.**
+
+Current reality (as of 2026-02-03):
+- **ONE backend container** serves both `api.longhouse.ai` and `api-david.longhouse.ai`
+- **ONE frontend container** serves both `longhouse.ai` and `david.longhouse.ai`
+- **ONE SQLite database** at `/data/longhouse.db` (~2.5GB)
+- **No control plane** — can't provision per-user instances
+- **"david.longhouse.ai" is cosmetic** — just DNS routing to shared infra
+
+**Target state:** Control plane provisions isolated containers per user (Docker API + Traefik labels). See VISION.md for architecture.
+
+See `/docs/LAUNCH-PLAN.md` for detailed analysis.
+
+---
+
+## 🚨 OSS Auth — Password Login for Self-Hosters (3)
+
+**Priority: CRITICAL for HN launch**
+
+**Problem:** Only Google OAuth exists. OSS self-hosters must either:
+- Set up their own Google Console project (unreasonable)
+- Disable auth entirely (`AUTH_DISABLED=1`) (insecure for remote access)
+
+**Solution:** Add simple password auth via environment variable.
+
+- [ ] Add `LONGHOUSE_PASSWORD` config var in `apps/zerg/backend/zerg/config/__init__.py`
+- [ ] Add `POST /api/auth/password` endpoint in `routers/auth.py`
+  - If `LONGHOUSE_PASSWORD` is set, enable password login
+  - If not set + localhost, auto-authenticate (current dev behavior)
+  - If not set + remote, require password or Google OAuth
+- [ ] Add password login UI to `HeroSection.tsx` login modal
+  - Show password field when `LONGHOUSE_PASSWORD` is configured
+  - Keep Google OAuth as alternative
+- [ ] Update frontend config to detect password auth availability
+- [ ] Test full OSS flow: `pip install` → `longhouse serve` → password login → timeline
+
+**Files:** `config/__init__.py`, `routers/auth.py`, `HeroSection.tsx`, `config.ts`
+
+---
+
 ## Domain Split — Marketing vs Personal Instance (4)
 
 **Goal:** longhouse.ai is marketing-only; david.longhouse.ai is the app (single-tenant).
+
+**Status:** DNS routing complete. Marketing mode logic exists but has issues.
 
 - [x] Add marketing-only frontend flag (hostname-driven) to disable auth + app routes on longhouse.ai
 - [x] Update Coolify domains: zerg-web -> david.longhouse.ai, zerg-api -> api.david.longhouse.ai
 - [x] Update zerg-api env: APP_PUBLIC_URL/PUBLIC_SITE_URL to david, CORS to include longhouse.ai + david
 - [x] Add Cloudflare DNS for david.longhouse.ai + api.david.longhouse.ai (and optional wildcard)
+
+**Reality check:** This is DNS routing to ONE shared deployment, not isolated instances. The "david" subdomain is cosmetic. See Architecture Reality Check above.
+
+**Remaining issues:**
+- [ ] Google OAuth needs both `longhouse.ai` AND `david.longhouse.ai` in authorized origins (add to Google Console)
+- [ ] Cross-subdomain OAuth code exists (`/auth/accept-token`) but targets non-existent per-user architecture
+- [ ] Marketing mode defaults were removed (broke auth) — needs cleaner hostname detection
 
 ---
 
@@ -26,12 +101,20 @@ Capture list for substantial work. Not quick fixes (do those live).
 
 **Goal:** Clear user paths, visible CTAs, better contrast. Visitor instantly understands: what it is, who it's for, how to get started.
 
+**⚠️ DEPENDS ON LAUNCH DECISION:**
+- **OSS GA (current):** Hero should emphasize `pip install`, self-host, "your data stays local"
+- **Hosted Beta:** Secondary CTA or "Join waitlist" copy
+
+Current copy is a mix of both stories. Align to OSS-first primary.
+
 **Problems identified (2026-02-03):**
 1. Sign-in button is ghost variant, bottom of hero — hard to see, weird position
 2. Colors too dark — low contrast text, cards blend into background
 3. No clear user path differentiation (self-hosted vs cloud vs paid)
 4. No sticky header — can't navigate or sign in without scrolling up
 5. Current story (AI That Knows You, integrations) is OLD — new story is Timeline + Search + Resume
+6. **NEW:** Several CTA buttons don't work or lead to broken flows
+7. **NEW:** Google OAuth only works on domains registered in Console (blocking david.longhouse.ai)
 
 ### Phase 1: Header + Navigation (2 hours)
 
@@ -169,6 +252,14 @@ Update screenshots to show Timeline, not old dashboard.
 
 **Goal:** HN reader can install, see value immediately, understand what problem this solves, and start using it.
 
+**Launch Path Decision:** OSS GA + Hosted Beta (optional). See `/docs/LAUNCH-PLAN.md`.
+
+### 🚨 Critical Blockers (Fix First)
+
+- [ ] **OSS Auth** — Password login for self-hosters (see dedicated section above)
+- [ ] **Google Console** — Add `david.longhouse.ai` to authorized origins (immediate workaround)
+- [ ] **Landing page CTAs** — Several buttons don't work or lead nowhere
+
 ### High Priority
 
 - [ ] **Demo mode flag** (30 min) — infrastructure exists, just needs CLI glue
@@ -194,6 +285,84 @@ Update screenshots to show Timeline, not old dashboard.
 - [ ] **Video walkthrough** (optional, 2 hours)
   - 60-90 second Loom showing install → timeline → search
   - Add to README + landing page
+
+---
+
+## Control Plane — Hosted Beta (8)
+
+**What it enables:** Users sign up at longhouse.ai → get their own instance (alice.longhouse.ai)
+
+**Architecture:** Tiny FastAPI app that handles signup/billing/provisioning. Uses Docker API directly (not Coolify).
+
+**Scope:** Only if P0 OSS GA is complete.
+
+### Phase 1: Scaffold + Auth (2)
+
+- [ ] Create `apps/control-plane/` directory structure
+  ```
+  apps/control-plane/
+  ├── main.py           # FastAPI app
+  ├── config.py         # Settings (Stripe keys, Docker host, etc.)
+  ├── models.py         # SQLAlchemy models (User, Instance)
+  ├── routers/
+  │   ├── auth.py       # Google OAuth
+  │   ├── billing.py    # Stripe checkout/webhooks
+  │   └── instances.py  # Provision/deprovision
+  └── services/
+      ├── provisioner.py  # Docker API client
+      └── stripe_service.py
+  ```
+- [ ] Add Google OAuth (control plane only, not per-instance)
+- [ ] Add User model: email, stripe_customer_id, instance_id, subscription_status
+- [ ] Add Instance model: user_id, container_name, subdomain, state, created_at
+
+### Phase 2: Stripe Integration (3)
+
+- [ ] Add `POST /checkout` → create Stripe checkout session
+- [ ] Add `POST /webhooks/stripe` → handle payment events
+- [ ] On `invoice.paid` → trigger provisioning
+- [ ] On `customer.subscription.deleted` → trigger deprovisioning
+- [ ] Add billing portal link (`POST /billing/portal`)
+
+### Phase 3: Docker Provisioning (3)
+
+- [ ] Implement Docker API client (SSH to zerg server or Docker socket)
+- [ ] Provision container with Traefik labels for subdomain routing
+  ```python
+  docker run -d \
+    --name longhouse-{user} \
+    --label traefik.enable=true \
+    --label "traefik.http.routers.{user}.rule=Host(`{user}.longhouse.ai`)" \
+    -v /data/longhouse-{user}:/data \
+    -e INSTANCE_ID={user} \
+    -e SINGLE_TENANT=1 \
+    ghcr.io/cipher982/longhouse:latest
+  ```
+- [ ] Create SQLite volume per user
+- [ ] Implement deprovision (stop + remove container, archive data)
+- [ ] Add health check polling after provision
+
+### Phase 4: Cross-Subdomain Auth (2)
+
+- [ ] Control plane issues JWT on successful OAuth
+- [ ] Redirect to `{user}.longhouse.ai?auth_token=xxx`
+- [ ] Instance validates token at `/api/auth/accept-token` (code exists)
+- [ ] Instance sets session cookie, user is logged in
+
+### Phase 5: Landing Page Integration (1)
+
+- [ ] Update landing page CTAs to call control plane endpoints
+- [ ] "Get Started" → `/signup` (OAuth) → `/checkout` (Stripe) → provision → redirect
+- [ ] "Sign In" → `/login` (OAuth) → redirect to existing instance
+- [ ] Show instance status on landing page if logged in
+
+**Files:** New `apps/control-plane/` directory
+
+**Infra requirements:**
+- Traefik on zerg server (for subdomain routing)
+- Wildcard DNS `*.longhouse.ai` (already configured)
+- Docker socket access from control plane
+- Postgres for control plane DB (can be existing Coolify-managed instance)
 
 ---
 
@@ -255,7 +424,10 @@ Eliminate the "empty timeline" anticlimactic moment and improve discovery for us
 Close the remaining open questions from VISION.md.
 
 - [ ] Decide whether the shipper is bundled with the CLI or shipped as a separate package.
-- [ ] Decide remote auth UX for `longhouse connect` (device token vs OAuth vs API key).
+- [x] Decide remote auth UX for `longhouse connect` (device token vs OAuth vs API key).
+  - **Decision:** Password auth via `LONGHOUSE_PASSWORD` env var (see OSS Auth section)
+  - Google OAuth is fallback for users who want it
+  - Device token / API key deferred to post-launch
 - [ ] Decide HTTPS story for local OSS (`longhouse serve`) — built-in vs reverse proxy guidance.
 - [ ] Capture current frontend bundle size and set a target budget.
 
@@ -368,3 +540,4 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [ ] Add agent-friendly capture path (MCP/tool or skill) with stable output paths
 - [ ] Add docs + examples; ensure instructions are short and reproducible
 - [x] Fix ui-capture a11y snapshot: Playwright 1.57 has no `page.accessibility`; use `locator.ariaSnapshot()` or guard missing API and still write trace/manifest on partial failure
+- [ ] Add SCENE=empty reset endpoint (or CLI) to clear sessions; update docs to note current no-op until available

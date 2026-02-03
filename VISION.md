@@ -308,31 +308,78 @@ It is multi-tenant by necessity, but it stores only account + provisioning metad
 6. Redirect to alice.longhouse.ai
 ```
 
-**Provisioning (via Coolify API):**
+**Provisioning (via Docker API on zerg server):**
+
+We do NOT use Coolify for dynamic provisioning (API can't create apps). Instead:
+
+**Docker API access (security):**
+- Control plane runs on the zerg host and uses the local Docker unix socket
+- If remote access is required, use SSH + `docker context` (no open TCP socket)
+- Lock down the control plane service user to Docker-only permissions
+
+```python
+# Control plane calls Docker API directly
+docker run -d \
+  --name longhouse-alice \
+  --label traefik.enable=true \
+  --label "traefik.http.routers.alice.rule=Host(\`alice.longhouse.ai\`)" \
+  --label "traefik.http.routers.alice.entrypoints=websecure" \
+  --label "traefik.http.routers.alice.tls=true" \
+  --label "traefik.http.routers.alice.tls.certresolver=letsencrypt" \
+  --label "traefik.http.services.alice.loadbalancer.server.port=8000" \
+  -v /data/longhouse-alice:/data \
+  -e INSTANCE_ID=alice \
+  -e SINGLE_TENANT=1 \
+  -e APP_PUBLIC_URL=https://alice.longhouse.ai \
+  -e PUBLIC_SITE_URL=https://longhouse.ai \
+  -e DATABASE_URL=sqlite:////data/longhouse.db \
+  ghcr.io/cipher982/longhouse:latest
 ```
-POST /api/applications
-{
-  "name": "longhouse-alice",
-  "image": "ghcr.io/cipher982/longhouse:latest",
-  "env": {
-    "DATABASE_URL": "postgres://...",
-    "USER_EMAIL": "alice@example.com",
-    "INSTANCE_ID": "alice"
-  }
-}
+
+**Control plane stack:**
+```
+apps/control-plane/           # NEW - tiny FastAPI app
+├── main.py                   # App startup + router wiring
+├── config.py                 # Settings (Stripe keys, Docker host, JWT)
+├── models.py                 # User, Instance, Subscription
+├── routers/
+│   ├── auth.py               # Google OAuth
+│   ├── billing.py            # Stripe checkout + portal + webhooks
+│   └── instances.py          # Provision/deprovision/status
+└── services/
+    ├── provisioner.py        # Docker API client
+    └── stripe_service.py     # Stripe helpers
 ```
 
 **Routing:**
-- Wildcard DNS: `*.longhouse.ai -> load balancer IP`
-- Traefik/Caddy routes by subdomain to correct container
-- Each container exposes on unique internal port
+- Wildcard DNS: `*.longhouse.ai -> zerg server IP` (already configured)
+- Traefik routes by subdomain via Docker labels
+- Each container gets unique subdomain automatically
 
-**What control plane stores:**
+**Provisioning guarantees:**
+- Provision is idempotent (retry-safe) by instance_id
+- Control plane waits for `/health` before redirect
+- Deprovision archives volume before delete (or marks for retention)
+
+**What control plane stores (Postgres, separate from instances):**
 - User email, Stripe customer ID, subscription status
-- Instance ID, provisioned timestamp, current state
-- NOT user data (that's in their isolated instance)
+- Instance ID, container name, provisioned timestamp, state
+- NOT user data (that's in their isolated SQLite instance)
 
-**Control plane storage:** may use Postgres; runtime instances do not.
+**What user instances store (SQLite, isolated):**
+- Agent sessions, events, threads
+- User preferences, API keys (encrypted)
+- Everything in the OSS schema
+
+**Control plane endpoints:**
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /signup` | Google OAuth → create user record |
+| `POST /checkout` | Create Stripe checkout session |
+| `POST /webhooks/stripe` | Handle payment → trigger provision |
+| `GET /instance/{user}` | Check instance status |
+| `POST /provision/{user}` | Manual trigger (admin) |
+| `DELETE /instance/{user}` | Deprovision (cancel) |
 
 ---
 
@@ -608,6 +655,69 @@ We avoid most multi-tenant risk by isolating users. Remaining risks:
 - **Data leakage**: isolated instance prevents cross-user leaks by default.
 
 Containerization (Docker/containerd/k3s) protects execution, **not** data isolation. It does not replace tenant safety if we ever go multi-tenant.
+
+---
+
+## Authentication (Two Paths)
+
+Auth differs between self-hosted and hosted. The Longhouse app codebase is identical; auth method is configured via environment.
+
+### Self-Hosted Auth
+
+OSS users should NOT need Google Console setup. Options:
+
+| Method | Env Var | Use Case |
+|--------|---------|----------|
+| **Password** | `LONGHOUSE_PASSWORD=xxx` | Remote access, simple shared secret |
+| **Disabled** | `AUTH_DISABLED=1` | Local-only, trusted network |
+| **Google OAuth** | `GOOGLE_CLIENT_ID=xxx` | Power users who want OAuth |
+
+**Default behavior:**
+- If `LONGHOUSE_PASSWORD` is set → password login enabled
+- If localhost + no password → auto-authenticate (dev convenience)
+- If remote + no password + no OAuth → require one to be configured
+
+**Password endpoint:**
+```
+POST /api/auth/password
+{ "password": "xxx" }
+→ Sets session cookie, returns user info
+```
+
+### Hosted Auth
+
+Hosted users authenticate via control plane, then get redirected to their instance.
+
+**Flow:**
+```
+1. User visits longhouse.ai
+2. Clicks "Sign In with Google"
+3. Control plane handles OAuth, creates/finds user record
+4. If no instance: redirect to checkout
+5. If instance exists: redirect to {user}.longhouse.ai?auth_token=xxx
+6. User instance validates token, sets session cookie
+```
+
+**Cross-subdomain token:**
+- Control plane issues short-lived JWT (5 min)
+- User instance validates at `/api/auth/accept-token`
+- Token contains user_id, email, instance_id
+- After validation, instance sets its own session cookie
+
+**Token trust:**
+- Control plane signs JWTs with a private key
+- Instances validate via shared secret or JWKS URL
+- Tokens are one-time use (nonce stored server-side)
+
+**Instance auth state:**
+- Instance trusts tokens signed by control plane
+- Instance maintains its own session (httpOnly cookie)
+- No ongoing dependency on control plane for auth
+
+**Hosted auth alternatives:**
+- Default: Google OAuth via control plane
+- Optional: per-instance password (`LONGHOUSE_PASSWORD`) for users who refuse OAuth
+- Future: magic link or passkeys (not required for launch)
 
 ---
 
