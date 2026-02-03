@@ -300,6 +300,37 @@ export function GoogleSignInButton({ clientId, onSuccess, onError }: GoogleSignI
   );
 }
 
+// Auth methods response type
+export interface AuthMethods {
+  google: boolean;
+  password: boolean;
+}
+
+// Fetch available authentication methods from the backend
+export async function getAuthMethods(): Promise<AuthMethods> {
+  try {
+    const response = await fetch(`${config.apiBaseUrl}/auth/methods`);
+    if (!response.ok) {
+      return { google: true, password: false };
+    }
+    return response.json();
+  } catch {
+    // Default to Google-only on network errors
+    return { google: true, password: false };
+  }
+}
+
+// Password authentication
+export async function loginWithPassword(password: string): Promise<boolean> {
+  const response = await fetch(`${config.apiBaseUrl}/auth/password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ password }),
+  });
+  return response.ok;
+}
+
 // Dev login function (bypasses Google OAuth in development)
 async function loginWithDevAccount(): Promise<{ access_token: string; expires_in: number }> {
   const response = await fetch(`${config.apiBaseUrl}/auth/dev-login`, {

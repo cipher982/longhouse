@@ -183,6 +183,34 @@ def _daemonize() -> None:
     pid_file.chmod(0o600)
 
 
+def _build_demo_db(db_path: Path) -> None:
+    """Build a demo database with sample data.
+
+    Creates demo agent sessions for the timeline view.
+    """
+    from sqlalchemy.orm import sessionmaker
+
+    from zerg.database import Base
+    from zerg.database import make_engine
+    from zerg.models.agents import AgentsBase
+    from zerg.services.agents_store import AgentsStore
+    from zerg.services.demo_sessions import build_demo_agent_sessions
+
+    db_url = f"sqlite:///{db_path}"
+    engine = make_engine(db_url).execution_options(schema_translate_map={"zerg": None, "agents": None})
+    Base.metadata.create_all(bind=engine)
+    AgentsBase.metadata.create_all(bind=engine)
+
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
+    db = SessionLocal()
+    try:
+        store = AgentsStore(db)
+        for session in build_demo_agent_sessions():
+            store.ingest_session(session)
+    finally:
+        db.close()
+
+
 @app.command()
 def serve(
     host: str = typer.Option(
@@ -224,6 +252,11 @@ def serve(
         "--stop",
         help="Stop running daemon",
     ),
+    demo: bool = typer.Option(
+        False,
+        "--demo",
+        help="Use demo database with sample data",
+    ),
 ) -> None:
     """Start the Longhouse server.
 
@@ -232,6 +265,7 @@ def serve(
 
     Examples:
         longhouse serve                           # SQLite on localhost:8080
+        longhouse serve --demo                    # Start with sample data
         longhouse serve --daemon                  # Run in background
         longhouse serve --stop                    # Stop background server
         longhouse serve --host 0.0.0.0 --port 80  # Bind to all interfaces
@@ -267,8 +301,17 @@ def serve(
             typer.echo("Use 'longhouse serve --stop' to stop it first")
             raise typer.Exit(code=1)
 
-    # Set database URL if explicitly provided
-    if db:
+    # Handle demo mode
+    if demo:
+        demo_db_path = _get_longhouse_home() / "demo.db"
+        if not demo_db_path.exists():
+            typer.echo("Building demo database with sample data...")
+            _build_demo_db(demo_db_path)
+        os.environ["DATABASE_URL"] = f"sqlite:///{demo_db_path}"
+        typer.secho("Demo mode: using sample data", fg=typer.colors.CYAN)
+        typer.echo("")
+    elif db:
+        # Set database URL if explicitly provided
         os.environ["DATABASE_URL"] = db
 
     # Apply lite mode defaults (SQLite, auth disabled, etc.)

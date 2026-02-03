@@ -2,11 +2,11 @@
  * HowItWorksSection
  *
  * Simple 3-step explanation of how Longhouse works.
- * Cloud workspace: Sync → Run → Resume.
+ * Local-first: Install → Search → Resume.
  */
 
 import config from "../../lib/config";
-import { ZapIcon, SmartphoneIcon, PlugIcon } from "../icons";
+import { DownloadIcon, SearchIcon, SmartphoneIcon } from "../icons";
 import { Button } from "../ui";
 
 interface Step {
@@ -18,22 +18,22 @@ interface Step {
 
 const steps: Step[] = [
   {
-    icon: <PlugIcon width={32} height={32} />,
+    icon: <DownloadIcon width={32} height={32} />,
     number: "1",
-    title: "Sync Sessions",
-    description: "Install CLI. Your Claude Code sessions flow to the cloud."
+    title: "Install",
+    description: "pip install longhouse. Sessions sync automatically from Claude, Codex, Cursor."
   },
   {
-    icon: <ZapIcon width={32} height={32} />,
+    icon: <SearchIcon width={32} height={32} />,
     number: "2",
-    title: "Agents Run",
-    description: "Work happens on our servers. Close your laptop—nothing stops."
+    title: "Search",
+    description: "Find where you solved it. FTS5-powered instant search across all sessions."
   },
   {
     icon: <SmartphoneIcon width={32} height={32} />,
     number: "3",
-    title: "Continue Anywhere",
-    description: "Phone, tablet, browser. Pick up where you left off."
+    title: "Resume",
+    description: "Continue any conversation from any device. Your history follows you."
   }
 ];
 
@@ -60,7 +60,7 @@ export function HowItWorksSection() {
       <div className="landing-section-inner">
         <h2 className="landing-section-title">How It Works</h2>
         <p className="landing-section-subtitle">
-          Your cloud workspace. Setup in 2 minutes.
+          Your local archive. Setup in 2 minutes.
         </p>
 
         <div className="landing-steps-row">
@@ -78,7 +78,7 @@ export function HowItWorksSection() {
 
         <div className="landing-steps-cta">
           <Button variant="primary" size="lg" onClick={handleGetStarted}>
-            Get your Longhouse 🪵
+            Get Started
           </Button>
         </div>
       </div>

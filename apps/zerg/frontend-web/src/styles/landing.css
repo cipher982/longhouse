@@ -397,6 +397,46 @@
     border: none !important;
   }
 
+  /* Password login */
+  .landing-password-login {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    width: 100%;
+  }
+
+  .landing-password-input {
+    width: 100%;
+    padding: var(--space-3) var(--space-4);
+    font-size: var(--font-size-base);
+    background: var(--color-surface-input);
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-md);
+    color: var(--color-text-primary);
+    transition: border-color var(--motion-duration-fast);
+  }
+
+  .landing-password-input:focus {
+    outline: none;
+    border-color: var(--color-accent-primary);
+  }
+
+  .landing-password-input:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .landing-password-submit {
+    width: 100%;
+  }
+
+  .landing-password-error {
+    color: var(--color-intent-error);
+    font-size: var(--font-size-sm);
+    margin: 0;
+    text-align: center;
+  }
+
   /* --------------------------------------------------------
    WAITLIST MODAL
    -------------------------------------------------------- */

@@ -1,7 +1,7 @@
 /**
  * PricingSection
  *
- * Simple 2-tier pricing: Free Beta + Pro (coming soon)
+ * Simple 2-tier pricing: Self-hosted (free) + Hosted (coming soon)
  */
 
 import { useState } from "react";
@@ -39,7 +39,7 @@ function WaitlistModal({ onClose }: WaitlistModalProps) {
       const response = await fetch(`${config.apiBaseUrl}/waitlist`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, source: "pricing_pro" }),
+        body: JSON.stringify({ email, source: "pricing_hosted" }),
       });
       const data = await response.json();
       setResult({ success: data.success, message: data.message });
@@ -54,13 +54,13 @@ function WaitlistModal({ onClose }: WaitlistModalProps) {
     <div className="landing-login-overlay" onClick={onClose}>
       <div className="landing-login-modal waitlist-modal" onClick={(e) => e.stopPropagation()}>
         <button className="landing-login-close" onClick={onClose}>
-          ×
+          x
         </button>
 
         {result ? (
           <div className="waitlist-result">
             <div className={`waitlist-result-icon ${result.success ? "success" : "error"}`}>
-              {result.success ? "✓" : "!"}
+              {result.success ? "OK" : "!"}
             </div>
             <p className="waitlist-result-message">{result.message}</p>
             <Button variant="primary" size="lg" onClick={onClose}>
@@ -69,10 +69,9 @@ function WaitlistModal({ onClose }: WaitlistModalProps) {
           </div>
         ) : (
           <>
-            <h2>Join the Pro Waitlist</h2>
+            <h2>Join the Hosted Waitlist</h2>
             <p className="landing-login-subtext">
-              Be the first to know when Longhouse Pro launches with unlimited compute and team
-              workspaces.
+              Be the first to know when Longhouse hosted launches with always-on sync and cross-device access.
             </p>
 
             <form onSubmit={handleSubmit} className="waitlist-form">
@@ -124,30 +123,30 @@ export function PricingSection() {
 
   const tiers: PricingTier[] = [
     {
-      name: "Cloud Beta",
-      price: "$0",
-      period: "/month",
-      description: "Your cloud workspace to try",
+      name: "Self-Hosted",
+      price: "Free",
+      period: "forever",
+      description: "Your data stays local",
       features: [
-        "Full cloud workspace",
-        "Agents run on our servers",
-        "Resume from any device",
-        "Community support",
+        "Full timeline and search",
+        "SQLite database on your machine",
+        "Claude Code sync",
+        "Open source (Apache 2.0)",
       ],
-      ctaText: "Get your Longhouse 🪵",
+      ctaText: "Get Started",
       ctaAction: handleGetStarted,
       highlighted: true,
     },
     {
-      name: "Pro",
-      price: "$9",
+      name: "Hosted",
+      price: "$5",
       period: "/month",
-      description: "For power users",
+      description: "Always-on sync",
       features: [
-        "Unlimited compute hours",
-        "Priority agent processing",
-        "Team workspaces",
-        "Email support",
+        "Everything in self-hosted",
+        "Cloud backup and sync",
+        "Access from any device",
+        "Priority support",
       ],
       ctaText: "Join Waitlist",
       ctaAction: handleJoinWaitlist,
@@ -159,7 +158,7 @@ export function PricingSection() {
     <section id="pricing" className="landing-pricing">
       <div className="landing-section-inner">
         <h2 className="landing-section-title">Simple Pricing</h2>
-        <p className="landing-section-subtitle">Free cloud workspace during beta. Self-host anytime.</p>
+        <p className="landing-section-subtitle">Self-host free forever. Hosted option coming soon.</p>
 
         <div className="landing-pricing-grid">
           {tiers.map((tier, index) => (
