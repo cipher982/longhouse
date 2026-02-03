@@ -134,7 +134,7 @@ export function PricingSection() {
         "Resume from any device",
         "Community support",
       ],
-      ctaText: "Get your Longhouse",
+      ctaText: "Get your Longhouse 🪵",
       ctaAction: handleGetStarted,
       highlighted: true,
     },
