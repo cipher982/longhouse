@@ -1,135 +1,74 @@
 import { Link } from "react-router-dom";
 import {
-  SlackIcon,
-  GamepadIcon,
-  MailIcon,
-  MessageSquareIcon,
-  GithubIcon,
-  ClipboardListIcon,
-  ZapIcon,
-  FileTextIcon,
-  CalendarIcon,
-  HeartIcon,
-  HomeIcon,
-  PlugIcon,
+  CodeIcon,
+  SparklesIcon,
   LockIcon,
   ShieldIcon,
   TrashIcon,
   BanIcon,
 } from "../icons";
 
-interface Integration {
+interface Provider {
   name: string;
   icon: React.ReactNode;
-  category: string;
-  available: boolean; // true = implemented, false = coming soon
+  status: "syncing" | "coming";
+  description: string;
 }
 
 export function IntegrationsSection() {
-  const integrations: Integration[] = [
-    // Available now - these are implemented in backend/zerg/connectors/registry.py
+  const providers: Provider[] = [
     {
-      name: "Slack",
-      icon: <SlackIcon width={32} height={32} />,
-      category: "Notifications",
-      available: true,
+      name: "Claude Code",
+      icon: <SparklesIcon width={40} height={40} />,
+      status: "syncing",
+      description: "Full session sync with tool calls",
     },
     {
-      name: "Discord",
-      icon: <GamepadIcon width={32} height={32} />,
-      category: "Notifications",
-      available: true,
+      name: "Codex",
+      icon: <CodeIcon width={40} height={40} />,
+      status: "coming",
+      description: "OpenAI coding agent sessions",
     },
     {
-      name: "Email",
-      icon: <MailIcon width={32} height={32} />,
-      category: "Notifications",
-      available: true,
+      name: "Cursor",
+      icon: <CodeIcon width={40} height={40} />,
+      status: "coming",
+      description: "IDE-integrated AI sessions",
     },
     {
-      name: "SMS",
-      icon: <MessageSquareIcon width={32} height={32} />,
-      category: "Notifications",
-      available: true,
-    },
-    {
-      name: "GitHub",
-      icon: <GithubIcon width={32} height={32} />,
-      category: "Development",
-      available: true,
-    },
-    {
-      name: "Jira",
-      icon: <ClipboardListIcon width={32} height={32} />,
-      category: "Development",
-      available: true,
-    },
-    {
-      name: "Linear",
-      icon: <ZapIcon width={32} height={32} />,
-      category: "Development",
-      available: true,
-    },
-    {
-      name: "Notion",
-      icon: <FileTextIcon width={32} height={32} />,
-      category: "Productivity",
-      available: true,
-    },
-    // Coming soon - not yet implemented
-    {
-      name: "Google Calendar",
-      icon: <CalendarIcon width={32} height={32} />,
-      category: "Productivity",
-      available: false,
-    },
-    {
-      name: "Apple Health",
-      icon: <HeartIcon width={32} height={32} />,
-      category: "Health",
-      available: false,
-    },
-    {
-      name: "Home Assistant",
-      icon: <HomeIcon width={32} height={32} />,
-      category: "Smart Home",
-      available: false,
-    },
-    {
-      name: "MCP Servers",
-      icon: <PlugIcon width={32} height={32} />,
-      category: "Custom",
-      available: true,
+      name: "Gemini CLI",
+      icon: <SparklesIcon width={40} height={40} />,
+      status: "coming",
+      description: "Google AI coding sessions",
     },
   ];
 
   return (
     <section id="integrations" className="landing-integrations">
       <div className="landing-section-inner">
-        <h2 className="landing-section-title">Works With Your Tools</h2>
+        <h2 className="landing-section-title">Session Sources</h2>
         <p className="landing-section-subtitle">
-          Connect what you already use. No vendor lock-in.
+          One timeline for all your AI coding agents.
         </p>
 
-        <div className="landing-integrations-grid">
-          {integrations.map((integration, index) => (
+        <div className="landing-providers-grid">
+          {providers.map((provider, index) => (
             <div
               key={index}
-              className={`landing-integration-item ${!integration.available ? 'coming-soon' : ''}`}
-              style={{ animationDelay: `${index * 50}ms` }}
+              className={`landing-provider-card ${provider.status === 'coming' ? 'coming-soon' : ''}`}
+              style={{ animationDelay: `${index * 100}ms` }}
             >
-              <span className="landing-integration-icon">{integration.icon}</span>
-              <span className="landing-integration-name">{integration.name}</span>
-              {!integration.available && (
-                <span className="landing-integration-badge">Soon</span>
-              )}
+              <span className="landing-provider-icon">{provider.icon}</span>
+              <div className="landing-provider-info">
+                <span className="landing-provider-name">{provider.name}</span>
+                <span className="landing-provider-desc">{provider.description}</span>
+              </div>
+              <span className={`landing-provider-status ${provider.status}`}>
+                {provider.status === 'syncing' ? 'Syncing now' : 'Coming soon'}
+              </span>
             </div>
           ))}
         </div>
-
-        <p className="landing-integrations-note">
-          And anything else via <code>webhooks</code>, <code>REST APIs</code>, or <code>MCP</code>
-        </p>
 
         {/* Trust badges */}
         <Link to="/security" className="landing-trust-badges-link">

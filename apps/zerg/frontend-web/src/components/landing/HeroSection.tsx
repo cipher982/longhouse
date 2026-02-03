@@ -87,32 +87,35 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
           </div>
 
           <h1 className="landing-hero-headline">
-            Your AI That Actually <span className="gradient-text">Knows You</span>
+            Your AI coding sessions, <span className="gradient-text">unified.</span>
           </h1>
 
           <p className="landing-hero-subhead">
-            Connect your health, calendar, and inbox.
-            Get an AI that remembers everything and acts on it.
+            Stop grepping JSONL. See every Claude Code session in one timeline with full tool calls.
           </p>
 
+          <p className="landing-hero-note">
+            Works with Claude Code today. Codex, Cursor, Gemini coming soon.
+          </p>
+
+          {/* Install command section - primary CTA */}
+          <InstallSection className="landing-hero-install" />
+
           <div className="landing-hero-ctas">
-            <Button variant="primary" size="lg" className="landing-cta-main" onClick={handleGetStarted}>
-              Get My AI Assistant
-            </Button>
             <Button variant="ghost" size="lg" className="landing-cta-text" onClick={onScrollToHowItWorks}>
               See How It Works <span className="landing-cta-arrow">↓</span>
             </Button>
+            <Button variant="ghost" size="lg" className="landing-cta-text landing-cta-main" onClick={handleGetStarted}>
+              Sign In
+            </Button>
           </div>
-
-          {/* Install command section */}
-          <InstallSection className="landing-hero-install" />
         </div>
 
         {/* Right: Product screenshot */}
         <div className="landing-hero-visual">
           <AppScreenshotFrame
-            src="/images/landing/chat-preview.png"
-            alt="Longhouse AI chat interface"
+            src="/images/landing/dashboard-preview.png"
+            alt="Longhouse session timeline showing Claude Code sessions"
             title="Longhouse"
             aspectRatio="4/3"
             showChrome={true}
@@ -130,7 +133,7 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
             </button>
             <SwarmLogo size={48} className="landing-login-logo" />
             <h2>Welcome to Longhouse</h2>
-            <p className="landing-login-subtext">Sign in to start building your personal AI</p>
+            <p className="landing-login-subtext">Sign in to access your session timeline</p>
 
             <div className="landing-login-buttons">
               <GoogleSignInButtonWrapper />
