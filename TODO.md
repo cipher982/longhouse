@@ -55,10 +55,10 @@ Capture list for substantial work. Not quick fixes (do those live).
 
   **Files:** `HeroSection.tsx`, `HowItWorksSection.tsx`, `IntegrationsSection.tsx`, `landing.css`
 
-- [ ] **Demo mode flag** (2 hours)
-  - Add `longhouse serve --demo` flag that starts with pre-loaded sessions
-  - Allows exploration without Claude Code setup
-  - Show banner: "Demo Mode - exploring sample data"
+- [ ] **Demo mode flag** (30 min) — infrastructure exists, just needs CLI glue
+  - Add `longhouse serve --demo` flag (uses `~/.longhouse/demo.db`, builds if missing)
+  - Show banner: "Demo Mode - sample data"
+  - **Existing:** `scripts/build_demo_db.py`, `services/demo_sessions.py`, `scenarios/data/swarm-mvp.yaml`
   - File: `apps/zerg/backend/zerg/cli/serve.py`
 
 ### Medium Priority
