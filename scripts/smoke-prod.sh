@@ -60,12 +60,12 @@ section() {
 }
 
 # Wait for API health to return "healthy" status
-# Polls /health until status is "healthy" twice consecutively (or timeout)
+# Polls /health until status is "healthy" three times consecutively (or timeout)
 wait_for_health() {
     local url="${1:-$API_URL/health}"
     local max_attempts="${2:-45}"   # 45 * 2s = 90s max
     local interval="${3:-2}"
-    local required_consecutive=2
+    local required_consecutive=3
 
     local attempt=0
     local consecutive_ok=0
