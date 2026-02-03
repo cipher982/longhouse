@@ -364,5 +364,3 @@ class ChannelPlugin(ABC):
             NotImplementedError: If channel doesn't support streaming
         """
         raise NotImplementedError(f"{self.meta['id']} does not support message streaming")
-        # Make this a proper async generator by yielding after the raise
-        yield  # type: ignore

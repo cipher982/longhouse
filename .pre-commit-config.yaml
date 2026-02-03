@@ -104,3 +104,14 @@ repos:
         language: system
         files: ^apps/zerg/frontend-web/src/
         pass_filenames: false
+
+      # -----------------------------------------------------------------------
+      # Vulture dead code detection (unused functions/classes/variables)
+      # -----------------------------------------------------------------------
+      - id: python-vulture
+        name: Vulture - detect dead code
+        entry: bash -c 'cd apps/zerg/backend && uv run vulture zerg/ vulture-whitelist.py --min-confidence 80 --exclude "**/tests/**,**/test_*.py"'
+        language: system
+        files: ^apps/zerg/backend/zerg/
+        exclude: ^apps/zerg/backend/zerg/generated/
+        pass_filenames: false
