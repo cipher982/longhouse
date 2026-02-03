@@ -71,8 +71,8 @@ function WaitlistModal({ onClose }: WaitlistModalProps) {
           <>
             <h2>Join the Pro Waitlist</h2>
             <p className="landing-login-subtext">
-              Be the first to know when Longhouse Pro launches with unlimited fiches and advanced
-              workflows.
+              Be the first to know when Longhouse Pro launches with unlimited compute and team
+              workspaces.
             </p>
 
             <form onSubmit={handleSubmit} className="waitlist-form">
@@ -124,12 +124,17 @@ export function PricingSection() {
 
   const tiers: PricingTier[] = [
     {
-      name: "Free Beta",
+      name: "Cloud Beta",
       price: "$0",
       period: "/month",
-      description: "Everything you need to get started",
-      features: ["5 AI fiches", "Core integrations", "Community support", "Basic automations"],
-      ctaText: "Start Free Beta",
+      description: "Your cloud workspace to try",
+      features: [
+        "Full cloud workspace",
+        "Agents run on our servers",
+        "Resume from any device",
+        "Community support",
+      ],
+      ctaText: "Start Free",
       ctaAction: handleGetStarted,
       highlighted: true,
     },
@@ -139,10 +144,10 @@ export function PricingSection() {
       period: "/month",
       description: "For power users",
       features: [
-        "Unlimited fiches",
-        "All integrations",
-        "Priority support",
-        "Advanced workflows",
+        "Unlimited compute hours",
+        "Priority agent processing",
+        "Team workspaces",
+        "Email support",
       ],
       ctaText: "Join Waitlist",
       ctaAction: handleJoinWaitlist,
@@ -154,7 +159,7 @@ export function PricingSection() {
     <section id="pricing" className="landing-pricing">
       <div className="landing-section-inner">
         <h2 className="landing-section-title">Simple Pricing</h2>
-        <p className="landing-section-subtitle">Start free. Upgrade when you need more.</p>
+        <p className="landing-section-subtitle">Free cloud workspace during beta. Self-host anytime.</p>
 
         <div className="landing-pricing-grid">
           {tiers.map((tier, index) => (

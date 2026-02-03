@@ -91,11 +91,11 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
           </div>
 
           <h1 className="landing-hero-headline">
-            Never lose an AI coding <span className="gradient-text">conversation.</span>
+            Close your laptop. <span className="gradient-text">Keep coding.</span>
           </h1>
 
           <p className="landing-hero-subhead">
-            Every Claude Code session in one searchable timeline. Full tool calls. Resume anywhere.
+            Your AI agents run in the cloud. Resume from any device. Never lose a session.
           </p>
 
           <p className="landing-hero-note">

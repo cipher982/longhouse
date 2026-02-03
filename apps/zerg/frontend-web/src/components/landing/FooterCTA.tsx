@@ -28,10 +28,10 @@ export function FooterCTA() {
         {/* Final CTA */}
         <div className="landing-footer-cta">
           <blockquote className="landing-footer-quote">
-            Your sessions are already there. Start seeing them.
+            Your cloud workspace is waiting.
           </blockquote>
           <Button variant="primary" size="lg" className="landing-cta-main" onClick={handleStartFree}>
-            View Your Timeline
+            Get Started Free
           </Button>
         </div>
 
