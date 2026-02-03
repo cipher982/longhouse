@@ -367,3 +367,4 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [ ] Prototype a simple capture CLI/API (local dev + headless) and document usage
 - [ ] Add agent-friendly capture path (MCP/tool or skill) with stable output paths
 - [ ] Add docs + examples; ensure instructions are short and reproducible
+- [ ] Fix ui-capture a11y snapshot: Playwright 1.57 has no `page.accessibility`; use `locator.ariaSnapshot()` or guard missing API and still write trace/manifest on partial failure
