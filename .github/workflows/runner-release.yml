@@ -1,0 +1,127 @@
+name: Runner Binary Release
+
+on:
+  push:
+    tags:
+      - "runner-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g., runner-v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            target: bun-darwin-arm64
+            artifact: longhouse-runner-darwin-arm64
+          - os: macos-13
+            target: bun-darwin-x64
+            artifact: longhouse-runner-darwin-x64
+          - os: ubuntu-latest
+            target: bun-linux-x64
+            artifact: longhouse-runner-linux-x64
+          - os: ubuntu-24.04-arm
+            target: bun-linux-arm64
+            artifact: longhouse-runner-linux-arm64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        working-directory: apps/runner
+        run: bun install
+
+      - name: Build binary
+        working-directory: apps/runner
+        run: |
+          bun build --compile --target=${{ matrix.target }} --minify src/index.ts --outfile=dist/${{ matrix.artifact }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: apps/runner/dist/${{ matrix.artifact }}
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: binaries
+          merge-multiple: true
+
+      - name: List binaries
+        run: ls -la binaries/
+
+      - name: Make binaries executable
+        run: chmod +x binaries/*
+
+      - name: Get version from tag
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          VERSION="${TAG#runner-}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Longhouse Runner ${{ steps.version.outputs.version }}
+          body: |
+            ## Installation
+
+            ```bash
+            curl -fsSL https://api.longhouse.ai/api/runners/install.sh?enroll_token=YOUR_TOKEN | bash
+            ```
+
+            ## Binaries
+
+            | Platform | Architecture | File |
+            |----------|-------------|------|
+            | macOS | Apple Silicon (arm64) | `longhouse-runner-darwin-arm64` |
+            | macOS | Intel (x64) | `longhouse-runner-darwin-x64` |
+            | Linux | x64 | `longhouse-runner-linux-x64` |
+            | Linux | arm64 | `longhouse-runner-linux-arm64` |
+
+            ## Manual Installation
+
+            1. Download the binary for your platform
+            2. Make it executable: `chmod +x longhouse-runner-*`
+            3. Register with Longhouse API to get credentials
+            4. Run: `./longhouse-runner-* --envfile /path/to/runner.env`
+          draft: false
+          prerelease: false
+          files: |
+            binaries/longhouse-runner-darwin-arm64
+            binaries/longhouse-runner-darwin-x64
+            binaries/longhouse-runner-linux-x64
+            binaries/longhouse-runner-linux-arm64
