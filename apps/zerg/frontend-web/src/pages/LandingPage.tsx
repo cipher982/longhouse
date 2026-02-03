@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
-import config, { isUserSubdomain } from "../lib/config";
+import config from "../lib/config";
 import { SwarmLogo } from "../components/SwarmLogo";
 import { usePublicPageScroll } from "../hooks/usePublicPageScroll";
 import "../styles/landing.css";
@@ -113,13 +113,12 @@ export default function LandingPage() {
   // Enable normal document scrolling (app shell locks root by default)
   usePublicPageScroll();
 
-  // Handle cross-subdomain auth: accept token from URL parameter
-  // When user is redirected from longhouse.ai after OAuth with ?auth_token=xxx
+  // Handle auth token from URL parameter (for cross-domain auth redirects)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const authToken = params.get('auth_token');
 
-    if (!authToken || !isUserSubdomain()) return;
+    if (!authToken) return;
 
     setIsAcceptingToken(true);
 
@@ -132,15 +131,13 @@ export default function LandingPage() {
     })
       .then(async (response) => {
         if (response.ok) {
-          // Token accepted, cookie set - refresh auth state and redirect
+          // Token accepted, cookie set - redirect to timeline
           if (refreshAuth) await refreshAuth();
-          // Clean URL and redirect to timeline
           window.location.href = '/timeline';
         } else {
           console.error('Token acceptance failed:', await response.text());
-          // Clean the URL parameter on failure
           params.delete('auth_token');
-          window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`);
+          window.history.replaceState({}, '', window.location.pathname);
           setIsAcceptingToken(false);
         }
       })
