@@ -100,11 +100,11 @@
     margin: 0;
   }
 
-  .timeline-empty__setup {
+  .timeline-empty__troubleshoot {
     margin-top: var(--space-4);
   }
 
-  .timeline-empty__setup h4 {
+  .timeline-empty__troubleshoot h4 {
     font-size: var(--font-size-sm);
     font-weight: var(--font-weight-semibold);
     color: var(--color-text-secondary);
@@ -113,45 +113,25 @@
     margin: 0 0 var(--space-3);
   }
 
-  .timeline-empty__steps-list {
+  .timeline-empty__checklist {
     list-style: none;
     padding: 0;
     margin: 0;
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
-    counter-reset: step-counter;
   }
 
-  .timeline-empty__steps-list li {
+  .timeline-empty__checklist li {
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
-    padding-left: var(--space-6);
-    position: relative;
-    counter-increment: step-counter;
   }
 
-  .timeline-empty__steps-list li::before {
-    content: counter(step-counter);
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 20px;
-    height: 20px;
-    border-radius: var(--radius-full);
-    background: var(--color-brand-primary);
-    color: var(--color-text-inverse);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-semibold);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .timeline-empty__steps-list strong {
+  .timeline-empty__checklist strong {
     color: var(--color-text-primary);
     font-weight: var(--font-weight-medium);
+    font-size: var(--font-size-sm);
   }
 
   .timeline-empty__code {

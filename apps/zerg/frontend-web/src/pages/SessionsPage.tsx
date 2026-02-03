@@ -459,28 +459,28 @@ export default function SessionsPage() {
             <div className="timeline-empty__intro">
               <h3>No sessions yet</h3>
               <p>
-                Your Claude Code sessions appear here when synced via the shipper.
+                Sessions sync automatically from Claude Code on your machine.
               </p>
             </div>
-            <div className="timeline-empty__setup">
-              <h4>Setup</h4>
-              <ol className="timeline-empty__steps-list">
+            <div className="timeline-empty__troubleshoot">
+              <h4>Troubleshooting</h4>
+              <ul className="timeline-empty__checklist">
                 <li>
-                  <strong>Install the CLI</strong>
-                  <code className="timeline-empty__code">pip install longhouse</code>
+                  <strong>Shipper running?</strong>
+                  <code className="timeline-empty__code">longhouse connect --status</code>
                 </li>
                 <li>
-                  <strong>Authenticate</strong>
-                  <code className="timeline-empty__code">longhouse auth</code>
+                  <strong>Have Claude sessions?</strong>
+                  <code className="timeline-empty__code">ls ~/.claude/projects/</code>
                 </li>
                 <li>
-                  <strong>Start syncing</strong>
-                  <code className="timeline-empty__code">longhouse connect --install</code>
+                  <strong>Force sync</strong>
+                  <code className="timeline-empty__code">longhouse ship</code>
                 </li>
-              </ol>
+              </ul>
             </div>
             <p className="timeline-empty__hint">
-              Already running the shipper? Check <code>longhouse connect --status</code> to verify it's connected.
+              New install? Run <code>longhouse onboard</code> to set up the shipper.
             </p>
           </div>
         ) : sessions.length === 0 ? (
