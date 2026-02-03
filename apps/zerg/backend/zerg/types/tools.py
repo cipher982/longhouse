@@ -70,6 +70,18 @@ def _python_type_to_json_schema(py_type: type) -> dict[str, Any]:
             # For complex unions, just use object
             return {"type": "object"}
 
+    # Handle PEP604 union types (X | Y syntax) - Python 3.10+
+    import types
+
+    if isinstance(py_type, types.UnionType):
+        args = py_type.__args__
+        # Filter out NoneType for Optional handling
+        non_none_args = [a for a in args if a is not type(None)]
+        if len(non_none_args) == 1:
+            return _python_type_to_json_schema(non_none_args[0])
+        # For complex unions, just use object
+        return {"type": "object"}
+
     # Default to string for unknown types
     return {"type": "string"}
 
