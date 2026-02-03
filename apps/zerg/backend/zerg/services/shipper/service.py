@@ -100,15 +100,20 @@ def _find_project_root() -> Path | None:
 
 
 def get_zerg_executable() -> str:
-    """Get the path to the zerg CLI executable.
+    """Get the path to the Longhouse CLI executable.
 
-    First tries to find 'zerg' in PATH, then falls back to
-    running via 'uv run zerg' if in a development environment.
+    Prefers the installed ``longhouse`` command, then falls back to
+    legacy ``zerg`` if present, and finally uses ``uv run`` in dev.
 
     Returns:
-        Path or command to run zerg
+        Path or command to run the CLI
     """
-    # Check if 'zerg' is in PATH
+    # Prefer 'longhouse' in PATH
+    longhouse_path = shutil.which("longhouse")
+    if longhouse_path:
+        return longhouse_path
+
+    # Legacy fallback: 'zerg' in PATH
     zerg_path = shutil.which("zerg")
     if zerg_path:
         return zerg_path
@@ -118,11 +123,11 @@ def get_zerg_executable() -> str:
     if uv_path:
         project_root = _find_project_root()
         if project_root:
-            return f"{uv_path} run --project {project_root} zerg"
-        return f"{uv_path} run zerg"
+            return f"{uv_path} run --project {project_root} longhouse"
+        return f"{uv_path} run longhouse"
 
-    # Fallback: assume zerg is installed
-    return "zerg"
+    # Fallback: assume longhouse is installed
+    return "longhouse"
 
 
 def _get_launchd_plist_path() -> Path:
