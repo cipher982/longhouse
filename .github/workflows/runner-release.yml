@@ -22,9 +22,8 @@ jobs:
           - os: macos-latest
             target: bun-darwin-arm64
             artifact: longhouse-runner-darwin-arm64
-          - os: macos-15-large
-            target: bun-darwin-x64
-            artifact: longhouse-runner-darwin-x64
+          # darwin-x64 skipped: no free Intel macOS runner available
+          # Can build locally or use self-hosted runner if needed
           - os: ubuntu-latest
             target: bun-linux-x64
             artifact: longhouse-runner-linux-x64
@@ -108,7 +107,6 @@ jobs:
             | Platform | Architecture | File |
             |----------|-------------|------|
             | macOS | Apple Silicon (arm64) | `longhouse-runner-darwin-arm64` |
-            | macOS | Intel (x64) | `longhouse-runner-darwin-x64` |
             | Linux | x64 | `longhouse-runner-linux-x64` |
             | Linux | arm64 | `longhouse-runner-linux-arm64` |
 
@@ -122,6 +120,5 @@ jobs:
           prerelease: false
           files: |
             binaries/longhouse-runner-darwin-arm64
-            binaries/longhouse-runner-darwin-x64
             binaries/longhouse-runner-linux-x64
             binaries/longhouse-runner-linux-arm64
