@@ -62,7 +62,7 @@ _REGISTER_LOCK = threading.Lock()
 def get_install_script(
     enroll_token: str,
     runner_name: str | None = None,
-    swarmlet_url: str | None = None,  # Legacy param name, kept for backwards compatibility
+    swarmlet_url: str | None = None,  # Deprecated: use longhouse_url instead
     longhouse_url: str | None = None,
     runner_image: str | None = None,
 ) -> Response:
@@ -86,7 +86,7 @@ def get_install_script(
 
     settings = get_settings()
 
-    # Prefer longhouse_url, fall back to swarmlet_url (legacy), then settings
+    # Prefer longhouse_url, fall back to swarmlet_url (deprecated), then settings
     api_url = longhouse_url or swarmlet_url
     if not api_url:
         if not settings.app_public_url:

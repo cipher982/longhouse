@@ -457,7 +457,7 @@ class CommisJob(Base):
 class Runner(Base):
     """User-owned runner daemon for executing commands.
 
-    Runners connect outbound to the Swarmlet platform and execute jobs
+    Runners connect outbound to the Longhouse platform and execute jobs
     on behalf of commiss. This enables secure execution without backend
     access to user SSH keys.
     """
