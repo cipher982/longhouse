@@ -97,7 +97,20 @@ async function checkDevRunning(backendUrl: string): Promise<boolean> {
 async function seedScene(scene: SceneName, backendUrl: string): Promise<void> {
   switch (scene) {
     case "empty":
-      // No-op: empty state
+      // Clear all sessions for true empty state
+      try {
+        const response = await fetch(`${backendUrl}/api/system/reset-sessions`, {
+          method: "POST",
+        });
+        if (!response.ok) {
+          console.warn(
+            `  Warning: reset-sessions failed (${response.status} ${response.statusText})`
+          );
+        }
+      } catch (error) {
+        const { message } = formatError(error);
+        console.warn(`  Warning: reset-sessions failed (${message})`);
+      }
       break;
     case "demo":
       try {
