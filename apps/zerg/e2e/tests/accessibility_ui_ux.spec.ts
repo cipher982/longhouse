@@ -531,26 +531,9 @@ test.describe('Accessibility and UI/UX', () => {
         workflowSteps.push({ step: 'Fiche appears in dashboard', time: 100 });
       }
 
-      // Step 4: Navigate to canvas with fiche
-      const step4Start = Date.now();
-      await page.getByTestId('global-canvas-tab').click();
-      await page.waitForTimeout(1000);
-      const step4Time = Date.now() - step4Start;
-      workflowSteps.push({ step: 'Navigate to canvas', time: step4Time });
-
-      // Check canvas workflow elements
-      const canvasElements = {
-        canvas: await page.locator('[data-testid="canvas-container"]').count(),
-        ficheShelf: await page.locator('[data-testid="fiche-shelf"]').count(),
-        toolPalette: await page.locator('[data-testid="tool-palette"]').count()
-      };
-
-      console.log('📊 Canvas workflow elements:', canvasElements);
-
-      const workflowElementsPresent = Object.values(canvasElements).reduce((sum, count) => sum + count, 0);
-      if (workflowElementsPresent >= 2) {
-        workflowSteps.push({ step: 'Canvas workflow available', time: 50 });
-      }
+      // Step 4: Canvas navigation - skipped (Canvas hidden for alpha)
+      // TODO: Re-enable when Canvas is ready
+      console.log('📊 Canvas workflow step skipped (Canvas disabled)');
     }
 
     console.log('📊 User workflow steps completed:', workflowSteps.length);
