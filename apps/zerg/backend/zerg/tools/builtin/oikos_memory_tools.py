@@ -9,13 +9,12 @@ from __future__ import annotations
 import logging
 from typing import List
 
-from langchain_core.tools import StructuredTool
-
 from zerg.connectors.context import get_credential_resolver
 from zerg.services.memory_store import get_memory_store
 from zerg.services.oikos_context import get_oikos_context
 from zerg.tools.error_envelope import ErrorType
 from zerg.tools.error_envelope import tool_error
+from zerg.types.tools import Tool as StructuredTool
 
 logger = logging.getLogger(__name__)
 

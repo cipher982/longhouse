@@ -24,7 +24,6 @@ from typing import List
 from typing import Optional
 
 import httpx
-from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.connectors.registry import ConnectorType
@@ -33,6 +32,7 @@ from zerg.tools.error_envelope import connector_not_configured_error
 from zerg.tools.error_envelope import invalid_credentials_error
 from zerg.tools.error_envelope import tool_error
 from zerg.tools.error_envelope import tool_success
+from zerg.types.tools import Tool as StructuredTool
 
 logger = logging.getLogger(__name__)
 

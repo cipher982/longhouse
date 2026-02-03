@@ -10,9 +10,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 from pydantic import Field
+
+from zerg.types.tools import Tool as StructuredTool
 
 logger = logging.getLogger(__name__)
 

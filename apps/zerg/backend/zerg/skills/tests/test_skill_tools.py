@@ -3,12 +3,12 @@
 from pathlib import Path
 
 import pytest
-from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 from pydantic import Field
 
 from zerg.skills.integration import SkillIntegration
 from zerg.skills.integration import create_skill_tool
+from zerg.types.tools import Tool as StructuredTool
 
 
 class SearchInput(BaseModel):

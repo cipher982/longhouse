@@ -4,8 +4,6 @@ import logging
 from typing import Any
 from typing import Dict
 
-from langchain_core.tools import StructuredTool
-
 from zerg.context import get_commis_context
 from zerg.crud import crud
 from zerg.database import db_session
@@ -13,6 +11,7 @@ from zerg.tools.builtin.email_tools import send_email
 from zerg.tools.error_envelope import ErrorType
 from zerg.tools.error_envelope import tool_error
 from zerg.tools.error_envelope import tool_success
+from zerg.types.tools import Tool as StructuredTool
 
 logger = logging.getLogger(__name__)
 

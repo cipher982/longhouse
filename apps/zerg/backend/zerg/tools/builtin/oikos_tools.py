@@ -19,8 +19,6 @@ from datetime import timedelta
 from datetime import timezone
 from typing import List
 
-from langchain_core.tools import StructuredTool
-
 from zerg.connectors.context import get_credential_resolver
 from zerg.models_config import DEFAULT_COMMIS_MODEL_ID
 from zerg.services.commis_artifact_store import CommisArtifactStore
@@ -28,6 +26,7 @@ from zerg.services.oikos_context import get_oikos_context
 from zerg.services.tool_output_store import ToolOutputStore
 from zerg.tools.error_envelope import ErrorType
 from zerg.tools.error_envelope import tool_error
+from zerg.types.tools import Tool as StructuredTool
 
 logger = logging.getLogger(__name__)
 

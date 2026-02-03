@@ -7,7 +7,7 @@ from typing import FrozenSet
 from typing import List
 from typing import Optional
 
-from langchain_core.tools import StructuredTool
+from zerg.types.tools import Tool as StructuredTool
 
 # ---------------------------------------------------------------------------
 # Backwards-compatibility shim ------------------------------------------------
@@ -157,7 +157,7 @@ class ToolRegistry:
 def register_tool(*, name: str, description: str):  # noqa: D401 – decorator
     """Decorator that registers a function as a ``StructuredTool`` instance."""
 
-    from langchain_core.tools import StructuredTool
+    from zerg.types.tools import Tool as StructuredTool
 
     def _wrapper(fn):
         tool = StructuredTool.from_function(fn, name=name, description=description)

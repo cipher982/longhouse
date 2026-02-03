@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING
 from .catalog import CORE_TOOLS
 
 if TYPE_CHECKING:
-    from langchain_core.tools import BaseTool
+    from zerg.types.tools import Tool as BaseTool
 
     from .unified_access import ToolResolver
 

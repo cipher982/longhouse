@@ -30,7 +30,7 @@ from typing import List
 from typing import Optional
 from typing import Set
 
-from langchain_core.tools import StructuredTool
+from zerg.types.tools import Tool as StructuredTool
 
 from .registry import ImmutableToolRegistry
 

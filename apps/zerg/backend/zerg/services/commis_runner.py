@@ -17,9 +17,6 @@ from datetime import datetime
 from datetime import timezone
 from typing import Any
 
-from langchain_core.messages import AIMessage
-from langchain_core.messages import BaseMessage
-from langchain_core.messages import ToolMessage
 from openai import AsyncOpenAI
 from sqlalchemy.orm import Session
 
@@ -37,6 +34,9 @@ from zerg.prompts import build_commis_prompt
 from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.services.thread_service import ThreadService
 from zerg.services.thread_service import _db_to_langchain
+from zerg.types.messages import AIMessage
+from zerg.types.messages import BaseMessage
+from zerg.types.messages import ToolMessage
 
 logger = logging.getLogger(__name__)
 

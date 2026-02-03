@@ -4,8 +4,7 @@ import datetime as dt
 from typing import List
 from typing import Optional
 
-from langchain_core.tools import StructuredTool
-
+from zerg.types.tools import Tool as StructuredTool
 from zerg.utils.time import utc_now
 
 

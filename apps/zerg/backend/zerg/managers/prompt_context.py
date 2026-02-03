@@ -21,9 +21,9 @@ from typing import List
 from typing import Optional
 from typing import Sequence
 
-from langchain_core.messages import BaseMessage
-from langchain_core.messages import HumanMessage
-from langchain_core.messages import ToolMessage
+from zerg.types.messages import BaseMessage
+from zerg.types.messages import HumanMessage
+from zerg.types.messages import ToolMessage
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -356,7 +356,7 @@ def build_prompt(
 
 def _extract_system_prompt(messages: List[BaseMessage]) -> str:
     """Extract system prompt from messages."""
-    from langchain_core.messages import SystemMessage
+    from zerg.types.messages import SystemMessage
 
     for msg in messages:
         if isinstance(msg, SystemMessage):
@@ -369,7 +369,7 @@ def _extract_system_prompt(messages: List[BaseMessage]) -> str:
 
 def _extract_conversation(messages: List[BaseMessage]) -> List[BaseMessage]:
     """Extract conversation messages (excluding system and dynamic context)."""
-    from langchain_core.messages import SystemMessage
+    from zerg.types.messages import SystemMessage
 
     result = []
     for msg in messages:
@@ -390,7 +390,7 @@ def _extract_dynamic_blocks(messages: List[BaseMessage]) -> List[DynamicContextB
     SystemMessage. We extract it as a single DYNAMIC block to avoid duplication
     when using context_to_messages().
     """
-    from langchain_core.messages import SystemMessage
+    from zerg.types.messages import SystemMessage
 
     blocks = []
     for msg in messages:
@@ -424,7 +424,7 @@ def context_to_messages(context: PromptContext) -> List[BaseMessage]:
     Returns:
         List of messages suitable for LLM invocation
     """
-    from langchain_core.messages import SystemMessage
+    from zerg.types.messages import SystemMessage
 
     messages: List[BaseMessage] = []
 

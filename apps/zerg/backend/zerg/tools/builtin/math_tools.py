@@ -6,7 +6,7 @@ import operator
 from typing import List
 from typing import Union
 
-from langchain_core.tools import StructuredTool
+from zerg.types.tools import Tool as StructuredTool
 
 logger = logging.getLogger(__name__)
 

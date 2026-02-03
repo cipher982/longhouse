@@ -129,9 +129,8 @@ class MCPToolAdapter:
                     # Register with mutable runtime registry so callers can rebuild
                     # the immutable production registry to include these tools.
                     try:
-                        from langchain_core.tools import StructuredTool
-
                         from zerg.tools.registry import ToolRegistry
+                        from zerg.types.tools import Tool as StructuredTool
 
                         tool = StructuredTool.from_function(
                             wrapper_fn,

@@ -13,9 +13,8 @@ from __future__ import annotations
 
 from typing import Dict
 
-from langchain_core.tools import StructuredTool
-
 from zerg.config import get_settings
+from zerg.types.tools import Tool as StructuredTool
 
 
 def _container_exec(command: str, timeout_secs: int = 20) -> str:

@@ -35,14 +35,11 @@ def pytest_addoption(parser):
     parser.addoption("--live-token", action="store", help="JWT Token for live server (optional)")
 
 
-# Disable LangSmith/LangChain tracing for all tests
+# Disable LangChain tracing for all tests
 for _k in (
     "LANGCHAIN_TRACING_V2",
     "LANGCHAIN_ENDPOINT",
     "LANGCHAIN_API_KEY",
-    "LANGSMITH_TRACING",
-    "LANGSMITH_ENDPOINT",
-    "LANGSMITH_API_KEY",
 ):
     os.environ.pop(_k, None)
 
@@ -70,13 +67,6 @@ if "cryptography" not in sys.modules:
     _fernet_mod.Fernet = _FakeFernet
     sys.modules["cryptography"] = _crypto_mod
     sys.modules["cryptography.fernet"] = _fernet_mod
-
-# Mock the LangSmith client to prevent any actual API calls
-mock_langsmith = MagicMock()
-mock_langsmith_client = MagicMock()
-mock_langsmith.Client.return_value = mock_langsmith_client
-sys.modules["langsmith"] = mock_langsmith
-sys.modules["langsmith.client"] = MagicMock()
 
 # Load .env from monorepo root
 _REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -261,24 +251,6 @@ if _eval_mode != "live":
 
 # Import app after all engine setup and mocks are in place
 from zerg.main import app
-
-
-@pytest.fixture(scope="session", autouse=True)
-def disable_langsmith_tracing():
-    """Fixture to disable LangSmith tracing for all tests."""
-    with (
-        patch("langsmith.client.Client") as mock_client,
-        patch("langsmith._internal._background_thread.tracing_control_thread_func") as mock_thread,
-    ):
-        mock_client_instance = MagicMock()
-        mock_client_instance.sync_trace.return_value = MagicMock()
-        mock_client_instance.trace.return_value = MagicMock()
-        mock_client.return_value = mock_client_instance
-        mock_thread.return_value = None
-
-        with patch("langsmith.wrappers.wrap_openai") as mock_wrap:
-            mock_wrap.return_value = lambda *args, **kwargs: args[0]
-            yield
 
 
 @pytest.fixture(scope="session", autouse=True)

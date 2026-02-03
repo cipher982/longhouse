@@ -13,12 +13,12 @@ from typing import List
 from typing import Optional
 from typing import Set
 
-from langchain_core.tools import StructuredTool
 from sqlalchemy.orm import Session
 
 from zerg.skills.models import Skill
 from zerg.skills.models import SkillEntry
 from zerg.skills.registry import SkillRegistry
+from zerg.types.tools import Tool as StructuredTool
 
 logger = logging.getLogger(__name__)
 

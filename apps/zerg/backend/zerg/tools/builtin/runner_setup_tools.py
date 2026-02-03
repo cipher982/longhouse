@@ -15,12 +15,11 @@ from typing import Any
 from typing import Dict
 from typing import List
 
-from langchain_core.tools import StructuredTool
-
 from zerg.connectors.context import get_credential_resolver
 from zerg.crud import runner_crud
 from zerg.database import db_session
 from zerg.schemas.runner_schemas import RunnerResponse
+from zerg.types.tools import Tool as StructuredTool
 
 
 def _longhouse_api_url() -> str:
