@@ -1,4 +1,4 @@
-"""QA Fiche job - AI-powered monitoring for Swarmlet health.
+"""QA Fiche job - AI-powered monitoring for Longhouse health.
 
 Runs every 15 minutes to:
 - Collect system health metrics
