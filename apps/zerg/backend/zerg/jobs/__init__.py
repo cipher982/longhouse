@@ -7,7 +7,6 @@ Job Categories:
 - backups: Backup verification and sync (backup-sentinel, minio-sync)
 - monitoring: Infrastructure monitoring (disk-health, traccar-watchdog)
 - digests: Daily digests and reports (worklog, google-ads-digest)
-- syncs: Data synchronization (gmail-sync)
 - maintenance: Cleanup and maintenance tasks
 
 Job Sources:
