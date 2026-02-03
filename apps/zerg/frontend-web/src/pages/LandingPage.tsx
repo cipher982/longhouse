@@ -132,7 +132,7 @@ export default function LandingPage() {
   // - authEnabled=false (dev mode - fake auth, don't redirect)
   // - noredirect=1 query param (manual override for testing)
   useEffect(() => {
-    if (!config.authEnabled) return; // Dev mode: never redirect
+    if (!config.authEnabled || config.marketingOnly) return; // Dev/marketing: never redirect
     const params = new URLSearchParams(window.location.search);
     const skipRedirect = params.get("noredirect") === "1";
     if (isAuthenticated && !isLoading && !skipRedirect) {

@@ -16,6 +16,10 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
   const [isDevLoginLoading, setIsDevLoginLoading] = useState(false);
 
   const handleGetStarted = () => {
+    if (config.marketingOnly) {
+      document.querySelector(".install-section")?.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
     // Track CTA click
     if (window.LonghouseFunnel) {
       window.LonghouseFunnel.track('cta_clicked', { location: 'hero' });
@@ -125,7 +129,7 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
       </div>
 
       {/* Login Modal */}
-      {showLogin && (
+      {!config.marketingOnly && showLogin && (
         <div className="landing-login-overlay" onClick={() => setShowLogin(false)}>
           <div className="landing-login-modal" onClick={(e) => e.stopPropagation()}>
             <button className="landing-login-close" onClick={() => setShowLogin(false)}>

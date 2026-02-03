@@ -39,6 +39,10 @@ const steps: Step[] = [
 
 export function HowItWorksSection() {
   const handleGetStarted = () => {
+    if (config.marketingOnly) {
+      document.querySelector(".install-section")?.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
     // If auth is disabled (dev mode), go directly to timeline
     if (!config.authEnabled) {
       window.location.href = '/timeline';

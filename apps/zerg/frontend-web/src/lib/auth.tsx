@@ -107,6 +107,23 @@ interface AuthProviderProps {
 }
 
 export function AuthProvider({ children }: AuthProviderProps) {
+  if (config.marketingOnly) {
+    const value: AuthContextType = {
+      user: null,
+      isAuthenticated: false,
+      isLoading: false,
+      login: async () => {},
+      logout: () => {},
+      getToken: () => null,
+    };
+
+    return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  }
+
+  return <AuthProviderInner>{children}</AuthProviderInner>;
+}
+
+function AuthProviderInner({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const queryClient = useQueryClient();

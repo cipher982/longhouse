@@ -6,6 +6,7 @@ import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "./lib/auth";
 import { ConfirmProvider } from "./components/confirm";
 import { SessionPickerProvider } from "./components/SessionPickerProvider";
+import config from "./lib/config";
 
 // Global stylesheet entrypoint
 import "./styles/app.css";
@@ -30,28 +31,30 @@ if (!isLocalhost && umamiWebsiteId) {
 }
 
 // Global error beacon - captures JS errors from all users (including anonymous)
-window.onerror = (msg, src, line, col, err) => {
-  fetch("/api/ops/beacon", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ msg, src, line, col, stack: err?.stack, url: location.href }),
-    keepalive: true,
-  }).catch(() => {}); // Silent fail
-};
+if (!config.marketingOnly) {
+  window.onerror = (msg, src, line, col, err) => {
+    fetch("/api/ops/beacon", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ msg, src, line, col, stack: err?.stack, url: location.href }),
+      keepalive: true,
+    }).catch(() => {}); // Silent fail
+  };
 
-window.onunhandledrejection = (event) => {
-  fetch("/api/ops/beacon", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      msg: event.reason?.message || String(event.reason),
-      stack: event.reason?.stack,
-      url: location.href,
-      type: "unhandled_rejection",
-    }),
-    keepalive: true,
-  }).catch(() => {});
-};
+  window.onunhandledrejection = (event) => {
+    fetch("/api/ops/beacon", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        msg: event.reason?.message || String(event.reason),
+        stack: event.reason?.stack,
+        url: location.href,
+        type: "unhandled_rejection",
+      }),
+      keepalive: true,
+    }).catch(() => {});
+  };
+}
 
 const container = document.getElementById("react-root");
 
