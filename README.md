@@ -39,13 +39,26 @@ cd longhouse && make dev
 
 ## Configuration
 
-Set `LONGHOUSE_PASSWORD` for remote access authentication.
+Set `LONGHOUSE_PASSWORD` (plaintext) or `LONGHOUSE_PASSWORD_HASH` (recommended) for remote access authentication.
+
+Generate a pbkdf2 hash:
+```bash
+python - <<'PY'
+import base64, hashlib, os
+password = "change-me"
+salt = os.urandom(16)
+iterations = 200_000
+dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
+print(f"pbkdf2_sha256${iterations}${base64.b64encode(salt).decode()}${base64.b64encode(dk).decode()}")
+PY
+```
 
 ## Commands
 
 ```bash
 longhouse serve      # Start the server
 longhouse serve --demo   # Start with sample data
+longhouse serve --demo-fresh # Rebuild demo data on start
 longhouse connect    # Sync Claude Code sessions (continuous)
 longhouse ship       # One-time sync
 longhouse status     # Show configuration

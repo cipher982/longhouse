@@ -24,7 +24,7 @@
 ### What Does NOT Exist
 - Control plane (signup → provision → route)
 - Per-user instance isolation
-- Alternative auth methods (password, magic link)
+- Alternative auth methods (magic link)
 - `longhouse` CLI package on PyPI
 
 ---
@@ -85,7 +85,7 @@ Target: Users who want cloud convenience
 ### 1. Auth for OSS Self-Hosters
 Current: Only Google OAuth or AUTH_DISABLED
 
-**Fix:** Add simple password auth
+**Fix:** Add simple password auth (DONE 2026-02-03)
 ```python
 # New endpoint: POST /api/auth/password
 # Env: LONGHOUSE_PASSWORD=xxx
@@ -155,10 +155,10 @@ Keep current single deployment, add multi-user support:
 ## Immediate Actions (This Week)
 
 ### Day 1-2: Fix Auth (OSS)
-- [ ] Add `LONGHOUSE_PASSWORD` env var
-- [ ] Add `POST /api/auth/password` endpoint
-- [ ] Auto-skip auth on localhost if no password set
-- [ ] Test OSS flow end-to-end
+- [x] Add `LONGHOUSE_PASSWORD` env var
+- [x] Add `POST /api/auth/password` endpoint
+- [x] Auto-skip auth on localhost if no password set
+- [x] Test OSS flow end-to-end
 
 ### Day 3: CLI & Packaging (OSS)
 - [ ] Verify `longhouse serve` works
@@ -167,9 +167,9 @@ Keep current single deployment, add multi-user support:
 - [ ] Write install docs
 
 ### Day 4: Landing Page (OSS)
-- [ ] Update hero copy for OSS
-- [ ] Add "pip install" as primary CTA
-- [ ] Remove/hide hosted-specific features
+- [x] Update hero copy for OSS
+- [x] Add "pip install" as primary CTA
+- [x] Remove/hide hosted-specific features
 - [ ] Add self-host docs link
 
 ### Day 5: Testing & Polish (OSS)

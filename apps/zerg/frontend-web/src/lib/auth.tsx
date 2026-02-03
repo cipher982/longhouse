@@ -306,29 +306,48 @@ export interface AuthMethods {
   password: boolean;
 }
 
+export interface PasswordLoginResult {
+  ok: boolean;
+  error?: string;
+}
+
 // Fetch available authentication methods from the backend
 export async function getAuthMethods(): Promise<AuthMethods> {
   try {
     const response = await fetch(`${config.apiBaseUrl}/auth/methods`);
     if (!response.ok) {
-      return { google: true, password: false };
+      return { google: true, password: true };
     }
     return response.json();
   } catch {
-    // Default to Google-only on network errors
-    return { google: true, password: false };
+    // Default to showing both on network errors
+    return { google: true, password: true };
   }
 }
 
 // Password authentication
-export async function loginWithPassword(password: string): Promise<boolean> {
+export async function loginWithPassword(password: string): Promise<PasswordLoginResult> {
   const response = await fetch(`${config.apiBaseUrl}/auth/password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
     body: JSON.stringify({ password }),
   });
-  return response.ok;
+  if (response.ok) {
+    return { ok: true };
+  }
+
+  if (response.status === 400) {
+    return { ok: false, error: 'Password auth not configured' };
+  }
+
+  if (response.status === 429) {
+    const retryAfter = response.headers.get('Retry-After');
+    const suffix = retryAfter ? ` Try again in ${retryAfter}s.` : ' Try again later.';
+    return { ok: false, error: `Too many attempts.${suffix}` };
+  }
+
+  return { ok: false, error: 'Invalid password' };
 }
 
 // Dev login function (bypasses Google OAuth in development)

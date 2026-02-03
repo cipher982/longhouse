@@ -59,15 +59,15 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
       window.LonghouseFunnel.track('signup_submitted', { method: 'password' });
     }
     try {
-      const success = await loginWithPassword(password);
-      if (success) {
+      const result = await loginWithPassword(password);
+      if (result.ok) {
         // Track signup completed
         if (window.LonghouseFunnel) {
           window.LonghouseFunnel.track('signup_completed', { method: 'password' });
         }
         window.location.href = '/timeline';
       } else {
-        setPasswordError("Invalid password");
+        setPasswordError(result.error || "Invalid password");
       }
     } catch (error) {
       setPasswordError("Login failed. Please try again.");
