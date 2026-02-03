@@ -7,13 +7,61 @@
  * Multi-home support: Can connect to multiple backends simultaneously via LONGHOUSE_URLS.
  */
 
+import { parseArgs } from 'util';
+import { readFileSync } from 'fs';
 import { loadConfig, type RunnerConfig } from './config';
 import { RunnerWebSocketClient } from './ws-client';
 import { getRunnerMetadata } from './protocol';
 
+const VERSION = '0.1.0';
+
+// Parse CLI args before anything else
+const { values } = parseArgs({
+  options: {
+    version: { type: 'boolean', short: 'v' },
+    envfile: { type: 'string' },
+    help: { type: 'boolean', short: 'h' },
+  },
+  allowPositionals: false,
+});
+
+if (values.help) {
+  console.log(`Usage: longhouse-runner [options]
+Options:
+  -v, --version     Print version and exit
+  --envfile <path>  Load env vars from file (default: auto-load .env)
+  -h, --help        Show this help`);
+  process.exit(0);
+}
+
+if (values.version) {
+  console.log(`longhouse-runner ${VERSION}`);
+  process.exit(0);
+}
+
+// Load envfile if specified (before loadConfig reads process.env)
+if (values.envfile) {
+  try {
+    const content = readFileSync(values.envfile, 'utf-8');
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIndex = trimmed.indexOf('=');
+      if (eqIndex > 0) {
+        const key = trimmed.slice(0, eqIndex).trim();
+        const value = trimmed.slice(eqIndex + 1).trim();
+        process.env[key] = value;
+      }
+    }
+  } catch (err) {
+    console.error(`Error loading envfile ${values.envfile}:`, err);
+    process.exit(1);
+  }
+}
+
 async function main() {
   console.log('====================================');
-  console.log('Longhouse Runner v0.1.0');
+  console.log(`Longhouse Runner v${VERSION}`);
   console.log('====================================');
 
   // Load configuration

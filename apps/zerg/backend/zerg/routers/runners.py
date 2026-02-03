@@ -66,7 +66,7 @@ def get_install_script(
     runner_name: str | None = None,
     swarmlet_url: str | None = None,  # Deprecated: use longhouse_url instead
     longhouse_url: str | None = None,
-    runner_image: str | None = None,
+    mode: str | None = None,  # Reserved for future: user|system
 ) -> Response:
     """Return shell script for one-liner runner installation.
 
@@ -74,13 +74,15 @@ def get_install_script(
         curl -fsSL https://api.longhouse.ai/api/runners/install.sh?enroll_token=xxx | bash
 
     Or with environment variables:
-        curl -fsSL https://api.longhouse.ai/api/runners/install.sh | \
+        curl -fsSL https://api.longhouse.ai/api/runners/install.sh | \\
             ENROLL_TOKEN=xxx RUNNER_NAME=my-runner bash
 
     The script:
-    1. Registers the runner using the enroll token
-    2. Saves credentials to ~/.config/longhouse/runner.env
-    3. Starts the runner container with docker run
+    1. Detects OS (macOS/Linux)
+    2. Registers the runner using the enroll token
+    3. Downloads the native binary from GitHub Releases
+    4. Installs as a launchd (macOS) or systemd (Linux) service
+    5. Starts the runner automatically
 
     No authentication required - this is for bootstrapping new runners.
     """
@@ -103,22 +105,25 @@ def get_install_script(
         else:
             api_url = settings.app_public_url
 
-    if not runner_image:
-        runner_image = settings.runner_docker_image
+    # GitHub releases URL for binaries
+    binary_url = "https://github.com/davidrose-drros/zerg/releases/latest/download"
 
     # Generate the shell script
     default_runner_name = runner_name or "$(hostname)"
     script = f"""#!/bin/bash
-set -e
+# Longhouse Runner - Universal Installer
+# Detects OS, registers runner, and installs as native service
+#
+# macOS: launchd LaunchAgent
+# Linux: systemd user service
 
-# Longhouse Runner Installer
-# This script registers a runner and starts it with Docker
+set -e
 
 # Configuration (can be overridden via env vars)
 ENROLL_TOKEN="${{ENROLL_TOKEN:-{enroll_token}}}"
 RUNNER_NAME="${{RUNNER_NAME:-{default_runner_name}}}"
 LONGHOUSE_URL="${{LONGHOUSE_URL:-{api_url}}}"
-RUNNER_IMAGE="${{RUNNER_IMAGE:-{runner_image}}}"
+BINARY_URL="${{BINARY_URL:-{binary_url}}}"
 
 # Validate required vars
 if [ -z "$ENROLL_TOKEN" ]; then
@@ -131,71 +136,251 @@ if [ -z "$LONGHOUSE_URL" ]; then
   exit 1
 fi
 
+echo "======================================"
+echo "Longhouse Runner Installer"
+echo "======================================"
+echo ""
+echo "Runner Name: $RUNNER_NAME"
+echo "API URL: $LONGHOUSE_URL"
+echo ""
+
+# Detect OS
+OS="$(uname -s)"
+case "$OS" in
+  Darwin) OS_TYPE="macos" ;;
+  Linux) OS_TYPE="linux" ;;
+  MINGW*|MSYS*|CYGWIN*)
+    echo "Error: Windows is not yet supported. Coming soon!" >&2
+    exit 1
+    ;;
+  *)
+    echo "Error: Unsupported operating system: $OS" >&2
+    exit 1
+    ;;
+esac
+
+echo "Detected OS: $OS_TYPE"
+echo ""
+
+# Check for required tools
+if ! command -v curl >/dev/null 2>&1; then
+  echo "Error: curl is required but not installed" >&2
+  exit 1
+fi
+
+# JSON parsing helper
+parse_json() {{
+  local json="$1"
+  local field="$2"
+
+  if command -v python3 >/dev/null 2>&1; then
+    echo "$json" | python3 -c "import sys, json; print(json.load(sys.stdin).get('$field', ''))"
+  elif command -v node >/dev/null 2>&1; then
+    echo "$json" | node -e "const d=JSON.parse(require('fs').readFileSync(0,'utf-8'));console.log(d['$field']||'')"
+  else
+    echo ""
+  fi
+}}
+
+# Register runner with backend
 echo "Registering runner '$RUNNER_NAME' with Longhouse..."
 
-# Register runner and get credentials
 REGISTER_URL="${{LONGHOUSE_URL}}/api/runners/register"
 RESPONSE=$(curl -sf -X POST "$REGISTER_URL" \\
   -H "Content-Type: application/json" \\
-  -d "{{\\\"enroll_token\\\": \\\"$ENROLL_TOKEN\\\", \\\"name\\\": \\\"$RUNNER_NAME\\\"}}")
-
-if [ $? -ne 0 ]; then
+  -d "{{\\"enroll_token\\": \\"$ENROLL_TOKEN\\", \\"name\\": \\"$RUNNER_NAME\\"}}" 2>&1) || {{
   echo "Error: Failed to register runner. Check your enrollment token." >&2
+  echo "Response: $RESPONSE" >&2
   exit 1
-fi
+}}
 
-# Parse JSON response
-# Try python3 first, fallback to node, otherwise error
-if command -v python3 >/dev/null 2>&1; then
-  RUNNER_SECRET=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['runner_secret'])")
-  RUNNER_NAME=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['name'])")
-elif command -v node >/dev/null 2>&1; then
-  RUNNER_SECRET=$(echo "$RESPONSE" | node -e "console.log(JSON.parse(require('fs').readFileSync(0, 'utf-8')).runner_secret)")
-  RUNNER_NAME=$(echo "$RESPONSE" | node -e "console.log(JSON.parse(require('fs').readFileSync(0, 'utf-8')).name)")
-else
-  echo "Error: Please install python3 or node to parse JSON response" >&2
-  exit 1
-fi
+# Parse response
+RUNNER_SECRET=$(parse_json "$RESPONSE" "runner_secret")
+RUNNER_NAME=$(parse_json "$RESPONSE" "name")
 
 if [ -z "$RUNNER_SECRET" ]; then
-  echo "Error: Failed to parse runner credentials from response" >&2
+  if command -v python3 >/dev/null 2>&1 || command -v node >/dev/null 2>&1; then
+    echo "Error: Failed to parse runner credentials from response" >&2
+    echo "Response: $RESPONSE" >&2
+  else
+    echo "Error: Please install python3 or node to parse JSON response" >&2
+  fi
   exit 1
 fi
 
-echo "Runner registered successfully: $RUNNER_NAME"
+echo "Runner registered successfully!"
+echo ""
 
-# Save credentials to config file
-CONFIG_DIR="$HOME/.config/longhouse"
-CONFIG_FILE="$CONFIG_DIR/runner.env"
+# Platform-specific installation
+case "$OS_TYPE" in
+  macos)
+    ARCH=$(uname -m)
+    case "$ARCH" in
+      arm64|aarch64) PLATFORM="darwin-arm64" ;;
+      x86_64) PLATFORM="darwin-x64" ;;
+      *) echo "Error: Unsupported architecture: $ARCH" >&2; exit 1 ;;
+    esac
 
-mkdir -p "$CONFIG_DIR"
-cat > "$CONFIG_FILE" <<EOF
+    BIN_DIR="$HOME/.local/bin"
+    CONFIG_DIR="$HOME/.config/longhouse"
+    STATE_DIR="$HOME/.local/state/longhouse"
+    LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
+
+    mkdir -p "$BIN_DIR" "$CONFIG_DIR" "$STATE_DIR" "$LAUNCH_AGENTS_DIR"
+
+    BINARY_PATH="$BIN_DIR/longhouse-runner"
+    DOWNLOAD_URL="${{BINARY_URL}}/longhouse-runner-${{PLATFORM}}"
+
+    echo "Downloading runner binary ($PLATFORM)..."
+    if ! curl -fsSL "$DOWNLOAD_URL" -o "$BINARY_PATH"; then
+      echo "Error: Failed to download runner binary from $DOWNLOAD_URL" >&2
+      exit 1
+    fi
+    chmod +x "$BINARY_PATH"
+
+    ENV_FILE="$CONFIG_DIR/runner.env"
+    cat > "$ENV_FILE" <<EOF
 LONGHOUSE_URL=$LONGHOUSE_URL
 RUNNER_NAME=$RUNNER_NAME
 RUNNER_SECRET=$RUNNER_SECRET
 EOF
+    chmod 600 "$ENV_FILE"
+    echo "Credentials saved to $ENV_FILE"
 
-chmod 600 "$CONFIG_FILE"
+    PLIST_FILE="$LAUNCH_AGENTS_DIR/com.longhouse.runner.plist"
+    cat > "$PLIST_FILE" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.longhouse.runner</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$BINARY_PATH</string>
+        <string>--envfile</string>
+        <string>$ENV_FILE</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    <key>WorkingDirectory</key>
+    <string>$HOME</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>StandardOutPath</key>
+    <string>$STATE_DIR/runner.log</string>
+    <key>StandardErrorPath</key>
+    <string>$STATE_DIR/runner.log</string>
+</dict>
+</plist>
+EOF
 
-echo "Credentials saved to $CONFIG_FILE"
+    if launchctl list 2>/dev/null | grep -q "com.longhouse.runner"; then
+      echo "Stopping existing runner..."
+      launchctl unload "$PLIST_FILE" 2>/dev/null || true
+    fi
 
-# Start runner container
-echo "Starting runner container..."
+    echo "Starting runner service..."
+    launchctl load "$PLIST_FILE"
 
-docker run -d --name longhouse-runner \\
-  --env-file "$CONFIG_FILE" \\
-  --restart unless-stopped \\
-  "$RUNNER_IMAGE"
+    echo ""
+    echo "Runner installed and started successfully!"
+    echo ""
+    echo "Management commands:"
+    echo "  launchctl stop com.longhouse.runner      # Stop"
+    echo "  launchctl start com.longhouse.runner     # Start"
+    echo "  tail -f $STATE_DIR/runner.log            # View logs"
+    ;;
 
-if [ $? -eq 0 ]; then
-  echo "Runner container started successfully!"
-  echo "Container name: longhouse-runner"
-  echo ""
-  echo "Check status with: docker logs longhouse-runner"
-else
-  echo "Error: Failed to start runner container" >&2
-  exit 1
-fi
+  linux)
+    ARCH=$(uname -m)
+    case "$ARCH" in
+      aarch64|arm64) PLATFORM="linux-arm64" ;;
+      x86_64) PLATFORM="linux-x64" ;;
+      *) echo "Error: Unsupported architecture: $ARCH" >&2; exit 1 ;;
+    esac
+
+    BIN_DIR="$HOME/.local/bin"
+    CONFIG_DIR="$HOME/.config/longhouse"
+    SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
+
+    mkdir -p "$BIN_DIR" "$CONFIG_DIR" "$SYSTEMD_USER_DIR"
+
+    BINARY_PATH="$BIN_DIR/longhouse-runner"
+    DOWNLOAD_URL="${{BINARY_URL}}/longhouse-runner-${{PLATFORM}}"
+
+    echo "Downloading runner binary ($PLATFORM)..."
+    if ! curl -fsSL "$DOWNLOAD_URL" -o "$BINARY_PATH"; then
+      echo "Error: Failed to download runner binary from $DOWNLOAD_URL" >&2
+      exit 1
+    fi
+    chmod +x "$BINARY_PATH"
+
+    ENV_FILE="$CONFIG_DIR/runner.env"
+    cat > "$ENV_FILE" <<EOF
+LONGHOUSE_URL=$LONGHOUSE_URL
+RUNNER_NAME=$RUNNER_NAME
+RUNNER_SECRET=$RUNNER_SECRET
+EOF
+    chmod 600 "$ENV_FILE"
+    echo "Credentials saved to $ENV_FILE"
+
+    SERVICE_FILE="$SYSTEMD_USER_DIR/longhouse-runner.service"
+    cat > "$SERVICE_FILE" <<'SERVICEEOF'
+[Unit]
+Description=Longhouse Runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/longhouse-runner --envfile %h/.config/longhouse/runner.env
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Install]
+WantedBy=default.target
+SERVICEEOF
+
+    systemctl --user daemon-reload
+
+    if systemctl --user is-active --quiet longhouse-runner 2>/dev/null; then
+      echo "Stopping existing runner..."
+      systemctl --user stop longhouse-runner
+    fi
+
+    echo "Starting runner service..."
+    systemctl --user enable longhouse-runner
+    systemctl --user start longhouse-runner
+
+    echo ""
+    echo "Runner installed and started successfully!"
+    echo ""
+    echo "Management commands:"
+    echo "  systemctl --user stop longhouse-runner   # Stop"
+    echo "  systemctl --user start longhouse-runner  # Start"
+    echo "  journalctl --user -u longhouse-runner -f # View logs"
+    echo ""
+    echo "Note: User services only run while you are logged in."
+    echo "For always-on servers: loginctl enable-linger \\$USER"
+    ;;
+esac
+
+echo ""
+echo "To uninstall:"
+echo "  curl -fsSL ${{LONGHOUSE_URL}}/api/runners/uninstall.sh | bash"
 """
 
     return Response(
@@ -203,6 +388,142 @@ fi
         media_type="text/plain",
         headers={
             "Content-Disposition": "inline; filename=install.sh",
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.get("/uninstall.sh")
+def get_uninstall_script() -> Response:
+    """Return shell script for uninstalling the runner.
+
+    This endpoint is designed to be used with curl:
+        curl -fsSL https://api.longhouse.ai/api/runners/uninstall.sh | bash
+
+    The script:
+    1. Detects OS (macOS/Linux)
+    2. Stops and removes the service (launchd/systemd)
+    3. Removes binary, config, and state files
+
+    No authentication required.
+    """
+    script = """#!/bin/bash
+# Longhouse Runner - Universal Uninstaller
+# Removes runner service and all associated files
+
+set -e
+
+echo "======================================"
+echo "Longhouse Runner Uninstaller"
+echo "======================================"
+echo ""
+
+# Detect OS
+OS="$(uname -s)"
+case "$OS" in
+  Darwin) OS_TYPE="macos" ;;
+  Linux) OS_TYPE="linux" ;;
+  MINGW*|MSYS*|CYGWIN*)
+    echo "Error: Windows uninstaller not yet supported" >&2
+    exit 1
+    ;;
+  *)
+    echo "Error: Unsupported operating system: $OS" >&2
+    exit 1
+    ;;
+esac
+
+echo "Detected OS: $OS_TYPE"
+echo ""
+
+case "$OS_TYPE" in
+  macos)
+    PLIST_FILE="$HOME/Library/LaunchAgents/com.longhouse.runner.plist"
+
+    # Stop and unload service
+    if [ -f "$PLIST_FILE" ]; then
+      echo "Stopping and removing launchd service..."
+      launchctl unload "$PLIST_FILE" 2>/dev/null || true
+      rm -f "$PLIST_FILE"
+      echo "LaunchAgent removed"
+    else
+      echo "LaunchAgent not found (already removed?)"
+    fi
+
+    # Remove binary
+    BINARY_PATH="$HOME/.local/bin/longhouse-runner"
+    if [ -f "$BINARY_PATH" ]; then
+      rm -f "$BINARY_PATH"
+      echo "Binary removed: $BINARY_PATH"
+    fi
+
+    # Remove config directory
+    CONFIG_DIR="$HOME/.config/longhouse"
+    if [ -d "$CONFIG_DIR" ]; then
+      rm -rf "$CONFIG_DIR"
+      echo "Config removed: $CONFIG_DIR"
+    fi
+
+    # Remove state directory (logs)
+    STATE_DIR="$HOME/.local/state/longhouse"
+    if [ -d "$STATE_DIR" ]; then
+      rm -rf "$STATE_DIR"
+      echo "State/logs removed: $STATE_DIR"
+    fi
+    ;;
+
+  linux)
+    SERVICE_NAME="longhouse-runner"
+    SERVICE_FILE="$HOME/.config/systemd/user/${SERVICE_NAME}.service"
+
+    # Stop and disable service
+    if systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+      echo "Stopping systemd service..."
+      systemctl --user stop "$SERVICE_NAME"
+    fi
+
+    if systemctl --user is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
+      echo "Disabling systemd service..."
+      systemctl --user disable "$SERVICE_NAME"
+    fi
+
+    # Remove service file
+    if [ -f "$SERVICE_FILE" ]; then
+      rm -f "$SERVICE_FILE"
+      systemctl --user daemon-reload
+      echo "Systemd service removed"
+    else
+      echo "Systemd service not found (already removed?)"
+    fi
+
+    # Remove binary
+    BINARY_PATH="$HOME/.local/bin/longhouse-runner"
+    if [ -f "$BINARY_PATH" ]; then
+      rm -f "$BINARY_PATH"
+      echo "Binary removed: $BINARY_PATH"
+    fi
+
+    # Remove config directory
+    CONFIG_DIR="$HOME/.config/longhouse"
+    if [ -d "$CONFIG_DIR" ]; then
+      rm -rf "$CONFIG_DIR"
+      echo "Config removed: $CONFIG_DIR"
+    fi
+    ;;
+esac
+
+echo ""
+echo "Longhouse Runner uninstalled successfully!"
+echo ""
+echo "Note: The runner registration still exists on the server."
+echo "To fully remove, revoke the runner from the Longhouse web UI."
+"""
+
+    return Response(
+        content=script,
+        media_type="text/plain",
+        headers={
+            "Content-Disposition": "inline; filename=uninstall.sh",
             "Cache-Control": "no-store",
         },
     )
