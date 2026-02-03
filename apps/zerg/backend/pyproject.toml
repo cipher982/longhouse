@@ -60,6 +60,8 @@ dependencies = [
     # CLI for session shipping
     "typer>=0.9.0",
     "watchdog>=6.0.0",
+    # Dead code detection
+    "vulture>=2.11",
 ]
 
 [project.scripts]

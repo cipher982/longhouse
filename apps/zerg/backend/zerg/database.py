@@ -154,7 +154,7 @@ def _configure_sqlite_engine(engine: Engine) -> None:
     wal_autocheckpoint = os.getenv("SQLITE_WAL_AUTOCHECKPOINT")
 
     @event.listens_for(engine, "connect")
-    def set_sqlite_pragmas(dbapi_conn, connection_record):
+    def set_sqlite_pragmas(dbapi_conn, _connection_record):
         cursor = dbapi_conn.cursor()
         try:
             cursor.execute(f"PRAGMA journal_mode={journal_mode}")

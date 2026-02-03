@@ -23,9 +23,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from langchain_core.messages import AIMessage
-from langchain_core.messages import HumanMessage
-from langchain_core.messages import ToolMessage
+from zerg.types.messages import AIMessage
+from zerg.types.messages import HumanMessage
+from zerg.types.messages import ToolMessage
 
 from zerg.crud import crud
 from zerg.database import db_session

@@ -62,7 +62,7 @@ class MCPServerAddRequest(BaseModel):
     allowed_tools: List[str] = Field(None, description="List of allowed tools (None means all)")
 
     # Custom validation
-    def model_post_init(self, __context: Any) -> None:
+    def model_post_init(self, _context: Any) -> None:
         """Validate based on transport type."""
         if self.preset:
             # Preset mode - no other server fields needed
