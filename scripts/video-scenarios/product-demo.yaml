@@ -91,7 +91,7 @@ scenes:
   # Scene 1: Dashboard Overview
   - id: dashboard-intro
     voiceover: |
-      Meet Swarmlet. Your personal AI automation platform that works the way you think.
+      Meet Longhouse. Your personal AI automation platform that works the way you think.
       From the dashboard, you can see all your agents at a glance, monitor active automations,
       and dive into any workflow with a single click.
     steps:
@@ -105,7 +105,7 @@ scenes:
   # Scene 2: Chat Introduction
   - id: chat-intro
     voiceover: |
-      The magic happens in chat. Just tell Swarmlet what you need in plain English.
+      The magic happens in chat. Just tell Longhouse what you need in plain English.
       No complex menus, no learning curve. Just ask.
     steps:
       - action: navigate
@@ -118,7 +118,7 @@ scenes:
   # Scene 3: Morning Briefing Demo
   - id: chat-briefing
     voiceover: |
-      Watch as Swarmlet handles a morning briefing request.
+      Watch as Longhouse handles a morning briefing request.
       It automatically coordinates with your calendar, checks the weather,
       and prioritizes your tasks. All from a simple question.
     golden_conversation: morning-briefing
@@ -147,7 +147,7 @@ scenes:
   - id: chat-automation
     voiceover: |
       Need something automated? Just describe it.
-      Swarmlet understands context, figures out the right approach,
+      Longhouse understands context, figures out the right approach,
       and builds the workflow for you behind the scenes.
     golden_conversation: automate-reports
     steps:
@@ -188,8 +188,8 @@ scenes:
   # Scene 6: Closing
   - id: closing
     voiceover: |
-      Swarmlet. AI automation that just works.
-      Start for free at swarmlet dot com.
+      Longhouse. AI automation that just works.
+      Start for free at longhouse dot ai.
     steps:
       - action: navigate
         url: /landing?marketing=true&effects=off
