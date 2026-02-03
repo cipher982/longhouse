@@ -294,7 +294,7 @@ function RunnerStatusIndicator() {
 
   return (
     <span
-      style={{ display: "flex", alignItems: "center", gap: "4px", marginLeft: "12px" }}
+      style={{ display: "flex", alignItems: "center", gap: "4px", marginLeft: "8px", opacity: 0.7 }}
       title={runnerStatus.runners.map((r) => `${r.name}: ${r.status}`).join("\n")}
     >
       <span
@@ -322,7 +322,7 @@ function StatusFooter() {
 
   return (
     <footer className="status-bar" data-testid="status-footer" aria-live="polite">
-      <div className="packet-counter">
+      <div className="packet-counter" style={{ display: "flex", alignItems: "center" }}>
         <ConnectionStatusIndicator status={connectionStatus} />
         <RunnerStatusIndicator />
       </div>
