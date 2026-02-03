@@ -92,17 +92,13 @@ class MockChatLLM(BaseChatModel):
         return AIMessage(content="Hello! I'm a mock assistant. I received your message and I'm responding appropriately.")
 
     def _generate(self, messages: List[Any], stop: Optional[List[str]] = None, **kwargs: Any) -> ChatResult:
-        """LangChain interface - wraps native method."""
-        # Import langchain types only when needed for LangChain interface
-        from langchain_core.messages import AIMessage as LangChainAIMessage
+        """LangChain interface - wraps native method.
 
-        native_result = self._generate_native(messages)
-        # Convert native AIMessage to LangChain format for backwards compat
-        lc_message = LangChainAIMessage(
-            content=native_result.content or "",
-            tool_calls=native_result.tool_calls or [],
-        )
-        return ChatResult(generations=[ChatGeneration(message=lc_message)])
+        Returns native AIMessage in ChatGeneration - LangChain uses duck-typing
+        so this works as long as AIMessage has the expected attributes.
+        """
+        ai_message = self._generate_native(messages)
+        return ChatResult(generations=[ChatGeneration(message=ai_message)])
 
     async def _agenerate(
         self,
