@@ -69,7 +69,64 @@ export default function App() {
     }
   }, []);
 
-  const routes = useRoutes([
+  const routes = useRoutes(config.marketingOnly ? [
+    {
+      path: "/",
+      element: (
+        <ErrorBoundary>
+          <LandingPage />
+        </ErrorBoundary>
+      )
+    },
+    {
+      path: "/pricing",
+      element: (
+        <ErrorBoundary>
+          <PricingPage />
+        </ErrorBoundary>
+      )
+    },
+    {
+      path: "/docs",
+      element: (
+        <ErrorBoundary>
+          <DocsPage />
+        </ErrorBoundary>
+      )
+    },
+    {
+      path: "/changelog",
+      element: (
+        <ErrorBoundary>
+          <ChangelogPage />
+        </ErrorBoundary>
+      )
+    },
+    {
+      path: "/privacy",
+      element: (
+        <ErrorBoundary>
+          <PrivacyPage />
+        </ErrorBoundary>
+      )
+    },
+    {
+      path: "/security",
+      element: (
+        <ErrorBoundary>
+          <SecurityPage />
+        </ErrorBoundary>
+      )
+    },
+    {
+      path: "*",
+      element: (
+        <ErrorBoundary>
+          <LandingPage />
+        </ErrorBoundary>
+      )
+    },
+  ] : [
     // Root route: redirect to timeline when auth disabled (dev/test mode)
     // In production (auth enabled), show landing page (it handles its own auth redirect)
     {

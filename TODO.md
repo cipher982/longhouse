@@ -11,6 +11,17 @@ Capture list for substantial work. Not quick fixes (do those live).
 
 ---
 
+## Domain Split — Marketing vs Personal Instance (4)
+
+**Goal:** longhouse.ai is marketing-only; david.longhouse.ai is the app (single-tenant).
+
+- [x] Add marketing-only frontend flag (hostname-driven) to disable auth + app routes on longhouse.ai
+- [ ] Update Coolify domains: zerg-web -> david.longhouse.ai, zerg-api -> api.david.longhouse.ai
+- [ ] Update zerg-api env: APP_PUBLIC_URL/PUBLIC_SITE_URL to david, CORS to include longhouse.ai + david
+- [ ] Add Cloudflare DNS for david.longhouse.ai + api.david.longhouse.ai (and optional wildcard)
+
+---
+
 ## HN Launch Readiness — Remaining (5)
 
 **Goal:** HN reader can install, see value immediately, understand what problem this solves, and start using it.

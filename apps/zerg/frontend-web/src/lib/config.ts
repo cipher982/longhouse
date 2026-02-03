@@ -9,6 +9,7 @@ export interface AppConfig {
   // Authentication
   googleClientId: string;
   authEnabled: boolean;
+  marketingOnly: boolean;
 
   // Environment
   isDevelopment: boolean;
@@ -77,11 +78,31 @@ function normalizeApiBaseUrl(value: string): string {
   return `${url.origin}${normalizedPath}`;
 }
 
+function resolveMarketingOnly(): boolean {
+  const envValue = import.meta.env.VITE_MARKETING_ONLY;
+  if (envValue === "true") return true;
+  if (envValue === "false") return false;
+
+  if (typeof window === "undefined") return false;
+
+  const host = window.location.hostname.toLowerCase();
+  const envHosts = (import.meta.env.VITE_MARKETING_HOSTNAMES || "")
+    .split(",")
+    .map((value: string) => value.trim().toLowerCase())
+    .filter(Boolean);
+
+  const defaultHosts = ["longhouse.ai", "www.longhouse.ai"];
+  const marketingHosts = envHosts.length > 0 ? envHosts : defaultHosts;
+
+  return marketingHosts.includes(host);
+}
+
 // Load configuration from environment variables
 function loadConfig(): AppConfig {
   const isDevelopment = import.meta.env.MODE === 'development';
   const isProduction = import.meta.env.MODE === 'production';
   const isTesting = import.meta.env.MODE === 'test';
+  const marketingOnly = resolveMarketingOnly();
 
   // FAIL FAST: No fallbacks, no silent defaults
   // Production MUST have config.js loaded with API_BASE_URL and WS_BASE_URL
@@ -111,7 +132,7 @@ function loadConfig(): AppConfig {
   apiBaseUrl = normalizeApiBaseUrl(apiBaseUrl);
 
   // Validate required config in production
-  if (isProduction) {
+  if (isProduction && !marketingOnly) {
     if (!apiBaseUrl) {
       throw new Error('FATAL: API_BASE_URL not configured! Add window.API_BASE_URL in config.js');
     }
@@ -128,6 +149,7 @@ function loadConfig(): AppConfig {
     // Authentication
     googleClientId: import.meta.env.VITE_GOOGLE_CLIENT_ID || "658453123272-gt664mlo8q3pra3u1h3oflbmrdi94lld.apps.googleusercontent.com",
     authEnabled: import.meta.env.VITE_AUTH_ENABLED !== 'false',
+    marketingOnly,
 
     // Environment
     isDevelopment,
@@ -154,11 +176,11 @@ export const config: AppConfig = loadConfig();
 export function validateConfig(): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
 
-  if (!config.googleClientId) {
+  if (!config.marketingOnly && !config.googleClientId) {
     errors.push('VITE_GOOGLE_CLIENT_ID is required for authentication');
   }
 
-  if (!config.apiBaseUrl) {
+  if (!config.marketingOnly && !config.apiBaseUrl) {
     errors.push('API base URL is required');
   }
 
@@ -187,7 +209,7 @@ export const getWebSocketConfig = () => ({
   baseUrl: config.wsBaseUrl,
   reconnectInterval: config.wsReconnectInterval,
   maxReconnectAttempts: config.wsMaxReconnectAttempts,
-  includeAuth: config.authEnabled,
+  includeAuth: config.authEnabled && !config.marketingOnly,
 });
 
 export const getPerformanceConfig = () => ({
@@ -210,6 +232,7 @@ if (config.isDevelopment) {
     environment: import.meta.env.MODE,
     apiBaseUrl: config.apiBaseUrl,
     authEnabled: config.authEnabled,
+    marketingOnly: config.marketingOnly,
     performanceMonitoring: config.enablePerformanceMonitoring,
   });
 }
