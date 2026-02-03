@@ -422,8 +422,8 @@ class ScriptedChatLLM(BaseChatModel):
         if role == "commis" and scenario and scenario.get("name") == "disk_space_commis":
             tool_call = {
                 "id": f"call_{uuid.uuid4().hex[:8]}",
-                "name": "get_current_time",
-                "args": {},
+                "name": "runner_exec",
+                "args": {"target": "cube", "command": "df -h"},
             }
             return AIMessage(content="", tool_calls=[tool_call])
 
