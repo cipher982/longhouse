@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { SwarmLogo } from "../SwarmLogo";
 import { Button } from "../ui";
 import { useAuth } from "../../lib/auth";
-import config, { isUserSubdomain, buildAuthRedirectUrl } from "../../lib/config";
+import config from "../../lib/config";
 import { AppScreenshotFrame } from "./AppScreenshotFrame";
 import { InstallSection } from "./InstallSection";
 
@@ -140,21 +140,7 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
             <p className="landing-login-subtext">Sign in to access your session timeline</p>
 
             <div className="landing-login-buttons">
-              {/* On user subdomain, redirect to main domain for OAuth */}
-              {isUserSubdomain() ? (
-                <Button
-                  variant="primary"
-                  size="lg"
-                  className="landing-google-redirect"
-                  onClick={() => {
-                    window.location.href = buildAuthRedirectUrl();
-                  }}
-                >
-                  Sign in with Google
-                </Button>
-              ) : (
-                <GoogleSignInButtonWrapper />
-              )}
+              <GoogleSignInButtonWrapper />
 
               {config.isDevelopment && (
                 <>

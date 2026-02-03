@@ -91,10 +91,11 @@ function resolveMarketingOnly(): boolean {
     .map((value: string) => value.trim().toLowerCase())
     .filter(Boolean);
 
-  const defaultHosts = ["longhouse.ai", "www.longhouse.ai"];
-  const marketingHosts = envHosts.length > 0 ? envHosts : defaultHosts;
+  // No default marketing hosts - all domains are functional apps
+  // Set VITE_MARKETING_HOSTNAMES explicitly if you want marketing-only pages
+  if (envHosts.length === 0) return false;
 
-  return marketingHosts.includes(host);
+  return envHosts.includes(host);
 }
 
 /**
@@ -167,6 +168,9 @@ function loadConfig(): AppConfig {
     if (host === 'david.longhouse.ai') {
       apiBaseUrl = 'https://api-david.longhouse.ai/api';
       wsBaseUrl = 'wss://api-david.longhouse.ai/api/ws';
+    } else if (host === 'longhouse.ai' || host === 'www.longhouse.ai') {
+      apiBaseUrl = 'https://api.longhouse.ai/api';
+      wsBaseUrl = 'wss://api.longhouse.ai/api/ws';
     }
   }
 
