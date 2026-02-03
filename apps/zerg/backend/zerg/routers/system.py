@@ -101,6 +101,26 @@ def health() -> Dict[str, Any]:
     }
 
 
+@router.post("/reset-sessions")
+async def reset_sessions() -> Dict[str, Any]:
+    """Clear all agent sessions (dev only).
+
+    Used by ui-capture for deterministic empty state testing.
+    Disabled in production.
+    """
+    if _settings.environment and _settings.environment.lower() == "production":
+        return {"error": "Reset disabled in production"}
+
+    session_factory = get_session_factory()
+    with session_factory() as db:  # type: ignore[arg-type]
+        # Delete events first (FK constraint), then sessions
+        db.execute(text("DELETE FROM events"))
+        db.execute(text("DELETE FROM sessions"))
+        db.commit()
+
+    return {"status": "ok", "message": "All sessions cleared"}
+
+
 @router.post("/seed-demo-sessions")
 async def seed_demo_sessions() -> Dict[str, Any]:
     """Seed demo agent sessions for marketing/onboarding.
