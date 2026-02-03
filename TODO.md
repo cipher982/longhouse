@@ -152,13 +152,13 @@ Make Longhouse the sole source of session truth. Remove Life Hub routes, naming,
 - ✅ Frontend migrated — `useActiveSessions` uses agents API, no `useLifeHubSessions`
 - ✅ Session continuity uses Zerg-native endpoints (`fetch_session_from_zerg`, `ship_session_to_zerg`)
 - ✅ Router source files deleted (`oikos_life_hub.py` removed)
-- ⚠️ **Gmail sync job still active** — `jobs/life_hub/gmail_sync.py` hits external Life Hub API every 30min
-- ⚠️ Stale `.pyc` files in `routers/__pycache__/` (harmless but messy)
+- ✅ Gmail sync job removed — watch renewal moved to Life Hub Pub/Sub webhook
+- ✅ Stale `.pyc` files cleaned up
 
 - [x] Replace `/oikos/life-hub/*` endpoints — routers deleted, frontend uses agents API
 - [x] Update frontend hooks/components — all migrated to agents API
 - [x] Update session-resume flow — uses Zerg-native endpoints
-- [x] **Disable Gmail sync for OSS** — conditionally skip if `LIFE_HUB_API_KEY` not set ✅ 2026-02-02
+- [x] **Remove Gmail sync job entirely** — watch renewal now in Life Hub Pub/Sub webhook ✅ 2026-02-02
 - [x] Clean up stale `.pyc` files in routers/__pycache__/ ✅ 2026-02-02
 - [x] Update VISION session-resume section to remove Life Hub flow (doc consolidated).
 
