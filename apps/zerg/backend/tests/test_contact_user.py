@@ -72,7 +72,7 @@ class TestContactUser:
             mock_send_email.assert_called_once()
             call_kwargs = mock_send_email.call_args[1]
             assert call_kwargs["to"] == "user@example.com"
-            assert call_kwargs["subject"] == "[Swarmlet] Task completed"
+            assert call_kwargs["subject"] == "[Longhouse] Task completed"
             assert "Your task has finished successfully" in call_kwargs["html"]
 
     def test_missing_commis_context(self):
@@ -272,7 +272,7 @@ class TestContactUser:
             assert "**Bold text**" not in call_kwargs["html"]  # Not raw markdown
 
     def test_subject_prefix(self, mock_commis_context, mock_user):
-        """Test that subject gets Swarmlet prefix."""
+        """Test that subject gets Longhouse prefix."""
         with (
             patch("zerg.tools.builtin.contact_user.get_commis_context") as mock_get_ctx,
             patch("zerg.tools.builtin.contact_user.db_session") as mock_db_session,
@@ -296,5 +296,5 @@ class TestContactUser:
 
             # Verify subject prefix
             call_kwargs = mock_send_email.call_args[1]
-            assert call_kwargs["subject"].startswith("[Swarmlet]")
+            assert call_kwargs["subject"].startswith("[Longhouse]")
             assert "Task completed" in call_kwargs["subject"]
