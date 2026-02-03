@@ -704,6 +704,15 @@
     color: var(--color-text-muted);
   }
 
+  .landing-providers-tagline {
+    font-size: var(--font-size-lg);
+    color: var(--color-text-secondary);
+    font-style: italic;
+    text-align: center;
+    margin: var(--space-8) auto var(--space-12);
+    max-width: 500px;
+  }
+
   @media (width <= 600px) {
     .landing-providers-grid {
       grid-template-columns: 1fr;
