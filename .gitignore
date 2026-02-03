@@ -219,6 +219,9 @@ apps/zerg/backend/docs/work/
 videos/
 .claude/
 
+# UI capture debug bundles
+artifacts/ui-capture/
+
 # Archive/legacy files
 **/archive/
 **/legacy/

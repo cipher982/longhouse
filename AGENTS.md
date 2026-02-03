@@ -66,6 +66,7 @@ make test-full     # Full suite (unit + full E2E + evals + visual baselines)
 - **Tool contracts**: Edit `schemas/tools.yml`, then run `scripts/generate_tool_types.py` — never edit generated files directly
 - **Oikos tools**: Registration is centralized in `oikos_tools.py`; `CORE_TOOLS` pulls from `SUPERVISOR_TOOL_NAMES`; tests in `test_core_tools.py` catch drift
 - **Git policy**: Work only on `main`, no worktrees; confirm `git status -sb` before changes; no stashing unless explicitly requested
+- **Concurrent edits**: Dirty trees are normal; work around existing diffs and avoid overlapping lines. Only pause to coordinate if you must edit an already-modified file.
 
 ## UI Components
 
@@ -148,6 +149,7 @@ Sauron is the centralized ops scheduler, deployed as a standalone service on cli
 | Sauron scheduler | `apps/sauron/README.md` |
 | Sauron job definitions | `~/git/sauron-jobs/` |
 | Gmail Pub/Sub architecture | `~/git/life-hub/docs/specs/gmail-pubsub-realtime.md` |
+| UI Capture | `/zerg-ui` skill — debug bundles with trace/a11y, `make ui-capture` |
 
 ## Jobs: Builtin vs External
 
@@ -182,3 +184,4 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-03) [ux] Global nav still includes Forum/Canvas in some headers despite Timeline-first direction; align nav to Timeline/Oikos core.
 - (2026-02-03) [product] Longhouse positioning is AI coding session management; landing page copy still reflects old personal AI hub vision.
 - (2026-02-03) [ops] Cloudflare Universal SSL does not cover sub-subdomains; prefer single-level (api-david.longhouse.ai) or custom cert.
+- (2026-02-03) [ui] UI debug bundles: `make ui-capture` produces screenshot + trace + a11y + manifest. Use `--scene=` for deterministic states.
