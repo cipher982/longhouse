@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Generate web icon assets for Swarmlet from the master logo.
+# Generate web icon assets for Longhouse from the master logo.
 # Requires ImageMagick (magick command).
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -36,7 +36,7 @@ magick \
   \( -size 1200x630 canvas:'#0a0a0f' -alpha set -channel A -evaluate set 30% +channel \) \
   -compose over -composite \
   \( "${PUBLIC_DIR}/favicon-512.png" -resize 320x320 \) -gravity West -geometry +120+0 -composite \
-  -gravity Northwest -font 'Helvetica-Bold' -pointsize 120 -fill '#ffffff' -annotate +500+200 'Swarmlet' \
+  -gravity Northwest -font 'Helvetica-Bold' -pointsize 120 -fill '#ffffff' -annotate +500+200 'Longhouse' \
   -gravity Northwest -font 'Helvetica' -pointsize 52 -fill '#e6f7ff' -annotate +500+320 'AI Agent Platform' \
   "${PUBLIC_DIR}/og-image.png"
 
