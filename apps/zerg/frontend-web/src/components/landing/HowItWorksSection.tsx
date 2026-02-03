@@ -78,7 +78,7 @@ export function HowItWorksSection() {
 
         <div className="landing-steps-cta">
           <Button variant="primary" size="lg" onClick={handleGetStarted}>
-            Get your Longhouse
+            Get your Longhouse 🪵
           </Button>
         </div>
       </div>
