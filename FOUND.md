@@ -27,3 +27,5 @@
 - [Docs vs UI] “Resume from anywhere / Timeline resume” is not in Timeline UI; resume is only implemented in Forum Drop‑In (Claude-only) and not exposed on `/timeline`.
 - [Docs vs code] VISION lists Oikos discovery tools (`search_sessions`, `grep_sessions`, `filter_sessions`, `get_session_detail`) but no such tool implementations exist.
 - [Docs vs code] VISION says cross‑subdomain auth tokens are one‑time with nonce stored server‑side and validated via control plane/JWKS; current `POST /api/auth/accept-token` just validates JWT and sets cookie (no nonce/one‑time guard).
+- [Docs/infra] `install-claude.sh` is broken: `longhouse.ai/install-claude.sh` serves the SPA HTML, `get.longhouse.ai/install-claude.sh` redirects to `scripts/install-claude.sh` which 404s, and the repo only contains `scripts/install-claude-shim.sh`.
+- [Docs vs code] VISION requires a PATH‑based Claude shim + verification in a fresh shell; current installer only adds a hook unless `~/.longhouse/install-claude-shim.sh` already exists and does not verify in a new shell.
