@@ -139,6 +139,12 @@ Sauron is the centralized ops scheduler, deployed as a standalone service on cli
 
 **Deploy:** Coolify on clifford, separate from main Zerg deployment.
 
+## apps/runner - Native Runner Daemon
+
+Bun-compiled binary for command execution on user infrastructure. Connects via WebSocket, validates commands client-side (defense-in-depth), streams output. Install via `ENROLL_TOKEN=xxx curl .../install.sh | bash` → launchd (macOS) or systemd (Linux).
+
+**Entrypoints:** `apps/runner/src/index.ts` (daemon), `apps/runner/src/executor.ts` (command exec), `zerg/services/runner_job_dispatcher.py` (backend dispatch). Release workflow: `.github/workflows/runner-release.yml`.
+
 ## Deep Dives
 
 | Topic | Guide |
