@@ -6,14 +6,13 @@ enabling explicit verification of which integrations are available.
 
 from typing import Any
 
-from langchain_core.tools import StructuredTool
-
 from zerg.connectors.context import get_credential_resolver
 from zerg.connectors.status_builder import build_connector_status
 from zerg.database import db_session
 from zerg.tools.error_envelope import ErrorType
 from zerg.tools.error_envelope import tool_error
 from zerg.tools.error_envelope import tool_success
+from zerg.types.tools import Tool as StructuredTool
 
 
 def refresh_connector_status() -> dict[str, Any]:

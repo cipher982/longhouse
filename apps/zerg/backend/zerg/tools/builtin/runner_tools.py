@@ -14,8 +14,6 @@ from typing import Any
 from typing import Dict
 from typing import List
 
-from langchain_core.tools import StructuredTool
-
 from zerg.context import get_commis_context
 from zerg.crud import runner_crud
 from zerg.database import get_db
@@ -24,6 +22,7 @@ from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.tools.error_envelope import ErrorType
 from zerg.tools.error_envelope import tool_error
 from zerg.tools.error_envelope import tool_success
+from zerg.types.tools import Tool as StructuredTool
 
 logger = logging.getLogger(__name__)
 

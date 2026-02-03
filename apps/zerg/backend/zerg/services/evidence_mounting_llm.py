@@ -27,10 +27,9 @@ import logging
 import re
 from typing import Any
 
-from langchain_core.messages import BaseMessage
-from langchain_core.messages import ToolMessage
-
 from zerg.services.evidence_compiler import EvidenceCompiler
+from zerg.types.messages import BaseMessage
+from zerg.types.messages import ToolMessage
 
 logger = logging.getLogger(__name__)
 

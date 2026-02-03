@@ -501,8 +501,6 @@ class Runner:  # noqa: D401 – naming follows project conventions
         Raises:
             FicheInterrupted: If spawn_commis is called again (sequential commiss).
         """
-        from langchain_core.messages import ToolMessage
-
         from zerg.connectors.context import reset_credential_resolver
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
@@ -510,6 +508,7 @@ class Runner:  # noqa: D401 – naming follows project conventions
         from zerg.managers.prompt_context import context_to_messages
         from zerg.services.oikos_react_engine import run_oikos_loop
         from zerg.tools.unified_access import get_tool_resolver
+        from zerg.types.messages import ToolMessage
 
         logger.info(
             f"[Runner] Starting run_continuation for thread {thread.id}, tool_call_id={tool_call_id}",
@@ -747,8 +746,6 @@ class Runner:  # noqa: D401 – naming follows project conventions
         Raises:
             FicheInterrupted: If spawn_commis is called again (new batch of commiss).
         """
-        from langchain_core.messages import ToolMessage
-
         from zerg.connectors.context import reset_credential_resolver
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
@@ -756,6 +753,7 @@ class Runner:  # noqa: D401 – naming follows project conventions
         from zerg.managers.prompt_context import context_to_messages
         from zerg.services.oikos_react_engine import run_oikos_loop
         from zerg.tools.unified_access import get_tool_resolver
+        from zerg.types.messages import ToolMessage
 
         logger.info(
             f"[Runner] Starting run_batch_continuation for thread {thread.id}, {len(commis_results)} commiss",

@@ -10,7 +10,6 @@ from datetime import datetime
 from typing import Any
 from typing import Dict
 
-from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy import desc
@@ -22,6 +21,7 @@ from zerg.models.models import UserTask
 from zerg.tools.error_envelope import ErrorType
 from zerg.tools.error_envelope import tool_error
 from zerg.tools.error_envelope import tool_success
+from zerg.types.tools import Tool as StructuredTool
 
 logger = logging.getLogger(__name__)
 

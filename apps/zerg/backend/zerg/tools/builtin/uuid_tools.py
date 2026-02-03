@@ -4,7 +4,7 @@ import uuid
 from typing import List
 from typing import Optional
 
-from langchain_core.tools import StructuredTool
+from zerg.types.tools import Tool as StructuredTool
 
 
 def generate_uuid(version: Optional[int] = 4, namespace: Optional[str] = None, name: Optional[str] = None) -> str:

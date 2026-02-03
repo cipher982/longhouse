@@ -14,7 +14,8 @@ from urllib.parse import urljoin
 from urllib.parse import urlparse
 
 import httpx
-from langchain_core.tools import StructuredTool
+
+from zerg.types.tools import Tool as StructuredTool
 
 logger = logging.getLogger(__name__)
 

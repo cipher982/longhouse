@@ -39,18 +39,17 @@ from datetime import datetime
 from datetime import timezone
 from typing import TYPE_CHECKING
 
-from langchain_core.messages import AIMessage
-from langchain_core.messages import BaseMessage
-from langchain_core.messages import SystemMessage
-from langchain_core.messages import ToolMessage
-from langchain_openai import ChatOpenAI
-
 from zerg.context import get_commis_context
 from zerg.managers.fiche_runner import FicheInterrupted
+from zerg.services.openai_client import OpenAIChat
 from zerg.tools.result_utils import is_critical_tool_error
+from zerg.types.messages import AIMessage
+from zerg.types.messages import BaseMessage
+from zerg.types.messages import SystemMessage
+from zerg.types.messages import ToolMessage
 
 if TYPE_CHECKING:
-    from langchain_core.tools import BaseTool
+    from zerg.types.tools import Tool as BaseTool
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +217,7 @@ def _make_llm(
             effort = "low"
         kwargs["reasoning_effort"] = effort
 
-    llm = ChatOpenAI(**kwargs)
+    llm = OpenAIChat(**kwargs)
 
     if tool_choice is None:
         return llm.bind_tools(tools)

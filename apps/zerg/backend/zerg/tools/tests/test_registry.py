@@ -1,9 +1,9 @@
 """Tests for ImmutableToolRegistry and tool aggregation."""
 
 import pytest
-from langchain_core.tools import StructuredTool
 from zerg.tools.builtin import BUILTIN_TOOLS
 from zerg.tools.registry import ImmutableToolRegistry
+from zerg.types.tools import Tool as StructuredTool
 
 
 def dummy_tool_a():

@@ -17,13 +17,8 @@ import logging
 from typing import Any
 from typing import Optional
 
-# Optional import to keep the runtime lightweight in test environments where
-# the full ``langchain`` package might not be installed (only
-# ``langchain-core`` is a dependency).  We fall back to a minimal base-class
-# replacement that matches the few attributes we rely on.
-# Single, canonical import – the stack always includes langchain-core.
-# Fallbacks are deliberately avoided to keep behaviour deterministic.
-from langchain_core.callbacks.base import AsyncCallbackHandler  # type: ignore
+# Native callback base class (LangChain-free)
+from zerg.callbacks.base import AsyncCallbackHandler
 from zerg.generated.ws_messages import Envelope
 from zerg.generated.ws_messages import StreamChunkData
 from zerg.websocket.manager import topic_manager
@@ -60,47 +55,7 @@ class WsTokenCallback(AsyncCallbackHandler):
         # Track if we've already warned about missing context (avoid log spam)
         self._warned_no_context = False
 
-    # We only need **async** token notifications
-
-    # ------------------------------------------------------------------
-    # Callback filtering
-    # ------------------------------------------------------------------
-
-    # We *only* care about individual LLM tokens.  All other event categories
-    # (chains, fiches, chat-model lifecycle, etc.) can be safely ignored to
-    # avoid unnecessary method dispatch and the corresponding "method not
-    # implemented" errors that were cluttering the logs.  The
-    # ``BaseCallbackHandler`` contract allows us to opt-out on a per-category
-    # basis by overriding the ``ignore_*`` properties.
-
-    @property  # type: ignore[override]
-    def ignore_chain(self) -> bool:  # noqa: D401 – property mirrors base-class naming
-        return True
-
-    @property  # type: ignore[override]
-    def ignore_agent(self) -> bool:  # noqa: D401
-        return True
-
-    @property  # type: ignore[override]
-    def ignore_retriever(self) -> bool:  # noqa: D401
-        return True
-
-    @property  # type: ignore[override]
-    def ignore_chat_model(self) -> bool:  # noqa: D401
-        # We already receive token-level callbacks via ``on_llm_new_token``
-        # even for chat models, so we can skip the separate chat-specific
-        # lifecycle hooks entirely.
-        return True
-
-    @property  # type: ignore[override]
-    def ignore_custom_event(self) -> bool:  # noqa: D401
-        return True
-
-    # ------------------------------------------------------------------
-    # LLM token hook
-    # ------------------------------------------------------------------
-
-    async def on_llm_new_token(self, token: str, **_: Any) -> None:  # noqa: D401 – interface defined by LangChain
+    async def on_llm_new_token(self, token: str, **_: Any) -> None:
         """Broadcast *token* to all subscribers via WebSocket and event bus."""
 
         thread_id = current_thread_id_var.get()

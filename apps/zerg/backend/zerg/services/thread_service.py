@@ -20,17 +20,17 @@ from typing import List
 from typing import Optional
 from typing import Type
 
-from langchain_core.messages import AIMessage
-from langchain_core.messages import BaseMessage
-from langchain_core.messages import HumanMessage
-from langchain_core.messages import SystemMessage
-from langchain_core.messages import ToolMessage
 from sqlalchemy.orm import Session
 
 from zerg.crud import crud
 from zerg.models.models import Fiche as FicheModel
 from zerg.models.models import Thread as ThreadModel
 from zerg.models.models import ThreadMessage as ThreadMessageModel
+from zerg.types.messages import AIMessage
+from zerg.types.messages import BaseMessage
+from zerg.types.messages import HumanMessage
+from zerg.types.messages import SystemMessage
+from zerg.types.messages import ToolMessage
 
 logger = logging.getLogger(__name__)
 

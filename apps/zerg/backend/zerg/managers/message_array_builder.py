@@ -23,10 +23,10 @@ from typing import List
 from typing import Optional
 from typing import Sequence
 
-from langchain_core.messages import BaseMessage
-from langchain_core.messages import HumanMessage
-from langchain_core.messages import SystemMessage
-from langchain_core.messages import ToolMessage
+from zerg.types.messages import BaseMessage
+from zerg.types.messages import HumanMessage
+from zerg.types.messages import SystemMessage
+from zerg.types.messages import ToolMessage
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session

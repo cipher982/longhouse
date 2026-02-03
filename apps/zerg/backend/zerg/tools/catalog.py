@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 from zerg.tools.builtin.oikos_tools import OIKOS_TOOL_NAMES
 
 if TYPE_CHECKING:
-    from langchain_core.tools import BaseTool
+    from zerg.types.tools import Tool as BaseTool
 
 logger = logging.getLogger(__name__)
 
