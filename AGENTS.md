@@ -67,6 +67,23 @@ make test-full     # Full suite (unit + full E2E + evals + visual baselines)
 - **Oikos tools**: Registration is centralized in `oikos_tools.py`; `CORE_TOOLS` pulls from `SUPERVISOR_TOOL_NAMES`; tests in `test_core_tools.py` catch drift
 - **Git policy**: Work only on `main`, no worktrees; confirm `git status -sb` before changes; no stashing unless explicitly requested
 
+## UI Components
+
+Import from `../components/ui`. **Check here before building custom UI.**
+
+| Component | Variants/Sizes | Usage |
+|-----------|---------------|-------|
+| Button | primary, secondary, tertiary, ghost, danger, success / sm, md, lg | `<Button variant="primary" size="md">` |
+| Badge | neutral, success, warning, error | `<Badge variant="success">Active</Badge>` |
+| Card | glass (default), default | `<Card><Card.Header>...</Card.Header><Card.Body>...</Card.Body></Card>` |
+| EmptyState | default, error | `<EmptyState title="..." description="..." action={<Button>}/>` |
+| Input | - | `<Input placeholder="..." />` |
+| Spinner | sm, md, lg | `<Spinner size="lg" />` |
+| Table | - | `<Table><Table.Header>...<Table.Body><Table.Row>...` |
+| SectionHeader | - | `<SectionHeader title="..." description="..." actions={...} />` |
+| PageShell | narrow, normal, wide, full | `<PageShell size="wide">...</PageShell>` |
+| IconButton | - | `<IconButton aria-label="..."><Icon /></IconButton>` |
+
 ## Gotchas
 
 1. **`make dev` is interactive** — Use `run_in_background=true` in Bash tool.
@@ -152,10 +169,10 @@ Jobs can live in two places:
 - (2026-02-02) [arch] Gmail sync cron removed from Zerg; watch renewal now in Life Hub Pub/Sub webhook.
 - (2026-02-02) [arch] Scenario seed engine uses SeedRegistry for run-level idempotency; uuid5 helper exists but entity IDs are still auto-increment.
 - (2026-02-02) [arch] AgentsStore (timeline) and Oikos (threads/runs) are separate schemas - don't force consolidation across different data models.
-- (2026-02-02) [ux] Removed "Load demo" UI buttons - fake data should never write to dev DB from live UI paths.
-- (2026-02-02) [pattern] Autonomous mode: execute full pipeline, fix blockers, verify prod, report comprehensively. Don't ask for obvious fixes.
-- (2026-02-02) [pattern] Automation > manual: create repeatable scripts instead of one-off work.
 - (2026-02-02) [gotcha] .env DATABASE_URL overrides make dev; comment it out for SQLite.
 - (2026-02-03) [gotcha] scenario seeding clean=True does not clear SeedRegistry; reseed will skip unless registry is cleared.
 - (2026-02-01) [design] Alpha = clean breaks. No legacy fallbacks or backwards compat.
 - (2026-02-01) [test] Core E2E serial only (`--workers=1`); parallel causes SQLite race conditions.
+- (2026-02-03) [gotcha] Runner daemons hardcode API URL; domain changes break them silently. Check `/api/runners/status` endpoint or footer indicator.
+- (2026-02-03) [ops] Runner daemons on servers: restart with `docker rm/run` using `SWARMLET_URL=wss://api.longhouse.ai`.
+- (2026-02-03) [ux] Global nav still includes Forum/Canvas in some headers despite Timeline-first direction; align nav to Timeline/Oikos core.
