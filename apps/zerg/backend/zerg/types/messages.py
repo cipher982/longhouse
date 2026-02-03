@@ -107,22 +107,32 @@ def to_openai_message(msg: BaseMessage) -> dict[str, Any]:
         return {"role": "user", "content": msg.content or ""}
 
     if isinstance(msg, AIMessage):
+        import json
+
         result: dict[str, Any] = {"role": "assistant"}
         if msg.content:
             result["content"] = msg.content
         if msg.tool_calls:
-            # Convert to OpenAI tool_calls format
-            result["tool_calls"] = [
-                {
-                    "id": tc.get("id", ""),
-                    "type": "function",
-                    "function": {
-                        "name": tc.get("name", ""),
-                        "arguments": tc.get("args", {}),
-                    },
-                }
-                for tc in msg.tool_calls
-            ]
+            # Convert to OpenAI tool_calls format - args must be JSON string
+            tc_list = []
+            for tc in msg.tool_calls:
+                args = tc.get("args", {})
+                # Args may be dict or already a string
+                if isinstance(args, dict):
+                    args_str = json.dumps(args)
+                else:
+                    args_str = str(args)
+                tc_list.append(
+                    {
+                        "id": tc.get("id", ""),
+                        "type": "function",
+                        "function": {
+                            "name": tc.get("name", ""),
+                            "arguments": args_str,
+                        },
+                    }
+                )
+            result["tool_calls"] = tc_list
         return result
 
     if isinstance(msg, ToolMessage):
@@ -166,17 +176,30 @@ def from_openai_message(msg_dict: dict[str, Any]) -> BaseMessage:
         return HumanMessage(content=msg_dict.get("content"))
 
     if role == "assistant":
+        import json
+
         tool_calls = None
         if "tool_calls" in msg_dict:
-            # Convert from OpenAI tool_calls format
-            tool_calls = [
-                {
-                    "id": tc.get("id", ""),
-                    "name": tc.get("function", {}).get("name", ""),
-                    "args": tc.get("function", {}).get("arguments", {}),
-                }
-                for tc in msg_dict.get("tool_calls", [])
-            ]
+            # Convert from OpenAI tool_calls format - arguments is JSON string
+            tc_list = []
+            for tc in msg_dict.get("tool_calls", []):
+                args_raw = tc.get("function", {}).get("arguments", "{}")
+                # Parse JSON string to dict
+                if isinstance(args_raw, str):
+                    try:
+                        args = json.loads(args_raw)
+                    except json.JSONDecodeError:
+                        args = {}
+                else:
+                    args = args_raw
+                tc_list.append(
+                    {
+                        "id": tc.get("id", ""),
+                        "name": tc.get("function", {}).get("name", ""),
+                        "args": args,
+                    }
+                )
+            tool_calls = tc_list
         return AIMessage(
             content=msg_dict.get("content"),
             tool_calls=tool_calls,
