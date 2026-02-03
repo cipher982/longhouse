@@ -162,20 +162,9 @@ Jobs can live in two places:
 
 ## Demo & Seed Data
 
-Two distinct use cases with existing infrastructure:
-
-| Purpose | Data | How |
-|---------|------|-----|
-| **Fast to Fun** (onboarding) | 2 Timeline sessions | Empty state → "Load demo timeline" button |
-| **Showcase** (demos/videos) | Full Oikos + Timeline | `scripts/build_demo_db.py` → `data/demo/longhouse-demo.db` |
-
-**Key files:**
-- `services/demo_sessions.py` — 2 agent sessions for Timeline (Claude + Codex)
-- `scripts/build_demo_db.py` — builds complete showcase DB with scenarios + agent sessions
-- `scenarios/data/*.yaml` — Oikos run scenarios (swarm-mvp has 5 runs: waiting/failed/success/running/queued)
-- `scripts/capture_demo_video.py` — Playwright video capture for marketing
-
-**To build showcase DB:** `uv run scripts/build_demo_db.py --force`
+Two separate things exist — don't conflate or rebuild:
+- **Fast to Fun** (onboarding): `services/demo_sessions.py` — seeds 2 sessions via empty state button
+- **Showcase** (demos/videos): `scripts/build_demo_db.py` — builds full DB with scenarios
 
 ## Misc
 - GH actions use runners on Cube
