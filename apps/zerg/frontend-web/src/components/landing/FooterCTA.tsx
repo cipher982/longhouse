@@ -31,7 +31,7 @@ export function FooterCTA() {
             Your cloud workspace is waiting.
           </blockquote>
           <Button variant="primary" size="lg" className="landing-cta-main" onClick={handleStartFree}>
-            Get Started Free
+            Get your Longhouse
           </Button>
         </div>
 

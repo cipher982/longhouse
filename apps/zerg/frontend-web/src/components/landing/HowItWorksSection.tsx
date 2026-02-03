@@ -78,7 +78,7 @@ export function HowItWorksSection() {
 
         <div className="landing-steps-cta">
           <Button variant="primary" size="lg" onClick={handleGetStarted}>
-            View Your Timeline
+            Get your Longhouse
           </Button>
         </div>
       </div>
