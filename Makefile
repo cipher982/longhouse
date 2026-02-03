@@ -577,7 +577,7 @@ video-list: ## List available video scenarios
 # UI Capture (Debug Bundles for Agents)
 # ---------------------------------------------------------------------------
 ui-capture: ## Capture local dev UI debug bundle (requires dev running)
-	@bunx tsx scripts/ui-capture.ts $(PAGE) $(if $(SCENE),--scene=$(SCENE),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(ALL),--all,)
+	@bunx tsx scripts/ui-capture.ts $(PAGE) $(if $(SCENE),--scene=$(SCENE),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(ALL),--all,) $(if $(NO_TRACE),--no-trace,)
 
 # ---------------------------------------------------------------------------
 # Validation
