@@ -61,10 +61,21 @@ def health() -> Dict[str, Any]:
     minimal to avoid impacting test performance.
     """
     db_ok = True
+    alembic_version = None
     try:
         session_factory = get_session_factory()
         with session_factory() as s:  # type: ignore[arg-type]
             s.execute(text("SELECT 1"))
+
+            # Get current alembic version (may not exist in test databases)
+            try:
+                result = s.execute(text("SELECT version_num FROM alembic_version LIMIT 1"))
+                row = result.fetchone()
+                if row:
+                    alembic_version = row[0]
+            except Exception:
+                # alembic_version table doesn't exist - not an error
+                pass
     except Exception:  # pragma: no cover – defensive: surface as unhealthy but do not raise
         db_ok = False
 
@@ -82,7 +93,10 @@ def health() -> Dict[str, Any]:
 
     return {
         "status": "ok" if db_ok else "degraded",
-        "db": {"status": "ok" if db_ok else "error"},
+        "db": {
+            "status": "ok" if db_ok else "error",
+            "alembic_version": alembic_version,
+        },
         "ws": ws_stats,
     }
 
