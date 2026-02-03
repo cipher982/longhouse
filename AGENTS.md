@@ -180,11 +180,7 @@ Two separate things exist — don't conflate or rebuild:
 ## Learnings (Recent - Human compacts weekly)
 
 <!-- Agents: append below. Keep last 7 days or 10 entries max. -->
-- (2026-02-02) [arch] Scenario seed engine uses SeedRegistry for run-level idempotency; uuid5 helper exists but entity IDs are still auto-increment.
-- (2026-02-02) [arch] AgentsStore (timeline) and Oikos (threads/runs) are separate schemas - don't force consolidation across different data models.
-- (2026-02-02) [gotcha] .env DATABASE_URL overrides make dev; comment it out for SQLite.
 - (2026-02-03) [gotcha] scenario seeding clean=True does not clear SeedRegistry; reseed will skip unless registry is cleared.
-- (2026-02-01) [test] Core E2E serial only (`--workers=1`); parallel causes SQLite race conditions.
 - (2026-02-03) [gotcha] Runner daemons hardcode API URL; domain changes break them silently. Check `/api/runners/status` endpoint or footer indicator.
 - (2026-02-03) [ops] Runner daemons on servers: restart with `docker rm/run` using `SWARMLET_URL=wss://api.longhouse.ai`.
 - (2026-02-03) [ux] Global nav still includes Forum/Canvas in some headers despite Timeline-first direction; align nav to Timeline/Oikos core.
@@ -193,3 +189,4 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-03) [ui] UI debug bundles: `make ui-capture` produces screenshot + trace + manifest; Playwright 1.57 lacks `page.accessibility`, so a11y capture uses `locator.ariaSnapshot()` (YAML) or guards the missing API.
 - (2026-02-03) [ui] SCENE=empty currently no-ops (doesn't clear sessions); ariaSnapshot flattens session list into a single text node, limiting structured parsing.
 - (2026-02-03) [gotcha] `uv run` builds fail if `apps/zerg/frontend-web/dist` is missing (hatch force-include); build frontend before backend tests.
+- (2026-02-03) [ops] Installer lives at `get.longhouse.ai/install.sh`; `longhouse.ai/install.sh` serves the SPA, and `api-david.longhouse.ai` is the working API subdomain (not api.david).
