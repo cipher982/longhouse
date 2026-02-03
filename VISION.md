@@ -43,6 +43,20 @@ This is a living vision doc. It captures both the direction and the reasoning th
 
 ---
 
+## User Value Proposition
+
+Three promises to users:
+
+1. **Never lose a conversation** — Every Claude, Codex, Cursor, Gemini session appears in one timeline. No more grepping JSONL.
+
+2. **Find where you solved it** — Search by keyword, project, date. FTS5-powered instant results. Or ask Oikos for deeper discovery.
+
+3. **Resume from anywhere** — Close your laptop. Open Longhouse on phone. Resume the session as a commis (headless Claude Code). Work continues.
+
+**Guiding principle: Fast to Fun.** Time from install to "oh cool" should be under 2 minutes.
+
+---
+
 ## Principles & Constraints
 
 - **Always-on beats cold start** for paid users. Background agents are core; sleeping instances break the product.
@@ -98,6 +112,30 @@ Agent sessions are unified into a single, lossless, queryable database:
 - **events**: append-only rows for each message/tool call (raw text + parsed fields)
 
 This schema is already proven in Life Hub. We are moving it to Longhouse and making Longhouse the source of truth.
+
+---
+
+## Session Discovery
+
+Two tiers optimized for different needs:
+
+**Timeline Search Bar (fast, 80% of lookups)**
+- SQLite FTS5 over session events (`content_text`, `tool_name`, project, etc.)
+- Instant results (<10ms)
+- Keyword matching, project/date filters
+- User types → results appear immediately
+
+**Oikos Discovery (agentic, complex queries)**
+- Multi-tool reasoning for vague or complex lookups
+- Tools: `search_sessions`, `grep_sessions`, `filter_sessions`, `get_session_detail`
+- Semantic search (embeddings) for approximate matching
+- Example: "Find where I implemented retry logic last month" → Oikos searches, filters, cross-references
+
+**The split:**
+- Search bar handles "I know roughly what I'm looking for"
+- Oikos handles "I vaguely remember something..."
+
+This keeps the UI snappy while preserving power for complex discovery.
 
 ---
 
@@ -224,7 +262,7 @@ If the README drifts from reality, CI fails. No hidden env flags - everything de
   - QuickStart by default; Manual for power users
   - No 200-line `.env` edits
   - Graceful degradation: UI works without API keys; chat unlocks later
-- **Goal:** time-to-value < 2 minutes and a visible session in the Forum
+- **Goal:** time-to-value < 2 minutes and a visible session in the Timeline
 
 ---
 
@@ -436,10 +474,10 @@ The shipper-to-Longhouse ingest must be robust:
 
 ---
 
-## Forum Drop-In Session Resume (Design)
+## Timeline Session Resume (Design)
 
-Transform Forum from passive session visualization into an interactive session multiplexer.
-Click an agent session (Claude/Codex/Gemini) and chat with that session in real time.
+Transform Timeline from passive session visualization into an interactive session multiplexer.
+Click an agent session (Claude/Codex/Gemini) and resume that session in real time.
 
 **Goal:** Resume a provider session turn-by-turn without breaking the canonical archive in Longhouse.
 
@@ -486,9 +524,9 @@ Backend: POST /api/sessions/{id}/chat
 - Cancel button (AbortController)
 - Lock status indicators
 
-**`pages/ForumPage.tsx`**
-- Chat mode toggle when session selected
-- SessionChat replaces metadata panel in chat mode
+**`pages/ForumPage.tsx`** (may rename to `TimelinePage.tsx`)
+- Resume mode toggle when session selected
+- SessionChat replaces metadata panel in resume mode
 
 ### SSE Event Types
 
@@ -839,13 +877,14 @@ This is David's personal integration. OSS users don't need Life Hub at all.
 ## Open Questions
 
 1. ~~TimescaleDB support in Longhouse deployments?~~ → Fallback to vanilla Postgres with time-based partitioning.
-2. Session resume: store raw JSONL alongside events or reconstruct on demand?
+2. ~~Session resume: store raw JSONL alongside events or reconstruct on demand?~~ → Reconstruct from events (implemented).
 3. Backfill tooling: how to avoid duplicates and ensure fidelity?
 4. How should Oikos conversations map into sessions (provider="oikos")?
 5. Artifact storage: should file diffs, screenshots, patches be stored alongside events or separate?
 6. Runner daemon packaging: separate install or bundle with `longhouse` CLI?
 7. Secrets for jobs: job-scoped encrypted bundles (age) vs sops vs external secrets manager?
 8. Jobs pack UX: local template by default vs required private repo from day one?
+9. Session discovery: semantic search (embeddings) priority vs FTS5-only for MVP?
 
 ---
 
@@ -1030,7 +1069,7 @@ These are the concrete mismatches between today’s codebase and the SQLite-only
 │    [Phone/Web]                  [Sauron crons]              │
 │                                                             │
 │  Timeline: searchable archive of all sessions               │
-│  Forum: async agent collaboration space                     │
+│  Resume: continue any session from any device               │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -1064,12 +1103,12 @@ longhouse serve --host 0.0.0.0 --port 8080
 
 | Feature | Description |
 |---------|-------------|
-| **Oikos** | Main chat interface — your Super-Siri |
-| **Commis Pool** | Background agents working in parallel |
-| **Timeline** | Searchable archive of all sessions |
-| **Forum** | Async collaboration space for agents |
-| **Session Migration** | Move local Claude → cloud commis |
-| **Mobile Access** | Check on agents from phone |
+| **Timeline** | Searchable archive of all sessions — the core product |
+| **Search** | FTS5-powered instant discovery + Oikos for complex queries |
+| **Resume** | Continue any session from any device (spawns commis) |
+| **Commis Pool** | Background agents (headless Claude Code) working in parallel |
+| **Oikos** | Chat interface for discovery and direct AI interaction |
+| **Mobile Access** | Check on agents, resume sessions from phone |
 | **Sauron Crons** | Scheduled background jobs |
 
 ### What "Lightweight" Means
@@ -1370,8 +1409,8 @@ openai_api_key = "sk-..."
 
 ### Open Questions
 
-- [ ] Package name: `longhouse` available on PyPI?
-- [ ] Frontend bundle size?
+- [x] Package name: `longhouse` available on PyPI? → **Yes, published as `longhouse` v0.1.1**
+- [ ] Frontend bundle size? (target budget TBD)
 - [ ] Shipper: bundled or separate package?
 - [ ] Auth for remote access: API key? OAuth?
 - [ ] HTTPS: built-in or "use Caddy/nginx"?
@@ -1480,6 +1519,8 @@ Curated sources we can lean on when pushing SQLite to its limits, plus the concr
 - **2026-01-30:** Initial draft
 - **2026-01-30:** Pivoted from "viewer" to "cloud agent ops center"
 - **2026-01-30:** Proved SQLite + concurrent agents works — durable queue stays
+- **2026-02-02:** Added User Value Proposition, Session Discovery architecture, "Fast to Fun" principle
+- **2026-02-02:** Renamed Forum → Timeline throughout; elevated Resume as key feature
 
 ## Summary
 
