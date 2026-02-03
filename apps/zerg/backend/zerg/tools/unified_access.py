@@ -258,17 +258,15 @@ def _create_stubbed_tool(original_tool: StructuredTool, stub_matcher: Callable[[
         # No stub match - call original
         return original_func(**kwargs)
 
-    # Create new tool preserving all attributes from original
+    # Create new tool preserving core attributes from original
+    # Note: Native Tool type doesn't have LangChain-specific attrs like
+    # return_direct, verbose, handle_tool_error, response_format
     return StructuredTool(
         name=original_tool.name,
         description=original_tool.description,
         func=stubbed_func,
-        args_schema=original_tool.args_schema,
-        return_direct=original_tool.return_direct,
-        coroutine=original_tool.coroutine,
-        verbose=original_tool.verbose,
-        handle_tool_error=original_tool.handle_tool_error,
-        response_format=original_tool.response_format,
+        args_schema=getattr(original_tool, "args_schema", None),
+        coroutine=getattr(original_tool, "coroutine", None),
     )
 
 
