@@ -68,12 +68,32 @@ Make Longhouse ready for Hacker News launch. The product works but the story/UX 
   - ✅ Clear commands section
   - ✅ Feature checklist (✅ vs 🚧)
 
-- [ ] **Landing page / product story alignment** (1 hour) - Blocked by Worker 3 (frontend)
-  - Landing says "Your Personal AI Hub" but product is timeline viewer
-  - Pick ONE story: Timeline focus OR hub focus
-  - Recommendation: Timeline = clearer, more focused value prop
-  - Update landing hero, meta descriptions, copy
-  - Files: `apps/zerg/frontend-web/src/components/landing/HeroSection.tsx`, meta tags
+- [ ] **Landing page redesign** (4 hours)
+  - Current landing tells OLD story ("AI That Knows You", integrations)
+  - New story: Timeline + Search + Resume (matches VISION.md User Value Prop)
+  - **Guiding principle: Fast to Fun** — install to "oh cool" < 2 minutes
+
+  **Hero Section:**
+  - [ ] Headline: "Never lose an AI coding conversation" (or similar)
+  - [ ] Subhead: Search across Claude, Codex, Cursor, Gemini / Resume from anywhere
+  - [ ] Screenshot: Timeline view with sessions (swap from chat-preview.png)
+  - [ ] CTA: `pip install longhouse` prominent
+
+  **How It Works:**
+  - [ ] Reframe as: Install → Connect → Search (not Connect apps → AI Learns → Automate)
+  - [ ] Keep 3-step simplicity
+
+  **Features:**
+  - [ ] Cut or minimize integrations section (wrong story)
+  - [ ] Add: Search (FTS5 instant), Resume (commis), Multi-tool (providers)
+  - [ ] Position Oikos as power feature, not hero
+
+  **Visuals needed:**
+  - [ ] Hero screenshot: Timeline with search bar visible + demo sessions
+  - [ ] Provider logos: Claude, Codex, Cursor, Gemini icons
+  - [ ] Optional: Search results screenshot, session detail view
+
+  **Files:** `HeroSection.tsx`, `HowItWorksSection.tsx`, `IntegrationsSection.tsx`, `landing.css`
 
 - [ ] **Demo mode flag** (2 hours)
   - Add `longhouse serve --demo` flag that starts with pre-loaded sessions
@@ -496,6 +516,46 @@ hatch (claude --print)
 - [x] Fix and redeploy
 
 **Done 2026-02-01:** Docker builds successfully after lockfile fixes.
+
+---
+
+## Session Discovery — FTS5 Search + Oikos Tools (6)
+
+Make session discovery actually useful. Two tiers: fast search bar for keywords, Oikos for complex discovery.
+
+**Problem:** Timeline cards are just a prettier version of scrolling snippets. Real value is finding "where did I solve X?"
+
+**Architecture:**
+- **Search bar**: SQLite FTS5 over session events. Instant (<10ms), keyword-based.
+- **Oikos**: Agentic multi-tool discovery. Semantic search, grep, filters, cross-referencing.
+
+### Phase 1: FTS5 Search Bar (Timeline)
+
+- [ ] Add FTS5 virtual table for `agents.events` content (`content_text`, `tool_name`, etc.)
+- [ ] Add search endpoint `GET /api/agents/sessions/search?q=...`
+- [ ] Add search bar UI to Timeline page (debounced, instant results)
+- [ ] Results show matching snippets with highlights
+- [ ] Click result → opens session detail at relevant event
+
+**Files:** `models/agents.py`, `services/agents_store.py`, `routers/agents.py`, `SessionsPage.tsx`
+
+### Phase 2: Oikos Session Discovery Tools
+
+- [ ] Add `search_sessions` tool (FTS5 search, returns session summaries)
+- [ ] Add `grep_sessions` tool (regex search over event content)
+- [ ] Add `filter_sessions` tool (by project, date range, provider, tool usage)
+- [ ] Add `get_session_detail` tool (fetch full session with events)
+- [ ] Register tools in Oikos core tools
+
+**Files:** `tools/builtin/session_tools.py`, `oikos_tools.py`
+
+### Phase 3: Embeddings for Oikos (Optional)
+
+- [ ] Embed session events on ingest (background job or sync)
+- [ ] Add `semantic_search_sessions` tool for Oikos
+- [ ] Vector search via sqlite-vec or pgvector
+
+**Test:** "Find where I implemented retry logic" returns relevant sessions in <100ms (search bar) or with reasoning (Oikos).
 
 ---
 
