@@ -603,7 +603,7 @@ export default function DashboardPage() {
               <Table.Row className="fiches-empty-row">
                 <Table.Cell colSpan={emptyColspan} className="fiches-empty-cell">
                   <EmptyState
-                    icon={<img src={appLogo} alt="Swarmlet Logo" className="dashboard-empty-logo" />}
+                    icon={<img src={appLogo} alt="Longhouse Logo" className="dashboard-empty-logo" />}
                     title="No fiches found"
                     description="Click 'Create Fiche' to get started."
                   />

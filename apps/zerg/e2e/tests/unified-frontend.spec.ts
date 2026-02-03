@@ -43,7 +43,7 @@ test.describe('Unified Frontend Navigation', () => {
     await page.goto(`${UNIFIED_URL}/`);
 
     // Wait for page title - use toHaveTitle() which correctly reads document.title
-    await expect(page).toHaveTitle(/Swarmlet/, { timeout: 10000 });
+    await expect(page).toHaveTitle(/Longhouse/, { timeout: 10000 });
     await expect(page).toHaveURL(/\/(dashboard)?$/);
   });
 

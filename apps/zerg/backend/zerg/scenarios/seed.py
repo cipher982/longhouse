@@ -11,9 +11,6 @@ from pathlib import Path
 from typing import Any
 from typing import Iterable
 from typing import Optional
-from uuid import NAMESPACE_DNS
-from uuid import UUID
-from uuid import uuid5
 
 import yaml
 from sqlalchemy.orm import Session
@@ -31,9 +28,6 @@ from zerg.services.oikos_service import OikosService
 from zerg.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
-
-# Namespace for deterministic UUID generation
-SEED_NAMESPACE = uuid5(NAMESPACE_DNS, "longhouse.ai.seed")
 
 SCENARIO_DIR = Path(__file__).resolve().parent / "data"
 SCENARIO_TITLE_PREFIX = "[scenario:"
@@ -61,11 +55,6 @@ def load_scenario(name: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ScenarioError(f"Scenario '{name}' must be a mapping at the top level")
     return data
-
-
-def deterministic_uuid(seed_key: str) -> UUID:
-    """Generate deterministic UUID from seed key using uuid5."""
-    return uuid5(SEED_NAMESPACE, seed_key)
 
 
 def check_seed_registry(
@@ -305,7 +294,7 @@ def cleanup_scenario(db: Session, scenario_name: Optional[str]) -> dict[str, int
     thread_ids = [row[0] for row in thread_rows]
 
     if not thread_ids:
-        return {"runs": 0, "threads": 0, "messages": 0, "commis_jobs": 0}
+        return {"runs": 0, "threads": 0, "messages": 0, "commis_jobs": 0, "registry_entries": 0}
 
     run_ids = [row[0] for row in db.query(Run.id).filter(Run.thread_id.in_(thread_ids)).all()]
 
@@ -317,13 +306,19 @@ def cleanup_scenario(db: Session, scenario_name: Optional[str]) -> dict[str, int
     messages_deleted = db.query(ThreadMessage).filter(ThreadMessage.thread_id.in_(thread_ids)).delete(synchronize_session=False)
     threads_deleted = db.query(Thread).filter(Thread.id.in_(thread_ids)).delete(synchronize_session=False)
 
+    # Clear SeedRegistry entries for this scenario to allow re-seeding
+    registry_deleted = 0
+    if scenario_name:
+        registry_deleted = db.query(SeedRegistry).filter(SeedRegistry.seed_key.like(f"{scenario_name}:%")).delete(synchronize_session=False)
+
     logger.info(
-        "Scenario cleanup %s: %s runs, %s messages, %s threads, %s commis jobs",
+        "Scenario cleanup %s: %s runs, %s messages, %s threads, %s commis jobs, %s registry entries",
         prefix,
         runs_deleted,
         messages_deleted,
         threads_deleted,
         commis_jobs_deleted,
+        registry_deleted,
     )
 
     return {
@@ -331,6 +326,7 @@ def cleanup_scenario(db: Session, scenario_name: Optional[str]) -> dict[str, int
         "threads": threads_deleted,
         "messages": messages_deleted,
         "commis_jobs": commis_jobs_deleted,
+        "registry_entries": registry_deleted,
     }
 
 

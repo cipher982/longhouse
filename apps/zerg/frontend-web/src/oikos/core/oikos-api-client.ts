@@ -91,10 +91,10 @@ export class OikosAPIClient {
 
   /**
    * Deprecated: Oikos now uses HttpOnly cookie-based auth.
-   * Login is handled by the main Swarmlet dashboard.
+   * Login is handled by the main Longhouse dashboard.
    */
   async authenticate(): Promise<never> {
-    throw new Error('Deprecated: Oikos uses HttpOnly cookie auth via Swarmlet dashboard login.');
+    throw new Error('Deprecated: Oikos uses HttpOnly cookie auth via Longhouse dashboard login.');
   }
 
   /**

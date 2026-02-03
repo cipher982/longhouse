@@ -10,10 +10,10 @@ export default function ChangelogPage() {
   usePublicPageScroll();
 
   useEffect(() => {
-    document.title = "Changelog - Swarmlet";
+    document.title = "Changelog - Longhouse";
     const metaDescription = document.querySelector('meta[name="description"]');
     if (metaDescription) {
-      metaDescription.setAttribute('content', 'Track Swarmlet\'s development progress. See new features, improvements, and fixes as we build the platform.');
+      metaDescription.setAttribute('content', 'Track Longhouse\'s development progress. See new features, improvements, and fixes as we build the platform.');
     }
   }, []);
 
@@ -29,7 +29,7 @@ export default function ChangelogPage() {
           </Link>
           <Link to="/" className="info-page-brand">
             <SwarmLogo size={28} />
-            <span className="info-page-brand-name">Swarmlet</span>
+            <span className="info-page-brand-name">Longhouse</span>
           </Link>
         </div>
       </header>
@@ -37,7 +37,7 @@ export default function ChangelogPage() {
       <main className="info-page-content">
         <h1 className="info-page-title">Changelog</h1>
         <p className="info-page-subtitle">
-          Track our progress as we build Swarmlet.
+          Track our progress as we build Longhouse.
         </p>
 
         <div className="docs-section changelog-empty-state">
@@ -55,7 +55,7 @@ export default function ChangelogPage() {
       </main>
 
       <footer className="info-page-footer">
-        <p>&copy; {currentYear} Swarmlet. All rights reserved.</p>
+        <p>&copy; {currentYear} Longhouse. All rights reserved.</p>
       </footer>
     </div>
   );

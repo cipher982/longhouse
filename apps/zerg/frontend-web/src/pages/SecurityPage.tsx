@@ -11,10 +11,10 @@ export default function SecurityPage() {
   usePublicPageScroll();
 
   useEffect(() => {
-    document.title = "Security - Swarmlet";
+    document.title = "Security - Longhouse";
     const metaDescription = document.querySelector('meta[name="description"]');
     if (metaDescription) {
-      metaDescription.setAttribute('content', 'How Swarmlet protects your data. HTTPS-only connections, OAuth 2.0 authentication, encrypted credentials, and responsible disclosure policy.');
+      metaDescription.setAttribute('content', 'How Longhouse protects your data. HTTPS-only connections, OAuth 2.0 authentication, encrypted credentials, and responsible disclosure policy.');
     }
   }, []);
 
@@ -30,7 +30,7 @@ export default function SecurityPage() {
           </Link>
           <Link to="/" className="info-page-brand">
             <SwarmLogo size={28} />
-            <span className="info-page-brand-name">Swarmlet</span>
+            <span className="info-page-brand-name">Longhouse</span>
           </Link>
         </div>
       </header>
@@ -75,7 +75,7 @@ export default function SecurityPage() {
         <div className="legal-content">
           <h2>Authentication</h2>
           <p>
-            Swarmlet uses Google OAuth 2.0 for authentication. We never see or store your Google password.
+            Longhouse uses Google OAuth 2.0 for authentication. We never see or store your Google password.
             You can revoke access anytime from your Google account settings.
           </p>
 
@@ -117,7 +117,7 @@ export default function SecurityPage() {
       </main>
 
       <footer className="info-page-footer">
-        <p>&copy; {currentYear} Swarmlet. All rights reserved.</p>
+        <p>&copy; {currentYear} Longhouse. All rights reserved.</p>
       </footer>
     </div>
   );

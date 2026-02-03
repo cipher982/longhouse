@@ -258,10 +258,10 @@ export default function ChatPage() {
   // Update document title with fiche name for better context
   useEffect(() => {
     if (fiche) {
-      document.title = `${fiche.name} - Swarmlet`;
+      document.title = `${fiche.name} - Longhouse`;
     }
     return () => {
-      document.title = "Swarmlet AI Fiche Platform";
+      document.title = "Longhouse AI Fiche Platform";
     };
   }, [fiche]);
 
