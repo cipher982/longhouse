@@ -306,6 +306,12 @@ Unblock blob image previews + Cloudflare beacon by updating CSP in frontend ngin
 
 ---
 
+## Prod Cache Fixes — Frontend (1) ✅
+
+- [x] Force `index.html` and SPA fallback to no-store so rebrand updates reach prod quickly.
+
+---
+
 ## Prod Console Noise — Auth + Funnel (1)
 
 Eliminate unauth 401 spam and fix funnel 403 after rebrand.
