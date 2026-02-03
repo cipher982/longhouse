@@ -1,0 +1,21 @@
+# FOUND (2026-02-03)
+
+- [Infra/docs] API host mismatch: backend is configured for `api-david.longhouse.ai`, but TODO Domain Split still references `api.david.longhouse.ai`. `curl https://api-david.longhouse.ai/health` returns 200; `curl https://api.david.longhouse.ai/health` fails, and container labels only include `api-david.longhouse.ai`.
+- [Infra/docs] `longhouse.ai/install.sh` serves the SPA HTML (not the installer). The working installer URL is `get.longhouse.ai/install.sh` (302 to GitHub raw). VISION + `scripts/install.sh` comment still point to `https://longhouse.ai/install.sh`.
+- [Infra/docs] Wildcard DNS claim is stale: `dig foo.longhouse.ai` returns no records, so `*.longhouse.ai` does not appear to be configured despite VISION saying it is.
+- [Infra/docs] DB size is outdated: docs say `/data/longhouse.db (~2.5GB)` but current file is ~3.5GB (`/data/longhouse.db`). Update TODO + LAUNCH-PLAN.
+- [Docs vs code] Install script installs Python 3.11, but `pyproject.toml` requires `>=3.12`. `scripts/install.sh` should install 3.12+ (or lower the requirement).
+- [Docs vs code] Shipper defaults to `http://localhost:47300`, while `longhouse serve` defaults to 8080 and README uses 8080. Running `longhouse connect` with no `--url` will target the wrong port.
+- [Docs vs code] VISION mentions `longhouse up` and port `30080` for OSS. CLI is `longhouse serve` and default port is `8080`.
+- [Docs vs code] VISION claims FTS5-powered timeline search; current search is `ilike` join on events (no FTS5 tables/queries present).
+- [Docs vs code] VISION says job claiming is dialect-aware (Postgres `FOR UPDATE SKIP LOCKED`). `commis_job_queue.py` is SQLite-specific (`datetime('now')`, `UPDATE ... RETURNING`) and is imported unconditionally in `commis_job_processor.py`.
+- [Docs vs code] Workspace paths in VISION are `~/.longhouse/workspaces/...` and artifacts in `~/.longhouse/artifacts`, but current defaults are `/var/oikos/workspaces` and `settings.data_dir` (`/data` in Docker or repo `data/`). Session resume temp workspaces default to `/tmp/zerg-session-workspaces`.
+- [Docs vs code] VISION control-plane section lists `apps/control-plane/` file tree, but no such directory exists in repo (plan vs reality is unclear).
+- [Docs vs infra] VISION control-plane routing assumes Traefik labels; current infra uses Caddy (coolify-proxy with Caddy labels). If Traefik is intended, docs should say so and note migration.
+- [Docs vs release] PyPI latest is `longhouse` 0.1.1, but repo `pyproject.toml` is 0.1.2. LAUNCH-PLAN still claims no PyPI package; README implies `pip install` yields current features.
+- [Docs vs code] README + HN launch copy claim search across Claude/Codex/Cursor/Gemini, but shipper/parser only supports Claude Code JSONL. Demo seeds include Codex/Gemini, but real ingest is Claude-only.
+- [Docs] HN_LAUNCH.md says MIT license; repo LICENSE and pyproject are Apache-2.0.
+- [Docs] HN_LAUNCH.md checklist says “README has screenshot (done!)” but README has no image.
+- [Docs] HN_LAUNCH.md says demo data seeds on first run; current behavior requires `--demo/--demo-fresh` or calling the demo seed endpoint.
+- [Docs] VISION repeatedly references `brew install longhouse`, but there is no Homebrew formula in repo or release workflow.
+- [Docs conflict] LAUNCH-PLAN hosted beta suggests provisioning via Coolify API; VISION explicitly says not to use Coolify for dynamic provisioning.
