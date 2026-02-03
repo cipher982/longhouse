@@ -2,11 +2,11 @@
  * HowItWorksSection
  *
  * Simple 3-step explanation of how Longhouse works.
- * Cloud workspace: Install → Agents Run → Continue Anywhere.
+ * Cloud workspace: Sync → Run → Resume.
  */
 
 import config from "../../lib/config";
-import { CodeIcon, ZapIcon, SmartphoneIcon } from "../icons";
+import { ZapIcon, SmartphoneIcon, PlugIcon } from "../icons";
 import { Button } from "../ui";
 
 interface Step {
@@ -18,22 +18,22 @@ interface Step {
 
 const steps: Step[] = [
   {
-    icon: <CodeIcon width={32} height={32} />,
+    icon: <PlugIcon width={32} height={32} />,
     number: "1",
-    title: "Install",
-    description: "One command. Sessions start syncing to your cloud workspace."
+    title: "Sync Sessions",
+    description: "Install CLI. Your Claude Code sessions flow to the cloud."
   },
   {
     icon: <ZapIcon width={32} height={32} />,
     number: "2",
     title: "Agents Run",
-    description: "AI agents process on our infrastructure. Close your laptop—they keep working."
+    description: "Work happens on our servers. Close your laptop—nothing stops."
   },
   {
     icon: <SmartphoneIcon width={32} height={32} />,
     number: "3",
     title: "Continue Anywhere",
-    description: "Resume from phone, tablet, or any browser. Your workspace follows you."
+    description: "Phone, tablet, browser. Pick up where you left off."
   }
 ];
 
