@@ -73,9 +73,8 @@ def get_install_script(
     This endpoint is designed to be used with curl:
         curl -fsSL https://api.longhouse.ai/api/runners/install.sh?enroll_token=xxx | bash
 
-    Or with environment variables:
-        curl -fsSL https://api.longhouse.ai/api/runners/install.sh | \\
-            ENROLL_TOKEN=xxx RUNNER_NAME=my-runner bash
+    Or with environment variables (preferred - avoids token in shell history):
+        ENROLL_TOKEN=xxx curl -fsSL https://api.longhouse.ai/api/runners/install.sh | bash
 
     The script:
     1. Detects OS (macOS/Linux)
@@ -86,12 +85,41 @@ def get_install_script(
 
     No authentication required - this is for bootstrapping new runners.
     """
+    import re
+    import shlex
+
     from zerg.config import get_settings
 
     settings = get_settings()
 
+    # Validate enroll_token format (alphanumeric + dash/underscore only)
+    if not re.match(r"^[A-Za-z0-9_-]+$", enroll_token):
+        return Response(
+            content="Error: Invalid enroll_token format",
+            media_type="text/plain",
+            status_code=400,
+        )
+
+    # Validate runner_name if provided (alphanumeric + dash/underscore/dot only)
+    if runner_name and not re.match(r"^[A-Za-z0-9_.-]+$", runner_name):
+        return Response(
+            content="Error: Invalid runner_name format (use alphanumeric, dash, underscore, dot)",
+            media_type="text/plain",
+            status_code=400,
+        )
+
     # Prefer longhouse_url, fall back to swarmlet_url (deprecated), then settings
-    api_url = longhouse_url or swarmlet_url
+    # Note: We don't accept arbitrary URLs from query params for security
+    api_url = swarmlet_url  # Only accept deprecated param for backwards compat
+    if longhouse_url:
+        # Validate URL format to prevent injection
+        if not re.match(r"^https?://[A-Za-z0-9._-]+(:[0-9]+)?(/.*)?$", longhouse_url):
+            return Response(
+                content="Error: Invalid longhouse_url format",
+                media_type="text/plain",
+                status_code=400,
+            )
+        api_url = longhouse_url
     if not api_url:
         if not settings.app_public_url:
             if settings.testing:
@@ -105,11 +133,18 @@ def get_install_script(
         else:
             api_url = settings.app_public_url
 
-    # GitHub releases URL for binaries
-    binary_url = "https://github.com/davidrose-drros/zerg/releases/latest/download"
+    # GitHub releases URL for binaries (hardcoded, not user-provided)
+    binary_url = "https://github.com/cipher982/longhouse/releases/latest/download"
+
+    # Shell-escape all user-provided values to prevent command injection
+    safe_enroll_token = shlex.quote(enroll_token)
+    safe_runner_name = shlex.quote(runner_name) if runner_name else ""
+    safe_api_url = shlex.quote(api_url)
+    safe_binary_url = shlex.quote(binary_url)
 
     # Generate the shell script
-    default_runner_name = runner_name or "$(hostname)"
+    # Note: Values are shell-quoted to prevent command injection
+    default_runner_name_expr = safe_runner_name if runner_name else "$(hostname)"
     script = f"""#!/bin/bash
 # Longhouse Runner - Universal Installer
 # Detects OS, registers runner, and installs as native service
@@ -120,10 +155,11 @@ def get_install_script(
 set -e
 
 # Configuration (can be overridden via env vars)
-ENROLL_TOKEN="${{ENROLL_TOKEN:-{enroll_token}}}"
-RUNNER_NAME="${{RUNNER_NAME:-{default_runner_name}}}"
-LONGHOUSE_URL="${{LONGHOUSE_URL:-{api_url}}}"
-BINARY_URL="${{BINARY_URL:-{binary_url}}}"
+# Values are pre-validated and shell-escaped by the server
+ENROLL_TOKEN="${{ENROLL_TOKEN:-{safe_enroll_token}}}"
+RUNNER_NAME="${{RUNNER_NAME:-{default_runner_name_expr}}}"
+LONGHOUSE_URL="${{LONGHOUSE_URL:-{safe_api_url}}}"
+BINARY_URL="${{BINARY_URL:-{safe_binary_url}}}"
 
 # Validate required vars
 if [ -z "$ENROLL_TOKEN" ]; then
@@ -190,18 +226,18 @@ RESPONSE=$(curl -sf -X POST "$REGISTER_URL" \\
   -H "Content-Type: application/json" \\
   -d "{{\\"enroll_token\\": \\"$ENROLL_TOKEN\\", \\"name\\": \\"$RUNNER_NAME\\"}}" 2>&1) || {{
   echo "Error: Failed to register runner. Check your enrollment token." >&2
-  echo "Response: $RESPONSE" >&2
+  # Don't print response - may contain secrets on partial success
   exit 1
 }}
 
-# Parse response
+# Parse response (don't print raw response - contains runner_secret)
 RUNNER_SECRET=$(parse_json "$RESPONSE" "runner_secret")
 RUNNER_NAME=$(parse_json "$RESPONSE" "name")
 
 if [ -z "$RUNNER_SECRET" ]; then
   if command -v python3 >/dev/null 2>&1 || command -v node >/dev/null 2>&1; then
     echo "Error: Failed to parse runner credentials from response" >&2
-    echo "Response: $RESPONSE" >&2
+    echo "Hint: Server may have returned an error. Check your enrollment token." >&2
   else
     echo "Error: Please install python3 or node to parse JSON response" >&2
   fi
@@ -227,6 +263,10 @@ case "$OS_TYPE" in
     LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 
     mkdir -p "$BIN_DIR" "$CONFIG_DIR" "$STATE_DIR" "$LAUNCH_AGENTS_DIR"
+    # Restrict state dir permissions (logs may contain sensitive output)
+    chmod 700 "$STATE_DIR"
+    touch "$STATE_DIR/runner.log"
+    chmod 600 "$STATE_DIR/runner.log"
 
     BINARY_PATH="$BIN_DIR/longhouse-runner"
     DOWNLOAD_URL="${{BINARY_URL}}/longhouse-runner-${{PLATFORM}}"
@@ -315,6 +355,8 @@ EOF
     SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 
     mkdir -p "$BIN_DIR" "$CONFIG_DIR" "$SYSTEMD_USER_DIR"
+    # Restrict config dir permissions (contains secrets)
+    chmod 700 "$CONFIG_DIR"
 
     BINARY_PATH="$BIN_DIR/longhouse-runner"
     DOWNLOAD_URL="${{BINARY_URL}}/longhouse-runner-${{PLATFORM}}"
@@ -582,8 +624,8 @@ def create_enroll_token(
         f"  {runner_image}"
     )
 
-    # Generate one-liner install command (recommended method)
-    one_liner_install_command = f"curl -fsSL {api_url}/api/runners/install.sh?enroll_token={plaintext_token} | bash"
+    # Generate one-liner install command (env var method - avoids token in shell history)
+    one_liner_install_command = f"ENROLL_TOKEN={plaintext_token} bash -c 'curl -fsSL {api_url}/api/runners/install.sh | bash'"
 
     return EnrollTokenResponse(
         enroll_token=plaintext_token,

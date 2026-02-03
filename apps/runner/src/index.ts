@@ -8,7 +8,7 @@
  */
 
 import { parseArgs } from 'util';
-import { readFileSync } from 'fs';
+import { readFileSync, statSync } from 'fs';
 import { loadConfig, type RunnerConfig } from './config';
 import { RunnerWebSocketClient } from './ws-client';
 import { getRunnerMetadata } from './protocol';
@@ -21,6 +21,7 @@ const { values } = parseArgs({
     version: { type: 'boolean', short: 'v' },
     envfile: { type: 'string' },
     help: { type: 'boolean', short: 'h' },
+    'allow-insecure-envfile': { type: 'boolean' },
   },
   allowPositionals: false,
 });
@@ -28,9 +29,10 @@ const { values } = parseArgs({
 if (values.help) {
   console.log(`Usage: longhouse-runner [options]
 Options:
-  -v, --version     Print version and exit
-  --envfile <path>  Load env vars from file (default: auto-load .env)
-  -h, --help        Show this help`);
+  -v, --version              Print version and exit
+  --envfile <path>           Load env vars from file (default: auto-load .env)
+  --allow-insecure-envfile   Skip envfile permission check (not recommended)
+  -h, --help                 Show this help`);
   process.exit(0);
 }
 
@@ -42,6 +44,20 @@ if (values.version) {
 // Load envfile if specified (before loadConfig reads process.env)
 if (values.envfile) {
   try {
+    // SSH-style permission check: envfile must not be readable/writable by group/others
+    // This prevents accidental credential exposure
+    const stats = statSync(values.envfile);
+    const mode = stats.mode;
+    // Check for group/other read/write permissions (bits 0o077)
+    const insecurePerms = mode & 0o077;
+    if (insecurePerms && !values['allow-insecure-envfile']) {
+      console.error(`Error: Envfile ${values.envfile} has insecure permissions (mode ${(mode & 0o777).toString(8)})`);
+      console.error('The file must not be readable or writable by group/others.');
+      console.error('Fix with: chmod 600 ' + values.envfile);
+      console.error('Or use --allow-insecure-envfile to skip this check (not recommended).');
+      process.exit(1);
+    }
+
     const content = readFileSync(values.envfile, 'utf-8');
     for (const line of content.split('\n')) {
       const trimmed = line.trim();
