@@ -166,13 +166,13 @@ Jobs can live in two places:
 ## Learnings (Recent - Human compacts weekly)
 
 <!-- Agents: append below. Keep last 7 days or 10 entries max. -->
-- (2026-02-02) [arch] Gmail sync cron removed from Zerg; watch renewal now in Life Hub Pub/Sub webhook.
 - (2026-02-02) [arch] Scenario seed engine uses SeedRegistry for run-level idempotency; uuid5 helper exists but entity IDs are still auto-increment.
 - (2026-02-02) [arch] AgentsStore (timeline) and Oikos (threads/runs) are separate schemas - don't force consolidation across different data models.
 - (2026-02-02) [gotcha] .env DATABASE_URL overrides make dev; comment it out for SQLite.
 - (2026-02-03) [gotcha] scenario seeding clean=True does not clear SeedRegistry; reseed will skip unless registry is cleared.
-- (2026-02-01) [design] Alpha = clean breaks. No legacy fallbacks or backwards compat.
 - (2026-02-01) [test] Core E2E serial only (`--workers=1`); parallel causes SQLite race conditions.
 - (2026-02-03) [gotcha] Runner daemons hardcode API URL; domain changes break them silently. Check `/api/runners/status` endpoint or footer indicator.
 - (2026-02-03) [ops] Runner daemons on servers: restart with `docker rm/run` using `SWARMLET_URL=wss://api.longhouse.ai`.
 - (2026-02-03) [ux] Global nav still includes Forum/Canvas in some headers despite Timeline-first direction; align nav to Timeline/Oikos core.
+- (2026-02-03) [product] Longhouse positioning is AI coding session management; landing page copy still reflects old personal AI hub vision.
+- (2026-02-03) [ops] Cloudflare Universal SSL does not cover sub-subdomains; prefer single-level (api-david.longhouse.ai) or custom cert.
