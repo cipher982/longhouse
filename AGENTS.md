@@ -130,6 +130,18 @@ Sauron is the centralized ops scheduler, deployed as a standalone service on cli
 | Oikos Tools | `apps/zerg/backend/docs/supervisor_tools.md` |
 | Sauron scheduler | `apps/sauron/README.md` |
 | Sauron job definitions | `~/git/sauron-jobs/` |
+| Gmail Pub/Sub architecture | `~/git/life-hub/docs/specs/gmail-pubsub-realtime.md` |
+
+## Jobs: Builtin vs External
+
+Jobs can live in two places:
+
+| Location | When to use |
+|----------|-------------|
+| **Builtin** (`zerg/jobs/`) | Product functionality - backup-sentinel, QA checks, things OSS users need |
+| **External** (`sauron-jobs/`) | David-specific automation - worklog, google-ads-digest, life-hub integrations |
+
+**Rule of thumb:** If an OSS user wouldn't need it, put it in `sauron-jobs/`.
 
 ## Misc
 - GH actions use runners on Cube
