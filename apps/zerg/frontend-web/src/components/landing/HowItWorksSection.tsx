@@ -2,11 +2,11 @@
  * HowItWorksSection
  *
  * Simple 3-step explanation of how Longhouse works.
- * Developer-focused: Install → Sync → Search flow.
+ * Cloud workspace: Install → Agents Run → Continue Anywhere.
  */
 
 import config from "../../lib/config";
-import { CodeIcon, ZapIcon, EyeIcon } from "../icons";
+import { CodeIcon, ZapIcon, SmartphoneIcon } from "../icons";
 import { Button } from "../ui";
 
 interface Step {
@@ -21,19 +21,19 @@ const steps: Step[] = [
     icon: <CodeIcon width={32} height={32} />,
     number: "1",
     title: "Install",
-    description: "One command. Installs the CLI and syncs with your Claude Code sessions."
+    description: "One command. Sessions start syncing to your cloud workspace."
   },
   {
     icon: <ZapIcon width={32} height={32} />,
     number: "2",
-    title: "Sessions Sync",
-    description: "Your Claude Code sessions appear automatically. Every tool call, every file edit."
+    title: "Agents Run",
+    description: "AI agents process on our infrastructure. Close your laptop—they keep working."
   },
   {
-    icon: <EyeIcon width={32} height={32} />,
+    icon: <SmartphoneIcon width={32} height={32} />,
     number: "3",
-    title: "Search & Resume",
-    description: "Find where you solved it before. Pick up exactly where you left off."
+    title: "Continue Anywhere",
+    description: "Resume from phone, tablet, or any browser. Your workspace follows you."
   }
 ];
 
@@ -60,7 +60,7 @@ export function HowItWorksSection() {
       <div className="landing-section-inner">
         <h2 className="landing-section-title">How It Works</h2>
         <p className="landing-section-subtitle">
-          From install to timeline in under 2 minutes.
+          Your cloud workspace. Setup in 2 minutes.
         </p>
 
         <div className="landing-steps-row">
