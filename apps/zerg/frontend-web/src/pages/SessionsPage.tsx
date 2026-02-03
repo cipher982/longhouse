@@ -296,7 +296,7 @@ export default function SessionsPage() {
   const [limit, setLimit] = useState(PAGE_SIZE);
 
   // Fetch dynamic filter options
-  const { data: filtersData, isLoading: filtersLoading, refetch: refetchFilters } = useAgentFilters(daysBack);
+  const { data: filtersData, isLoading: filtersLoading } = useAgentFilters(daysBack);
   const projectOptions = filtersData?.projects || [];
   const providerOptions = filtersData?.providers || [];
 

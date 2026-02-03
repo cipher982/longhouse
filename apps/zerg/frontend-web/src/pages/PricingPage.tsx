@@ -12,10 +12,10 @@ export default function PricingPage() {
   usePublicPageScroll();
 
   useEffect(() => {
-    document.title = "Pricing - Swarmlet";
+    document.title = "Pricing - Longhouse";
     const metaDescription = document.querySelector('meta[name="description"]');
     if (metaDescription) {
-      metaDescription.setAttribute('content', 'Free during beta. Full access to Swarmlet\'s AI fiche platform while we build and refine the product.');
+      metaDescription.setAttribute('content', 'Free during beta. Full access to Longhouse\'s AI fiche platform while we build and refine the product.');
     }
   }, []);
 
@@ -38,7 +38,7 @@ export default function PricingPage() {
           </Link>
           <Link to="/" className="info-page-brand">
             <SwarmLogo size={28} />
-            <span className="info-page-brand-name">Swarmlet</span>
+            <span className="info-page-brand-name">Longhouse</span>
           </Link>
         </div>
       </header>
@@ -90,7 +90,7 @@ export default function PricingPage() {
       </main>
 
       <footer className="info-page-footer">
-        <p>&copy; {currentYear} Swarmlet. All rights reserved.</p>
+        <p>&copy; {currentYear} Longhouse. All rights reserved.</p>
       </footer>
     </div>
   );

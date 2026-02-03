@@ -1097,12 +1097,12 @@ function AdminPage() {
             </Card.Header>
             <Card.Body>
               <p className="section-description admin-section-description">
-                One-click demo with sample data. Perfect for showing off Swarmlet.
+                One-click demo with sample data. Perfect for showing off Longhouse.
               </p>
 
               {demoUsers.length === 0 ? (
                 <div className="demo-empty-state">
-                  <p>Create a demo account to show off Swarmlet with sample data.</p>
+                  <p>Create a demo account to show off Longhouse with sample data.</p>
                   <Button
                     variant="primary"
                     size="lg"

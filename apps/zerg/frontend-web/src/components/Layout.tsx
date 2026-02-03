@@ -121,7 +121,7 @@ function WelcomeHeader() {
               />
               <div className="brand-logo-glow" aria-hidden="true" />
             </div>
-            <h1>Swarmlet</h1>
+            <h1>Longhouse</h1>
           </a>
         </div>
       </div>
@@ -201,7 +201,7 @@ function WelcomeHeader() {
             src="/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png"
             alt=""
           />
-          <span>Swarmlet</span>
+          <span>Longhouse</span>
         </div>
         <button
           className="mobile-nav-close"

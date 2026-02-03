@@ -10,10 +10,10 @@ export default function PrivacyPage() {
   usePublicPageScroll();
 
   useEffect(() => {
-    document.title = "Privacy Policy - Swarmlet";
+    document.title = "Privacy Policy - Longhouse";
     const metaDescription = document.querySelector('meta[name="description"]');
     if (metaDescription) {
-      metaDescription.setAttribute('content', 'How Swarmlet handles your data. We don\'t train AI on your conversations, don\'t sell your data, and give you full control over your information.');
+      metaDescription.setAttribute('content', 'How Longhouse handles your data. We don\'t train AI on your conversations, don\'t sell your data, and give you full control over your information.');
     }
   }, []);
 
@@ -29,7 +29,7 @@ export default function PrivacyPage() {
           </Link>
           <Link to="/" className="info-page-brand">
             <SwarmLogo size={28} />
-            <span className="info-page-brand-name">Swarmlet</span>
+            <span className="info-page-brand-name">Longhouse</span>
           </Link>
         </div>
       </header>
@@ -95,7 +95,7 @@ export default function PrivacyPage() {
       </main>
 
       <footer className="info-page-footer">
-        <p>&copy; {currentYear} Swarmlet. All rights reserved.</p>
+        <p>&copy; {currentYear} Longhouse. All rights reserved.</p>
       </footer>
     </div>
   );

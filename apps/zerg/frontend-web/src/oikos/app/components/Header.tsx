@@ -1,5 +1,5 @@
 /**
- * Header component - Swarmlet brand + global nav + actions
+ * Header component - Longhouse brand + global nav + actions
  * Cyber/HUD aesthetic with glassmorphic controls
  */
 
@@ -38,7 +38,7 @@ export function Header({ onSync, onReset, isResetting }: HeaderProps) {
             />
             <div className="brand-logo-glow" aria-hidden="true" />
           </div>
-          <h1>Swarmlet</h1>
+          <h1>Longhouse</h1>
         </a>
       </div>
 

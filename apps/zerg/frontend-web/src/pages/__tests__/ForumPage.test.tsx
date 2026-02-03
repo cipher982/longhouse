@@ -29,7 +29,7 @@ describe("ForumPage", () => {
     useActiveSessionsMock.mockReset();
   });
 
-  it("shows empty state and demo seed option", async () => {
+  it("shows empty state", async () => {
     useActiveSessionsMock.mockReturnValue({
       data: { sessions: [], total: 0, last_refresh: new Date().toISOString() },
       isLoading: false,
@@ -48,7 +48,6 @@ describe("ForumPage", () => {
 
     expect(await screen.findByTestId("forum-canvas")).toBeInTheDocument();
     expect(screen.getByText(/No sessions found/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Load demo data/i })).toBeInTheDocument();
   });
 
   it("renders sessions in the list", async () => {

@@ -11,10 +11,10 @@ export default function DocsPage() {
   usePublicPageScroll();
 
   useEffect(() => {
-    document.title = "Documentation - Swarmlet";
+    document.title = "Documentation - Longhouse";
     const metaDescription = document.querySelector('meta[name="description"]');
     if (metaDescription) {
-      metaDescription.setAttribute('content', 'Learn how to use Swarmlet. Quick start guides, visual workflow builder tutorials, and integration setup instructions.');
+      metaDescription.setAttribute('content', 'Learn how to use Longhouse. Quick start guides, visual workflow builder tutorials, and integration setup instructions.');
     }
   }, []);
 
@@ -30,7 +30,7 @@ export default function DocsPage() {
           </Link>
           <Link to="/" className="info-page-brand">
             <SwarmLogo size={28} />
-            <span className="info-page-brand-name">Swarmlet</span>
+            <span className="info-page-brand-name">Longhouse</span>
           </Link>
         </div>
       </header>
@@ -38,7 +38,7 @@ export default function DocsPage() {
       <main className="info-page-content">
         <h1 className="info-page-title">Documentation</h1>
         <p className="info-page-subtitle">
-          Get started with Swarmlet.
+          Get started with Longhouse.
         </p>
 
         <nav className="docs-nav">
@@ -155,7 +155,7 @@ Instructions and context for the agent.`}</code></pre>
         <section id="integrations" className="docs-section">
           <h2>Integrations</h2>
           <p>
-            Connect Swarmlet to your existing tools. Go to Settings &gt; Integrations to set up connections.
+            Connect Longhouse to your existing tools. Go to Settings &gt; Integrations to set up connections.
           </p>
 
           <h3>Available Now</h3>
@@ -178,7 +178,7 @@ Instructions and context for the agent.`}</code></pre>
       </main>
 
       <footer className="info-page-footer">
-        <p>&copy; {currentYear} Swarmlet. All rights reserved.</p>
+        <p>&copy; {currentYear} Longhouse. All rights reserved.</p>
       </footer>
     </div>
   );
