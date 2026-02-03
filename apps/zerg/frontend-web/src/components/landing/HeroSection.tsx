@@ -17,8 +17,8 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
 
   const handleGetStarted = () => {
     // Track CTA click
-    if (window.SwarmletFunnel) {
-      window.SwarmletFunnel.track('cta_clicked', { location: 'hero' });
+    if (window.LonghouseFunnel) {
+      window.LonghouseFunnel.track('cta_clicked', { location: 'hero' });
     }
 
     // If auth is disabled (dev mode), go directly to timeline
@@ -29,16 +29,16 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
 
     setShowLogin(true);
     // Track modal opened
-    if (window.SwarmletFunnel) {
-      window.SwarmletFunnel.track('signup_modal_opened');
+    if (window.LonghouseFunnel) {
+      window.LonghouseFunnel.track('signup_modal_opened');
     }
   };
 
   const handleDevLogin = async () => {
     setIsDevLoginLoading(true);
     // Track signup submitted (dev login)
-    if (window.SwarmletFunnel) {
-      window.SwarmletFunnel.track('signup_submitted', { method: 'dev_login' });
+    if (window.LonghouseFunnel) {
+      window.LonghouseFunnel.track('signup_submitted', { method: 'dev_login' });
     }
     try {
       const response = await fetch(`${config.apiBaseUrl}/auth/dev-login`, {
@@ -51,9 +51,9 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
         // Cookie is set by server; no localStorage storage needed
 
         // Track signup completed and stitch visitor to user
-        if (window.SwarmletFunnel) {
-          const visitorId = window.SwarmletFunnel.getVisitorId();
-          window.SwarmletFunnel.track('signup_completed', { method: 'dev_login' });
+        if (window.LonghouseFunnel) {
+          const visitorId = window.LonghouseFunnel.getVisitorId();
+          window.LonghouseFunnel.track('signup_completed', { method: 'dev_login' });
 
           // Stitch visitor to user (fire and forget)
           fetch(`${config.apiBaseUrl}/funnel/stitch-visitor`, {
@@ -169,17 +169,17 @@ function GoogleSignInButtonWrapper() {
       setIsLoading(true);
 
       // Track signup submitted (Google OAuth)
-      if (window.SwarmletFunnel) {
-        window.SwarmletFunnel.track('signup_submitted', { method: 'google_oauth' });
+      if (window.LonghouseFunnel) {
+        window.LonghouseFunnel.track('signup_submitted', { method: 'google_oauth' });
       }
 
       try {
         await login(response.credential);
 
         // Track signup completed and stitch visitor to user
-        if (window.SwarmletFunnel) {
-          const visitorId = window.SwarmletFunnel.getVisitorId();
-          window.SwarmletFunnel.track('signup_completed', { method: 'google_oauth' });
+        if (window.LonghouseFunnel) {
+          const visitorId = window.LonghouseFunnel.getVisitorId();
+          window.LonghouseFunnel.track('signup_completed', { method: 'google_oauth' });
 
           // Stitch visitor to user (fire and forget)
           // Use email as user_id since login() doesn't return user object
