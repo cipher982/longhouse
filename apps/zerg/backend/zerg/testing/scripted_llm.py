@@ -5,6 +5,10 @@ exercise oikos/commis plumbing without calling real LLM APIs.
 
 It is intentionally minimal: only the behaviors required by the unit tests are
 implemented.
+
+NOTE: This still inherits from LangChain's BaseChatModel for interface compatibility,
+but uses duck-typing for message checks to work with both langchain_core.messages
+and zerg.types.messages.
 """
 
 from __future__ import annotations
@@ -19,26 +23,44 @@ from typing import Optional
 
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage
-from langchain_core.messages import BaseMessage
-from langchain_core.messages import HumanMessage
-from langchain_core.messages import SystemMessage
-from langchain_core.messages import ToolMessage
 from langchain_core.outputs import ChatGeneration
 from langchain_core.outputs import ChatResult
 
+# Use native types for return values
+from zerg.types.messages import AIMessage
 
-def detect_role_from_messages(messages: List[BaseMessage]) -> str:
+
+def _is_human_message(msg: Any) -> bool:
+    """Check if message is a human/user message (duck-typed)."""
+    return getattr(msg, "type", None) in ("human", "user")
+
+
+def _is_ai_message(msg: Any) -> bool:
+    """Check if message is an AI/assistant message (duck-typed)."""
+    return getattr(msg, "type", None) in ("ai", "assistant")
+
+
+def _is_system_message(msg: Any) -> bool:
+    """Check if message is a system message (duck-typed)."""
+    return getattr(msg, "type", None) == "system"
+
+
+def _is_tool_message(msg: Any) -> bool:
+    """Check if message is a tool message (duck-typed)."""
+    return getattr(msg, "type", None) == "tool"
+
+
+def detect_role_from_messages(messages: List[Any]) -> str:
     """Best-effort role detector used by scripted scenarios."""
     # If we see a spawn_commis call, assume oikos.
     for msg in messages:
-        if isinstance(msg, AIMessage) and msg.tool_calls:
+        if _is_ai_message(msg) and getattr(msg, "tool_calls", None):
             for call in msg.tool_calls:
                 if call.get("name") == "spawn_commis":
                     return "oikos"
 
     # Otherwise, infer from system prompt length (tests use this heuristic).
-    first_system = next((m for m in messages if isinstance(m, SystemMessage)), None)
+    first_system = next((m for m in messages if _is_system_message(m)), None)
     if first_system:
         system_text = str(first_system.content or "").lower()
         if "you are a commis" in system_text:
@@ -252,13 +274,13 @@ class ScriptedChatLLM(BaseChatModel):
 
     def _generate(
         self,
-        messages: List[BaseMessage],
+        messages: List[Any],
         stop: Optional[List[str]] = None,  # noqa: ARG002 - unused (deterministic)
         run_manager: Optional[CallbackManagerForLLMRun] = None,  # noqa: ARG002 - unused
         **kwargs: Any,  # noqa: ARG002 - unused
     ) -> ChatResult:
         role = detect_role_from_messages(messages)
-        last_user = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
+        last_user = next((m for m in reversed(messages) if _is_human_message(m)), None)
         prompt = str(last_user.content) if last_user else ""
 
         # Check for sequenced response first (enables replay behavior testing)
@@ -283,12 +305,12 @@ class ScriptedChatLLM(BaseChatModel):
             # Find messages after the last HumanMessage (the current turn)
             last_human_idx = None
             for i, m in enumerate(messages):
-                if isinstance(m, HumanMessage):
+                if _is_human_message(m):
                     last_human_idx = i
             current_turn_msgs = messages[last_human_idx + 1 :] if last_human_idx is not None else []
 
             # Check if there's a ToolMessage in the current turn
-            tool_msg_this_turn = next((m for m in current_turn_msgs if isinstance(m, ToolMessage)), None)
+            tool_msg_this_turn = next((m for m in current_turn_msgs if _is_tool_message(m)), None)
             if tool_msg_this_turn is not None:
                 # A memory tool was already executed in this turn, synthesize result
                 content = str(tool_msg_this_turn.content)
@@ -328,7 +350,7 @@ class ScriptedChatLLM(BaseChatModel):
                 return ChatResult(generations=[ChatGeneration(message=ai_message)])
 
         # If tool results are present, emit final synthesis (no more tool calls).
-        tool_msg = next((m for m in reversed(messages) if isinstance(m, ToolMessage)), None)
+        tool_msg = next((m for m in reversed(messages) if _is_tool_message(m)), None)
         if tool_msg is not None:
             from zerg.tools.result_utils import check_tool_error
 
@@ -413,7 +435,7 @@ class ScriptedChatLLM(BaseChatModel):
 
     async def _agenerate(
         self,
-        messages: List[BaseMessage],
+        messages: List[Any],
         stop: Optional[List[str]] = None,
         run_manager: Optional[CallbackManagerForLLMRun] = None,
         **kwargs: Any,
