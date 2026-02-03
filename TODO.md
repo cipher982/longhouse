@@ -11,62 +11,11 @@ Capture list for substantial work. Not quick fixes (do those live).
 
 ---
 
-## HN Launch Readiness — Zero to Ship (8)
-
-Make Longhouse ready for Hacker News launch. The product works but the story/UX isn't ready for public scrutiny.
-
-**Problem:** User journey has critical gaps. Install works, but then what? Empty timeline = "Is this broken?" No screenshot = no trust. Value prop unclear.
+## HN Launch Readiness — Remaining (5)
 
 **Goal:** HN reader can install, see value immediately, understand what problem this solves, and start using it.
 
-### Critical (Blockers — Must Fix Before HN)
-
-- [x] **Screenshot/GIF in README** (30 min) ✅ DONE 2026-02-02
-  - ✅ Created automated Playwright capture script
-  - ✅ Captured timeline view with demo sessions
-  - ✅ Captured landing page
-  - ✅ Embedded in README
-  - ✅ Files: `timeline-screenshot.png`, `landing-hero.png`
-  - Script: `bun run capture:screenshots`
-
-- [x] **Seed demo sessions infrastructure** (1 hour) ✅ DONE 2026-02-02
-  - ✅ Added `/api/system/seed-demo-sessions` endpoint (routers/system.py)
-  - ✅ Uses existing `demo_sessions.py` (2 sessions: onboarding review, session query)
-  - ✅ Integrated into screenshot capture script
-  - ⚠️ Still TODO: Auto-seed on `longhouse onboard` if timeline empty (needs frontend changes)
-
-- [x] **Fix README branding** (15 min) ✅ DONE 2026-02-02
-  - ✅ Removed confusing naming note (Oikos/Zerg explanation)
-  - ✅ Added 🪵 logs emoji to title
-  - ✅ Install URL already using `get.longhouse.ai`
-  - ✅ Unified license to Apache-2.0 across all files
-
-- [x] **Rewrite value proposition** (30 min) ✅ DONE 2026-02-02
-  - ✅ New tagline: "Never lose an AI coding conversation again"
-  - ✅ Added "The Problem" section (relatable pain: grepping JSON)
-  - ✅ Added "The Solution" section (searchable timeline)
-  - ✅ Bullet points with concrete use cases
-  - ✅ Added "Why Longhouse?" section (logs metaphor)
-
-- [x] **Empty state UI** (1 hour) ✅ DONE 2026-02-02
-  - ✅ Implemented in `SessionsPage.tsx` (lines 478-528)
-  - ✅ Shows "Welcome to your Timeline" when no sessions exist
-  - ✅ 3-step onboarding: Connect shipper → Load demo → Explore timeline
-  - ✅ "Load demo timeline" button calls `seedAgentDemoSessions()`
-  - ✅ Error handling for demo seed failures
-
-### High Priority (Polish Before Launch)
-
-- [x] **Add GitHub badges** (15 min) ✅ DONE 2026-02-02
-  - ✅ Tests passing badge (link to GitHub Actions)
-  - ✅ Version badge (link to PyPI)
-  - ✅ License badge (Apache-2.0)
-  - ✅ Python version badge (3.12+)
-
-- [x] **"What happens next" section in README** (20 min) ✅ DONE 2026-02-02
-  - ✅ Step-by-step post-install guide
-  - ✅ Clear commands section
-  - ✅ Feature checklist (✅ vs 🚧)
+### High Priority
 
 - [ ] **Landing page redesign** (4 hours)
   - Current landing tells OLD story ("AI That Knows You", integrations)
@@ -101,29 +50,7 @@ Make Longhouse ready for Hacker News launch. The product works but the story/UX 
   - Show banner: "Demo Mode - exploring sample data"
   - File: `apps/zerg/backend/zerg/cli/serve.py`
 
-- [x] **HN post title + copy** (30 min) ✅ DONE 2026-02-02
-  - ✅ Created `docs/HN_LAUNCH.md` with:
-    - 4 title options
-    - Full launch comment draft
-    - Anticipated Q&A
-    - Pre-launch checklist
-    - Timing recommendations
-
-### Medium Priority (Nice to Have)
-
-- [ ] **Social proof** (if available)
-  - Add testimonial or "Built by X" to README
-  - Show usage stats if you have any early users
-  - Link to personal Twitter/GitHub for credibility
-
-- [ ] **Video walkthrough** (optional, 2 hours)
-  - 60-90 second Loom showing:
-    1. The problem (searching through JSONL files)
-    2. Install in one line
-    3. Timeline appears with sessions
-    4. Search + detail view
-  - Add to README + landing page
-  - More engaging than screenshot alone
+### Medium Priority
 
 - [ ] **Comparison table** (30 min)
   - Show how Longhouse compares to:
@@ -132,14 +59,23 @@ Make Longhouse ready for Hacker News launch. The product works but the story/UX 
     - Not tracking at all (disaster)
   - Table showing: searchable, cross-tool, persistent, visual timeline
 
+- [ ] **Social proof** (if available)
+  - Add testimonial or "Built by X" to README
+  - Show usage stats if you have any early users
+  - Link to personal Twitter/GitHub for credibility
+
+- [ ] **Video walkthrough** (optional, 2 hours)
+  - 60-90 second Loom showing install → timeline → search
+  - Add to README + landing page
+
 ---
 
-## Public Launch Checklist (from archived doc) (6)
+## Public Launch Checklist (6)
 
 Ensure launch readiness without relying on scattered docs.
 
 - [ ] Rewrite README to center Timeline value and 3 install paths.
-- [ ] Add CTA from Chat to “View session trace” after a run.
+- [ ] Add CTA from Chat to "View session trace" after a run.
 - [ ] Improve Timeline detail header (goal, repo/project, duration, status).
 - [ ] Add basic metrics (tool count, duration, latency if available).
 - [ ] Add filters within detail view (user/assistant/tool) + search.
@@ -162,28 +98,6 @@ Automate README command verification with explicit, opt-in contracts. Use cube A
 
 ---
 
-## Life Hub Dependency Removal — Sessions/Forum/Resume (7)
-
-Make Longhouse the sole source of session truth. Remove Life Hub routes, naming, and test dependencies in OSS/runtime.
-
-**Deliverables:** Session picker + Forum + session resume all use Longhouse agents data; no LIFE_HUB_API_KEY needed for OSS/E2E.
-
-**Current State (verified 2026-02-02):**
-- ✅ Frontend migrated — `useActiveSessions` uses agents API, no `useLifeHubSessions`
-- ✅ Session continuity uses Zerg-native endpoints (`fetch_session_from_zerg`, `ship_session_to_zerg`)
-- ✅ Router source files deleted (`oikos_life_hub.py` removed)
-- ✅ Gmail sync job removed — watch renewal moved to Life Hub Pub/Sub webhook
-- ✅ Stale `.pyc` files cleaned up
-
-- [x] Replace `/oikos/life-hub/*` endpoints — routers deleted, frontend uses agents API
-- [x] Update frontend hooks/components — all migrated to agents API
-- [x] Update session-resume flow — uses Zerg-native endpoints
-- [x] **Remove Gmail sync job entirely** — watch renewal now in Life Hub Pub/Sub webhook ✅ 2026-02-02
-- [x] Clean up stale `.pyc` files in routers/__pycache__/ ✅ 2026-02-02
-- [x] Update VISION session-resume section to remove Life Hub flow (doc consolidated).
-
----
-
 ## Forum Discovery UX + Explicit Presence Signals (7)
 
 Make the Forum the canonical discovery UI for sessions, with **explicit** state signals (no heuristics).
@@ -199,101 +113,24 @@ Make the Forum the canonical discovery UI for sessions, with **explicit** state 
 
 ---
 
-## OSS One-Liner Installer + Onboard Wizard (6) ✅
-
-Make the one-liner + TUI wizard the **default** OSS onboarding path.
-
-**Deliverables:** `curl -fsSL https://get.longhouse.ai/install.sh | bash` installs CLI + Claude shim, verifies PATH, then runs `longhouse onboard`.
-
-- [x] Create `scripts/install.sh` (one-liner entrypoint) that installs CLI + Claude shim + verification.
-- [x] Implement `longhouse onboard` TUI (QuickStart default, Manual option; no .env edits).
-- [x] Add shim verification: check `command -v claude` in a fresh shell; if failed, print one exact fix line.
-- [x] Update README quickstart + onboarding contract to use the one-liner + wizard.
-- [x] Add a fallback message for unique shells (fish/other) with exact instructions.
-- [x] Publish `longhouse` package to PyPI (v0.1.1 live)
-- [x] Set up trusted publishing workflow (GitHub Actions → PyPI via OIDC)
-- [x] Set up vanity URL redirect (get.longhouse.ai → raw GitHub)
-- [x] Cross-platform installer CI (Ubuntu 22/24, macOS Intel/ARM)
-
-**Done 2026-02-02:** Core onboarding flow complete. PyPI package published, installer working on all platforms.
-
----
-
 ## OSS First-Run UX Polish (5)
 
 Eliminate the "empty timeline" anticlimactic moment and improve discovery for users without Claude Code.
 
-**Deliverables:** New users see value immediately; timeline isn't empty; clear next steps regardless of setup.
-
-**Current State (verified 2026-02-02):** Most items done via HN Launch work.
-
 - [ ] Seed demo session data on first `longhouse onboard` run (shows what the timeline looks like)
-- [x] Add README screenshot/gif showing the timeline UI — `timeline-screenshot.png` embedded
 - [ ] Improve "No Claude Code" guidance in onboard wizard (link to alternatives, explain what to do next)
-- [x] Add "Getting Started" card in empty timeline state — implemented in `SessionsPage.tsx`
 - [ ] Consider demo mode flag for `longhouse serve --demo` (starts with pre-loaded sessions for exploration)
-
----
-
-## Longhouse Home Dir + Path Cleanup (4)
-
-Unify local paths under `~/.longhouse` and remove legacy `~/.zerg` naming + env vars.
-
-**Deliverables:** CLI defaults, shipper state, skills, and workspace paths all use Longhouse naming; no `/var/oikos` defaults in OSS.
-
-**Current State (verified 2026-02-02):**
-- ✅ `cli/serve.py` uses `~/.longhouse` with auto-migration from `~/.zerg` (lines 29-43)
-- ✅ Skills loader uses `~/.longhouse/skills` with legacy fallback
-- ✅ Config uses `~/.longhouse/config.toml`
-- ⚠️ `ZERG_API_URL` still primary env var (dual support exists in config_file.py)
-- ⚠️ `scripts/dev-demo.sh` still uses `~/.zerg`
-
-- [x] Rename `~/.zerg` → `~/.longhouse` in CLI — done with migration logic
-- [x] Skills loader updated — uses `~/.longhouse/skills` with fallback
-- [x] Fix `scripts/dev-demo.sh` to use `~/.longhouse` ✅ 2026-02-02
-- [x] Rename env var `ZERG_API_URL` → `LONGHOUSE_API_URL` as primary (keep fallback) ✅ 2026-02-02
-- [x] Update OpenAPI prod URL from `api.zerg.ai` → `api.longhouse.ai` ✅ 2026-02-02
-
----
-
-## Memory Store SQLite Pass (3) ✅
-
-Ensure Oikos memory tools are SQLite-safe and do not assume Postgres.
-
-**Status: ALREADY COMPATIBLE.** Verified 2026-02-02 — `PostgresMemoryStore` name is misleading but code is DB-agnostic.
-
-- [x] Memory store uses SQLAlchemy abstractions only (`.ilike()`, standard filters) — no pg_trgm, no JSONB operators
-- [x] GUID TypeDecorator handles UUID ↔ CHAR(36) conversion transparently
-- [x] Tests in `test_oikos_memory_store.py` account for SQLite timestamp precision
-- [x] Rename `PostgresMemoryStore` → `SQLMemoryStore` (with backwards-compatible alias) ✅ 2026-02-02
-- [x] Tests verify both names work (14 tests passing)
 
 ---
 
 ## OSS Packaging Decisions (3)
 
-Close the remaining open questions from VISION.md (SQLite-only OSS Pivot section).
+Close the remaining open questions from VISION.md.
 
-- [x] Confirm PyPI availability for `longhouse` — **published as `longhouse` on PyPI** (v0.1.1 live)
 - [ ] Decide whether the shipper is bundled with the CLI or shipped as a separate package.
 - [ ] Decide remote auth UX for `longhouse connect` (device token vs OAuth vs API key).
 - [ ] Decide HTTPS story for local OSS (`longhouse serve`) — built-in vs reverse proxy guidance.
 - [ ] Capture current frontend bundle size and set a target budget.
-
----
-
-## Longhouse Rebrand — Docs + Naming Map (5)
-
-Establish a single public brand (Longhouse) while keeping Oikos as assistant UI and Zerg as internal codename. Docs must align with VISION + OSS onboarding.
-
-**Deliverables:** clear naming map, updated VISION + OSS docs + README, consistent user-facing language.
-
-- [x] Decide and record naming map: **Longhouse** (umbrella), **Oikos** (assistant), **Zerg** (internal codename only)
-- [x] Update `VISION.md` to “Longhouse Vision” + add a short naming note (Oikos/Zerg)
-- [x] Update VISION.md (SQLite-only OSS Pivot section) to Longhouse naming + CLI examples
-- [x] Update `README.md` to Longhouse branding + domain references
-- [x] Update VISION onboarding section (and TODO checklist) to reflect Longhouse naming
-- [x] Add branding usage rules to VISION naming section
 
 ---
 
@@ -303,50 +140,13 @@ User-facing strings, metadata, and package descriptions must stop mentioning Swa
 
 **Scope:** 105 occurrences across 28 frontend files, 124 occurrences across 39 backend files (229 total)
 
-**Files:** `apps/zerg/frontend-web/index.html`, `apps/zerg/frontend-web/public/site.webmanifest`, `package.json`, runner docs, email templates
-
 - [ ] Replace "Swarmlet" with "Longhouse" in frontend HTML metadata + webmanifest
 - [ ] Update `package.json` description to Longhouse naming
 - [ ] Update runner README/package metadata to Longhouse (e.g., "Longhouse Runner")
 - [ ] Update email templates / notification copy referencing Swarmlet
 - [ ] Decide domain swap (`swarmlet.com` → `longhouse.ai`) and update hardcoded URLs if approved
-- [ ] Update landing FAQ + marketing copy that still says “PostgreSQL” or “Swarmlet” (e.g., `TrustSection.tsx`)
+- [ ] Update landing FAQ + marketing copy that still says "PostgreSQL" or "Swarmlet" (e.g., `TrustSection.tsx`)
 - [ ] Update OpenAPI schema metadata (title/description/servers) to Longhouse and regenerate `openapi.json` + frontend types
-
----
-
-## Prod CSP Fixes — Longhouse (1) ✅
-
-Unblock blob image previews + Cloudflare beacon by updating CSP in frontend nginx entrypoint.
-
-- [x] Allow `blob:` in `img-src`
-- [x] Allow `https://static.cloudflareinsights.com` in `script-src`
-
-**Done 2026-02-01:** CSP headers updated in `entrypoint.sh`.
-
----
-
-## Prod Cache Fixes — Frontend (1) ✅
-
-- [x] Force `index.html` and SPA fallback to no-store so rebrand updates reach prod quickly.
-
----
-
-## Prod Console Noise — Auth + Funnel (1)
-
-Eliminate unauth 401 spam and fix funnel 403 after rebrand.
-
-- [x] Add `/auth/status` to avoid 401 on initial load
-- [x] Allow `longhouse.ai` origins in funnel tracking
-
----
-
-## Public Origin Config — Centralize (2)
-
-Make public origins discoverable and derived from config instead of hard-coded lists.
-
-- [x] Add `PUBLIC_SITE_URL`/`PUBLIC_API_URL` to settings and helpers
-- [x] Use helpers for CORS + funnel origin checks and add tests
 
 ---
 
@@ -354,54 +154,13 @@ Make public origins discoverable and derived from config instead of hard-coded l
 
 Package and binary naming so OSS users see Longhouse everywhere.
 
-**Scripts needing update:** `install-runner.sh` (2 refs), `smoke-prod.sh` (2 refs), `run-prod-e2e.sh` (2 refs), `product-demo.yaml` (6 refs)
-
-- [x] Decide PyPI package name: `longhouse` vs fallback (`longhouse-ai`) → **`longhouse`**
-- [x] Decide CLI binary name: `longhouse` vs fallback (`longhousectl`) → **`longhouse`**
 - [ ] Decide npm scope/name for runner: `@longhouse/runner` or `longhouse-runner`
 - [ ] Update docker image name for docs/examples (ghcr.io/.../longhouse)
 - [ ] Update installer scripts to new names (12 refs across 4 scripts)
 
 ---
 
-## Frontend Bundling for pip Package (2) ✅
-
-Bundle frontend assets into pip package using importlib.resources. Final polish for SQLite OSS pivot.
-
-**Why:** `pip install longhouse && longhouse serve` works with bundled frontend.
-
-**Files:** `apps/zerg/backend/pyproject.toml`, `apps/zerg/backend/zerg/main.py`
-
-- [x] Configure hatch to include `frontend-web/dist/` in package (force-include in pyproject.toml)
-- [x] Update FastAPI static mount to use `importlib.resources` for packaged assets (main.py)
-- [x] Test: `pip install longhouse` → UI loads (verified locally)
-
----
-
-## Prompting Pipeline Hardening (3) ✅
-
-Unify prompt construction across `run_thread`, `run_continuation`, and `run_batch_continuation` to eliminate divergence in tool loading, usage capture, and persistence.
-
-**Why:** Current flows have subtle differences that cause bugs. Memory query behavior varies, tool results can duplicate.
-
-**Files:** `managers/prompt_context.py`, `managers/message_array_builder.py`
-
-**Status: COMPLETE.** All flows use unified `build_prompt()` with comprehensive tests.
-
-- [x] Introduce `PromptContext` dataclass (system + conversation + tool_messages + dynamic_context) — `managers/prompt_context.py:43-65`
-- [x] Create unified `build_prompt()` helper — `managers/prompt_context.py:266-354`
-- [x] Extract single `derive_memory_query(...)` helper — `managers/prompt_context.py:90-130`
-- [x] Wire PromptContext through FicheRunner flows (run_thread, run_continuation, run_batch_continuation) ✅ All 3 flows use build_prompt()
-- [x] Add DB-level idempotency for tool results — `get_or_create_tool_message()` at lines 138-210
-- [x] Add prompt snapshot test fixture — `tests/managers/test_prompt_context.py` with consistency checks
-
-**Done 2026-02-02:** Verified all flows wired. Guard at line 311 prevents silent tool_message loss.
-
----
-
 ## Prompt Cache Optimization (5)
-
-**Depends on:** Prompting Pipeline Hardening (unified helper changes message layout)
 
 Reorder message layout to maximize cache hits. Current layout busts cache by injecting dynamic content early.
 
@@ -410,7 +169,7 @@ Reorder message layout to maximize cache hits. Current layout busts cache by inj
 **Current (bad):**
 ```
 [system] → [connector_status] → [memory] → [conversation] → [user_msg]
-                ↑ BUST              ↑ BUST
+               ↑ BUST              ↑ BUST
 ```
 
 **Target:**
@@ -430,92 +189,6 @@ Reorder message layout to maximize cache hits. Current layout busts cache by inj
 - [ ] Reorder message construction in fiche_runner
 - [ ] Verify cache hit rate improves (add logging/metrics)
 - [ ] Document the ordering contract
-
----
-
-## Live Commis Tool Events via Claude Code Hooks (8) ✅
-
-Workspace commis currently emit only `commis_started` and `commis_complete` — no visibility during execution. This task adds **real-time tool event streaming** using Claude Code hooks.
-
-**Why:** UI shows black box during workspace commis (30-60 min). Users can't see what's happening. Live visibility enables monitoring, early cancellation, and debugging.
-
-**Approach:** Claude Code hooks (`PostToolUse`, `PreToolUse`) fire during hatch execution and POST events to Longhouse API. Longhouse emits SSE events to UI in real-time.
-
-**Architecture:**
-```
-hatch (claude --print)
-    └── PostToolUse hook → POST /api/internal/commis/tool_event
-                               └── SSE: commis_tool_completed → UI
-```
-
-### Phase 1: Hook Infrastructure ✅
-**Files:** `config/claude-hooks/`, `scripts/deploy-hooks.sh`
-
-- [x] Create `config/claude-hooks/settings.json` with PreToolUse + PostToolUse hooks
-- [x] Create `config/claude-hooks/scripts/tool_event.py` — POSTs to Longhouse
-- [x] Create `scripts/deploy-hooks.sh` — deploys to zerg server
-- [x] Test locally: verify hooks fire and POST correctly
-
-### Phase 2: Backend API ✅
-**Files:** `routers/oikos_internal.py`, `events/commis_emitter.py`
-
-- [x] Add `POST /api/internal/commis/tool_event` endpoint
-- [x] Validate job_id exists and is running
-- [x] Auth: internal token (X-Internal-Token)
-- [x] Emit SSE events: `commis_tool_started`, `commis_tool_completed`
-
-### Phase 3: Environment Plumbing ✅
-**Files:** `services/commis_job_processor.py`, `services/cloud_executor.py`
-
-- [x] Pass env vars to hatch: `LONGHOUSE_CALLBACK_URL`, `COMMIS_JOB_ID`, `COMMIS_CALLBACK_TOKEN`
-- [x] Use internal token for auth (`COMMIS_CALLBACK_TOKEN = INTERNAL_API_SECRET`)
-- [x] Ensure hooks can reach Longhouse API (loopback default; override via `LONGHOUSE_CALLBACK_URL`)
-
-### Phase 4: Frontend ✅
-**Files:** `frontend-web/src/hooks/`, `frontend-web/src/components/`
-
-- [x] Handle new SSE events in existing listener
-- [x] UI component showing live tool calls during commis
-- [x] Icons/labels per tool type (Edit, Bash, Read, etc.)
-
-### Phase 5: Polish (optional)
-- [ ] Error handling in hook script (retry, timeout)
-- [ ] Rate limiting (debounce rapid tool calls)
-- [ ] Optional: persist events for replay after completion
-- [ ] Update docs with hook deployment instructions
-
-**Done 2026-02-01:** All 4 core phases complete. Hook infrastructure, backend API, env plumbing, and frontend all implemented and working.
-
-**Docs:** Claude Code hooks reference: https://docs.anthropic.com/en/docs/claude-code/hooks
-
----
-
-## Sauron /sync Reschedule (3) ✅
-
-~~`/sync` endpoint reloads manifest but APScheduler doesn't reschedule existing jobs.~~
-
-**Status:** Complete. Implementation in `registry.py:sync_jobs()`. Verified in prod 2026-02-01.
-
-- [x] On sync, diff old vs new jobs
-- [x] Remove jobs no longer in manifest
-- [x] Reschedule jobs with changed cron expressions
-- [ ] Add test coverage (optional — works in prod)
-
----
-
-## Docker Build: uv sync Failure (2) ✅
-
-`zerg-api` Coolify deploy fails at `uv sync --frozen --no-install-project --no-dev` (exit code 2).
-
-**Error location:** `docker/backend.dockerfile:71`
-
-**Files:** `docker/backend.dockerfile`, `apps/zerg/backend/uv.lock`, `apps/zerg/backend/pyproject.toml`
-
-- [x] Investigate uv sync failure — likely lockfile mismatch or missing dependency
-- [x] Test build locally: `docker build -f docker/backend.dockerfile .`
-- [x] Fix and redeploy
-
-**Done 2026-02-01:** Docker builds successfully after lockfile fixes.
 
 ---
 
@@ -556,20 +229,3 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [ ] Vector search via sqlite-vec or pgvector
 
 **Test:** "Find where I implemented retry logic" returns relevant sessions in <100ms (search bar) or with reasoning (Oikos).
-
----
-
-## E2E SQLite Database Init Failure (2)
-
-E2E tests fail with "no such table: users" / "no such table: commis_jobs". The per-worker SQLite databases aren't being initialized with schema.
-
-**Error:** `sqlite3.OperationalError: no such table: users`
-
-**Files:** `apps/zerg/e2e/global-setup.ts`, `apps/zerg/e2e/playwright.config.ts`
-
-- [x] Investigate why globalSetup creates DB files but doesn't run migrations (2026-02-01: Added /health/db endpoint)
-- [x] Ensure `initialize_database()` is called for each per-worker SQLite (2026-02-01: Playwright now waits for /health/db)
-- [x] Fix reset-database to include AgentsBase tables (2026-02-01: Added to admin.py)
-- [x] Verify E2E tests pass after fix (2026-02-02)
-- [x] Remove Postgres schema isolation assumptions; keep `X-Test-Commis` for SQLite routing (2026-02-02)
-- [x] Update e2e helpers to reflect SQLite-only test flow (2026-02-02)
