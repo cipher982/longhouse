@@ -1,6 +1,6 @@
-// Type definitions for Swarmlet funnel tracking
+// Type definitions for Longhouse funnel tracking
 
-interface SwarmletFunnelAPI {
+interface LonghouseFunnelAPI {
   track: (eventType: string, metadata?: Record<string, any>) => void;
   getVisitorId: () => string;
   flush: () => void;
@@ -8,7 +8,7 @@ interface SwarmletFunnelAPI {
 
 declare global {
   interface Window {
-    SwarmletFunnel?: SwarmletFunnelAPI;
+    LonghouseFunnel?: LonghouseFunnelAPI;
   }
 }
 
