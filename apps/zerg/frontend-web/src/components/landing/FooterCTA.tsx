@@ -24,10 +24,10 @@ export function FooterCTA() {
         {/* Final CTA */}
         <div className="landing-footer-cta">
           <blockquote className="landing-footer-quote">
-            Life is noisy. You deserve a brain that pays attention for you.
+            Your sessions are already there. Start seeing them.
           </blockquote>
           <Button variant="primary" size="lg" className="landing-cta-main" onClick={handleStartFree}>
-            Get Started Now
+            View Your Timeline
           </Button>
         </div>
 

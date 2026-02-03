@@ -2,13 +2,13 @@
  * ProductShowcase
  *
  * Tabbed showcase of real product screenshots.
- * Replaces the demo video placeholder with actual product views.
+ * Shows Timeline and Session Detail views.
  */
 
 import { useState } from "react";
 import { AppScreenshotFrame } from "./AppScreenshotFrame";
 
-type Tab = "chat" | "dashboard" | "canvas";
+type Tab = "timeline" | "session";
 
 interface TabConfig {
   id: Tab;
@@ -20,30 +20,23 @@ interface TabConfig {
 
 const tabs: TabConfig[] = [
   {
-    id: "chat",
-    label: "Chat",
-    description: "Talk to your AI assistant naturally. It understands context, calls tools, and gets things done.",
-    image: "/images/landing/chat-preview.png",
-    alt: "Oikos chat interface showing a conversation with AI assistant",
-  },
-  {
-    id: "dashboard",
-    label: "Dashboard",
-    description: "Monitor all your fiches in one place. See status, runs, and success rates at a glance.",
+    id: "timeline",
+    label: "Timeline",
+    description: "All your AI coding sessions in one place. See when, what, and how long.",
     image: "/images/landing/dashboard-preview.png",
-    alt: "Dashboard showing fiche status, runs, and monitoring",
+    alt: "Session timeline showing Claude Code sessions with timestamps and summaries",
   },
   {
-    id: "canvas",
-    label: "Workflow Builder",
-    description: "Drag and drop to build workflows. Connect triggers, fiches, and actions visually.",
-    image: "/images/landing/canvas-preview.png",
-    alt: "Visual workflow canvas with connected fiche nodes",
+    id: "session",
+    label: "Session Detail",
+    description: "Expand any session to see every tool call, file edit, and conversation turn.",
+    image: "/images/landing/chat-preview.png",
+    alt: "Detailed session view showing tool calls and conversation",
   },
 ];
 
 export function ProductShowcase() {
-  const [activeTab, setActiveTab] = useState<Tab>("chat");
+  const [activeTab, setActiveTab] = useState<Tab>("timeline");
   const activeConfig = tabs.find((t) => t.id === activeTab)!;
 
   return (

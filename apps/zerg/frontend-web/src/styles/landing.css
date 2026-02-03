@@ -215,7 +215,13 @@
     font-size: var(--font-size-xl);
     color: var(--color-text-secondary);
     line-height: var(--font-line-height-relaxed);
-    margin-bottom: var(--space-8);
+    margin-bottom: var(--space-4);
+  }
+
+  .landing-hero-note {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+    margin-bottom: var(--space-6);
   }
 
   .landing-hero-ctas {
@@ -620,6 +626,88 @@
     padding: var(--space-0-5) var(--space-2);
     border-radius: var(--radius-sm);
     color: var(--color-brand-secondary);
+  }
+
+  /* Provider Grid (for session sources) */
+  .landing-providers-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--space-4);
+    max-width: 700px;
+    margin: 0 auto var(--space-8);
+  }
+
+  .landing-provider-card {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    padding: var(--space-5);
+    background: var(--color-surface-card);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-xl);
+    transition: all var(--motion-duration-fast);
+    animation: landing-fadeInUp 0.4s ease-out backwards;
+  }
+
+  .landing-provider-card:hover {
+    border-color: var(--color-brand-primary);
+    transform: translateY(-2px);
+  }
+
+  .landing-provider-card.coming-soon {
+    opacity: 0.6;
+  }
+
+  .landing-provider-card.coming-soon:hover {
+    opacity: 0.8;
+  }
+
+  .landing-provider-icon {
+    flex-shrink: 0;
+    color: var(--color-brand-primary);
+  }
+
+  .landing-provider-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .landing-provider-name {
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+  }
+
+  .landing-provider-desc {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+  }
+
+  .landing-provider-status {
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    padding: var(--space-1) var(--space-3);
+    border-radius: var(--radius-full);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .landing-provider-status.syncing {
+    background: rgb(34 197 94 / 15%);
+    color: var(--color-intent-success);
+  }
+
+  .landing-provider-status.coming {
+    background: var(--color-surface-section);
+    color: var(--color-text-muted);
+  }
+
+  @media (width <= 600px) {
+    .landing-providers-grid {
+      grid-template-columns: 1fr;
+    }
   }
 
   /* Skills Section */

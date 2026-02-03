@@ -2,11 +2,11 @@
  * HowItWorksSection
  *
  * Simple 3-step explanation of how Longhouse works.
- * Replaces the heavier ScenariosSection.
+ * Developer-focused: Install → Sync → Browse flow.
  */
 
 import config from "../../lib/config";
-import { PlugIcon, BrainIcon, ZapIcon } from "../icons";
+import { CodeIcon, ZapIcon, EyeIcon } from "../icons";
 import { Button } from "../ui";
 
 interface Step {
@@ -18,22 +18,22 @@ interface Step {
 
 const steps: Step[] = [
   {
-    icon: <PlugIcon width={32} height={32} />,
+    icon: <CodeIcon width={32} height={32} />,
     number: "1",
-    title: "Connect",
-    description: "Link your apps in 2 minutes. Health trackers, calendars, inboxes, smart home."
-  },
-  {
-    icon: <BrainIcon width={32} height={32} />,
-    number: "2",
-    title: "AI Learns",
-    description: "Your AI builds context from your data. It learns your patterns and preferences."
+    title: "Install",
+    description: "One command. Installs the CLI and syncs with your Claude Code sessions."
   },
   {
     icon: <ZapIcon width={32} height={32} />,
+    number: "2",
+    title: "Sessions Sync",
+    description: "Your Claude Code sessions appear automatically. Every tool call, every file edit."
+  },
+  {
+    icon: <EyeIcon width={32} height={32} />,
     number: "3",
-    title: "Automate",
-    description: "Morning briefs, smart triggers, proactive alerts. Your AI works while you sleep."
+    title: "Browse & Resume",
+    description: "Find where you solved it before. Pick up exactly where you left off."
   }
 ];
 
@@ -56,7 +56,7 @@ export function HowItWorksSection() {
       <div className="landing-section-inner">
         <h2 className="landing-section-title">How It Works</h2>
         <p className="landing-section-subtitle">
-          Three simple steps. No complexity.
+          From install to timeline in under 2 minutes.
         </p>
 
         <div className="landing-steps-row">
@@ -74,7 +74,7 @@ export function HowItWorksSection() {
 
         <div className="landing-steps-cta">
           <Button variant="primary" size="lg" onClick={handleGetStarted}>
-            Get Started Free
+            View Your Timeline
           </Button>
         </div>
       </div>
