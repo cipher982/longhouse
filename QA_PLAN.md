@@ -12,7 +12,7 @@ Scope: OSS-first, SQLite-only, timeline-first product
 - No waiting for bug reports: automated QA catches regressions before users do.
 
 ## Current QA Inventory (What We Already Have)
-- Makefile test tiers: `make test` (SQLite-lite), `make test-legacy`, `make test-e2e` (core + a11y), `make test-zerg-e2e`, `make test-frontend-unit`, `make test-hatch-agent`, `make test-runner-unit`, `make test-shipper-e2e`, `make onboarding-sqlite`, `make onboarding-funnel`.
+- Makefile test tiers: `make test` (SQLite-lite), `make test-legacy`, `make test-e2e` (core + a11y), `make test-zerg-e2e`, `make test-frontend-unit`, `make test-hatch-agent`, `make test-runner-unit`, `make test-shipper-e2e`, `make onboarding-sqlite`, `make onboarding-funnel`, `make qa-oss`.
 - Playwright E2E with core suite + a11y, visual baselines, perf tests (some skipped).
 - Backend pytest suites: unit + integration; SQLite-lite tests in `tests_lite/`.
 - Docs-as-source onboarding contract + Playwright test for README contract.
@@ -28,7 +28,7 @@ Scope: OSS-first, SQLite-only, timeline-first product
 7) Runner and commis execution lack full integration tests with real WebSocket channel.
 8) Real-time events (SSE/WS) tests are disabled due to flakiness.
 9) No formal OS matrix for OSS install (macOS/Linux/WSL).
-10) No automated “OSS user QA script” that mirrors the actual user path.
+10) OSS user QA script was missing; now covered by `scripts/qa-oss.sh` (`make qa-oss`).
 
 ## Virtual QA Team (Agent Roles)
 Use commis/runners + hatch agents to form a lightweight QA org that runs locally or in CI.
@@ -153,8 +153,8 @@ P2 (after)
 - Release: all tiers + live evals (if keys available).
 
 ## Immediate Next Steps
-1. Update onboarding contract to match SQLite-only path (no Docker).
-2. Add OSS QA script (new target) and wire to CI.
+1. Update onboarding contract to match SQLite-only path (no Docker). ✅
+2. Add OSS QA script (new target) and wire to CI. ✅ (CI wiring pending)
 3. Fix commis/session-continuity E2E failures and remove skip if possible.
 4. Introduce deterministic LLM mock server so streaming tests can run.
 5. Add demo DB validation to onboarding and E2E flows.

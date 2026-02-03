@@ -120,3 +120,37 @@ Apache-2.0 - see LICENSE file
 - **Documentation:** https://longhouse.ai/docs
 - **Issues:** https://github.com/cipher982/longhouse/issues
 - **PyPI:** https://pypi.org/project/longhouse/
+
+---
+
+Onboarding contract (CI). Do not edit unless the README steps change.
+
+<!-- onboarding-contract:start -->
+```json
+{
+  "workdir": "/tmp/longhouse-onboarding",
+  "steps": [
+    "cd {{WORKDIR}}/apps/zerg/frontend-web && bun install --silent && bun run build",
+    "cd {{WORKDIR}}/apps/zerg/backend && uv sync",
+    "cd {{WORKDIR}}/apps/zerg/backend && HOME={{WORKDIR}}/.qa-home uv run longhouse serve --demo-fresh --host 127.0.0.1 --port 8080 --daemon",
+    "sleep 5",
+    "curl -fsS http://127.0.0.1:8080/health"
+  ],
+  "cleanup": [
+    "cd {{WORKDIR}}/apps/zerg/backend && HOME={{WORKDIR}}/.qa-home uv run longhouse serve --stop || true",
+    "rm -rf {{WORKDIR}}/.qa-home"
+  ],
+  "primary_route": "/timeline",
+  "cta_buttons": [
+    {
+      "label": "Timeline search",
+      "selector": ".sessions-search-input"
+    },
+    {
+      "label": "Timeline sessions",
+      "selector": ".session-card"
+    }
+  ]
+}
+```
+<!-- onboarding-contract:end -->
