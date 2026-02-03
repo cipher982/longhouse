@@ -602,9 +602,9 @@ def custom_openapi():
     from fastapi.openapi.utils import get_openapi
 
     openapi_schema = get_openapi(
-        title="Zerg Fiche Platform API",
+        title="Longhouse API",
         version="1.0.0",
-        description="Complete REST API specification for the Zerg Fiche Platform. "
+        description="Complete REST API specification for Longhouse. "
         "This schema is the single source of truth for frontend-backend contracts.",
         routes=app.routes,
     )
@@ -827,7 +827,7 @@ async def read_root():
         if index_path.is_file():
             return FileResponse(index_path)
 
-    return {"message": "Fiche Platform API is running"}
+    return {"message": "Longhouse API is running"}
 
 
 @app.get("/health/db", operation_id="health_db_check")
@@ -871,7 +871,7 @@ async def health_check():
 
     from sqlalchemy import text
 
-    health_status = {"status": "healthy", "message": "Fiche Platform API is running"}
+    health_status = {"status": "healthy", "message": "Longhouse API is running"}
     checks = {}
 
     # 0. Single-tenant violation check (critical)

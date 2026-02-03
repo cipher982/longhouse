@@ -111,8 +111,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
     # Create FastAPI app
     app = FastAPI(
-        title="Fiche Platform API",
-        description="AI Fiche Platform with clean architecture",
+        title="Longhouse API",
+        description="AI session orchestration platform",
         version="2.0.0",
         lifespan=lifespan,
     )
