@@ -67,7 +67,7 @@ def create_user(
         if settings.testing or not settings.discord_enable_alerts or not settings.discord_webhook_url:
             return
         count_info = f" (#{total_users} total)" if total_users else ""
-        content = f"@here 🎉 **New User Signup!** {email} just joined Swarmlet{count_info}"
+        content = f"@here 🎉 **New User Signup!** {email} just joined Longhouse{count_info}"
         try:
             with httpx.Client(timeout=5.0) as client:
                 resp = client.post(settings.discord_webhook_url, json={"content": content})
