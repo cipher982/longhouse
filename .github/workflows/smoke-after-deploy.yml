@@ -38,7 +38,7 @@ jobs:
         run: |
           echo "Checking API health..."
           for i in {1..10}; do
-            if curl -sf https://api.swarmlet.com/health > /dev/null; then
+            if curl -sf https://api.longhouse.ai/health > /dev/null; then
               echo "✓ API is healthy"
               break
             fi
@@ -47,7 +47,7 @@ jobs:
           done
 
           echo "Checking frontend..."
-          curl -sf https://swarmlet.com > /dev/null && echo "✓ Frontend is up"
+          curl -sf https://longhouse.ai > /dev/null && echo "✓ Frontend is up"
 
       - name: Run smoke tests
         env:
@@ -61,7 +61,7 @@ jobs:
         run: |
           echo "## Smoke Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Frontend:** https://swarmlet.com" >> $GITHUB_STEP_SUMMARY
-          echo "- **API:** https://api.swarmlet.com" >> $GITHUB_STEP_SUMMARY
+          echo "- **Frontend:** https://longhouse.ai" >> $GITHUB_STEP_SUMMARY
+          echo "- **API:** https://api.longhouse.ai" >> $GITHUB_STEP_SUMMARY
           echo "- **Triggered by:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY

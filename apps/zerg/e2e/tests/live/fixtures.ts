@@ -92,7 +92,7 @@ type LiveFixtures = {
 
 export const test = base.extend<LiveFixtures>({
   apiBaseUrl: async ({}, use) => {
-    const apiBaseUrl = process.env.PLAYWRIGHT_API_BASE_URL || process.env.E2E_API_URL || 'https://api.swarmlet.com';
+    const apiBaseUrl = process.env.PLAYWRIGHT_API_BASE_URL || process.env.E2E_API_URL || 'https://api.longhouse.ai';
     await use(apiBaseUrl);
   },
 

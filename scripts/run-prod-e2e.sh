@@ -11,8 +11,8 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
   set +a
 fi
 
-FRONTEND_URL="${PLAYWRIGHT_BASE_URL:-${E2E_FRONTEND_URL:-https://swarmlet.com}}"
-API_URL="${PLAYWRIGHT_API_BASE_URL:-${E2E_API_URL:-https://api.swarmlet.com}}"
+FRONTEND_URL="${PLAYWRIGHT_BASE_URL:-${E2E_FRONTEND_URL:-https://longhouse.ai}}"
+API_URL="${PLAYWRIGHT_API_BASE_URL:-${E2E_API_URL:-https://api.longhouse.ai}}"
 
 if [[ -z "${SMOKE_TEST_SECRET:-}" ]]; then
   echo "SMOKE_TEST_SECRET is required for prod E2E (service-login)." >&2

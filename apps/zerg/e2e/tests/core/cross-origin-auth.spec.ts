@@ -2,14 +2,14 @@
  * Cross-Origin Authentication Tests - Core Suite
  *
  * These tests verify cookie-based authentication works across different domains
- * (split deployment: swarmlet.com for frontend, api.swarmlet.com for backend).
+ * (split deployment: longhouse.ai for frontend, api.longhouse.ai for backend).
  *
  * REQUIRES: SMOKE_TEST_SECRET environment variable set
  *
  * Cookie requirements for split deployment:
  * - SameSite=None: Required for cross-origin requests
  * - Secure: Required when SameSite=None
- * - Domain=.swarmlet.com: Optional, enables subdomain sharing
+ * - Domain=.longhouse.ai: Optional, enables subdomain sharing
  *
  * CORE SUITE: 0 skipped, 0 flaky, retries: 0
  */
