@@ -5,6 +5,7 @@ import type {
   RunnerUpdate,
   RunnerListResponse,
   RotateSecretResponse,
+  RunnerStatusResponse,
 } from "./types";
 
 export async function createEnrollToken(): Promise<EnrollTokenResponse> {
@@ -39,4 +40,8 @@ export async function rotateRunnerSecret(runnerId: number): Promise<RotateSecret
   return request<RotateSecretResponse>(`/runners/${runnerId}/rotate-secret`, {
     method: "POST",
   });
+}
+
+export async function fetchRunnerStatus(): Promise<RunnerStatusResponse> {
+  return request<RunnerStatusResponse>(`/runners/status`);
 }

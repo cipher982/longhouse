@@ -135,6 +135,27 @@ class RunnerRotateSecretResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Runner Status Summary
+# ---------------------------------------------------------------------------
+
+
+class RunnerStatusItem(BaseModel):
+    """Individual runner status for summary."""
+
+    name: str
+    status: str  # online|offline|revoked
+
+
+class RunnerStatusResponse(BaseModel):
+    """Summary of runner health for UI status indicators."""
+
+    total: int = Field(..., description="Total number of runners")
+    online: int = Field(..., description="Number of online runners")
+    offline: int = Field(..., description="Number of offline runners")
+    runners: list[RunnerStatusItem] = Field(..., description="Status of each runner")
+
+
+# ---------------------------------------------------------------------------
 # Generic Success Response
 # ---------------------------------------------------------------------------
 
