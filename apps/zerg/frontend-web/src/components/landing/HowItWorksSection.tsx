@@ -2,7 +2,7 @@
  * HowItWorksSection
  *
  * Simple 3-step explanation of how Longhouse works.
- * Developer-focused: Install → Sync → Browse flow.
+ * Developer-focused: Install → Sync → Search flow.
  */
 
 import config from "../../lib/config";
@@ -32,7 +32,7 @@ const steps: Step[] = [
   {
     icon: <EyeIcon width={32} height={32} />,
     number: "3",
-    title: "Browse & Resume",
+    title: "Search & Resume",
     description: "Find where you solved it before. Pick up exactly where you left off."
   }
 ];

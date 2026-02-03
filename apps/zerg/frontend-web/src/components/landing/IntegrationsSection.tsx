@@ -70,6 +70,10 @@ export function IntegrationsSection() {
           ))}
         </div>
 
+        <p className="landing-providers-tagline">
+          Find where you solved auth. Resume that refactor. All from one timeline.
+        </p>
+
         {/* Trust badges */}
         <Link to="/security" className="landing-trust-badges-link">
           <div className="landing-trust-badges">

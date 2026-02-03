@@ -91,11 +91,11 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
           </div>
 
           <h1 className="landing-hero-headline">
-            Your AI coding sessions, <span className="gradient-text">unified.</span>
+            Never lose an AI coding <span className="gradient-text">conversation.</span>
           </h1>
 
           <p className="landing-hero-subhead">
-            Stop grepping JSONL. See every Claude Code session in one timeline with full tool calls.
+            Every Claude Code session in one searchable timeline. Full tool calls. Resume anywhere.
           </p>
 
           <p className="landing-hero-note">
