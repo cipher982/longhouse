@@ -1,10 +1,10 @@
 openapi: 3.0.3
 
 info:
-  title: Zerg Fiche Platform API
+  title: Longhouse API
   version: 1.0.0
   description: |
-    Complete REST API schema for the Zerg Fiche Platform.
+    Complete REST API schema for Longhouse.
     Single source of truth for all HTTP endpoints.
 
 servers:

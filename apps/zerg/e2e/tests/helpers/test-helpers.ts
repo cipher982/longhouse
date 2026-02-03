@@ -274,7 +274,7 @@ export async function checkBackendHealth(commisId: string = '0'): Promise<boolea
   const apiClient = createApiClient(commisId);
   try {
     const response = await apiClient.healthCheck();
-    return response && response.message === 'Fiche Platform API is running';
+    return response && response.message === 'Longhouse API is running';
   } catch (error) {
     testLog.error('Backend health check failed:', error);
     return false;
