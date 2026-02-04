@@ -65,3 +65,4 @@
 - [Docs vs reality] Landing FAQ (`TrustSection.tsx`) claims data is stored in PostgreSQL and auth is Google‑only; current OSS runtime is SQLite and supports password/local auth.
 - [Docs vs reality] Landing DemoSection/Footers still use cloud‑workspace + “from any device” copy (`DemoSection.tsx`, `FooterCTA.tsx`), which doesn’t match local‑first OSS or missing cross‑device resume.
 - [Docs vs code] Landing SkillsSection says Slack skill can “manage channels,” but Slack tool is webhook‑only (send message); no channel management/listing tools exist.
+- [Docs vs code] `DemoSection.tsx` comment says it “Shows Chat, Dashboard, and Canvas views,” but `ProductShowcase` only displays Timeline and Session Detail tabs.
