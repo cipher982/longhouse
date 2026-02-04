@@ -411,7 +411,6 @@ def service_login(request: Request, response: Response, db: Session = Depends(ge
     Optional X-Smoke-Run-Id header creates an isolated per-run user/thread.
     Hidden from OpenAPI docs for reduced discoverability.
     """
-    import re
 
     secret = request.headers.get("X-Service-Secret") or ""
     expected = _settings.smoke_test_secret or ""
@@ -421,22 +420,12 @@ def service_login(request: Request, response: Response, db: Session = Depends(ge
     if not expected or not hmac.compare_digest(secret, expected):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
-    def _smoke_user_for_run(run_id_value: str) -> tuple[str, str, str]:
-        """Return (email, provider_user_id, display_name) for a smoke run."""
-        if not run_id_value:
-            return ("smoke@service.local", "smoke-test-1", "Smoke Test")
-
-        safe = re.sub(r"[^A-Za-z0-9._-]+", "-", run_id_value).strip("-_.")
-        if not safe:
-            return ("smoke@service.local", "smoke-test-1", "Smoke Test")
-
-        safe = safe[:48]
-        email = f"smoke+{safe}@service.local"
-        provider_user_id = f"smoke-test-{safe}"
-        display_name = f"Smoke Test ({safe})"
-        return (email, provider_user_id, display_name)
-
-    email, provider_user_id, display_name = _smoke_user_for_run(run_id)
+    # Always use a single smoke user - no per-run isolation needed.
+    # Run ID is just metadata for logging, not user isolation.
+    # This prevents accumulation of smoke test users in prod.
+    email = "smoke@service.local"
+    provider_user_id = "smoke-test"
+    display_name = "Smoke Test" + (f" ({run_id[:20]})" if run_id else "")
 
     # Get or create service user (handles race condition)
     user = crud.get_user_by_email(db, email)
