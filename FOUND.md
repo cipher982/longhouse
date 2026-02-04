@@ -72,3 +72,4 @@
 - [Docs vs code] VISION says runners are “Node.js” daemons, but the runner is Bun-based (`apps/runner` uses Bun scripts and builds a Bun-compiled binary); Node isn’t required.
 - [Docs vs code] VISION OSS local path says the shipper runs “zero config” alongside `longhouse up`; in reality the shipper is not auto-started by `longhouse serve` and requires `longhouse connect`/`onboard` to install or run.
 - [Docs] QA_PLAN P0 backlog references `longhouse up`, but the CLI has no `up` command (it's `longhouse serve`).
+- [Docs vs repo] VISION “Docker alternative” says `docker compose up` for full stack with Postgres, but there is no root compose file; Docker configs live under `docker/` (same drift as README).
