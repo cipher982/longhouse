@@ -2,8 +2,7 @@ name: Test Installer
 
 on:
   push:
-    paths:
-      - 'scripts/install.sh'
+  pull_request:
   workflow_dispatch:  # Manual trigger
 
 jobs:
