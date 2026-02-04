@@ -62,3 +62,5 @@
 - [Docs vs reality] Public Docs page (`frontend-web/src/pages/DocsPage.tsx`) is still the old “fiche/canvas/dashboard” workflow with Google sign‑in, not the timeline‑first OSS product.
 - [Docs vs reality] Public info pages (`PricingPage.tsx`, `SecurityPage.tsx`, `PrivacyPage.tsx`) still describe fiches/workflows, Google‑only OAuth auth, and dashboard account management, which don’t match the current timeline‑first OSS flow.
 - [Docs vs code] Landing “Create Your Own” skills copy says to add `SKILL.md` to `skills/` in your workspace; actual loader looks in `~/.longhouse/skills` (user) or `workspace/skills/` (requires workspace path in server), so the user doc is incomplete/unclear for OSS users.
+- [Docs vs reality] Landing FAQ (`TrustSection.tsx`) claims data is stored in PostgreSQL and auth is Google‑only; current OSS runtime is SQLite and supports password/local auth.
+- [Docs vs reality] Landing DemoSection/Footers still use cloud‑workspace + “from any device” copy (`DemoSection.tsx`, `FooterCTA.tsx`), which doesn’t match local‑first OSS or missing cross‑device resume.
