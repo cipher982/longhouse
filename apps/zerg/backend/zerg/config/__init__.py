@@ -127,7 +127,7 @@ class Settings:  # noqa: D401 – simple data container
     jobs_git_repo_url: str | None  # e.g., https://github.com/user/sauron-jobs.git
     jobs_git_branch: str  # Branch to clone (default: main)
     jobs_git_token: str | None  # GitHub PAT for private repo
-    jobs_dir: str  # Local path for cloned repo (default: /opt/sauron-jobs)
+    jobs_dir: str  # Local path for jobs manifest (default: /data/jobs)
     jobs_refresh_interval_seconds: int  # Polling interval (0 = disabled)
 
     # Container runner settings ----------------------------------------
@@ -435,7 +435,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         jobs_git_repo_url=os.getenv("JOBS_GIT_REPO_URL"),
         jobs_git_branch=os.getenv("JOBS_GIT_BRANCH", "main"),
         jobs_git_token=os.getenv("JOBS_GIT_TOKEN"),
-        jobs_dir=os.getenv("JOBS_DIR", "/opt/sauron-jobs"),
+        jobs_dir=os.getenv("JOBS_DIR", "/data/jobs"),
         jobs_refresh_interval_seconds=int(os.getenv("JOBS_REFRESH_INTERVAL_SECONDS", "60")),
         # Container runner defaults
         container_default_image=os.getenv("CONTAINER_DEFAULT_IMAGE", "python:3.11-slim"),
