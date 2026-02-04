@@ -181,15 +181,12 @@ Two separate things exist — don't conflate or rebuild:
 
 <!-- Agents: append below. Keep last 7 days or 10 entries max. -->
 - (2026-02-03) [gotcha] Runner daemons hardcode API URL; domain changes break them silently. Check `/api/runners/status` endpoint or footer indicator.
-- (2026-02-03) [ops] Runner daemons on servers: restart with `docker rm/run` using `SWARMLET_URL=wss://api.longhouse.ai`.
 - (2026-02-03) [gotcha] Shipper files/labels are `longhouse-*` now: token `~/.claude/longhouse-device-token`, URL `~/.claude/longhouse-url`, launchd label `com.longhouse.shipper` (legacy `zerg-*` paths are migration-only).
 - (2026-02-03) [bug] Commis queue: if initial `extend_lease` fails in `_run_job`, the job stays `claimed` until lease expiry (no reschedule/mark-dead).
 - (2026-02-03) [ops] Cloudflare Universal SSL does not cover sub-subdomains; prefer single-level (api-david.longhouse.ai) or custom cert.
 - (2026-02-03) [ui] UI debug bundles: `make ui-capture` produces screenshot + trace + manifest; Playwright 1.57 lacks `page.accessibility`, so a11y capture uses `locator.ariaSnapshot()` (YAML) or guards the missing API.
-- (2026-02-03) [ui] SCENE=empty currently no-ops (doesn't clear sessions); ariaSnapshot flattens session list into a single text node, limiting structured parsing.
-- (2026-02-03) [gotcha] `uv run` builds fail if `apps/zerg/frontend-web/dist` is missing (hatch force-include); build frontend before backend tests.
 - (2026-02-03) [ops] Installer lives at `get.longhouse.ai/install.sh`; `longhouse.ai/install.sh` serves the SPA, and `api-david.longhouse.ai` is the working API subdomain (not api.david).
 - (2026-02-04) [docs] CLI has no `longhouse logs` or `longhouse runner` commands; `longhouse status` only prints config (no job list).
 - (2026-02-04) [gotcha] `_apply_lite_mode_defaults()` must run BEFORE demo mode in serve.py—demo imports trigger config loading which needs FERNET_SECRET and TRIGGER_SIGNING_SECRET.
-- (2026-02-04) [ops] k3s ARC runners on cube: if repo renamed, must update helm release `githubConfigUrl`, delete stale EphemeralRunners (patch finalizers first), and restart controller to clear cached clients.
 - (2026-02-04) [ci] SQLite-only pivot broke `backend-tests` CI job (used Postgres). Fix: removed job, moved hatch-agent/install-runner tests to sqlite-tests.
+- (2026-02-04) [docs] Docs policy: keep only `README.md`, `TODO.md`, `VISION.md` as canonical; fold other root docs into TODO to avoid drift.
