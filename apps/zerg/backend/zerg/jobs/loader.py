@@ -62,29 +62,48 @@ async def load_jobs_manifest(clear_existing: bool = False, builtin_job_ids: set[
         Returns False (doesn't raise) so builtin jobs continue working.
 
     Note:
-        - Acquires git sync read lock to prevent loading during repo update
+        - Acquires git sync read lock to prevent loading during repo update (if git configured)
         - Temporarily modifies sys.path (restored after load)
         - Duplicate job IDs are skipped with a warning (not fatal)
+        - Falls back to local-only mode (jobs_dir) when git sync is not configured
     """
     from zerg.jobs.git_sync import get_git_sync_service
     from zerg.jobs.registry import job_registry
 
     git_service = get_git_sync_service()
-    if not git_service:
-        logger.info("Jobs git repo not configured; skipping manifest load")
-        return False
+    if git_service:
+        # Git-based manifest loading (preferred path, backwards compatible)
+        repo_root = Path(git_service.local_path)
+        manifest_path = repo_root / "manifest.py"
 
-    repo_root = Path(git_service.local_path)
-    manifest_path = repo_root / "manifest.py"
+        if not manifest_path.exists():
+            logger.warning("Jobs manifest missing: %s", manifest_path)
+            return False
 
-    if not manifest_path.exists():
-        logger.warning("Jobs manifest missing: %s", manifest_path)
-        return False
+        # Acquire read lock to prevent loading during git sync
+        # IMPORTANT: clear_existing must be inside the lock to prevent race conditions
+        # where registry is cleared but then blocks waiting for background sync
+        async with git_service.read_lock() as git_sha:
+            # Clear manifest jobs before reload if requested
+            if clear_existing:
+                preserved = builtin_job_ids or set()
+                removed = job_registry.clear_manifest_jobs(preserved)
+                if removed:
+                    logger.info("Cleared %d manifest jobs before reload: %s", len(removed), removed)
 
-    # Acquire read lock to prevent loading during git sync
-    # IMPORTANT: clear_existing must be inside the lock to prevent race conditions
-    # where registry is cleared but then blocks waiting for background sync
-    async with git_service.read_lock() as git_sha:
+            return _execute_manifest(manifest_path, repo_root, git_sha)
+    else:
+        # Local-only mode: load from jobs_dir when git sync is not configured
+        from zerg.config import get_settings
+
+        settings = get_settings()
+        repo_root = Path(settings.jobs_dir)
+        manifest_path = repo_root / "manifest.py"
+
+        if not manifest_path.exists():
+            logger.info("No jobs manifest found at %s (local-only mode)", manifest_path)
+            return False
+
         # Clear manifest jobs before reload if requested
         if clear_existing:
             preserved = builtin_job_ids or set()
@@ -92,7 +111,7 @@ async def load_jobs_manifest(clear_existing: bool = False, builtin_job_ids: set[
             if removed:
                 logger.info("Cleared %d manifest jobs before reload: %s", len(removed), removed)
 
-        return _execute_manifest(manifest_path, repo_root, git_sha)
+        return _execute_manifest(manifest_path, repo_root, None)
 
 
 def _execute_manifest(manifest_path: Path, repo_root: Path, git_sha: str | None) -> bool:
