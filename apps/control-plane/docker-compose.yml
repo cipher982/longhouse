@@ -31,6 +31,7 @@ services:
       - "8085:8085"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/data/longhouse:/var/lib/docker/data/longhouse
     depends_on:
       - control-plane-db
     networks:
