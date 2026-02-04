@@ -124,20 +124,9 @@ This waits for health, runs API checks (auth, LLM, voice, CRUD), then browser te
 4. ✅ Run `make verify-prod` (~80s)
 5. ✅ Report result to user
 
-## apps/sauron - Standalone Scheduler
+## apps/sauron - Scheduler (Folded In)
 
-Sauron is the centralized ops scheduler, deployed as a standalone service on clifford VPS. It reuses `zerg.jobs` infrastructure.
-
-**Location:** `apps/sauron/`
-
-**Key files:**
-- `main.py` - APScheduler + worker loop
-- `api.py` - FastAPI for Jarvis control
-- `cli.py` - CLI for manual operations
-- `Dockerfile` - Builds from monorepo root
-- `docker-compose.yml` - Coolify deployment config
-
-**Deploy:** Coolify on clifford, separate from main Zerg deployment.
+Sauron is not a separate service; scheduled jobs run inside the standard Longhouse instance service (per-user). The `sauron-jobs` repo pattern remains a power-user path (optional jobs pack), but OSS onboarding should not depend on it.
 
 ## apps/runner - Native Runner Daemon
 
@@ -193,3 +182,7 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-04) [infra] Decision: keep control plane + instances on zerg; avoid Coolify for dynamic provisioning (control plane uses Docker API directly).
 - (2026-02-04) [ops] FERNET_SECRET must be urlsafe base64 32-byte key; hex strings cause instance startup failure.
 - (2026-02-04) [arch] Runtime image (`docker/runtime.dockerfile`) bundles frontend+backend; backend serves frontend via StaticFiles at `/app/frontend-web/dist`.
+- (2026-02-04) [docs] TODO.md control plane status is stale; `apps/control-plane/` exists with Docker API provisioner + env-driven runtime image.
+- (2026-02-04) [arch] Sauron is folded into the standard Longhouse instance; scheduled jobs run in-process per user, not as a separate service.
+- (2026-02-04) [product] Jobs are core; default to local instance job manifests (no repo required). Private git sync (e.g., `sauron-jobs`) is just one storage option.
+- (2026-02-04) [product] Jobs should live in a local repo inside the instance and auto-commit changes; optional UI-driven remote sync (e.g., GitHub) for backups.
