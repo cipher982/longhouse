@@ -44,7 +44,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 - [x] Support `LONGHOUSE_PASSWORD_HASH` (bcrypt/argon2)
 - [x] UI fallback if `/auth/methods` fails
 - [x] Add `--demo-fresh` flag to rebuild demo DB
-- [ ] Remove workflow/canvas feature (backend + frontend + deps + tests)
+- [x] Remove workflow/canvas feature (backend + frontend + deps + tests)
 
 ---
 
