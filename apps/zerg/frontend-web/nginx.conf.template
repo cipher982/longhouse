@@ -29,6 +29,7 @@ http {
         set $backend_upstream http://${BACKEND_HOST}:8000;
 
         # --- API proxying (same-origin) ---
+        # Strip /api prefix: /api/health → backend:8000/health
         # WebSocket endpoint must be defined before the generic /api/ location
         location /api/ws {
             proxy_http_version 1.1;
@@ -36,12 +37,16 @@ http {
             proxy_set_header Connection "Upgrade";
             proxy_set_header Host $host;
             proxy_set_header X-Forwarded-Proto $scheme;
+            # Rewrite /api/ws to /ws
+            rewrite ^/api(/ws.*)$ $1 break;
             proxy_pass $backend_upstream;
         }
 
         location /api/ {
             proxy_set_header Host $host;
             proxy_set_header X-Forwarded-Proto $scheme;
+            # Rewrite /api/* to /*
+            rewrite ^/api/(.*)$ /$1 break;
             proxy_pass $backend_upstream;
         }
 
