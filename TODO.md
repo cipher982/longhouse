@@ -13,6 +13,42 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ---
 
+## 📊 Validation Summary (2026-02-04)
+
+**Agent audit of all TODO sections. Use this to understand current state.**
+
+### ✅ DONE (Close/Archive)
+| Section | Status | Notes |
+|---------|--------|-------|
+| P0 OSS GA | ✅ 100% | All 5 items verified: auth, demo, CTAs, README, QA script |
+| Post-GA Follow-ups | ✅ 100% | Rate limiting, hash support, UI fallback, demo-fresh, workflow removal |
+| OSS Auth | ✅ 100% | Password login fully implemented with rate limiting |
+| Prompt Cache Optimization | ✅ DONE | MessageArrayBuilder has correct layout. TODO was stale |
+
+### ⚠️ PARTIALLY DONE
+| Section | Status | Notes |
+|---------|--------|-------|
+| HN Launch Readiness | 95% | Hero CTAs work. Just verify in prod |
+| Rebrand | ~80% | ~40 occurrences remain (NOT 229). Email templates + root openapi.json |
+| FTS5 Search | 25% | Search bar UI exists but uses ILIKE not FTS5. Oikos tools don't exist |
+| QA Infrastructure | 80% | Pieces exist but `make test-readmes` aggregator missing |
+| Install/Onboarding | 60% | Missing: `longhouse doctor`, device token UI, fresh-shell verify |
+| OSS First-Run UX | 50% | --demo works but onboarding doesn't seed demo data |
+
+### ❌ NOT STARTED
+| Section | Status | Notes |
+|---------|--------|-------|
+| Landing Page Redesign | 0% | All 6 phases not started. No header, no contrast fixes |
+| Control Plane | 0% | No `apps/control-plane/` directory. Zero code exists |
+| Forum Discovery UX | 0% | Heuristic status only. No presence events, no bucket UI |
+
+### 📝 INACCURACIES CORRECTED
+- Rebrand scope: TODO said 229 occurrences — actually ~40 (most already fixed)
+- Prompt Cache: TODO said "needs reordering" — already done
+- Landing CTAs: TODO said "broken" — actually work, just need prod verification
+
+---
+
 ## [Launch] 🎯 HN Launch Priority (This Week)
 
 **Decision:** OSS GA + Hosted Beta (optional). Hosted tasks only if P0 is done.
