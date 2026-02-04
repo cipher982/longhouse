@@ -11,7 +11,7 @@ import { test, expect } from './fixtures';
  * 5. Focus management and tab order
  * 6. ARIA labels and semantic markup
  * 7. Responsive design and mobile compatibility
- * 8. User workflow usability testing
+ * 8. User flow usability testing
  */
 
 test.describe('Accessibility and UI/UX', () => {
@@ -468,25 +468,25 @@ test.describe('Accessibility and UI/UX', () => {
     console.log('✅ Responsive design test completed');
   });
 
-  test('User workflow usability testing', async ({ page, request }) => {
-    console.log('🚀 Starting user workflow usability test...');
+  test('User flow usability testing', async ({ page, request }) => {
+    console.log('🚀 Starting user flow usability test...');
 
     const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Test 1: Primary user journey - Fiche creation
-    console.log('📊 Test 1: Testing fiche creation workflow...');
+    console.log('📊 Test 1: Testing fiche creation flow...');
 
     await page.goto('/');
     await page.waitForTimeout(1000);
 
-    const workflowSteps = [];
+    const flowSteps = [];
 
     // Step 1: Navigate to dashboard
     const step1Start = Date.now();
     await page.locator('.header-nav').click();
     await page.waitForTimeout(500);
     const step1Time = Date.now() - step1Start;
-    workflowSteps.push({ step: 'Navigate to dashboard', time: step1Time });
+    flowSteps.push({ step: 'Navigate to dashboard', time: step1Time });
 
     // Step 2: Look for fiche creation interface
     const createButton = await page.locator('button:has-text("Create"), [data-testid*="create"]').count();
@@ -495,12 +495,12 @@ test.describe('Accessibility and UI/UX', () => {
     if (createButton > 0) {
       const step2Start = Date.now();
       // This would be where user creates an fiche via UI
-      // For now, we'll create via API to test the rest of the workflow
+      // For now, we'll create via API to test the rest of the flow
       const step2Time = Date.now() - step2Start;
-      workflowSteps.push({ step: 'Fiche creation interface', time: step2Time });
+      flowSteps.push({ step: 'Fiche creation interface', time: step2Time });
     }
 
-    // Create fiche via API for workflow testing
+    // Create fiche via API for flow testing
     const ficheResponse = await request.post('/api/fiches', {
       headers: {
         'X-Test-Commis': commisId,
@@ -509,7 +509,7 @@ test.describe('Accessibility and UI/UX', () => {
       data: {
         name: `Usability Test Fiche ${Date.now()}`,
         system_instructions: 'Fiche for usability testing',
-        task_instructions: 'Test user workflow',
+        task_instructions: 'Test user flow',
         model: 'gpt-mock',
       }
     });
@@ -528,25 +528,21 @@ test.describe('Accessibility and UI/UX', () => {
       console.log('📊 Fiche visible in dashboard:', ficheVisible);
 
       if (ficheVisible) {
-        workflowSteps.push({ step: 'Fiche appears in dashboard', time: 100 });
+        flowSteps.push({ step: 'Fiche appears in dashboard', time: 100 });
       }
-
-      // Step 4: Canvas navigation - skipped (Canvas hidden for alpha)
-      // TODO: Re-enable when Canvas is ready
-      console.log('📊 Canvas workflow step skipped (Canvas disabled)');
     }
 
-    console.log('📊 User workflow steps completed:', workflowSteps.length);
-    console.log('📊 Total workflow time:', workflowSteps.reduce((sum, step) => sum + step.time, 0), 'ms');
+    console.log('📊 User flow steps completed:', flowSteps.length);
+    console.log('📊 Total flow time:', flowSteps.reduce((sum, step) => sum + step.time, 0), 'ms');
 
-    const averageStepTime = workflowSteps.reduce((sum, step) => sum + step.time, 0) / workflowSteps.length;
+    const averageStepTime = flowSteps.reduce((sum, step) => sum + step.time, 0) / flowSteps.length;
     console.log('📊 Average step time:', Math.round(averageStepTime), 'ms');
 
     if (averageStepTime < 1000) {
-      console.log('✅ User workflow is responsive');
+      console.log('✅ User flow is responsive');
     }
 
-    // Test 2: Error recovery in workflow
+    // Test 2: Error recovery in flow
     console.log('📊 Test 2: Testing error recovery...');
 
     // Try to trigger a recoverable error
@@ -569,6 +565,6 @@ test.describe('Accessibility and UI/UX', () => {
       console.log('📊 Error recovery test:', error.message);
     }
 
-    console.log('✅ User workflow usability test completed');
+    console.log('✅ User flow usability test completed');
   });
 });

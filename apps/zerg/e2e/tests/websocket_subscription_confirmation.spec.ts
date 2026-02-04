@@ -209,7 +209,7 @@ test.describe('WebSocket Subscription Confirmation', () => {
     // Rapidly switch between views to trigger subscribe/unsubscribe
     for (let i = 0; i < 3; i++) {
       console.log(`🔄 Cycle ${i + 1}/3`);
-      await page.getByTestId('global-canvas-tab').click();
+      await page.getByTestId('global-chat-tab').click();
       await page.waitForTimeout(500);
       await page.locator('.header-nav').click();
       await page.waitForTimeout(500);
@@ -360,7 +360,7 @@ test.describe('WebSocket Subscription Confirmation', () => {
     console.log('✅ Dashboard mounted with subscriptions');
 
     // Navigate away (unmounts component)
-    await page.getByTestId('global-canvas-tab').click();
+    await page.getByTestId('global-chat-tab').click();
     await page.waitForTimeout(1000);
 
     console.log('✅ Navigated away - component unmounted');

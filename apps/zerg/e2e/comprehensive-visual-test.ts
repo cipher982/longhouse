@@ -34,13 +34,6 @@ const PAGE_CONFIGS: PageTestConfig[] = [
     reactUrl: '/react/index.html#/chat',
     description: 'Empty chat interface without active conversation',
     waitForSelector: '.chat-container, [data-testid="chat-container"]'
-  },
-  {
-    name: 'canvas-editor',
-    rustUrl: '/canvas',
-    reactUrl: '/react/index.html#/canvas',
-    description: 'Canvas workflow editor interface',
-    waitForSelector: '.canvas-container, [data-testid="canvas-container"]'
   }
 ];
 
