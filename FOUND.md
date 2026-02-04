@@ -69,3 +69,6 @@
 - [Docs vs code] VISION “Runner registration” says `longhouse runner register` generates credentials, but the CLI has no `runner` command; registration happens via the runner installer hitting `/api/runners/register`.
 - [Docs vs code] VISION CLI section says `longhouse status` shows running jobs and `longhouse logs <job_id>` tails job logs, but `longhouse status` only prints configuration and there is no `logs` command.
 - [Docs vs code] VISION “File Structure (After)” claims `~/.longhouse/logs/` with per‑job logs and shows `→ http://0.0.0.0:8080`; actual logging is `~/.longhouse/server.log` (server) + `~/.claude/shipper.log` (shipper) and `longhouse serve` defaults to `127.0.0.1:8080` unless `--host` is set.
+- [Docs vs code] VISION says runners are “Node.js” daemons, but the runner is Bun-based (`apps/runner` uses Bun scripts and builds a Bun-compiled binary); Node isn’t required.
+- [Docs vs code] VISION OSS local path says the shipper runs “zero config” alongside `longhouse up`; in reality the shipper is not auto-started by `longhouse serve` and requires `longhouse connect`/`onboard` to install or run.
+- [Docs] QA_PLAN P0 backlog references `longhouse up`, but the CLI has no `up` command (it's `longhouse serve`).
