@@ -180,10 +180,6 @@ Two separate things exist — don't conflate or rebuild:
 ## Learnings (Recent - Human compacts weekly)
 
 <!-- Agents: append below. Keep last 7 days or 10 entries max. -->
-- (2026-02-03) [gotcha] Runner daemons hardcode API URL; domain changes break them silently. Check `/api/runners/status` endpoint or footer indicator.
-- (2026-02-03) [gotcha] Shipper files/labels are `longhouse-*` now: token `~/.claude/longhouse-device-token`, URL `~/.claude/longhouse-url`, launchd label `com.longhouse.shipper` (legacy `zerg-*` paths are migration-only).
-- (2026-02-03) [bug] Commis queue: if initial `extend_lease` fails in `_run_job`, the job stays `claimed` until lease expiry (no reschedule/mark-dead).
-- (2026-02-03) [ops] Cloudflare Universal SSL does not cover sub-subdomains; prefer single-level (api-david.longhouse.ai) or custom cert.
 - (2026-02-03) [ui] UI debug bundles: `make ui-capture` produces screenshot + trace + manifest; Playwright 1.57 lacks `page.accessibility`, so a11y capture uses `locator.ariaSnapshot()` (YAML) or guards the missing API.
 - (2026-02-03) [ops] Installer lives at `get.longhouse.ai/install.sh`; `longhouse.ai/install.sh` serves the SPA, and `api-david.longhouse.ai` is the working API subdomain (not api.david).
 - (2026-02-04) [docs] CLI has no `longhouse logs` or `longhouse runner` commands; `longhouse status` only prints config (no job list).
@@ -193,3 +189,4 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-04) [arch] Single-domain architecture: each user subdomain (alice.longhouse.ai) serves both frontend and API; nginx proxies /api/* to backend via BACKEND_HOST env var. No separate api-alice subdomain needed.
 - (2026-02-04) [gotcha] Coolify stores docker-compose defaults in DB, not git. Delete env vars via API then redeploy to pick up new defaults. Or manually update via Coolify UI.
 - (2026-02-04) [ops] Set SINGLE_TENANT=0 on prod to allow smoke test user alongside real user. Default SINGLE_TENANT=1 fails health if >1 user exists.
+- (2026-02-04) [arch] Backend router surface still includes legacy fiche/workflow/connectors/etc. (see `apps/zerg/backend/zerg/main.py` include_router list); candidate for slimming to sessions+shipper core.
