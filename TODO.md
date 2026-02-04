@@ -277,6 +277,7 @@ Update screenshots to show Timeline, not old dashboard.
   - Show banner: "Demo Mode - sample data"
   - **Existing:** `scripts/build_demo_db.py`, `services/demo_sessions.py`, `scenarios/data/swarm-mvp.yaml`
   - File: `apps/zerg/backend/zerg/cli/serve.py`
+- [x] Installer enforces Python 3.12+ (align with `pyproject.toml`)
 
 ### Medium Priority
 

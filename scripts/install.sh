@@ -87,20 +87,20 @@ install_uv() {
 
 # Install Python via uv
 install_python() {
-    step "Ensuring Python 3.11+ is available"
+    step "Ensuring Python 3.12+ is available"
 
     # Check if uv can already find Python
-    if uv python find 3.11 &>/dev/null 2>&1; then
+    if uv python find 3.12 &>/dev/null 2>&1; then
         local py_path
-        py_path=$(uv python find 3.11 2>/dev/null)
+        py_path=$(uv python find 3.12 2>/dev/null)
         info "Python found: $py_path"
         return 0
     fi
 
-    info "Installing Python 3.11 via uv..."
-    uv python install 3.11
+    info "Installing Python 3.12 via uv..."
+    uv python install 3.12
 
-    success "Python 3.11 installed"
+    success "Python 3.12 installed"
 }
 
 # Install Longhouse CLI
@@ -270,10 +270,10 @@ verify_installation() {
     fi
 
     # Check Python
-    if uv python find 3.11 &>/dev/null 2>&1; then
-        success "Python: $(uv python find 3.11)"
+    if uv python find 3.12 &>/dev/null 2>&1; then
+        success "Python: $(uv python find 3.12)"
     else
-        error "Python 3.11 not found"
+        error "Python 3.12 not found"
         all_ok=false
     fi
 
