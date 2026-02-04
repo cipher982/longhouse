@@ -14,7 +14,7 @@ export function DemoSection() {
         <span className="landing-section-label">See it in action</span>
         <h2 className="landing-section-title">Your AI Session Archive</h2>
         <p className="landing-section-subtitle">
-          Searchable timeline of every Claude, Codex, and Gemini session. Resume any conversation from any device.
+          Searchable timeline of every Claude Code session. Resume any conversation from any device.
         </p>
 
         <ProductShowcase />

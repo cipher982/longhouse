@@ -134,11 +134,11 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
           </h1>
 
           <p className="landing-hero-subhead">
-            Search across Claude, Codex, Cursor, Gemini. Resume from anywhere.
+            Your Claude Code sessions in one searchable timeline. Resume from anywhere.
           </p>
 
           <p className="landing-hero-note">
-            Works with Claude Code today. Others coming soon. Self-host anytime.
+            Codex, Cursor, Gemini coming soon. Self-host anytime.
           </p>
 
           {/* Install command section - primary CTA */}
