@@ -452,7 +452,7 @@
     border-color: var(--color-brand-primary);
   }
 
-  /* View tabs above dashboard/canvas */
+  /* View tabs above dashboard */
   .view-tabs {
     display: flex;
     background: var(--color-surface-page);

@@ -12,7 +12,6 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Timeline', href: '/timeline' },
   { label: 'Chat', href: '/chat' },
   { label: 'Dashboard', href: '/dashboard' },
-  { label: 'Canvas', href: '/canvas' },
   { label: 'Integrations', href: '/settings/integrations' },
   { label: 'Runners', href: '/runners' },
 ]
