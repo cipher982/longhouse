@@ -183,7 +183,7 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-03) [gotcha] scenario seeding clean=True does not clear SeedRegistry; reseed will skip unless registry is cleared.
 - (2026-02-03) [gotcha] Runner daemons hardcode API URL; domain changes break them silently. Check `/api/runners/status` endpoint or footer indicator.
 - (2026-02-03) [ops] Runner daemons on servers: restart with `docker rm/run` using `SWARMLET_URL=wss://api.longhouse.ai`.
-- (2026-02-03) [ux] Global nav still includes Forum/Canvas in some headers despite Timeline-first direction; align nav to Timeline/Oikos core.
+- (2026-02-03) [gotcha] Shipper files/labels are `longhouse-*` now: token `~/.claude/longhouse-device-token`, URL `~/.claude/longhouse-url`, launchd label `com.longhouse.shipper` (legacy `zerg-*` paths are migration-only).
 - (2026-02-03) [product] Longhouse positioning is AI coding session management; landing page copy still reflects old personal AI hub vision.
 - (2026-02-03) [ops] Cloudflare Universal SSL does not cover sub-subdomains; prefer single-level (api-david.longhouse.ai) or custom cert.
 - (2026-02-03) [ui] UI debug bundles: `make ui-capture` produces screenshot + trace + manifest; Playwright 1.57 lacks `page.accessibility`, so a11y capture uses `locator.ariaSnapshot()` (YAML) or guards the missing API.
