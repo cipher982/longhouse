@@ -17,7 +17,6 @@
   "dependencies": {
     "@openai/agents": "^0.1.1",
     "@tanstack/react-query": "^5.62.7",
-    "@xyflow/react": "^12.8.6",
     "clsx": "^2.1.1",
     "dompurify": "^3.3.0",
     "idb": "^8.0.0",
