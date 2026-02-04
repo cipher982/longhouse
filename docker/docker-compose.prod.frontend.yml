@@ -1,10 +1,11 @@
 # Production Docker Compose - Frontend Only
 # Deploys as separate Coolify app: zerg-web
-# Domain: longhouse.ai
 #
-# Runtime env vars (set in Coolify):
-#   API_BASE_URL=https://api.longhouse.ai/api
-#   WS_BASE_URL=wss://api.longhouse.ai/api/ws
+# Single-domain architecture: frontend nginx proxies /api/* to backend.
+# Set BACKEND_HOST to backend container name (e.g., zerg-backend for Coolify).
+#
+# For cross-origin (not recommended): Set API_BASE_URL and WS_BASE_URL env vars.
+# Without these, frontend uses same-origin /api (nginx proxies to backend).
 #
 # Build-time args for analytics (set in Coolify as "Available at Build Time"):
 #   VITE_UMAMI_WEBSITE_ID, VITE_UMAMI_SCRIPT_SRC, VITE_UMAMI_DOMAINS
@@ -30,9 +31,10 @@ services:
     restart: unless-stopped
     # Note: No ports mapping - Coolify proxy handles external routing
     environment:
-      # Runtime config - entrypoint generates config.js from these
-      API_BASE_URL: ${API_BASE_URL:-https://api.longhouse.ai/api}
-      WS_BASE_URL: ${WS_BASE_URL:-wss://api.longhouse.ai/api/ws}
+      # BACKEND_HOST: Docker hostname for nginx proxy (default: backend for docker-compose)
+      BACKEND_HOST: ${BACKEND_HOST:-backend}
+      # Optional: For cross-origin mode, set API_BASE_URL/WS_BASE_URL
+      # Without these, frontend uses same-origin /api (nginx proxies to BACKEND_HOST)
     healthcheck:
       test: ["CMD", "sh", "-c", "curl -f http://localhost:80/ | grep -q 'Longhouse'"]
       interval: 30s
