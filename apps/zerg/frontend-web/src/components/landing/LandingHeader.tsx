@@ -88,7 +88,10 @@ export function LandingHeader({ onSignIn, onGetStarted }: LandingHeaderProps) {
       </div>
 
       {/* Mobile Menu */}
-      <div className={`landing-header-mobile-menu ${isMobileMenuOpen ? "landing-header-mobile-menu--open" : ""}`}>
+      <div
+        className={`landing-header-mobile-menu ${isMobileMenuOpen ? "landing-header-mobile-menu--open" : ""}`}
+        aria-hidden={!isMobileMenuOpen}
+      >
         <nav className="landing-header-mobile-nav">
           {navLinks.map((link) => (
             <button
@@ -96,16 +99,17 @@ export function LandingHeader({ onSignIn, onGetStarted }: LandingHeaderProps) {
               className="landing-header-mobile-link"
               onClick={() => handleNavClick(link.href, link.external)}
               type="button"
+              tabIndex={isMobileMenuOpen ? 0 : -1}
             >
               {link.label}
             </button>
           ))}
         </nav>
         <div className="landing-header-mobile-actions">
-          <Button variant="ghost" size="md" onClick={() => { onSignIn?.(); setIsMobileMenuOpen(false); }}>
+          <Button variant="ghost" size="md" onClick={() => { onSignIn?.(); setIsMobileMenuOpen(false); }} tabIndex={isMobileMenuOpen ? 0 : -1}>
             Sign In
           </Button>
-          <Button variant="primary" size="md" onClick={() => { onGetStarted?.(); setIsMobileMenuOpen(false); }}>
+          <Button variant="primary" size="md" onClick={() => { onGetStarted?.(); setIsMobileMenuOpen(false); }} tabIndex={isMobileMenuOpen ? 0 : -1}>
             Get Started
           </Button>
         </div>
