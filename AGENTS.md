@@ -190,3 +190,4 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-03) [gotcha] `uv run` builds fail if `apps/zerg/frontend-web/dist` is missing (hatch force-include); build frontend before backend tests.
 - (2026-02-03) [ops] Installer lives at `get.longhouse.ai/install.sh`; `longhouse.ai/install.sh` serves the SPA, and `api-david.longhouse.ai` is the working API subdomain (not api.david).
 - (2026-02-04) [docs] CLI has no `longhouse logs` or `longhouse runner` commands; `longhouse status` only prints config (no job list).
+- (2026-02-04) [gotcha] `_apply_lite_mode_defaults()` must run BEFORE demo mode in serve.py—demo imports trigger config loading which needs FERNET_SECRET and TRIGGER_SIGNING_SECRET.
