@@ -54,3 +54,4 @@
 - [Docs/infra] `scripts/install-runner.sh` advertises `curl -sSL https://longhouse.ai/install-runner.sh | bash`, but that URL serves the SPA HTML; the working installer URL is `https://get.longhouse.ai/install-runner.sh` (redirects to raw GitHub).
 - [Docs vs infra] VISION Life Hub config uses `ZERG_API_URL=https://longhouse.ai/api`, but `https://longhouse.ai/api/*` returns 502; the working API host is `https://api.longhouse.ai`.
 - [Docs vs UI] Backend notifications use `https://longhouse.ai/runs/{run.id}` (see `oikos_service.py`), but the frontend has no `/runs/:id` route; unknown paths redirect to LandingPage/Timeline, so run links are broken.
+- [Docs vs code] `zerg/cli/__init__.py` says `longhouse connect` is “continuous polling,” but the CLI defaults to watch mode (polling is only with `--poll`/`--interval`).
