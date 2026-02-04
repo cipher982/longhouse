@@ -57,3 +57,4 @@
 - [Docs vs code] CLI docs in `zerg/cli/__init__.py` and `zerg/cli/main.py` say `longhouse connect` is “continuous polling,” but the CLI defaults to watch mode (polling only with `--poll`/`--interval`).
 - [Docs vs code] `scripts/install.sh` advertises `LONGHOUSE_API_URL` env var but never reads it; the comment also implies a default `http://localhost:8080`, while shipper API defaults to 47300.
 - [Docs vs reality] Timeline page copy says “across providers,” but real ingest only supports Claude Code; other providers are demo-only.
+- [Docs vs reality] Landing “How It Works” copy in `frontend-web/src/components/landing/HowItWorksSection.tsx` claims: (a) sessions auto‑sync from Claude/Codex/Cursor, (b) FTS5‑powered search, (c) resume any conversation from any device — all currently false.
