@@ -66,3 +66,6 @@
 - [Docs vs reality] Landing DemoSection/Footers still use cloud‑workspace + “from any device” copy (`DemoSection.tsx`, `FooterCTA.tsx`), which doesn’t match local‑first OSS or missing cross‑device resume.
 - [Docs vs code] Landing SkillsSection says Slack skill can “manage channels,” but Slack tool is webhook‑only (send message); no channel management/listing tools exist.
 - [Docs vs code] `DemoSection.tsx` comment says it “Shows Chat, Dashboard, and Canvas views,” but `ProductShowcase` only displays Timeline and Session Detail tabs.
+- [Docs vs code] VISION “Runner registration” says `longhouse runner register` generates credentials, but the CLI has no `runner` command; registration happens via the runner installer hitting `/api/runners/register`.
+- [Docs vs code] VISION CLI section says `longhouse status` shows running jobs and `longhouse logs <job_id>` tails job logs, but `longhouse status` only prints configuration and there is no `logs` command.
+- [Docs vs code] VISION “File Structure (After)” claims `~/.longhouse/logs/` with per‑job logs and shows `→ http://0.0.0.0:8080`; actual logging is `~/.longhouse/server.log` (server) + `~/.claude/shipper.log` (shipper) and `longhouse serve` defaults to `127.0.0.1:8080` unless `--host` is set.
