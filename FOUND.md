@@ -47,3 +47,4 @@
 - [Bug] `GitSyncService._get_auth_url()` mangles SSH-style repo URLs when `token` is set (e.g., `git@github.com:user/repo.git` → malformed `@@` URL); should reject token auth for SSH URLs or handle separately.
 - [Docs vs code] Slack skill doc is wrong: `apps/zerg/backend/zerg/skills/bundled/slack/SKILL.md` references `slack_send_message` and `SLACK_BOT_TOKEN`, but the actual tool is `send_slack_webhook` and it uses incoming webhook URLs (connector/env), not a bot token.
 - [Docs vs code] README features claim “FTS5‑powered” search; backend search is `ilike`-based with no FTS5 tables/queries.
+- [Docs vs code] `scripts/install.sh` WSL warning tells users to run `longhouse connect --foreground`, but the CLI has no `--foreground` flag (foreground is the default).
