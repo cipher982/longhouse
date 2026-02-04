@@ -109,8 +109,8 @@ export function isUserSubdomain(): boolean {
   const match = host.match(/^([a-z0-9-]+)\.longhouse\.ai$/);
   if (!match) return false;
   const subdomain = match[1];
-  // Exclude known system subdomains
-  const systemSubdomains = ["www", "api", "api-david", "staging", "dev"];
+  // Exclude known system subdomains (api-X pattern is deprecated)
+  const systemSubdomains = ["www", "api", "staging", "dev", "get"];
   return !systemSubdomains.includes(subdomain);
 }
 
@@ -123,7 +123,7 @@ export function getUserSubdomain(): string | null {
   const match = host.match(/^([a-z0-9-]+)\.longhouse\.ai$/);
   if (!match) return null;
   const subdomain = match[1];
-  const systemSubdomains = ["www", "api", "api-david", "staging", "dev"];
+  const systemSubdomains = ["www", "api", "staging", "dev", "get"];
   if (systemSubdomains.includes(subdomain)) return null;
   return subdomain;
 }
@@ -163,14 +163,15 @@ function loadConfig(): AppConfig {
     ? window.WS_BASE_URL
     : (import.meta.env.VITE_WS_BASE_URL || (isDevelopment && typeof window !== 'undefined' ? 'ws://localhost:47300' : ''));
 
-  if (typeof window !== 'undefined') {
+  // Single-domain architecture: each user subdomain (alice.longhouse.ai) serves
+  // both frontend and API. Nginx proxies /api/* to the backend container.
+  // No separate api-X.longhouse.ai subdomain needed.
+  if (typeof window !== 'undefined' && isProduction) {
     const host = window.location.hostname.toLowerCase();
-    if (host === 'david.longhouse.ai') {
-      apiBaseUrl = 'https://api-david.longhouse.ai/api';
-      wsBaseUrl = 'wss://api-david.longhouse.ai/api/ws';
-    } else if (host === 'longhouse.ai' || host === 'www.longhouse.ai') {
-      apiBaseUrl = 'https://api.longhouse.ai/api';
-      wsBaseUrl = 'wss://api.longhouse.ai/api/ws';
+    // For any *.longhouse.ai domain, use same-origin /api
+    if (host.endsWith('.longhouse.ai') || host === 'longhouse.ai') {
+      apiBaseUrl = '/api';
+      wsBaseUrl = `wss://${host}/api/ws`;
     }
   }
 
