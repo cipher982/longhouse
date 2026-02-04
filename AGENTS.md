@@ -191,3 +191,4 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-04) [arch] Backend router surface still includes legacy fiche/workflow/connectors/etc. (see `apps/zerg/backend/zerg/main.py` include_router list); candidate for slimming to sessions+shipper core.
 - (2026-02-04) [infra] Control plane should be self-managed (off Coolify); current routing uses Coolify's Caddy proxy and *.longhouse.ai wildcard is not set (testuser.longhouse.ai has no A/CNAME).
 - (2026-02-04) [infra] Decision: keep control plane + instances on zerg; avoid Coolify for dynamic provisioning (control plane uses Docker API directly).
+- (2026-02-04) [ops] FERNET_SECRET must be urlsafe base64 32-byte key; hex strings cause instance startup failure.
