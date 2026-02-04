@@ -1274,7 +1274,7 @@ function AdminPage() {
                     Clear User Data
                   </Button>
                   <p className="action-description">
-                    Remove all user-generated data (agents, runs, workflows) while preserving user accounts
+                    Remove all user-generated data (agents, runs, sessions) while preserving user accounts
                   </p>
                 </div>
                 <div className="action-group">
@@ -1307,7 +1307,7 @@ function AdminPage() {
         }
         message={
           modalState.type === "clear_data"
-            ? "This will remove all user-generated data (agents, runs, workflows) but preserve user accounts. This action cannot be undone."
+            ? "This will remove all user-generated data (agents, runs, sessions) but preserve user accounts. This action cannot be undone."
             : "This will drop and recreate all database tables. All data will be lost. This action cannot be undone."
         }
         confirmText={resetMutation.isPending ? "Processing..." : "Confirm"}

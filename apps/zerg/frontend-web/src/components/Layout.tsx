@@ -51,7 +51,7 @@ function WelcomeHeader() {
   const toggleMobileNav = useCallback(() => setMobileNavOpen(prev => !prev), []);
 
   // Only show shelf toggle on routes that have drawer UI
-  const SHELF_ENABLED_ROUTES = ["/canvas", "/fiche"];
+  const SHELF_ENABLED_ROUTES = ["/fiche"];
   const shouldShowShelfToggle = SHELF_ENABLED_ROUTES.some(route =>
     location.pathname.startsWith(route)
   );
@@ -333,14 +333,11 @@ function StatusFooter() {
 export default function Layout({ children }: PropsWithChildren) {
   const location = useLocation();
 
-  const isCanvasRoute = location.pathname.startsWith("/canvas");
-
   return (
     <>
       <WelcomeHeader />
       <div
         id="app-container"
-        className={clsx({ "canvas-view": isCanvasRoute })}
         data-testid="app-container"
       >
         {children}

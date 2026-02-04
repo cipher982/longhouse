@@ -3,7 +3,6 @@ export * from "./base";
 export * from "./types";
 export * from "./fiches";
 export * from "./threads";
-export * from "./workflows";
 export * from "./models";
 export * from "./connectors";
 export * from "./users";

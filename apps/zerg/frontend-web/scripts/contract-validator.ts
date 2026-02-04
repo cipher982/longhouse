@@ -40,10 +40,8 @@ const CRITICAL_ENDPOINTS = [
   '/api/ops/summary',
   '/api/ops/timeseries',
   '/api/ops/top',
-  '/api/workflow-executions/{execution_id}/status',
   '/api/users/me',
   '/api/fiches',
-  '/api/workflows/current',
 ];
 
 class ContractValidator {

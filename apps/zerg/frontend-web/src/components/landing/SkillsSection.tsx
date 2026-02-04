@@ -34,7 +34,7 @@ export function SkillsSection() {
         <div className="landing-skills-custom">
           <h3>Create Your Own</h3>
           <p>
-            Add a <code>SKILL.md</code> file to define custom skills for your workflows.
+            Add a <code>SKILL.md</code> file to define custom skills for your agents.
           </p>
           <pre className="landing-skills-code"><code>{`---
 name: my-skill

@@ -4,7 +4,6 @@ import { logger } from "../../oikos/core/logger";
 import {
   postThreadMessage,
   startThreadRun,
-  startWorkflowExecution,
   Thread,
   ThreadMessage,
   updateThread,
@@ -76,24 +75,6 @@ export function useChatActions({ ficheId, effectiveThreadId }: UseChatActionsPar
     },
   });
 
-  // Workflow execution mutation
-  const executeWorkflowMutation = useMutation({
-    mutationFn: ({ workflowId }: { workflowId: number }) => startWorkflowExecution(workflowId),
-    onSuccess: (result) => {
-      toast.success(`Workflow execution started! ID: ${result.execution_id}`);
-      // Send a message to the chat about the workflow execution
-      if (effectiveThreadId) {
-        sendMutation.mutate({
-          threadId: effectiveThreadId,
-          content: `🔄 Started workflow execution #${result.execution_id} (Phase: ${result.phase})`,
-        });
-      }
-    },
-    onError: (error: Error) => {
-      toast.error(`Failed to execute workflow: ${error.message}`);
-    },
-  });
-
   const renameThreadMutation = useMutation<
     Thread,
     Error,
@@ -143,7 +124,6 @@ export function useChatActions({ ficheId, effectiveThreadId }: UseChatActionsPar
 
   return {
     sendMutation,
-    executeWorkflowMutation,
     renameThreadMutation,
   };
 }

@@ -1,7 +1,6 @@
 import { type FormEvent, useRef, useEffect } from "react";
 import clsx from "clsx";
-import { Workflow } from "../../services/api";
-import { WrenchIcon, FileTextIcon } from "../icons";
+import { FileTextIcon } from "../icons";
 
 interface ChatComposerProps {
   draft: string;
@@ -9,16 +8,6 @@ interface ChatComposerProps {
   onSend: (evt: FormEvent) => void;
   effectiveThreadId: number | null;
   isSending: boolean;
-  showWorkflowPanel: boolean;
-  onToggleWorkflowPanel: () => void;
-  workflowsQuery: {
-    data: Workflow[] | undefined;
-    isLoading: boolean;
-  };
-  selectedWorkflow: number | null;
-  onSelectWorkflow: (workflowId: number | null) => void;
-  onExecuteWorkflow: () => void;
-  isExecutingWorkflow: boolean;
   messagesCount: number;
   onExportChat: () => void;
 }
@@ -29,13 +18,6 @@ export function ChatComposer({
   onSend,
   effectiveThreadId,
   isSending,
-  showWorkflowPanel,
-  onToggleWorkflowPanel,
-  workflowsQuery,
-  selectedWorkflow,
-  onSelectWorkflow,
-  onExecuteWorkflow,
-  isExecutingWorkflow,
   messagesCount,
   onExportChat,
 }: ChatComposerProps) {
@@ -61,14 +43,6 @@ export function ChatComposer({
     <div className="chat-composer-container">
       <form className="chat-input-form" onSubmit={onSend}>
         <div className="chat-input-tools-left">
-          <button
-            type="button"
-            className="icon-tool-btn"
-            onClick={onToggleWorkflowPanel}
-            title="Execute Workflow"
-          >
-            <WrenchIcon width={18} height={18} />
-          </button>
           <button
             type="button"
             className="icon-tool-btn"
@@ -107,57 +81,6 @@ export function ChatComposer({
         </div>
       </form>
 
-      {/* Workflow Execution Panel */}
-      {showWorkflowPanel && (
-        <div className="workflow-panel-popover">
-          <div className="workflow-panel-header">
-            <h4>Execute Workflow</h4>
-            <button
-              type="button"
-              className="close-panel-btn"
-              onClick={onToggleWorkflowPanel}
-            >
-              ✕
-            </button>
-          </div>
-          <div className="workflow-panel-content">
-            {workflowsQuery.isLoading ? (
-              <div>Loading workflows...</div>
-            ) : workflowsQuery.data?.length ? (
-              <>
-                <div className="workflow-selector">
-                  <label htmlFor="workflow-select">Select Workflow:</label>
-                  <select
-                    id="workflow-select"
-                    value={selectedWorkflow || ""}
-                    onChange={(e) => onSelectWorkflow(Number(e.target.value) || null)}
-                  >
-                    <option value="">Choose a workflow...</option>
-                    {workflowsQuery.data.map((workflow) => (
-                      <option key={workflow.id} value={workflow.id}>
-                        {workflow.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <button
-                  type="button"
-                  className="execute-workflow-btn"
-                  onClick={onExecuteWorkflow}
-                  disabled={!selectedWorkflow || isExecutingWorkflow}
-                >
-                  {isExecutingWorkflow ? "Executing..." : "▶️ Execute"}
-                </button>
-              </>
-            ) : (
-              <div className="no-workflows">
-                <p>No workflows available</p>
-                <small>Create workflows in the Canvas Editor to execute them here</small>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

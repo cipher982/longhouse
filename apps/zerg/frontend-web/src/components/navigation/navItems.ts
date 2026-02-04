@@ -9,8 +9,6 @@ const BASE_ITEMS: NavItem[] = [
   { label: "Chat", href: "/chat", testId: "global-chat-tab" },
   { label: "Dashboard", href: "/dashboard", testId: "global-dashboard-tab" },
   { label: "Forum", href: "/forum", testId: "global-forum-tab" },
-  // Canvas disabled for now - not ready for alpha
-  // { label: "Canvas", href: "/canvas", testId: "global-canvas-tab" },
   { label: "Integrations", href: "/settings/integrations", testId: "global-integrations-tab" },
   { label: "Contacts", href: "/settings/contacts", testId: "global-contacts-tab" },
   { label: "Runners", href: "/runners", testId: "global-runners-tab" },
