@@ -60,6 +60,28 @@ def _get_or_create_fernet_secret() -> str:
     return key
 
 
+def _get_or_create_trigger_secret() -> str:
+    """Get or create a persistent TRIGGER_SIGNING_SECRET for lite mode.
+
+    Stores the secret in ~/.longhouse/trigger.key for persistence across restarts.
+    """
+    secret_file = _get_longhouse_home() / "trigger.key"
+
+    if secret_file.exists():
+        return secret_file.read_text().strip()
+
+    # Generate a 64-char hex string (32 bytes)
+    key = secrets.token_hex(32)
+
+    fd = os.open(str(secret_file), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(fd, key.encode())
+    finally:
+        os.close(fd)
+
+    return key
+
+
 def _mask_db_url(url: str) -> str:
     """Mask sensitive parts of a database URL for display."""
     if not url or url.startswith("sqlite"):
@@ -105,9 +127,9 @@ def _apply_lite_mode_defaults() -> None:
     if not os.environ.get("FERNET_SECRET"):
         os.environ["FERNET_SECRET"] = _get_or_create_fernet_secret()
 
-    # TRIGGER_SIGNING_SECRET (required for webhook triggers)
+    # TRIGGER_SIGNING_SECRET (required for webhook triggers, persisted like FERNET)
     if not os.environ.get("TRIGGER_SIGNING_SECRET"):
-        os.environ["TRIGGER_SIGNING_SECRET"] = secrets.token_hex(32)
+        os.environ["TRIGGER_SIGNING_SECRET"] = _get_or_create_trigger_secret()
 
 
 def _get_pid_file() -> Path:
@@ -366,12 +388,34 @@ def serve(
         )
         raise typer.Exit(code=1)
 
+    # Check if port is available
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind((host if host != "0.0.0.0" else "127.0.0.1", port))
+        sock.close()
+    except OSError as e:
+        typer.secho(f"ERROR: Port {port} is already in use.", fg=typer.colors.RED)
+        typer.echo(f"  Try: longhouse serve --port {port + 1}")
+        typer.echo(f"  Or find what's using it: lsof -i :{port}")
+        raise typer.Exit(code=1) from e
+
     # Check for bundled frontend
     from zerg.main import FRONTEND_DIST_DIR
     from zerg.main import FRONTEND_SOURCE
 
     has_frontend = FRONTEND_DIST_DIR is not None
     frontend_source = FRONTEND_SOURCE
+
+    if not has_frontend:
+        typer.secho(
+            "WARNING: Frontend not found. API will work but no web UI.",
+            fg=typer.colors.YELLOW,
+        )
+        typer.echo("  If you installed from PyPI, this may be a packaging issue.")
+        typer.echo("  From source: cd apps/zerg/frontend-web && bun run build")
+        typer.echo("")
 
     typer.echo("Starting Longhouse server...")
     typer.echo(f"  Host: {host}")
