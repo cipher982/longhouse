@@ -180,7 +180,6 @@ Two separate things exist — don't conflate or rebuild:
 ## Learnings (Recent - Human compacts weekly)
 
 <!-- Agents: append below. Keep last 7 days or 10 entries max. -->
-- (2026-02-03) [gotcha] scenario seeding clean=True does not clear SeedRegistry; reseed will skip unless registry is cleared.
 - (2026-02-03) [gotcha] Runner daemons hardcode API URL; domain changes break them silently. Check `/api/runners/status` endpoint or footer indicator.
 - (2026-02-03) [ops] Runner daemons on servers: restart with `docker rm/run` using `SWARMLET_URL=wss://api.longhouse.ai`.
 - (2026-02-03) [gotcha] Shipper files/labels are `longhouse-*` now: token `~/.claude/longhouse-device-token`, URL `~/.claude/longhouse-url`, launchd label `com.longhouse.shipper` (legacy `zerg-*` paths are migration-only).
@@ -190,3 +189,4 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-03) [ui] SCENE=empty currently no-ops (doesn't clear sessions); ariaSnapshot flattens session list into a single text node, limiting structured parsing.
 - (2026-02-03) [gotcha] `uv run` builds fail if `apps/zerg/frontend-web/dist` is missing (hatch force-include); build frontend before backend tests.
 - (2026-02-03) [ops] Installer lives at `get.longhouse.ai/install.sh`; `longhouse.ai/install.sh` serves the SPA, and `api-david.longhouse.ai` is the working API subdomain (not api.david).
+- (2026-02-04) [docs] CLI has no `longhouse logs` or `longhouse runner` commands; `longhouse status` only prints config (no job list).
