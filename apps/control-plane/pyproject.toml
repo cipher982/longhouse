@@ -1,0 +1,25 @@
+[project]
+name = "longhouse-control-plane"
+version = "0.1.0"
+description = "Longhouse control plane (signup, billing, provisioning)"
+requires-python = ">=3.12"
+readme = "README.md"
+license = { text = "Proprietary" }
+authors = [{ name = "Longhouse" }]
+
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "sqlalchemy>=2.0",
+  "pydantic-settings>=2.4",
+  "httpx>=0.27",
+  "docker>=7.0",
+  "python-multipart>=0.0.9",
+  "psycopg[binary]>=3.2",
+]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.5", "pytest>=8.0"]
+
+[tool.ruff]
+line-length = 120
