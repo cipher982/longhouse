@@ -192,18 +192,23 @@ test_chat() {
             -d "{\"message\": \"$message\", \"message_id\": \"$msg_id\"}" 2>/dev/null) || true
     fi
 
-    # Check for supervisor_complete event
-    if ! echo "$response" | grep -q "event: supervisor_complete"; then
-        fail "$name (no supervisor_complete event)"
+    # Check for completion event (oikos_complete preferred, supervisor_complete legacy)
+    local complete_event=""
+    if echo "$response" | grep -q "event: oikos_complete"; then
+        complete_event="oikos_complete"
+    elif echo "$response" | grep -q "event: supervisor_complete"; then
+        complete_event="supervisor_complete"
+    else
+        fail "$name (no completion event)"
         return 1
     fi
 
-    # Extract the data line after supervisor_complete
+    # Extract the data line after completion event
     local complete_data
-    complete_data=$(echo "$response" | grep -A1 "event: supervisor_complete" | grep "^data:" | head -1 | sed 's/^data: //')
+    complete_data=$(echo "$response" | grep -A1 "event: $complete_event" | grep "^data:" | head -1 | sed 's/^data: //')
 
     if [[ -z "$complete_data" ]]; then
-        fail "$name (no data in supervisor_complete)"
+        fail "$name (no data in $complete_event)"
         return 1
     fi
 
@@ -269,12 +274,12 @@ test_voice() {
     # Transcribe request
     local response
     if [[ -n "$TIMEOUT_CMD" ]]; then
-        response=$($TIMEOUT_CMD "$timeout_secs" curl -s -X POST "$API_URL/api/jarvis/voice/transcribe" \
+        response=$($TIMEOUT_CMD "$timeout_secs" curl -s -X POST "$API_URL/api/oikos/voice/transcribe" \
             -b "$cookie_jar" \
             -F "audio=@${wav_file};type=audio/wav;filename=sample.wav" \
             -F "message_id=$msg_id" 2>/dev/null) || true
     else
-        response=$(curl -s -X POST "$API_URL/api/jarvis/voice/transcribe" \
+        response=$(curl -s -X POST "$API_URL/api/oikos/voice/transcribe" \
             -b "$cookie_jar" \
             -F "audio=@${wav_file};type=audio/wav;filename=sample.wav" \
             -F "message_id=$msg_id" 2>/dev/null) || true
@@ -321,12 +326,12 @@ test_voice() {
     tts_payload=$(jq -nc --arg text "$transcript" --arg msg_id "$msg_id" '{text:$text, message_id:$msg_id}')
     local tts_response
     if [[ -n "$TIMEOUT_CMD" ]]; then
-        tts_response=$($TIMEOUT_CMD "$timeout_secs" curl -s -X POST "$API_URL/api/jarvis/voice/tts" \
+        tts_response=$($TIMEOUT_CMD "$timeout_secs" curl -s -X POST "$API_URL/api/oikos/voice/tts" \
             -b "$cookie_jar" \
             -H "Content-Type: application/json" \
             -d "$tts_payload" 2>/dev/null) || true
     else
-        tts_response=$(curl -s -X POST "$API_URL/api/jarvis/voice/tts" \
+        tts_response=$(curl -s -X POST "$API_URL/api/oikos/voice/tts" \
             -b "$cookie_jar" \
             -H "Content-Type: application/json" \
             -d "$tts_payload" 2>/dev/null) || true
