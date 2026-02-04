@@ -16,6 +16,15 @@
 
 set -e
 
+# Load repo .env if present (local only; no auto-creation)
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+if [[ -f "$ROOT_DIR/.env" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "$ROOT_DIR/.env"
+    set +a
+fi
+
 # Configuration - split deployment
 FRONTEND_URL="${FRONTEND_URL:-https://longhouse.ai}"
 API_URL="${API_URL:-https://api.longhouse.ai}"
