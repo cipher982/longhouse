@@ -440,7 +440,7 @@ async def lifespan(app: FastAPI):
                 logger.exception("Failed to start commis_job_processor")
 
             # Job queue commis (durable job execution)
-            if _settings.job_queue_enabled:
+            if not _settings.testing:
                 try:
                     from pathlib import Path
 
