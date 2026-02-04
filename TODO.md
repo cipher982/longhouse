@@ -346,35 +346,25 @@ Update screenshots to show Timeline, not old dashboard.
 **Decisions / Notes (2026-02-04):**
 - Control plane + user instances will live on **zerg** (single host for now).
 - Do **not** use Coolify for dynamic provisioning; control plane talks to Docker directly.
-- Proxy will be self-managed on zerg (Caddy Docker Proxy preferred; Traefik viable).
-- Wildcard DNS `*.longhouse.ai` is currently missing (testuser.longhouse.ai has no A/CNAME).
+- Proxy uses existing Coolify Caddy (caddy-docker-proxy) with caddy labels.
+- Wildcard DNS `*.longhouse.ai` ✅ configured (2026-02-04), proxied through Cloudflare.
+- Runtime image: `docker/runtime.dockerfile` bundles frontend + backend in single container.
 
-### Phase 0: Routing + DNS Reality Check (must validate before build)
+### Phase 0: Routing + DNS Reality Check ✅ DONE
 
-- [ ] Verify wildcard DNS status for `*.longhouse.ai` (currently disputed in drift findings). Fix DNS or update assumptions.
-- [ ] Decide routing layer: Traefik vs Caddy. Current infra uses Caddy; Traefik labels require an actual Traefik container + Docker provider.
-- [x] Manual provision smoke test: run one container + confirm routing via proxy works (used Caddy internal TLS; wildcard DNS still missing).
+- [x] Wildcard DNS `*.longhouse.ai` configured in Cloudflare (A record → 5.161.92.127, proxied)
+- [x] Routing layer: Caddy (existing coolify-proxy) with caddy-docker-proxy labels
+- [x] Manual provision smoke test: test2, test3 instances provisioned and routed
 - [ ] Add control-plane → instance auth bridge endpoint (control plane issues token; instance sets cookie for owner).
 
-### Phase 1: Scaffold + Auth (2)
+### Phase 1: Scaffold + Auth ✅ DONE
 
-- [ ] Create `apps/control-plane/` directory structure
-  ```
-  apps/control-plane/
-  ├── main.py           # FastAPI app
-  ├── config.py         # Settings (Stripe keys, Docker host, etc.)
-  ├── models.py         # SQLAlchemy models (User, Instance)
-  ├── routers/
-  │   ├── auth.py       # Google OAuth
-  │   ├── billing.py    # Stripe checkout/webhooks
-  │   └── instances.py  # Provision/deprovision
-  └── services/
-      ├── provisioner.py  # Docker API client
-      └── stripe_service.py
-  ```
+- [x] Create `apps/control-plane/` directory structure (FastAPI app, models, routers, services)
+- [x] Add provisioner service (Docker API client with Caddy labels)
+- [x] Add Instance model with subdomain, container_name, state
+- [x] Admin API + minimal HTML UI for manual provisioning
 - [ ] Add Google OAuth (control plane only, not per-instance)
-- [ ] Add User model: email, stripe_customer_id, instance_id, subscription_status
-- [ ] Add Instance model: user_id, container_name, subdomain, state, created_at
+- [ ] Add User model with Stripe fields
 
 ### Phase 2: Stripe Integration (3)
 
@@ -384,23 +374,15 @@ Update screenshots to show Timeline, not old dashboard.
 - [ ] On `customer.subscription.deleted` → trigger deprovisioning
 - [ ] Add billing portal link (`POST /billing/portal`)
 
-### Phase 3: Docker Provisioning (3)
+### Phase 3: Docker Provisioning ✅ MOSTLY DONE
 
-- [ ] Implement Docker API client (SSH to zerg server or Docker socket)
-- [ ] Provision container with Traefik labels for subdomain routing
-  ```python
-  docker run -d \
-    --name longhouse-{user} \
-    --label traefik.enable=true \
-    --label "traefik.http.routers.{user}.rule=Host(`{user}.longhouse.ai`)" \
-    -v /data/longhouse-{user}:/data \
-    -e INSTANCE_ID={user} \
-    -e SINGLE_TENANT=1 \
-    ghcr.io/cipher982/longhouse:latest
-  ```
-- [ ] Create SQLite volume per user
-- [ ] Implement deprovision (stop + remove container, archive data)
-- [ ] Add health check polling after provision
+- [x] Implement Docker API client via local socket
+- [x] Provision container with Caddy labels for subdomain routing
+- [x] Create SQLite volume per user at `/var/lib/docker/data/longhouse/{subdomain}`
+- [x] Implement deprovision (stop + remove container)
+- [x] Add health check polling after provision
+- [ ] Build and push runtime image (`docker/runtime.dockerfile`) to ghcr.io
+- [ ] Update CONTROL_PLANE_IMAGE to use runtime image (currently uses backend-only)
 
 ### Phase 4: Cross-Subdomain Auth (2)
 
@@ -416,13 +398,14 @@ Update screenshots to show Timeline, not old dashboard.
 - [ ] "Sign In" → `/login` (OAuth) → redirect to existing instance
 - [ ] Show instance status on landing page if logged in
 
-**Files:** New `apps/control-plane/` directory
+**Files:** `apps/control-plane/`, `docker/runtime.dockerfile`
 
-**Infra requirements:**
-- Traefik on zerg server (for subdomain routing) — or adapt to Caddy if keeping current stack
-- Wildcard DNS `*.longhouse.ai` (needs verification — drift audit says it's NOT configured)
-- Docker socket access from control plane
-- Postgres for control plane DB (can be existing Coolify-managed instance)
+**Infra status:**
+- ✅ Caddy (coolify-proxy) on zerg handles subdomain routing via caddy-docker-proxy labels
+- ✅ Wildcard DNS `*.longhouse.ai` configured in Cloudflare (proxied)
+- ✅ Docker socket access from control plane container
+- ✅ Postgres for control plane DB (separate container via docker-compose)
+- ⏳ Runtime image needs build + push to ghcr.io
 
 ---
 
