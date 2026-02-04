@@ -9,9 +9,11 @@ Capture list for substantial work. Not quick fixes (do those live).
 - Check off subtasks as you go so next agent knows state
 - Add notes under tasks if you hit blockers or learn something
 
+Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tech Debt], [Brand]
+
 ---
 
-## 🎯 HN Launch Priority (This Week)
+## [Launch] 🎯 HN Launch Priority (This Week)
 
 **Decision:** OSS GA + Hosted Beta (optional). Hosted tasks only if P0 is done.
 
@@ -36,7 +38,7 @@ Capture list for substantial work. Not quick fixes (do those live).
 
 ---
 
-## Post-GA Follow-ups (From 2026-02-03 Swarm)
+## [Launch] Post-GA Follow-ups (From 2026-02-03 Swarm)
 
 - [x] Add rate limiting on `POST /auth/password`
 - [x] Support `LONGHOUSE_PASSWORD_HASH` (bcrypt/argon2)
@@ -45,7 +47,7 @@ Capture list for substantial work. Not quick fixes (do those live).
 
 ---
 
-## ⚠️ Architecture Reality Check (Read First)
+## [Infra] ⚠️ Architecture Reality Check (Read First)
 
 **VISION.md describes per-user isolated instances. That doesn't exist YET.**
 
@@ -62,7 +64,7 @@ See this file for the current launch analysis.
 
 ---
 
-## 🚨 OSS Auth — Password Login for Self-Hosters (3)
+## [Launch] 🚨 OSS Auth — Password Login for Self-Hosters (3)
 
 **Priority: CRITICAL for HN launch**
 
@@ -87,7 +89,7 @@ See this file for the current launch analysis.
 
 ---
 
-## Domain Split — Marketing vs Personal Instance (4)
+## [Infra] Domain Split — Marketing vs Personal Instance (4)
 
 **Goal:** longhouse.ai is marketing-only; david.longhouse.ai is the app (single-tenant).
 
@@ -107,7 +109,7 @@ See this file for the current launch analysis.
 
 ---
 
-## Landing Page Redesign — Full (6)
+## [Product] Landing Page Redesign — Full (6)
 
 **Goal:** Clear user paths, visible CTAs, better contrast. Visitor instantly understands: what it is, who it's for, how to get started.
 
@@ -258,7 +260,7 @@ Update screenshots to show Timeline, not old dashboard.
 
 ---
 
-## HN Launch Readiness — Remaining (4)
+## [Launch] HN Launch Readiness — Remaining (4)
 
 **Goal:** HN reader can install, see value immediately, understand what problem this solves, and start using it.
 
@@ -299,7 +301,7 @@ Update screenshots to show Timeline, not old dashboard.
 
 ---
 
-## Control Plane — Hosted Beta (8)
+## [Infra] Control Plane — Hosted Beta (8)
 
 **What it enables:** Users sign up at longhouse.ai → get their own instance (alice.longhouse.ai)
 
@@ -377,7 +379,7 @@ Update screenshots to show Timeline, not old dashboard.
 
 ---
 
-## Public Launch Checklist (6)
+## [Launch] Public Launch Checklist (6)
 
 Ensure launch readiness without relying on scattered docs.
 
@@ -392,7 +394,7 @@ Ensure launch readiness without relying on scattered docs.
 
 ---
 
-## HN Post Notes (Condensed)
+## [Launch] HN Post Notes (Condensed)
 
 Keep the HN post short and problem-first. Use install.sh as the canonical path.
 
@@ -403,7 +405,7 @@ Keep the HN post short and problem-first. Use install.sh as the canonical path.
 
 ---
 
-## README Test CI (Readme-Contract) (5)
+## [QA/Test] README Test CI (Readme-Contract) (5)
 
 Automate README command verification with explicit, opt-in contracts. Use cube ARC runners where possible.
 
@@ -416,7 +418,7 @@ Automate README command verification with explicit, opt-in contracts. Use cube A
 
 ---
 
-## Forum Discovery UX + Explicit Presence Signals (7)
+## [Product] Forum Discovery UX + Explicit Presence Signals (7)
 
 Make the Forum the canonical discovery UI for sessions, with **explicit** state signals (no heuristics).
 
@@ -431,7 +433,7 @@ Make the Forum the canonical discovery UI for sessions, with **explicit** state 
 
 ---
 
-## OSS First-Run UX Polish (5)
+## [Product] OSS First-Run UX Polish (5)
 
 Eliminate the "empty timeline" anticlimactic moment and improve discovery for users without Claude Code.
 
@@ -441,7 +443,7 @@ Eliminate the "empty timeline" anticlimactic moment and improve discovery for us
 
 ---
 
-## Install + Onboarding Alignment (4)
+## [Launch] Install + Onboarding Alignment (4)
 
 Close the gap between VISION, README, docs, and the live installer.
 
@@ -452,7 +454,7 @@ Close the gap between VISION, README, docs, and the live installer.
 
 ---
 
-## OSS Packaging Decisions (3)
+## [Infra] OSS Packaging Decisions (3)
 
 Close the remaining open questions from VISION.md.
 
@@ -466,7 +468,7 @@ Close the remaining open questions from VISION.md.
 
 ---
 
-## Longhouse Rebrand — Product/Meta Strings (6)
+## [Brand] Longhouse Rebrand — Product/Meta Strings (6)
 
 User-facing strings, metadata, and package descriptions must stop mentioning Swarmlet/Zerg as a brand.
 
@@ -482,7 +484,7 @@ User-facing strings, metadata, and package descriptions must stop mentioning Swa
 
 ---
 
-## Longhouse Rebrand — CLI / Packages / Images (7)
+## [Brand] Longhouse Rebrand — CLI / Packages / Images (7)
 
 Package and binary naming so OSS users see Longhouse everywhere.
 
@@ -492,7 +494,7 @@ Package and binary naming so OSS users see Longhouse everywhere.
 
 ---
 
-## Prompt Cache Optimization (5)
+## [Tech Debt] Prompt Cache Optimization (5)
 
 Reorder message layout to maximize cache hits. Current layout busts cache by injecting dynamic content early.
 
@@ -524,7 +526,7 @@ Reorder message layout to maximize cache hits. Current layout busts cache by inj
 
 ---
 
-## Session Discovery — FTS5 Search + Oikos Tools (6)
+## [Product] Session Discovery — FTS5 Search + Oikos Tools (6)
 
 Make session discovery actually useful. Two tiers: fast search bar for keywords, Oikos for complex discovery.
 
@@ -564,7 +566,7 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 
 ---
 
-## UI QA Screenshot Capture System (4)
+## [QA/Test] UI QA Screenshot Capture System (4)
 
 **Goal:** Flexible, low-friction screenshot capture for agents + humans; clear instructions; minimal token cost.
 
@@ -577,7 +579,7 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 
 ---
 
-## Findings / Drift Audit (2026-02-03)
+## [Docs/Drift] Findings / Drift Audit (2026-02-03)
 
 (Former FOUND.md. Keep this list updated here only.)
 
@@ -660,7 +662,7 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 
 ---
 
-## Evidence-Backed Refactor Ideas (Ranked)
+## [Tech Debt] Evidence-Backed Refactor Ideas (Ranked)
 
 (Former IDEAS.md. Each item includes an evidence script under `ideas/evidence/`.)
 
@@ -803,7 +805,7 @@ Evidence: `ideas/evidence/50_evidence_tokens_css_legacy_aliases.sh`
 
 ---
 
-## QA Plan (Virtual QA Team) (2026-02-02)
+## [QA/Test] QA Plan (Virtual QA Team) (2026-02-02)
 
 (Former QA_PLAN.md. Keep this plan updated here only.)
 
