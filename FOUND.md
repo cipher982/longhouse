@@ -51,3 +51,4 @@
 - [Docs vs code] `services/shipper/spool.py` docstring claims replay uses idempotency keys, but the shipper does not send idempotency keys (dedupe relies on DB unique constraints).
 - [Docs vs code] GitHub skill doc says `GITHUB_TOKEN` env var works; `github_tools` only resolves tokens from connectors or explicit parameters (no env fallback).
 - [Docs vs code] Web search skill docs omit required `TAVILY_API_KEY`: `web_search` errors when the env var is missing, but `apps/zerg/backend/zerg/skills/bundled/web-search/SKILL.md` has no env requirement and is marked `always: true`.
+- [Docs/infra] `scripts/install-runner.sh` advertises `curl -sSL https://longhouse.ai/install-runner.sh | bash`, but that URL serves the SPA HTML; the working installer URL is `https://get.longhouse.ai/install-runner.sh` (redirects to raw GitHub).
