@@ -1097,17 +1097,49 @@ export interface paths {
          *     This endpoint is designed to be used with curl:
          *         curl -fsSL https://api.longhouse.ai/api/runners/install.sh?enroll_token=xxx | bash
          *
-         *     Or with environment variables:
-         *         curl -fsSL https://api.longhouse.ai/api/runners/install.sh |             ENROLL_TOKEN=xxx RUNNER_NAME=my-runner bash
+         *     Or with environment variables (preferred - avoids token in shell history):
+         *         ENROLL_TOKEN=xxx curl -fsSL https://api.longhouse.ai/api/runners/install.sh | bash
          *
          *     The script:
-         *     1. Registers the runner using the enroll token
-         *     2. Saves credentials to ~/.config/longhouse/runner.env
-         *     3. Starts the runner container with docker run
+         *     1. Detects OS (macOS/Linux)
+         *     2. Registers the runner using the enroll token
+         *     3. Downloads the native binary from GitHub Releases
+         *     4. Installs as a launchd (macOS) or systemd (Linux) service
+         *     5. Starts the runner automatically
          *
          *     No authentication required - this is for bootstrapping new runners.
          */
         get: operations["get_install_script_api_runners_install_sh_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runners/uninstall.sh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Uninstall Script
+         * @description Return shell script for uninstalling the runner.
+         *
+         *     This endpoint is designed to be used with curl:
+         *         curl -fsSL https://api.longhouse.ai/api/runners/uninstall.sh | bash
+         *
+         *     The script:
+         *     1. Detects OS (macOS/Linux)
+         *     2. Stops and removes the service (launchd/systemd)
+         *     3. Removes binary, config, and state files
+         *
+         *     No authentication required.
+         */
+        get: operations["get_uninstall_script_api_runners_uninstall_sh_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1159,6 +1191,29 @@ export interface paths {
          *     token reuse even if runner creation fails.
          */
         post: operations["register_runner_api_runners_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runners/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Runner Status
+         * @description Get runner health summary for status indicators.
+         *
+         *     Returns a lightweight summary of runner status for UI health indicators.
+         *     Useful for detecting broken runner connections early.
+         */
+        get: operations["get_runner_status_api_runners_status_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1251,410 +1306,6 @@ export interface paths {
          *     WARNING: The new secret is returned only once. Store it securely.
          */
         post: operations["rotate_runner_secret_api_runners__runner_id__rotate_secret_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/workflows/validate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Validate Workflow
-         * @description Validate workflow canvas data without saving.
-         */
-        post: operations["validate_workflow_api_workflows_validate_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/workflows/": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Read Workflows
-         * @description Return all workflows owned by current user.
-         *
-         *     If `name` is provided, filters to workflows matching that name.
-         */
-        get: operations["read_workflows_api_workflows__get"];
-        put?: never;
-        /**
-         * Create Workflow
-         * @description Create new workflow.
-         *     Supports template deployment via template_id or template_name.
-         *     Rate limited to 100 workflows per minute per user.
-         */
-        post: operations["create_workflow_api_workflows__post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/workflows/current": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Current Workflow
-         * @description Get the user's current working workflow.
-         *     Creates a default workflow if none exists.
-         */
-        get: operations["get_current_workflow_api_workflows_current_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/workflows/current/canvas": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /**
-         * Update Current Workflow Canvas
-         * @description Update the canvas for the user's current workflow.
-         *     Creates a default workflow if none exists.
-         */
-        patch: operations["update_current_workflow_canvas_api_workflows_current_canvas_patch"];
-        trace?: never;
-    };
-    "/api/workflows/{workflow_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Workflow By Id
-         * @description Get a specific workflow by ID.
-         */
-        get: operations["get_workflow_by_id_api_workflows__workflow_id__get"];
-        put?: never;
-        post?: never;
-        /** Delete Workflow */
-        delete: operations["delete_workflow_api_workflows__workflow_id__delete"];
-        options?: never;
-        head?: never;
-        /** Rename Workflow */
-        patch: operations["rename_workflow_api_workflows__workflow_id__patch"];
-        trace?: never;
-    };
-    "/api/workflows/{workflow_id}/layout": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Workflow Layout
-         * @description Return the stored canvas layout for the workflow or **204** when empty.
-         */
-        get: operations["get_workflow_layout_api_workflows__workflow_id__layout_get"];
-        /**
-         * Put Workflow Layout
-         * @description Persist the canvas layout for **workflow_id** owned by *current_user*.
-         *
-         *     The endpoint completely replaces the stored layout – callers should send
-         *     the full `nodes` + `viewport` payload (same schema as `/api/graph/layout`).
-         */
-        put: operations["put_workflow_layout_api_workflows__workflow_id__layout_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/workflow-executions/by-workflow/{workflow_id}/reserve": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reserve Workflow Execution
-         * @description Reserve an execution ID for a workflow without starting execution.
-         *     This allows the frontend to subscribe to WebSocket messages before execution starts.
-         */
-        post: operations["reserve_workflow_execution_api_workflow_executions_by_workflow__workflow_id__reserve_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/workflow-executions/by-workflow/{workflow_id}/start": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Start Workflow Execution
-         * @description Start a new execution of a workflow using LangGraph engine.
-         *     Non-blocking: returns immediately with phase=running.
-         */
-        post: operations["start_workflow_execution_api_workflow_executions_by_workflow__workflow_id__start_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/workflow-executions/executions/{execution_id}/start": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Start Reserved Execution
-         * @description Start a previously reserved execution.
-         */
-        post: operations["start_reserved_execution_api_workflow_executions_executions__execution_id__start_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/workflow-executions/{workflow_id}/start": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Start Workflow Execution Deprecated
-         * @description DEPRECATED: Use /by-workflow/{workflow_id}/start instead.
-         *     Start a new execution of a workflow.
-         */
-        post: operations["start_workflow_execution_deprecated_api_workflow_executions__workflow_id__start_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/workflow-executions/{execution_id}/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Execution Status
-         * @description Get the status of a workflow execution.
-         */
-        get: operations["get_execution_status_api_workflow_executions__execution_id__status_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/workflow-executions/{execution_id}/await": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Await Execution Completion
-         * @description Wait for a workflow execution to complete (synchronous).
-         *
-         *     This endpoint blocks until the workflow completes or times out.
-         *     Useful for testing and simple synchronous workflows.
-         *
-         *     Args:
-         *         execution_id: ID of the execution to wait for
-         *         timeout: Maximum time to wait in seconds (default 30)
-         *
-         *     Returns:
-         *         Execution status when complete
-         */
-        post: operations["await_execution_completion_api_workflow_executions__execution_id__await_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/workflow-executions/{execution_id}/logs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Execution Logs
-         * @description Get the logs of a workflow execution.
-         */
-        get: operations["get_execution_logs_api_workflow_executions__execution_id__logs_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/workflow-executions/history/{workflow_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Execution History
-         * @description Get the execution history of a workflow.
-         */
-        get: operations["get_execution_history_api_workflow_executions_history__workflow_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/workflow-executions/{execution_id}/export": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Export Execution Data
-         * @description Export the data of a workflow execution.
-         */
-        get: operations["export_execution_data_api_workflow_executions__execution_id__export_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/workflow-executions/{execution_id}/cancel": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /**
-         * Cancel Execution
-         * @description Mark a running workflow execution as *cancelled*.
-         *
-         *     The engine cooperatively checks the updated status before starting each
-         *     new node and exits early. If the execution already finished the endpoint
-         *     returns 409.
-         */
-        patch: operations["cancel_execution_api_workflow_executions__execution_id__cancel_patch"];
-        trace?: never;
-    };
-    "/api/workflow-executions/{workflow_id}/schedule": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Workflow Schedule
-         * @description Get the current schedule for a workflow.
-         */
-        get: operations["get_workflow_schedule_api_workflow_executions__workflow_id__schedule_get"];
-        put?: never;
-        /**
-         * Schedule Workflow
-         * @description Schedule a workflow to run on a cron schedule.
-         */
-        post: operations["schedule_workflow_api_workflow_executions__workflow_id__schedule_post"];
-        /**
-         * Unschedule Workflow
-         * @description Remove the schedule for a workflow.
-         */
-        delete: operations["unschedule_workflow_api_workflow_executions__workflow_id__schedule_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/workflow-executions/scheduled": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Scheduled Workflows
-         * @description List all scheduled workflows for the current user.
-         */
-        get: operations["list_scheduled_workflows_api_workflow_executions_scheduled_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1769,6 +1420,75 @@ export interface paths {
          *     Returns 204 on success. Safe to call even if not logged in.
          */
         post: operations["logout_api_auth_logout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/accept-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept Token
+         * @description Accept a JWT token from cross-subdomain auth redirect.
+         *
+         *     This endpoint validates the token and sets a session cookie.
+         *     Used when OAuth happens on longhouse.ai and user is redirected
+         *     back to their subdomain (e.g., david.longhouse.ai) with a token.
+         *
+         *     Expected JSON body: `{ "token": "<JWT>" }`.
+         */
+        post: operations["accept_token_api_auth_accept_token_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/methods": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Auth Methods
+         * @description Return available auth methods for frontend.
+         */
+        get: operations["get_auth_methods_api_auth_methods_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Password Login
+         * @description Simple password auth for self-hosters.
+         *
+         *     Expected JSON body: `{ "password": "<configured password>" }`.
+         *     Returns a JWT token and sets session cookie on success.
+         */
+        post: operations["password_login_api_auth_password_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2060,115 +1780,6 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
-        trace?: never;
-    };
-    "/api/templates/": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Templates
-         * @description List workflow templates. By default shows public templates.
-         *     Set my_templates=true to see your own templates (public and private).
-         */
-        get: operations["list_templates_api_templates__get"];
-        put?: never;
-        /**
-         * Create Template
-         * @description Create new workflow template.
-         */
-        post: operations["create_template_api_templates__post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/templates/categories": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Categories
-         * @description Get all available template categories.
-         */
-        get: operations["list_categories_api_templates_categories_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/templates/{template_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Template
-         * @description Get a specific template by ID.
-         */
-        get: operations["get_template_api_templates__template_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/templates/deploy": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Deploy Template
-         * @description Deploy a template as a new workflow.
-         */
-        post: operations["deploy_template_api_templates_deploy_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/graph/layout": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Layout
-         * @description Return the stored layout for the authenticated user (if any).
-         */
-        get: operations["get_layout_api_graph_layout_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /**
-         * Patch Layout
-         * @description Upsert the authenticated user's canvas layout.
-         */
-        patch: operations["patch_layout_api_graph_layout_patch"];
         trace?: never;
     };
     "/api/oikos/fiches": {
@@ -2800,6 +2411,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/oikos/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Oikos Agents
+         * @description Compatibility alias for fiche listing (historical /agents path).
+         */
+        get: operations["list_oikos_agents_api_oikos_agents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/oikos/events": {
         parameters: {
             query?: never;
@@ -3244,6 +2875,29 @@ export interface paths {
         get: operations["health_api_system_health_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/system/reset-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset Sessions
+         * @description Clear all agent sessions (dev only).
+         *
+         *     Used by ui-capture for deterministic empty state testing.
+         *     Disabled in production.
+         */
+        post: operations["reset_sessions_api_system_reset_sessions_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4895,18 +4549,6 @@ export interface components {
             /** Percent */
             percent: number | null;
         };
-        /** CancelPayload */
-        CancelPayload: {
-            /** Reason */
-            reason: string;
-        };
-        /**
-         * CanvasUpdate
-         * @description Schema for updating workflow canvas (nodes and edges)
-         */
-        CanvasUpdate: {
-            canvas: components["schemas"]["WorkflowData-Input"];
-        };
         /**
          * CleanupRequest
          * @description Request for test cleanup.
@@ -5558,26 +5200,6 @@ export interface components {
             /** Total */
             total: number;
         };
-        /**
-         * ExecutionLogsResponse
-         * @description Response for workflow execution logs.
-         */
-        ExecutionLogsResponse: {
-            /** Logs */
-            logs: string;
-        };
-        /**
-         * ExecutionStatusResponse
-         * @description Response for workflow execution status.
-         */
-        ExecutionStatusResponse: {
-            /** Execution Id */
-            execution_id: number;
-            /** Phase */
-            phase: string;
-            /** Result */
-            result?: unknown | null;
-        };
         /** Fiche */
         Fiche: {
             /** Name */
@@ -5891,14 +5513,6 @@ export interface components {
             /** P95 */
             p95: number;
         };
-        /** LayoutUpdate */
-        LayoutUpdate: {
-            /** Nodes */
-            nodes: {
-                [key: string]: components["schemas"]["NodePos"];
-            };
-            viewport?: components["schemas"]["Viewport"] | null;
-        };
         /**
          * MCPServerAddRequest
          * @description Request model for adding an MCP server.
@@ -6029,13 +5643,6 @@ export interface components {
             env?: string[];
             /** Config */
             config?: string[];
-        };
-        /** NodePos */
-        NodePos: {
-            /** X */
-            x: number;
-            /** Y */
-            y: number;
         };
         /**
          * ObsidianCredentials
@@ -6489,6 +6096,11 @@ export interface components {
             /** P95 Ms */
             p95_ms: number;
         };
+        /** PasswordLoginRequest */
+        PasswordLoginRequest: {
+            /** Password */
+            password: string;
+        };
         /**
          * PeriodUsage
          * @description Usage stats for a single period.
@@ -6566,16 +6178,6 @@ export interface components {
             phone?: string | null;
             /** Notes */
             notes?: string | null;
-        };
-        /**
-         * Position
-         * @description Node position on canvas.
-         */
-        Position: {
-            /** X */
-            x: number;
-            /** Y */
-            y: number;
         };
         /**
          * PullResponse
@@ -6917,6 +6519,42 @@ export interface components {
             capabilities?: string[];
         };
         /**
+         * RunnerStatusItem
+         * @description Individual runner status for summary.
+         */
+        RunnerStatusItem: {
+            /** Name */
+            name: string;
+            /** Status */
+            status: string;
+        };
+        /**
+         * RunnerStatusResponse
+         * @description Summary of runner health for UI status indicators.
+         */
+        RunnerStatusResponse: {
+            /**
+             * Total
+             * @description Total number of runners
+             */
+            total: number;
+            /**
+             * Online
+             * @description Number of online runners
+             */
+            online: number;
+            /**
+             * Offline
+             * @description Number of offline runners
+             */
+            offline: number;
+            /**
+             * Runners
+             * @description Status of each runner
+             */
+            runners: components["schemas"]["RunnerStatusItem"][];
+        };
+        /**
          * RunnerSuccessResponse
          * @description Generic success response for runner operations.
          */
@@ -6987,13 +6625,6 @@ export interface components {
              * @default false
              */
             clean: boolean;
-        };
-        /** ScheduleWorkflowPayload */
-        ScheduleWorkflowPayload: {
-            /** Cron Expression */
-            cron_expression: string;
-            /** Trigger Config */
-            trigger_config?: Record<string, never>;
         };
         /**
          * SessionChatRequest
@@ -7493,15 +7124,6 @@ export interface components {
              * @description Maximum text length for TTS
              */
             max_text_length: number;
-        };
-        /** TemplateDeployRequest */
-        TemplateDeployRequest: {
-            /** Template Id */
-            template_id: number;
-            /** Name */
-            name?: string | null;
-            /** Description */
-            description?: string | null;
         };
         /** Thread */
         Thread: {
@@ -8008,27 +7630,6 @@ export interface components {
             type: string;
         };
         /**
-         * ValidationResponse
-         * @description Response for workflow validation.
-         */
-        ValidationResponse: {
-            /** Is Valid */
-            is_valid: boolean;
-            /** Errors */
-            errors: Record<string, never>[];
-            /** Warnings */
-            warnings: Record<string, never>[];
-        };
-        /** Viewport */
-        Viewport: {
-            /** X */
-            x: number;
-            /** Y */
-            y: number;
-            /** Zoom */
-            zoom: number;
-        };
-        /**
          * VoiceAudioResponse
          * @description Optional audio payload for TTS output.
          */
@@ -8207,147 +7808,6 @@ export interface components {
              * @description OAuth refresh token
              */
             refresh_token?: string | null;
-        };
-        /** Workflow */
-        Workflow: {
-            /** Name */
-            name: string;
-            /** Description */
-            description?: string | null;
-            /** Id */
-            id: number;
-            /** Owner Id */
-            owner_id: number;
-            /** Is Active */
-            is_active: boolean;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-            canvas: components["schemas"]["WorkflowData-Output"];
-        };
-        /** WorkflowCreate */
-        WorkflowCreate: {
-            /** Name */
-            name: string;
-            /** Description */
-            description?: string | null;
-            canvas?: components["schemas"]["WorkflowData-Input"] | null;
-            /** Template Id */
-            template_id?: number | null;
-            /** Template Name */
-            template_name?: string | null;
-        };
-        /**
-         * WorkflowData
-         * @description Complete workflow specification.
-         */
-        "WorkflowData-Input": {
-            /** Nodes */
-            nodes: components["schemas"]["WorkflowNode"][];
-            /** Edges */
-            edges: components["schemas"]["WorkflowEdge"][];
-        };
-        /**
-         * WorkflowData
-         * @description Complete workflow specification.
-         */
-        "WorkflowData-Output": {
-            /** Nodes */
-            nodes: components["schemas"]["WorkflowNode"][];
-            /** Edges */
-            edges: components["schemas"]["WorkflowEdge"][];
-        };
-        /**
-         * WorkflowEdge
-         * @description A directed edge connecting two nodes.
-         */
-        WorkflowEdge: {
-            /** From Node Id */
-            from_node_id: string;
-            /** To Node Id */
-            to_node_id: string;
-            /** Config */
-            config?: Record<string, never>;
-        };
-        /**
-         * WorkflowNode
-         * @description A workflow node (fiche, tool, trigger, or conditional).
-         */
-        WorkflowNode: {
-            /** Id */
-            id: string;
-            /**
-             * Type
-             * @enum {string}
-             */
-            type: "fiche" | "tool" | "trigger" | "conditional";
-            position: components["schemas"]["Position"];
-            /** Config */
-            config?: Record<string, never>;
-        };
-        /** WorkflowTemplate */
-        WorkflowTemplate: {
-            /** Name */
-            name: string;
-            /** Description */
-            description?: string | null;
-            /** Category */
-            category: string;
-            canvas: components["schemas"]["WorkflowData-Output"];
-            /**
-             * Tags
-             * @default []
-             */
-            tags: string[] | null;
-            /** Preview Image Url */
-            preview_image_url?: string | null;
-            /** Id */
-            id: number;
-            /** Created By */
-            created_by: number;
-            /** Is Public */
-            is_public: boolean;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-        };
-        /** WorkflowTemplateCreate */
-        WorkflowTemplateCreate: {
-            /** Name */
-            name: string;
-            /** Description */
-            description?: string | null;
-            /** Category */
-            category: string;
-            canvas: components["schemas"]["WorkflowData-Input"];
-            /**
-             * Tags
-             * @default []
-             */
-            tags: string[] | null;
-            /** Preview Image Url */
-            preview_image_url?: string | null;
-        };
-        /** WorkflowUpdate */
-        WorkflowUpdate: {
-            /** Name */
-            name?: string | null;
-            /** Description */
-            description?: string | null;
         };
     };
     responses: never;
@@ -10522,7 +9982,7 @@ export interface operations {
                 runner_name?: string | null;
                 swarmlet_url?: string | null;
                 longhouse_url?: string | null;
-                runner_image?: string | null;
+                mode?: string | null;
             };
             header?: never;
             path?: never;
@@ -10546,6 +10006,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_uninstall_script_api_runners_uninstall_sh_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
@@ -10603,6 +10083,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunnerRegisterResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_runner_status_api_runners_status_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnerStatusResponse"];
                 };
             };
             /** @description Validation Error */
@@ -10783,812 +10294,6 @@ export interface operations {
             };
         };
     };
-    validate_workflow_api_workflows_validate_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CanvasUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ValidationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_workflows_api_workflows__get: {
-        parameters: {
-            query?: {
-                name?: string | null;
-                skip?: number;
-                limit?: number;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Workflow"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_workflow_api_workflows__post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WorkflowCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Workflow"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_current_workflow_api_workflows_current_get: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Workflow"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_current_workflow_canvas_api_workflows_current_canvas_patch: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CanvasUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Workflow"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_workflow_by_id_api_workflows__workflow_id__get: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                workflow_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Workflow"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_workflow_api_workflows__workflow_id__delete: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                workflow_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    rename_workflow_api_workflows__workflow_id__patch: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                workflow_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WorkflowUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Workflow"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_workflow_layout_api_workflows__workflow_id__layout_get: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                workflow_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    put_workflow_layout_api_workflows__workflow_id__layout_put: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                workflow_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LayoutUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reserve_workflow_execution_api_workflow_executions_by_workflow__workflow_id__reserve_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                workflow_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ExecutionStatusResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    start_workflow_execution_api_workflow_executions_by_workflow__workflow_id__start_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                workflow_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ExecutionStatusResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    start_reserved_execution_api_workflow_executions_executions__execution_id__start_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                execution_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ExecutionStatusResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    start_workflow_execution_deprecated_api_workflow_executions__workflow_id__start_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                workflow_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_execution_status_api_workflow_executions__execution_id__status_get: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                execution_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ExecutionStatusResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    await_execution_completion_api_workflow_executions__execution_id__await_post: {
-        parameters: {
-            query?: {
-                timeout?: number;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                execution_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_execution_logs_api_workflow_executions__execution_id__logs_get: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                execution_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ExecutionLogsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_execution_history_api_workflow_executions_history__workflow_id__get: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                workflow_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    export_execution_data_api_workflow_executions__execution_id__export_get: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                execution_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cancel_execution_api_workflow_executions__execution_id__cancel_patch: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                execution_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CancelPayload"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_workflow_schedule_api_workflow_executions__workflow_id__schedule_get: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                workflow_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    schedule_workflow_api_workflow_executions__workflow_id__schedule_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                workflow_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ScheduleWorkflowPayload"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    unschedule_workflow_api_workflow_executions__workflow_id__schedule_delete: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                workflow_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_scheduled_workflows_api_workflow_executions_scheduled_get: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     dev_login_api_auth_dev_login_post: {
         parameters: {
             query?: {
@@ -11732,6 +10437,98 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    accept_token_api_auth_accept_token_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_auth_methods_api_auth_methods_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    password_login_api_auth_password_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordLoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };
@@ -12324,241 +11121,6 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_templates_api_templates__get: {
-        parameters: {
-            query?: {
-                category?: string | null;
-                skip?: number;
-                limit?: number;
-                my_templates?: boolean;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkflowTemplate"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_template_api_templates__post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WorkflowTemplateCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkflowTemplate"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_categories_api_templates_categories_get: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": string[];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_template_api_templates__template_id__get: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                template_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkflowTemplate"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    deploy_template_api_templates_deploy_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TemplateDeployRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Workflow"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_layout_api_graph_layout_get: {
-        parameters: {
-            query?: {
-                workflow_id?: number | null;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    patch_layout_api_graph_layout_patch: {
-        parameters: {
-            query?: {
-                workflow_id?: number | null;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LayoutUpdate"];
-            };
-        };
         responses: {
             /** @description Successful Response */
             204: {
@@ -13324,6 +11886,39 @@ export interface operations {
             };
         };
     };
+    list_oikos_agents_api_oikos_agents_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OikosFicheSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     oikos_events_api_oikos_events_get: {
         parameters: {
             query?: {
@@ -13847,6 +12442,26 @@ export interface operations {
         };
     };
     health_api_system_health_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    reset_sessions_api_system_reset_sessions_post: {
         parameters: {
             query?: never;
             header?: never;

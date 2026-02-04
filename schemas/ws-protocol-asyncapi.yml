@@ -88,21 +88,6 @@ channels:
       UserUpdate:
         $ref: '#/components/messages/UserUpdate'
 
-  WorkflowExecutionChannel:
-    address: workflow_execution:{execution_id}
-    description: Workflow execution state, node updates, and logs
-    parameters:
-      execution_id:
-        description: Numeric identifier of the execution run
-        examples: ["123", "456"]
-    messages:
-      NodeState:
-        $ref: '#/components/messages/NodeState'
-      ExecutionFinished:
-        $ref: '#/components/messages/ExecutionFinished'
-      NodeLog:
-        $ref: '#/components/messages/NodeLog'
-
   OpsChannel:
     address: ops:events
     description: Admin-only operational ticker with normalized events
@@ -142,13 +127,6 @@ operations:
     channel:
       $ref: '#/channels/UserChannel'
     summary: Handle user-level WebSocket operations
-
-  # Workflow execution operations
-  WorkflowOperations:
-    action: send
-    channel:
-      $ref: '#/channels/WorkflowExecutionChannel'
-    summary: Handle workflow execution WebSocket operations
 
   OpsOperations:
     action: send
@@ -300,31 +278,6 @@ components:
       payload:
         $ref: '#/components/schemas/UserUpdateData'
       x-handler-method: handle_user_update
-      x-aliases: []
-
-    # Workflow execution messages
-    NodeState:
-      name: node_state
-      summary: Workflow node state change
-      payload:
-        $ref: '#/components/schemas/NodeStateData'
-      x-handler-method: handle_node_state
-      x-aliases: []
-
-    ExecutionFinished:
-      name: execution_finished
-      summary: Workflow execution completed
-      payload:
-        $ref: '#/components/schemas/ExecutionFinishedData'
-      x-handler-method: handle_execution_finished
-      x-aliases: []
-
-    NodeLog:
-      name: node_log
-      summary: Workflow node log output
-      payload:
-        $ref: '#/components/schemas/NodeLogData'
-      x-handler-method: handle_node_log
       x-aliases: []
 
     OpsEvent:
@@ -662,84 +615,6 @@ components:
           type: string
           format: uri
 
-    # Workflow execution payloads
-    NodeStateData:
-      type: object
-      required: [execution_id, node_id, phase]
-      properties:
-        execution_id:
-          type: integer
-          minimum: 1
-        node_id:
-          type: string
-          minLength: 1
-        # New Phase/Result architecture
-        phase:
-          type: string
-          enum: [waiting, running, finished]
-          description: "Current execution phase - what is happening NOW"
-        result:
-          type: string
-          enum: [success, failure, cancelled]
-          description: "Execution result - how did it END (only when phase=finished)"
-        attempt_no:
-          type: integer
-          minimum: 1
-          description: "Attempt number for retry tracking"
-        failure_kind:
-          type: string
-          enum: [user, system, timeout, external, unknown]
-          description: "Classification of failure type (only when result=failure)"
-        error_message:
-          type: string
-          description: "Detailed error message for failures"
-        output:
-          type: object
-
-    ExecutionFinishedData:
-      type: object
-      required: [execution_id, result]
-      properties:
-        execution_id:
-          type: integer
-          minimum: 1
-        # New Phase/Result architecture (phase is always "finished" for this message)
-        result:
-          type: string
-          enum: [success, failure, cancelled]
-          description: "How the execution ended"
-        attempt_no:
-          type: integer
-          minimum: 1
-          description: "Final attempt number"
-        failure_kind:
-          type: string
-          enum: [user, system, timeout, external, unknown]
-          description: "Classification of failure type (only when result=failure)"
-        error_message:
-          type: string
-          description: "Detailed error message for failures"
-        duration_ms:
-          type: integer
-          minimum: 0
-          description: "Total execution time in milliseconds"
-
-    NodeLogData:
-      type: object
-      required: [execution_id, node_id, stream, text]
-      properties:
-        execution_id:
-          type: integer
-          minimum: 1
-        node_id:
-          type: string
-          minLength: 1
-        stream:
-          type: string
-          enum: [stdout, stderr]
-        text:
-          type: string
-
     # Ops ticker payload (admin-only)
     OpsEventData:
       type: object
@@ -796,17 +671,13 @@ components:
 
 x-handler-groups:
   dashboard:
-    description: Handles fiche management, runs, workflow execution, and ops ticker
+    description: Handles fiche management, runs, and ops ticker
     handles:
       - run_update
       - fiche_event
-      - execution_finished
-      - node_state
-      - node_log
       - ops_event
     topics:
       - "fiche:*"
-      - "workflow_execution:*"
       - "ops:*"
 
   chat:

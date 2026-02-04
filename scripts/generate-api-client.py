@@ -11,6 +11,7 @@ The Rust/WASM frontend has been retired.
 
 import yaml
 import json
+import re
 from pathlib import Path
 
 def generate_typescript_api_client(openapi_spec):
@@ -91,9 +92,10 @@ def generate_function_name(path, method, spec):
     summary = spec.get('operationId', spec.get('summary', ''))
 
     if summary:
-        # Convert to camelCase
-        words = summary.lower().replace('-', '_').split('_')
-        return words[0] + ''.join(word.capitalize() for word in words[1:])
+        # Convert to camelCase and strip non-identifier characters
+        words = [word for word in re.split(r'[^a-zA-Z0-9]+', summary.lower()) if word]
+        if words:
+            return words[0] + ''.join(word.capitalize() for word in words[1:])
 
     return f"{method.lower()}{clean_path.title().replace('_', '')}"
 

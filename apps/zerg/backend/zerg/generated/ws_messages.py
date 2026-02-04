@@ -194,36 +194,6 @@ class UserUpdateData(BaseModel):
     display_name: Optional[str] = None
     avatar_url: Optional[str] = None
 
-class NodeStateData(BaseModel):
-    """Payload for NodeStateData messages"""
-
-    execution_id: int = Field(ge=1, description='')
-    node_id: str = Field(min_length=1, description='')
-    phase: Literal['waiting', 'running', 'finished'] = Field(description='Current execution phase - what is happening NOW')
-    result: Optional[Literal['success', 'failure', 'cancelled']] = Field(default=None, description='Execution result - how did it END (only when phase=finished)')
-    attempt_no: Optional[int] = Field(default=None, ge=1, description='Attempt number for retry tracking')
-    failure_kind: Optional[Literal['user', 'system', 'timeout', 'external', 'unknown']] = Field(default=None, description='Classification of failure type (only when result=failure)')
-    error_message: Optional[str] = Field(default=None, description='Detailed error message for failures')
-    output: Optional[Dict[str, Any]] = None
-
-class ExecutionFinishedData(BaseModel):
-    """Payload for ExecutionFinishedData messages"""
-
-    execution_id: int = Field(ge=1, description='')
-    result: Literal['success', 'failure', 'cancelled'] = Field(description='How the execution ended')
-    attempt_no: Optional[int] = Field(default=None, ge=1, description='Final attempt number')
-    failure_kind: Optional[Literal['user', 'system', 'timeout', 'external', 'unknown']] = Field(default=None, description='Classification of failure type (only when result=failure)')
-    error_message: Optional[str] = Field(default=None, description='Detailed error message for failures')
-    duration_ms: Optional[int] = Field(default=None, ge=0, description='Total execution time in milliseconds')
-
-class NodeLogData(BaseModel):
-    """Payload for NodeLogData messages"""
-
-    execution_id: int = Field(ge=1, description='')
-    node_id: str = Field(min_length=1, description='')
-    stream: Literal['stdout', 'stderr']
-    text: str
-
 class OpsEventData(BaseModel):
     """Payload for OpsEventData messages"""
 
@@ -261,9 +231,6 @@ class MessageType(str, Enum):
     FICHE_EVENT = "fiche_event"
     RUN_UPDATE = "run_update"
     USER_UPDATE = "user_update"
-    NODE_STATE = "node_state"
-    EXECUTION_FINISHED = "execution_finished"
-    NODE_LOG = "node_log"
     OPS_EVENT = "ops_event"
 
 
