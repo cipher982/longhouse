@@ -76,24 +76,6 @@
         "UserUpdate"
       ]
     },
-    "WorkflowExecutionChannel": {
-      "address": "workflow_execution:{execution_id}",
-      "description": "Workflow execution state, node updates, and logs",
-      "parameters": {
-        "execution_id": {
-          "description": "Numeric identifier of the execution run",
-          "examples": [
-            "123",
-            "456"
-          ]
-        }
-      },
-      "messages": [
-        "NodeState",
-        "ExecutionFinished",
-        "NodeLog"
-      ]
-    },
     "OpsChannel": {
       "address": "ops:events",
       "description": "Admin-only operational ticker with normalized events",
@@ -251,30 +233,6 @@
       "handler_method": "handle_user_update",
       "aliases": []
     },
-    "node_state": {
-      "summary": "Workflow node state change",
-      "payload_schema": {
-        "$ref": "#/components/schemas/NodeStateData"
-      },
-      "handler_method": "handle_node_state",
-      "aliases": []
-    },
-    "execution_finished": {
-      "summary": "Workflow execution completed",
-      "payload_schema": {
-        "$ref": "#/components/schemas/ExecutionFinishedData"
-      },
-      "handler_method": "handle_execution_finished",
-      "aliases": []
-    },
-    "node_log": {
-      "summary": "Workflow node log output",
-      "payload_schema": {
-        "$ref": "#/components/schemas/NodeLogData"
-      },
-      "handler_method": "handle_node_log",
-      "aliases": []
-    },
     "ops_event": {
       "summary": "Normalized operational ticker event for admin dashboard",
       "payload_schema": {
@@ -310,13 +268,6 @@
       "action": "send",
       "channel": {
         "$ref": "#/channels/UserChannel"
-      },
-      "messages": []
-    },
-    "WorkflowOperations": {
-      "action": "send",
-      "channel": {
-        "$ref": "#/channels/WorkflowExecutionChannel"
       },
       "messages": []
     },

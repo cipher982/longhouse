@@ -152,43 +152,6 @@ export interface UserUpdateData {
   avatar_url?: string;
 }
 
-export interface NodeStateData {
-  execution_id: number;
-  node_id: string;
-  /** Current execution phase - what is happening NOW */
-  phase: "waiting" | "running" | "finished";
-  /** Execution result - how did it END (only when phase=finished) */
-  result?: "success" | "failure" | "cancelled";
-  /** Attempt number for retry tracking */
-  attempt_no?: number;
-  /** Classification of failure type (only when result=failure) */
-  failure_kind?: "user" | "system" | "timeout" | "external" | "unknown";
-  /** Detailed error message for failures */
-  error_message?: string;
-  output?: Record<string, any>;
-}
-
-export interface ExecutionFinishedData {
-  execution_id: number;
-  /** How the execution ended */
-  result: "success" | "failure" | "cancelled";
-  /** Final attempt number */
-  attempt_no?: number;
-  /** Classification of failure type (only when result=failure) */
-  failure_kind?: "user" | "system" | "timeout" | "external" | "unknown";
-  /** Detailed error message for failures */
-  error_message?: string;
-  /** Total execution time in milliseconds */
-  duration_ms?: number;
-}
-
-export interface NodeLogData {
-  execution_id: number;
-  node_id: string;
-  stream: "stdout" | "stderr";
-  text: string;
-}
-
 export interface OpsEventData {
   type: "run_started" | "run_success" | "run_failed" | "fiche_created" | "fiche_updated" | "thread_message_created" | "budget_denied";
   fiche_id?: number;
@@ -292,21 +255,6 @@ export interface UserUpdate extends Envelope<UserUpdateData> {
   type: 'user_update';
 }
 
-/** Workflow node state change */
-export interface NodeState extends Envelope<NodeStateData> {
-  type: 'node_state';
-}
-
-/** Workflow execution completed */
-export interface ExecutionFinished extends Envelope<ExecutionFinishedData> {
-  type: 'execution_finished';
-}
-
-/** Workflow node log output */
-export interface NodeLog extends Envelope<NodeLogData> {
-  type: 'node_log';
-}
-
 /** Normalized operational ticker event for admin dashboard */
 export interface OpsEvent extends Envelope<OpsEventData> {
   type: 'ops_event';
@@ -331,7 +279,4 @@ export type WebSocketMessage =
   | FicheEvent
   | RunUpdate
   | UserUpdate
-  | NodeState
-  | ExecutionFinished
-  | NodeLog
   | OpsEvent
