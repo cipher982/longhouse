@@ -55,3 +55,4 @@
 - [Docs vs infra] VISION Life Hub config uses `ZERG_API_URL=https://longhouse.ai/api`, but `https://longhouse.ai/api/*` returns 502; the working API host is `https://api.longhouse.ai`.
 - [Docs vs UI] Backend notifications use `https://longhouse.ai/runs/{run.id}` (see `oikos_service.py`), but the frontend has no `/runs/:id` route; unknown paths redirect to LandingPage/Timeline, so run links are broken.
 - [Docs vs code] CLI docs in `zerg/cli/__init__.py` and `zerg/cli/main.py` say `longhouse connect` is “continuous polling,” but the CLI defaults to watch mode (polling only with `--poll`/`--interval`).
+- [Docs vs code] `scripts/install.sh` advertises `LONGHOUSE_API_URL` env var but never reads it; the comment also implies a default `http://localhost:8080`, while shipper API defaults to 47300.
