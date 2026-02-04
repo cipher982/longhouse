@@ -64,3 +64,4 @@
 - [Docs vs code] Landing “Create Your Own” skills copy says to add `SKILL.md` to `skills/` in your workspace; actual loader looks in `~/.longhouse/skills` (user) or `workspace/skills/` (requires workspace path in server), so the user doc is incomplete/unclear for OSS users.
 - [Docs vs reality] Landing FAQ (`TrustSection.tsx`) claims data is stored in PostgreSQL and auth is Google‑only; current OSS runtime is SQLite and supports password/local auth.
 - [Docs vs reality] Landing DemoSection/Footers still use cloud‑workspace + “from any device” copy (`DemoSection.tsx`, `FooterCTA.tsx`), which doesn’t match local‑first OSS or missing cross‑device resume.
+- [Docs vs code] Landing SkillsSection says Slack skill can “manage channels,” but Slack tool is webhook‑only (send message); no channel management/listing tools exist.
