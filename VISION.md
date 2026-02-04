@@ -35,7 +35,7 @@ This is a living vision doc. It captures both the direction and the reasoning th
 
 ## North Star
 
-1. Zero-friction onboarding for OSS builders: `pip install longhouse` or `brew install longhouse`, SQLite only.
+1. Zero-friction onboarding for OSS builders: **install.sh (primary)** plus `pip install longhouse` / `brew install longhouse` as alternates, SQLite only.
 2. Always-on agents: background work continues even when the user is away.
 3. Unified, queryable agent sessions across providers (Claude, Codex, Gemini, Cursor, Oikos).
 4. A hosted option that feels like "I pay $5 and never think about it."
@@ -253,7 +253,8 @@ README contains an `onboarding-contract` JSON block that CI executes:
 If the README drifts from reality, CI fails. No hidden env flags - everything declared in the contract.
 
 **OSS install + onboarding (canonical):**
-- **One-liner install is the primary path:** `curl -fsSL https://longhouse.ai/install.sh | bash`
+- **One-liner install is the primary path:** `curl -fsSL https://get.longhouse.ai/install.sh | bash`
+- `pip install` / `brew install` remain supported but are not the primary path
 - The installer must:
   - Install the `longhouse` CLI
   - Install a Claude shim (PATH-based) so sessions show up without user retraining
