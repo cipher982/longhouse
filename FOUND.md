@@ -61,3 +61,4 @@
 - [Docs vs reality] Landing hero subhead says “Your AI agents run in the cloud. Resume from any device.” (`HeroSection.tsx`), but OSS is local‑first and cross‑device resume isn’t implemented.
 - [Docs vs reality] Public Docs page (`frontend-web/src/pages/DocsPage.tsx`) is still the old “fiche/canvas/dashboard” workflow with Google sign‑in, not the timeline‑first OSS product.
 - [Docs vs reality] Public info pages (`PricingPage.tsx`, `SecurityPage.tsx`, `PrivacyPage.tsx`) still describe fiches/workflows, Google‑only OAuth auth, and dashboard account management, which don’t match the current timeline‑first OSS flow.
+- [Docs vs code] Landing “Create Your Own” skills copy says to add `SKILL.md` to `skills/` in your workspace; actual loader looks in `~/.longhouse/skills` (user) or `workspace/skills/` (requires workspace path in server), so the user doc is incomplete/unclear for OSS users.
