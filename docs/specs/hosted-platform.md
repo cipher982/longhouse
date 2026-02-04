@@ -1,8 +1,21 @@
 # SDP-1: Hosted Platform Spec
 
-**Status:** In Progress
-**Version:** 2026-02-04
+**Status:** Mostly Complete
+**Version:** 2026-02-05
 **Owner:** david010@gmail.com
+
+## Current State (2026-02-05)
+
+- [x] Phase 1: Control plane on Coolify proxy (control.longhouse.ai working)
+- [x] Phase 2: Runtime image (ghcr.io/cipher982/longhouse-runtime:latest)
+- [x] Phase 3: Jobs system (local manifest loading, /api/jobs/repo endpoints)
+- [x] Phase 4: David's instance (david.longhouse.ai provisioned)
+- [ ] Phase 5: Retire Sauron (sauron-scheduler still on Clifford)
+
+**Remaining work:**
+- Debug sauron-jobs manifest import errors (lib dependencies missing in runtime)
+- Shut down sauron-scheduler on Clifford once jobs verified working
+- Clean up old zerg-api/zerg-web on Coolify
 
 ## Executive Summary
 
