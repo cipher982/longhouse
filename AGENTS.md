@@ -180,7 +180,6 @@ Two separate things exist — don't conflate or rebuild:
 ## Learnings (Recent - Human compacts weekly)
 
 <!-- Agents: append below. Keep last 7 days or 10 entries max. -->
-- (2026-02-03) [ui] UI debug bundles: `make ui-capture` produces screenshot + trace + manifest; Playwright 1.57 lacks `page.accessibility`, so a11y capture uses `locator.ariaSnapshot()` (YAML) or guards the missing API.
 - (2026-02-03) [ops] Installer lives at `get.longhouse.ai/install.sh`; `longhouse.ai/install.sh` serves the SPA, and `api-david.longhouse.ai` is the working API subdomain (not api.david).
 - (2026-02-04) [docs] CLI has no `longhouse logs` or `longhouse runner` commands; `longhouse status` only prints config (no job list).
 - (2026-02-04) [gotcha] `_apply_lite_mode_defaults()` must run BEFORE demo mode in serve.py—demo imports trigger config loading which needs FERNET_SECRET and TRIGGER_SIGNING_SECRET.
@@ -190,3 +189,4 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-04) [gotcha] Coolify stores docker-compose defaults in DB, not git. Delete env vars via API then redeploy to pick up new defaults. Or manually update via Coolify UI.
 - (2026-02-04) [ops] Set SINGLE_TENANT=0 on prod to allow smoke test user alongside real user. Default SINGLE_TENANT=1 fails health if >1 user exists.
 - (2026-02-04) [arch] Backend router surface still includes legacy fiche/workflow/connectors/etc. (see `apps/zerg/backend/zerg/main.py` include_router list); candidate for slimming to sessions+shipper core.
+- (2026-02-04) [infra] Control plane should be self-managed (off Coolify); current routing uses Coolify's Caddy proxy and *.longhouse.ai wildcard is not set (testuser.longhouse.ai has no A/CNAME).
