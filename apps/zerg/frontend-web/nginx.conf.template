@@ -25,8 +25,8 @@ http {
         root /usr/share/nginx/html;
         index index.html;
 
-        # Defer upstream resolution to runtime
-        set $backend_upstream http://backend:8000;
+        # Defer upstream resolution to runtime (BACKEND_HOST set by docker-entrypoint.sh)
+        set $backend_upstream http://${BACKEND_HOST}:8000;
 
         # --- API proxying (same-origin) ---
         # WebSocket endpoint must be defined before the generic /api/ location
