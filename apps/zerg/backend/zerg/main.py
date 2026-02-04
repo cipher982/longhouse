@@ -373,6 +373,20 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"Auto-seed failed (non-fatal): {e}")
 
+        # Bootstrap jobs repository (creates /data/jobs/ with git versioning)
+        # Non-fatal: dev mode may not have /data mounted
+        if not _settings.testing:
+            try:
+                from zerg.services.jobs_repo import bootstrap_jobs_repo
+
+                jobs_result = bootstrap_jobs_repo(_settings.data_dir)
+                if jobs_result["errors"]:
+                    logger.warning(f"Jobs repo bootstrap had errors: {jobs_result['errors']}")
+                elif jobs_result["created"] or jobs_result["initialized_git"]:
+                    logger.info(f"Jobs repo bootstrapped: {jobs_result['jobs_dir']}")
+            except Exception as e:
+                logger.warning(f"Jobs repo bootstrap failed (non-fatal): {e}")
+
         # Initialize fiche state recovery system (recovers orphaned fiches, runs, jobs)
         if not _settings.testing:
             from zerg.services.fiche_state_recovery import initialize_fiche_state_system
