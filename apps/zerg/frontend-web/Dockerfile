@@ -40,7 +40,7 @@ RUN bun run build
 # Production target - nginx serving static files
 FROM nginx:alpine AS production
 
-COPY apps/zerg/frontend-web/nginx.conf /etc/nginx/nginx.conf
+COPY apps/zerg/frontend-web/nginx.conf.template /etc/nginx/nginx.conf.template
 COPY apps/zerg/frontend-web/docker-entrypoint.sh /docker-entrypoint.sh
 COPY --from=builder /app/dist/ /usr/share/nginx/html/
 
