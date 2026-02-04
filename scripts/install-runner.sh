@@ -7,7 +7,7 @@
 # systemd hardening for defense in depth.
 #
 # Usage:
-#   curl -sSL https://longhouse.ai/install-runner.sh | bash -s -- \
+#   curl -sSL https://get.longhouse.ai/install-runner.sh | bash -s -- \
 #     --name cube \
 #     --token <enrollment-token> \
 #     --url wss://api.longhouse.ai \

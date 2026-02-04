@@ -35,7 +35,7 @@ This is a living vision doc. It captures both the direction and the reasoning th
 
 ## North Star
 
-1. Zero-friction onboarding for OSS builders: **install.sh (primary)** plus `pip install longhouse` / `brew install longhouse` as alternates, SQLite only.
+1. Zero-friction onboarding for OSS builders: **install.sh (primary)** plus `pip install longhouse` as alternate, SQLite only. (Homebrew formula planned for future.)
 2. Always-on agents: background work continues even when the user is away.
 3. Unified, queryable agent sessions across providers (Claude, Codex, Gemini, Cursor, Oikos).
 4. A hosted option that feels like "I pay $5 and never think about it."
@@ -49,7 +49,7 @@ Three promises to users:
 
 1. **Never lose a conversation** — Every Claude, Codex, Cursor, Gemini session appears in one timeline. No more grepping JSONL.
 
-2. **Find where you solved it** — Search by keyword, project, date. FTS5-powered instant results. Or ask Oikos for deeper discovery.
+2. **Find where you solved it** — Search by keyword, project, date. Instant results. (FTS5 search planned; current implementation uses indexed ilike queries.) Or ask Oikos for deeper discovery.
 
 3. **Resume from anywhere** — Close your laptop. Open Longhouse on phone. Resume the session as a commis (headless Claude Code). Work continues.
 
@@ -88,7 +88,7 @@ relation "agents.events" does not exist
 
 Cause: Longhouse was querying `agents.sessions` and `agents.events` in Life Hub's database. Those tables do not exist in Longhouse's DB.
 
-This revealed the deeper issue: Longhouse was not standalone. OSS users who `brew install longhouse` would hit Life Hub errors. That is a dead end for adoption.
+This revealed the deeper issue: Longhouse was not standalone. OSS users who install Longhouse would hit Life Hub errors. That is a dead end for adoption.
 
 ---
 
@@ -120,10 +120,11 @@ This schema is already proven in Life Hub. We are moving it to Longhouse and mak
 Two tiers optimized for different needs:
 
 **Timeline Search Bar (fast, 80% of lookups)**
-- SQLite FTS5 over session events (`content_text`, `tool_name`, project, etc.)
-- Instant results (<10ms)
+- Indexed search over session events (`content_text`, `tool_name`, project, etc.)
+- Instant results
 - Keyword matching, project/date filters
 - User types → results appear immediately
+- (Planned: SQLite FTS5 for sub-10ms full-text search)
 
 **Oikos Discovery (agentic, complex queries)**
 - Multi-tool reasoning for vague or complex lookups
@@ -184,14 +185,16 @@ Both end up in Life Hub, so Longhouse depends on Life Hub. We are reversing that
 ## Product Paths
 
 ### OSS Local (default path)
+```bash
+pip install longhouse
+longhouse serve
 ```
-brew install longhouse
-longhouse up
-```
-- Local web UI
-- Local agents DB
-- Shipper runs on the same machine (zero config)
+- Local web UI on port 8080
+- Local agents DB (SQLite)
+- Shipper requires `longhouse connect` to start
 - Full end-to-end flow is visible locally
+
+(Homebrew formula planned for future.)
 
 **Local path diagram:**
 ```
@@ -353,7 +356,7 @@ apps/control-plane/           # NEW - tiny FastAPI app
 ```
 
 **Routing:**
-- Wildcard DNS: `*.longhouse.ai -> zerg server IP` (already configured)
+- Wildcard DNS: `*.longhouse.ai -> zerg server IP` (needs setup — not currently configured)
 - Traefik routes by subdomain via Docker labels
 - Each container gets unique subdomain automatically
 
@@ -389,7 +392,7 @@ apps/control-plane/           # NEW - tiny FastAPI app
 Runners are user-owned daemons that execute commands on infrastructure the user controls.
 
 **What a runner is:**
-- Node.js daemon installed on user's laptop/server
+- Bun-compiled daemon installed on user's laptop/server
 - Connects **outbound** to Longhouse (no firewall holes needed)
 - Executes shell commands when Longhouse requests (`runner_exec` tool)
 - Example: run tests, git operations, deploy scripts
@@ -406,8 +409,8 @@ Local command execution (npm test, etc.)
 Each user's Longhouse instance only sees their own runners. Isolation is natural.
 
 **Runner registration:**
-- `longhouse runner register` generates credentials
-- Runner connects with those credentials
+- Runner installer (`install-runner.sh`) registers via `/api/runners/register` endpoint
+- Runner connects with enrollment token
 - Longhouse validates runner belongs to the user
 
 ---
@@ -754,23 +757,24 @@ Users bring their own LLM API keys. Longhouse stores and uses them securely.
 
 ## OSS Packaging
 
-`brew install longhouse` must "just work" for the 90% case.
+`pip install longhouse` must "just work" for the 90% case. (Homebrew formula planned for future.)
 
 **What's in the package:**
-- `longhouse` CLI (Python, via pipx or standalone binary)
+- `longhouse` CLI (Python, via pip)
 - Embeds: FastAPI backend, React frontend (built), shipper
 - Default: SQLite for local DB (zero-config). Postgres is not part of core/runtime.
 
 **Commands:**
 ```bash
-longhouse up              # Start local server (SQLite, port 30080)
+longhouse serve           # Start local server (SQLite, port 8080)
 longhouse connect <url>   # Connect shipper to remote instance
 longhouse ship            # One-time manual sync
+longhouse status          # Show current configuration
 ```
 
 **Docker alternative:**
 ```bash
-docker compose up    # Full stack with Postgres
+docker compose -f docker/docker-compose.dev.yml up    # Full stack with Postgres
 ```
 
 **DB note (self-contained):**
@@ -782,8 +786,9 @@ docker compose up    # Full stack with Postgres
 - Postgres (optional, user provides)
 - LLM API keys (user provides)
 
-**Homebrew formula sketch:**
+**Homebrew formula (planned):**
 ```ruby
+# Not yet published to Homebrew
 class Longhouse < Formula
   desc "AI agent orchestration platform"
   homepage "https://longhouse.ai"
@@ -1215,7 +1220,7 @@ longhouse serve --host 0.0.0.0 --port 8080
 | Feature | Description |
 |---------|-------------|
 | **Timeline** | Searchable archive of all sessions — the core product |
-| **Search** | FTS5-powered instant discovery + Oikos for complex queries |
+| **Search** | Instant discovery (FTS5 planned) + Oikos for complex queries |
 | **Resume** | Continue any session from any device (spawns commis) |
 | **Commis Pool** | Background agents (headless Claude Code) working in parallel |
 | **Oikos** | Chat interface for discovery and direct AI interaction |
@@ -1428,10 +1433,10 @@ class CommisPool:
 
 **CLI:**
 ```bash
-longhouse serve              # Start server
+longhouse serve              # Start server (default: 127.0.0.1:8080)
 longhouse serve --port 8080  # Custom port
-longhouse status             # Show running jobs
-longhouse logs <job_id>      # Tail job logs
+longhouse status             # Show current configuration
+# Note: `longhouse logs` command planned but not yet implemented
 ```
 
 **Frontend:** Pre-built React app served from FastAPI static mount
@@ -1458,10 +1463,11 @@ pip install longhouse
 └── logs/                # Job logs
 
 $ longhouse serve
-→ http://0.0.0.0:8080
-→ 5 commis slots available
+→ http://127.0.0.1:8080
 → SQLite: ~/.longhouse/longhouse.db
 ```
+
+Logs are written to `~/.longhouse/server.log` (server) and `~/.claude/shipper.log` (shipper).
 
 ---
 

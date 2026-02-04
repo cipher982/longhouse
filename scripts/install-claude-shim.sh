@@ -132,7 +132,7 @@ fi
 
 if [[ -z "${REAL_CLAUDE}" || ! -x "${REAL_CLAUDE}" ]]; then
   echo "Longhouse: cannot find the real Claude binary."
-  echo "Run: curl -fsSL https://longhouse.ai/install-claude.sh | bash"
+  echo "Install Claude Code first: https://docs.anthropic.com/en/docs/claude-code"
   exit 1
 fi
 

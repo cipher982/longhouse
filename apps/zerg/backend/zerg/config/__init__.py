@@ -509,11 +509,14 @@ def _validate_required(settings: Settings) -> None:  # noqa: D401 – helper
         if weak_internal:
             missing_vars.append("INTERNAL_API_SECRET (must be >=16 chars, not 'dev-internal-secret')")
 
-        if not settings.google_client_id:
-            missing_vars.append("GOOGLE_CLIENT_ID (required when auth enabled)")
+        # Google OAuth is required UNLESS password auth is configured
+        password_auth_configured = bool(settings.longhouse_password or settings.longhouse_password_hash)
+        if not password_auth_configured:
+            if not settings.google_client_id:
+                missing_vars.append("GOOGLE_CLIENT_ID (required when auth enabled and no password set)")
 
-        if not settings.google_client_secret:
-            missing_vars.append("GOOGLE_CLIENT_SECRET (required when auth enabled)")
+            if not settings.google_client_secret:
+                missing_vars.append("GOOGLE_CLIENT_SECRET (required when auth enabled and no password set)")
 
     if missing_vars:
         error_msg = (

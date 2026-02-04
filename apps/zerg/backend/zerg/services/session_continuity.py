@@ -38,7 +38,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Longhouse API configuration (local by default)
-LONGHOUSE_API_URL = os.getenv("LONGHOUSE_API_URL", "http://localhost:47300")
+# Standard port is 8080 for `longhouse serve`
+LONGHOUSE_API_URL = os.getenv("LONGHOUSE_API_URL", "http://localhost:8080")
 
 # Valid session ID pattern (alphanumeric, dashes, underscores only)
 # Prevents path traversal attacks via malicious session IDs

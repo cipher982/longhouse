@@ -3,7 +3,7 @@
 # Longhouse One-Liner Installer
 #
 # Usage:
-#   curl -fsSL https://longhouse.ai/install.sh | bash
+#   curl -fsSL https://get.longhouse.ai/install.sh | bash
 #
 # Environment:
 #   LONGHOUSE_NO_WIZARD=1  Skip onboarding wizard
