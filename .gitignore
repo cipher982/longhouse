@@ -226,3 +226,4 @@ artifacts/ui-capture/
 **/archive/
 **/legacy/
 **/*_legacy*
+apps/zerg/backend/.qa-home/
