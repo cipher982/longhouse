@@ -73,3 +73,6 @@
 - [Docs vs code] VISION OSS local path says the shipper runs “zero config” alongside `longhouse up`; in reality the shipper is not auto-started by `longhouse serve` and requires `longhouse connect`/`onboard` to install or run.
 - [Docs] QA_PLAN P0 backlog references `longhouse up`, but the CLI has no `up` command (it's `longhouse serve`).
 - [Docs vs repo] VISION “Docker alternative” says `docker compose up` for full stack with Postgres, but there is no root compose file; Docker configs live under `docker/` (same drift as README).
+- [Docs] QA job prompt (`apps/zerg/backend/zerg/jobs/qa/prompt.md`) still brands alerts as “SWARMLET QA”; should be Longhouse (brand drift).
+- [Docs conflict] VISION “Prompt Cache Optimization” claims message layout already system→conversation→dynamic, but TODO still says layout busts cache and needs reordering; code comments in `fiche_runner.py` show the target layout already in place, so TODO item looks stale.
+- [Docs vs code] VISION Homebrew formula sketch depends on `python@3.11`, but backend requires Python 3.12+ per `pyproject.toml` (same mismatch as install.sh).
