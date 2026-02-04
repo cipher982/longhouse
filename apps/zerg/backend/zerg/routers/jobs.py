@@ -76,6 +76,148 @@ async def _ensure_jobs_registered() -> None:
         _registered = True
 
 
+# ---------------------------------------------------------------------------
+# Jobs Repo Endpoints (must come before /{job_id} to avoid route shadowing)
+# ---------------------------------------------------------------------------
+
+
+class JobsRepoStatusResponse(BaseModel):
+    """Response for jobs repo status."""
+
+    initialized: bool
+    has_remote: bool
+    remote_url: str | None
+    last_commit_time: str | None
+    last_commit_message: str | None
+    jobs_dir: str
+    job_count: int
+
+
+class JobsRepoInitResponse(BaseModel):
+    """Response for jobs repo initialization."""
+
+    success: bool
+    message: str
+    jobs_dir: str
+
+
+class JobsRepoSyncResponse(BaseModel):
+    """Response for jobs repo sync."""
+
+    success: bool
+    message: str
+    status: str  # "not_implemented", "synced", "error"
+
+
+@router.get("/repo", response_model=JobsRepoStatusResponse)
+async def get_jobs_repo_status(
+    current_user: UserModel = Depends(require_admin),
+):
+    """Get the status of the jobs repository.
+
+    Returns information about:
+    - Whether the repo is initialized (has .git directory)
+    - Whether a remote is configured
+    - Last commit time and message
+    - Number of jobs in the manifest
+    """
+    try:
+        from zerg.services.jobs_repo import get_jobs_repo_status as _get_status
+
+        status = _get_status()
+        return JobsRepoStatusResponse(**status)
+    except ImportError:
+        # Service not yet implemented - return stub response
+        from zerg.config import get_settings
+
+        settings = get_settings()
+        jobs_dir = getattr(settings, "jobs_dir", "/data/jobs")
+
+        return JobsRepoStatusResponse(
+            initialized=False,
+            has_remote=False,
+            remote_url=None,
+            last_commit_time=None,
+            last_commit_message=None,
+            jobs_dir=jobs_dir,
+            job_count=0,
+        )
+    except Exception as e:
+        logger.error("Failed to get jobs repo status: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to get jobs repo status: {e}")
+
+
+@router.post("/repo/init", response_model=JobsRepoInitResponse)
+async def init_jobs_repo(
+    current_user: UserModel = Depends(require_admin),
+):
+    """Initialize the jobs repository.
+
+    Creates the jobs directory structure if it doesn't exist:
+    - /data/jobs/manifest.py (job definitions)
+    - /data/jobs/jobs/ (job modules)
+    - Runs git init
+
+    This is normally done automatically on first boot, but can be
+    triggered manually if needed.
+    """
+    try:
+        from zerg.services.jobs_repo import init_jobs_repo as _init_repo
+
+        result = _init_repo()
+        logger.info("Jobs repo initialized by user %s", current_user.email)
+        return JobsRepoInitResponse(**result)
+    except ImportError:
+        # Service not yet implemented - return stub response
+        from zerg.config import get_settings
+
+        settings = get_settings()
+        jobs_dir = getattr(settings, "jobs_dir", "/data/jobs")
+
+        return JobsRepoInitResponse(
+            success=False,
+            message="Jobs repo service not yet implemented",
+            jobs_dir=jobs_dir,
+        )
+    except Exception as e:
+        logger.error("Failed to initialize jobs repo: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to initialize jobs repo: {e}")
+
+
+@router.post("/repo/sync", response_model=JobsRepoSyncResponse)
+async def sync_jobs_repo(
+    current_user: UserModel = Depends(require_admin),
+):
+    """Sync the jobs repository with its remote.
+
+    If a remote is configured, this will:
+    - Pull changes from remote
+    - Push local commits to remote
+    - Handle merge conflicts (if any)
+
+    Note: Remote sync is optional. Jobs work fine with local-only versioning.
+
+    Currently returns not_implemented as remote sync is not yet built.
+    """
+    try:
+        from zerg.services.jobs_repo import sync_jobs_repo as _sync_repo
+
+        result = _sync_repo()
+        if result.get("status") != "not_implemented":
+            logger.info("Jobs repo synced by user %s", current_user.email)
+        return JobsRepoSyncResponse(**result)
+    except ImportError:
+        # Service not yet implemented
+        return JobsRepoSyncResponse(
+            success=False,
+            message="Remote sync not yet implemented. Jobs work fine with local-only versioning.",
+            status="not_implemented",
+        )
+    except Exception as e:
+        logger.error("Failed to sync jobs repo: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to sync jobs repo: {e}")
+
+
 @router.get("/", response_model=JobListResponse)
 async def list_jobs(
     enabled_only: bool = False,
@@ -290,145 +432,3 @@ async def get_queue_state(
     except Exception as e:
         logger.error("Failed to fetch queue state: %s", e)
         raise HTTPException(status_code=500, detail=f"Failed to fetch queue state: {e}")
-
-
-# ---------------------------------------------------------------------------
-# Jobs Repo Endpoints
-# ---------------------------------------------------------------------------
-
-
-class JobsRepoStatusResponse(BaseModel):
-    """Response for jobs repo status."""
-
-    initialized: bool
-    has_remote: bool
-    remote_url: str | None
-    last_commit_time: str | None
-    last_commit_message: str | None
-    jobs_dir: str
-    job_count: int
-
-
-class JobsRepoInitResponse(BaseModel):
-    """Response for jobs repo initialization."""
-
-    success: bool
-    message: str
-    jobs_dir: str
-
-
-class JobsRepoSyncResponse(BaseModel):
-    """Response for jobs repo sync."""
-
-    success: bool
-    message: str
-    status: str  # "not_implemented", "synced", "error"
-
-
-@router.get("/repo", response_model=JobsRepoStatusResponse)
-async def get_jobs_repo_status(
-    current_user: UserModel = Depends(require_admin),
-):
-    """Get the status of the jobs repository.
-
-    Returns information about:
-    - Whether the repo is initialized (has .git directory)
-    - Whether a remote is configured
-    - Last commit time and message
-    - Number of jobs in the manifest
-    """
-    try:
-        from zerg.services.jobs_repo import get_jobs_repo_status as _get_status
-
-        status = _get_status()
-        return JobsRepoStatusResponse(**status)
-    except ImportError:
-        # Service not yet implemented - return stub response
-        from zerg.config import get_settings
-
-        settings = get_settings()
-        jobs_dir = getattr(settings, "jobs_dir", "/data/jobs")
-
-        return JobsRepoStatusResponse(
-            initialized=False,
-            has_remote=False,
-            remote_url=None,
-            last_commit_time=None,
-            last_commit_message=None,
-            jobs_dir=jobs_dir,
-            job_count=0,
-        )
-    except Exception as e:
-        logger.error("Failed to get jobs repo status: %s", e)
-        raise HTTPException(status_code=500, detail=f"Failed to get jobs repo status: {e}")
-
-
-@router.post("/repo/init", response_model=JobsRepoInitResponse)
-async def init_jobs_repo(
-    current_user: UserModel = Depends(require_admin),
-):
-    """Initialize the jobs repository.
-
-    Creates the jobs directory structure if it doesn't exist:
-    - /data/jobs/manifest.py (job definitions)
-    - /data/jobs/jobs/ (job modules)
-    - Runs git init
-
-    This is normally done automatically on first boot, but can be
-    triggered manually if needed.
-    """
-    try:
-        from zerg.services.jobs_repo import init_jobs_repo as _init_repo
-
-        result = _init_repo()
-        logger.info("Jobs repo initialized by user %s", current_user.email)
-        return JobsRepoInitResponse(**result)
-    except ImportError:
-        # Service not yet implemented - return stub response
-        from zerg.config import get_settings
-
-        settings = get_settings()
-        jobs_dir = getattr(settings, "jobs_dir", "/data/jobs")
-
-        return JobsRepoInitResponse(
-            success=False,
-            message="Jobs repo service not yet implemented",
-            jobs_dir=jobs_dir,
-        )
-    except Exception as e:
-        logger.error("Failed to initialize jobs repo: %s", e)
-        raise HTTPException(status_code=500, detail=f"Failed to initialize jobs repo: {e}")
-
-
-@router.post("/repo/sync", response_model=JobsRepoSyncResponse)
-async def sync_jobs_repo(
-    current_user: UserModel = Depends(require_admin),
-):
-    """Sync the jobs repository with its remote.
-
-    If a remote is configured, this will:
-    - Pull changes from remote
-    - Push local commits to remote
-    - Handle merge conflicts (if any)
-
-    Note: Remote sync is optional. Jobs work fine with local-only versioning.
-
-    Currently returns not_implemented as remote sync is not yet built.
-    """
-    try:
-        from zerg.services.jobs_repo import sync_jobs_repo as _sync_repo
-
-        result = _sync_repo()
-        if result.get("status") != "not_implemented":
-            logger.info("Jobs repo synced by user %s", current_user.email)
-        return JobsRepoSyncResponse(**result)
-    except ImportError:
-        # Service not yet implemented
-        return JobsRepoSyncResponse(
-            success=False,
-            message="Remote sync not yet implemented. Jobs work fine with local-only versioning.",
-            status="not_implemented",
-        )
-    except Exception as e:
-        logger.error("Failed to sync jobs repo: %s", e)
-        raise HTTPException(status_code=500, detail=f"Failed to sync jobs repo: {e}")
