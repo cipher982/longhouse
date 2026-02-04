@@ -269,9 +269,9 @@ Update screenshots to show Timeline, not old dashboard.
 ### 🚨 Critical Blockers (Fix First)
 
 - [x] **OSS Auth** — Password login for self-hosters (see dedicated section above)
-- [ ] **Password-only config bug** — `_validate_required()` still requires GOOGLE_CLIENT_ID even when LONGHOUSE_PASSWORD is set
+- [x] **Password-only config bug** — `_validate_required()` now skips Google OAuth validation when password auth is configured
   - File: `apps/zerg/backend/zerg/config/__init__.py:512`
-  - Fix: Skip Google OAuth validation if password auth is configured
+  - Fixed: Skip Google OAuth validation if `LONGHOUSE_PASSWORD` or `LONGHOUSE_PASSWORD_HASH` is set
 - [ ] **Landing page CTAs** — Several buttons don't work or lead nowhere
 
 ### High Priority
@@ -588,13 +588,13 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 (Former FOUND.md. Keep this list updated here only.)
 
 - [Infra/docs] API host mismatch: backend is configured for `api-david.longhouse.ai`, but TODO Domain Split still references `api.david.longhouse.ai`. `curl https://api-david.longhouse.ai/health` returns 200; `curl https://api.david.longhouse.ai/health` fails, and container labels only include `api-david.longhouse.ai`.
-- [Infra/docs] `longhouse.ai/install.sh` serves the SPA HTML (not the installer). The working installer URL is `get.longhouse.ai/install.sh` (302 to GitHub raw). VISION + `scripts/install.sh` comment still point to `https://longhouse.ai/install.sh`.
-- [Infra/docs] Wildcard DNS claim is stale: `dig foo.longhouse.ai` returns no records, so `*.longhouse.ai` does not appear to be configured despite VISION saying it is.
+- [Infra/docs] `longhouse.ai/install.sh` serves the SPA HTML (not the installer). The working installer URL is `get.longhouse.ai/install.sh` (302 to GitHub raw). ✅ FIXED: Scripts now use correct URL.
+- [Infra/docs] Wildcard DNS claim is stale: `dig foo.longhouse.ai` returns no records, so `*.longhouse.ai` does not appear to be configured. ✅ FIXED: VISION now says "needs setup".
 - [Infra/docs] DB size is outdated: docs say `/data/longhouse.db (~2.5GB)` but current file is ~3.5GB (`/data/longhouse.db`). Update TODO launch notes.
 - [Docs vs code] Install script installs Python 3.11, but `pyproject.toml` requires `>=3.12`. `scripts/install.sh` should install 3.12+ (or lower the requirement).
 - [Docs vs code] Shipper defaults to `http://localhost:47300`, while `longhouse serve` defaults to 8080 and README uses 8080. Running `longhouse connect` with no `--url` will target the wrong port.
-- [Docs vs code] VISION mentions `longhouse up` and port `30080` for OSS. CLI is `longhouse serve` and default port is `8080`.
-- [Docs vs code] VISION claims FTS5-powered timeline search; current search is `ilike` join on events (no FTS5 tables/queries present).
+- ✅ FIXED: [Docs vs code] VISION mentions `longhouse up` and port `30080` for OSS. CLI is `longhouse serve` and default port is `8080`. (VISION updated to `longhouse serve` and port 8080)
+- ✅ FIXED: [Docs vs code] VISION claims FTS5-powered timeline search; current search is `ilike` join on events (no FTS5 tables/queries present). (VISION updated to say FTS5 is planned)
 - [Docs vs code] VISION says job claiming is dialect-aware (Postgres `FOR UPDATE SKIP LOCKED`). `commis_job_queue.py` is SQLite-specific (`datetime('now')`, `UPDATE ... RETURNING`) and is imported unconditionally in `commis_job_processor.py`.
 - [Docs vs code] Workspace paths in VISION are `~/.longhouse/workspaces/...` and artifacts in `~/.longhouse/artifacts`, but current defaults are `/var/oikos/workspaces` and `settings.data_dir` (`/data` in Docker or repo `data/`). Session resume temp workspaces default to `/tmp/zerg-session-workspaces`.
 - [Docs vs code] VISION control-plane section lists `apps/control-plane/` file tree, but no such directory exists in repo (plan vs reality is unclear).
@@ -604,7 +604,7 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [Docs] Launch notes say MIT license; repo LICENSE and pyproject are Apache-2.0.
 - [Docs] Launch notes checklist says “README has screenshot (done!)” but README has no image.
 - [Docs] Launch notes say demo data seeds on first run; current behavior requires `--demo/--demo-fresh` or calling the demo seed endpoint.
-- [Docs] VISION repeatedly references `brew install longhouse`, but there is no Homebrew formula in repo or release workflow.
+- ✅ FIXED: [Docs] VISION repeatedly references `brew install longhouse`, but there is no Homebrew formula in repo or release workflow. (VISION updated to mark Homebrew as planned/future)
 - [Docs conflict] Launch plan notes suggest provisioning via Coolify API; VISION explicitly says not to use Coolify for dynamic provisioning.
 - [Docs vs code] VISION onboarding-contract example is Docker-centric (`cp .env.example`, `docker compose up`), but README’s contract runs bun+uv + `longhouse serve`; VISION’s example is stale.
 - [Docs vs code] VISION says `longhouse connect <url>` installs and starts the shipper; actual CLI only installs when `--install` is passed (default runs foreground watch/poll).
@@ -614,18 +614,18 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [Docs vs UI] “Resume from anywhere / Timeline resume” is not in Timeline UI; resume is only implemented in Forum Drop-In (Claude-only) and not exposed on `/timeline`.
 - [Docs vs code] VISION lists Oikos discovery tools (`search_sessions`, `grep_sessions`, `filter_sessions`, `get_session_detail`) but no such tool implementations exist.
 - [Docs vs code] VISION says cross-subdomain auth tokens are one-time with nonce stored server-side and validated via control plane/JWKS; current `POST /api/auth/accept-token` just validates JWT and sets cookie (no nonce/one-time guard).
-- [Docs/infra] `install-claude.sh` is broken: `longhouse.ai/install-claude.sh` serves the SPA HTML, `get.longhouse.ai/install-claude.sh` redirects to `scripts/install-claude.sh` which 404s, and the repo only contains `scripts/install-claude-shim.sh`.
+- [Docs/infra] `install-claude.sh` is broken: `longhouse.ai/install-claude.sh` serves the SPA HTML, `get.longhouse.ai/install-claude.sh` redirects to `scripts/install-claude.sh` which 404s. ✅ PARTIAL: Shim script now points users to Anthropic docs instead of broken URL.
 - [Docs vs code] VISION requires a PATH-based Claude shim + verification in a fresh shell; current installer only adds a hook unless `~/.longhouse/install-claude-shim.sh` already exists and does not verify in a new shell.
-- [Docs] QA_PLAN says onboarding contract is still Docker-centric; README contract now uses bun+uv + `longhouse serve` (SQLite), so this gap statement is stale.
+- STALE: [Docs] QA_PLAN says onboarding contract is still Docker-centric; README contract now uses bun+uv + `longhouse serve` (SQLite), so this gap statement is stale. (QA_PLAN docs likely removed or outdated)
 - [Docs] Launch notes claim session files in `~/.codex/sessions/*` etc; current shipper/parser only reads Claude Code (`~/.claude/projects/...`).
-- [Docs vs code] Password-only auth isn’t actually possible in production: `_validate_required()` always requires `GOOGLE_CLIENT_ID/SECRET` when `AUTH_DISABLED=0`, even if `LONGHOUSE_PASSWORD[_HASH]` is set. README/launch notes imply password-only is supported.
+- [Docs vs code] Password-only auth isn't actually possible in production: `_validate_required()` always requires `GOOGLE_CLIENT_ID/SECRET` when `AUTH_DISABLED=0`, even if `LONGHOUSE_PASSWORD[_HASH]` is set. README/launch notes imply password-only is supported. ✅ FIXED: Google OAuth validation now skipped when password auth is configured.
 - [Docs vs code] `session_continuity.py` defaults `LONGHOUSE_API_URL` to `http://localhost:47300`, conflicting with `longhouse serve` default 8080 and README.
 - [Docs vs UI] `longhouse auth` instructs users to open `/dashboard/settings/devices`, but there is no device-token UI or route; frontend only has `/settings` and no device token page.
 - [Code inconsistency] `WorkspaceManager` defaults to `/var/oikos/workspaces` while settings default `OIKOS_WORKSPACE_PATH` to `~/.longhouse/workspaces`; local OSS may try to write to `/var/oikos` without permission.
 - [Docs vs UI] VISION describes a 3-step guided empty state with “Load demo” CTA; Timeline empty state is a single sentence (“Run 'longhouse ship'”) with no demo button.
 - [Docs vs repo] README “Docker” install says `docker compose up`, but there is no root `docker-compose.yml` or `compose.yaml`; Docker configs live under `docker/` (e.g., `docker/docker-compose.dev.yml`).
 - [Docs vs code] `apps/runner/README.md` uses `LONGHOUSE_URL=http://localhost:30080` for dev/Docker; runner defaults to `ws://localhost:47300` and `longhouse serve` uses 8080, so the example points at the wrong port/service.
-- [Docs vs code] `experiments/shipper-manual-validation.md` is legacy: uses `zerg` CLI, old token/url files (`zerg-device-token`, `zerg-url`), old launchd label `com.swarmlet.shipper`, old frontend port 30080, and claims no sessions UI exists (Timeline now exists).
+- STALE: [Docs vs code] `experiments/shipper-manual-validation.md` is legacy: uses `zerg` CLI, old token/url files (`zerg-device-token`, `zerg-url`), old launchd label `com.swarmlet.shipper`, old frontend port 30080, and claims no sessions UI exists (Timeline now exists). (Experiments doc is historical, can be deleted or archived)
 - [Docs vs code] `apps/zerg/backend/docs/specs/shipper.md` still documents `zerg` commands and `~/.claude/zerg-device-token`; current CLI is `longhouse` and tokens are stored at `~/.claude/longhouse-device-token` (legacy `zerg-` paths are migration-only).
 - [Docs] `apps/zerg/backend/docs/supervisor_tools.md` references non-existent paths/tests: `apps/zerg/backend/docs/oikos_tools.md`, `examples/oikos_tools_demo.py`, `tests/test_oikos_tools.py`, `tests/test_oikos_tools_integration.py`, and “20/20 tests passing” despite those files not existing (only `tests/tools/test_oikos_tools_errors.py` exists).
 - [Docs vs code] `oikos_react_engine.py` module docstring claims “spawn_commis raises FicheInterrupted directly”; in parallel execution `_execute_tools_parallel` uses two-phase commit and does NOT raise FicheInterrupted (returns ToolMessages + interrupt_value instead).
@@ -638,7 +638,7 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [Docs vs code] `services/shipper/spool.py` docstring claims replay uses idempotency keys, but the shipper does not send idempotency keys (dedupe relies on DB unique constraints).
 - [Docs vs code] GitHub skill doc says `GITHUB_TOKEN` env var works; `github_tools` only resolves tokens from connectors or explicit parameters (no env fallback).
 - [Docs vs code] Web search skill docs omit required `TAVILY_API_KEY`: `web_search` errors when the env var is missing, but `apps/zerg/backend/zerg/skills/bundled/web-search/SKILL.md` has no env requirement and is marked `always: true`.
-- [Docs/infra] `scripts/install-runner.sh` advertises `curl -sSL https://longhouse.ai/install-runner.sh | bash`, but that URL serves the SPA HTML; the working installer URL is `https://get.longhouse.ai/install-runner.sh` (redirects to raw GitHub).
+- [Docs/infra] `scripts/install-runner.sh` advertises `curl -sSL https://longhouse.ai/install-runner.sh | bash`, but that URL serves the SPA HTML. ✅ FIXED: Script now uses correct URL.
 - [Docs vs infra] VISION Life Hub config uses `ZERG_API_URL=https://longhouse.ai/api`, but `https://longhouse.ai/api/*` returns 502; the working API host is `https://api.longhouse.ai`.
 - [Docs vs UI] Backend notifications use `https://longhouse.ai/runs/{run.id}` (see `oikos_service.py`), but the frontend has no `/runs/:id` route; unknown paths redirect to LandingPage/Timeline, so run links are broken.
 - [Docs vs code] CLI docs in `zerg/cli/__init__.py` and `zerg/cli/main.py` say `longhouse connect` is “continuous polling,” but the CLI defaults to watch mode (polling only with `--poll`/`--interval`).
@@ -653,16 +653,16 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [Docs vs reality] Landing DemoSection/Footers still use cloud-workspace + “from any device” copy (`DemoSection.tsx`, `FooterCTA.tsx`), which doesn’t match local-first OSS or missing cross-device resume.
 - [Docs vs code] Landing SkillsSection says Slack skill can “manage channels,” but Slack tool is webhook-only (send message); no channel management/listing tools exist.
 - [Docs vs code] `DemoSection.tsx` comment says it “Shows Chat, Dashboard, and Canvas views,” but `ProductShowcase` only displays Timeline and Session Detail tabs.
-- [Docs vs code] VISION “Runner registration” says `longhouse runner register` generates credentials, but the CLI has no `runner` command; registration happens via the runner installer hitting `/api/runners/register`.
-- [Docs vs code] VISION CLI section says `longhouse status` shows running jobs and `longhouse logs <job_id>` tails job logs, but `longhouse status` only prints configuration and there is no `logs` command.
-- [Docs vs code] VISION “File Structure (After)” claims `~/.longhouse/logs/` with per-job logs and shows `→ http://0.0.0.0:8080`; actual logging is `~/.longhouse/server.log` (server) + `~/.claude/shipper.log` (shipper) and `longhouse serve` defaults to `127.0.0.1:8080` unless `--host` is set.
-- [Docs vs code] VISION says runners are “Node.js” daemons, but the runner is Bun-based (`apps/runner` uses Bun scripts and builds a Bun-compiled binary); Node isn’t required.
-- [Docs vs code] VISION OSS local path says the shipper runs “zero config” alongside `longhouse up`; in reality the shipper is not auto-started by `longhouse serve` and requires `longhouse connect`/`onboard` to install or run.
-- [Docs] QA_PLAN P0 backlog references `longhouse up`, but the CLI has no `up` command (it's `longhouse serve`).
-- [Docs vs repo] VISION “Docker alternative” says `docker compose up` for full stack with Postgres, but there is no root compose file; Docker configs live under `docker/` (same drift as README).
+- ✅ FIXED: [Docs vs code] VISION "Runner registration" says `longhouse runner register` generates credentials, but the CLI has no `runner` command; registration happens via the runner installer hitting `/api/runners/register`. (VISION updated to describe actual flow)
+- ✅ FIXED: [Docs vs code] VISION CLI section says `longhouse status` shows running jobs and `longhouse logs <job_id>` tails job logs, but `longhouse status` only prints configuration and there is no `logs` command. (VISION updated - `logs` marked as planned)
+- ✅ FIXED: [Docs vs code] VISION "File Structure (After)" claims `~/.longhouse/logs/` with per-job logs and shows `→ http://0.0.0.0:8080`; actual logging is `~/.longhouse/server.log` (server) + `~/.claude/shipper.log` (shipper) and `longhouse serve` defaults to `127.0.0.1:8080` unless `--host` is set. (VISION updated with correct paths and port)
+- ✅ FIXED: [Docs vs code] VISION says runners are "Node.js" daemons, but the runner is Bun-based (`apps/runner` uses Bun scripts and builds a Bun-compiled binary); Node isn't required. (VISION updated to say Bun-compiled)
+- ✅ FIXED: [Docs vs code] VISION OSS local path says the shipper runs "zero config" alongside `longhouse up`; in reality the shipper is not auto-started by `longhouse serve` and requires `longhouse connect`/`onboard` to install or run. (VISION updated to note shipper requires `longhouse connect`)
+- STALE: [Docs] QA_PLAN P0 backlog references `longhouse up`, but the CLI has no `up` command (it's `longhouse serve`). (QA_PLAN docs likely removed or outdated)
+- ✅ FIXED: [Docs vs repo] VISION "Docker alternative" says `docker compose up` for full stack with Postgres, but there is no root compose file; Docker configs live under `docker/` (same drift as README). (VISION updated to use correct path `docker/docker-compose.dev.yml`)
 - [Docs] QA job prompt (`apps/zerg/backend/zerg/jobs/qa/prompt.md`) still brands alerts as “SWARMLET QA”; should be Longhouse (brand drift).
-- [Docs conflict] VISION “Prompt Cache Optimization” claims message layout already system→conversation→dynamic, but TODO still says layout busts cache and needs reordering; code comments in `fiche_runner.py` show the target layout already in place, so TODO item looks stale.
-- [Docs vs code] VISION Homebrew formula sketch depends on `python@3.11`, but backend requires Python 3.12+ per `pyproject.toml` (same mismatch as install.sh).
+- STALE: [Docs conflict] VISION "Prompt Cache Optimization" claims message layout already system→conversation→dynamic, but TODO still says layout busts cache and needs reordering; code comments in `fiche_runner.py` show the target layout already in place, so TODO item looks stale. (Target layout is already in place per code comments)
+- ✅ FIXED: [Docs vs code] VISION Homebrew formula sketch depends on `python@3.11`, but backend requires Python 3.12+ per `pyproject.toml` (same mismatch as install.sh). (VISION updated to python@3.12)
 
 ---
 

@@ -121,7 +121,6 @@ Base = declarative_base(metadata=_metadata)
 
 # Import all models at module level to ensure they are registered with Base
 try:
-    from zerg.models.models import CanvasLayout  # noqa: F401
     from zerg.models.models import Connector  # noqa: F401
     from zerg.models.models import Fiche  # noqa: F401
     from zerg.models.models import FicheMemoryKV  # noqa: F401
@@ -129,7 +128,6 @@ try:
     from zerg.models.models import Memory  # noqa: F401
     from zerg.models.models import MemoryEmbedding  # noqa: F401
     from zerg.models.models import MemoryFile  # noqa: F401
-    from zerg.models.models import NodeExecutionState  # noqa: F401
     from zerg.models.models import Run  # noqa: F401
     from zerg.models.models import Thread  # noqa: F401
     from zerg.models.models import ThreadMessage  # noqa: F401
@@ -137,9 +135,6 @@ try:
     from zerg.models.models import User  # noqa: F401
     from zerg.models.models import UserSkill  # noqa: F401
     from zerg.models.models import UserTask  # noqa: F401
-    from zerg.models.models import Workflow  # noqa: F401
-    from zerg.models.models import WorkflowExecution  # noqa: F401
-    from zerg.models.models import WorkflowTemplate  # noqa: F401
 except ImportError:
     # Handle case where models module might not be available during certain imports
     pass
@@ -370,7 +365,6 @@ def initialize_database(engine: Engine = None) -> None:
     """
     # Import all models to ensure they are registered with Base
     from zerg.models.agents import AgentsBase
-    from zerg.models.models import CanvasLayout  # noqa: F401
     from zerg.models.models import Connector  # noqa: F401
     from zerg.models.models import Fiche  # noqa: F401
     from zerg.models.models import FicheMemoryKV  # noqa: F401
@@ -378,16 +372,11 @@ def initialize_database(engine: Engine = None) -> None:
     from zerg.models.models import Memory  # noqa: F401
     from zerg.models.models import MemoryEmbedding  # noqa: F401
     from zerg.models.models import MemoryFile  # noqa: F401
-    from zerg.models.models import NodeExecutionState  # noqa: F401
     from zerg.models.models import Run  # noqa: F401
     from zerg.models.models import Thread  # noqa: F401
     from zerg.models.models import ThreadMessage  # noqa: F401
-    from zerg.models.models import Trigger  # noqa: F401
     from zerg.models.models import User  # noqa: F401
     from zerg.models.models import UserTask  # noqa: F401
-    from zerg.models.models import Workflow  # noqa: F401
-    from zerg.models.models import WorkflowExecution  # noqa: F401
-    from zerg.models.models import WorkflowTemplate  # noqa: F401
 
     target_engine = engine or default_engine
 

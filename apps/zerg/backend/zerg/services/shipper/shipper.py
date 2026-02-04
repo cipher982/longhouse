@@ -46,7 +46,7 @@ class RateLimitExhaustedError(Exception):
 class ShipperConfig:
     """Configuration for the session shipper."""
 
-    api_url: str = "http://localhost:47300"
+    api_url: str = "http://localhost:8080"  # Standard port for `longhouse serve`
     claude_config_dir: Path | None = None  # Defaults to ~/.claude
     scan_interval_seconds: int = 30
     batch_size: int = 100
