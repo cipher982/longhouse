@@ -192,3 +192,4 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-04) [docs] CLI has no `longhouse logs` or `longhouse runner` commands; `longhouse status` only prints config (no job list).
 - (2026-02-04) [gotcha] `_apply_lite_mode_defaults()` must run BEFORE demo mode in serve.py—demo imports trigger config loading which needs FERNET_SECRET and TRIGGER_SIGNING_SECRET.
 - (2026-02-04) [ops] k3s ARC runners on cube: if repo renamed, must update helm release `githubConfigUrl`, delete stale EphemeralRunners (patch finalizers first), and restart controller to clear cached clients.
+- (2026-02-04) [ci] SQLite-only pivot broke `backend-tests` CI job (used Postgres). Fix: removed job, moved hatch-agent/install-runner tests to sqlite-tests.
