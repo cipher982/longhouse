@@ -113,7 +113,7 @@ def send_digest_email(
     """Send a routine digest email."""
     digest_email = os.getenv("DIGEST_EMAIL")
     return send_email(
-        f"ZERG DIGEST: {subject}",
+        f"LONGHOUSE DIGEST: {subject}",
         body,
         to_email=digest_email,
         html=html,
@@ -141,7 +141,7 @@ def send_alert_email(
     level = (level or "WARNING").upper()
     alert_email = os.getenv("ALERT_EMAIL")
     return send_email(
-        f"{level} (ZERG): {subject}",
+        f"{level} (LONGHOUSE): {subject}",
         body,
         to_email=alert_email,
         html=html,
@@ -154,7 +154,7 @@ def send_alert_email(
 def send_job_failure_alert(failed_job_id: str, error: str) -> str | None:
     """Send alert for job failure."""
     subject = f"Job failed: {failed_job_id}"
-    body = f"""Zerg job failed:
+    body = f"""Longhouse job failed:
 
 Job ID: {failed_job_id}
 Error: {error}

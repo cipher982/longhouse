@@ -8,15 +8,15 @@ interface FAQ {
 const faqs: FAQ[] = [
   {
     question: "How does authentication work?",
-    answer: "We use Google OAuth for secure sign-in. Your credentials are never stored on our servers — we use industry-standard JWT tokens for session management."
+    answer: "Self-hosted: use password auth or disable auth entirely for local-only setups. Hosted: sign in with Google OAuth or password. Your credentials are never stored — we use industry-standard JWT tokens for session management."
   },
   {
     question: "Where is my data stored?",
-    answer: "Your data is stored in a PostgreSQL database. We never sell or share your personal information with third parties."
+    answer: "Local-first: your data lives in a SQLite database on your machine. Self-host and keep full control. We never sell or share your personal information with third parties."
   },
   {
     question: "Can I delete my data?",
-    answer: "Yes! Full account deletion is available in your profile settings. When you delete your account, all your sessions and workspace data are permanently removed."
+    answer: "Yes! Full account deletion is available in your profile settings. When you delete your account, all your sessions and data are permanently removed."
   },
   {
     question: "Do you train AI models on my data?",
@@ -24,7 +24,7 @@ const faqs: FAQ[] = [
   },
   {
     question: "What LLM do you use?",
-    answer: "Longhouse currently uses OpenAI models (default: GPT-5.2). You can pick from the available models depending on your quality/cost needs."
+    answer: "Longhouse currently uses OpenAI models (default: GPT-5.2). You bring your own API keys and can pick from the available models depending on your quality/cost needs."
   }
 ];
 

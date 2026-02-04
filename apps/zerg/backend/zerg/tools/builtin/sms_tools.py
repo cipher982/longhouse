@@ -202,7 +202,7 @@ def send_sms(
     Example:
         >>> send_sms(
         ...     to_number="+14155552672",
-        ...     message="Hello from Zerg!",
+        ...     message="Hello from Longhouse!",
         ... )
         {
             "success": True,

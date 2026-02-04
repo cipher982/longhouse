@@ -84,7 +84,7 @@ def send_discord_webhook(
         >>> send_discord_webhook(
         ...     webhook_url="https://discord.com/api/webhooks/123/abc",
         ...     content="Status Update",
-        ...     username="Zerg Fiche",
+        ...     username="Longhouse",
         ...     embeds=[{
         ...         "title": "Task Complete",
         ...         "description": "All operations finished",

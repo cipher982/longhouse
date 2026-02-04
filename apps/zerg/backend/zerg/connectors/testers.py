@@ -93,7 +93,7 @@ def _test_slack(creds: dict[str, Any]) -> dict[str, Any]:
 
     response = httpx.post(
         webhook_url,
-        json={"text": ":wrench: Zerg test message - your Slack webhook is working!"},
+        json={"text": ":wrench: Longhouse test message - your Slack webhook is working!"},
         timeout=TEST_TIMEOUT,
     )
 
@@ -117,7 +117,7 @@ def _test_discord(creds: dict[str, Any]) -> dict[str, Any]:
 
     response = httpx.post(
         webhook_url,
-        json={"content": ":wrench: Zerg test message - your Discord webhook is working!"},
+        json={"content": ":wrench: Longhouse test message - your Discord webhook is working!"},
         timeout=TEST_TIMEOUT,
     )
 

@@ -28,10 +28,10 @@ export function FooterCTA() {
         {/* Final CTA */}
         <div className="landing-footer-cta">
           <blockquote className="landing-footer-quote">
-            Your cloud workspace is waiting.
+            Self-host your AI session archive. Never lose a conversation again.
           </blockquote>
           <Button variant="primary" size="lg" className="landing-cta-main" onClick={handleStartFree}>
-            Get your Longhouse 🪵
+            Get Started
           </Button>
         </div>
 

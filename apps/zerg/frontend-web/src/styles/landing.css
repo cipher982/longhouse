@@ -7,6 +7,196 @@
 
 @layer pages {
   /* --------------------------------------------------------
+     LANDING HEADER (Sticky)
+     -------------------------------------------------------- */
+
+  .landing-header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    background: rgba(3, 3, 5, 0.7);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid transparent;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .landing-header--scrolled {
+    background: rgba(10, 10, 15, 0.95);
+    border-bottom-color: var(--color-border-subtle);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  }
+
+  .landing-header-inner {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: var(--space-4) var(--space-6);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .landing-header-brand {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    text-decoration: none;
+    color: var(--color-text-primary);
+  }
+
+  .landing-header-logo {
+    flex-shrink: 0;
+  }
+
+  .landing-header-wordmark {
+    font-family: var(--font-family-display);
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: var(--font-tracking-tight);
+  }
+
+  .landing-header-nav {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .landing-header-nav-link {
+    padding: var(--space-2) var(--space-4);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-secondary);
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .landing-header-nav-link:hover {
+    color: var(--color-text-primary);
+    background: var(--color-surface-card);
+  }
+
+  .landing-header-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  /* Mobile Menu Toggle */
+  .landing-header-menu-toggle {
+    display: none;
+    padding: var(--space-2);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+  }
+
+  .hamburger {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    width: 24px;
+  }
+
+  .hamburger-line {
+    display: block;
+    height: 2px;
+    background: var(--color-text-primary);
+    border-radius: 1px;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .hamburger--open .hamburger-line:nth-child(1) {
+    transform: rotate(45deg) translate(5px, 5px);
+  }
+
+  .hamburger--open .hamburger-line:nth-child(2) {
+    opacity: 0;
+  }
+
+  .hamburger--open .hamburger-line:nth-child(3) {
+    transform: rotate(-45deg) translate(5px, -5px);
+  }
+
+  /* Mobile Menu */
+  .landing-header-mobile-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: rgba(10, 10, 15, 0.98);
+    border-bottom: 1px solid var(--color-border-subtle);
+    padding: var(--space-6);
+    opacity: 0;
+    transform: translateY(-10px);
+    pointer-events: none;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .landing-header-mobile-menu--open {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+
+  .landing-header-mobile-nav {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-bottom: var(--space-6);
+  }
+
+  .landing-header-mobile-link {
+    padding: var(--space-3) var(--space-4);
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-secondary);
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    text-align: left;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .landing-header-mobile-link:hover {
+    color: var(--color-text-primary);
+    background: var(--color-surface-card);
+  }
+
+  .landing-header-mobile-actions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .landing-header-mobile-actions .ui-button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* Mobile responsive */
+  @media (width <= 768px) {
+    .landing-header-nav,
+    .landing-header-actions {
+      display: none;
+    }
+
+    .landing-header-menu-toggle {
+      display: block;
+    }
+
+    .landing-header-mobile-menu {
+      display: block;
+    }
+  }
+
+  /* --------------------------------------------------------
      Root Scroll Mode (public pages)
 
      The app shell uses a grid root with an internal scroll container (#app-container).
@@ -44,6 +234,8 @@
   .landing-main {
     position: relative;
     z-index: 1;
+    /* Account for sticky header height */
+    padding-top: 72px;
   }
 
   .landing-section-inner {
@@ -233,14 +425,23 @@
   .landing-cta-main {
     padding: var(--space-4) var(--space-8) !important;
     font-size: var(--font-size-lg) !important;
-    font-weight: var(--font-weight-semibold) !important;
-    box-shadow: var(--shadow-glow);
+    font-weight: var(--font-weight-bold) !important;
+    /* Enhanced prominence with stronger glow and border */
+    box-shadow:
+      0 0 20px rgb(99 102 241 / 40%),
+      0 0 40px rgb(99 102 241 / 20%),
+      0 4px 12px rgba(0, 0, 0, 0.3);
+    border: 1px solid rgb(99 102 241 / 60%) !important;
     transition: all var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .landing-cta-main:hover {
-    box-shadow: 0 0 32px rgb(99 102 241 / 40%);
-    transform: translateY(-2px);
+    box-shadow:
+      0 0 28px rgb(99 102 241 / 50%),
+      0 0 56px rgb(99 102 241 / 30%),
+      0 6px 16px rgba(0, 0, 0, 0.4);
+    transform: translateY(-3px);
+    border-color: rgb(99 102 241 / 80%) !important;
   }
 
   .landing-cta-text {
@@ -531,17 +732,19 @@
   .landing-step {
     text-align: center;
     padding: var(--space-8);
-    background: var(--color-surface-card);
-    border: 1px solid var(--color-border-subtle);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--color-border-primary);
     border-radius: var(--radius-xl);
     transition: all var(--motion-duration-normal) var(--motion-easing-standard);
     animation: landing-fadeInUp 0.6s ease-out backwards;
+    /* Visible elevation for card distinction */
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.05) inset;
   }
 
   .landing-step:hover {
     border-color: var(--color-brand-primary);
     transform: translateY(-4px);
-    box-shadow: var(--shadow-lg), 0 0 24px rgb(99 102 241 / 10%);
+    box-shadow: var(--shadow-lg), 0 0 32px rgb(99 102 241 / 15%), 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
   }
 
   .landing-step-icon {

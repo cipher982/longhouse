@@ -7,6 +7,7 @@ import { usePublicPageScroll } from "../hooks/usePublicPageScroll";
 import "../styles/landing.css";
 
 // Section components
+import { LandingHeader } from "../components/landing/LandingHeader";
 import { HeroSection } from "../components/landing/HeroSection";
 import { HowItWorksSection } from "../components/landing/HowItWorksSection";
 import { DemoSection } from "../components/landing/DemoSection";
@@ -189,8 +190,21 @@ export default function LandingPage() {
     document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" });
   };
 
+  const scrollToInstall = () => {
+    document.querySelector(".install-section")?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  const handleSignIn = () => {
+    // Trigger the sign-in modal via the Get Started button in hero
+    const signInBtn = document.querySelector('.landing-cta-main') as HTMLButtonElement;
+    signInBtn?.click();
+  };
+
   return (
     <div className="landing-page" data-fx-hero={heroAnimationsEnabled ? "1" : "0"} data-fx-particles={particlesEnabled ? "1" : "0"}>
+      {/* Sticky Header */}
+      <LandingHeader onSignIn={handleSignIn} onGetStarted={scrollToInstall} />
+
       {/* Particle background */}
       {particlesEnabled && <div className="particle-bg" />}
 
