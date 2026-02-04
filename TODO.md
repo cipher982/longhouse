@@ -52,13 +52,13 @@ Capture list for substantial work. Not quick fixes (do those live).
 Current reality (as of 2026-02-03):
 - **ONE backend container** serves both `api.longhouse.ai` and `api-david.longhouse.ai`
 - **ONE frontend container** serves both `longhouse.ai` and `david.longhouse.ai`
-- **ONE SQLite database** at `/data/longhouse.db` (~2.5GB)
+- **ONE SQLite database** at `/data/longhouse.db` (size varies; check on server)
 - **No control plane** — can't provision per-user instances
 - **"david.longhouse.ai" is cosmetic** — just DNS routing to shared infra
 
 **Target state:** Control plane provisions isolated containers per user (Docker API + Traefik labels). See VISION.md for architecture.
 
-See `/docs/LAUNCH-PLAN.md` for detailed analysis.
+See `/docs/LAUNCH.md` for detailed analysis.
 
 ---
 
@@ -94,9 +94,9 @@ See `/docs/LAUNCH-PLAN.md` for detailed analysis.
 **Status:** DNS routing complete. Marketing mode logic exists but has issues.
 
 - [x] Add marketing-only frontend flag (hostname-driven) to disable auth + app routes on longhouse.ai
-- [x] Update Coolify domains: zerg-web -> david.longhouse.ai, zerg-api -> api.david.longhouse.ai
+- [x] Update Coolify domains: zerg-web -> david.longhouse.ai, zerg-api -> api-david.longhouse.ai
 - [x] Update zerg-api env: APP_PUBLIC_URL/PUBLIC_SITE_URL to david, CORS to include longhouse.ai + david
-- [x] Add Cloudflare DNS for david.longhouse.ai + api.david.longhouse.ai (and optional wildcard)
+- [x] Add Cloudflare DNS for david.longhouse.ai + api-david.longhouse.ai (and optional wildcard)
 
 **Reality check:** This is DNS routing to ONE shared deployment, not isolated instances. The "david" subdomain is cosmetic. See Architecture Reality Check above.
 
@@ -262,7 +262,7 @@ Update screenshots to show Timeline, not old dashboard.
 
 **Goal:** HN reader can install, see value immediately, understand what problem this solves, and start using it.
 
-**Launch Path Decision:** OSS GA + Hosted Beta (optional). See `/docs/LAUNCH-PLAN.md`.
+**Launch Path Decision:** OSS GA + Hosted Beta (optional). See `/docs/LAUNCH.md`.
 
 ### 🚨 Critical Blockers (Fix First)
 
