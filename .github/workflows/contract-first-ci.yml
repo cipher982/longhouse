@@ -17,9 +17,6 @@ env:
   # Force public PyPI for CI so setup-python's pip step doesn't fail.
   PIP_INDEX_URL: https://pypi.org/simple
   PIP_EXTRA_INDEX_URL: ""
-  # Per-run schema isolation (prevents concurrent run collisions)
-  CI_TEST_SCHEMA: zerg_ci_${{ github.run_id }}_${{ github.run_attempt }}
-  E2E_SCHEMA_PREFIX: e2e_${{ github.run_id }}_${{ github.run_attempt }}_
 
 jobs:
   validate:
@@ -54,63 +51,10 @@ jobs:
     - name: Validate
       run: make validate
 
-  backend-tests:
-    runs-on: cube
-    needs: validate
-    name: "🐍 unit-backend--make-test-backend-ci--make-test-hatch-agent--make-test-install-runner"
-    env:
-      # Use dedicated CI Postgres (not Life Hub production)
-      DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
-      FERNET_SECRET: ${{ secrets.FERNET_SECRET }}
-      # cube has 24 cores; xdist -n auto can be too aggressive
-      PYTEST_XDIST_COMMIS: "8"
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
-
-    - name: Setup uv
-      uses: astral-sh/setup-uv@v7
-
-    - name: Setup Bun
-      uses: oven-sh/setup-bun@v2
-      with:
-        bun-version: '1.2.20'
-
-    - name: Install build tools
-      run: sudo apt-get update && sudo apt-get install -y make
-
-    - name: Build frontend (required by hatch)
-      run: cd apps/zerg/frontend-web && bun install && bun run build
-
-    - name: Install backend dependencies
-      run: cd apps/zerg/backend && uv sync
-
-    - name: Run database migrations
-      env:
-        # Alembic needs minimal settings to run - disable auth check
-        AUTH_DISABLED: "1"
-        JWT_SECRET: "ci-test-secret-jwt-1234567890"
-        INTERNAL_API_SECRET: "ci-test-internal-secret-1234"
-      run: cd apps/zerg/backend && uv run alembic upgrade head
-
-    - name: Run Backend Tests (external DB mode)
-      run: make test-backend-ci
-
-    - name: Run Hatch-Agent Tests
-      run: make test-hatch-agent
-
-    - name: Run Install-Runner Tests
-      run: make test-install-runner
-
   sqlite-tests:
     runs-on: ubuntu-latest
     # No dependency on validate - can run immediately on GitHub-hosted runners
-    name: "🗃️ sqlite-lite--make-test--oss-path"
+    name: "🗃️ sqlite-lite--make-test--hatch-agent--install-runner--oss-path"
 
     steps:
     - uses: actions/checkout@v4
@@ -136,6 +80,12 @@ jobs:
 
     - name: Run SQLite Lite Tests
       run: make test
+
+    - name: Run Hatch-Agent Tests
+      run: make test-hatch-agent
+
+    - name: Run Install-Runner Tests
+      run: make test-install-runner
 
   frontend-tests:
     runs-on: cube
@@ -172,7 +122,7 @@ jobs:
 
   e2e:
     runs-on: cube
-    needs: [backend-tests, frontend-tests]
+    needs: [sqlite-tests, frontend-tests]
     name: "🎭 e2e-core-a11y--make-test-e2e"
     env:
       # E2E tests use per-backend SQLite databases (no Postgres needed)
@@ -216,11 +166,6 @@ jobs:
 
     - name: Pre-install backend deps
       run: cd apps/zerg/backend && uv sync
-
-    - name: Verify database connectivity
-      run: |
-        echo "Testing CI database connectivity..."
-        cd apps/zerg/backend && uv run python -c "import os; os.environ['TESTING'] = '1'; from zerg.database import default_engine; from sqlalchemy import text; conn = default_engine.connect(); result = conn.execute(text('SELECT version()')); print(f'Connected to: {result.fetchone()[0][:50]}...'); conn.close()"
 
     - name: Run E2E Tests (core + a11y)
       run: make test-e2e

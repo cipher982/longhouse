@@ -14,9 +14,6 @@ env:
   # Force public PyPI for CI so setup-python's pip step doesn't fail.
   PIP_INDEX_URL: https://pypi.org/simple
   PIP_EXTRA_INDEX_URL: ""
-  # Per-run schema isolation (prevents concurrent run collisions)
-  CI_TEST_SCHEMA: zerg_ci_full_${{ github.run_id }}_${{ github.run_attempt }}
-  E2E_SCHEMA_PREFIX: e2e_full_${{ github.run_id }}_${{ github.run_attempt }}_
 
 jobs:
   extended:
@@ -63,11 +60,6 @@ jobs:
 
     - name: Pre-install backend deps
       run: cd apps/zerg/backend && uv sync
-
-    - name: Verify database connectivity
-      run: |
-        echo "Testing CI database connectivity..."
-        cd apps/zerg/backend && uv run python -c "import os; os.environ['TESTING'] = '1'; from zerg.database import default_engine; from sqlalchemy import text; conn = default_engine.connect(); result = conn.execute(text('SELECT version()')); print(f'Connected to: {result.fetchone()[0][:50]}...'); conn.close()"
 
     - name: Run Extended Suite
       run: make test-full
