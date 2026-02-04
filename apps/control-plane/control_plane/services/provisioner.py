@@ -75,6 +75,8 @@ def _env_for(subdomain: str, owner_email: str) -> dict[str, str]:
 def _volume_for(subdomain: str) -> tuple[str, dict[str, str]]:
     data_path = os.path.join(settings.instance_data_root, subdomain)
     os.makedirs(data_path, exist_ok=True)
+    # Set ownership to UID 1000 (longhouse user inside container)
+    os.chown(data_path, 1000, 1000)
     return data_path, {data_path: {"bind": "/data", "mode": "rw"}}
 
 
