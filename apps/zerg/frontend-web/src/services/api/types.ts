@@ -8,33 +8,6 @@ export type Run = Schemas["RunOut"];
 export type Thread = Schemas["Thread"];
 export type ThreadMessage = Schemas["ThreadMessageResponse"] & { created_at?: string };
 export type ThreadUpdatePayload = Schemas["ThreadUpdate"];
-export type Workflow = Schemas["Workflow"];
-export type WorkflowData = Schemas["WorkflowData-Output"];
-export type WorkflowDataInput = Schemas["WorkflowData-Input"];
-export type WorkflowNode = Schemas["WorkflowNode"];
-export type WorkflowEdge = Schemas["WorkflowEdge"];
-
-export interface WorkflowExecution {
-  id: number;
-  workflow_id: number;
-  phase: 'waiting' | 'running' | 'finished' | 'cancelled';
-  result?: unknown;
-  log?: string;
-  started_at?: string;
-  finished_at?: string;
-  triggered_by?: string;
-}
-
-export interface ExecutionStatus {
-  execution_id: number;
-  phase: string;
-  result?: unknown;
-}
-
-export interface ExecutionLogs {
-  logs: string;
-}
-
 export interface ContainerPolicy {
   enabled: boolean;
   default_image: string | null;

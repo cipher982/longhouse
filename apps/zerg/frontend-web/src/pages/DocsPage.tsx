@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { SwarmLogo } from "../components/SwarmLogo";
-import { ZapIcon, PuzzleIcon, SettingsIcon, MessageCircleIcon, SparklesIcon } from "../components/icons";
+import { ZapIcon, SettingsIcon, MessageCircleIcon, SparklesIcon } from "../components/icons";
 import { usePublicPageScroll } from "../hooks/usePublicPageScroll";
 import "../styles/info-pages.css";
 
@@ -14,7 +14,7 @@ export default function DocsPage() {
     document.title = "Documentation - Longhouse";
     const metaDescription = document.querySelector('meta[name="description"]');
     if (metaDescription) {
-      metaDescription.setAttribute('content', 'Learn how to use Longhouse. Quick start guides, visual workflow builder tutorials, and integration setup instructions.');
+      metaDescription.setAttribute('content', 'Learn how to use Longhouse. Quick start guides, timeline search tips, and integration setup instructions.');
     }
   }, []);
 
@@ -47,11 +47,6 @@ export default function DocsPage() {
             <h3>Quick Start</h3>
             <p>Get up and running</p>
           </a>
-          <a href="#canvas" className="docs-nav-card">
-            <PuzzleIcon width={32} height={32} className="docs-nav-icon" />
-            <h3>Visual Builder</h3>
-            <p>Learn the workflow canvas</p>
-          </a>
           <a href="#skills" className="docs-nav-card">
             <SparklesIcon width={32} height={32} className="docs-nav-icon" />
             <h3>Skills</h3>
@@ -82,29 +77,9 @@ export default function DocsPage() {
             From the Dashboard, click "New Fiche" and configure what you want it to do.
           </p>
 
-          <h3>4. Build a Workflow</h3>
+          <h3>4. Search the Timeline</h3>
           <p>
-            Open the Canvas to create visual workflows by connecting nodes.
-          </p>
-        </section>
-
-        <section id="canvas" className="docs-section">
-          <h2>Visual Builder</h2>
-          <p>
-            The Canvas lets you design AI workflows visually with a node-based interface.
-          </p>
-
-          <h3>Node Types</h3>
-          <ul>
-            <li><strong>Triggers</strong> - Start your workflow</li>
-            <li><strong>Actions</strong> - Perform tasks</li>
-            <li><strong>Conditions</strong> - Branch based on data</li>
-            <li><strong>AI Nodes</strong> - Use LLMs for decisions</li>
-          </ul>
-
-          <h3>Connecting Nodes</h3>
-          <p>
-            Drag from a node's output to another node's input to create connections.
+            Open the Timeline to search across your sessions and jump back in.
           </p>
         </section>
 
@@ -131,7 +106,7 @@ export default function DocsPage() {
           <ul>
             <li>Provide specialized tools (e.g., <code>web_search</code>)</li>
             <li>Add context to the agent's system prompt</li>
-            <li>Define custom behaviors and workflows</li>
+            <li>Define custom behaviors and automations</li>
           </ul>
 
           <h3>Creating Custom Skills</h3>

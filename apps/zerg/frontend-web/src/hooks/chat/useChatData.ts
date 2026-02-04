@@ -5,10 +5,8 @@ import {
   fetchFiche,
   fetchThreadMessages,
   fetchThreads,
-  fetchWorkflows,
   Thread,
   ThreadMessage,
-  Workflow,
 } from "../../services/api";
 
 interface UseChatDataParams {
@@ -56,13 +54,6 @@ export function useChatData({ ficheId, effectiveThreadId }: UseChatDataParams) {
     enabled: ficheId != null,
   });
 
-  // Fetch workflows for execution in chat
-  const workflowsQuery = useQuery<Workflow[]>({
-    queryKey: ["workflows"],
-    queryFn: fetchWorkflows,
-    staleTime: 60000, // Cache for 1 minute
-  });
-
   const messagesQuery = useQuery<ThreadMessage[]>({
     queryKey: ["thread-messages", effectiveThreadId],
     queryFn: () => {
@@ -102,7 +93,6 @@ export function useChatData({ ficheId, effectiveThreadId }: UseChatDataParams) {
     ficheQuery,
     chatThreadsQuery,
     automationThreadsQuery,
-    workflowsQuery,
     messagesQuery,
 
     // Derived data

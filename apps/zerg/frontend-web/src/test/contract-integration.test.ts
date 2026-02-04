@@ -141,31 +141,6 @@ describeContract('Backend API Contract Integration', () => {
     });
   });
 
-  describe('Workflow Execution Endpoints', () => {
-    it('should preserve execution_id in status response', async () => {
-      // This test would catch the workflow execution ID preservation issue
-      const result = await apiCall('/api/workflow-executions/1/status');
-
-      if (result.status === 404) {
-        console.log('⚠️  No test execution found (expected)');
-        return;
-      }
-
-      if (result.ok) {
-        expect(result.data).toBeTruthy();
-
-        // CRITICAL: response must include execution_id or frontend breaks
-        if (!result.data.execution_id && !result.data.hasOwnProperty('execution_id')) {
-          console.error('❌ CRITICAL: workflow execution status lacks execution_id');
-          console.error('   This causes frontend WebSocket updates to lose state');
-          expect(result.data).toHaveProperty('execution_id');
-        }
-
-        expect(result.data).toHaveProperty('phase');
-      }
-    });
-  });
-
   describe('Schema Drift Detection', () => {
     it('should detect when OpenAPI schema has empty response schemas', async () => {
       const fs = await import('fs');

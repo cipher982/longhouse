@@ -21,9 +21,6 @@
  * Dashboard (/dashboard):
  *   - data-ready: Set when !isLoading (API call complete, UI rendered)
  *
- * Canvas (/canvas):
- *   - data-ready: Set when isWorkflowFetched (workflow data loaded, canvas mounted)
- *
  * Chat (/chat):
  *   - data-ready: Set when chatReady flag is true (app mounted, EventBus ready)
  *   - data-screenshot-ready: Set when messages.length > 0 (content visible for screenshots)

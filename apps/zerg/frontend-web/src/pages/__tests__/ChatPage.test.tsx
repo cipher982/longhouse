@@ -18,8 +18,6 @@ const apiMocks = vi.hoisted(() => ({
   startThreadRun: vi.fn(),
   createThread: vi.fn(),
   updateThread: vi.fn(),
-  fetchWorkflows: vi.fn(),
-  startWorkflowExecution: vi.fn(),
   fetchContainerPolicy: vi.fn(),
   fetchAccountConnectors: vi.fn().mockResolvedValue([]),
 }));
@@ -40,8 +38,6 @@ const {
   startThreadRun: mockStartThreadRun,
   createThread: mockCreateThread,
   updateThread: mockUpdateThread,
-  fetchWorkflows: mockFetchWorkflows,
-  startWorkflowExecution: mockStartWorkflowExecution,
   fetchContainerPolicy: mockFetchContainerPolicy,
 } = apiMocks;
 
@@ -137,15 +133,6 @@ describe("ChatPage", () => {
       return Promise.resolve(threadState);
     });
 
-    // Mock workflow functions
-    mockFetchWorkflows.mockResolvedValue([
-      { id: 1, name: "Test Workflow", description: "A test workflow", canvas: { nodes: [], edges: [] } },
-    ]);
-    mockStartWorkflowExecution.mockResolvedValue({
-      execution_id: 123,
-      phase: "running",
-      result: null,
-    });
     mockFetchContainerPolicy.mockResolvedValue({
       enabled: true,
       default_image: "ubuntu:latest",

@@ -9,12 +9,10 @@
 @import url("./styles.css");
 
 /* System (formerly legacy) */
-@import url("./run_button.css") layer(system);
 @import url("./css/util.css") layer(system);
 @import url("./css/buttons.css") layer(system);
 @import url("./css/forms.css") layer(system);
 @import url("./css/fiche_shelf.css") layer(system);
-@import url("./css/canvas.css") layer(system);
 @import url("./css/dashboard.css") layer(system);
 @import url("./css/toast.css") layer(system);
 @import url("./css/status.css") layer(system);
@@ -24,7 +22,6 @@
 @import url("./css/mcp.css") layer(system);
 @import url("./css/particle.css") layer(system);
 @import url("./css/components/disclosure.css") layer(system);
-@import url("./css/components/execution-results.css") layer(system);
 
 /* Navigation */
 @import url("./css/nav.css") layer(navigation);
@@ -33,7 +30,6 @@
 @import url("./ui.css");
 @import url("./modal.css");
 @import url("./chat.css");
-@import url("./execution-log-stream.css");
 
 /* Oikos chat (now part of main app) */
 @import url("../oikos/styles/index.css") layer(components);

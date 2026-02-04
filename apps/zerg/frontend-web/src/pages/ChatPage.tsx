@@ -35,8 +35,6 @@ export default function ChatPage() {
   const [isSettingsDrawerOpen, setIsSettingsDrawerOpen] = useState(false);
 
   // Advanced features state
-  const [showWorkflowPanel, setShowWorkflowPanel] = useState(false);
-  const [selectedWorkflow, setSelectedWorkflow] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
 
   // Sync selectedThreadId from URL parameter - one-way only (URL → state)
@@ -47,7 +45,7 @@ export default function ChatPage() {
   }, [threadIdParam]);
 
   // Use chat data hook - strict URL state (no fallback)
-  const { fiche, chatThreads, automationThreads, messages, isLoading, hasError, workflowsQuery, chatThreadsQuery } = useChatData({
+  const { fiche, chatThreads, automationThreads, messages, isLoading, hasError, chatThreadsQuery } = useChatData({
     ficheId,
     effectiveThreadId: selectedThreadId,
   });
@@ -136,7 +134,7 @@ export default function ChatPage() {
   }, [ficheId, selectedThreadId, chatThreads.length, chatThreadsQuery.isLoading, queryClient, navigate]);
 
   // Use chat actions hook
-  const { sendMutation, executeWorkflowMutation, renameThreadMutation } = useChatActions({
+  const { sendMutation, renameThreadMutation } = useChatActions({
     ficheId,
     effectiveThreadId,
   });
@@ -243,16 +241,6 @@ export default function ChatPage() {
     URL.revokeObjectURL(url);
 
     toast.success("Chat history exported");
-  };
-
-  // Workflow execution handler
-  const handleExecuteWorkflow = () => {
-    if (!selectedWorkflow) {
-      toast.error("Please select a workflow");
-      return;
-    }
-    executeWorkflowMutation.mutate({ workflowId: selectedWorkflow });
-    setShowWorkflowPanel(false);
   };
 
   // Update document title with fiche name for better context
@@ -382,13 +370,6 @@ export default function ChatPage() {
             onSend={handleSend}
             effectiveThreadId={effectiveThreadId}
             isSending={sendMutation.isPending}
-            showWorkflowPanel={showWorkflowPanel}
-            onToggleWorkflowPanel={() => setShowWorkflowPanel(!showWorkflowPanel)}
-            workflowsQuery={workflowsQuery}
-            selectedWorkflow={selectedWorkflow}
-            onSelectWorkflow={setSelectedWorkflow}
-            onExecuteWorkflow={handleExecuteWorkflow}
-            isExecutingWorkflow={executeWorkflowMutation.isPending}
             messagesCount={messages.length}
             onExportChat={handleExportChat}
           />

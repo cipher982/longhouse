@@ -60,8 +60,8 @@ export default function PricingPage() {
               Full access while we're in beta.
             </p>
             <ul className="pricing-tier-features">
-              <li>Create fiches and workflows</li>
-              <li>Visual workflow builder</li>
+              <li>Timeline search across sessions</li>
+              <li>Resume runs from any device</li>
               <li>Available integrations</li>
               <li>Powered by OpenAI</li>
             </ul>

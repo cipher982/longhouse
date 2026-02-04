@@ -167,8 +167,6 @@ export function useWebSocket(
     // Check if this is a streaming message
     const streamingTypes = [
       'stream_start', 'stream_chunk', 'stream_end', 'assistant_id',
-      // Workflow execution events
-      'execution_started', 'node_state', 'workflow_progress', 'execution_finished'
     ];
     if (streamingTypes.includes(message.type)) {
       // Only log non-chunk messages to avoid noise (chunks logged with sampling in ChatPage)
