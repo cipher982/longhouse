@@ -31,3 +31,7 @@
 - [Docs vs code] VISION requires a PATH‑based Claude shim + verification in a fresh shell; current installer only adds a hook unless `~/.longhouse/install-claude-shim.sh` already exists and does not verify in a new shell.
 - [Docs] QA_PLAN says onboarding contract is still Docker‑centric; README contract now uses bun+uv + `longhouse serve` (SQLite), so this gap statement is stale.
 - [Docs] HN_LAUNCH claims session files in `~/.codex/sessions/*` etc; current shipper/parser only reads Claude Code (`~/.claude/projects/...`).
+- [Docs vs code] Password‑only auth isn’t actually possible in production: `_validate_required()` always requires `GOOGLE_CLIENT_ID/SECRET` when `AUTH_DISABLED=0`, even if `LONGHOUSE_PASSWORD[_HASH]` is set. README/LAUNCH-PLAN imply password-only is supported.
+- [Docs vs code] `session_continuity.py` defaults `LONGHOUSE_API_URL` to `http://localhost:47300`, conflicting with `longhouse serve` default 8080 and README.
+- [Docs vs UI] `longhouse auth` instructs users to open `/dashboard/settings/devices`, but there is no device‑token UI or route; frontend only has `/settings` and no device token page.
+- [Code inconsistency] `WorkspaceManager` defaults to `/var/oikos/workspaces` while settings default `OIKOS_WORKSPACE_PATH` to `~/.longhouse/workspaces`; local OSS may try to write to `/var/oikos` without permission.
