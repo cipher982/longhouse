@@ -40,6 +40,9 @@ jobs:
     - name: Install build tools
       run: sudo apt-get update && sudo apt-get install -y make
 
+    - name: Install backend dependencies
+      run: cd apps/zerg/backend && uv sync
+
     - name: Validate
       run: make validate
 
