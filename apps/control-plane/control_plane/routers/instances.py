@@ -165,6 +165,33 @@ def deprovision_instance(instance_id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
+@router.post("/{instance_id}/reprovision", response_model=InstanceOut, dependencies=[Depends(require_admin)])
+def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
+    """Reprovision a stopped/deprovisioned instance."""
+    row = db.query(Instance, User).join(User, Instance.user_id == User.id).filter(Instance.id == instance_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="instance not found")
+    inst, user = row
+
+    provisioner = Provisioner()
+    result = provisioner.provision_instance(inst.subdomain, owner_email=user.email)
+
+    inst.status = "provisioning"
+    inst.container_name = result.container_name
+    db.commit()
+    db.refresh(inst)
+
+    return InstanceOut(
+        id=inst.id,
+        email=user.email,
+        subdomain=inst.subdomain,
+        container_name=inst.container_name,
+        status=inst.status,
+        created_at=inst.created_at,
+        last_health_at=inst.last_health_at,
+    )
+
+
 @router.post("/{instance_id}/login-token", response_model=TokenOut, dependencies=[Depends(require_admin)])
 def issue_login_token(instance_id: int, db: Session = Depends(get_db)):
     inst = db.query(Instance).filter(Instance.id == instance_id).first()
