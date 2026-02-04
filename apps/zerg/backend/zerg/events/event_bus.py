@@ -39,13 +39,6 @@ class EventType(str, Enum):
     # User events (profile updates, etc.)
     USER_UPDATED = "user_updated"
 
-    # Workflow execution events (visual canvas)
-    EXECUTION_STARTED = "execution_started"
-    NODE_STATE_CHANGED = "node_state_changed"
-    WORKFLOW_PROGRESS = "workflow_progress"
-    EXECUTION_FINISHED = "execution_finished"
-    NODE_LOG = "node_log"
-
     # Ops dashboard events
     BUDGET_DENIED = "budget_denied"
 

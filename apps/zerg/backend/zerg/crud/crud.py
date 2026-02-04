@@ -10,7 +10,6 @@ For new code, prefer direct imports from the domain modules.
 """
 
 # Re-export model classes for backwards compatibility
-from zerg.models import CanvasLayout  # noqa: F401
 from zerg.models import CommisJob  # noqa: F401
 from zerg.models import Connector  # noqa: F401
 from zerg.models import Fiche  # noqa: F401
@@ -20,9 +19,6 @@ from zerg.models import Thread  # noqa: F401
 from zerg.models import ThreadMessage  # noqa: F401
 from zerg.models import Trigger  # noqa: F401
 from zerg.models import User  # noqa: F401
-from zerg.models import Workflow  # noqa: F401
-from zerg.models import WorkflowExecution  # noqa: F401
-from zerg.models import WorkflowTemplate  # noqa: F401
 
 # Re-export all CRUD functions from the package (single source of truth in __init__.py)
 from . import *  # noqa: F401, F403

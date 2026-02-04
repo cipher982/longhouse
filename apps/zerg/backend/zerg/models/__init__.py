@@ -13,7 +13,6 @@ from .fiche import FicheMessage
 
 # Re-export remaining models from models.py
 from .models import AccountConnectorCredential
-from .models import CanvasLayout
 from .models import CommisJob
 from .models import ConnectorCredential
 from .models import FicheMemoryKV
@@ -21,15 +20,11 @@ from .models import KnowledgeDocument
 from .models import KnowledgeSource
 from .models import MemoryEmbedding
 from .models import MemoryFile
-from .models import NodeExecutionState
 from .models import Runner
 from .models import RunnerEnrollToken
 from .models import RunnerJob
 from .models import UserSkill
 from .models import UserTask
-from .models import Workflow
-from .models import WorkflowExecution
-from .models import WorkflowTemplate
 from .run import Run
 from .run_event import RunEvent
 
@@ -67,13 +62,11 @@ __all__ = [
     # Remaining models (still in models.py)
     "AccountConnectorCredential",
     "FicheMemoryKV",
-    "CanvasLayout",
     "ConnectorCredential",
     "KnowledgeDocument",
     "KnowledgeSource",
     "MemoryEmbedding",
     "MemoryFile",
-    "NodeExecutionState",
     "Runner",
     "RunnerEnrollToken",
     "RunnerJob",
@@ -82,7 +75,4 @@ __all__ = [
     "UserTask",
     "UserSkill",
     "CommisJob",
-    "Workflow",
-    "WorkflowExecution",
-    "WorkflowTemplate",
 ]

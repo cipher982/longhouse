@@ -4,7 +4,6 @@ from sqlalchemy import JSON
 
 # SQLAlchemy core imports
 from sqlalchemy import Boolean
-from sqlalchemy import CheckConstraint
 from sqlalchemy import Column
 from sqlalchemy import Date
 from sqlalchemy import DateTime
@@ -25,7 +24,6 @@ from sqlalchemy.sql import func
 
 # Local helpers / enums
 from zerg.database import Base
-from zerg.models.enums import Phase
 from zerg.models.types import GUID
 from zerg.models_config import DEFAULT_COMMIS_MODEL_ID
 
@@ -44,187 +42,6 @@ from .user import User  # noqa: E402, F401
 # ---------------------------------------------------------------------------
 # Integrations – Connectors (single source of truth for provider creds)
 # ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# CanvasLayout – persist per-user canvas/UI state (Phase-B)
-# ---------------------------------------------------------------------------
-
-
-class CanvasLayout(Base):
-    """Persisted *canvas layout* for a user.
-
-    At the moment every user stores at most **one** layout (keyed by
-    ``workspace`` = NULL).  The table is future-proofed for multi-tenant
-    scenarios by including an optional *workspace* column.
-    """
-
-    __tablename__ = "canvas_layouts"
-
-    # Enforce *one layout per (user, workspace)*.  Workspace is currently
-    # always ``NULL`` but the uniqueness constraint makes future multi-tenant
-    # work easier and allows us to rely on an atomic *upsert* in the CRUD
-    # helper.
-    __table_args__ = (
-        # Ensure a user has at most *one* layout per workflow.
-        UniqueConstraint("user_id", "workflow_id", name="uix_user_workflow_layout"),
-    )
-
-    id = Column(Integer, primary_key=True)
-
-    # Foreign key to *users* – **NOT NULL**.  A NULL value would break the
-    # UNIQUE(user_id, workspace) constraint in SQLite because every row that
-    # contains a NULL is considered *distinct*.  That would allow unlimited
-    # duplicate layouts for anonymous users which is *never* what we want.
-    #
-    # For the dev-mode bypass (`AUTH_DISABLED`) the helper in
-    # `zerg.dependencies.auth` ensures a deterministic *dev@local* user row
-    # is always present so a proper `user_id` exists.
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-
-    # Reserved for a future multi-tenant feature where a user can switch
-    # between different *workspaces*.
-    workspace = Column(String, nullable=True)
-
-    # NEW – link layout to a specific **workflow**.  NULL = global / legacy.
-    workflow_id = Column(Integer, ForeignKey("workflows.id"), nullable=True)
-
-    # Raw JSON blobs coming from the WASM frontend.
-    nodes_json = Column(MutableDict.as_mutable(JSON), nullable=False)
-    viewport = Column(MutableDict.as_mutable(JSON), nullable=True)
-
-    # Track last update timestamp (creation time is implicit – equals first
-    # value of *updated_at*).
-    # Let the **database** rather than Python set and update the timestamp so
-    # values are consistent across multiple application instances and not
-    # subject to clock skew.
-    updated_at = Column(
-        DateTime,
-        server_default=func.now(),
-        onupdate=func.now(),
-        nullable=False,
-    )
-
-    # ORM relationship back to the owning user – one-to-one convenience.
-    user = relationship("User", backref="canvas_layout", uselist=False)
-
-    # Backref to owning workflow (optional)
-    workflow = relationship("Workflow", backref="canvas_layouts", uselist=False)
-
-
-# ------------------------------------------------------------
-# Triggers
-# ------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# Run – lightweight execution telemetry row
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# Workflow – visual workflow definition and persistence
-# ---------------------------------------------------------------------------
-
-
-class Workflow(Base):
-    __tablename__ = "workflows"
-
-    id = Column(Integer, primary_key=True, index=True)
-    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    name = Column(String, nullable=False)
-    description = Column(Text, nullable=True)
-    canvas = Column(MutableDict.as_mutable(JSON), nullable=False)
-    is_active = Column(Boolean, default=True, nullable=False)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-
-    # ORM relationship to User
-    owner = relationship("User", backref="workflows")
-
-
-class WorkflowTemplate(Base):
-    __tablename__ = "workflow_templates"
-
-    id = Column(Integer, primary_key=True, index=True)
-    created_by = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    name = Column(String, nullable=False)
-    description = Column(Text, nullable=True)
-    category = Column(String, nullable=False, index=True)
-    canvas = Column(MutableDict.as_mutable(JSON), nullable=False)
-    tags = Column(JSON, nullable=True, default=lambda: [])  # List of strings
-    preview_image_url = Column(String, nullable=True)
-    is_public = Column(Boolean, default=True, nullable=False)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-
-    # ORM relationships
-    creator = relationship("User", backref="created_templates")
-
-
-class WorkflowExecution(Base):
-    __tablename__ = "workflow_executions"
-
-    # Add constraint for Phase/Result consistency
-    __table_args__ = (CheckConstraint("(phase='finished') = (result IS NOT NULL)", name="phase_result_consistency_wf"),)
-
-    id = Column(Integer, primary_key=True, index=True)
-    workflow_id = Column(Integer, ForeignKey("workflows.id"), nullable=False, index=True)
-
-    # Phase/Result architecture
-    phase = Column(
-        String,
-        nullable=False,
-        default=Phase.WAITING.value,
-        server_default=Phase.WAITING.value,
-    )
-    result = Column(String, nullable=True, server_default=None)
-    attempt_no = Column(Integer, nullable=False, default=1, server_default="1")
-    failure_kind = Column(String, nullable=True)
-    error_message = Column(Text, nullable=True)
-    heartbeat_ts = Column(DateTime, nullable=True)
-
-    # Existing fields
-    triggered_by = Column(String, nullable=True, default="manual")  # manual, schedule, webhook, email, etc.
-    started_at = Column(DateTime, nullable=True)
-    finished_at = Column(DateTime, nullable=True)
-    log = Column(Text, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-
-    # ORM relationships
-    workflow = relationship("Workflow", backref="executions")
-    node_states = relationship("NodeExecutionState", back_populates="workflow_execution", cascade="all, delete-orphan")
-
-
-class NodeExecutionState(Base):
-    __tablename__ = "node_execution_states"
-
-    # Add constraint for Phase/Result consistency
-    __table_args__ = (CheckConstraint("(phase='finished') = (result IS NOT NULL)", name="phase_result_consistency_node"),)
-
-    id = Column(Integer, primary_key=True, index=True)
-    workflow_execution_id = Column(Integer, ForeignKey("workflow_executions.id"), nullable=False, index=True)
-    node_id = Column(String, nullable=False)
-
-    # Phase/Result architecture
-    phase = Column(
-        String,
-        nullable=False,
-        default=Phase.WAITING.value,
-        server_default=Phase.WAITING.value,
-    )
-    result = Column(String, nullable=True, server_default=None)
-    attempt_no = Column(Integer, nullable=False, default=1, server_default="1")
-    failure_kind = Column(String, nullable=True)
-    error_message = Column(Text, nullable=True)
-    heartbeat_ts = Column(DateTime, nullable=True)
-
-    # Existing fields
-    output = Column(MutableDict.as_mutable(JSON), nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-
-    # ORM relationship
-    workflow_execution = relationship("WorkflowExecution", back_populates="node_states")
-
 
 # ---------------------------------------------------------------------------
 # ConnectorCredential – encrypted credentials for built-in connector tools

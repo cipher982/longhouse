@@ -145,11 +145,7 @@ if _eval_mode_early != "live":
     sys.modules["openai"] = MagicMock()
     sys.modules["openai.OpenAI"] = mock_openai
 
-# Import langgraph for patching
 import langchain_openai
-import langgraph
-import langgraph.graph
-import langgraph.graph.message
 
 from langchain_core.messages import AIMessage
 
@@ -597,17 +593,6 @@ def other_user(db_session):
     if user is None:
         user = _crud.create_user(db_session, email="other@local", provider=None, role="USER")
     return user
-
-
-@pytest.fixture
-def mock_langgraph_state_graph():
-    """Mock the StateGraph class from LangGraph directly."""
-    with patch("langgraph.graph.StateGraph") as mock_state_graph:
-        mock_graph = MagicMock()
-        mock_state_graph.return_value = mock_graph
-        compiled_graph = MagicMock()
-        mock_graph.compile.return_value = compiled_graph
-        yield mock_state_graph
 
 
 @pytest.fixture

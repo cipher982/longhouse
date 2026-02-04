@@ -5,9 +5,6 @@ from collections import defaultdict
 from typing import Dict
 from typing import Optional
 
-from fastapi import HTTPException
-from fastapi import Request
-
 
 class SimpleRateLimiter:
     """In-memory rate limiter with sliding window."""
@@ -46,14 +43,3 @@ class SimpleRateLimiter:
 
 # Global rate limiter instance
 rate_limiter = SimpleRateLimiter()
-
-
-def check_workflow_creation_rate_limit(request: Request, user_id: int):
-    """Rate limit workflow creation: 100 per minute per user."""
-    if not rate_limiter.is_allowed(user_id, limit=100, window_seconds=60):
-        retry_after = rate_limiter.get_retry_after(user_id, window_seconds=60)
-        raise HTTPException(
-            status_code=429,
-            detail="Too many workflow creation requests. Limit: 100 per minute.",
-            headers={"Retry-After": str(retry_after)} if retry_after else {},
-        )
