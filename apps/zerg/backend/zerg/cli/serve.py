@@ -86,7 +86,7 @@ def _apply_lite_mode_defaults() -> None:
     - SQLite database in ~/.longhouse/longhouse.db
     - Auth disabled (single-user local install)
     - Single-tenant mode
-    - Auto-generated FERNET_SECRET (persisted)
+    - Auto-generated secrets (FERNET_SECRET, TRIGGER_SIGNING_SECRET)
     """
     # Database URL
     if not os.environ.get("DATABASE_URL"):
@@ -104,6 +104,10 @@ def _apply_lite_mode_defaults() -> None:
     # FERNET_SECRET (required by crypto module)
     if not os.environ.get("FERNET_SECRET"):
         os.environ["FERNET_SECRET"] = _get_or_create_fernet_secret()
+
+    # TRIGGER_SIGNING_SECRET (required for webhook triggers)
+    if not os.environ.get("TRIGGER_SIGNING_SECRET"):
+        os.environ["TRIGGER_SIGNING_SECRET"] = secrets.token_hex(32)
 
 
 def _get_pid_file() -> Path:
