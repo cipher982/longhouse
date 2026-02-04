@@ -7,7 +7,6 @@ const BASE_QUERY = 'clock=frozen&effects=off&seed=ui-baseline';
 const MOBILE_PAGES = [
   { name: 'dashboard', path: `/dashboard?${BASE_QUERY}`, ready: 'page', navOpen: true },
   { name: 'chat', path: `/chat?${BASE_QUERY}`, ready: 'page' },
-  { name: 'canvas', path: `/canvas?${BASE_QUERY}`, ready: 'page' },
   { name: 'settings', path: `/settings?${BASE_QUERY}`, ready: 'settings' },
   { name: 'profile', path: `/profile?${BASE_QUERY}`, ready: 'page' },
   { name: 'runners', path: `/runners?${BASE_QUERY}`, ready: 'page' },

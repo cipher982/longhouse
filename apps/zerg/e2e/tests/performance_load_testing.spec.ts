@@ -12,9 +12,8 @@ test.skip();
  * 3. Database performance with large datasets
  * 4. Memory usage and leak detection
  * 5. Concurrent user simulation
- * 6. Large workflow handling
- * 7. WebSocket performance under load
- * 8. Resource utilization monitoring
+ * 6. WebSocket performance under load
+ * 7. Resource utilization monitoring
  */
 
 test.describe('Performance and Load Testing', () => {
@@ -46,7 +45,7 @@ test.describe('Performance and Load Testing', () => {
     console.log('📊 Test 2: Navigation performance...');
     const navigationTests = [
       { name: 'Dashboard', testId: 'global-dashboard-tab' },
-      { name: 'Canvas', testId: 'global-canvas-tab' }
+      { name: 'Chat', testId: 'global-chat-tab' }
     ];
 
     for (const nav of navigationTests) {
@@ -104,7 +103,6 @@ test.describe('Performance and Load Testing', () => {
 
     const apiTests = [
       { name: 'GET /api/fiches', method: 'get', endpoint: '/api/fiches' },
-      { name: 'GET /api/workflows', method: 'get', endpoint: '/api/workflows' },
       { name: 'GET /api/users/me', method: 'get', endpoint: '/api/users/me' }
     ];
 
@@ -292,7 +290,7 @@ test.describe('Performance and Load Testing', () => {
     for (let i = 0; i < 10; i++) {
       await page.locator('.header-nav').click();
       await page.waitForTimeout(100);
-      await page.getByTestId('global-canvas-tab').click();
+      await page.getByTestId('global-chat-tab').click();
       await page.waitForTimeout(100);
     }
 
@@ -412,7 +410,7 @@ test.describe('Performance and Load Testing', () => {
         console.log(`📊 User ${index} fiche creation:`, success ? 'success' : 'failed');
 
         // Navigate between tabs
-        await page.getByTestId('global-canvas-tab').click();
+        await page.getByTestId('global-chat-tab').click();
         await page.waitForTimeout(300);
         await page.locator('.header-nav').click();
         await page.waitForTimeout(300);
@@ -444,130 +442,5 @@ test.describe('Performance and Load Testing', () => {
     console.log('✅ Concurrent user simulation completed');
   });
 
-  test('Large workflow performance', async ({ page, request }) => {
-    console.log('🚀 Starting large workflow performance test...');
 
-    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
-
-    // Test 1: Create fiches for large workflow
-    console.log('📊 Test 1: Creating fiches for large workflow...');
-    const ficheCount = 10;
-    const fiches = [];
-
-    for (let i = 0; i < ficheCount; i++) {
-      const ficheResponse = await request.post('/api/fiches', {
-        headers: {
-          'X-Test-Commis': commisId,
-          'Content-Type': 'application/json',
-        },
-        data: {
-          name: `Large Workflow Fiche ${i} ${Date.now()}`,
-          system_instructions: `Fiche ${i} for large workflow testing`,
-          task_instructions: `Handle task ${i} in large workflow`,
-          model: 'gpt-mock',
-        }
-      });
-
-      if (ficheResponse.ok()) {
-        const fiche = await ficheResponse.json();
-        fiches.push(fiche);
-        console.log(`📊 Created fiche ${i}:`, fiche.id);
-      }
-    }
-
-    console.log('📊 Total fiches for large workflow:', fiches.length);
-
-    // Test 2: Create large workflow
-    console.log('📊 Test 2: Creating large workflow...');
-
-    if (fiches.length >= 5) {
-      const largeWorkflowStart = Date.now();
-
-      // Create a complex workflow with many nodes and connections
-      const nodes = [
-        { id: 'trigger-1', type: 'trigger', position: { x: 50, y: 300 } },
-        ...fiches.map((fiche, index) => ({
-          id: `fiche-${index}`,
-          type: 'fiche',
-          fiche_id: fiche.id,
-          position: { x: 200 + (index % 5) * 150, y: 100 + Math.floor(index / 5) * 150 }
-        })),
-        // Add multiple tool nodes
-        ...Array.from({ length: 5 }, (_, i) => ({
-          id: `tool-${i}`,
-          type: 'tool',
-          tool_name: 'http_request',
-          position: { x: 800, y: 100 + i * 100 },
-          config: { url: `https://httpbin.org/get?test=${i}`, method: 'GET' }
-        }))
-      ];
-
-      // Create complex connection topology
-      const edges = [
-        // Connect trigger to first few fiches
-        { id: 'edge-trigger-0', source: 'trigger-1', target: 'fiche-0', type: 'default' },
-        { id: 'edge-trigger-1', source: 'trigger-1', target: 'fiche-1', type: 'default' },
-        // Sequential connections between fiches
-        ...fiches.slice(0, -1).map((_, index) => ({
-          id: `edge-fiche-${index}-${index + 1}`,
-          source: `fiche-${index}`,
-          target: `fiche-${index + 1}`,
-          type: 'default'
-        })),
-        // Parallel connections to tools
-        ...fiches.slice(0, 5).map((_, index) => ({
-          id: `edge-fiche-${index}-tool-${index}`,
-          source: `fiche-${index}`,
-          target: `tool-${index}`,
-          type: 'default'
-        }))
-      ];
-
-      const largeWorkflow = {
-        name: `Large Workflow Performance Test ${Date.now()}`,
-        description: 'Performance test workflow with many nodes and connections',
-        canvas_data: { nodes, edges }
-      };
-
-      const workflowResponse = await request.post('/api/workflows', {
-        headers: {
-          'X-Test-Commis': commisId,
-          'Content-Type': 'application/json',
-        },
-        data: largeWorkflow
-      });
-
-      const workflowCreationTime = Date.now() - largeWorkflowStart;
-
-      console.log('📊 Large workflow creation status:', workflowResponse.status());
-      console.log('📊 Large workflow creation time:', workflowCreationTime, 'ms');
-      console.log('📊 Workflow nodes:', nodes.length);
-      console.log('📊 Workflow connections:', edges.length);
-
-      if (workflowResponse.ok()) {
-        const workflow = await workflowResponse.json();
-        console.log('📊 Large workflow created with ID:', workflow.id);
-
-        // Test retrieval performance
-        const retrievalStart = Date.now();
-        const retrievalResponse = await request.get(`/api/workflows/${workflow.id}`, {
-          headers: { 'X-Test-Commis': commisId }
-        });
-        const retrievalTime = Date.now() - retrievalStart;
-
-        console.log('📊 Large workflow retrieval time:', retrievalTime, 'ms');
-
-        if (workflowCreationTime < 5000 && retrievalTime < 2000) {
-          console.log('✅ Large workflow performance is acceptable');
-        } else {
-          console.log('⚠️  Large workflow operations are slow');
-        }
-      } else {
-        const error = await workflowResponse.text();
-        console.log('❌ Large workflow creation failed:', error.substring(0, 200));
-      }
-    }
-
-    console.log('✅ Large workflow performance test completed');
-  });
 });

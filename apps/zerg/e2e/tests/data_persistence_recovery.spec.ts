@@ -244,51 +244,6 @@ test.describe('Data Persistence and Recovery', () => {
     const fiche = await ficheResponse.json();
     console.log('📊 Created fiche for consistency test:', fiche.id);
 
-    // Try to create a workflow that references this fiche
-    try {
-      const workflowResponse = await request.post('/api/workflows', {
-        headers: {
-          'X-Test-Commis': commisId,
-          'Content-Type': 'application/json',
-        },
-        data: {
-          name: `Consistency Test Workflow ${Date.now()}`,
-          description: 'Workflow for testing data consistency',
-          canvas_data: {
-            nodes: [{
-              id: 'fiche-node',
-              type: 'fiche',
-              fiche_id: fiche.id,
-              position: { x: 100, y: 100 }
-            }],
-            edges: []
-          }
-        }
-      });
-
-      if (workflowResponse.ok()) {
-        const workflow = await workflowResponse.json();
-        console.log('📊 Created workflow with fiche reference:', workflow.id);
-
-        // Verify the relationship is maintained
-        const workflowCheck = await request.get(`/api/workflows/${workflow.id}`, {
-          headers: { 'X-Test-Commis': commisId }
-        });
-
-        if (workflowCheck.ok()) {
-          const workflowData = await workflowCheck.json();
-          const hasFicheReference = JSON.stringify(workflowData.canvas_data).includes(fiche.id.toString());
-          console.log('📊 Fiche reference maintained in workflow:', hasFicheReference);
-
-          if (hasFicheReference) {
-            console.log('✅ Data relationships maintained');
-          }
-        }
-      }
-    } catch (error) {
-      console.log('📊 Data relationship test error:', error.message);
-    }
-
     // Test 2: Verify data integrity after operations
     console.log('📊 Test 2: Testing data integrity...');
 

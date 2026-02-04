@@ -97,10 +97,10 @@ mkdir -p "$REPORTS_DIR"
 get_test_files() {
     case $1 in
         basic)
-            echo "fiche_creation_full.spec.ts comprehensive_debug.spec.ts canvas_complete_workflow.spec.ts canvas_api_contract.spec.ts"
+            echo "fiche_creation_full.spec.ts comprehensive_debug.spec.ts"
             ;;
         full)
-            echo "fiche_creation_full.spec.ts comprehensive_debug.spec.ts canvas_complete_workflow.spec.ts canvas_api_contract.spec.ts workflow_execution_http.spec.ts tool_palette_node_connections.spec.ts realtime_websocket_monitoring.spec.ts error_handling_edge_cases.spec.ts data_persistence_recovery.spec.ts performance_load_testing.spec.ts accessibility_ui_ux.spec.ts multi_user_concurrency.spec.ts"
+            echo "fiche_creation_full.spec.ts comprehensive_debug.spec.ts realtime_websocket_monitoring.spec.ts error_handling_edge_cases.spec.ts data_persistence_recovery.spec.ts performance_load_testing.spec.ts accessibility_ui_ux.spec.ts multi_user_concurrency.spec.ts"
             ;;
         *)
             echo ""

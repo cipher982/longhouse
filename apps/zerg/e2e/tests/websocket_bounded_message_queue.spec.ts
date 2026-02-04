@@ -390,7 +390,7 @@ test.describe('WebSocket Bounded Message Queue', () => {
     await page.waitForTimeout(2000);
 
     // Switch views to generate subscribe/unsubscribe
-    await page.getByTestId('global-canvas-tab').click();
+    await page.getByTestId('global-chat-tab').click();
     await page.waitForTimeout(500);
     await page.locator('.header-nav').click();
     await page.waitForTimeout(2000);

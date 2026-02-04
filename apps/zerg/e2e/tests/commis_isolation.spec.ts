@@ -119,45 +119,6 @@ test.describe('Commis Database Isolation', () => {
     console.log('✅ Thread isolation verified via commis-specific database');
   });
 
-  // Skip: This test uses manual X-Test-Commis headers that conflict with fixture headers
-  test.skip('Commis isolation for workflows', async ({ request }) => {
-    console.log('🎯 Testing: Commis isolation for workflows');
-
-    // Commis 0: Create workflow
-    const commis0WorkflowResponse = await request.post('/api/workflows', {
-      headers: {
-        'X-Test-Commis': '0',
-        'Content-Type': 'application/json',
-      },
-      data: {
-        name: 'Commis 0 Workflow',
-        canvas: { nodes: [], edges: [] },
-      }
-    });
-
-    // CRITICAL: If workflow creation fails, test cannot validate isolation
-    if (commis0WorkflowResponse.status() !== 201) {
-      console.log(`❌ Workflow creation failed with status ${commis0WorkflowResponse.status()}`);
-      test.skip(true, 'Workflow creation requires additional setup - cannot test isolation');
-      return;
-    }
-
-    const commis0Workflow = await commis0WorkflowResponse.json();
-    console.log(`✅ Commis 0 created workflow ID: ${commis0Workflow.id}`);
-
-    // Commis 1 should not see it
-    const commis1WorkflowsResponse = await request.get('/api/workflows', {
-      headers: { 'X-Test-Commis': '1' }
-    });
-    expect(commis1WorkflowsResponse.status()).toBe(200);
-    const commis1Workflows = await commis1WorkflowsResponse.json();
-
-    // Commis 1 should have empty list (or at least not contain commis 0's workflow)
-    const hasCommis0Workflow = commis1Workflows.some((w: any) => w.id === commis0Workflow.id);
-    expect(hasCommis0Workflow).toBe(false);
-    console.log('✅ Commis 1 cannot see commis 0 workflows');
-  });
-
   test('WebSocket URLs include commis parameter', async ({ page, request }) => {
     console.log('🎯 Testing: WebSocket commis parameter injection');
 

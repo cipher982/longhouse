@@ -324,9 +324,9 @@ test.describe('Error Handling and Edge Cases', () => {
     await page.waitForLoadState('networkidle');
 
     // Try various UI interactions that might cause errors - wait for elements
-    const canvasTab = page.getByTestId('global-canvas-tab');
-    await expect(canvasTab).toBeVisible({ timeout: 5000 });
-    await canvasTab.click();
+    const chatTab = page.getByTestId('global-chat-tab');
+    await expect(chatTab).toBeVisible({ timeout: 5000 });
+    await chatTab.click();
 
     const headerNav = page.locator('.header-nav');
     if (await headerNav.count() > 0) {

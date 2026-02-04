@@ -6,9 +6,8 @@ import { test, expect } from './fixtures';
  * This test validates WebSocket-based real-time monitoring:
  * 1. Connect to WebSocket endpoints
  * 2. Monitor fiche state updates
- * 3. Monitor workflow execution events
- * 4. Validate event envelope structure
- * 5. Test real-time UI updates
+ * 3. Validate event envelope structure
+ * 4. Test real-time UI updates
  */
 
 test.describe('Real-time WebSocket Monitoring', () => {
@@ -39,7 +38,7 @@ test.describe('Real-time WebSocket Monitoring', () => {
           console.log('📨 WebSocket message received:', message.event_type || message.type);
 
           // Log detailed message for interesting events
-          if (message.event_type === 'fiche_state' || message.event_type === 'execution_update') {
+          if (message.event_type === 'fiche_state') {
             console.log('📊 Event details:', JSON.stringify(message).substring(0, 200));
           }
         } catch (error) {
@@ -83,7 +82,7 @@ test.describe('Real-time WebSocket Monitoring', () => {
     console.log('📊 Step 4: Navigating to trigger more WebSocket events...');
     await page.locator('.header-nav').click();
     await page.waitForTimeout(1000);
-    await page.getByTestId('global-canvas-tab').click();
+    await page.getByTestId('global-chat-tab').click();
     await page.waitForTimeout(1000);
 
     // Step 5: Analyze received WebSocket messages
@@ -98,11 +97,8 @@ test.describe('Real-time WebSocket Monitoring', () => {
       // Check for specific event types
       const ficheEvents = wsMessages.filter(msg => msg.event_type === 'fiche_state');
       const userEvents = wsMessages.filter(msg => msg.event_type === 'user_update');
-      const executionEvents = wsMessages.filter(msg => msg.event_type === 'execution_update');
-
       console.log('📊 Fiche state events:', ficheEvents.length);
       console.log('📊 User update events:', userEvents.length);
-      console.log('📊 Execution events:', executionEvents.length);
 
       // Validate event envelope structure
       const firstMessage = wsMessages[0];

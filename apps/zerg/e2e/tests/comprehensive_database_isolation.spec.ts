@@ -91,27 +91,6 @@ test.describe('Comprehensive Database Isolation', () => {
       console.log('❌ Fiche API error:', error);
     }
 
-    // Test workflow endpoint
-    try {
-      const workflowResponse = await request.get('/api/workflows', {
-        headers: {
-          'X-Test-Commis': commisId,
-        }
-      });
-      console.log('📊 Workflow API status:', workflowResponse.status());
-
-      if (workflowResponse.ok()) {
-        const workflows = await workflowResponse.json();
-        console.log('📊 Workflow count:', Array.isArray(workflows) ? workflows.length : 'not array');
-        console.log('✅ Workflow API working');
-      } else {
-        const errorText = await workflowResponse.text();
-        console.log('❌ Workflow API failed:', errorText.substring(0, 200));
-      }
-    } catch (error) {
-      console.log('❌ Workflow API error:', error);
-    }
-
     // Test fiche creation
     console.log('🔍 Testing fiche creation...');
     try {

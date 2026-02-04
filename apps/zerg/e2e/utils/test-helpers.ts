@@ -21,16 +21,6 @@ export interface TestFiche {
   model: string;
 }
 
-export interface TestWorkflow {
-  id: number;
-  name: string;
-  description: string;
-  canvas_data: {
-    nodes: any[];
-    edges: any[];
-  };
-}
-
 export interface PerformanceMetrics {
   loadTime: number;
   navigationTime: number;
@@ -75,62 +65,6 @@ export class TestDataGenerator {
     return Array.from({ length: count }, (_, i) =>
       this.generateFiche(prefix, i + 1)
     );
-  }
-
-  /**
-   * Generate test workflow data
-   */
-  static generateWorkflow(
-    fiches: TestFiche[],
-    name = 'Test Workflow'
-  ): Omit<TestWorkflow, 'id'> {
-    const suffix = this.counter++;
-    const nodes = [
-      {
-        id: 'trigger-1',
-        type: 'trigger',
-        position: { x: 50, y: 200 },
-        config: { trigger: { type: 'manual', config: { enabled: true, params: {}, filters: [] } } }
-      },
-      ...fiches.slice(0, 3).map((fiche, index) => ({
-        id: `fiche-${index + 1}`,
-        type: 'fiche',
-        fiche_id: fiche.id,
-        position: { x: 200 + index * 150, y: 150 + index * 25 }
-      })),
-      {
-        id: 'http-tool-1',
-        type: 'tool',
-        tool_name: 'http_request',
-        position: { x: 500, y: 200 },
-        config: {
-          url: `https://httpbin.org/get?test=${suffix}`,
-          method: 'GET'
-        }
-      }
-    ];
-
-    const edges = [
-      { id: 'edge-1', source: 'trigger-1', target: 'fiche-1', type: 'default' },
-      ...fiches.slice(0, 2).map((_, index) => ({
-        id: `edge-${index + 2}`,
-        source: `fiche-${index + 1}`,
-        target: `fiche-${index + 2}`,
-        type: 'default'
-      })),
-      {
-        id: 'edge-final',
-        source: fiches.length > 0 ? `fiche-${Math.min(fiches.length, 3)}` : 'trigger-1',
-        target: 'http-tool-1',
-        type: 'default'
-      }
-    ];
-
-    return {
-      name: `${name} ${suffix}`,
-      description: `Generated test workflow ${suffix} with ${fiches.length} fiches`,
-      canvas_data: { nodes, edges }
-    };
   }
 
   /**
@@ -215,101 +149,6 @@ export class APITestHelper {
       })),
       totalTime
     };
-  }
-
-  /**
-   * Create workflow with validation
-   */
-  async createWorkflow(workflowData: Omit<TestWorkflow, 'id'>): Promise<{
-    success: boolean;
-    workflow?: TestWorkflow;
-    error?: string
-  }> {
-    try {
-      const response = await this.request.post('http://localhost:8001/api/workflows', {
-        headers: {
-          'X-Test-Commis': this.commisId,
-          'Content-Type': 'application/json',
-        },
-        data: workflowData
-      });
-
-      if (response.ok()) {
-        const workflow = await response.json();
-        return { success: true, workflow };
-      } else {
-        const error = await response.text();
-        return { success: false, error: `Status ${response.status()}: ${error}` };
-      }
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  }
-
-  /**
-   * Execute workflow and monitor status
-   */
-  async executeWorkflowAndWait(
-    workflowId: number,
-    inputs: any = {},
-    timeoutMs = 30000
-  ): Promise<{
-    success: boolean;
-    execution?: any;
-    finalStatus?: string;
-    error?: string;
-  }> {
-    try {
-      // Start execution
-      const executeResponse = await this.request.post(`http://localhost:8001/api/workflows/${workflowId}/execute`, {
-        headers: {
-          'X-Test-Commis': this.commisId,
-          'Content-Type': 'application/json',
-        },
-        data: { inputs }
-      });
-
-      if (!executeResponse.ok()) {
-        const error = await executeResponse.text();
-        return { success: false, error: `Execution failed: ${error}` };
-      }
-
-      const execution = await executeResponse.json();
-
-      // Monitor status
-      const startTime = Date.now();
-      let attempts = 0;
-      const maxAttempts = Math.floor(timeoutMs / 1000);
-
-      while (attempts < maxAttempts) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
-        const statusResponse = await this.request.get(`http://localhost:8001/api/workflow-executions/${execution.id}`, {
-          headers: { 'X-Test-Commis': this.commisId }
-        });
-
-        if (statusResponse.ok()) {
-          const status = await statusResponse.json();
-
-          if (['completed', 'failed', 'cancelled'].includes(status.status)) {
-            return {
-              success: status.status === 'completed',
-              execution,
-              finalStatus: status.status
-            };
-          }
-        }
-
-        attempts++;
-        if (Date.now() - startTime > timeoutMs) {
-          break;
-        }
-      }
-
-      return { success: false, error: 'Execution timeout' };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
   }
 
   /**
@@ -734,17 +573,13 @@ export class DatabaseTestHelper {
    */
   async validateDatabaseConsistency(): Promise<{
     ficheCount: number;
-    workflowCount: number;
     orphanedReferences: number;
     consistent: boolean;
   }> {
     const fiches = await this.apiHelper.getFiches();
 
-    // For workflows, we'd need to implement similar logic
-    // This is a placeholder for comprehensive database validation
     return {
       ficheCount: fiches.length,
-      workflowCount: 0, // Would require workflow endpoint
       orphanedReferences: 0,
       consistent: true
     };
@@ -755,12 +590,11 @@ export class DatabaseTestHelper {
    */
   async seedTestData(scenario: 'minimal' | 'standard' | 'complex' = 'standard'): Promise<{
     fiches: TestFiche[];
-    workflows: TestWorkflow[];
   }> {
     const configs = {
-      minimal: { fiches: 2, workflows: 1 },
-      standard: { fiches: 5, workflows: 3 },
-      complex: { fiches: 10, workflows: 5 }
+      minimal: { fiches: 2 },
+      standard: { fiches: 5 },
+      complex: { fiches: 10 }
     };
 
     const config = configs[scenario];
@@ -769,23 +603,8 @@ export class DatabaseTestHelper {
     // Create fiches
     const ficheResults = await this.apiHelper.createFichesBatch(ficheData);
 
-    // Create workflows using the created fiches
-    const workflows: TestWorkflow[] = [];
-    for (let i = 0; i < config.workflows && ficheResults.successful.length > 0; i++) {
-      const workflowData = TestDataGenerator.generateWorkflow(
-        ficheResults.successful.slice(0, Math.min(3, ficheResults.successful.length)),
-        `Seed Workflow ${scenario} ${i + 1}`
-      );
-
-      const workflowResult = await this.apiHelper.createWorkflow(workflowData);
-      if (workflowResult.success && workflowResult.workflow) {
-        workflows.push(workflowResult.workflow);
-      }
-    }
-
     return {
-      fiches: ficheResults.successful,
-      workflows
+      fiches: ficheResults.successful
     };
   }
 }

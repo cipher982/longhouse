@@ -3,7 +3,7 @@ import { test, expect } from './fixtures';
 /**
  * AGENT CREATION FULL TEST
  *
- * This test validates the complete fiche creation workflow:
+ * This test validates the complete fiche creation flow:
  * 1. Database isolation is working (each commis has its own schema)
  * 2. Fiche creation via API works correctly
  * 3. Fiche appears in the UI after creation

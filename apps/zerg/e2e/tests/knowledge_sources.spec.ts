@@ -120,7 +120,7 @@ test.describe('Knowledge Sources - Core', () => {
 });
 
 // ============================================================================
-// ADD SOURCE TESTS - Modal workflow
+// ADD SOURCE TESTS - Modal flow
 // ============================================================================
 
 test.describe('Knowledge Sources - Add Source', () => {
