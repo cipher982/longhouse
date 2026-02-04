@@ -60,3 +60,4 @@
 - [Docs vs reality] Landing “How It Works” copy in `frontend-web/src/components/landing/HowItWorksSection.tsx` claims: (a) sessions auto‑sync from Claude/Codex/Cursor, (b) FTS5‑powered search, (c) resume any conversation from any device — all currently false.
 - [Docs vs reality] Landing hero subhead says “Your AI agents run in the cloud. Resume from any device.” (`HeroSection.tsx`), but OSS is local‑first and cross‑device resume isn’t implemented.
 - [Docs vs reality] Public Docs page (`frontend-web/src/pages/DocsPage.tsx`) is still the old “fiche/canvas/dashboard” workflow with Google sign‑in, not the timeline‑first OSS product.
+- [Docs vs reality] Public info pages (`PricingPage.tsx`, `SecurityPage.tsx`, `PrivacyPage.tsx`) still describe fiches/workflows, Google‑only OAuth auth, and dashboard account management, which don’t match the current timeline‑first OSS flow.
