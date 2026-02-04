@@ -44,6 +44,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 - [x] Support `LONGHOUSE_PASSWORD_HASH` (bcrypt/argon2)
 - [x] UI fallback if `/auth/methods` fails
 - [x] Add `--demo-fresh` flag to rebuild demo DB
+- [ ] Remove workflow/canvas feature (backend + frontend + deps + tests)
 
 ---
 
@@ -103,9 +104,9 @@ See this file for the current launch analysis.
 **Reality check:** This is DNS routing to ONE shared deployment, not isolated instances. The "david" subdomain is cosmetic. See Architecture Reality Check above.
 
 **Remaining issues:**
-- [ ] Google OAuth needs both `longhouse.ai` AND `david.longhouse.ai` in authorized origins (add to Google Console)
-- [ ] Cross-subdomain OAuth code exists (`/auth/accept-token`) but targets non-existent per-user architecture
+- [ ] Cross-subdomain OAuth code exists (`/auth/accept-token`) but targets non-existent per-user architecture — needs control plane to work as designed
 - [ ] Marketing mode defaults were removed (broke auth) — needs cleaner hostname detection
+- [ ] For now, use password auth on subdomains; Google OAuth only makes sense at control plane (longhouse.ai)
 
 ---
 
@@ -126,7 +127,6 @@ Current copy is a mix of both stories. Align to OSS-first primary.
 4. No sticky header — can't navigate or sign in without scrolling up
 5. Current story (AI That Knows You, integrations) is OLD — new story is Timeline + Search + Resume
 6. **NEW:** Several CTA buttons don't work or lead to broken flows
-7. **NEW:** Google OAuth only works on domains registered in Console (blocking david.longhouse.ai)
 
 ### Phase 1: Header + Navigation (2 hours)
 
@@ -268,17 +268,15 @@ Update screenshots to show Timeline, not old dashboard.
 
 ### 🚨 Critical Blockers (Fix First)
 
-- [ ] **OSS Auth** — Password login for self-hosters (see dedicated section above)
-- [ ] **Google Console** — Add `david.longhouse.ai` to authorized origins (immediate workaround)
+- [x] **OSS Auth** — Password login for self-hosters (see dedicated section above)
+- [ ] **Password-only config bug** — `_validate_required()` still requires GOOGLE_CLIENT_ID even when LONGHOUSE_PASSWORD is set
+  - File: `apps/zerg/backend/zerg/config/__init__.py:512`
+  - Fix: Skip Google OAuth validation if password auth is configured
 - [ ] **Landing page CTAs** — Several buttons don't work or lead nowhere
 
 ### High Priority
 
-- [ ] **Demo mode flag** (30 min) — infrastructure exists, just needs CLI glue
-  - Add `longhouse serve --demo` flag (uses `~/.longhouse/demo.db`, builds if missing)
-  - Show banner: "Demo Mode - sample data"
-  - **Existing:** `scripts/build_demo_db.py`, `services/demo_sessions.py`, `scenarios/data/swarm-mvp.yaml`
-  - File: `apps/zerg/backend/zerg/cli/serve.py`
+- [x] **Demo mode flag** — `longhouse serve --demo` and `--demo-fresh` implemented
 - [x] Installer enforces Python 3.12+ (align with `pyproject.toml`)
 
 ### Medium Priority
@@ -378,8 +376,8 @@ Update screenshots to show Timeline, not old dashboard.
 **Files:** New `apps/control-plane/` directory
 
 **Infra requirements:**
-- Traefik on zerg server (for subdomain routing)
-- Wildcard DNS `*.longhouse.ai` (already configured)
+- Traefik on zerg server (for subdomain routing) — or adapt to Caddy if keeping current stack
+- Wildcard DNS `*.longhouse.ai` (needs verification — drift audit says it's NOT configured)
 - Docker socket access from control plane
 - Postgres for control plane DB (can be existing Coolify-managed instance)
 
@@ -465,10 +463,10 @@ Close the gap between VISION, README, docs, and the live installer.
 Close the remaining open questions from VISION.md.
 
 - [ ] Decide whether the shipper is bundled with the CLI or shipped as a separate package.
-- [x] Decide remote auth UX for `longhouse connect` (device token vs OAuth vs API key).
-  - **Decision:** Password auth via `LONGHOUSE_PASSWORD` env var (see OSS Auth section)
-  - Google OAuth is fallback for users who want it
-  - Device token / API key deferred to post-launch
+- [ ] Decide shipper auth UX for `longhouse connect` (device token flow).
+  - Current: manual token creation in UI + paste into CLI
+  - VISION target: `longhouse connect` issues token automatically
+  - Note: This is separate from web UI auth (password/OAuth) — shipper needs device tokens
 - [ ] Decide HTTPS story for local OSS (`longhouse serve`) — built-in vs reverse proxy guidance.
 - [ ] Capture current frontend bundle size and set a target budget.
 
