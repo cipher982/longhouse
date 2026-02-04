@@ -109,7 +109,7 @@ Use these standard fingerprints:
 If an alert is warranted (new chronic issue), include this in your analysis:
 
 ```
-🔴 [SWARMLET QA] Chronic Issue Detected
+🔴 [LONGHOUSE QA] Chronic Issue Detected
 
 Issue: {description}
 Severity: {warning|critical}

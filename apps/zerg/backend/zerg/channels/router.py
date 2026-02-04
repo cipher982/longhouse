@@ -1,6 +1,6 @@
 """Channel Router.
 
-Routes messages between the Zerg fiche system and channel plugins.
+Routes messages between the Longhouse fiche system and channel plugins.
 Handles message dispatch, event routing, and conversation state.
 """
 
@@ -55,7 +55,7 @@ OutboundFilter = Callable[[ChannelMessage], ChannelMessage | None]
 
 
 class ChannelRouter:
-    """Routes messages between Zerg fiches and channel plugins.
+    """Routes messages between Longhouse fiches and channel plugins.
 
     The router:
     - Receives incoming messages from channels and dispatches to fiches

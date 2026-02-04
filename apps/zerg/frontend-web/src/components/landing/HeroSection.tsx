@@ -130,15 +130,15 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
           </div>
 
           <h1 className="landing-hero-headline">
-            Close your laptop. <span className="gradient-text">Keep coding.</span>
+            Never lose an <span className="gradient-text">AI coding conversation.</span>
           </h1>
 
           <p className="landing-hero-subhead">
-            Your AI agents run in the cloud. Resume from any device. Never lose a session.
+            Search across Claude, Codex, Cursor, Gemini. Resume from anywhere.
           </p>
 
           <p className="landing-hero-note">
-            Works with Claude Code today. Codex, Cursor, Gemini coming soon.
+            Works with Claude Code today. Others coming soon. Self-host anytime.
           </p>
 
           {/* Install command section - primary CTA */}

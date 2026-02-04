@@ -190,3 +190,4 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-04) [ops] Set SINGLE_TENANT=0 on prod to allow smoke test user alongside real user. Default SINGLE_TENANT=1 fails health if >1 user exists.
 - (2026-02-04) [arch] Backend router surface still includes legacy fiche/workflow/connectors/etc. (see `apps/zerg/backend/zerg/main.py` include_router list); candidate for slimming to sessions+shipper core.
 - (2026-02-04) [infra] Control plane should be self-managed (off Coolify); current routing uses Coolify's Caddy proxy and *.longhouse.ai wildcard is not set (testuser.longhouse.ai has no A/CNAME).
+- (2026-02-04) [infra] Decision: keep control plane + instances on zerg; avoid Coolify for dynamic provisioning (control plane uses Docker API directly).

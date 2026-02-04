@@ -19,7 +19,7 @@ job_registry.register(
         max_attempts=1,  # Don't retry - AI analysis is expensive
         tags=["zerg", "qa", "agentic", "monitoring"],
         project="zerg",
-        description="AI QA fiche - monitors Zerg health and detects anomalies",
+        description="AI QA fiche - monitors Longhouse health and detects anomalies",
     )
 )
 
