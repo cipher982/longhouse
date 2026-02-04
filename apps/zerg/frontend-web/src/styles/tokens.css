@@ -141,7 +141,6 @@
 
   /* Z-Index */
   --z-index-base: 0;
-  --z-index-canvas: 10;
   --z-index-toolbar: 100;
   --z-index-dropdown: 200;
   --z-index-overlay: 1000;
@@ -280,7 +279,6 @@
 
   /* Z-index shortcuts */
   --z-base: var(--z-index-base);
-  --z-canvas: var(--z-index-canvas);
   --z-toolbar: var(--z-index-toolbar);
   --z-dropdown: var(--z-index-dropdown);
   --z-overlay: var(--z-index-overlay);

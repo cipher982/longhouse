@@ -331,12 +331,6 @@
   z-index: var(--z-overlay);
 }
 
-#canvas-container.canvas-drop-target {
-  outline: 2px dashed var(--color-brand-secondary);
-  outline-offset: -2px;
-  background-color: rgb(99 102 241 / 8%);
-}
-
 /* Off-canvas responsive behaviour */
 @media (width <= 767px) {
   #fiche-shelf {

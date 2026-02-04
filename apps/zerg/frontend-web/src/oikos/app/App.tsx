@@ -106,10 +106,10 @@ export default function App({ embedded = false }: AppProps) {
   // - data-screenshot-ready="true": Content loaded for marketing captures
   //
   // Chat uses window.__oikos.ready.chatReady as the authoritative interactive signal.
-  // We sync data-ready to this flag to match dashboard/canvas behavior.
+  // We sync data-ready to this flag to match dashboard behavior.
   useEffect(() => {
     // Set up the chatReady flag and data-ready attribute together
-    // This ensures consistent behavior with dashboard/canvas pages
+    // This ensures consistent behavior with dashboard pages
     type OikosWindow = Window & { __oikos?: { ready?: { chatReady?: boolean; chatReadyTimestamp?: number }; eventBus?: unknown } }
     const w = window as OikosWindow
     w.__oikos = w.__oikos || {}
@@ -117,7 +117,7 @@ export default function App({ embedded = false }: AppProps) {
     w.__oikos.ready.chatReady = true
     w.__oikos.ready.chatReadyTimestamp = Date.now()
 
-    // Set data-ready when chat is interactive (matches dashboard/canvas contract)
+    // Set data-ready when chat is interactive (matches dashboard contract)
     document.body.setAttribute('data-ready', 'true')
 
     // Emit event for backwards compatibility (DEV mode only)
