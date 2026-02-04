@@ -35,3 +35,4 @@
 - [Docs vs code] `session_continuity.py` defaults `LONGHOUSE_API_URL` to `http://localhost:47300`, conflicting with `longhouse serve` default 8080 and README.
 - [Docs vs UI] `longhouse auth` instructs users to open `/dashboard/settings/devices`, but there is no device‑token UI or route; frontend only has `/settings` and no device token page.
 - [Code inconsistency] `WorkspaceManager` defaults to `/var/oikos/workspaces` while settings default `OIKOS_WORKSPACE_PATH` to `~/.longhouse/workspaces`; local OSS may try to write to `/var/oikos` without permission.
+- [Docs vs UI] VISION describes a 3‑step guided empty state with “Load demo” CTA; Timeline empty state is a single sentence (“Run 'longhouse ship'”) with no demo button.
