@@ -21,7 +21,7 @@ const steps: Step[] = [
     icon: <DownloadIcon width={32} height={32} />,
     number: "1",
     title: "Install",
-    description: "pip install longhouse. Sessions sync automatically from Claude, Codex, Cursor."
+    description: "curl -fsSL https://get.longhouse.ai/install.sh | bash. Sessions sync automatically from Claude, Codex, Cursor."
   },
   {
     icon: <SearchIcon width={32} height={32} />,

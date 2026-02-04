@@ -7,7 +7,7 @@ Search across Claude, Codex, Cursor, Gemini. Resume from anywhere.
 ## Quick Start
 
 ```bash
-pip install longhouse
+curl -fsSL https://get.longhouse.ai/install.sh | bash
 longhouse serve
 # Open http://localhost:8080
 ```
@@ -20,18 +20,25 @@ longhouse serve
 
 ## Install Options
 
-### 1. pip install (Recommended)
+### 1. One-liner install (Recommended)
 ```bash
-pip install longhouse
+curl -fsSL https://get.longhouse.ai/install.sh | bash
 longhouse serve --demo  # Try with sample data
 ```
 
-### 2. Docker
+### 2. pip install (Alternate)
+```bash
+pip install longhouse
+longhouse onboard
+longhouse serve --demo  # Try with sample data
+```
+
+### 3. Docker
 ```bash
 docker compose up
 ```
 
-### 3. From source
+### 4. From source
 ```bash
 git clone https://github.com/cipher982/longhouse
 cd longhouse && make dev
@@ -67,7 +74,7 @@ longhouse onboard    # Re-run setup wizard
 
 ## Documentation
 
-See [docs/](docs/) for detailed guides.
+This README is the canonical user guide. Product direction lives in `VISION.md`, and the execution roadmap lives in `TODO.md`.
 
 ---
 

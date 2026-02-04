@@ -58,7 +58,7 @@ Current reality (as of 2026-02-03):
 
 **Target state:** Control plane provisions isolated containers per user (Docker API + Traefik labels). See VISION.md for architecture.
 
-See `/docs/LAUNCH.md` for detailed analysis.
+See this file for the current launch analysis.
 
 ---
 
@@ -81,7 +81,7 @@ See `/docs/LAUNCH.md` for detailed analysis.
   - Show password field when `LONGHOUSE_PASSWORD` is configured
   - Keep Google OAuth as alternative
 - [x] Update frontend config to detect password auth availability
-- [x] Test full OSS flow: `pip install` → `longhouse serve` → password login → timeline
+- [x] Test full OSS flow: `install.sh` → `longhouse serve` → password login → timeline
 
 **Files:** `config/__init__.py`, `routers/auth.py`, `HeroSection.tsx`, `config.ts`
 
@@ -112,7 +112,7 @@ See `/docs/LAUNCH.md` for detailed analysis.
 **Goal:** Clear user paths, visible CTAs, better contrast. Visitor instantly understands: what it is, who it's for, how to get started.
 
 **⚠️ DEPENDS ON LAUNCH DECISION:**
-- **OSS GA (current):** Hero should emphasize `pip install`, self-host, "your data stays local"
+- **OSS GA (current):** Hero should emphasize `install.sh`, self-host, "your data stays local"
 - **Hosted Beta:** Secondary CTA or "Join waitlist" copy
 
 Current copy is a mix of both stories. Align to OSS-first primary.
@@ -262,7 +262,7 @@ Update screenshots to show Timeline, not old dashboard.
 
 **Goal:** HN reader can install, see value immediately, understand what problem this solves, and start using it.
 
-**Launch Path Decision:** OSS GA + Hosted Beta (optional). See `/docs/LAUNCH.md`.
+**Launch Path Decision:** OSS GA + Hosted Beta (optional).
 
 ### 🚨 Critical Blockers (Fix First)
 
@@ -392,6 +392,17 @@ Ensure launch readiness without relying on scattered docs.
 
 ---
 
+## HN Post Notes (Condensed)
+
+Keep the HN post short and problem-first. Use install.sh as the canonical path.
+
+- **Title options:** "Show HN: Longhouse – Search your Claude Code sessions" · "Show HN: Never lose a Claude Code conversation again" · "Show HN: Longhouse – A local timeline for AI coding sessions"
+- **Comment skeleton:** Problem (JSONL sprawl) → Solution (timeline + search) → Current state (Claude only, others planned, local-first) → Try it (`curl -fsSL https://get.longhouse.ai/install.sh | bash`, `longhouse serve`)
+- **Anticipated Qs:** Why not Claude history? · Cursor/Codex/Gemini when? · Privacy? · Performance at scale?
+- **Timing:** Tue–Thu mornings PT
+
+---
+
 ## README Test CI (Readme-Contract) (5)
 
 Automate README command verification with explicit, opt-in contracts. Use cube ARC runners where possible.
@@ -430,6 +441,17 @@ Eliminate the "empty timeline" anticlimactic moment and improve discovery for us
 
 ---
 
+## Install + Onboarding Alignment (4)
+
+Close the gap between VISION, README, docs, and the live installer.
+
+- [x] **Canonical install path**: `install.sh` is primary (README + landing aligned)
+- [ ] **Document onboarding wizard** (steps, troubleshooting, service install) and link it from README + landing page
+- [ ] **Add `longhouse doctor`** (self-diagnosis for server health, shipper status, config validity); run after install/upgrade and recommend in docs
+- [ ] **Installer polish:** verify Claude shim + PATH in a *fresh* shell and print an exact fix line when it fails (VISION requirement)
+
+---
+
 ## OSS Packaging Decisions (3)
 
 Close the remaining open questions from VISION.md.
@@ -465,7 +487,7 @@ User-facing strings, metadata, and package descriptions must stop mentioning Swa
 Package and binary naming so OSS users see Longhouse everywhere.
 
 - [ ] Decide npm scope/name for runner: `@longhouse/runner` or `longhouse-runner`
-- [ ] Update docker image name for docs/examples (ghcr.io/.../longhouse)
+- [ ] Update docker image name in README/examples (ghcr.io/.../longhouse)
 - [ ] Update installer scripts to new names (12 refs across 4 scripts)
 
 ---
