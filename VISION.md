@@ -291,6 +291,8 @@ We do not do "one VM per user." We do:
 - **Routing**: wildcard DNS + reverse proxy to per-user container
 - **Always-on**: paid instances never sleep
 
+**Current plan:** keep control plane + instances co-located on the zerg host for simplicity. Split later only if scale demands it.
+
 This preserves instant agents while keeping $5-10/month viable.
 
 **Decision:** the control plane is the *only* multi-tenant system. It provisions per-user Longhouse instances. The app remains single-tenant.
@@ -314,7 +316,7 @@ It is multi-tenant by necessity, but it stores only account + provisioning metad
 
 **Provisioning (via Docker API on zerg server):**
 
-We do NOT use Coolify for dynamic provisioning (API can't create apps). Instead:
+We do NOT use Coolify for dynamic provisioning (API can't create apps). Instead, the control plane runs on zerg and talks directly to the local Docker socket.
 
 **Docker API access (security):**
 - Control plane runs on the zerg host and uses the local Docker unix socket
@@ -357,7 +359,7 @@ apps/control-plane/           # NEW - tiny FastAPI app
 
 **Routing:**
 - Wildcard DNS: `*.longhouse.ai -> zerg server IP` (needs setup — not currently configured)
-- Traefik routes by subdomain via Docker labels
+- Self-managed reverse proxy on zerg (Caddy Docker Proxy preferred; Traefik also viable) routes by container labels
 - Each container gets unique subdomain automatically
 
 **Provisioning guarantees:**

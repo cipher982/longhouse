@@ -343,11 +343,18 @@ Update screenshots to show Timeline, not old dashboard.
 
 **Scope:** Only if P0 OSS GA is complete.
 
+**Decisions / Notes (2026-02-04):**
+- Control plane + user instances will live on **zerg** (single host for now).
+- Do **not** use Coolify for dynamic provisioning; control plane talks to Docker directly.
+- Proxy will be self-managed on zerg (Caddy Docker Proxy preferred; Traefik viable).
+- Wildcard DNS `*.longhouse.ai` is currently missing (testuser.longhouse.ai has no A/CNAME).
+
 ### Phase 0: Routing + DNS Reality Check (must validate before build)
 
 - [ ] Verify wildcard DNS status for `*.longhouse.ai` (currently disputed in drift findings). Fix DNS or update assumptions.
 - [ ] Decide routing layer: Traefik vs Caddy. Current infra uses Caddy; Traefik labels require an actual Traefik container + Docker provider.
 - [ ] Manual provision smoke test: run one container + confirm `https://testuser.longhouse.ai` routes, TLS works, and `/api/system/health` is green.
+- [ ] Add control-plane → instance auth bridge endpoint (control plane issues token; instance sets cookie for owner).
 
 ### Phase 1: Scaffold + Auth (2)
 
