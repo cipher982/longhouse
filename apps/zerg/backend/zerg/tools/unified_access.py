@@ -1,7 +1,7 @@
 """Unified tool access interface - Single way to resolve tools across the entire codebase.
 
 This module provides Carmack-style tool resolution following the same principles
-used in the canonical workflow system:
+used across the core tool system:
 
 1. Single source of truth for tool resolution
 2. Direct dependency injection instead of global lookups
@@ -178,7 +178,7 @@ class ToolResolver:
         """
         Validate tool names and return missing ones.
 
-        Replaces validation logic scattered across workflow validators.
+        Replaces validation logic scattered across legacy validators.
 
         Args:
             tool_names: Tool names to validate

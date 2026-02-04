@@ -72,7 +72,6 @@ from zerg.routers.fiche_config import router as fiche_config_router
 from zerg.routers.fiche_connectors import router as fiche_connectors_router
 from zerg.routers.fiches import router as fiches_router
 from zerg.routers.funnel import router as funnel_router
-from zerg.routers.graph_layout import router as graph_router
 from zerg.routers.jobs import router as jobs_router
 from zerg.routers.knowledge import router as knowledge_router
 from zerg.routers.mcp_servers import router as mcp_servers_router
@@ -91,15 +90,12 @@ from zerg.routers.skills import router as skills_router
 from zerg.routers.stream import router as stream_router
 from zerg.routers.sync import router as sync_router
 from zerg.routers.system import router as system_router
-from zerg.routers.templates import router as templates_router
 from zerg.routers.threads import router as threads_router
 from zerg.routers.traces import router as traces_router
 from zerg.routers.triggers import router as triggers_router
 from zerg.routers.users import router as users_router
 from zerg.routers.waitlist import router as waitlist_router
 from zerg.routers.websocket import router as websocket_router
-from zerg.routers.workflow_executions import router as workflow_executions_router
-from zerg.routers.workflows import router as workflows_router
 
 # Email trigger polling service (stub for now)
 # Background services ---------------------------------------------------------
@@ -698,14 +694,10 @@ app.include_router(triggers_router, prefix=f"{API_PREFIX}")
 app.include_router(knowledge_router, prefix=f"{API_PREFIX}")
 app.include_router(runs_router, prefix=f"{API_PREFIX}")
 app.include_router(runners_router, prefix=f"{API_PREFIX}")  # Runners execution infrastructure
-app.include_router(workflows_router, prefix=f"{API_PREFIX}")
-app.include_router(workflow_executions_router, prefix=f"{API_PREFIX}")
 app.include_router(auth_router, prefix=f"{API_PREFIX}")
 app.include_router(oauth_router, prefix=f"{API_PREFIX}")  # OAuth for third-party connectors
 app.include_router(users_router, prefix=f"{API_PREFIX}")
 app.include_router(contacts_router, prefix=f"{API_PREFIX}")  # User approved contacts for email/SMS
-app.include_router(templates_router, prefix=f"{API_PREFIX}")
-app.include_router(graph_router, prefix=f"{API_PREFIX}")
 app.include_router(oikos_router)  # Oikos integration - includes /api/oikos prefix
 app.include_router(oikos_internal_router, prefix=f"{API_PREFIX}")  # Internal endpoints for run continuation
 app.include_router(commis_internal_router, prefix=f"{API_PREFIX}")  # Internal endpoints for commis hooks

@@ -1,10 +1,6 @@
 """CRUD operations for all models."""
 
 # Fiche operations
-# Canvas operations
-from .crud_canvas import get_canvas_layout
-from .crud_canvas import upsert_canvas_layout
-
 # Connector operations
 from .crud_connectors import create_connector
 from .crud_connectors import delete_connector
@@ -61,21 +57,6 @@ from .crud_users import get_user
 from .crud_users import get_user_by_email
 from .crud_users import update_user
 
-# Workflow operations
-from .crud_workflows import create_workflow
-from .crud_workflows import create_workflow_execution
-from .crud_workflows import create_workflow_template
-from .crud_workflows import deploy_workflow_template
-from .crud_workflows import get_template_categories
-from .crud_workflows import get_waiting_execution_for_workflow
-from .crud_workflows import get_workflow
-from .crud_workflows import get_workflow_execution
-from .crud_workflows import get_workflow_executions
-from .crud_workflows import get_workflow_template
-from .crud_workflows import get_workflow_template_by_name
-from .crud_workflows import get_workflow_templates
-from .crud_workflows import get_workflows
-
 # Re-export from specialized modules
 from .knowledge_crud import *  # noqa: F403
 from .memory_crud import *  # noqa: F403
@@ -90,9 +71,6 @@ __all__ = [
     "get_fiche_messages",
     "get_fiches",
     "update_fiche",
-    # Canvas
-    "get_canvas_layout",
-    "upsert_canvas_layout",
     # Connectors
     "create_connector",
     "delete_connector",
@@ -135,18 +113,4 @@ __all__ = [
     "get_user_skill_by_name",
     "list_user_skills",
     "update_user_skill",
-    # Workflows
-    "create_workflow",
-    "create_workflow_execution",
-    "create_workflow_template",
-    "deploy_workflow_template",
-    "get_template_categories",
-    "get_waiting_execution_for_workflow",
-    "get_workflow",
-    "get_workflow_execution",
-    "get_workflow_executions",
-    "get_workflow_template",
-    "get_workflow_template_by_name",
-    "get_workflow_templates",
-    "get_workflows",
 ]

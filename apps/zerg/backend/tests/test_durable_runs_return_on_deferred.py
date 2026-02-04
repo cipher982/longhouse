@@ -10,8 +10,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from langgraph.checkpoint.memory import MemorySaver
-
 from zerg.events import EventType, event_bus
 from zerg.models.enums import RunStatus
 from zerg.models.models import Run
@@ -51,10 +49,7 @@ class TestReturnOnDeferred:
 
         service = OikosService(db_session)
 
-        with (
-            patch("zerg.services.checkpointer.get_checkpointer", return_value=MemorySaver()),
-            patch("zerg.managers.fiche_runner.FicheRunner.run_thread", new=AsyncMock(side_effect=slow_success)),
-        ):
+        with patch("zerg.managers.fiche_runner.FicheRunner.run_thread", new=AsyncMock(side_effect=slow_success)):
             result = await service.run_oikos(
                 owner_id=test_user.id,
                 task="slow task",
@@ -85,10 +80,7 @@ class TestReturnOnDeferred:
 
         service = OikosService(db_session)
 
-        with (
-            patch("zerg.services.checkpointer.get_checkpointer", return_value=MemorySaver()),
-            patch("zerg.managers.fiche_runner.FicheRunner.run_thread", new=AsyncMock(side_effect=slow_success)),
-        ):
+        with patch("zerg.managers.fiche_runner.FicheRunner.run_thread", new=AsyncMock(side_effect=slow_success)):
             result = await service.run_oikos(
                 owner_id=test_user.id,
                 task="slow task that completes",
@@ -120,10 +112,7 @@ class TestReturnOnDeferred:
 
         service = OikosService(db_session)
 
-        with (
-            patch("zerg.services.checkpointer.get_checkpointer", return_value=MemorySaver()),
-            patch("zerg.managers.fiche_runner.FicheRunner.run_thread", new=AsyncMock(side_effect=slow_fail)),
-        ):
+        with patch("zerg.managers.fiche_runner.FicheRunner.run_thread", new=AsyncMock(side_effect=slow_fail)):
             result = await service.run_oikos(
                 owner_id=test_user.id,
                 task="slow task that fails",
@@ -155,10 +144,7 @@ class TestReturnOnDeferred:
 
         service = OikosService(db_session)
 
-        with (
-            patch("zerg.services.checkpointer.get_checkpointer", return_value=MemorySaver()),
-            patch("zerg.managers.fiche_runner.FicheRunner.run_thread", new=AsyncMock(side_effect=fast_success)),
-        ):
+        with patch("zerg.managers.fiche_runner.FicheRunner.run_thread", new=AsyncMock(side_effect=fast_success)):
             result = await service.run_oikos(
                 owner_id=test_user.id,
                 task="fast task",

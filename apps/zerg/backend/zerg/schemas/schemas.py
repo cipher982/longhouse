@@ -13,7 +13,6 @@ from pydantic import ConfigDict
 from zerg.models.enums import FicheStatus
 from zerg.models.enums import RunStatus
 from zerg.models.enums import RunTrigger
-from zerg.schemas.workflow import WorkflowData
 
 
 # Fiche schemas
@@ -305,71 +304,6 @@ class DashboardSnapshot(BaseModel):
     runs_limit: int
     fiches: List[Fiche]
     runs: List[RunBundle]
-
-
-# ------------------------------------------------------------
-# Workflow schemas
-# ------------------------------------------------------------
-
-
-class WorkflowBase(BaseModel):
-    name: str
-    description: Optional[str] = None
-
-
-class WorkflowCreate(WorkflowBase):
-    canvas: Optional[WorkflowData] = None
-    template_id: Optional[int] = None  # Optional template to deploy
-    template_name: Optional[str] = None  # Optional template name (e.g., "minimal")
-
-
-class WorkflowUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-
-
-class Workflow(WorkflowBase):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    owner_id: int
-    is_active: bool
-    created_at: datetime
-    updated_at: datetime
-    canvas: WorkflowData
-
-
-# Template Gallery schemas
-# ------------------------------------------------------------
-
-
-class WorkflowTemplateBase(BaseModel):
-    name: str
-    description: Optional[str] = None
-    category: str
-    canvas: WorkflowData
-    tags: Optional[List[str]] = []
-    preview_image_url: Optional[str] = None
-
-
-class WorkflowTemplateCreate(WorkflowTemplateBase):
-    pass
-
-
-class WorkflowTemplate(WorkflowTemplateBase):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    created_by: int
-    is_public: bool
-    created_at: datetime
-    updated_at: datetime
-
-
-class TemplateDeployRequest(BaseModel):
-    template_id: int
-    name: Optional[str] = None  # Override template name if desired
-    description: Optional[str] = None  # Override template description if desired
 
 
 # ---------------------------------------------------------------------------

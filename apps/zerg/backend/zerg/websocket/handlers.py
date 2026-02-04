@@ -97,37 +97,6 @@ async def handle_user_subscription(client_id: str, user_id: int, message_id: str
     await subscribe_and_send_state(client_id, topic, message_id, user_data, "user_update", send_to_client)
 
 
-async def handle_workflow_subscription(client_id: str, execution_id: int, message_id: str, db: Session) -> None:
-    """Subscribe to workflow execution events."""
-    topic = f"workflow_execution:{execution_id}"
-    await topic_manager.subscribe_to_topic(client_id, topic)
-
-    # Try sending current state if execution finished
-    try:
-        execution = crud.get_workflow_execution(db, execution_id)
-        if execution and execution.phase == "finished":
-            from zerg.generated.ws_messages import ExecutionFinishedData
-
-            duration_ms = None
-            if execution.started_at and execution.finished_at:
-                duration_ms = int((execution.finished_at - execution.started_at).total_seconds() * 1000)
-
-            finished_data = ExecutionFinishedData(
-                execution_id=execution.id,
-                result=execution.result,
-                attempt_no=getattr(execution, "attempt_no", 1),
-                failure_kind=execution.failure_kind,
-                error_message=execution.error_message,
-                duration_ms=duration_ms,
-            )
-            envelope = Envelope.create("execution_finished", topic, finished_data.model_dump(), message_id)
-            await send_to_client(client_id, envelope.model_dump(), topic=topic)
-    except Exception as e:
-        logger.debug(f"No finished state for execution {execution_id}: {e}")
-
-    await send_subscribe_ack(client_id, message_id, [topic], send_to_client)
-
-
 async def handle_ops_subscription(client_id: str, message_id: str, db: Session) -> None:
     """Subscribe to ops events (admin-only)."""
     topic = "ops:events"
@@ -362,8 +331,6 @@ async def handle_subscribe(client_id: str, envelope: Envelope, db: Session) -> N
                     await handle_fiche_subscription(client_id, int(topic_id), message_id, db)
                 elif prefix == "user":
                     await handle_user_subscription(client_id, int(topic_id), message_id, db)
-                elif prefix == "workflow_execution":
-                    await handle_workflow_subscription(client_id, int(topic_id), message_id, db)
                 elif prefix == "ops" and topic_id == "events":
                     await handle_ops_subscription(client_id, message_id, db)
                 elif prefix == "thread":

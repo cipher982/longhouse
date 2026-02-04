@@ -11,10 +11,8 @@ This file whitelists code that vulture flags as unused but is actually:
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from langgraph.types import RunnableConfig
-
-    # Dummy usage to whitelist TYPE_CHECKING imports
-    _ = RunnableConfig
+    # Placeholder for TYPE_CHECKING-only imports when needed.
+    pass
 
 # SQLAlchemy event handlers require connection_record in signature
 connection_record = None

@@ -722,7 +722,7 @@ class CommisJobProcessor:
                     logger.warning(f"Failed to emit summary for job {job_id}: {summary_error}")
 
             # Resume oikos if waiting (best-effort) - use another short session
-            # Skip resume for cancelled jobs - user explicitly cancelled, don't continue workflow
+            # Skip resume for cancelled jobs - user explicitly cancelled, don't continue the run
             if final_status != "cancelled":
                 with db_session() as resume_db:
                     try:

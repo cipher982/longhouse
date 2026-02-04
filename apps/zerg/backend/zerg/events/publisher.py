@@ -32,13 +32,13 @@ async def publish_event(event_type: EventType, data: Dict[str, Any]) -> None:
         data: Event data dictionary
 
     Usage:
-        await publish_event(EventType.NODE_STATE_CHANGED, {"node_id": "test"})
+        await publish_event(EventType.OIKOS_COMPLETE, {"run_id": 123})
     """
     try:
         await event_bus.publish(event_type, data)
     except Exception as e:
         logger.error(f"Failed to publish event {event_type}: {e}")
-        # Don't re-raise - event publishing failures shouldn't break workflows
+        # Don't re-raise - event publishing failures shouldn't break request handling
 
 
 def publish_event_fire_and_forget(event_type: EventType, data: Dict[str, Any]) -> None:
@@ -53,7 +53,7 @@ def publish_event_fire_and_forget(event_type: EventType, data: Dict[str, Any]) -
         data: Event data dictionary
 
     Usage:
-        publish_event_fire_and_forget(EventType.NODE_STATE_CHANGED, {"node_id": "test"})
+        publish_event_fire_and_forget(EventType.OIKOS_HEARTBEAT, {"run_id": 123})
     """
     try:
         from zerg.utils.async_runner import run_in_shared_loop
