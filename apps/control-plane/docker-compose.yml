@@ -22,6 +22,11 @@ services:
       CONTROL_PLANE_INSTANCE_TRIGGER_SIGNING_SECRET: ${CONTROL_PLANE_INSTANCE_TRIGGER_SIGNING_SECRET}
       CONTROL_PLANE_INSTANCE_GOOGLE_CLIENT_ID: ${CONTROL_PLANE_INSTANCE_GOOGLE_CLIENT_ID}
       CONTROL_PLANE_INSTANCE_GOOGLE_CLIENT_SECRET: ${CONTROL_PLANE_INSTANCE_GOOGLE_CLIENT_SECRET}
+    labels:
+      # Caddy labels for control.longhouse.ai routing via coolify-proxy
+      caddy: control.longhouse.ai
+      caddy.reverse_proxy: "{{upstreams 8085}}"
+      caddy.tls: internal
     ports:
       - "8085:8085"
     volumes:
@@ -30,6 +35,7 @@ services:
       - control-plane-db
     networks:
       - control-plane
+      - coolify
 
   control-plane-db:
     image: postgres:16-alpine
@@ -46,3 +52,5 @@ services:
 networks:
   control-plane:
     driver: bridge
+  coolify:
+    external: true
