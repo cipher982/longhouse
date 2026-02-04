@@ -307,7 +307,10 @@ def serve(
             typer.echo("Use 'longhouse serve --stop' to stop it first")
             raise typer.Exit(code=1)
 
-    # Handle demo mode
+    # Apply lite mode defaults early (before any imports that trigger config loading)
+    _apply_lite_mode_defaults()
+
+    # Handle demo mode (may override DATABASE_URL set above)
     if demo or demo_fresh:
         demo_db_path = _get_longhouse_home() / "demo.db"
         if demo_fresh and demo_db_path.exists():
@@ -322,9 +325,6 @@ def serve(
     elif db:
         # Set database URL if explicitly provided
         os.environ["DATABASE_URL"] = db
-
-    # Apply lite mode defaults (SQLite, auth disabled, etc.)
-    _apply_lite_mode_defaults()
 
     db_url = os.environ["DATABASE_URL"]
     is_sqlite = db_url.startswith("sqlite")
