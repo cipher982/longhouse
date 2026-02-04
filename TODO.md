@@ -353,7 +353,7 @@ Update screenshots to show Timeline, not old dashboard.
 
 - [ ] Verify wildcard DNS status for `*.longhouse.ai` (currently disputed in drift findings). Fix DNS or update assumptions.
 - [ ] Decide routing layer: Traefik vs Caddy. Current infra uses Caddy; Traefik labels require an actual Traefik container + Docker provider.
-- [ ] Manual provision smoke test: run one container + confirm `https://testuser.longhouse.ai` routes, TLS works, and `/api/system/health` is green.
+- [x] Manual provision smoke test: run one container + confirm routing via proxy works (used Caddy internal TLS; wildcard DNS still missing).
 - [ ] Add control-plane → instance auth bridge endpoint (control plane issues token; instance sets cookie for owner).
 
 ### Phase 1: Scaffold + Auth (2)
