@@ -1,0 +1,141 @@
+name: CI Test Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref (branch or SHA) to test'
+        required: true
+        default: 'main'
+        type: string
+      suite:
+        description: 'Test suite to run'
+        required: true
+        type: choice
+        options:
+          - validate
+          - unit
+          - frontend
+          - runner-unit
+          - e2e-core
+          - e2e-a11y
+          - e2e-single
+          - full
+      test:
+        description: 'Playwright test path for e2e-single (e.g. tests/core/sessions.spec.ts)'
+        required: false
+        type: string
+
+concurrency:
+  group: ci-test-${{ github.workflow }}-${{ inputs.ref }}
+  cancel-in-progress: true
+
+env:
+  FERNET_SECRET: ${{ secrets.FERNET_SECRET }}
+  LIFE_HUB_API_KEY: ${{ secrets.LIFE_HUB_API_KEY }}
+  LIFE_HUB_URL: https://data.drose.io
+  E2E_DB_DIR: /tmp/zerg_e2e_dbs/${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  run:
+    runs-on: cube
+    name: "🧪 ci-test--${{ inputs.suite }}--${{ inputs.ref }}"
+    env:
+      SUITE: ${{ inputs.suite }}
+      TEST: ${{ inputs.test }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.2.20'
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y make
+
+      - name: Install JS deps (repo root)
+        if: contains('validate unit frontend e2e-core e2e-a11y e2e-single full', inputs.suite)
+        run: bun install --frozen-lockfile
+
+      - name: Build frontend (required by hatch)
+        if: contains('validate unit e2e-core e2e-a11y e2e-single full', inputs.suite)
+        run: cd apps/zerg/frontend-web && bun install && bun run build
+
+      - name: Pre-install backend deps
+        if: contains('validate unit e2e-core e2e-a11y e2e-single full', inputs.suite)
+        run: cd apps/zerg/backend && uv sync
+
+      - name: Install Playwright browsers + deps
+        if: startsWith(inputs.suite, 'e2e-')
+        run: cd apps/zerg/e2e && bunx playwright install --with-deps chromium
+
+      - name: Run selected suite
+        run: |
+          set -euo pipefail
+
+          case "$SUITE" in
+            validate)
+              make validate
+              ;;
+            unit)
+              make test
+              ;;
+            frontend)
+              cd apps/zerg/frontend-web
+              bun run validate:types
+              bun run test -- --run
+              ;;
+            runner-unit)
+              make test-runner-unit
+              ;;
+            e2e-core)
+              make test-e2e-core
+              ;;
+            e2e-a11y)
+              make test-e2e-a11y
+              ;;
+            e2e-single)
+              if [ -z "${TEST}" ]; then
+                echo "TEST is required for e2e-single (example: tests/core/sessions.spec.ts)" >&2
+                exit 2
+              fi
+              if ! echo "${TEST}" | grep -Eq '^[A-Za-z0-9_./-]+$'; then
+                echo "TEST has invalid characters" >&2
+                exit 2
+              fi
+              make test-e2e-single TEST="${TEST}"
+              ;;
+            full)
+              make test-full
+              ;;
+            *)
+              echo "Unknown suite: ${SUITE}" >&2
+              exit 2
+              ;;
+          esac
+
+      - name: Upload E2E artifacts (on failure)
+        if: failure() && startsWith(inputs.suite, 'e2e-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-test-e2e-artifacts
+          path: |
+            apps/zerg/e2e/test-results
+            apps/zerg/e2e/playwright-report
