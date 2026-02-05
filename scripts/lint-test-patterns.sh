@@ -28,7 +28,6 @@ ALLOWLIST_TIMEOUT=(
   "accessibility_ui_ux.spec.ts"
   "agent_scheduling.spec.ts"
   "canvas_workflows.spec.ts"
-  "chat_correlation_id.spec.ts"
   "comprehensive_database_isolation.spec.ts"
   "realtime_updates.spec.ts"
   "realtime_websocket_monitoring.spec.ts"

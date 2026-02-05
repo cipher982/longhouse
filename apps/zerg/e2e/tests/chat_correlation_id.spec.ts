@@ -18,26 +18,6 @@ test.describe('Chat Correlation ID Flow', () => {
     await expect(page.locator('.oikos-container')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.text-input-container')).toBeVisible({ timeout: 15_000 });
 
-    // Track API requests to capture the correlation ID sent to backend
-    let capturedCorrelationId: string | null = null;
-    let chatRequestMade = false;
-
-    page.on('request', (request) => {
-      const url = request.url();
-      if (url.includes('/api/oikos/chat') && request.method() === 'POST') {
-        chatRequestMade = true;
-        const postData = request.postData();
-        if (postData) {
-          try {
-            const body = JSON.parse(postData);
-            capturedCorrelationId = body.message_id;
-          } catch (e) {
-            // Ignore parse errors
-          }
-        }
-      }
-    });
-
     // Send a simple test message
     const testMessage = 'hi there';
     const inputSelector = '.text-input-container textarea, .text-input-container input[type="text"]';
@@ -45,16 +25,20 @@ test.describe('Chat Correlation ID Flow', () => {
 
     // Click send button
     const sendButton = page.locator('button.send-button, button[aria-label*="Send"], button:has-text("Send")').first();
+    const requestPromise = page.waitForRequest(r => r.url().includes('/api/oikos/chat') && r.method() === 'POST');
     await sendButton.click();
 
-    // Wait for API request to be made
-    await page.waitForFunction(() => (window as any).__chatRequestMade === true, null, { timeout: 5_000 }).catch(() => {
-      // Store flag in window for timeout check
-    });
-    await page.evaluate((flag) => { (window as any).__chatRequestMade = flag; }, chatRequestMade);
-
-    // Give a moment for the request to complete
-    await page.waitForTimeout(1000);
+    const request = await requestPromise;
+    const postData = request.postData();
+    let capturedCorrelationId: string | null = null;
+    if (postData) {
+      try {
+        const body = JSON.parse(postData);
+        capturedCorrelationId = body.message_id;
+      } catch (e) {
+        // Ignore parse errors
+      }
+    }
 
     // Verify correlation ID was sent to backend
     expect(capturedCorrelationId).toBeTruthy();
@@ -102,9 +86,6 @@ test.describe('Chat Correlation ID Flow', () => {
     const requestPromise1 = page.waitForRequest(r => r.url().includes('/api/oikos/chat') && r.method() === 'POST');
     await sendButton.click();
     await requestPromise1;
-
-    // Wait a moment for UI to reset (clear input)
-    await page.waitForTimeout(500);
 
     // Send second message and wait for API request
     const requestPromise2 = page.waitForRequest(r => r.url().includes('/api/oikos/chat') && r.method() === 'POST');
