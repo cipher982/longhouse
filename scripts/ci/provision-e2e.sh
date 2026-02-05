@@ -6,6 +6,8 @@ CONTROL_PLANE_DIR="$ROOT_DIR/apps/control-plane"
 API_URL="http://127.0.0.1:48080"
 INSTANCE_PORT=8000
 INSTANCE_URL="http://127.0.0.1:${INSTANCE_PORT}"
+CI_SUBDOMAIN="ci"
+CI_CONTAINER_NAME="longhouse-${CI_SUBDOMAIN}"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -63,6 +65,7 @@ cleanup() {
     curl -sf -X POST "${API_URL}/api/instances/${INSTANCE_ID}/deprovision" \
       -H "X-Admin-Token: ${ADMIN_TOKEN}" >/dev/null 2>&1 || true
   fi
+  docker rm -f "${CI_CONTAINER_NAME}" >/dev/null 2>&1 || true
   if [[ -n "${CONTROL_PLANE_PID:-}" ]]; then
     kill "$CONTROL_PLANE_PID" >/dev/null 2>&1 || true
   fi
@@ -110,10 +113,11 @@ if ! curl -sf "${API_URL}/health" >/dev/null; then
 fi
 
 printf "\n==> Provisioning test instance\n"
+docker rm -f "${CI_CONTAINER_NAME}" >/dev/null 2>&1 || true
 response=$(curl -sf -X POST "${API_URL}/api/instances" \
   -H "Content-Type: application/json" \
   -H "X-Admin-Token: ${ADMIN_TOKEN}" \
-  -d '{"email":"ci@example.com","subdomain":"ci"}')
+  -d "{\"email\":\"ci@example.com\",\"subdomain\":\"${CI_SUBDOMAIN}\"}")
 
 INSTANCE_ID=$(python - <<'PY'
 import json, sys
