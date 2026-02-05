@@ -2113,6 +2113,129 @@
   }
 
   /* --------------------------------------------------------
+   SOCIAL PROOF / CREDIBILITY
+   -------------------------------------------------------- */
+
+  .landing-social-proof {
+    padding: var(--space-12) 0;
+    text-align: center;
+  }
+
+  .social-proof-builder {
+    margin-bottom: var(--space-8);
+  }
+
+  .social-proof-built-by {
+    font-size: var(--font-size-base);
+    color: var(--color-text-secondary);
+    margin: 0 0 var(--space-4);
+  }
+
+  .social-proof-link {
+    color: var(--color-text-primary);
+    font-weight: var(--font-weight-semibold);
+    text-decoration: none;
+    transition: color var(--motion-duration-fast);
+  }
+
+  .social-proof-link:hover {
+    color: var(--color-brand-primary);
+  }
+
+  .social-proof-links {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--space-3);
+  }
+
+  .social-proof-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-4);
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: var(--radius-full);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    text-decoration: none;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .social-proof-badge:hover {
+    color: var(--color-text-primary);
+    border-color: var(--color-brand-primary);
+    transform: translateY(-1px);
+  }
+
+  .social-proof-badge svg {
+    flex-shrink: 0;
+  }
+
+  /* Video walkthrough placeholder / embed */
+  .social-proof-video {
+    max-width: 640px;
+    margin: 0 auto;
+  }
+
+  .social-proof-video-frame {
+    border-radius: var(--radius-xl);
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .social-proof-video-iframe {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border: none;
+    display: block;
+  }
+
+  .social-proof-video-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-3);
+    padding: var(--space-10) var(--space-6);
+    aspect-ratio: 16 / 9;
+    cursor: default;
+  }
+
+  .social-proof-video-play {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-secondary);
+  }
+
+  .social-proof-video-label {
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-secondary);
+    margin: 0;
+  }
+
+  .social-proof-video-sub {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+    margin: 0;
+  }
+
+  @media (width <= 480px) {
+    .social-proof-video {
+      max-width: 100%;
+    }
+  }
+
+  /* --------------------------------------------------------
    RESPONSIVE
    -------------------------------------------------------- */
 
