@@ -29,7 +29,6 @@ ALLOWLIST_TIMEOUT=(
   "agent_scheduling.spec.ts"
   "canvas_workflows.spec.ts"
   "comprehensive_database_isolation.spec.ts"
-  "realtime_updates.spec.ts"
   "realtime_websocket_monitoring.spec.ts"
   "supervisor-tool-visibility.spec.ts"
   "workflow_execution_http.spec.ts"
@@ -41,7 +40,6 @@ ALLOWLIST_NETWORKIDLE=(
   "agent_creation.spec.ts"
   "automation_history.spec.ts"
   "error_handling_edge_cases.spec.ts"
-  "realtime_updates.spec.ts"
   "worker_isolation.spec.ts"
   "workflow_execution.spec.ts"
 )
