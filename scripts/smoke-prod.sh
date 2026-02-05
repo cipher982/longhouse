@@ -415,6 +415,12 @@ test_config() {
     if [[ "$api_url" == "$api_expected" || "$api_url" == "$api_expected_with_suffix" ]]; then
         pass "Runtime config: API_BASE_URL = $api_url"
         return 0
+    fi
+
+    # Same-origin deployments use a relative /api base.
+    if [[ "$api_url" == "/api" && "${API_URL%/}" == "${FRONTEND_URL%/}" ]]; then
+        pass "Runtime config: API_BASE_URL = $api_url"
+        return 0
     else
         fail "Runtime config: API_BASE_URL incorrect ($api_url)"
         return 1
@@ -457,6 +463,11 @@ run_frontend_checks() {
 }
 
 run_cors_checks() {
+    if [[ "${API_URL%/}" == "${FRONTEND_URL%/}" ]]; then
+        info "CORS checks skipped (same-origin deployment)"
+        return 0
+    fi
+
     run_test test_cors "Auth endpoint" "$API_URL/api/auth/google" "$FRONTEND_URL"
     run_test test_cors "Oikos endpoint" "$API_URL/api/oikos/chat" "$FRONTEND_URL"
 }
