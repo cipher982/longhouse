@@ -102,7 +102,12 @@ class AgentsStore:
     def _fts_query(self, raw: str) -> str:
         """Normalize raw text into a safe FTS query."""
         cleaned = (raw or "").replace('"', '""').strip()
-        return cleaned
+        if not cleaned:
+            return cleaned
+        # FTS5 treats punctuation as operators; normalize to whitespace for stable matches.
+        normalized = re.sub(r"[^\w\s]+", " ", cleaned, flags=re.UNICODE)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        return normalized
 
     def _build_snippet(self, text: Optional[str], query: str, radius: int = 80) -> Optional[str]:
         """Return a short snippet around the first query token match."""
