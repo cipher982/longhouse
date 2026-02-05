@@ -114,9 +114,6 @@ class Settings:  # noqa: D401 – simple data container
     # Completion notifications ------------------------------------------
     notification_webhook: str | None  # Discord/Slack webhook for run completion
 
-    # Control plane JWT secret (for accept-token cross-domain auth) ------
-    control_plane_jwt_secret: str | None
-
     # Smoke testing -----------------------------------------------------
     smoke_test_secret: str | None  # Service account login for smoke tests
 
@@ -427,7 +424,6 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
             str(Path.home() / ".longhouse" / "workspaces"),
         ),
         notification_webhook=os.getenv("NOTIFICATION_WEBHOOK"),
-        control_plane_jwt_secret=os.getenv("CONTROL_PLANE_JWT_SECRET"),
         smoke_test_secret=os.getenv("SMOKE_TEST_SECRET"),
         agents_api_token=os.getenv("AGENTS_API_TOKEN"),
         job_queue_enabled=_truthy(os.getenv("JOB_QUEUE_ENABLED")),
