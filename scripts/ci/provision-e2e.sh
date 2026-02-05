@@ -114,22 +114,30 @@ fi
 
 printf "\n==> Provisioning test instance\n"
 docker rm -f "${CI_CONTAINER_NAME}" >/dev/null 2>&1 || true
-response=$(curl -sf -X POST "${API_URL}/api/instances" \
+response_file=$(mktemp)
+curl -sf -X POST "${API_URL}/api/instances" \
   -H "Content-Type: application/json" \
   -H "X-Admin-Token: ${ADMIN_TOKEN}" \
-  -d "{\"email\":\"ci@example.com\",\"subdomain\":\"${CI_SUBDOMAIN}\"}")
+  -d "{\"email\":\"ci@example.com\",\"subdomain\":\"${CI_SUBDOMAIN}\"}" \
+  -o "$response_file"
 
-INSTANCE_ID=$(python - <<'PY'
+INSTANCE_ID=$(python - <<'PY' "$response_file"
 import json, sys
-print(json.load(sys.stdin)["id"])
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+print(data["id"])
 PY
-<<<"$response")
+) || { echo "Failed to parse instance response:"; cat "$response_file"; exit 1; }
 
-CONTAINER_NAME=$(python - <<'PY'
+CONTAINER_NAME=$(python - <<'PY' "$response_file"
 import json, sys
-print(json.load(sys.stdin)["container_name"])
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+print(data["container_name"])
 PY
-<<<"$response")
+) || { echo "Failed to parse instance response:"; cat "$response_file"; exit 1; }
 
 printf "\n==> Waiting for instance health (%s)\n" "$CONTAINER_NAME"
 for _ in {1..40}; do
