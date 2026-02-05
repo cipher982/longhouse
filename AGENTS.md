@@ -176,7 +176,7 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-04) [docs] Docs policy: keep only `README.md`, `TODO.md`, `VISION.md` as canonical; fold other root docs into TODO to avoid drift.
 - (2026-02-04) [arch] Single-domain architecture: each user subdomain (alice.longhouse.ai) serves both frontend and API; nginx proxies /api/* to backend via BACKEND_HOST env var. No separate api-alice subdomain needed.
 - (2026-02-04) [gotcha] Coolify stores docker-compose defaults in DB, not git. Delete env vars via API then redeploy to pick up new defaults. Or manually update via Coolify UI.
-- (2026-02-04) [ops] Set SINGLE_TENANT=0 on prod to allow smoke test user alongside real user. Default SINGLE_TENANT=1 fails health if >1 user exists.
+- (2026-02-04) [ops] SINGLE_TENANT=1 now works with smoke tests: service accounts (provider="service") excluded from user count. No need to disable single-tenant mode.
 - (2026-02-04) [arch] Backend router surface still includes legacy fiche/workflow/connectors/etc. (see `apps/zerg/backend/zerg/main.py` include_router list); candidate for slimming to sessions+shipper core.
 - (2026-02-04) [infra] Control plane uses Coolify's Caddy proxy (caddy-docker-proxy) for routing; wildcard DNS `*.longhouse.ai` now configured in Cloudflare.
 - (2026-02-04) [infra] Decision: keep control plane + instances on zerg; avoid Coolify for dynamic provisioning (control plane uses Docker API directly).
