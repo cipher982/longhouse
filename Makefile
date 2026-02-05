@@ -197,12 +197,11 @@ test-validate-contracts-and-lints--approx-10s: validate ## Fast preflight valida
 
 # =============================================================================
 
-# Playwright E2E should run against an isolated frontend/backend pair by default,
-# not whatever is currently running in Docker on the dev ports.
-# Override per-command if you intentionally want to target your dev stack:
+# Playwright E2E should run against an isolated frontend/backend pair by default.
+# Ports are randomized unless explicitly pinned:
 #   make test-e2e E2E_BACKEND_PORT=47300 E2E_FRONTEND_PORT=47200
-E2E_BACKEND_PORT ?= 8001
-E2E_FRONTEND_PORT ?= 8002
+E2E_BACKEND_PORT ?=
+E2E_FRONTEND_PORT ?=
 SHIPPER_E2E_URL ?= http://localhost:47300
 
 test: ## Run lite tests by default (set TEST_SUITE=legacy for full suite)

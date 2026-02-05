@@ -26,8 +26,8 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
 fi
 
 # Configuration - split deployment
-FRONTEND_URL="${FRONTEND_URL:-https://longhouse.ai}"
-API_URL="${API_URL:-https://api.longhouse.ai}"
+FRONTEND_URL="${FRONTEND_URL:-https://david.longhouse.ai}"
+API_URL="${API_URL:-$FRONTEND_URL}"
 WAIT_SECS="${WAIT_SECS:-90}"
 SMOKE_TEST_EMAIL="${SMOKE_TEST_EMAIL:-david010@gmail.com}"
 SMOKE_RUN_ID="${SMOKE_RUN_ID:-}"
