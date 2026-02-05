@@ -5,19 +5,7 @@ import config from "../../lib/config";
 
 export function FooterCTA() {
   const handleStartFree = () => {
-    if (config.marketingOnly) {
-      document.querySelector(".install-section")?.scrollIntoView({ behavior: "smooth" });
-      return;
-    }
-    // If auth is disabled (dev mode), go directly to timeline
-    if (!config.authEnabled) {
-      window.location.href = '/timeline';
-      return;
-    }
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-    setTimeout(() => {
-      document.querySelector<HTMLButtonElement>('.landing-cta-main')?.click();
-    }, 500);
+    document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
   };
 
   const currentYear = new Date().getFullYear();
@@ -28,10 +16,10 @@ export function FooterCTA() {
         {/* Final CTA */}
         <div className="landing-footer-cta">
           <blockquote className="landing-footer-quote">
-            Self-host your AI session archive. Never lose a conversation again.
+            Hosted or self-hosted — never lose an AI session again.
           </blockquote>
           <Button variant="primary" size="lg" className="landing-cta-main" onClick={handleStartFree}>
-            Get Started
+            Choose Your Path
           </Button>
         </div>
 

@@ -1,6 +1,6 @@
 # Longhouse Vision (2026)
 
-Longhouse is an AI agent orchestration platform where AI does the work and humans manage the system. The product must feel instant, always-on, and magical: your local Claude/Codex/Gemini sessions appear as a clean, queryable timeline inside Longhouse with zero friction.
+Longhouse is an AI agent orchestration platform where AI does the work and humans manage the system. The product must feel instant, always-on, and magical: your Claude Code sessions appear as a clean, queryable timeline inside Longhouse with zero friction (Codex/Cursor/Gemini in progress).
 
 This is a living vision doc. It captures both the direction and the reasoning that got us here, so we can make fast decisions without re-litigating the fundamentals.
 
@@ -35,7 +35,7 @@ This is a living vision doc. It captures both the direction and the reasoning th
 
 ## North Star
 
-1. Zero-friction onboarding for OSS builders: **install.sh (primary)** plus `pip install longhouse` as alternate, SQLite only. (Homebrew formula planned for future.)
+1. Zero-friction onboarding for hosted + self-hosted: hosted beta signup plus **install.sh** for OSS. `pip install longhouse` remains the alternate. SQLite only.
 2. Always-on agents: background work continues even when the user is away.
 3. Unified, queryable agent sessions across providers (Claude, Codex, Gemini, Cursor, Oikos).
 4. A hosted option that feels like "I pay $5 and never think about it."
@@ -47,11 +47,11 @@ This is a living vision doc. It captures both the direction and the reasoning th
 
 Three promises to users:
 
-1. **Never lose a conversation** — Every Claude, Codex, Cursor, Gemini session appears in one timeline. No more grepping JSONL.
+1. **Never lose a conversation** — Claude Code sessions appear in one timeline today; Codex/Cursor/Gemini are in progress. No more grepping JSONL.
 
-2. **Find where you solved it** — Search by keyword, project, date. Instant results. (FTS5 search planned; current implementation uses indexed ilike queries.) Or ask Oikos for deeper discovery.
+2. **Find where you solved it** — Search by keyword, project, date. Instant results. (FTS5 is a launch requirement; current implementation uses indexed ilike as a stopgap.) Or ask Oikos for deeper discovery.
 
-3. **Resume from anywhere** — Close your laptop. Open Longhouse on phone. Resume the session as a commis (headless Claude Code). Work continues.
+3. **Resume from anywhere** — Hosted makes sessions resumable across devices. Self-hosted is local by default.
 
 **Guiding principle: Fast to Fun.** Time from install to "oh cool" should be under 2 minutes.
 
@@ -61,7 +61,7 @@ Three promises to users:
 
 - **Always-on beats cold start** for paid users. Background agents are core; sleeping instances break the product.
 - **Lossless logs are sacred.** The agent session archive is not disposable.
-- **OSS-first story**: easy to explain on HN/Twitter without enterprise jargon.
+- **Dual-path story**: hosted and self-hosted are equal in positioning and CTA.
 - **Progressive disclosure**: keep primary docs short and link to deeper runbooks; AGENTS.md must point to what else to read.
 - **Single-tenant core (enforced)**: build fast, keep code simple, avoid multi-tenant security tax. Agents APIs reject instances with >1 user.
 - **Hosted = convenience**: premium support and "don't think about it" operations.
@@ -124,7 +124,7 @@ Two tiers optimized for different needs:
 - Instant results
 - Keyword matching, project/date filters
 - User types → results appear immediately
-- (Planned: SQLite FTS5 for sub-10ms full-text search)
+- (Launch requirement: SQLite FTS5 for sub-10ms full-text search)
 
 **Oikos Discovery (agentic, complex queries)**
 - Multi-tool reasoning for vague or complex lookups
@@ -1222,7 +1222,7 @@ longhouse serve --host 0.0.0.0 --port 8080
 | Feature | Description |
 |---------|-------------|
 | **Timeline** | Searchable archive of all sessions — the core product |
-| **Search** | Instant discovery (FTS5 planned) + Oikos for complex queries |
+| **Search** | Instant discovery (FTS5 required for launch) + Oikos for complex queries |
 | **Resume** | Continue any session from any device (spawns commis) |
 | **Commis Pool** | Background agents (headless Claude Code) working in parallel |
 | **Oikos** | Chat interface for discovery and direct AI interaction |

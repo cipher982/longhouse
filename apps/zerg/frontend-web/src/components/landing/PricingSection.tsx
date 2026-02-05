@@ -158,7 +158,7 @@ export function PricingSection() {
     <section id="pricing" className="landing-pricing">
       <div className="landing-section-inner">
         <h2 className="landing-section-title">Simple Pricing</h2>
-        <p className="landing-section-subtitle">Self-host free forever. Hosted option coming soon.</p>
+        <p className="landing-section-subtitle">Self-host free forever. Hosted beta coming soon.</p>
 
         <div className="landing-pricing-grid">
           {tiers.map((tier, index) => (

@@ -47,6 +47,17 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
     }
   };
 
+  const handleHostedBeta = () => {
+    document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
+    setTimeout(() => {
+      document.querySelector<HTMLButtonElement>(".landing-pricing-card.coming-soon .landing-pricing-cta")?.click();
+    }, 400);
+  };
+
+  const handleSelfHost = () => {
+    document.querySelector(".install-section")?.scrollIntoView({ behavior: "smooth" });
+  };
+
   const handlePasswordLogin = async () => {
     if (!password.trim()) {
       setPasswordError("Please enter a password");
@@ -134,22 +145,31 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
           </h1>
 
           <p className="landing-hero-subhead">
-            Your Claude Code sessions in one searchable timeline. Resume from anywhere.
+            Your Claude Code sessions in one searchable timeline. Hosted unlocks resume anywhere.
           </p>
 
           <p className="landing-hero-note">
-            Codex, Cursor, Gemini coming soon. Self-host anytime.
+            Hosted beta + self-hosted. Codex, Cursor, Gemini in progress.
           </p>
 
-          {/* Install command section - primary CTA */}
-          <InstallSection className="landing-hero-install" />
-
           <div className="landing-hero-ctas">
-            <Button variant="ghost" size="lg" className="landing-cta-text" onClick={onScrollToHowItWorks}>
-              See How It Works <span className="landing-cta-arrow">↓</span>
+            <Button variant="primary" size="lg" onClick={handleHostedBeta}>
+              Hosted Beta
+            </Button>
+            <Button variant="secondary" size="lg" onClick={handleSelfHost}>
+              Self-host Now
             </Button>
             <Button variant="ghost" size="lg" className="landing-cta-text landing-cta-main" onClick={handleGetStarted}>
               Sign In
+            </Button>
+          </div>
+
+          {/* Install command section - self-host path */}
+          <InstallSection className="landing-hero-install" />
+
+          <div className="landing-hero-cta-secondary">
+            <Button variant="ghost" size="lg" className="landing-cta-text" onClick={onScrollToHowItWorks}>
+              See How It Works <span className="landing-cta-arrow">↓</span>
             </Button>
           </div>
         </div>

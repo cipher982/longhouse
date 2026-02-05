@@ -2,9 +2,15 @@
 
 Never lose an AI coding conversation.
 
-Search across Claude, Codex, Cursor, Gemini. Resume from anywhere.
+Claude Code now; Codex/Cursor/Gemini in progress. Hosted or self-hosted.
 
-## Quick Start
+## Get Started
+
+### Hosted (beta)
+
+Join the hosted waitlist at https://longhouse.ai. Hosted unlocks always-on sync and resume-anywhere.
+
+### Self-host (local)
 
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash
@@ -15,10 +21,13 @@ longhouse serve
 ## Features
 
 - **Timeline**: Searchable archive of all your AI coding sessions
-- **Search**: FTS5-powered instant discovery across all sessions
-- **Resume**: Continue any session from any device
+- **Search**: FTS5-powered instant discovery across all sessions (launch requirement)
+- **Resume**: Continue any session from any device (hosted)
 
 ## Install Options
+
+### 0. Hosted (beta)
+Join the waitlist at https://longhouse.ai (hosted launches with always-on sync).
 
 ### 1. One-liner install (Recommended)
 ```bash
@@ -116,7 +125,7 @@ Each session is a log in your timeline.
 
 ## Status
 
-**Alpha** - Actively developed, expect changes. Currently works with Claude Code, more tools coming soon.
+**Alpha** - Actively developed, expect changes. Claude Code works today; hosted beta and more providers are in progress.
 
 ## License
 
