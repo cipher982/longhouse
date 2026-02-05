@@ -14,6 +14,7 @@ interface ChatMessageListProps {
   streamingMessageId: number | null;
   pendingTokenBuffer: string;
   onCopyMessage: (message: ThreadMessage) => void;
+  threadId?: number | null;
 }
 
 // Custom Code Block Component with Copy Button
@@ -64,6 +65,7 @@ export function ChatMessageList({
   streamingMessageId,
   pendingTokenBuffer,
   onCopyMessage,
+  threadId,
 }: ChatMessageListProps) {
   const messagesContainerRef = useRef<HTMLDivElement>(null);
 
@@ -89,7 +91,12 @@ export function ChatMessageList({
 
   return (
     <section className="conversation-area">
-      <div className="messages-container" data-testid="messages-container" ref={messagesContainerRef}>
+      <div
+        className="messages-container"
+        data-testid="messages-container"
+        data-thread-id={threadId ?? undefined}
+        ref={messagesContainerRef}
+      >
         {messages
           .filter(msg => msg.role !== "system" && msg.role !== "tool")
           .map((msg, index) => {

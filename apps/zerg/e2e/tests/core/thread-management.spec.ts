@@ -159,10 +159,11 @@ test.describe('Thread Management - Core', () => {
     await expect(messagesContainer).toContainText(thread1Message, { timeout: 15000 });
 
     // Create new thread
-    await createNewThread(page);
+    const newThreadId = await createNewThread(page);
 
     // New thread should NOT contain the first thread's message
     await expect(messagesContainer).toBeVisible({ timeout: 5000 });
+    await expect(messagesContainer).toHaveAttribute('data-thread-id', String(newThreadId), { timeout: 5000 });
 
     // Use polling to verify message is NOT present
     await expect
