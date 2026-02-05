@@ -1565,6 +1565,11 @@ OIKOS_UTILITY_TOOLS: frozenset[str] = frozenset(
         "search_memory",
         "list_memories",
         "forget_memory",
+        # Session discovery
+        "search_sessions",
+        "grep_sessions",
+        "filter_sessions",
+        "get_session_detail",
     ]
 )
 

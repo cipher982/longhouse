@@ -29,6 +29,7 @@ from zerg.tools.builtin.oikos_tools import get_oikos_allowed_tools
 from zerg.tools.builtin.personal_tools import TOOLS as PERSONAL_TOOLS
 from zerg.tools.builtin.runner_setup_tools import TOOLS as RUNNER_SETUP_TOOLS
 from zerg.tools.builtin.runner_tools import TOOLS as RUNNER_TOOLS
+from zerg.tools.builtin.session_tools import TOOLS as SESSION_TOOLS
 from zerg.tools.builtin.slack_tools import TOOLS as SLACK_TOOLS
 from zerg.tools.builtin.sms_tools import TOOLS as SMS_TOOLS
 from zerg.tools.builtin.ssh_tools import TOOLS as SSH_TOOLS
@@ -61,6 +62,7 @@ BUILTIN_TOOLS = (
     + RUNNER_TOOLS
     + RUNNER_SETUP_TOOLS
     + SLACK_TOOLS
+    + SESSION_TOOLS
     + SMS_TOOLS
     + SSH_TOOLS
     + OIKOS_TOOLS
