@@ -68,13 +68,13 @@ class TestServiceConfig:
     def test_full_config(self):
         """Full config with all options."""
         config = ServiceConfig(
-            url="https://api.swarmlet.com",
+            url="https://api.longhouse.ai",
             token="test-token",
             claude_dir="/custom/claude",
             poll_mode=True,
             interval=60,
         )
-        assert config.url == "https://api.swarmlet.com"
+        assert config.url == "https://api.longhouse.ai"
         assert config.token == "test-token"
         assert config.claude_dir == "/custom/claude"
         assert config.poll_mode is True
@@ -147,7 +147,7 @@ class TestLaunchdPlistGeneration:
     def test_plist_with_token(self):
         """Generate plist with API token."""
         config = ServiceConfig(
-            url="https://api.swarmlet.com",
+            url="https://api.longhouse.ai",
             token="secret-token-123",
         )
 
@@ -221,7 +221,7 @@ class TestSystemdUnitGeneration:
     def test_unit_with_token(self):
         """Generate unit with API token."""
         config = ServiceConfig(
-            url="https://api.swarmlet.com",
+            url="https://api.longhouse.ai",
             token="secret-token-123",
         )
 
@@ -273,9 +273,9 @@ class TestLaunchdStatus:
         # launchctl print gui/<uid>/<label> output format
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_result.stdout = """com.swarmlet.shipper = {
+        mock_result.stdout = """com.longhouse.shipper = {
     active count = 1
-    path = /Users/user/Library/LaunchAgents/com.swarmlet.shipper.plist
+    path = /Users/user/Library/LaunchAgents/com.longhouse.shipper.plist
     state = running
     pid = 12345
 }"""
@@ -291,7 +291,7 @@ class TestLaunchdStatus:
 
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_result.stdout = """com.swarmlet.shipper = {
+        mock_result.stdout = """com.longhouse.shipper = {
     active count = 1
     pid = 12345
 }"""
@@ -308,9 +308,9 @@ class TestLaunchdStatus:
         # launchctl print output when service is loaded but not running
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_result.stdout = """com.swarmlet.shipper = {
+        mock_result.stdout = """com.longhouse.shipper = {
     active count = 0
-    path = /Users/user/Library/LaunchAgents/com.swarmlet.shipper.plist
+    path = /Users/user/Library/LaunchAgents/com.longhouse.shipper.plist
     state = waiting
 }"""
 
@@ -521,7 +521,7 @@ class TestGetServiceStatus:
 
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_result.stdout = """com.swarmlet.shipper = {
+        mock_result.stdout = """com.longhouse.shipper = {
     state = running
     pid = 12345
 }"""
@@ -561,7 +561,7 @@ class TestGetServiceInfo:
 
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_result.stdout = """com.swarmlet.shipper = {
+        mock_result.stdout = """com.longhouse.shipper = {
     state = running
     pid = 12345
 }"""

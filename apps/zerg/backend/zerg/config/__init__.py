@@ -293,10 +293,6 @@ def get_funnel_allowed_hosts(settings: Settings) -> set[str]:
 
     # Legacy fallback (kept to avoid hard failures if config is missing)
     return {
-        "swarmlet.com",
-        "www.swarmlet.com",
-        "swarmlet.ai",
-        "www.swarmlet.ai",
         "longhouse.ai",
         "www.longhouse.ai",
         "localhost",

@@ -32,7 +32,7 @@ async def main():
     # Set up temporary artifact store
     with tempfile.TemporaryDirectory() as tmpdir:
         import os
-        os.environ["SWARMLET_DATA_PATH"] = tmpdir
+        os.environ["LONGHOUSE_DATA_PATH"] = tmpdir
 
         # Create database session
         db = SessionLocal()

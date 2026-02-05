@@ -487,9 +487,9 @@ def test_multiple_stores_same_path():
 
 
 def test_env_var_base_path(monkeypatch):
-    """Test that SWARMLET_DATA_PATH environment variable is respected."""
+    """Test that LONGHOUSE_DATA_PATH environment variable is respected."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        monkeypatch.setenv("SWARMLET_DATA_PATH", tmpdir)
+        monkeypatch.setenv("LONGHOUSE_DATA_PATH", tmpdir)
 
         # Create store without explicit base_path
         store = CommisArtifactStore()

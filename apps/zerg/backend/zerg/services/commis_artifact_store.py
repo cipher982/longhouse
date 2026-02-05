@@ -67,10 +67,10 @@ class CommisArtifactStore:
         base_path
             Root directory for commis artifacts. Resolution order:
             1. If base_path is provided, use it (fail if not writable)
-            2. If SWARMLET_DATA_PATH env var is set, use it (fail if not writable)
+            2. If LONGHOUSE_DATA_PATH env var is set, use it (fail if not writable)
             3. Otherwise, use get_settings().data_dir / "commis"
         """
-        env_path = os.getenv("SWARMLET_DATA_PATH")
+        env_path = os.getenv("LONGHOUSE_DATA_PATH") or os.getenv("SWARMLET_DATA_PATH")
 
         if base_path:
             self.base_path = Path(base_path)
@@ -85,7 +85,7 @@ class CommisArtifactStore:
             logger.error(f"CommisArtifactStore: failed to init {self.base_path}: {e}")
             # Fallback to /tmp only as a last resort in dev/testing
             if not base_path and not env_path and get_settings().testing:
-                self.base_path = Path("/tmp/swarmlet/commis")
+                self.base_path = Path("/tmp/longhouse/commis")
                 self.base_path.mkdir(parents=True, exist_ok=True)
                 logger.warning(f"CommisArtifactStore: using emergency fallback {self.base_path}")
             else:

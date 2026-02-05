@@ -7,7 +7,7 @@ import { CheckCircleIcon, MonitorIcon, ClipboardIcon, AlertTriangleIcon, Chevron
 interface RunnerSetupData {
   enroll_token: string;
   expires_at: string;
-  swarmlet_url: string;
+  longhouse_url: string;
   docker_command: string;
   one_liner_install_command: string;
 }
@@ -321,7 +321,7 @@ export function parseRunnerSetupData(content: string): RunnerSetupData | null {
       return {
         enroll_token: parsed.data.enroll_token,
         expires_at: parsed.data.expires_at,
-        swarmlet_url: parsed.data.swarmlet_url,
+        longhouse_url: parsed.data.longhouse_url || parsed.data.swarmlet_url,
         docker_command: parsed.data.docker_command,
         one_liner_install_command: parsed.data.one_liner_install_command || "",
       };

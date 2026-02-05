@@ -36,7 +36,7 @@ class TestDurableRunsTimeout:
     def temp_artifact_path(self, monkeypatch):
         """Create temporary artifact store path."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            monkeypatch.setenv("SWARMLET_DATA_PATH", tmpdir)
+            monkeypatch.setenv("LONGHOUSE_DATA_PATH", tmpdir)
             yield tmpdir
 
     @pytest.mark.asyncio
@@ -178,7 +178,7 @@ class TestResumeFlow:
     def temp_artifact_path(self, monkeypatch):
         """Create temporary artifact store path."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            monkeypatch.setenv("SWARMLET_DATA_PATH", tmpdir)
+            monkeypatch.setenv("LONGHOUSE_DATA_PATH", tmpdir)
             yield tmpdir
 
     @pytest.mark.asyncio
@@ -367,7 +367,7 @@ class TestHeartbeatCounterReset:
         from tests.conftest import TEST_COMMIS_MODEL
 
         # Isolate commis artifacts
-        monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+        monkeypatch.setenv("LONGHOUSE_DATA_PATH", str(tmp_path / "commis"))
         store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
         # Create commis and job

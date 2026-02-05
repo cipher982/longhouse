@@ -22,7 +22,7 @@ from zerg.services.oikos_service import OikosService
 def temp_artifact_path(monkeypatch):
     """Create temporary artifact store path and set environment variable."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        monkeypatch.setenv("SWARMLET_DATA_PATH", tmpdir)
+        monkeypatch.setenv("LONGHOUSE_DATA_PATH", tmpdir)
         yield tmpdir
 
 

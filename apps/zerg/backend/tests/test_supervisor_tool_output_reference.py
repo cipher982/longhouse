@@ -66,7 +66,7 @@ async def test_execute_tool_spawn_commis_no_type_error(monkeypatch, tmp_path, db
     set_credential_resolver(resolver)
 
     # Set up artifact store
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path))
+    monkeypatch.setenv("LONGHOUSE_DATA_PATH", str(tmp_path))
 
     tool_call = {
         "name": "spawn_commis",

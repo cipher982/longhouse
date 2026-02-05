@@ -28,8 +28,8 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 |---------|--------|-------|
 | P0 Launch Core | ~90% | Auth + demo + CTAs + README + FTS5 search done; hosted beta still pending |
 | HN Launch Readiness | ~55% | Remaining: CTA copy/flow, comparison table, social proof/video |
-| Landing Page Redesign | ~20% | Header done; hero CTAs + copy + contrast still pending |
-| Rebrand | ~65% | ~13 Swarmlet matches in core code; ~50 total incl tests/docs |
+| Landing Page Redesign | ~40% | Header done; Phase 3 contrast/a11y done; hero CTAs + copy still pending |
+| Rebrand | ~95% | Core Swarmlet refs removed; only experiments/evidence docs remain |
 | Prompt Cache Optimization | ~20% | Message layout correct; cache-busting fixes remain (timestamps, connector ordering, split dynamic) |
 | FTS5 Search | ~75% | FTS5 table + backend query + snippets/jump; Oikos tools + semantic search pending |
 | QA Infrastructure | ~10% | UI capture fix done; readme test runner + CI still missing |
@@ -242,27 +242,27 @@ Make Self-host / Hosted Beta / Enterprise paths explicit with distinct CTAs.
 
 **Files:** `HeroSection.tsx`, `components/landing/DeploymentOptions.tsx`, `PricingSection.tsx`
 
-### Phase 3: Color/Contrast Improvements (2 hours)
+### Phase 3: Color/Contrast Improvements (2 hours) ✅
 
 Fix dark theme accessibility issues. Target WCAG 4.5:1 for text, 3:1 for UI.
 
 **CSS Variable Updates:**
-- [ ] Audit `--color-text-secondary` and `--color-text-muted` contrast ratios
-- [ ] Increase body text contrast (current ~4.0:1, need 4.5:1+)
-- [ ] Add card elevation: cards should be visibly lighter than page bg
-- [ ] Improve CTA button contrast: primary should pop (saturated accent on dark)
-- [ ] Badge contrast: "Free during beta" badge needs better visibility
+- [x] Audit `--color-text-secondary` and `--color-text-muted` contrast ratios
+- [x] Increase body text contrast (current ~4.0:1, need 4.5:1+)
+- [x] Add card elevation: cards should be visibly lighter than page bg
+- [x] Improve CTA button contrast: primary should pop (saturated accent on dark)
+- [x] Badge contrast: "Free during beta" badge needs better visibility
 
 **Specific fixes:**
-- [ ] `.landing-hero-subhead` — bump from `--color-text-secondary` to higher contrast
-- [ ] `.landing-hero-note` — bump from `--color-text-muted`
-- [ ] `.landing-step` cards — add lighter bg or visible border
-- [ ] `.landing-cta-main` — increase glow/prominence (currently blends)
-- [ ] `.landing-pricing-card` — more visible elevation
+- [x] `.landing-hero-subhead` — bump from `--color-text-secondary` to higher contrast (#d0d0d6, ~11:1)
+- [x] `.landing-hero-note` — bump from `--color-text-muted` to `--color-text-secondary` (7.9:1)
+- [x] `.landing-step` cards — bumped bg to 0.06, border to rgba(255,255,255,0.10), inset glow
+- [x] `.landing-cta-main` — increased glow radius/opacity + brighter border (#818cf8/70%)
+- [x] `.landing-pricing-card` — bumped bg to 0.06, added box-shadow + inset highlight
 
-**Test:** Run contrast checker on all text/bg combinations
+**Also fixed:** All small-text muted usages (badges, footer nav headings, provider descriptions, install section, pricing period, dividers, etc.) bumped from muted (#9898a3, 5.3:1) to secondary (#b4b4bc, 7.9:1). Card elevation improved across provider cards, integration items, and trust badges. Remaining muted usages are UI components (close buttons, toggle icons), placeholders, or decorative elements — all meeting 3:1 for non-text.
 
-**Files:** `styles/tokens.css` (or wherever vars defined), `landing.css`
+**Files:** `landing.css` (component-level overrides, no token changes needed)
 
 ### Phase 4: Hero CTA Restructure (1 hour)
 
@@ -326,7 +326,7 @@ Update screenshots to show Timeline, not old dashboard.
 - [ ] Above fold: Self-host primary, hosted beta secondary
 - [ ] Header: Docs + Pricing reachable in 1 click
 - [ ] CTAs: hero + header + mid-page + footer; labels match next step
-- [ ] Dark theme: text ≥ 4.5:1, UI components ≥ 3:1, visible focus indicators
+- [x] Dark theme: text ≥ 4.5:1, UI components ≥ 3:1 (Phase 3 done; focus indicators still TODO)
 - [ ] Sticky header doesn't obscure focus / anchors
 - [ ] Self-host responsibilities spelled out (not marketing-only)
 
@@ -554,11 +554,14 @@ User-facing strings, metadata, and package descriptions must stop mentioning Swa
 - [x] Update runner README/package metadata to Longhouse (e.g., "Longhouse Runner")
 - [x] Update landing FAQ + marketing copy that still says "PostgreSQL" or "Swarmlet" (`TrustSection.tsx`)
 - [x] Update OpenAPI schema metadata (title/description/servers) to Longhouse
-- [ ] Remove deprecated `swarmlet_url` / Swarmlet defaults (RunnerSetupCard + runners API + openapi types)
-- [ ] Update shipper defaults/docs still pointing at `api.swarmlet.com`
-- [ ] Rename `/tmp/swarmlet/commis` artifact path
-- [ ] Decide domain swap (`swarmlet.com` → `longhouse.ai`) and update hardcoded URLs if approved
-- [ ] Clean up legacy tests/docs/experiments referencing Swarmlet (shipper manual validation, unit tests)
+- [x] Remove deprecated `swarmlet_url` / Swarmlet defaults (RunnerSetupCard + runners API + openapi types)
+- [x] Update shipper defaults/docs still pointing at `api.swarmlet.com`
+- [x] Rename `/tmp/swarmlet/commis` artifact path → `/tmp/longhouse/commis`
+- [x] Rename `SWARMLET_DATA_PATH` env var → `LONGHOUSE_DATA_PATH` (with backwards compat)
+- [x] Remove `swarmlet.com`/`swarmlet.ai` from CORS fallback
+- [x] Clean up tests referencing old Swarmlet names (env vars, URLs, launchd labels)
+- [ ] Clean up `experiments/shipper-manual-validation.md` (historical, low priority)
+- [ ] Regenerate OpenAPI types (`src/generated/openapi-types.ts` still has `swarmlet_url`)
 
 ---
 
