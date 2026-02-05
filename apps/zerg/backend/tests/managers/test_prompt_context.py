@@ -14,6 +14,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from tests.conftest import TEST_COMMIS_MODEL
+from zerg.connectors.status_builder import FicheContextParts
 from zerg.crud import crud
 from zerg.managers.fiche_runner import RuntimeView
 from zerg.managers.prompt_context import (
@@ -25,6 +26,14 @@ from zerg.managers.prompt_context import (
     find_parent_assistant_id,
     get_or_create_tool_message,
 )
+
+
+def _mock_fiche_context_parts(**kwargs):
+    """Return a mock FicheContextParts for testing."""
+    return FicheContextParts(
+        connector_status='<connector_status captured_at="2026-01-01T00:00Z">\n{}\n</connector_status>',
+        current_time="<current_time>2026-01-01T00:00Z</current_time>",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +315,7 @@ class TestBuildPrompt:
             processed=True,
         )
 
-        with patch("zerg.connectors.status_builder.build_fiche_context", return_value="{}"):
+        with patch("zerg.connectors.status_builder.build_fiche_context_parts", side_effect=_mock_fiche_context_parts):
             context = build_prompt(
                 db_session,
                 runtime_view,
@@ -325,7 +334,7 @@ class TestBuildPrompt:
             AIMessage(content="Hi there"),
         ]
 
-        with patch("zerg.connectors.status_builder.build_fiche_context", return_value="{}"):
+        with patch("zerg.connectors.status_builder.build_fiche_context_parts", side_effect=_mock_fiche_context_parts):
             context = build_prompt(
                 db_session,
                 runtime_view,
@@ -349,7 +358,7 @@ class TestBuildPrompt:
             ToolMessage(content="Commis result", tool_call_id="tc-build", name="spawn_commis"),
         ]
 
-        with patch("zerg.connectors.status_builder.build_fiche_context", return_value="{}"):
+        with patch("zerg.connectors.status_builder.build_fiche_context_parts", side_effect=_mock_fiche_context_parts):
             context = build_prompt(
                 db_session,
                 runtime_view,
@@ -394,8 +403,8 @@ class TestPromptContextStructure:
         with pytest.raises(AttributeError):
             block.tag = "MODIFIED"
 
-    def test_context_to_messages_basic(self):
-        """Should convert PromptContext to message array."""
+    def test_context_to_messages_separate_dynamic_blocks(self):
+        """Each dynamic block should become a separate SystemMessage."""
         context = PromptContext(
             system_prompt="You are helpful",
             conversation_history=[
@@ -403,19 +412,45 @@ class TestPromptContextStructure:
                 AIMessage(content="Hi"),
             ],
             dynamic_context=[
-                DynamicContextBlock(tag="DYNAMIC", content="[INTERNAL CONTEXT]\nstatus: ok"),
+                DynamicContextBlock(tag="CONNECTOR_STATUS", content="[INTERNAL CONTEXT]\n<connector_status>ok</connector_status>"),
+                DynamicContextBlock(tag="CURRENT_TIME", content="[INTERNAL CONTEXT]\n<current_time>2026-01-01T00:00Z</current_time>"),
             ],
         )
 
         messages = context_to_messages(context)
 
-        assert len(messages) == 4  # system + 2 conv + dynamic
+        # system + 2 conv + 2 dynamic = 5
+        assert len(messages) == 5
         assert isinstance(messages[0], SystemMessage)
         assert messages[0].content == "You are helpful"
         assert isinstance(messages[1], HumanMessage)
         assert isinstance(messages[2], AIMessage)
+        # Connector status as separate SystemMessage
         assert isinstance(messages[3], SystemMessage)
-        assert "[INTERNAL CONTEXT]" in messages[3].content
+        assert "<connector_status>" in messages[3].content
+        # Time as separate SystemMessage
+        assert isinstance(messages[4], SystemMessage)
+        assert "<current_time>" in messages[4].content
+
+    def test_context_to_messages_three_dynamic_blocks(self):
+        """With memory, should emit 3 separate dynamic SystemMessages."""
+        context = PromptContext(
+            system_prompt="You are helpful",
+            conversation_history=[HumanMessage(content="Hello")],
+            dynamic_context=[
+                DynamicContextBlock(tag="CONNECTOR_STATUS", content="[INTERNAL CONTEXT]\n<connector_status>ok</connector_status>"),
+                DynamicContextBlock(tag="MEMORY", content="[MEMORY CONTEXT]\nMemory Files:\n- notes.txt: relevant info"),
+                DynamicContextBlock(tag="CURRENT_TIME", content="[INTERNAL CONTEXT]\n<current_time>2026-01-01T00:00Z</current_time>"),
+            ],
+        )
+
+        messages = context_to_messages(context)
+
+        # system + 1 conv + 3 dynamic = 5
+        assert len(messages) == 5
+        assert "<connector_status>" in messages[2].content
+        assert "[MEMORY CONTEXT]" in messages[3].content
+        assert "<current_time>" in messages[4].content
 
     def test_context_to_messages_empty_dynamic(self):
         """Should handle empty dynamic context."""
@@ -450,7 +485,7 @@ class TestBuilderConsistency:
             processed=True,
         )
 
-        with patch("zerg.connectors.status_builder.build_fiche_context", return_value="{}"):
+        with patch("zerg.connectors.status_builder.build_fiche_context_parts", side_effect=_mock_fiche_context_parts):
             # New unified way
             context = build_prompt(
                 db_session,
@@ -478,7 +513,7 @@ class TestBuilderConsistency:
             AIMessage(content="Hi"),
         ]
 
-        with patch("zerg.connectors.status_builder.build_fiche_context", return_value="{}"):
+        with patch("zerg.connectors.status_builder.build_fiche_context_parts", side_effect=_mock_fiche_context_parts):
             # New unified way
             context = build_prompt(
                 db_session,

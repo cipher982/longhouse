@@ -15,6 +15,7 @@ The status builder:
 import json
 import logging
 import os
+from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
 from typing import TYPE_CHECKING
@@ -370,46 +371,50 @@ def build_connector_status(
     return status_dict
 
 
-def build_fiche_context(
+@dataclass
+class FicheContextParts:
+    """Separate parts of fiche dynamic context for cache-optimized injection.
+
+    By splitting into separate parts, each can be injected as its own
+    SystemMessage.  LLM providers (Anthropic, OpenAI) cache based on
+    message-array prefix, so only the *changed* part busts its cache
+    segment instead of invalidating the entire dynamic block.
+
+    Stability order (most stable first):
+        connector_status  -- rarely changes (only on credential changes)
+        current_time      -- changes every minute
+    """
+
+    connector_status: str  # XML-formatted connector status
+    current_time: str  # XML-formatted current time
+
+
+def build_fiche_context_parts(
     db: "Session",
     owner_id: int,
     fiche_id: int | None = None,
     *,
     allowed_tools: list[str] | None = None,
     compact_json: bool = True,
-) -> str:
-    """Build the full context injection string for a fiche turn.
+) -> FicheContextParts:
+    """Build fiche context as separate parts for cache-optimized injection.
 
-    This function creates the XML-formatted context block that gets injected
-    into every fiche conversation turn, providing:
-    - Current timestamp for temporal awareness
-    - Connector status with captured_at timestamp
+    Returns separate strings for connector status and current time so the
+    caller can inject each as its own SystemMessage.  This maximizes LLM
+    prefix-cache hit rates: connector status rarely changes while time
+    ticks every minute.
 
     Args:
         db: Database session
         owner_id: User ID who owns the credentials
         fiche_id: Optional fiche ID for fiche-level overrides
+        allowed_tools: Limit connectors to those relevant for these tools
+        compact_json: Use compact JSON formatting (default True)
 
     Returns:
-        XML-formatted string with current_time and connector_status blocks
-
-    Example output:
-        <current_time>2025-01-17T15:00Z</current_time>
-
-        <connector_status captured_at="2025-01-17T15:00Z">
-        {
-          "github": {
-            "status": "connected",
-            "tools": ["github_create_issue", ...],
-            ...
-          },
-          ...
-        }
-        </connector_status>
+        FicheContextParts with connector_status and current_time strings
     """
     # Get current time in UTC, rounded to the minute.
-    # Dropping seconds improves LLM prompt-cache hit rate: all requests
-    # within the same minute produce identical dynamic context strings.
     current_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
 
     # Build connector status
@@ -419,9 +424,7 @@ def build_fiche_context(
         fiche_id=fiche_id,
     )
 
-    # Reduce context bloat: only include connectors that matter for this fiche's tool allowlist.
-    # For example, commis typically do not need personal connectors (WHOOP/Obsidian) when they
-    # only have infra tools enabled.
+    # Reduce context bloat: only include connectors relevant to this fiche's tools
     if allowed_tools:
         allowed = set(allowed_tools)
         filtered: dict[str, Any] = {}
@@ -438,10 +441,58 @@ def build_fiche_context(
     else:
         json_kwargs.update(indent=2)
 
-    context = f"""<current_time>{current_time}</current_time>
-
-<connector_status captured_at="{current_time}">
+    connector_str = f"""<connector_status captured_at="{current_time}">
 {json.dumps(connector_status, **json_kwargs)}
 </connector_status>"""
 
-    return context
+    time_str = f"<current_time>{current_time}</current_time>"
+
+    logger.debug(
+        "Built fiche context parts for owner_id=%d fiche_id=%s",
+        owner_id,
+        fiche_id,
+    )
+
+    return FicheContextParts(
+        connector_status=connector_str,
+        current_time=time_str,
+    )
+
+
+def build_fiche_context(
+    db: "Session",
+    owner_id: int,
+    fiche_id: int | None = None,
+    *,
+    allowed_tools: list[str] | None = None,
+    compact_json: bool = True,
+) -> str:
+    """Build the full context injection string for a fiche turn.
+
+    This function creates the XML-formatted context block that gets injected
+    into every fiche conversation turn, providing:
+    - Current timestamp for temporal awareness
+    - Connector status with captured_at timestamp
+
+    .. note::
+        Prefer ``build_fiche_context_parts()`` for cache-optimized injection.
+        This function is kept for backward compatibility.
+
+    Args:
+        db: Database session
+        owner_id: User ID who owns the credentials
+        fiche_id: Optional fiche ID for fiche-level overrides
+        allowed_tools: Limit connectors to those relevant for these tools
+        compact_json: Use compact JSON formatting (default True)
+
+    Returns:
+        XML-formatted string with current_time and connector_status blocks
+    """
+    parts = build_fiche_context_parts(
+        db=db,
+        owner_id=owner_id,
+        fiche_id=fiche_id,
+        allowed_tools=allowed_tools,
+        compact_json=compact_json,
+    )
+    return f"{parts.current_time}\n\n{parts.connector_status}"

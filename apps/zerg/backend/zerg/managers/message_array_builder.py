@@ -3,11 +3,13 @@
 This module centralizes message array construction, eliminating code duplication
 across run_thread(), run_continuation(), and run_batch_continuation() in FicheRunner.
 
-Layout: [system] -> [conversation] -> [tool_messages] -> [dynamic_context]
-        ^cacheable  ^cacheable        ^per-turn          ^per-turn
+Layout: [system] -> [conversation] -> [connectors] -> [memory] -> [time]
+        ^cacheable  ^cacheable        ^rarely changes  ^per-query  ^per-minute
 
 Both OpenAI and Anthropic use prefix-based caching: identical prefix = cache hit.
-Dynamic content placed at the end maximizes cache hits on the static prefix.
+Dynamic context is split into separate SystemMessages ordered by stability so that
+only the *changed* segment busts its cache -- e.g. time ticks every minute but
+connector status stays the same for hours.
 """
 
 from __future__ import annotations
@@ -78,8 +80,8 @@ class BuildPhase(IntEnum):
 class MessageArrayBuilder:
     """Cache-optimized message array construction.
 
-    Layout: [system] -> [conversation] -> [tool_messages] -> [dynamic_context]
-            ^cacheable  ^cacheable        ^per-turn          ^per-turn
+    Layout: [system] -> [conversation] -> [connectors] -> [memory] -> [time]
+            ^cacheable  ^cacheable        ^rarely changes  ^per-query  ^per-minute
 
     Usage:
         result = (
@@ -244,9 +246,15 @@ class MessageArrayBuilder:
         unprocessed_rows: Optional[List[Any]] = None,
         conversation_msgs: Optional[List[BaseMessage]] = None,
     ) -> MessageArrayBuilder:
-        """Add dynamic context (connector status + memory) at end.
+        """Add dynamic context as separate SystemMessages for cache optimization.
 
-        Dynamic context is placed last to maximize prefix cache hits.
+        Each context category is emitted as its own SystemMessage so that
+        LLM prefix-caching only invalidates the *changed* segment.
+
+        Order (most stable first, least stable last):
+            1. Connector status  -- rarely changes (credential additions/removals)
+            2. Memory context    -- changes when the user query triggers different recalls
+            3. Current time      -- changes every minute
 
         Args:
             memory_query: Query string for memory/knowledge search (optional)
@@ -265,22 +273,23 @@ class MessageArrayBuilder:
         else:
             raise RuntimeError(f"with_dynamic_context must be called after CONVERSATION or TOOL_MESSAGES (current: {self._phase.name})")
 
-        dynamic_context_parts: List[str] = []
-
-        # 1. Connector status context
+        # 1. Connector status context (most stable -- rarely changes)
+        connector_context_msg: Optional[SystemMessage] = None
+        time_context_msg: Optional[SystemMessage] = None
         try:
-            from zerg.connectors.status_builder import build_fiche_context
+            from zerg.connectors.status_builder import build_fiche_context_parts
 
-            context_text = build_fiche_context(
+            parts = build_fiche_context_parts(
                 db=self._db,
                 owner_id=self._agent.owner_id,
                 fiche_id=self._agent.id,
                 allowed_tools=allowed_tools,
                 compact_json=True,
             )
-            dynamic_context_parts.append(f"[INTERNAL CONTEXT - Do not mention unless asked]\n{context_text}")
+            connector_context_msg = SystemMessage(content=f"[INTERNAL CONTEXT - Do not mention unless asked]\n{parts.connector_status}")
+            time_context_msg = SystemMessage(content=f"[INTERNAL CONTEXT - Do not mention unless asked]\n{parts.current_time}")
             logger.debug(
-                "[Builder] Built connector context for agent %s (owner_id=%s)",
+                "[Builder] Built connector + time context for agent %s (owner_id=%s)",
                 self._agent.id,
                 self._agent.owner_id,
             )
@@ -291,8 +300,8 @@ class MessageArrayBuilder:
                 exc_info=True,
             )
 
-        # 2. Memory recall context
-        # Derive query from unprocessed rows or conversation if not provided
+        # 2. Memory recall context (moderately stable -- changes per-query)
+        memory_context_msg: Optional[SystemMessage] = None
         query = memory_query
         if query is None:
             query = self._extract_user_query(unprocessed_rows, conversation_msgs)
@@ -300,15 +309,23 @@ class MessageArrayBuilder:
         if query:
             memory_context = self._build_memory_context(query)
             if memory_context:
-                dynamic_context_parts.append(memory_context)
+                memory_context_msg = SystemMessage(content=memory_context)
                 logger.debug("[Builder] Built memory context")
 
-        # Inject dynamic context as SystemMessage at end (cache-optimized position)
-        if dynamic_context_parts:
-            combined_context = "\n\n".join(dynamic_context_parts)
-            context_msg = SystemMessage(content=combined_context)
-            self._messages.append(context_msg)
-            logger.debug("[Builder] Injected dynamic context at end of message array")
+        # Inject as separate SystemMessages: connectors -> memory -> time
+        # Most stable first, least stable last for optimal prefix caching.
+        if connector_context_msg:
+            self._messages.append(connector_context_msg)
+        if memory_context_msg:
+            self._messages.append(memory_context_msg)
+        if time_context_msg:
+            self._messages.append(time_context_msg)
+
+        if connector_context_msg or memory_context_msg or time_context_msg:
+            logger.debug(
+                "[Builder] Injected %d dynamic context messages at end of message array",
+                sum(1 for m in (connector_context_msg, memory_context_msg, time_context_msg) if m),
+            )
 
         return self
 
