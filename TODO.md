@@ -170,6 +170,19 @@ See this file for the current launch analysis.
 
 ---
 
+## [QA/Test] CI Stability — E2E + Smoke (3)
+
+**Goal:** Stop CI spam and make signal trustworthy (E2E isolation + prod smoke correctness).
+
+- [ ] E2E on cube: remove fixed ports, use per-run DB dir, and upload artifacts on failure.
+- [ ] Smoke-after-deploy: target canonical `/api/health` and correct app domain(s).
+- [ ] Add schedule gate for smoke to prevent spam during known outages.
+
+**Notes:**
+- Current prod endpoints returning HTTP 525 (Cloudflare origin handshake); fix infra routing or adjust smoke targets.
+
+---
+
 ## [Product] Landing Page Redesign — Full (6)
 
 **Goal:** Clear user paths, visible CTAs, better contrast. Visitor instantly understands: what it is, who it's for, how to get started.
