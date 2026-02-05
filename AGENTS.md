@@ -165,6 +165,7 @@ Two separate things exist — don't conflate or rebuild:
 
 ## Misc
 - GH actions use runners on Cube
+- if you are manually patching things for coolify you likely did something wrong. Remember infra-as-code.
 
 ## Learnings (Recent - Human compacts weekly)
 
