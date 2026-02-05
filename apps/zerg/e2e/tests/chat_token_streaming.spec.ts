@@ -94,32 +94,16 @@ test.describe('Chat Token Streaming Tests', () => {
     const streamingMessage = page.locator('[data-streaming="true"]').first();
     await expect(streamingMessage).toBeVisible({ timeout: 15000 });
 
-    // Capture initial content length
-    let previousLength = 0;
-    let contentGrew = false;
+    const messageContent = streamingMessage.locator('.message-content');
+    const getContentLength = async () => {
+      const content = await messageContent.textContent();
+      return content?.length || 0;
+    };
 
-    // Check multiple times that content is growing (tokens accumulating)
-    for (let i = 0; i < 5; i++) {
-      await page.waitForTimeout(1000); // Wait 1 second between checks
-
-      if ((await streamingMessage.count()) === 0) {
-        break;
-      }
-
-      const currentContent = await streamingMessage
-        .locator('.message-content')
-        .textContent({ timeout: 2000 })
-        .catch(() => null);
-      const currentLength = currentContent?.length || 0;
-
-      if (currentLength > previousLength) {
-        contentGrew = true;
-        previousLength = currentLength;
-      }
-    }
-
-    // Verify content grew (tokens were accumulating)
-    expect(contentGrew).toBe(true);
+    // Wait for some content, then verify it grows
+    await expect.poll(getContentLength, { timeout: 8000 }).toBeGreaterThan(0);
+    const firstLength = await getContentLength();
+    await expect.poll(getContentLength, { timeout: 8000 }).toBeGreaterThan(firstLength);
 
     // Wait for streaming to complete
     const finalMessage = page.locator('[data-role="chat-message-assistant"]').last();
@@ -149,43 +133,18 @@ test.describe('Chat Token Streaming Tests', () => {
     const streamingMessage = page.locator('[data-streaming="true"]').first();
     await expect(streamingMessage).toBeVisible({ timeout: 15000 });
 
-    // Track content changes over time
-    const contentSnapshots: string[] = [];
+    const messageContent = streamingMessage.locator('.message-content');
+    const getContentLength = async () => {
+      const content = await messageContent.textContent();
+      return content?.length || 0;
+    };
 
-    for (let i = 0; i < 10; i++) {
-      await page.waitForTimeout(500); // Check every 500ms
-      if ((await streamingMessage.count()) === 0) {
-        break;
-      }
-
-      const content = await streamingMessage
-        .locator('.message-content')
-        .textContent({ timeout: 2000 })
-        .catch(() => null);
-
-      if (content) {
-        contentSnapshots.push(content);
-      }
-
-      // If we see streaming has ended, break early
-      const isStreaming = await streamingMessage.getAttribute('data-streaming');
-      if (isStreaming !== 'true') {
-        break;
-      }
-    }
-
-    // Verify we captured multiple snapshots
-    expect(contentSnapshots.length).toBeGreaterThan(1);
-
-    // Verify content grew (each snapshot should be longer or equal)
-    let grew = false;
-    for (let i = 1; i < contentSnapshots.length; i++) {
-      if (contentSnapshots[i].length > contentSnapshots[i - 1].length) {
-        grew = true;
-        break;
-      }
-    }
-    expect(grew).toBe(true);
+    // Ensure we see at least two increments (multiple chunks)
+    await expect.poll(getContentLength, { timeout: 8000 }).toBeGreaterThan(0);
+    const firstLength = await getContentLength();
+    await expect.poll(getContentLength, { timeout: 8000 }).toBeGreaterThan(firstLength);
+    const secondLength = await getContentLength();
+    await expect.poll(getContentLength, { timeout: 8000 }).toBeGreaterThan(secondLength);
   });
 
   test('Verify streaming cursor animation', async ({ page }) => {
@@ -276,7 +235,9 @@ test.describe('Chat Token Streaming Tests', () => {
     }
 
     await newThreadBtn.click();
-    await page.waitForTimeout(1000); // Wait for thread creation
+    await page.waitForURL((url) => url.pathname.includes('/thread/') && !url.pathname.includes(`/thread/${threadAId}`), {
+      timeout: 15000,
+    });
     console.log('📊 Switched to Thread B');
 
     const threadBUrl = page.url();
@@ -287,17 +248,9 @@ test.describe('Chat Token Streaming Tests', () => {
     expect(threadBId).not.toBe(threadAId);
     expect(threadBId).toBeTruthy();
 
-    // CRITICAL: Verify Thread B has NO content from Thread A's streaming
-    // Wait a bit to see if any tokens leak through
-    await page.waitForTimeout(2000);
-
     // Thread B should be empty (new thread with no messages)
     const assistantMessagesInThreadB = page.locator('[data-role="chat-message-assistant"]');
-    const threadBMessageCount = await assistantMessagesInThreadB.count();
-
-    // CRITICAL: Thread B should have ZERO assistant messages
-    // (More reliable than checking keywords - any assistant message is a leak)
-    expect(threadBMessageCount).toBe(0);
+    await expect.poll(async () => assistantMessagesInThreadB.count(), { timeout: 5000 }).toBe(0);
     console.log('✅ Thread B has no assistant messages (no token leakage)');
 
     // Switch back to Thread A
@@ -305,29 +258,18 @@ test.describe('Chat Token Streaming Tests', () => {
 
     if (await threadAInSidebar.count() > 0) {
       await threadAInSidebar.click();
-      await page.waitForTimeout(500);
+      await page.waitForURL((url) => url.pathname.includes(`/thread/${threadAId}`), { timeout: 10000 });
       console.log('📊 Switched back to Thread A');
-
-      // Wait for streaming to complete and persist (may still be streaming)
-      await page.waitForTimeout(3000);
 
       // Verify Thread A has assistant messages (streaming continued in background)
       const assistantMessagesInThreadA = page.locator('[data-role="chat-message-assistant"]');
-      const threadAMessageCount = await assistantMessagesInThreadA.count();
-
-      // Thread A should eventually have assistant messages (wait up to 10s)
-      if (threadAMessageCount === 0) {
-        await expect(assistantMessagesInThreadA.first()).toBeVisible({ timeout: 10000 });
-      }
-
+      await expect.poll(async () => assistantMessagesInThreadA.count(), { timeout: 10000 }).toBeGreaterThan(0);
       const finalThreadAMessageCount = await assistantMessagesInThreadA.count();
-      expect(finalThreadAMessageCount).toBeGreaterThan(0);
       console.log(`✅ Thread A has ${finalThreadAMessageCount} assistant message(s)`);
 
       // Verify Thread A contains actual content (not just empty messages)
       const messagesInThreadA = page.getByTestId('messages-container');
-      const threadAContent = await messagesInThreadA.textContent();
-      expect(threadAContent?.length || 0).toBeGreaterThan(20);
+      await expect.poll(async () => (await messagesInThreadA.textContent())?.length || 0, { timeout: 10000 }).toBeGreaterThan(20);
       console.log('✅ Thread A preserved its content');
     }
 
@@ -366,7 +308,9 @@ test.describe('Chat Token Streaming Tests', () => {
     }
 
     await newThreadBtn.click();
-    await page.waitForTimeout(1000);
+    await page.waitForURL((url) => url.pathname.includes('/thread/') && !url.pathname.includes(`/thread/${threadId}`), {
+      timeout: 15000,
+    });
     console.log('📊 Created and switched to Thread B');
 
     // Verify original thread shows "✍️ writing..." badge in sidebar
@@ -386,15 +330,9 @@ test.describe('Chat Token Streaming Tests', () => {
         // Stream might have finished already - that's okay
       }
 
-      // Wait for streaming to complete
-      await page.waitForTimeout(10000);
-
-      // Badge should disappear when streaming completes
-      const stillVisible = await writingIndicator.isVisible().catch(() => false);
-      if (!stillVisible) {
+      if (await writingIndicator.isVisible().catch(() => false)) {
+        await expect.poll(async () => writingIndicator.isVisible().catch(() => false), { timeout: 15000 }).toBe(false);
         console.log('✅ Writing badge correctly disappeared after stream completed');
-      } else {
-        console.log('⚠️  Badge still visible - stream may still be active');
       }
     } else {
       console.log('⚠️  Thread not found in sidebar');
