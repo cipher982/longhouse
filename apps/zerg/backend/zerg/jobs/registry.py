@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from dataclasses import field
 from datetime import UTC
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from typing import Awaitable
 from typing import Callable
@@ -125,10 +126,22 @@ class JobRegistry:
             jobs = [j for j in jobs if j.enabled]
         return jobs
 
+    def _try_auto_commit(self, context: str = "job-state-change") -> None:
+        """Attempt to auto-commit changes to jobs repo. Failures are logged but not raised."""
+        try:
+            from zerg.config import get_settings
+            from zerg.services.jobs_repo import auto_commit_if_dirty
+
+            settings = get_settings()
+            auto_commit_if_dirty(Path(settings.data_dir), context=context)
+        except Exception:
+            logger.warning("Auto-commit failed", exc_info=True)
+
     def enable(self, job_id: str) -> bool:
         """Enable a job. Returns True if found."""
         if job_id in self._jobs:
             self._jobs[job_id].enabled = True
+            self._try_auto_commit()
             return True
         return False
 
@@ -136,6 +149,7 @@ class JobRegistry:
         """Disable a job. Returns True if found."""
         if job_id in self._jobs:
             self._jobs[job_id].enabled = False
+            self._try_auto_commit()
             return True
         return False
 
