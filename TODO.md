@@ -856,7 +856,7 @@ Scope: SQLite-only, timeline-first product with dual-path positioning (self-host
 8) Real-time events (SSE/WS) tests are disabled due to flakiness.
 9) No formal OS matrix for OSS install (macOS/Linux/WSL).
 10) OSS user QA script exists (`scripts/qa-oss.sh`), but CI wiring is still pending.
-11) Timeline search E2E lives in `tests/sessions.spec.ts` but is not part of `test-e2e-core` gating (regressions can ship).
+11) ✅ FIXED: Timeline search E2E is now part of `test-e2e-core` gating.
 12) ✅ FIXED: Oikos session discovery tools now have unit coverage.
 13) ✅ FIXED: FTS trigger integrity tests cover update/delete index consistency.
 

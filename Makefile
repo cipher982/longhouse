@@ -274,6 +274,7 @@ test-e2e-core: ## @internal Run core E2E tests only (no retries, must pass 100%)
 		tests/core/swarm-ops.spec.ts \
 		tests/core/thread-management.spec.ts \
 		tests/core/voice-turn-based.spec.ts \
+		tests/sessions.spec.ts \
 		--retries=0 --workers=1
 
 test-full: ## Full suite (unit + full E2E + evals + visual baselines)
