@@ -61,6 +61,7 @@ class TestDbIsSqlite:
             oikos_device_secret=None,
             oikos_workspace_path="/tmp",
             notification_webhook=None,
+            control_plane_jwt_secret=None,
             smoke_test_secret=None,
             agents_api_token=None,
             job_queue_enabled=False,

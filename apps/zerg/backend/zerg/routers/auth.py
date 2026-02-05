@@ -638,6 +638,10 @@ def accept_token(response: Response, body: dict[str, str], db: Session = Depends
     Used when OAuth happens on longhouse.ai and user is redirected
     back to their subdomain (e.g., david.longhouse.ai) with a token.
 
+    Tokens may come from:
+    1. The instance itself (sub=numeric user_id, signed with JWT_SECRET)
+    2. The control plane (sub=email, signed with CONTROL_PLANE_JWT_SECRET)
+
     Expected JSON body: `{ "token": "<JWT>" }`.
     """
     from zerg.auth.strategy import _decode_jwt_fallback
@@ -649,25 +653,69 @@ def accept_token(response: Response, body: dict[str, str], db: Session = Depends
             detail="token must be provided",
         )
 
-    # Validate the JWT (checks signature and expiry)
-    try:
-        payload = _decode_jwt_fallback(token, JWT_SECRET)
-    except Exception:
+    # Try to validate the JWT against known secrets.
+    # First try the instance's own JWT_SECRET, then the control plane's secret.
+    settings = get_settings()
+    secrets_to_try = [JWT_SECRET]
+    if settings.control_plane_jwt_secret:
+        secrets_to_try.append(settings.control_plane_jwt_secret)
+
+    payload: dict[str, Any] | None = None
+    for secret in secrets_to_try:
+        try:
+            payload = _decode_jwt_fallback(token, secret)
+            break
+        except Exception:
+            continue
+
+    if payload is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
         )
 
-    # Verify user exists
-    try:
-        user_id = int(payload.get("sub"))
-    except (TypeError, ValueError):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token payload",
-        )
+    # Resolve the user from the token's sub claim.
+    # sub may be a numeric user_id (instance-issued) or an email (control-plane-issued).
+    sub_raw = payload.get("sub")
+    user = None
 
-    user = crud.get_user(db, user_id)
+    # Try numeric user_id first (backwards compat with instance-issued tokens)
+    try:
+        user_id = int(sub_raw)
+        user = crud.get_user(db, user_id)
+    except (TypeError, ValueError):
+        pass
+
+    # If numeric lookup failed or returned no user, treat sub as email
+    if user is None:
+        email = str(sub_raw) if sub_raw else payload.get("email")
+        if not email or "@" not in str(email):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token payload",
+            )
+        email = str(email).strip().lower()
+
+        # Look up or create user by email (control-plane-issued token flow)
+        user = crud.get_user_by_email(db, email)
+        if user is None:
+            # Single-tenant mode: enforce owner email binding
+            if settings.single_tenant and not settings.testing:
+                from zerg.services.single_tenant import is_owner_email
+
+                if not is_owner_email(email):
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="This instance is configured for a specific owner.",
+                    )
+
+            user = crud.create_user(
+                db,
+                email=email,
+                provider="control-plane",
+                provider_user_id=f"cp:{email}",
+            )
+
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -685,10 +733,20 @@ def accept_token(response: Response, body: dict[str, str], db: Session = Depends
             detail="Token has expired",
         )
 
-    # Set session cookie
-    _set_session_cookie(response, token, remaining)
+    # Issue a fresh instance-local token (so subsequent requests use the
+    # instance's own JWT_SECRET, not the control-plane secret).
+    expires_in = min(remaining, 30 * 60)  # Cap at 30 min
+    access_token = _issue_access_token(
+        user.id,
+        user.email,
+        display_name=getattr(user, "display_name", None),
+        avatar_url=getattr(user, "avatar_url", None),
+    )
 
-    return TokenOut(access_token=token, expires_in=remaining)
+    # Set session cookie with the fresh instance-local token
+    _set_session_cookie(response, access_token, expires_in)
+
+    return TokenOut(access_token=access_token, expires_in=expires_in)
 
 
 # ---------------------------------------------------------------------------
