@@ -29,7 +29,6 @@ ALLOWLIST_TIMEOUT=(
   "agent_scheduling.spec.ts"
   "canvas_workflows.spec.ts"
   "comprehensive_database_isolation.spec.ts"
-  "realtime_websocket_monitoring.spec.ts"
   "supervisor-tool-visibility.spec.ts"
   "workflow_execution_http.spec.ts"
   "workflow_execution.spec.ts"

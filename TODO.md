@@ -57,6 +57,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 - E2E: core chat streaming + follow-up flow added; correlation ID test now deterministic
 - E2E: removed placeholder specs (trigger email/perf/errors) and trimmed scheduling/search placeholders
 - E2E: realtime_updates now event-driven (ready signals + stream event asserts) and removed lint allowlist entry
+- E2E: realtime_websocket_monitoring now asserts stream envelope fields; removed timeout allowlist entry
 
 ### 🛠 Ops Changes (prod)
 - Re-created `longhouse-david` container on zerg (PUBLIC_SITE_URL=https://david.longhouse.ai, SINGLE_TENANT=0, SMOKE_TEST_SECRET set, latest runtime image pulled) — stopgap until control-plane provisioning owns this.
@@ -192,6 +193,7 @@ See this file for the current launch analysis.
 - [x] E2E on cube: remove fixed ports, use per-run DB dir, and upload artifacts on failure.
 - [x] Smoke-after-deploy: target canonical `/api/health` and correct app domain(s).
 - [x] Add schedule gate for smoke to prevent spam during known outages.
+- [x] Replace `realtime_websocket_monitoring.spec.ts` timeouts/log-only flow with deterministic assertions (or drop the test).
 
 **Notes:**
 - Current prod endpoints returning HTTP 525 (Cloudflare origin handshake); fix infra routing or adjust smoke targets.
