@@ -1,9 +1,6 @@
 import { test, expect, type Page } from './fixtures';
 import { resetDatabase } from './test-utils';
 
-// Skip: Token streaming UI selectors have changed
-test.skip();
-
 // Reset DB before each test to keep fiche/thread ids predictable
 // Uses strict reset that throws on failure to fail fast
 test.beforeEach(async ({ request }) => {
@@ -93,11 +90,9 @@ test.describe('Chat Token Streaming Tests', () => {
       timeout: 10000
     });
 
-    // Get the assistant message element
-    const assistantMessage = page.locator('[data-role="chat-message-assistant"]').last();
-
     // Wait for streaming to start
-    await expect(assistantMessage).toBeVisible({ timeout: 15000 });
+    const streamingMessage = page.locator('[data-streaming="true"]').first();
+    await expect(streamingMessage).toBeVisible({ timeout: 15000 });
 
     // Capture initial content length
     let previousLength = 0;
@@ -107,7 +102,14 @@ test.describe('Chat Token Streaming Tests', () => {
     for (let i = 0; i < 5; i++) {
       await page.waitForTimeout(1000); // Wait 1 second between checks
 
-      const currentContent = await assistantMessage.locator('.message-content').textContent();
+      if ((await streamingMessage.count()) === 0) {
+        break;
+      }
+
+      const currentContent = await streamingMessage
+        .locator('.message-content')
+        .textContent({ timeout: 2000 })
+        .catch(() => null);
       const currentLength = currentContent?.length || 0;
 
       if (currentLength > previousLength) {
@@ -120,12 +122,13 @@ test.describe('Chat Token Streaming Tests', () => {
     expect(contentGrew).toBe(true);
 
     // Wait for streaming to complete
-    await expect(assistantMessage).not.toHaveAttribute('data-streaming', 'true', {
+    const finalMessage = page.locator('[data-role="chat-message-assistant"]').last();
+    await expect(finalMessage).not.toHaveAttribute('data-streaming', 'true', {
       timeout: 30000
     });
 
     // Verify final message has substantial content
-    const finalContent = await assistantMessage.locator('.message-content').textContent();
+    const finalContent = await finalMessage.locator('.message-content').textContent();
     expect(finalContent?.length).toBeGreaterThan(10);
   });
 
@@ -143,21 +146,29 @@ test.describe('Chat Token Streaming Tests', () => {
       timeout: 10000
     });
 
-    const assistantMessage = page.locator('[data-role="chat-message-assistant"]').last();
-    await expect(assistantMessage).toBeVisible({ timeout: 15000 });
+    const streamingMessage = page.locator('[data-streaming="true"]').first();
+    await expect(streamingMessage).toBeVisible({ timeout: 15000 });
 
     // Track content changes over time
     const contentSnapshots: string[] = [];
 
     for (let i = 0; i < 10; i++) {
       await page.waitForTimeout(500); // Check every 500ms
-      const content = await assistantMessage.locator('.message-content').textContent();
+      if ((await streamingMessage.count()) === 0) {
+        break;
+      }
+
+      const content = await streamingMessage
+        .locator('.message-content')
+        .textContent({ timeout: 2000 })
+        .catch(() => null);
+
       if (content) {
         contentSnapshots.push(content);
       }
 
       // If we see streaming has ended, break early
-      const isStreaming = await assistantMessage.getAttribute('data-streaming');
+      const isStreaming = await streamingMessage.getAttribute('data-streaming');
       if (isStreaming !== 'true') {
         break;
       }
@@ -290,8 +301,7 @@ test.describe('Chat Token Streaming Tests', () => {
     console.log('✅ Thread B has no assistant messages (no token leakage)');
 
     // Switch back to Thread A
-    const threadASelector = `[data-thread-id="${threadAId}"]`;
-    const threadAInSidebar = page.locator(threadASelector);
+    const threadAInSidebar = page.locator(`[data-testid="thread-row-${threadAId}"]`);
 
     if (await threadAInSidebar.count() > 0) {
       await threadAInSidebar.click();
@@ -360,7 +370,7 @@ test.describe('Chat Token Streaming Tests', () => {
     console.log('📊 Created and switched to Thread B');
 
     // Verify original thread shows "✍️ writing..." badge in sidebar
-    const threadInSidebar = page.locator(`[data-thread-id="${threadId}"]`);
+    const threadInSidebar = page.locator(`[data-testid="thread-row-${threadId}"]`);
 
     if (await threadInSidebar.count() > 0) {
       // Check for writing indicator within the thread item

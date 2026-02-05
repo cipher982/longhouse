@@ -52,6 +52,8 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 - Contrast: All landing text bumped to WCAG AA, card elevation improved
 - Rebrand: 24 files updated — env vars, URLs, CORS, paths, tests renamed to Longhouse
 - CLI: `longhouse connect` and `longhouse ship` default URL fixed from 47300 → 8080
+- E2E: gpt-scripted now streams tokens; E2E default model forced to `gpt-scripted`
+- E2E: chat token streaming suite re-enabled + selectors hardened; removed placeholder chat/thread specs
 
 ### 🛠 Ops Changes (prod)
 - Re-created `longhouse-david` container on zerg (PUBLIC_SITE_URL=https://david.longhouse.ai, SINGLE_TENANT=0, SMOKE_TEST_SECRET set, latest runtime image pulled) — stopgap until control-plane provisioning owns this.

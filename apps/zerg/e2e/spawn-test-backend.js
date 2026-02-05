@@ -120,6 +120,8 @@ const backend = spawn('uv', [
         // SQLite database for this E2E backend instance
         DATABASE_URL: databaseUrl,
         LLM_TOKEN_STREAM: process.env.LLM_TOKEN_STREAM || 'true',  // Enable token streaming for E2E tests
+        // Force deterministic model for E2E chat flows (UI uses default model id)
+        E2E_DEFAULT_MODEL: process.env.E2E_DEFAULT_MODEL || 'gpt-scripted',
         // LIFE_HUB_URL and LIFE_HUB_API_KEY inherited from environment (for session continuity tests)
         // Workspace path for workspace agents (use temp dir in E2E, not /var/oikos)
         OIKOS_WORKSPACE_PATH: process.env.OIKOS_WORKSPACE_PATH || os.tmpdir() + '/zerg-e2e-workspaces',

@@ -14,6 +14,7 @@ and zerg.types.messages.
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 import uuid
 from typing import Any
@@ -189,6 +190,65 @@ def get_scenario_evidence_keyword(prompt: str, role: str) -> str | None:
     return keyword if isinstance(keyword, str) else None
 
 
+def _static_response_for_prompt(prompt: str) -> Optional[str]:
+    """Return deterministic content for known E2E chat prompts."""
+    text = (prompt or "").strip().lower()
+    if not text:
+        return None
+
+    if "say hello in exactly 10 words" in text:
+        # 10 words: Hello(1) there(2) friend(3) this(4) is(5) a(6) ten(7) word(8) greeting(9) today(10).
+        return "Hello there friend this is a ten word greeting today."
+
+    if "count from 1 to 5" in text:
+        return "1 cat 2 dog 3 fox 4 owl 5"
+
+    if "short sentence about ai" in text:
+        return "AI helps people solve problems faster."
+
+    if text in {"hello", "hello!", "hi", "hi!"}:
+        return "Hello!"
+
+    if "robot exploring mars" in text:
+        return "A small robot trundled across Mars, mapping dunes, sampling rocks, " "and logging the red horizon with steady curiosity."
+
+    return None
+
+
+def _chunk_text(text: str, *, max_chunks: int = 12) -> List[str]:
+    """Split text into a bounded number of deterministic chunks."""
+    if not text:
+        return []
+
+    words = re.findall(r"\S+\s*", text)
+    if len(words) <= 1:
+        return [text]
+
+    if len(words) <= max_chunks:
+        return words
+
+    chunk_size = max(1, math.ceil(len(words) / max_chunks))
+    return ["".join(words[i : i + chunk_size]) for i in range(0, len(words), chunk_size)]
+
+
+def _extract_callbacks(kwargs: Dict[str, Any]) -> List[Any]:
+    """Collect callbacks passed via kwargs or config."""
+    callbacks: List[Any] = []
+    direct = kwargs.get("callbacks")
+    config = kwargs.get("config") or {}
+    config_callbacks = config.get("callbacks")
+
+    for item in (direct, config_callbacks):
+        if not item:
+            continue
+        if isinstance(item, (list, tuple)):
+            callbacks.extend(item)
+        else:
+            callbacks.append(item)
+
+    return callbacks
+
+
 class ScriptedChatLLM(BaseChatModel):
     """A deterministic chat model driven by simple prompt scenarios.
 
@@ -233,7 +293,33 @@ class ScriptedChatLLM(BaseChatModel):
         """
         # Keep a tiny await to preserve async scheduling semantics.
         await asyncio.sleep(0.0)
-        return self._generate_native(messages)
+        result = self._generate_native(messages)
+
+        callbacks = _extract_callbacks(kwargs)
+        if callbacks and isinstance(result, AIMessage):
+            content = str(result.content or "")
+            if content:
+                await self._emit_streaming_tokens(content, callbacks)
+
+        return result
+
+    async def _emit_streaming_tokens(self, content: str, callbacks: List[Any]) -> None:
+        """Emit tokens incrementally for streaming UI tests."""
+        chunks = _chunk_text(content, max_chunks=12)
+        if not chunks:
+            return
+
+        delay_seconds = 0.2
+        for idx, chunk in enumerate(chunks):
+            for callback in callbacks:
+                handler = getattr(callback, "on_llm_new_token", None)
+                if handler is None:
+                    continue
+                result = handler(chunk)
+                if asyncio.iscoroutine(result):
+                    await result
+            if idx < len(chunks) - 1:
+                await asyncio.sleep(delay_seconds)
 
     def _get_sequenced_response(self, prompt: str) -> Optional[AIMessage]:
         """Return a sequenced response if one matches the prompt and call count.
@@ -376,6 +462,10 @@ class ScriptedChatLLM(BaseChatModel):
                     final_text = "Task completed successfully."
 
             return AIMessage(content=final_text, tool_calls=[])
+
+        static_reply = _static_response_for_prompt(prompt)
+        if static_reply:
+            return AIMessage(content=static_reply, tool_calls=[])
 
         # Workspace commis scenario: spawns spawn_workspace_commis with git repo and optional resume
         if role == "oikos" and scenario and scenario.get("name") == "workspace_commis_oikos":
