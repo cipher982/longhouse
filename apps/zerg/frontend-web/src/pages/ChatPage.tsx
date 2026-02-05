@@ -353,6 +353,7 @@ export default function ChatPage() {
             streamingMessageId={streamingMessageId}
             pendingTokenBuffer={pendingTokenBuffer}
             onCopyMessage={handleCopyMessage}
+            threadId={effectiveThreadId}
           />
         </div>
 
