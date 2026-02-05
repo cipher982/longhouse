@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures';
+import { waitForPageReady } from './helpers/ready-signals';
 
 /**
  * COMPREHENSIVE DATABASE ISOLATION TEST
@@ -12,112 +13,69 @@ import { test, expect } from './fixtures';
 
 test.describe('Comprehensive Database Isolation', () => {
   test('Complete database isolation validation', async ({ page, request }) => {
-    console.log('🔍 Starting comprehensive database isolation test...');
-
-    // Get the commis ID from environment
     const commisId = process.env.TEST_PARALLEL_INDEX || '0';
-    console.log('📊 Commis ID:', commisId);
+    const otherCommisId = commisId === '0' ? '1' : '0';
 
     // Navigate to the app - this should trigger database initialization
-    console.log('🚀 Navigating to app...');
-    await page.goto('/');
-
-    // Wait for initial load
-    await page.waitForTimeout(2000);
-
-    // Check if we can see the app structure
-    const dashboardExists = await page.locator('.header-nav').isVisible();
-    console.log('📊 Dashboard tab visible:', dashboardExists);
-
-    if (dashboardExists) {
-      console.log('✅ App loaded successfully');
-
-      // Try to interact with the dashboard
-      await page.locator('.header-nav').click();
-      await page.waitForTimeout(1000);
-
-      // Check for any error messages
-      const errorVisible = await page.locator('.error, .alert-error, [data-testid*="error"]').isVisible();
-      console.log('📊 Error visible:', errorVisible);
-
-      if (!errorVisible) {
-        console.log('✅ Dashboard loaded without errors');
-      } else {
-        console.log('❌ Dashboard showed errors');
-      }
-    } else {
-      console.log('❌ App did not load properly');
-    }
+    await page.goto('/dashboard');
+    await waitForPageReady(page);
+    await expect(page.locator('.header-nav')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="create-fiche-btn"]')).toBeVisible({ timeout: 10000 });
 
     // Test API endpoints directly with proper headers
-    console.log('🔍 Testing API endpoints...');
-
     // Test simple health check first
-    try {
-      const healthResponse = await request.get('/api/health', {
-        headers: {
-          'X-Test-Commis': commisId,
-        }
-      });
-      console.log('📊 Health check status:', healthResponse.status());
-
-      if (healthResponse.ok()) {
-        console.log('✅ Health check passed');
-      } else {
-        console.log('❌ Health check failed');
+    const healthResponse = await request.get('/api/health', {
+      headers: {
+        'X-Test-Commis': commisId,
       }
-    } catch (error) {
-      console.log('❌ Health check error:', error);
-    }
+    });
+    expect(healthResponse.ok()).toBe(true);
 
     // Test fiche endpoint
-    try {
-      const ficheResponse = await request.get('/api/fiches', {
-        headers: {
-          'X-Test-Commis': commisId,
-        }
-      });
-      console.log('📊 Fiche API status:', ficheResponse.status());
-
-      if (ficheResponse.ok()) {
-        const fiches = await ficheResponse.json();
-        console.log('📊 Fiche count:', Array.isArray(fiches) ? fiches.length : 'not array');
-        console.log('✅ Fiche API working');
-      } else {
-        const errorText = await ficheResponse.text();
-        console.log('❌ Fiche API failed:', errorText.substring(0, 200));
+    const ficheResponse = await request.get('/api/fiches', {
+      headers: {
+        'X-Test-Commis': commisId,
       }
-    } catch (error) {
-      console.log('❌ Fiche API error:', error);
-    }
+    });
+    expect(ficheResponse.ok()).toBe(true);
+    const fiches = await ficheResponse.json();
+    expect(Array.isArray(fiches)).toBe(true);
 
     // Test fiche creation
-    console.log('🔍 Testing fiche creation...');
-    try {
-      const createResponse = await request.post('/api/fiches', {
-        headers: {
-          'X-Test-Commis': commisId,
-          'Content-Type': 'application/json',
-        },
-        data: {
-          name: `Test Fiche ${commisId}`,
-          system_instructions: 'You are a test fiche for database isolation testing',
-        }
-      });
-      console.log('📊 Fiche creation status:', createResponse.status());
-
-      if (createResponse.ok()) {
-        const fiche = await createResponse.json();
-        console.log('📊 Created fiche ID:', fiche.id);
-        console.log('✅ Fiche creation successful');
-      } else {
-        const errorText = await createResponse.text();
-        console.log('❌ Fiche creation failed:', errorText.substring(0, 200));
+    const createResponse = await request.post('/api/fiches', {
+      headers: {
+        'X-Test-Commis': commisId,
+        'Content-Type': 'application/json',
+      },
+      data: {
+        system_instructions: 'You are a test fiche for database isolation testing',
+        task_instructions: 'Respond briefly',
+        model: 'gpt-5.2',
       }
-    } catch (error) {
-      console.log('❌ Fiche creation error:', error);
-    }
+    });
+    expect(createResponse.status()).toBe(201);
+    const createdFiche = await createResponse.json();
+    expect(createdFiche.id).toBeDefined();
 
-    console.log('✅ Comprehensive database isolation test complete');
+    const ficheListAfter = await request.get('/api/fiches', {
+      headers: {
+        'X-Test-Commis': commisId,
+      }
+    });
+    expect(ficheListAfter.ok()).toBe(true);
+    const fichesAfter = await ficheListAfter.json();
+    const idsAfter = Array.isArray(fichesAfter) ? fichesAfter.map((f: any) => f.id) : [];
+    expect(idsAfter).toContain(createdFiche.id);
+
+    // Verify isolation by querying a different commis DB
+    const otherListResponse = await request.get('/api/fiches', {
+      headers: {
+        'X-Test-Commis': otherCommisId,
+      }
+    });
+    expect(otherListResponse.ok()).toBe(true);
+    const otherFiches = await otherListResponse.json();
+    const otherIds = Array.isArray(otherFiches) ? otherFiches.map((f: any) => f.id) : [];
+    expect(otherIds).not.toContain(createdFiche.id);
   });
 });
