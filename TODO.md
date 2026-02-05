@@ -13,39 +13,41 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ---
 
-## 📊 Validation Summary (2026-02-04)
+## 📊 Validation Summary (2026-02-05)
 
-**Agent audit of all TODO sections. Use this to understand current state.**
+**Audit pass across TODO vs repo + light live checks (DNS, prod health, installer URLs).**
 
-### ✅ DONE (Close/Archive)
+### ✅ DONE / VERIFIED
 | Section | Status | Notes |
 |---------|--------|-------|
-| P0 OSS GA | ✅ 100% | All 5 items verified: auth, demo, CTAs, README, QA script |
-| Post-GA Follow-ups | ✅ 100% | Rate limiting, hash support, UI fallback, demo-fresh, workflow removal |
-| OSS Auth | ✅ 100% | Password login fully implemented with rate limiting |
-| Prompt Cache Optimization | ✅ DONE | MessageArrayBuilder has correct layout. TODO was stale |
+| Post-GA Follow-ups | ✅ 100% | All five items verified in code |
+| OSS Auth | ✅ 100% | Password login + rate limiting present |
 
 ### ⚠️ PARTIALLY DONE
 | Section | Status | Notes |
 |---------|--------|-------|
-| HN Launch Readiness | 95% | Hero CTAs work. Just verify in prod |
-| Rebrand | ~80% | ~40 occurrences remain (NOT 229). Email templates + root openapi.json |
-| FTS5 Search | 25% | Search bar UI exists but uses ILIKE not FTS5. Oikos tools don't exist |
-| QA Infrastructure | 80% | Pieces exist but `make test-readmes` aggregator missing |
-| Install/Onboarding | 60% | Missing: `longhouse doctor`, device token UI, fresh-shell verify |
-| OSS First-Run UX | 50% | --demo works but onboarding doesn't seed demo data |
+| P0 OSS GA | ~90% | Auth + demo + QA script done; README/landing still overpromise and CTAs aren’t OSS-first |
+| HN Launch Readiness | ~70% | Remaining: CTA copy/flow, comparison table, social proof/video |
+| Landing Page Redesign | ~25% | Header done; hero CTAs + copy + contrast still pending |
+| Rebrand | ~65% | ~13 Swarmlet matches in core code; ~50 total incl tests/docs |
+| Prompt Cache Optimization | ~60% | Message layout correct; cache-busting fixes remain (timestamps, connector ordering, split dynamic) |
+| FTS5 Search | 25% | Search bar UI exists but uses ILIKE; no FTS5 tables or Oikos tools |
+| QA Infrastructure | 80% | `make test-readmes` aggregator + runner missing |
+| Install/Onboarding | ~50% | Missing doctor, device token UI, fresh-shell shim verify; connect default URL mismatch |
+| OSS First-Run UX | ~40% | `--demo` works, but onboarding doesn’t seed demo data or guided empty state |
+| Control Plane | ~35% | Scaffold + provisioner + admin UI exist; OAuth/billing/runtime image pending |
 
 ### ❌ NOT STARTED
 | Section | Status | Notes |
 |---------|--------|-------|
-| Landing Page Redesign | 0% | All 6 phases not started. No header, no contrast fixes |
-| Control Plane | 0% | No `apps/control-plane/` directory. Zero code exists |
 | Forum Discovery UX | 0% | Heuristic status only. No presence events, no bucket UI |
 
-### 📝 INACCURACIES CORRECTED
-- Rebrand scope: TODO said 229 occurrences — actually ~40 (most already fixed)
-- Prompt Cache: TODO said "needs reordering" — already done
-- Landing CTAs: TODO said "broken" — actually work, just need prod verification
+### 📝 INACCURACIES CORRECTED (2026-02-05)
+- Control plane scaffold exists (`apps/control-plane/` with provisioner + admin UI).
+- Wildcard DNS resolves (`*.longhouse.ai` via Cloudflare).
+- `install.sh` enforces Python 3.12+ (no longer 3.11).
+- `session_continuity.py` default LONGHOUSE_API_URL is 8080.
+- Landing CTAs are wired; issue is OSS-first copy/flow, not broken buttons.
 
 ---
 
@@ -58,9 +60,11 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 |----------|------|-----|
 | 1 | OSS Password Auth ✅ | 1 day |
 | 2 | Demo mode flag ✅ | 0.5 day |
-| 3 | Landing Page CTAs (self-hosted primary) ✅ | 0.5 day |
-| 4 | README rewrite (Timeline + install paths) ✅ | 0.5 day |
+| 3 | Landing Page CTAs (self-hosted primary) ⚠️ | 0.5 day |
+| 4 | README rewrite (Timeline + install paths) ⚠️ | 0.5 day |
 | 5 | OSS GA QA script + README onboarding contract ✅ | 1 day |
+
+**Notes:** CTAs are wired, but hero/landing copy is not OSS-first. README still overclaims FTS5 search + cross-device resume.
 
 ### P1 — Hosted Beta (Stretch)
 | Priority | Task | Est |
@@ -88,14 +92,15 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 **VISION.md describes per-user isolated instances. That doesn't exist YET.**
 
-Current reality (as of 2026-02-03):
+Current reality (as of 2026-02-05):
 - **ONE backend container** serves both `api.longhouse.ai` and `api-david.longhouse.ai`
 - **ONE frontend container** serves both `longhouse.ai` and `david.longhouse.ai`
 - **ONE SQLite database** at `/data/longhouse.db` (size varies; check on server)
-- **No control plane** — can't provision per-user instances
+- **No production control plane** — repo scaffold exists but not wired to signup/billing
 - **"david.longhouse.ai" is cosmetic** — just DNS routing to shared infra
+- **Prod health logs** show Alembic upgrade failure (`20260131_llm_audit` missing) but server starts
 
-**Target state:** Control plane provisions isolated containers per user (Docker API + Traefik labels). See VISION.md for architecture.
+**Target state:** Control plane provisions isolated containers per user (Docker API + Caddy labels; Traefik optional). See VISION.md for architecture.
 
 See this file for the current launch analysis.
 
@@ -152,28 +157,27 @@ See this file for the current launch analysis.
 
 **⚠️ DEPENDS ON LAUNCH DECISION:**
 - **OSS GA (current):** Hero should emphasize `install.sh`, self-host, "your data stays local"
-- **Hosted Beta:** Secondary CTA or "Join waitlist" copy
+- **Hosted Beta:** Secondary CTA or "Join waitlist" copy only
 
 Current copy is a mix of both stories. Align to OSS-first primary.
 
-**Problems identified (2026-02-03):**
-1. Sign-in button is ghost variant, bottom of hero — hard to see, weird position
+**Problems identified (2026-02-05):**
+1. Hero CTAs are ghost + not OSS-first (primary action should be install/self-host)
 2. Colors too dark — low contrast text, cards blend into background
-3. No clear user path differentiation (self-hosted vs cloud vs paid)
-4. No sticky header — can't navigate or sign in without scrolling up
-5. Current story (AI That Knows You, integrations) is OLD — new story is Timeline + Search + Resume
-6. **NEW:** Several CTA buttons don't work or lead to broken flows
+3. No explicit self-host vs hosted paths; waitlist CTA is buried
+4. Story copy overpromises cross-provider + FTS5 + resume-anywhere
+5. Several CTAs route to sign-in modal even on marketing-only (should emphasize install/scroll)
 
-### Phase 1: Header + Navigation (2 hours)
+### Phase 1: Header + Navigation (done)
 
 Add a persistent sticky header following dev-tool best practices (Vercel, Supabase, Railway).
 
-- [ ] Create `LandingHeader.tsx` component with sticky positioning
-- [ ] Left: Logo + "Longhouse" wordmark
-- [ ] Center: Product | Docs | Pricing | Enterprise (or Self-host)
-- [ ] Right: "Sign In" (secondary) + "Get Started" (primary CTA)
-- [ ] Mobile: hamburger menu
-- [ ] Add to `LandingPage.tsx` above hero
+- [x] Create `LandingHeader.tsx` component with sticky positioning
+- [x] Left: Logo + "Longhouse" wordmark
+- [x] Center: Product | Docs | Pricing | Enterprise (or Self-host)
+- [x] Right: "Sign In" (secondary) + "Get Started" (primary CTA)
+- [x] Mobile: hamburger menu
+- [x] Add to `LandingPage.tsx` above hero
 
 **Design notes:**
 - Header bg: slightly lighter than page bg (elevation via lightening, not shadows)
@@ -184,23 +188,23 @@ Add a persistent sticky header following dev-tool best practices (Vercel, Supaba
 
 ### Phase 2: User Path Differentiation (2 hours)
 
-Make Cloud / Self-host / Enterprise paths explicit with distinct CTAs.
+Make Self-host / Hosted Beta / Enterprise paths explicit with distinct CTAs.
 
 **Option A: Hero with dual path**
-- [ ] Primary CTA: "Start Free" → Cloud signup (highlighted, brand color)
-- [ ] Secondary CTA: "Self-host" → scrolls to install section
+- [ ] Primary CTA: "Install (Self-host)" → scrolls to install section
+- [ ] Secondary CTA: "Hosted Beta" → waitlist modal
 - [ ] Tertiary link: "Enterprise →" below
 
 **Option B: Three-card section below hero**
-- [ ] Add `DeploymentOptions.tsx` with 3 cards: Cloud Beta | Self-hosted | Enterprise
+- [ ] Add `DeploymentOptions.tsx` with 3 cards: Self-hosted | Hosted Beta | Enterprise
 - [ ] Each card: 1-line promise, 3 features, dedicated CTA
-- [ ] Cloud: "Start Free" → signup modal
 - [ ] Self-host: "Install CLI" → install section
+- [ ] Hosted: "Join Waitlist" → waitlist modal
 - [ ] Enterprise: "Contact Us" → mailto or form
 
 **Recommended approach:** Option A for hero simplicity + Option B as separate section
 
-- [ ] Update `HeroSection.tsx` CTAs to emphasize Cloud path
+- [ ] Update `HeroSection.tsx` CTAs to emphasize Self-host path
 - [ ] Create `DeploymentOptions.tsx` section
 - [ ] Add comparison table: who runs it, data residency, support, upgrade path
 
@@ -240,15 +244,15 @@ Move Sign In to header, restructure hero CTAs for clarity.
 
 **Target:**
 ```
-[Start Free - Cloud] [Self-host →]  ← clear primary + secondary
-[No credit card • Works offline • <2min setup]
+[Install (Self-host)] [Hosted waitlist →]  ← clear primary + secondary
+[Works offline • <2min setup • Your data stays local]
 ```
 
 - [ ] Remove "Sign In" from hero (it's now in header)
-- [ ] Primary CTA: "Start Free" (triggers signup modal or goes to /signup)
-- [ ] Secondary CTA: "Self-host →" (scrolls to install section OR links to docs)
+- [ ] Primary CTA: "Install (Self-host)" (scrolls to install section)
+- [ ] Secondary CTA: "Hosted Beta →" (waitlist modal)
 - [ ] Keep install command section but position as "Self-host" path
-- [ ] Add friction reducers: "No credit card", "Free during beta", etc.
+- [ ] Add friction reducers: "Works offline", "Your data stays local", "Free during beta"
 
 **Files:** `HeroSection.tsx`, `InstallSection.tsx`
 
@@ -258,13 +262,13 @@ Update copy to match VISION.md value prop: Timeline + Search + Resume.
 
 **Hero copy:**
 - [ ] Headline: "Never lose an AI coding conversation" (or similar)
-- [ ] Subhead: "Search across Claude, Codex, Cursor, Gemini. Resume from anywhere."
-- [ ] Note: "Free cloud workspace during beta. Self-host anytime."
+- [ ] Subhead: "Claude Code sessions in one searchable timeline. Other providers coming soon."
+- [ ] Note: "Local-first. Self-host anytime. Hosted beta waitlist."
 
 **How It Works:**
-- [ ] Step 1: "Install" → Your sessions sync automatically
-- [ ] Step 2: "Search" → Find where you solved it (FTS5 instant)
-- [ ] Step 3: "Resume" → Continue from any device (commis)
+- [ ] Step 1: "Install" → Claude Code sync today (others coming)
+- [ ] Step 2: "Search" → Keyword search now (FTS5 planned)
+- [ ] Step 3: "Resume" → Forum resume is Claude-only; Timeline resume planned
 
 **Cut/minimize:**
 - [ ] IntegrationsSection (wrong story — we're not about connecting apps)
@@ -287,7 +291,7 @@ Update screenshots to show Timeline, not old dashboard.
 
 ### Checklist (dev-tool landing page best practices 2025-26)
 
-- [ ] Above fold: Cloud / Self-host paths with distinct CTAs
+- [ ] Above fold: Self-host primary, hosted beta secondary
 - [ ] Header: Docs + Pricing reachable in 1 click
 - [ ] CTAs: hero + header + mid-page + footer; labels match next step
 - [ ] Dark theme: text ≥ 4.5:1, UI components ≥ 3:1, visible focus indicators
@@ -616,7 +620,7 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [Infra/docs] API host mismatch: backend is configured for `api-david.longhouse.ai`, but TODO Domain Split still references `api.david.longhouse.ai`. `curl https://api-david.longhouse.ai/health` returns 200; `curl https://api.david.longhouse.ai/health` fails, and container labels only include `api-david.longhouse.ai`.
 - [Infra/docs] `longhouse.ai/install.sh` serves the SPA HTML (not the installer). The working installer URL is `get.longhouse.ai/install.sh` (302 to GitHub raw). ✅ FIXED: Scripts now use correct URL.
 - [Infra/docs] Wildcard DNS claim is stale: `dig foo.longhouse.ai` returns no records, so `*.longhouse.ai` does not appear to be configured. ✅ FIXED: VISION now says "needs setup".
-- [Infra/docs] DB size is outdated: docs say `/data/longhouse.db (~2.5GB)` but current file is ~3.5GB (`/data/longhouse.db`). Update TODO launch notes.
+- [Infra/docs] DB size claim likely stale; re-check `/data/longhouse.db` on server and update docs/launch notes.
 - [Docs vs code] Install script installs Python 3.11, but `pyproject.toml` requires `>=3.12`. `scripts/install.sh` should install 3.12+ (or lower the requirement).
 - [Docs vs code] Shipper defaults to `http://localhost:47300`, while `longhouse serve` defaults to 8080 and README uses 8080. Running `longhouse connect` with no `--url` will target the wrong port.
 - ✅ FIXED: [Docs vs code] VISION mentions `longhouse up` and port `30080` for OSS. CLI is `longhouse serve` and default port is `8080`. (VISION updated to `longhouse serve` and port 8080)
@@ -625,7 +629,7 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [Docs vs code] Workspace paths in VISION are `~/.longhouse/workspaces/...` and artifacts in `~/.longhouse/artifacts`, but current defaults are `/var/oikos/workspaces` and `settings.data_dir` (`/data` in Docker or repo `data/`). Session resume temp workspaces default to `/tmp/zerg-session-workspaces`.
 - [Docs vs code] VISION control-plane section lists `apps/control-plane/` file tree, but no such directory exists in repo (plan vs reality is unclear).
 - [Docs vs infra] VISION control-plane routing assumes Traefik labels; current infra uses Caddy (coolify-proxy with Caddy labels). If Traefik is intended, docs should say so and note migration.
-- [Docs vs release] PyPI latest is `longhouse` 0.1.1, but repo `pyproject.toml` is 0.1.2. Launch notes still claim no PyPI package; README implies `pip install` yields current features.
+- [Docs vs release] PyPI version likely lags repo; verify `longhouse` version on PyPI before making release claims.
 - [Docs vs code] README + HN launch copy claim search across Claude/Codex/Cursor/Gemini, but shipper/parser only supports Claude Code JSONL. Demo seeds include Codex/Gemini, but real ingest is Claude-only.
 - [Docs] Launch notes say MIT license; repo LICENSE and pyproject are Apache-2.0.
 - [Docs] Launch notes checklist says “README has screenshot (done!)” but README has no image.
