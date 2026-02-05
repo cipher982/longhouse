@@ -186,3 +186,5 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-04) [arch] Sauron is folded into the standard Longhouse instance; scheduled jobs run in-process per user, not as a separate service.
 - (2026-02-04) [product] Jobs are core; default to local instance job manifests (no repo required). Private git sync (e.g., `sauron-jobs`) is just one storage option.
 - (2026-02-04) [product] Jobs should live in a local repo inside the instance and auto-commit changes; optional UI-driven remote sync (e.g., GitHub) for backups.
+- (2026-02-04) [fix] Jobs repo API endpoints wired: `get_jobs_repo_status()`, `init_jobs_repo()`, `sync_jobs_repo()` now exported from `jobs_repo.py`; `enable()`/`disable()` call `auto_commit_if_dirty()`.
+- (2026-02-04) [arch] Local manifest loading already works—`/data/jobs/manifest.py` loads when `JOBS_GIT_REPO_URL` not set. Job queue env-gate only affects backfill (cron still fires).
