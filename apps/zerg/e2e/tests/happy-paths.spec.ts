@@ -439,12 +439,25 @@ test.describe('Navigation', () => {
 // ============================================================================
 
 test.describe('Chat UI', () => {
-  test.skip('CHAT 1: Follow-up message in same thread', async ({ page }) => {
-    // Skipped: This test requires waiting for LLM to finish processing the first message
-    // before the send button is re-enabled for the follow-up. Without LLM mocking,
-    // this test times out waiting for the LLM response.
-    // Enable when mock LLM server is available.
-    test.skip(true, 'LLM streaming not stubbed – skipping until mock server available');
+  test('CHAT 1: Follow-up message in same thread', async ({ page }) => {
+    const ficheId = await createFicheViaUI(page);
+    await navigateToChat(page, ficheId);
+
+    const firstMessage = 'First message';
+    const followupMessage = 'Second message';
+
+    await sendMessage(page, firstMessage);
+    await expect(page.getByTestId('messages-container')).toContainText(firstMessage, { timeout: 10000 });
+
+    // Wait for send button to be usable again (mutation settled)
+    const sendBtn = page.locator('[data-testid="send-message-btn"]');
+    await expect(sendBtn).toBeEnabled({ timeout: 10000 });
+
+    await sendMessage(page, followupMessage);
+    await expect(page.getByTestId('messages-container')).toContainText(followupMessage, { timeout: 10000 });
+
+    const userMessages = page.locator('[data-role="chat-message-user"]');
+    await expect(userMessages).toHaveCount(2);
   });
 
   test('CHAT 2: Empty thread displays appropriate state', async ({ page }) => {
