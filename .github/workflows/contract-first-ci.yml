@@ -130,6 +130,8 @@ jobs:
       # Life Hub credentials for session continuity tests
       LIFE_HUB_API_KEY: ${{ secrets.LIFE_HUB_API_KEY }}
       LIFE_HUB_URL: https://data.drose.io
+      # Isolate E2E DBs per run to avoid cross-run contamination on shared runners
+      E2E_DB_DIR: /tmp/zerg_e2e_dbs/${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
     - uses: actions/checkout@v4
@@ -169,6 +171,15 @@ jobs:
 
     - name: Run E2E Tests (core + a11y)
       run: make test-e2e
+
+    - name: Upload E2E artifacts (on failure)
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: e2e-artifacts
+        path: |
+          apps/zerg/e2e/test-results
+          apps/zerg/e2e/playwright-report
 
   oss-qa:
     runs-on: ubuntu-latest

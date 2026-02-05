@@ -24,6 +24,11 @@ jobs:
     name: "🧪 Post-Deploy Smoke Test"
     runs-on: cube
     timeout-minutes: 10
+    if: ${{ github.event_name != 'schedule' || vars.SMOKE_AFTER_DEPLOY_ENABLED != 'false' }}
+    env:
+      # Default to the primary instance domain (single-domain app + API)
+      FRONTEND_URL: ${{ vars.SMOKE_FRONTEND_URL || 'https://david.longhouse.ai' }}
+      API_URL: ${{ vars.SMOKE_API_URL || 'https://david.longhouse.ai' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -38,7 +43,7 @@ jobs:
         run: |
           echo "Checking API health..."
           for i in {1..10}; do
-            if curl -sf https://api.longhouse.ai/health > /dev/null; then
+            if curl -sf "$API_URL/api/health" > /dev/null; then
               echo "✓ API is healthy"
               break
             fi
@@ -47,7 +52,7 @@ jobs:
           done
 
           echo "Checking frontend..."
-          curl -sf https://longhouse.ai > /dev/null && echo "✓ Frontend is up"
+          curl -sf "$FRONTEND_URL" > /dev/null && echo "✓ Frontend is up"
 
       - name: Run smoke tests
         env:
@@ -61,7 +66,7 @@ jobs:
         run: |
           echo "## Smoke Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Frontend:** https://longhouse.ai" >> $GITHUB_STEP_SUMMARY
-          echo "- **API:** https://api.longhouse.ai" >> $GITHUB_STEP_SUMMARY
+          echo "- **Frontend:** $FRONTEND_URL" >> $GITHUB_STEP_SUMMARY
+          echo "- **API:** $API_URL" >> $GITHUB_STEP_SUMMARY
           echo "- **Triggered by:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
