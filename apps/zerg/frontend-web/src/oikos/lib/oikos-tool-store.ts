@@ -701,12 +701,16 @@ class OikosToolStore {
    * Future: load tools from persisted data (for thread reload)
    */
   loadTools(tools: OikosToolCall[]): void {
-    const newTools = new Map<string, OikosToolCall>();
+    const newTools = new Map<string, OikosToolCall>(this.state.tools);
+    let added = 0;
     for (const tool of tools) {
-      newTools.set(tool.toolCallId, tool);
+      if (!newTools.has(tool.toolCallId)) {
+        newTools.set(tool.toolCallId, tool);
+        added += 1;
+      }
     }
     this.setState({ tools: newTools });
-    logger.debug(`[OikosToolStore] Loaded ${tools.length} tools from history`);
+    logger.debug(`[OikosToolStore] Loaded ${tools.length} tools from history (added ${added})`);
   }
 }
 
