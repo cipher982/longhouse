@@ -178,13 +178,20 @@ class AgentsStore:
 
         matches: dict[UUID, dict[str, Any]] = {}
         for row in rows:
+            session_id = row.session_id
+            if isinstance(session_id, str):
+                try:
+                    session_id = UUID(session_id)
+                except ValueError:
+                    # Keep raw value if it can't be parsed; avoids hard failure on bad data.
+                    pass
             snippet = (
                 self._build_snippet(row.content_text, query)
                 or self._build_snippet(row.tool_output_text, query)
                 or self._build_snippet(row.tool_name, query)
                 or ""
             )
-            matches[row.session_id] = {
+            matches[session_id] = {
                 "event_id": row.event_id,
                 "snippet": snippet,
                 "role": row.role,
@@ -210,7 +217,16 @@ class AgentsStore:
                 text("SELECT DISTINCT session_id FROM events_fts WHERE events_fts MATCH :query"),
                 {"query": self._fts_query(query)},
             ).fetchall()
-            return [row[0] for row in rows]
+            session_ids: list[UUID] = []
+            for row in rows:
+                session_id = row[0]
+                if isinstance(session_id, str):
+                    try:
+                        session_id = UUID(session_id)
+                    except ValueError:
+                        continue
+                session_ids.append(session_id)
+            return session_ids
         except Exception as exc:
             raise RuntimeError(f"FTS5 search failed: {exc}") from exc
 
