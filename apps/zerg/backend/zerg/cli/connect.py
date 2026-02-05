@@ -231,7 +231,7 @@ def ship(
 
     # Load stored credentials if not provided
     if not url:
-        url = get_zerg_url(config_dir) or "http://localhost:47300"
+        url = get_zerg_url(config_dir) or "http://localhost:8080"
     if not token:
         token = load_token(config_dir)
 
@@ -350,7 +350,7 @@ def connect(
 
     # Load stored credentials if not provided
     if not url:
-        url = get_zerg_url(config_dir) or "http://localhost:47300"
+        url = get_zerg_url(config_dir) or "http://localhost:8080"
     if not token:
         token = load_token(config_dir)
 
