@@ -26,12 +26,12 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 ### ⚠️ PARTIALLY DONE
 | Section | Status | Notes |
 |---------|--------|-------|
-| P0 Launch Core | ~85% | Auth + demo + CTAs + README done; FTS5 backend done; hosted beta + search UX polish pending |
+| P0 Launch Core | ~90% | Auth + demo + CTAs + README + FTS5 search done; hosted beta still pending |
 | HN Launch Readiness | ~55% | Remaining: CTA copy/flow, comparison table, social proof/video |
 | Landing Page Redesign | ~20% | Header done; hero CTAs + copy + contrast still pending |
 | Rebrand | ~65% | ~13 Swarmlet matches in core code; ~50 total incl tests/docs |
 | Prompt Cache Optimization | ~20% | Message layout correct; cache-busting fixes remain (timestamps, connector ordering, split dynamic) |
-| FTS5 Search | ~60% | FTS5 table + backend query live; UI highlights + Oikos tools pending |
+| FTS5 Search | ~75% | FTS5 table + backend query + snippets/jump; Oikos tools + semantic search pending |
 | QA Infrastructure | ~10% | UI capture fix done; readme test runner + CI still missing |
 | Install/Onboarding | ~15% | Missing doctor, device token UI, fresh-shell shim verify; connect default URL mismatch |
 | OSS First-Run UX | ~25% | `--demo` works, but onboarding doesn’t seed demo data or guided empty state |
@@ -613,8 +613,9 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [x] Add FTS5 virtual table for `agents.events` content (`content_text`, `tool_name`, etc.)
 - [x] Use FTS5 for session queries on `GET /api/agents/sessions?query=...`
 - [x] Add search bar UI to Timeline page (debounced, instant results)
-- [ ] Results show matching snippets with highlights
-- [ ] Click result → opens session detail at relevant event
+- [x] Add match snippets + event jump for query results (backend + UI)
+- [x] Results show matching snippets with highlights
+- [x] Click result → opens session detail at relevant event
 
 **Files:** `models/agents.py`, `services/agents_store.py`, `routers/agents.py`, `SessionsPage.tsx`
 
