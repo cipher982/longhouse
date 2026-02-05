@@ -180,3 +180,4 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-05) [security] Avoid storing admin tokens in AI session notes; rotate any exposed token immediately.
 - (2026-02-05) [ci] Provisioning E2E runs on cube ARC (DIND), builds runtime image, provisions instance, and hits health + timeline smoke checks.
 - (2026-02-05) [ops] Instance health uses `/api/system/health`; `/health` caches single-tenant bootstrap failures until restart.
+- (2026-02-05) [ops] longhouse.ai and api.longhouse.ai currently return HTTP 525 (Cloudflare origin handshake failure); smoke-after-deploy health checks fail.
