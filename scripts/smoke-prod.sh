@@ -669,7 +669,6 @@ if [[ -n "$SMOKE_TEST_SECRET" ]]; then
         run_test test_http_auth "User profile (authed)" "$API_URL/api/users/me" "200" "$COOKIE_JAR"
 
         if [[ $RUN_LLM -eq 1 ]]; then
-            local llm_available
             llm_available=$(curl -s "$API_URL/api/system/capabilities" 2>/dev/null | jq -r '.llm_available // "unknown"' 2>/dev/null)
             if [[ "$llm_available" != "true" ]]; then
                 warn "LLM unavailable (llm_available=$llm_available) - skipping LLM tests"
