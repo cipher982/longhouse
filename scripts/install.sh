@@ -52,7 +52,7 @@ detect_platform() {
     if [[ -f /proc/version ]] && grep -qi microsoft /proc/version; then
         warn "Running in WSL (Windows Subsystem for Linux)"
         warn "  - systemd may not be available for background services"
-        warn "  - You can still run 'longhouse connect --foreground' manually"
+        warn "  - You can still run 'longhouse connect' manually"
         echo ""
     fi
 

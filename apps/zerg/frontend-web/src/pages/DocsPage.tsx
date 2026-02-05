@@ -1,3 +1,5 @@
+// TODO: This page still describes the old fiche/canvas/dashboard workflow with Google sign-in.
+// It needs a full rewrite to reflect the current timeline-first OSS product (install, timeline, search, resume).
 import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { SwarmLogo } from "../components/SwarmLogo";

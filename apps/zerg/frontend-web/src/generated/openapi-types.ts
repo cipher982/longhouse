@@ -6887,6 +6887,21 @@ export interface components {
              * @description Tool call count
              */
             tool_calls: number;
+            /**
+             * Match Event Id
+             * @description Matching event id for search queries
+             */
+            match_event_id?: number | null;
+            /**
+             * Match Snippet
+             * @description Snippet of matching content
+             */
+            match_snippet?: string | null;
+            /**
+             * Match Role
+             * @description Role for matching event
+             */
+            match_role?: string | null;
         };
         /**
          * SessionSummaryResponse
@@ -10104,7 +10119,6 @@ export interface operations {
             query: {
                 enroll_token: string;
                 runner_name?: string | null;
-                swarmlet_url?: string | null;
                 longhouse_url?: string | null;
                 mode?: string | null;
             };
