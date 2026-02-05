@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import "@testing-library/jest-dom/vitest";
-import { vi, beforeAll, afterAll } from "vitest";
+import { cleanup } from "@testing-library/react";
+import { vi, beforeAll, afterAll, afterEach } from "vitest";
 
 // Suppress expected test output
 // These are warnings/errors that are deliberately triggered by tests verifying edge case handling
@@ -28,6 +29,10 @@ beforeAll(() => {
 afterAll(() => {
   console.warn = originalWarn;
   console.error = originalError;
+});
+
+afterEach(() => {
+  cleanup();
 });
 
 vi.mock("../lib/auth", () => {
