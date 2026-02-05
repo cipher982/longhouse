@@ -530,6 +530,7 @@ Package and binary naming so OSS users see Longhouse everywhere.
 - [x] Decide npm scope/name for runner: `@longhouse/runner` (package.json already uses this)
 - [ ] Update docker image name in README/examples (ghcr.io/.../longhouse)
 - [ ] Update installer scripts to new names (install-runner still points at `daverosedavis/zerg`)
+- [ ] Update default runner image name (`RUNNER_DOCKER_IMAGE` defaults to `ghcr.io/cipher982/zerg-runner:latest`)
 
 ---
 
