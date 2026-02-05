@@ -64,30 +64,6 @@ test.describe('Fiche scheduling UI', () => {
     }
   });
 
-  test('Edit existing schedule placeholder', async () => {
-    test.skip();
-  });
-
-  test('Remove schedule placeholder', async () => {
-    test.skip();
-  });
-
-  test('Verify next_run_at displays correctly placeholder', async () => {
-    test.skip();
-  });
-
-  test('Scheduled status indicator placeholder', async () => {
-    test.skip();
-  });
-
-  test('Schedule in different timezones placeholder', async () => {
-    test.skip();
-  });
-
-  test('View last_run_at after execution placeholder', async () => {
-    test.skip();
-  });
-
   test('Test invalid cron expressions', async ({ page }) => {
     await createAndOpenConfig(page);
 
