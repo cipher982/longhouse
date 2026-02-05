@@ -258,7 +258,7 @@ test.describe('Error Handling and Edge Cases', () => {
 
     // Navigate to application
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await expect(page.locator('.header-nav')).toBeVisible({ timeout: 10000 });
 
     // Test 1: Network connectivity loss simulation
     console.log('📊 Test 1: Network connectivity simulation');
@@ -280,7 +280,7 @@ test.describe('Error Handling and Edge Cases', () => {
 
       // Restore connectivity
       await page.context().setOffline(false);
-      await page.waitForLoadState('networkidle');
+      await expect(page.locator('.header-nav')).toBeVisible({ timeout: 10000 });
 
       console.log('✅ Network connectivity simulation completed');
     } catch (error) {
@@ -321,7 +321,7 @@ test.describe('Error Handling and Edge Cases', () => {
 
     // Navigate back to main app
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await expect(page.locator('.header-nav')).toBeVisible({ timeout: 10000 });
 
     // Try various UI interactions that might cause errors - wait for elements
     const chatTab = page.getByTestId('global-chat-tab');

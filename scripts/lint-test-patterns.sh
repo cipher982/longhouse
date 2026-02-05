@@ -24,23 +24,9 @@ failed=0
 # New violations in these files will still be caught if the pattern count increases.
 # To remove a file from allowlist, fix all its violations first.
 # =============================================================================
-ALLOWLIST_TIMEOUT=(
-  "accessibility_ui_ux.spec.ts"
-  "agent_scheduling.spec.ts"
-  "canvas_workflows.spec.ts"
-  "supervisor-tool-visibility.spec.ts"
-  "workflow_execution_http.spec.ts"
-  "workflow_execution.spec.ts"
-)
+ALLOWLIST_TIMEOUT=()
 
-ALLOWLIST_NETWORKIDLE=(
-  "agent_creation_full.spec.ts"
-  "agent_creation.spec.ts"
-  "automation_history.spec.ts"
-  "error_handling_edge_cases.spec.ts"
-  "worker_isolation.spec.ts"
-  "workflow_execution.spec.ts"
-)
+ALLOWLIST_NETWORKIDLE=()
 
 # Helper: check if filename is in allowlist
 is_in_allowlist() {

@@ -61,6 +61,9 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 - E2E: comprehensive_database_isolation now asserts API + commis isolation without timeouts; removed allowlist entry
 - E2E: core-journey commis drawer test now locates card by nested tool text to avoid CI flake
 - CI: provision-e2e now waits for control-plane deps before health check (avoid false failures)
+- E2E: automation_history now uses chat ready signals instead of networkidle; removed allowlist entry
+- E2E: error_handling_edge_cases now waits on real UI signals (no networkidle)
+- E2E: accessibility_ui_ux no longer uses arbitrary timeouts; lint allowlist cleared
 
 ### 🛠 Ops Changes (prod)
 - Re-created `longhouse-david` container on zerg (PUBLIC_SITE_URL=https://david.longhouse.ai, SINGLE_TENANT=0, SMOKE_TEST_SECRET set, latest runtime image pulled) — stopgap until control-plane provisioning owns this.
