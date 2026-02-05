@@ -99,6 +99,29 @@ test.describe('Chat Send - Core', () => {
     await expect(messagesContainer).toContainText(testMessage, { timeout: 15000 });
   });
 
+  test('assistant stream appears and completes', async ({ page }) => {
+    const ficheId = await createFicheViaUI(page);
+    await navigateToChat(page, ficheId);
+
+    const testMessage = 'Say hello in exactly 10 words';
+    await sendMessage(page, testMessage);
+
+    const streamingMessage = page.locator('[data-streaming="true"]').first();
+    await expect(streamingMessage).toBeVisible({ timeout: 15000 });
+
+    const messageContent = streamingMessage.locator('.message-content');
+    const getContentLength = async () => {
+      const content = await messageContent.textContent();
+      return content?.length || 0;
+    };
+
+    await expect.poll(getContentLength, { timeout: 8000 }).toBeGreaterThan(0);
+
+    const finalMessage = page.locator('[data-role="chat-message-assistant"]').last();
+    await expect(finalMessage).not.toHaveAttribute('data-streaming', 'true', { timeout: 15000 });
+    await expect(finalMessage).toContainText(/hello/i);
+  });
+
   test('input clears after sending message', async ({ page }) => {
     const ficheId = await createFicheViaUI(page);
     await navigateToChat(page, ficheId);
