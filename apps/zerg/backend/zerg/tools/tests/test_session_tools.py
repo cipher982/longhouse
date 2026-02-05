@@ -13,7 +13,10 @@ from zerg.database import make_engine
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
+from zerg.tools.builtin import BUILTIN_TOOLS
 from zerg.tools.builtin import session_tools
+from zerg.tools.registry import ImmutableToolRegistry
+from zerg.tools.unified_access import create_tool_resolver
 
 
 def _seed_session(engine) -> str:
@@ -136,3 +139,20 @@ def test_get_session_detail_returns_events(tmp_path, monkeypatch):
     data = result["data"]
     assert data["session"]["id"] == session_id
     assert len(data["events"]) >= 1
+
+
+def test_tool_resolver_invokes_search_sessions(tmp_path, monkeypatch):
+    engine = make_engine(f"sqlite:///{tmp_path / 'resolver.db'}")
+    initialize_database(engine)
+    _seed_session(engine)
+    _patch_db_session(monkeypatch, engine)
+
+    registry = ImmutableToolRegistry.build([BUILTIN_TOOLS])
+    resolver = create_tool_resolver(registry)
+
+    tool = resolver.get_tool("search_sessions")
+    assert tool is not None
+
+    result = tool.invoke({"query": "alpha", "limit": 5})
+    assert result["ok"] is True
+    assert result["data"]["sessions"]
