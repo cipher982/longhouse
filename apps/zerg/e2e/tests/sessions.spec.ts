@@ -6,6 +6,7 @@
  * In a fresh test DB, the empty state will be shown.
  */
 
+import { randomUUID } from 'crypto';
 import { test, expect, type Page } from './fixtures';
 
 async function ensureDemoProviders(page: Page): Promise<void> {
@@ -80,6 +81,57 @@ test.describe('Sessions Page', () => {
 
     // URL should include query param (auto-polls for debounce)
     await expect(page).toHaveURL(/query=test\+query|query=test%20query/);
+  });
+
+  test('Search results show snippet and jump to matching event', async ({ page, request }) => {
+    const sessionId = randomUUID();
+    const timestamp = new Date().toISOString();
+    const magicToken = 'krypton-needle';
+
+    const ingest = await request.post('/api/agents/ingest', {
+      data: {
+        id: sessionId,
+        provider: 'claude',
+        environment: 'test',
+        project: 'fts-e2e',
+        device_id: 'e2e-device',
+        cwd: '/tmp',
+        git_repo: null,
+        git_branch: null,
+        started_at: timestamp,
+        events: [
+          {
+            role: 'user',
+            content_text: `Find ${magicToken} in this session`,
+            timestamp,
+            source_path: '/tmp/session.jsonl',
+            source_offset: 0,
+          },
+        ],
+      },
+    });
+
+    expect(ingest.ok()).toBe(true);
+
+    await page.goto('/timeline');
+    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+
+    const searchInput = page.locator('input[type="search"]');
+    await searchInput.fill(magicToken);
+    await expect(page).toHaveURL(new RegExp(`query=${magicToken}`));
+
+    const sessionCard = page.locator('.session-card', { hasText: 'fts-e2e' }).first();
+    await expect(sessionCard).toBeVisible();
+
+    const snippet = sessionCard.locator('.session-card-snippet');
+    await expect(snippet).toContainText(magicToken);
+    await expect(snippet.locator('mark.search-highlight')).toBeVisible();
+
+    await sessionCard.click();
+
+    await expect(page).toHaveURL(new RegExp(`/timeline/${sessionId}.*event_id=`));
+    const highlight = page.locator('.event-highlight');
+    await expect(highlight).toContainText(magicToken);
   });
 
   test('Clear filters button removes all filters', async ({ page }) => {
