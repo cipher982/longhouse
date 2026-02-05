@@ -106,6 +106,13 @@ See this file for the current launch analysis.
 
 ---
 
+## [Infra] Migration Health / Alembic Drift (2)
+
+- [ ] Fix missing Alembic revision `20260131_llm_audit` seen in prod health logs; migrations should run cleanly on SQLite.
+- [ ] Verify Alembic env uses SQLite (not PostgresqlImpl) in runtime containers and health checks.
+
+---
+
 ## [Launch] 🚨 OSS Auth — Password Login for Self-Hosters (3)
 
 **Priority: CRITICAL for HN launch**
@@ -312,7 +319,7 @@ Update screenshots to show Timeline, not old dashboard.
 - [x] **Password-only config bug** — `_validate_required()` now skips Google OAuth validation when password auth is configured
   - File: `apps/zerg/backend/zerg/config/__init__.py:512`
   - Fixed: Skip Google OAuth validation if `LONGHOUSE_PASSWORD` or `LONGHOUSE_PASSWORD_HASH` is set
-- [ ] **Landing page CTAs** — Several buttons don't work or lead nowhere
+- [ ] **Landing page CTAs** — Copy/flow not OSS-first; some CTAs route to sign-in modal instead of install
 
 ### High Priority
 
@@ -354,21 +361,21 @@ Update screenshots to show Timeline, not old dashboard.
 - Wildcard DNS `*.longhouse.ai` ✅ configured (2026-02-04), proxied through Cloudflare.
 - Runtime image: `docker/runtime.dockerfile` bundles frontend + backend in single container.
 
-### Phase 0: Routing + DNS Reality Check ✅ DONE
+### Phase 0: Routing + DNS Reality Check ⚠️ PARTIAL
 
-- [x] Wildcard DNS `*.longhouse.ai` configured in Cloudflare (A record → 5.161.92.127, proxied)
-- [x] Routing layer: Caddy (existing coolify-proxy) with caddy-docker-proxy labels
-- [x] Manual provision smoke test: test2, test3 instances provisioned and routed
-- [ ] Add control-plane → instance auth bridge endpoint (control plane issues token; instance sets cookie for owner).
+- [x] Wildcard DNS `*.longhouse.ai` resolves via Cloudflare (verified 2026-02-05)
+- [ ] Routing layer: Caddy (existing coolify-proxy) with caddy-docker-proxy labels (needs live verify)
+- [ ] Manual provision smoke test: test2/test3 instances provisioned + routed (needs rerun)
+- [ ] Add control-plane → instance auth bridge endpoint (control plane issues token; instance sets cookie for owner)
 
-### Phase 1: Scaffold + Auth ✅ DONE
+### Phase 1: Scaffold + Auth ⚠️ PARTIAL
 
 - [x] Create `apps/control-plane/` directory structure (FastAPI app, models, routers, services)
 - [x] Add provisioner service (Docker API client with Caddy labels)
 - [x] Add Instance model with subdomain, container_name, state
 - [x] Admin API + minimal HTML UI for manual provisioning
 - [ ] Add Google OAuth (control plane only, not per-instance)
-- [ ] Add User model with Stripe fields
+- [x] Add User model with Stripe fields (fields only; no Stripe logic yet)
 
 ### Phase 2: Stripe Integration (3)
 
@@ -404,11 +411,11 @@ Update screenshots to show Timeline, not old dashboard.
 
 **Files:** `apps/control-plane/`, `docker/runtime.dockerfile`
 
-**Infra status:**
-- ✅ Caddy (coolify-proxy) on zerg handles subdomain routing via caddy-docker-proxy labels
-- ✅ Wildcard DNS `*.longhouse.ai` configured in Cloudflare (proxied)
-- ✅ Docker socket access from control plane container
-- ✅ Postgres for control plane DB (separate container via docker-compose)
+**Infra status (needs live verify unless noted):**
+- ⚠️ Caddy (coolify-proxy) on zerg handles subdomain routing via caddy-docker-proxy labels
+- ✅ Wildcard DNS `*.longhouse.ai` resolves (verified 2026-02-05)
+- ⚠️ Docker socket access from control plane container
+- ⚠️ Postgres for control plane DB (separate container via docker-compose)
 - ⏳ Runtime image needs build + push to ghcr.io
 
 ---
@@ -417,7 +424,7 @@ Update screenshots to show Timeline, not old dashboard.
 
 Ensure launch readiness without relying on scattered docs.
 
-- [ ] Rewrite README to center Timeline value and 3 install paths.
+- [ ] Rewrite README to center Timeline value and 3 install paths (structure done; truth pass needed for FTS5/resume/providers).
 - [ ] Add CTA from Chat to "View session trace" after a run.
 - [ ] Improve Timeline detail header (goal, repo/project, duration, status).
 - [ ] Add basic metrics (tool count, duration, latency if available).
@@ -472,8 +479,9 @@ Make the Forum the canonical discovery UI for sessions, with **explicit** state 
 Eliminate the "empty timeline" anticlimactic moment and improve discovery for users without Claude Code.
 
 - [ ] Seed demo session data on first `longhouse onboard` run (shows what the timeline looks like)
+- [ ] Add guided empty state with "Load demo" CTA + connect shipper steps (VISION)
 - [ ] Improve "No Claude Code" guidance in onboard wizard (link to alternatives, explain what to do next)
-- [ ] Consider demo mode flag for `longhouse serve --demo` (starts with pre-loaded sessions for exploration)
+- [x] `longhouse serve --demo` / `--demo-fresh` supported (demo DB)
 
 ---
 
@@ -484,6 +492,7 @@ Close the gap between VISION, README, docs, and the live installer.
 - [x] **Canonical install path**: `install.sh` is primary (README + landing aligned)
 - [ ] **Document onboarding wizard** (steps, troubleshooting, service install) and link it from README + landing page
 - [ ] **Add `longhouse doctor`** (self-diagnosis for server health, shipper status, config validity); run after install/upgrade and recommend in docs
+- [ ] **Fix `longhouse connect` default URL** (fallback uses 47300; should align with 8080/README)
 - [ ] **Installer polish:** verify Claude shim + PATH in a *fresh* shell and print an exact fix line when it fails (VISION requirement)
 
 ---
@@ -506,15 +515,18 @@ Close the remaining open questions from VISION.md.
 
 User-facing strings, metadata, and package descriptions must stop mentioning Swarmlet/Zerg as a brand.
 
-**Scope:** 105 occurrences across 28 frontend files, 124 occurrences across 39 backend files (229 total)
+**Scope (2026-02-05):** ~13 Swarmlet matches in core runtime code, ~50 total incl tests/docs/experiments.
 
-- [ ] Replace "Swarmlet" with "Longhouse" in frontend HTML metadata + webmanifest
-- [ ] Update `package.json` description to Longhouse naming
-- [ ] Update runner README/package metadata to Longhouse (e.g., "Longhouse Runner")
-- [ ] Update email templates / notification copy referencing Swarmlet
+- [x] Replace "Swarmlet" with "Longhouse" in frontend HTML metadata + webmanifest
+- [x] Update `package.json` description to Longhouse naming
+- [x] Update runner README/package metadata to Longhouse (e.g., "Longhouse Runner")
+- [x] Update landing FAQ + marketing copy that still says "PostgreSQL" or "Swarmlet" (`TrustSection.tsx`)
+- [x] Update OpenAPI schema metadata (title/description/servers) to Longhouse
+- [ ] Remove deprecated `swarmlet_url` / Swarmlet defaults (RunnerSetupCard + runners API + openapi types)
+- [ ] Update shipper defaults/docs still pointing at `api.swarmlet.com`
+- [ ] Rename `/tmp/swarmlet/commis` artifact path
 - [ ] Decide domain swap (`swarmlet.com` → `longhouse.ai`) and update hardcoded URLs if approved
-- [ ] Update landing FAQ + marketing copy that still says "PostgreSQL" or "Swarmlet" (e.g., `TrustSection.tsx`)
-- [ ] Update OpenAPI schema metadata (title/description/servers) to Longhouse and regenerate `openapi.json` + frontend types
+- [ ] Clean up legacy tests/docs/experiments referencing Swarmlet (shipper manual validation, unit tests)
 
 ---
 
@@ -530,33 +542,26 @@ Package and binary naming so OSS users see Longhouse everywhere.
 
 ## [Tech Debt] Prompt Cache Optimization (5)
 
-Reorder message layout to maximize cache hits. Current layout busts cache by injecting dynamic content early.
+Message layout is already system → conversation → dynamic. Remaining work is cache-busting fixes.
 
-**Why:** Cache misses = slower + more expensive. Research shows 10-90% cost reduction with proper ordering.
-
-**Current (bad):**
+**Verified layout:**
 ```
-[system] → [connector_status] → [memory] → [conversation] → [user_msg]
-               ↑ BUST              ↑ BUST
+[system] → [conversation] → [dynamic]
+ cached      cached         per-turn only
 ```
 
-**Target:**
-```
-[system] → [conversation] → [dynamic + user_msg]
- cached      cached           per-turn only
-```
+**Remaining cache-busters (from VISION):**
+- Timestamps are too granular (changes every request)
+- Connector status JSON ordering is non-deterministic
+- Memory context varies per query (should be separated or cached)
 
-**Files:** `managers/fiche_runner.py` (search: `_build_messages` and `_inject_dynamic_context`)
+**Files:** `managers/fiche_runner.py`, `managers/prompt_context.py`
 
-**Principles:**
-- Static content at position 0 (tools, system prompt)
-- Conversation history next (extends cacheable prefix)
-- Dynamic content LAST (connector status, RAG, timestamps)
-- Never remove tools — return "disabled" instead
-
-- [ ] Reorder message construction in fiche_runner
-- [ ] Verify cache hit rate improves (add logging/metrics)
-- [ ] Document the ordering contract
+- [x] MessageArrayBuilder layout is system → conversation → dynamic
+- [ ] Reduce timestamp granularity in dynamic context (minute-level)
+- [ ] Sort connector status keys for deterministic JSON (`json.dumps(..., sort_keys=True)`)
+- [ ] Split dynamic context into separate SystemMessages (time / connector / memory)
+- [ ] Add cache hit logging/metrics
 
 ---
 
@@ -613,21 +618,21 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 
 ---
 
-## [Docs/Drift] Findings / Drift Audit (2026-02-03)
+## [Docs/Drift] Findings / Drift Audit (2026-02-05)
 
 (Former FOUND.md. Keep this list updated here only.)
 
 - [Infra/docs] API host mismatch: backend is configured for `api-david.longhouse.ai`, but TODO Domain Split still references `api.david.longhouse.ai`. `curl https://api-david.longhouse.ai/health` returns 200; `curl https://api.david.longhouse.ai/health` fails, and container labels only include `api-david.longhouse.ai`.
 - [Infra/docs] `longhouse.ai/install.sh` serves the SPA HTML (not the installer). The working installer URL is `get.longhouse.ai/install.sh` (302 to GitHub raw). ✅ FIXED: Scripts now use correct URL.
-- [Infra/docs] Wildcard DNS claim is stale: `dig foo.longhouse.ai` returns no records, so `*.longhouse.ai` does not appear to be configured. ✅ FIXED: VISION now says "needs setup".
+- [Infra/docs] Wildcard DNS is now configured (dig `test-longhouse-audit.longhouse.ai` resolves); VISION still says "needs setup" in Control Plane section.
 - [Infra/docs] DB size claim likely stale; re-check `/data/longhouse.db` on server and update docs/launch notes.
-- [Docs vs code] Install script installs Python 3.11, but `pyproject.toml` requires `>=3.12`. `scripts/install.sh` should install 3.12+ (or lower the requirement).
-- [Docs vs code] Shipper defaults to `http://localhost:47300`, while `longhouse serve` defaults to 8080 and README uses 8080. Running `longhouse connect` with no `--url` will target the wrong port.
-- ✅ FIXED: [Docs vs code] VISION mentions `longhouse up` and port `30080` for OSS. CLI is `longhouse serve` and default port is `8080`. (VISION updated to `longhouse serve` and port 8080)
+- ✅ FIXED: [Docs vs code] Install script now enforces Python 3.12+ (matches `pyproject.toml`).
+- [Docs vs code] `longhouse connect` fallback still uses `http://localhost:47300` while `longhouse serve` + README use 8080.
+- [Docs vs code] VISION naming section still mentions `longhouse up`; should be `longhouse serve` (CLI has no `up`).
 - ✅ FIXED: [Docs vs code] VISION claims FTS5-powered timeline search; current search is `ilike` join on events (no FTS5 tables/queries present). (VISION updated to say FTS5 is planned)
 - [Docs vs code] VISION says job claiming is dialect-aware (Postgres `FOR UPDATE SKIP LOCKED`). `commis_job_queue.py` is SQLite-specific (`datetime('now')`, `UPDATE ... RETURNING`) and is imported unconditionally in `commis_job_processor.py`.
 - [Docs vs code] Workspace paths in VISION are `~/.longhouse/workspaces/...` and artifacts in `~/.longhouse/artifacts`, but current defaults are `/var/oikos/workspaces` and `settings.data_dir` (`/data` in Docker or repo `data/`). Session resume temp workspaces default to `/tmp/zerg-session-workspaces`.
-- [Docs vs code] VISION control-plane section lists `apps/control-plane/` file tree, but no such directory exists in repo (plan vs reality is unclear).
+- ✅ FIXED: [Docs vs code] `apps/control-plane/` now exists in repo (scaffold + provisioner).
 - [Docs vs infra] VISION control-plane routing assumes Traefik labels; current infra uses Caddy (coolify-proxy with Caddy labels). If Traefik is intended, docs should say so and note migration.
 - [Docs vs release] PyPI version likely lags repo; verify `longhouse` version on PyPI before making release claims.
 - [Docs vs code] README + HN launch copy claim search across Claude/Codex/Cursor/Gemini, but shipper/parser only supports Claude Code JSONL. Demo seeds include Codex/Gemini, but real ingest is Claude-only.
@@ -646,10 +651,9 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [Docs vs code] VISION says cross-subdomain auth tokens are one-time with nonce stored server-side and validated via control plane/JWKS; current `POST /api/auth/accept-token` just validates JWT and sets cookie (no nonce/one-time guard).
 - [Docs/infra] `install-claude.sh` is broken: `longhouse.ai/install-claude.sh` serves the SPA HTML, `get.longhouse.ai/install-claude.sh` redirects to `scripts/install-claude.sh` which 404s. ✅ PARTIAL: Shim script now points users to Anthropic docs instead of broken URL.
 - [Docs vs code] VISION requires a PATH-based Claude shim + verification in a fresh shell; current installer only adds a hook unless `~/.longhouse/install-claude-shim.sh` already exists and does not verify in a new shell.
-- STALE: [Docs] QA_PLAN says onboarding contract is still Docker-centric; README contract now uses bun+uv + `longhouse serve` (SQLite), so this gap statement is stale. (QA_PLAN docs likely removed or outdated)
 - [Docs] Launch notes claim session files in `~/.codex/sessions/*` etc; current shipper/parser only reads Claude Code (`~/.claude/projects/...`).
 - [Docs vs code] Password-only auth isn't actually possible in production: `_validate_required()` always requires `GOOGLE_CLIENT_ID/SECRET` when `AUTH_DISABLED=0`, even if `LONGHOUSE_PASSWORD[_HASH]` is set. README/launch notes imply password-only is supported. ✅ FIXED: Google OAuth validation now skipped when password auth is configured.
-- [Docs vs code] `session_continuity.py` defaults `LONGHOUSE_API_URL` to `http://localhost:47300`, conflicting with `longhouse serve` default 8080 and README.
+- ✅ FIXED: [Docs vs code] `session_continuity.py` default LONGHOUSE_API_URL is now 8080.
 - [Docs vs UI] `longhouse auth` instructs users to open `/dashboard/settings/devices`, but there is no device-token UI or route; frontend only has `/settings` and no device token page.
 - [Code inconsistency] `WorkspaceManager` defaults to `/var/oikos/workspaces` while settings default `OIKOS_WORKSPACE_PATH` to `~/.longhouse/workspaces`; local OSS may try to write to `/var/oikos` without permission.
 - [Docs vs UI] VISION describes a 3-step guided empty state with “Load demo” CTA; Timeline empty state is a single sentence (“Run 'longhouse ship'”) with no demo button.
@@ -672,26 +676,23 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [Docs vs infra] VISION Life Hub config uses `ZERG_API_URL=https://longhouse.ai/api`, but `https://longhouse.ai/api/*` returns 502; the working API host is `https://api.longhouse.ai`.
 - [Docs vs UI] Backend notifications use `https://longhouse.ai/runs/{run.id}` (see `oikos_service.py`), but the frontend has no `/runs/:id` route; unknown paths redirect to LandingPage/Timeline, so run links are broken.
 - [Docs vs code] CLI docs in `zerg/cli/__init__.py` and `zerg/cli/main.py` say `longhouse connect` is “continuous polling,” but the CLI defaults to watch mode (polling only with `--poll`/`--interval`).
-- [Docs vs code] `scripts/install.sh` advertises `LONGHOUSE_API_URL` env var but never reads it; the comment also implies a default `http://localhost:8080`, while shipper API defaults to 47300.
+- [Docs vs code] `scripts/install.sh` only documents `LONGHOUSE_API_URL`; CLI reads it, but `longhouse connect` fallback still uses 47300 (docs imply 8080).
 - [Docs vs reality] Timeline page copy says “across providers,” but real ingest only supports Claude Code; other providers are demo-only.
 - [Docs vs reality] Landing “How It Works” copy in `frontend-web/src/components/landing/HowItWorksSection.tsx` claims: (a) sessions auto-sync from Claude/Codex/Cursor, (b) FTS5-powered search, (c) resume any conversation from any device — all currently false.
-- [Docs vs reality] Landing hero subhead says “Your AI agents run in the cloud. Resume from any device.” (`HeroSection.tsx`), but OSS is local-first and cross-device resume isn’t implemented.
+- [Docs vs reality] Landing hero subhead still claims “Resume from anywhere” (`HeroSection.tsx`); cross-device resume isn’t implemented (cloud phrasing removed).
 - [Docs vs reality] Public Docs page (`frontend-web/src/pages/DocsPage.tsx`) is still the old “fiche/canvas/dashboard” workflow with Google sign-in, not the timeline-first OSS product.
 - [Docs vs reality] Public info pages (`PricingPage.tsx`, `SecurityPage.tsx`, `PrivacyPage.tsx`) still describe fiches/workflows, Google-only OAuth auth, and dashboard account management, which don’t match the current timeline-first OSS flow.
-- [Docs vs code] Landing “Create Your Own” skills copy says to add `SKILL.md` to `skills/` in your workspace; actual loader looks in `~/.longhouse/skills` (user) or `workspace/skills/` (requires workspace path in server), so the user doc is incomplete/unclear for OSS users.
-- [Docs vs reality] Landing FAQ (`TrustSection.tsx`) claims data is stored in PostgreSQL and auth is Google-only; current OSS runtime is SQLite and supports password/local auth.
-- [Docs vs reality] Landing DemoSection/Footers still use cloud-workspace + “from any device” copy (`DemoSection.tsx`, `FooterCTA.tsx`), which doesn’t match local-first OSS or missing cross-device resume.
+- [Docs vs code] DocsPage skills section says to add `SKILL.md` to `workspace/skills`; default loader path for OSS is `~/.longhouse/skills` unless a workspace path is configured.
+- [Docs vs reality] Landing DemoSection + Pricing/HowItWorks still claim cross-device resume / cloud backup (`DemoSection.tsx`, `PricingSection.tsx`, `HowItWorksSection.tsx`) — not implemented.
 - [Docs vs code] Landing SkillsSection says Slack skill can “manage channels,” but Slack tool is webhook-only (send message); no channel management/listing tools exist.
-- [Docs vs code] `DemoSection.tsx` comment says it “Shows Chat, Dashboard, and Canvas views,” but `ProductShowcase` only displays Timeline and Session Detail tabs.
 - ✅ FIXED: [Docs vs code] VISION "Runner registration" says `longhouse runner register` generates credentials, but the CLI has no `runner` command; registration happens via the runner installer hitting `/api/runners/register`. (VISION updated to describe actual flow)
 - ✅ FIXED: [Docs vs code] VISION CLI section says `longhouse status` shows running jobs and `longhouse logs <job_id>` tails job logs, but `longhouse status` only prints configuration and there is no `logs` command. (VISION updated - `logs` marked as planned)
 - ✅ FIXED: [Docs vs code] VISION "File Structure (After)" claims `~/.longhouse/logs/` with per-job logs and shows `→ http://0.0.0.0:8080`; actual logging is `~/.longhouse/server.log` (server) + `~/.claude/shipper.log` (shipper) and `longhouse serve` defaults to `127.0.0.1:8080` unless `--host` is set. (VISION updated with correct paths and port)
 - ✅ FIXED: [Docs vs code] VISION says runners are "Node.js" daemons, but the runner is Bun-based (`apps/runner` uses Bun scripts and builds a Bun-compiled binary); Node isn't required. (VISION updated to say Bun-compiled)
 - ✅ FIXED: [Docs vs code] VISION OSS local path says the shipper runs "zero config" alongside `longhouse up`; in reality the shipper is not auto-started by `longhouse serve` and requires `longhouse connect`/`onboard` to install or run. (VISION updated to note shipper requires `longhouse connect`)
-- STALE: [Docs] QA_PLAN P0 backlog references `longhouse up`, but the CLI has no `up` command (it's `longhouse serve`). (QA_PLAN docs likely removed or outdated)
 - ✅ FIXED: [Docs vs repo] VISION "Docker alternative" says `docker compose up` for full stack with Postgres, but there is no root compose file; Docker configs live under `docker/` (same drift as README). (VISION updated to use correct path `docker/docker-compose.dev.yml`)
 - [Docs] QA job prompt (`apps/zerg/backend/zerg/jobs/qa/prompt.md`) still brands alerts as “SWARMLET QA”; should be Longhouse (brand drift).
-- STALE: [Docs conflict] VISION "Prompt Cache Optimization" claims message layout already system→conversation→dynamic, but TODO still says layout busts cache and needs reordering; code comments in `fiche_runner.py` show the target layout already in place, so TODO item looks stale. (Target layout is already in place per code comments)
+- ✅ FIXED: [Docs conflict] TODO now reflects that message layout is already system→conversation→dynamic; remaining cache-busters are listed.
 - ✅ FIXED: [Docs vs code] VISION Homebrew formula sketch depends on `python@3.11`, but backend requires Python 3.12+ per `pyproject.toml` (same mismatch as install.sh). (VISION updated to python@3.12)
 
 ---
@@ -862,7 +863,7 @@ Scope: OSS-first, SQLite-only, timeline-first product
 - Shipper tests (unit + integration), runner unit tests.
 
 ### Gaps vs Vision (What’s Missing / Fragile)
-1) OSS onboarding contract still Docker-centric. Vision says SQLite-only + `install.sh` + `longhouse onboard`.
+1) Docs/landing copy still overpromise features (FTS5, cross-device resume, multi-provider); no automated drift checks in CI.
 2) Installer + CLI onboarding flows lack robust automated tests across OS targets.
 3) Demo DB pipeline is new; no automated validation that demo DB builds and UI uses it.
 4) E2E commis/session-continuity failures (timeouts) -> core suite stability risk.
@@ -871,7 +872,7 @@ Scope: OSS-first, SQLite-only, timeline-first product
 7) Runner and commis execution lack full integration tests with real WebSocket channel.
 8) Real-time events (SSE/WS) tests are disabled due to flakiness.
 9) No formal OS matrix for OSS install (macOS/Linux/WSL).
-10) OSS user QA script was missing; now covered by `scripts/qa-oss.sh` (`make qa-oss`).
+10) OSS user QA script exists (`scripts/qa-oss.sh`), but CI wiring is still pending.
 
 ### Virtual QA Team (Agent Roles)
 Use commis/runners + hatch agents to form a lightweight QA org that runs locally or in CI.
@@ -968,7 +969,7 @@ Suggested flow:
 
 P0 (now)
 - Align README onboarding-contract with SQLite-first path.
-- Add installer/CLI tests (install.sh, longhouse onboard, longhouse up).
+- Add installer/CLI tests (install.sh, longhouse onboard, longhouse serve).
 - Make demo DB build + demo load test part of OSS gate.
 - Fix commis/session-continuity E2E timeouts (core suite must be 100% pass).
 - Stabilize /api/system/health checks in tests (already in onboarding-sqlite).
