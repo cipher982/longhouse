@@ -121,6 +121,29 @@ function getSessionTitle(session: AgentSession): string {
   return `${session.provider.charAt(0).toUpperCase() + session.provider.slice(1)} session`;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function renderHighlightedText(text: string, query: string) {
+  const tokens = query.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return text;
+  const pattern = tokens.map(escapeRegExp).join("|");
+  if (!pattern) return text;
+  const splitRegex = new RegExp(`(${pattern})`, "gi");
+  const matchRegex = new RegExp(`^(${pattern})$`, "i");
+
+  return text.split(splitRegex).map((part, idx) =>
+    matchRegex.test(part) ? (
+      <mark key={`${idx}-${part}`} className="search-highlight">
+        {part}
+      </mark>
+    ) : (
+      part
+    )
+  );
+}
+
 function formatDuration(startedAt: string, endedAt: string | null): string {
   if (!endedAt) return "In progress";
   const start = new Date(startedAt);
@@ -195,9 +218,10 @@ function DaysSelect({ value, onChange }: DaysSelectProps) {
 interface SessionCardProps {
   session: AgentSession;
   onClick: () => void;
+  highlightQuery?: string;
 }
 
-function SessionCard({ session, onClick }: SessionCardProps) {
+function SessionCard({ session, onClick, highlightQuery }: SessionCardProps) {
   const turnCount = session.user_messages + session.assistant_messages;
   const toolCount = session.tool_calls;
 
@@ -222,6 +246,11 @@ function SessionCard({ session, onClick }: SessionCardProps) {
           <div className="session-card-branch">
             <span className="branch-icon">&#x2387;</span>
             {session.git_branch}
+          </div>
+        )}
+        {highlightQuery && session.match_snippet && (
+          <div className="session-card-snippet">
+            {renderHighlightedText(session.match_snippet, highlightQuery)}
           </div>
         )}
       </div>
@@ -252,9 +281,10 @@ interface SessionGroupProps {
   title: string;
   sessions: AgentSession[];
   onSessionClick: (session: AgentSession) => void;
+  highlightQuery?: string;
 }
 
-function SessionGroup({ title, sessions, onSessionClick }: SessionGroupProps) {
+function SessionGroup({ title, sessions, onSessionClick, highlightQuery }: SessionGroupProps) {
   return (
     <div className="session-group">
       <div className="session-group-header">
@@ -267,6 +297,7 @@ function SessionGroup({ title, sessions, onSessionClick }: SessionGroupProps) {
             key={session.id}
             session={session}
             onClick={() => onSessionClick(session)}
+            highlightQuery={highlightQuery}
           />
         ))}
       </div>
@@ -349,10 +380,11 @@ export default function SessionsPage() {
 
   // Handle session click - preserve current filters in location state
   const handleSessionClick = useCallback((session: AgentSession) => {
-    navigate(`/timeline/${session.id}`, {
+    const matchId = debouncedQuery && session.match_event_id ? `?event_id=${session.match_event_id}` : "";
+    navigate(`/timeline/${session.id}${matchId}`, {
       state: { from: location.pathname + location.search },
     });
-  }, [navigate, location]);
+  }, [navigate, location, debouncedQuery]);
 
   // Load more sessions
   const handleLoadMore = useCallback(() => {
@@ -483,6 +515,7 @@ export default function SessionsPage() {
                 title={dateKey}
                 sessions={daySessions}
                 onSessionClick={handleSessionClick}
+                highlightQuery={debouncedQuery}
               />
             ))}
           </div>

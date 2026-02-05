@@ -184,6 +184,19 @@
     opacity: 0.7;
   }
 
+  .session-card-snippet {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+    line-height: var(--font-line-height-relaxed);
+  }
+
+  .search-highlight {
+    background: color-mix(in srgb, var(--color-brand-primary) 20%, transparent);
+    color: var(--color-text-primary);
+    padding: 0 2px;
+    border-radius: var(--radius-xs);
+  }
+
   .session-card-footer {
     display: flex;
     justify-content: space-between;
@@ -354,6 +367,12 @@
     background: var(--surface-glass-1);
     border: 1px solid var(--border-glass-1);
     border-radius: var(--radius-lg);
+  }
+
+  .event-highlight {
+    border-color: color-mix(in srgb, var(--color-brand-primary) 55%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-brand-primary) 35%, transparent),
+      0 12px 28px rgba(0, 0, 0, 0.25);
   }
 
   .event-header {
