@@ -204,7 +204,7 @@ test.describe('Core User Journey - Scripted LLM', () => {
       { runId, toolCallId, commisId, jobId }
     );
 
-    const commisCard = page.locator('[data-testid="commis-tool-card"]').first();
+    const commisCard = page.locator(`[data-testid="commis-tool-card"][data-tool-call-id="${toolCallId}"]`);
     await expect(commisCard).toBeVisible({ timeout: 5000 });
 
     const commandLabel = commisCard.locator('.nested-tool-name--command');
@@ -274,7 +274,7 @@ test.describe('Core User Journey - Scripted LLM', () => {
       { runId, toolCallId, commisId, jobId }
     );
 
-    const commisCard = page.locator('[data-testid="commis-tool-card"]').first();
+    const commisCard = page.locator(`[data-testid="commis-tool-card"][data-tool-call-id="${toolCallId}"]`);
     await expect(commisCard).toBeVisible({ timeout: 5000 });
 
     // Click on the nested tool row to expand details
@@ -341,7 +341,7 @@ test.describe('Core User Journey - Scripted LLM', () => {
       { runId, toolCallId, commisId, jobId }
     );
 
-    const commisCard = page.locator('[data-testid="commis-tool-card"]').first();
+    const commisCard = page.locator(`[data-testid="commis-tool-card"][data-tool-call-id="${toolCallId}"]`);
     await expect(commisCard).toBeVisible({ timeout: 5000 });
 
     // Verify source badge is visible
@@ -406,7 +406,7 @@ test.describe('Core User Journey - Scripted LLM', () => {
       { runId, toolCallId, commisId, jobId }
     );
 
-    const commisCard = page.locator('[data-testid="commis-tool-card"]').first();
+    const commisCard = page.locator(`[data-testid="commis-tool-card"][data-tool-call-id="${toolCallId}"]`);
     await expect(commisCard).toBeVisible({ timeout: 5000 });
 
     // Verify offline badge is visible
@@ -471,7 +471,7 @@ test.describe('Core User Journey - Scripted LLM', () => {
       { runId, toolCallId, commisId, jobId }
     );
 
-    const commisCard = page.locator('[data-testid="commis-tool-card"]').first();
+    const commisCard = page.locator(`[data-testid="commis-tool-card"][data-tool-call-id="${toolCallId}"]`);
     await expect(commisCard).toBeVisible({ timeout: 5000 });
 
     // Verify preview is visible initially
@@ -538,7 +538,7 @@ test.describe('Core User Journey - Scripted LLM', () => {
       { runId, toolCallId, commisId, jobId }
     );
 
-    const commisCard = page.locator('[data-testid="commis-tool-card"]').first();
+    const commisCard = page.locator(`[data-testid="commis-tool-card"][data-tool-call-id="${toolCallId}"]`);
     await expect(commisCard).toBeVisible({ timeout: 5000 });
 
     // Hover over the nested tool row to make copy button visible
