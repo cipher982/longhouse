@@ -26,7 +26,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 ### ⚠️ PARTIALLY DONE
 | Section | Status | Notes |
 |---------|--------|-------|
-| P0 OSS GA | ~60% | Auth + demo + QA script done; README/landing still overpromise and CTAs aren’t OSS-first |
+| P0 Launch Core | ~60% | Auth + demo + QA script done; README/landing still overpromise and CTAs aren’t dual-path |
 | HN Launch Readiness | ~55% | Remaining: CTA copy/flow, comparison table, social proof/video |
 | Landing Page Redesign | ~20% | Header done; hero CTAs + copy + contrast still pending |
 | Rebrand | ~65% | ~13 Swarmlet matches in core code; ~50 total incl tests/docs |
@@ -47,24 +47,25 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 - Wildcard DNS resolves (`*.longhouse.ai` via Cloudflare).
 - `install.sh` enforces Python 3.12+ (no longer 3.11).
 - `session_continuity.py` default LONGHOUSE_API_URL is 8080.
-- Landing CTAs are wired; issue is OSS-first copy/flow, not broken buttons.
+- Landing CTAs are wired; issue is dual-path copy/flow, not broken buttons.
 
 ---
 
 ## [Launch] 🎯 HN Launch Priority (This Week)
 
-**Decision:** OSS GA + Hosted Beta (optional). Hosted tasks only if P0 is done.
+**Decision:** OSS GA + Hosted Beta in parallel (50/50 positioning). No "OSS-first" bias in copy/CTAs.
 
-### P0 — OSS GA (Required)
+### P0 — Launch Core (Required)
 | Priority | Task | Est |
 |----------|------|-----|
 | 1 | OSS Password Auth ✅ | 1 day |
 | 2 | Demo mode flag ✅ | 0.5 day |
-| 3 | Landing Page CTAs (self-hosted primary) ⚠️ | 0.5 day |
-| 4 | README rewrite (Timeline + install paths) ⚠️ | 0.5 day |
-| 5 | OSS GA QA script + README onboarding contract ✅ | 1 day |
+| 3 | Landing Page CTAs (dual-path: Self-host + Hosted) ⚠️ | 0.5 day |
+| 4 | README rewrite (Timeline + dual-path install) ⚠️ | 0.5 day |
+| 5 | FTS5 search (launch requirement) ⚠️ | 2 days |
+| 6 | OSS GA QA script + README onboarding contract ✅ | 1 day |
 
-**Notes:** CTAs are wired, but hero/landing copy is not OSS-first. README still overclaims FTS5 search + cross-device resume.
+**Notes:** CTAs are wired, but hero/landing copy is not dual-path. README must match launch requirements (FTS5 + hosted path).
 
 ### P1 — Hosted Beta (Stretch)
 | Priority | Task | Est |
@@ -191,10 +192,10 @@ See this file for the current launch analysis.
 - **OSS GA (current):** Hero should emphasize `install.sh`, self-host, "your data stays local"
 - **Hosted Beta:** Secondary CTA or "Join waitlist" copy only
 
-Current copy is a mix of both stories. Align to OSS-first primary.
+Current copy is a mix of both stories. Align to dual-path parity.
 
 **Problems identified (2026-02-05):**
-1. Hero CTAs are ghost + not OSS-first (primary action should be install/self-host)
+1. Hero CTAs are ghost + not dual-path (both self-host + hosted should be visible)
 2. Colors too dark — low contrast text, cards blend into background
 3. No explicit self-host vs hosted paths; waitlist CTA is buried
 4. Story copy overpromises cross-provider + FTS5 + resume-anywhere
@@ -344,7 +345,7 @@ Update screenshots to show Timeline, not old dashboard.
 - [x] **Password-only config bug** — `_validate_required()` now skips Google OAuth validation when password auth is configured
   - File: `apps/zerg/backend/zerg/config/__init__.py:512`
   - Fixed: Skip Google OAuth validation if `LONGHOUSE_PASSWORD` or `LONGHOUSE_PASSWORD_HASH` is set
-- [ ] **Landing page CTAs** — Copy/flow not OSS-first; some CTAs route to sign-in modal instead of install
+- [ ] **Landing page CTAs** — Copy/flow not dual-path; some CTAs route to sign-in modal instead of install/waitlist
 
 ### High Priority
 
@@ -521,7 +522,7 @@ Eliminate the "empty timeline" anticlimactic moment and improve discovery for us
 
 Close the gap between VISION, README, docs, and the live installer.
 
-- [ ] **Canonical install path**: `install.sh` is primary (README aligned; landing still needs OSS-first CTA)
+- [ ] **Canonical install path**: `install.sh` is primary (README aligned; landing still needs dual-path CTA)
 - [ ] **Document onboarding wizard** (steps, troubleshooting, service install) and link it from README + landing page
 - [ ] **Add `longhouse doctor`** (self-diagnosis for server health, shipper status, config validity); run after install/upgrade and recommend in docs
 - [ ] **Fix `longhouse connect` default URL** (fallback uses 47300; should align with 8080/README)
@@ -825,7 +826,7 @@ Evidence: `ideas/evidence/50_evidence_tokens_css_legacy_aliases.sh`
 
 Date: 2026-02-02
 Owner: Longhouse (Zerg) core
-Scope: OSS-first, SQLite-only, timeline-first product
+Scope: SQLite-only, timeline-first product with dual-path positioning (self-host + hosted)
 
 ### Goals (Vision-Aligned)
 - Zero-friction OSS onboarding (install + onboard + demo) works on first run.
