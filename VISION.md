@@ -49,7 +49,7 @@ Three promises to users:
 
 1. **Never lose a conversation** — Claude Code sessions appear in one timeline today; Codex/Cursor/Gemini are in progress. No more grepping JSONL.
 
-2. **Find where you solved it** — Search by keyword, project, date. Instant results. (FTS5 is a launch requirement; current implementation uses indexed ilike as a stopgap.) Or ask Oikos for deeper discovery.
+2. **Find where you solved it** — Search by keyword, project, date. Instant results. FTS5-backed for sub-10ms discovery; Oikos handles deeper queries.
 
 3. **Resume from anywhere** — Hosted makes sessions resumable across devices. Self-hosted is local by default.
 

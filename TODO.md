@@ -26,12 +26,12 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 ### ⚠️ PARTIALLY DONE
 | Section | Status | Notes |
 |---------|--------|-------|
-| P0 Launch Core | ~60% | Auth + demo + QA script done; README/landing still overpromise and CTAs aren’t dual-path |
+| P0 Launch Core | ~85% | Auth + demo + CTAs + README done; FTS5 backend done; hosted beta + search UX polish pending |
 | HN Launch Readiness | ~55% | Remaining: CTA copy/flow, comparison table, social proof/video |
 | Landing Page Redesign | ~20% | Header done; hero CTAs + copy + contrast still pending |
 | Rebrand | ~65% | ~13 Swarmlet matches in core code; ~50 total incl tests/docs |
 | Prompt Cache Optimization | ~20% | Message layout correct; cache-busting fixes remain (timestamps, connector ordering, split dynamic) |
-| FTS5 Search | 25% | Search bar UI exists but uses ILIKE; no FTS5 tables or Oikos tools |
+| FTS5 Search | ~60% | FTS5 table + backend query live; UI highlights + Oikos tools pending |
 | QA Infrastructure | ~10% | UI capture fix done; readme test runner + CI still missing |
 | Install/Onboarding | ~15% | Missing doctor, device token UI, fresh-shell shim verify; connect default URL mismatch |
 | OSS First-Run UX | ~25% | `--demo` works, but onboarding doesn’t seed demo data or guided empty state |
@@ -62,10 +62,10 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | 2 | Demo mode flag ✅ | 0.5 day |
 | 3 | Landing Page CTAs (dual-path: Self-host + Hosted) ✅ | 0.5 day |
 | 4 | README rewrite (Timeline + dual-path install) ✅ | 0.5 day |
-| 5 | FTS5 search (launch requirement) ⚠️ | 2 days |
+| 5 | FTS5 search (launch requirement) ✅ | 2 days |
 | 6 | OSS GA QA script + README onboarding contract ✅ | 1 day |
 
-**Notes:** CTAs are dual-path; README now matches launch requirements (FTS5 + hosted path). Remaining gap is implementation of FTS5 + hosted beta.
+**Notes:** CTAs are dual-path; README now matches launch requirements. Remaining gap is hosted beta + search UX polish (snippets/highlights + Oikos tools).
 
 ### P1 — Hosted Beta (Stretch)
 | Priority | Task | Est |
@@ -299,7 +299,7 @@ Update copy to match VISION.md value prop: Timeline + Search + Resume.
 
 **How It Works:**
 - [ ] Step 1: "Install" → Claude Code sync today (others coming)
-- [ ] Step 2: "Search" → Keyword search now (FTS5 planned)
+- [ ] Step 2: "Search" → Keyword search now (FTS5-powered)
 - [ ] Step 3: "Resume" → Forum resume is Claude-only; Timeline resume planned
 
 **Cut/minimize:**
@@ -314,7 +314,7 @@ Update copy to match VISION.md value prop: Timeline + Search + Resume.
 Update screenshots to show Timeline, not old dashboard.
 
 - [ ] Capture Timeline page with demo sessions populated
-- [ ] Capture search results (if FTS5 is ready)
+- [ ] Capture search results
 - [ ] Capture session detail view with events
 - [ ] Update `dashboard-preview.png` → `timeline-preview.png`
 - [ ] Add provider logos inline (Claude, Codex, Cursor, Gemini)
@@ -456,7 +456,7 @@ Update screenshots to show Timeline, not old dashboard.
 
 Ensure launch readiness without relying on scattered docs.
 
-- [ ] Rewrite README to center Timeline value and 3 install paths (structure done; truth pass needed for FTS5/resume/providers).
+- [x] Rewrite README to center Timeline value and 3 install paths (FTS5 + resume/provider copy aligned).
 - [ ] Add CTA from Chat to "View session trace" after a run.
 - [ ] Improve Timeline detail header (goal, repo/project, duration, status).
 - [ ] Add basic metrics (tool count, duration, latency if available).
@@ -610,9 +610,9 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 
 ### Phase 1: FTS5 Search Bar (Timeline)
 
-- [ ] Add FTS5 virtual table for `agents.events` content (`content_text`, `tool_name`, etc.)
-- [ ] Add search endpoint `GET /api/agents/sessions/search?q=...`
-- [ ] Add search bar UI to Timeline page (debounced, instant results)
+- [x] Add FTS5 virtual table for `agents.events` content (`content_text`, `tool_name`, etc.)
+- [x] Use FTS5 for session queries on `GET /api/agents/sessions?query=...`
+- [x] Add search bar UI to Timeline page (debounced, instant results)
 - [ ] Results show matching snippets with highlights
 - [ ] Click result → opens session detail at relevant event
 
@@ -661,7 +661,7 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - ✅ FIXED: [Docs vs code] Install script now enforces Python 3.12+ (matches `pyproject.toml`).
 - [Docs vs code] `longhouse connect` fallback still uses `http://localhost:47300` while `longhouse serve` + README use 8080.
 - [Docs vs code] VISION naming section still mentions `longhouse up`; should be `longhouse serve` (CLI has no `up`).
-- [Docs vs code] VISION now marks FTS5 as a launch requirement; implementation is still pending (ILike stopgap).
+- ✅ FIXED: [Docs vs code] VISION now reflects FTS5-backed search (no ILIKE stopgap).
 - [Docs vs code] VISION says job claiming is dialect-aware (Postgres `FOR UPDATE SKIP LOCKED`). `commis_job_queue.py` is SQLite-specific (`datetime('now')`, `UPDATE ... RETURNING`) and is imported unconditionally in `commis_job_processor.py`.
 - [Docs vs code] Workspace paths in VISION are `~/.longhouse/workspaces/...` and artifacts in `~/.longhouse/artifacts`, but current defaults are `/var/oikos/workspaces` and `settings.data_dir` (`/data` in Docker or repo `data/`). Session resume temp workspaces default to `/tmp/zerg-session-workspaces`.
 - ✅ FIXED: [Docs vs code] `apps/control-plane/` now exists in repo (scaffold + provisioner).
@@ -699,7 +699,7 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [Bug] `jobs/commis.py` `_run_job` returns early if `extend_lease` fails before execution, leaving the job in `claimed` state until lease expiry (no reschedule/mark-dead handling).
 - [Bug] `GitSyncService._get_auth_url()` mangles SSH-style repo URLs when `token` is set (e.g., `git@github.com:user/repo.git` → malformed `@@` URL); should reject token auth for SSH URLs or handle separately.
 - [Docs vs code] Slack skill doc is wrong: `apps/zerg/backend/zerg/skills/bundled/slack/SKILL.md` references `slack_send_message` and `SLACK_BOT_TOKEN`, but the actual tool is `send_slack_webhook` and it uses incoming webhook URLs (connector/env), not a bot token.
-- [Docs vs code] README keeps FTS5 as a launch requirement; backend search is still `ilike`-based (implementation pending).
+- ✅ FIXED: [Docs vs code] Backend search uses FTS5 when available; README still reflects launch requirement.
 - [Docs vs code] `scripts/install.sh` WSL warning tells users to run `longhouse connect --foreground`, but the CLI has no `--foreground` flag (foreground is the default).
 - [Docs vs code] `services/shipper/spool.py` docstring claims replay uses idempotency keys, but the shipper does not send idempotency keys (dedupe relies on DB unique constraints).
 - [Docs vs code] GitHub skill doc says `GITHUB_TOKEN` env var works; `github_tools` only resolves tokens from connectors or explicit parameters (no env fallback).
@@ -842,7 +842,7 @@ Scope: SQLite-only, timeline-first product with dual-path positioning (self-host
 - Shipper tests (unit + integration), runner unit tests.
 
 ### Gaps vs Vision (What’s Missing / Fragile)
-1) Docs/landing copy still overpromise features (FTS5, cross-device resume, multi-provider); no automated drift checks in CI.
+1) Docs/landing copy still overpromise features (cross-device resume, multi-provider); no automated drift checks in CI.
 2) Installer + CLI onboarding flows lack robust automated tests across OS targets.
 3) Demo DB pipeline is new; no automated validation that demo DB builds and UI uses it.
 4) E2E commis/session-continuity failures (timeouts) -> core suite stability risk.
