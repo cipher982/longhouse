@@ -629,7 +629,7 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - ✅ FIXED: [Docs vs code] `apps/control-plane/` now exists in repo (scaffold + provisioner).
 - [Docs vs infra] VISION control-plane routing assumes Traefik labels; current infra uses Caddy (coolify-proxy with Caddy labels). If Traefik is intended, docs should say so and note migration.
 - [Docs vs release] PyPI version likely lags repo; verify `longhouse` version on PyPI before making release claims.
-- [Docs vs code] README + HN launch copy claim search across Claude/Codex/Cursor/Gemini, but shipper/parser only supports Claude Code JSONL. Demo seeds include Codex/Gemini, but real ingest is Claude-only.
+- [Docs vs code] README + HN launch copy claim multi-provider search + “resume anywhere,” but shipper/parser only supports Claude Code JSONL and Timeline resume isn’t implemented. Demo seeds include Codex/Gemini, but real ingest is Claude-only.
 - [Docs] Launch notes say MIT license; repo LICENSE and pyproject are Apache-2.0.
 - [Docs] Launch notes checklist says “README has screenshot (done!)” but README has no image.
 - [Docs] Launch notes say demo data seeds on first run; current behavior requires `--demo/--demo-fresh` or calling the demo seed endpoint.
