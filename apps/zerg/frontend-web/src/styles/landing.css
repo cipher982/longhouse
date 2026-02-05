@@ -360,9 +360,11 @@
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
-    background: var(--color-surface-card);
-    border: 1px solid var(--color-border-subtle);
-    color: var(--color-text-secondary);
+    /* Slightly more opaque bg for badge visibility */
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    /* Bumped from --color-text-secondary to brighter for small badge text */
+    color: #d0d0d6;
     padding: var(--space-2) var(--space-4);
     border-radius: var(--radius-full);
     font-size: var(--font-size-sm);
@@ -405,14 +407,16 @@
 
   .landing-hero-subhead {
     font-size: var(--font-size-xl);
-    color: var(--color-text-secondary);
+    /* Bumped from --color-text-secondary (#b4b4bc) to #d0d0d6 for better hero readability (~11:1) */
+    color: #d0d0d6;
     line-height: var(--font-line-height-relaxed);
     margin-bottom: var(--space-4);
   }
 
   .landing-hero-note {
     font-size: var(--font-size-sm);
-    color: var(--color-text-muted);
+    /* Bumped from --color-text-muted (#9898a3, 5.3:1) to secondary (#b4b4bc, 7.9:1) for WCAG AA at small size */
+    color: var(--color-text-secondary);
     margin-bottom: var(--space-6);
   }
 
@@ -426,22 +430,22 @@
     padding: var(--space-4) var(--space-8) !important;
     font-size: var(--font-size-lg) !important;
     font-weight: var(--font-weight-bold) !important;
-    /* Enhanced prominence with stronger glow and border */
+    /* Strong prominence: bright glow + solid border to stand out from dark bg */
     box-shadow:
-      0 0 20px rgb(99 102 241 / 40%),
-      0 0 40px rgb(99 102 241 / 20%),
-      0 4px 12px rgba(0, 0, 0, 0.3);
-    border: 1px solid rgb(99 102 241 / 60%) !important;
+      0 0 24px rgb(99 102 241 / 50%),
+      0 0 48px rgb(99 102 241 / 25%),
+      0 4px 16px rgba(0, 0, 0, 0.4);
+    border: 1px solid rgb(129 140 248 / 70%) !important;
     transition: all var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .landing-cta-main.ui-button--primary:hover {
     box-shadow:
-      0 0 28px rgb(99 102 241 / 50%),
-      0 0 56px rgb(99 102 241 / 30%),
-      0 6px 16px rgba(0, 0, 0, 0.4);
+      0 0 32px rgb(99 102 241 / 60%),
+      0 0 64px rgb(99 102 241 / 35%),
+      0 6px 20px rgba(0, 0, 0, 0.5);
     transform: translateY(-3px);
-    border-color: rgb(99 102 241 / 80%) !important;
+    border-color: rgb(129 140 248 / 90%) !important;
   }
 
   .landing-hero-cta-secondary {
@@ -475,6 +479,25 @@
   .landing-hero-screenshot {
     max-width: 100%;
     box-shadow: var(--shadow-2xl), 0 0 64px rgb(99 102 241 / 20%);
+  }
+
+  /* Friction reducers below hero CTAs */
+  .landing-hero-friction-reducers {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-top: var(--space-4);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+  }
+
+  .landing-hero-friction-dot {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--color-text-muted);
+    opacity: 0.5;
+    flex-shrink: 0;
   }
 
   /* --------------------------------------------------------
@@ -575,7 +598,7 @@
   }
 
   .landing-signin-loading {
-    color: var(--color-text-muted);
+    color: var(--color-text-secondary);
     font-size: var(--font-size-sm);
   }
 
@@ -583,7 +606,7 @@
     display: flex;
     align-items: center;
     gap: var(--space-3);
-    color: var(--color-text-muted);
+    color: var(--color-text-secondary);
     font-size: var(--font-size-sm);
   }
 
@@ -680,7 +703,8 @@
   .waitlist-privacy {
     margin-top: var(--space-4);
     font-size: var(--font-size-sm);
-    color: var(--color-text-muted);
+    /* Bumped from muted to secondary for WCAG AA */
+    color: var(--color-text-secondary);
   }
 
   .waitlist-result {
@@ -736,13 +760,14 @@
   .landing-step {
     text-align: center;
     padding: var(--space-8);
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid var(--color-border-primary);
+    /* Bumped from 0.04 to 0.06 for visible card elevation above page bg */
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.10);
     border-radius: var(--radius-xl);
     transition: all var(--motion-duration-normal) var(--motion-easing-standard);
     animation: landing-fadeInUp 0.6s ease-out backwards;
     /* Visible elevation for card distinction */
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.06) inset;
   }
 
   .landing-step:hover {
@@ -815,8 +840,9 @@
     align-items: center;
     gap: var(--space-2);
     padding: var(--space-5);
-    background: var(--color-surface-card);
-    border: 1px solid var(--color-border-subtle);
+    /* Bumped from surface-card (0.03) to 0.06 for visible elevation */
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.10);
     border-radius: var(--radius-lg);
     transition: all var(--motion-duration-fast);
     animation: landing-fadeInUp 0.4s ease-out backwards;
@@ -851,8 +877,9 @@
     position: absolute;
     top: var(--space-2);
     right: var(--space-2);
-    background: var(--color-surface-section);
-    color: var(--color-text-muted);
+    background: rgba(255, 255, 255, 0.06);
+    /* Bumped from muted to secondary for WCAG AA at xs uppercase */
+    color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
     padding: var(--space-0-5) var(--space-2);
@@ -862,7 +889,8 @@
   }
 
   .landing-integrations-note {
-    color: var(--color-text-muted);
+    /* Bumped from muted to secondary for WCAG AA */
+    color: var(--color-text-secondary);
     font-size: var(--font-size-sm);
     margin-bottom: var(--space-12);
   }
@@ -889,11 +917,13 @@
     align-items: center;
     gap: var(--space-4);
     padding: var(--space-5);
-    background: var(--color-surface-card);
-    border: 1px solid var(--color-border-subtle);
+    /* Bumped from surface-card (0.03) to 0.06 for visible elevation */
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.10);
     border-radius: var(--radius-xl);
     transition: all var(--motion-duration-fast);
     animation: landing-fadeInUp 0.4s ease-out backwards;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
   }
 
   .landing-provider-card:hover {
@@ -929,7 +959,8 @@
 
   .landing-provider-desc {
     font-size: var(--font-size-sm);
-    color: var(--color-text-muted);
+    /* Bumped from muted to secondary for WCAG AA at small size */
+    color: var(--color-text-secondary);
   }
 
   .landing-provider-status {
@@ -947,8 +978,9 @@
   }
 
   .landing-provider-status.coming {
-    background: var(--color-surface-section);
-    color: var(--color-text-muted);
+    background: rgba(255, 255, 255, 0.06);
+    /* Bumped from muted to secondary for WCAG AA at xs size */
+    color: var(--color-text-secondary);
   }
 
   .landing-providers-tagline {
@@ -1088,8 +1120,9 @@
     align-items: center;
     gap: var(--space-2);
     padding: var(--space-3) var(--space-5);
-    background: var(--color-surface-card);
-    border: 1px solid var(--color-border-subtle);
+    /* Slightly elevated bg for badge visibility */
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.10);
     border-radius: var(--radius-full);
     font-size: var(--font-size-sm);
     color: var(--color-text-secondary);
@@ -1122,6 +1155,101 @@
   }
 
   /* --------------------------------------------------------
+   DEPLOYMENT OPTIONS SECTION
+   -------------------------------------------------------- */
+
+  .landing-deployment {
+    padding: var(--space-16) 0;
+    text-align: center;
+  }
+
+  .landing-deployment-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-6);
+    max-width: 1000px;
+    margin: 0 auto;
+  }
+
+  .landing-deployment-card {
+    background: var(--color-surface-card);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-xl);
+    padding: var(--space-8);
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    transition: all var(--motion-duration-normal) var(--motion-easing-standard);
+  }
+
+  .landing-deployment-card:hover {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .landing-deployment-card.highlighted {
+    border-color: var(--color-brand-primary);
+    box-shadow: 0 0 32px rgb(99 102 241 / 15%);
+  }
+
+  .landing-deployment-badge {
+    position: absolute;
+    top: var(--space-4);
+    right: var(--space-4);
+    background: var(--color-surface-section);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    padding: var(--space-1) var(--space-3);
+    border-radius: var(--radius-full);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .landing-deployment-header {
+    margin-bottom: var(--space-6);
+  }
+
+  .landing-deployment-name {
+    font-family: var(--font-family-display);
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-semibold);
+    margin-bottom: var(--space-2);
+  }
+
+  .landing-deployment-promise {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    margin: 0;
+  }
+
+  .landing-deployment-features {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 var(--space-6);
+    flex: 1;
+  }
+
+  .landing-deployment-features li {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) 0;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+  }
+
+  .landing-deployment-check {
+    color: var(--color-intent-success);
+    flex-shrink: 0;
+  }
+
+  .landing-deployment-cta {
+    width: 100%;
+  }
+
+  /* --------------------------------------------------------
    PRICING SECTION
    -------------------------------------------------------- */
 
@@ -1139,8 +1267,9 @@
   }
 
   .landing-pricing-card {
-    background: var(--color-surface-card);
-    border: 1px solid var(--color-border-subtle);
+    /* Bumped from surface-card (0.03) to 0.06 for visible card elevation */
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.10);
     border-radius: var(--radius-xl);
     padding: var(--space-8);
     text-align: left;
@@ -1148,16 +1277,17 @@
     flex-direction: column;
     position: relative;
     transition: all var(--motion-duration-normal) var(--motion-easing-standard);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.05) inset;
   }
 
   .landing-pricing-card:hover {
     transform: translateY(-4px);
-    box-shadow: var(--shadow-lg);
+    box-shadow: var(--shadow-lg), 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
   }
 
   .landing-pricing-card.highlighted {
     border-color: var(--color-brand-primary);
-    box-shadow: 0 0 32px rgb(99 102 241 / 15%);
+    box-shadow: 0 0 32px rgb(99 102 241 / 15%), 0 4px 16px rgba(0, 0, 0, 0.3);
   }
 
   .landing-pricing-card.coming-soon {
@@ -1168,14 +1298,16 @@
     position: absolute;
     top: var(--space-4);
     right: var(--space-4);
-    background: var(--color-surface-section);
-    color: var(--color-text-muted);
+    background: rgba(255, 255, 255, 0.08);
+    /* Bumped from muted to secondary for WCAG AA on small uppercase text */
+    color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-semibold);
     padding: var(--space-1) var(--space-3);
     border-radius: var(--radius-full);
     text-transform: uppercase;
     letter-spacing: 0.5px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
   }
 
   .landing-pricing-header {
@@ -1205,7 +1337,8 @@
 
   .landing-pricing-period {
     font-size: var(--font-size-base);
-    color: var(--color-text-muted);
+    /* Bumped from muted to secondary for WCAG AA */
+    color: var(--color-text-secondary);
   }
 
   .landing-pricing-description {
@@ -1324,7 +1457,8 @@
     font-size: var(--font-size-3xl);
     font-weight: var(--font-weight-medium);
     letter-spacing: var(--font-tracking-tight);
-    color: var(--color-text-secondary);
+    /* Bumped from secondary to brighter for more impact */
+    color: #d0d0d6;
     margin: 0 0 var(--space-8);
     max-width: 600px;
     margin-left: auto;
@@ -1362,7 +1496,8 @@
     font-weight: var(--font-weight-semibold);
     text-transform: uppercase;
     letter-spacing: var(--font-tracking-wide);
-    color: var(--color-text-muted);
+    /* Bumped from muted to secondary for WCAG AA at small uppercase */
+    color: var(--color-text-secondary);
     margin-bottom: var(--space-3);
   }
 
@@ -1381,7 +1516,8 @@
 
   .landing-footer-bottom {
     text-align: center;
-    color: var(--color-text-muted);
+    /* Bumped from muted to secondary for WCAG AA */
+    color: var(--color-text-secondary);
     font-size: var(--font-size-sm);
   }
 
@@ -1724,7 +1860,8 @@
 
   .install-header p {
     font-size: var(--font-size-sm);
-    color: var(--color-text-muted);
+    /* Bumped from muted to secondary for WCAG AA */
+    color: var(--color-text-secondary);
     margin: 0;
   }
 
@@ -1738,7 +1875,8 @@
     padding: var(--space-2) var(--space-4);
     font-size: var(--font-size-sm);
     font-weight: var(--font-weight-medium);
-    color: var(--color-text-muted);
+    /* Bumped from muted to secondary for WCAG AA */
+    color: var(--color-text-secondary);
     background: transparent;
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-md);
@@ -1747,7 +1885,7 @@
   }
 
   .install-tab:hover {
-    color: var(--color-text-secondary);
+    color: var(--color-text-primary);
     border-color: var(--color-border-default);
   }
 
@@ -1823,7 +1961,8 @@
   .install-note {
     margin-top: var(--space-2);
     font-size: var(--font-size-xs);
-    color: var(--color-text-muted);
+    /* Bumped from muted to secondary for WCAG AA at xs size */
+    color: var(--color-text-secondary);
   }
 
   .install-features {
@@ -1906,6 +2045,15 @@
 
     .landing-steps-row {
       grid-template-columns: 1fr;
+    }
+
+    .landing-deployment-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .landing-hero-friction-reducers {
+      flex-wrap: wrap;
+      justify-content: center;
     }
 
     .landing-pricing-grid {
