@@ -85,33 +85,27 @@ run_url=""
 
 for _ in $(seq 1 30); do
   info=$(gh run list --workflow "$workflow" --limit 20 \
-    --json databaseId,headBranch,headSha,createdAt,htmlURL,event \
-    | python3 - "$ref" <<'PY'
-import json
-import re
-import sys
-
+    --json databaseId,headBranch,headSha,createdAt,url,event \
+    | python3 -c "
+import json, re, sys
 ref = sys.argv[1]
-is_sha = bool(re.fullmatch(r"[0-9a-fA-F]{7,40}", ref))
-
+is_sha = bool(re.fullmatch(r'[0-9a-fA-F]{7,40}', ref))
 data = json.load(sys.stdin)
-
 candidates = []
 for run in data:
-    if run.get("event") != "workflow_dispatch":
+    if run.get('event') != 'workflow_dispatch':
         continue
     if is_sha:
-        if run.get("headSha", "").startswith(ref):
+        if run.get('headSha', '').startswith(ref):
             candidates.append(run)
     else:
-        if run.get("headBranch") == ref:
+        if run.get('headBranch') == ref:
             candidates.append(run)
-
-candidates.sort(key=lambda r: r.get("createdAt", ""), reverse=True)
+candidates.sort(key=lambda r: r.get('createdAt', ''), reverse=True)
 if candidates:
-    run = candidates[0]
-    print(f"{run.get('databaseId','')}|{run.get('htmlURL','')}")
-PY
+    r = candidates[0]
+    print(str(r.get('databaseId', '')) + '|' + r.get('url', ''))
+" "$ref"
   )
 
   if [ -n "$info" ]; then
@@ -135,17 +129,14 @@ fi
 
 last_status=""
 while true; do
-  status_json=$(gh run view "$run_id" --json status,conclusion,htmlURL)
-  status=$(python3 - <<'PY'
-import json
-import sys
-
+  status=$(gh run view "$run_id" --json status,conclusion \
+    | python3 -c "
+import json, sys
 j = json.load(sys.stdin)
-status = j.get("status") or ""
-conclusion = j.get("conclusion") or ""
-print(f"{status}|{conclusion}")
-PY
-  <<< "$status_json")
+s = j.get('status') or ''
+c = j.get('conclusion') or ''
+print(s + '|' + c)
+")
 
   current_status="${status%%|*}"
   current_conclusion="${status#*|}"

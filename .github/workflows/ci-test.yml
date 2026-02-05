@@ -26,10 +26,6 @@ on:
         required: false
         type: string
 
-concurrency:
-  group: ci-test-${{ github.workflow }}-${{ inputs.ref }}
-  cancel-in-progress: true
-
 env:
   FERNET_SECRET: ${{ secrets.FERNET_SECRET }}
   LIFE_HUB_API_KEY: ${{ secrets.LIFE_HUB_API_KEY }}
