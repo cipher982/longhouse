@@ -29,7 +29,7 @@ echo "  ⏳ Waiting for backend to initialize..."
 sleep 5
 
 # Verify backend is responding
-if ! curl -s http://localhost:47300/health > /dev/null; then
+if ! curl -s http://localhost:47300/api/health > /dev/null; then
     echo "❌ Backend failed to start!"
     kill $BACKEND_PID || true
     exit 1

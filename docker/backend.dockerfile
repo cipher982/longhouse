@@ -111,7 +111,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
 
 # Health check with retry logic
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8000/health || curl -f http://localhost:8000/ || exit 1
+    CMD curl -f http://localhost:8000/api/health || exit 1
 
 # Expose port
 EXPOSE 8000

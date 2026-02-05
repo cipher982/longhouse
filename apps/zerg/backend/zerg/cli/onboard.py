@@ -66,7 +66,7 @@ def _check_server_health(host: str = "127.0.0.1", port: int = 8080, timeout: flo
     """Check if server is responding to health checks."""
     try:
         with httpx.Client(timeout=timeout) as client:
-            response = client.get(f"http://{host}:{port}/health")
+            response = client.get(f"http://{host}:{port}/api/health")
             return response.status_code == 200
     except Exception:
         return False

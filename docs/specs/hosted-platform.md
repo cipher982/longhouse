@@ -76,7 +76,7 @@ Transform Longhouse from split Coolify deployments to unified control-plane-prov
 - Signup (Google OAuth)
 - Billing (Stripe checkout, webhooks, portal)
 - Provisioning (Docker API → create container with Caddy labels)
-- Health monitoring (poll `/api/system/health`)
+- Health monitoring (poll `/api/health`)
 - Instance management (start, stop, deprovision)
 
 **Does NOT:**
@@ -235,7 +235,7 @@ Build and deploy unified frontend+backend image.
 
 **Acceptance:**
 - `curl https://testuser.longhouse.ai/` returns React app
-- `curl https://testuser.longhouse.ai/api/system/health` returns ok
+- `curl https://testuser.longhouse.ai/api/health` returns ok
 - Scheduler starts (check container logs)
 
 ### Phase 3: Jobs System (Always-On)
@@ -303,7 +303,7 @@ curl -X POST https://control.longhouse.ai/admin/instances \
 
 # Wait for health
 sleep 30
-curl https://e2etest.longhouse.ai/api/system/health
+curl https://e2etest.longhouse.ai/api/health
 
 # Check jobs repo exists
 curl https://e2etest.longhouse.ai/api/jobs/repo

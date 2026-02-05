@@ -60,7 +60,7 @@ ls -la ~/.claude/zerg-*
 # Expected: "No such file or directory" OR old files to remove
 
 # 3. Local dev stack is running
-curl -s http://localhost:47300/health | jq .status
+curl -s http://localhost:47300/api/health | jq .status
 # Expected: "ok"
 
 # 4. Frontend accessible

@@ -71,7 +71,7 @@ export function useServiceHealth() {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-      const response = await fetch(`${config.apiBaseUrl}/system/health`, {
+      const response = await fetch(`${config.apiBaseUrl}/health`, {
         method: 'GET',
         signal: controller.signal,
       });

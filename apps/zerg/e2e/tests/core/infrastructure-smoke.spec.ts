@@ -13,7 +13,7 @@ import { test, expect } from '../fixtures';
 
 test.describe('Infrastructure - Core', () => {
   test('backend health check responds', async ({ request }) => {
-    const response = await request.get('/api/system/health');
+    const response = await request.get('/api/health');
     expect(response.status()).toBe(200);
 
     const body = await response.json();
@@ -46,7 +46,7 @@ test.describe('Infrastructure - Core', () => {
 
   test('database is accessible', async ({ request }) => {
     // Lightweight DB check via system health probe
-    const response = await request.get('/api/system/health');
+    const response = await request.get('/api/health');
 
     expect(response.status()).toBe(200);
 

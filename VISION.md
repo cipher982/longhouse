@@ -364,7 +364,7 @@ apps/control-plane/           # NEW - tiny FastAPI app
 
 **Provisioning guarantees:**
 - Provision is idempotent (retry-safe) by instance_id
-- Control plane waits for `/health` before redirect
+- Control plane waits for `/api/health` before redirect
 - Deprovision archives volume before delete (or marks for retention)
 
 **What control plane stores (Postgres, separate from instances):**
@@ -899,7 +899,7 @@ Optional safety step:
 ## Observability
 
 **Per-instance health:**
-- `/health` endpoint on each user instance
+- `/api/health` endpoint on each user instance
 - Control plane pings periodically
 - Alert if instance unreachable for >5 minutes
 
@@ -1081,7 +1081,7 @@ These are the concrete mismatches between today’s codebase and the SQLite-only
 - **initialize_database()**
   - Skip schema creation for sqlite and avoid schema-qualified introspection.
 
-**Test:** `DATABASE_URL=sqlite:///~/.longhouse/longhouse.db longhouse serve` starts and `/health` works.
+**Test:** `DATABASE_URL=sqlite:///~/.longhouse/longhouse.db longhouse serve` starts and `/api/health` works.
 
 #### Phase 2 — Model Compatibility (Core + Agents)
 

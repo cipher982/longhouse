@@ -356,7 +356,7 @@ async def lifespan(app: FastAPI):
                     bootstrap_owner_user(db)
                 except SingleTenantViolation as e:
                     logger.error(str(e))
-                    # Store violation for /health endpoint to report
+                    # Store violation for /api/health endpoint to report
                     app.state.single_tenant_violation = str(e)
                 except Exception as e:
                     logger.error(f"Single-tenant bootstrap failed: {e}")
@@ -765,7 +765,7 @@ async def read_root():
     return {"message": "Longhouse API is running"}
 
 
-@app.get("/health/db", operation_id="health_db_check")
+@app.get(f"{API_PREFIX}/health/db", operation_id="health_db_check")
 async def health_db():
     """Database readiness check - verifies critical tables are initialized.
 
@@ -798,10 +798,17 @@ async def health_db():
         )
 
 
-@app.get("/health", operation_id="health_check_get")
-@app.head("/health", operation_id="health_check_head", include_in_schema=False)
+@app.get(f"{API_PREFIX}/livez", operation_id="livez_check_get")
+@app.head(f"{API_PREFIX}/livez", operation_id="livez_check_head", include_in_schema=False)
+async def livez_check():
+    """Liveness probe: process is up and serving requests."""
+    return {"status": "ok"}
+
+
+@app.get(f"{API_PREFIX}/health", operation_id="health_check_get")
+@app.head(f"{API_PREFIX}/health", operation_id="health_check_head", include_in_schema=False)
 async def health_check():
-    """Health check endpoint with comprehensive system validation."""
+    """Readiness probe: core dependencies are available."""
     from pathlib import Path
 
     from sqlalchemy import text

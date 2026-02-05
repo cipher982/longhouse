@@ -152,11 +152,21 @@ See this file for the current launch analysis.
 
 ## [Infra] Instance Health Route Returns HTML (1)
 
-**Goal:** `/health` and `/api/system/health` return JSON on `david.longhouse.ai` (no SPA fallback).
+**Goal:** `/api/health` returns JSON on `david.longhouse.ai` (no SPA fallback).
 
 - [x] Ensure runtime image includes the FastAPI route-order fix (catch-all registered last).
-- [x] Reprovision `longhouse-david` and verify `/health` returns JSON.
+- [x] Reprovision `longhouse-david` and verify `/api/health` returns JSON.
 - [x] Backfill missing `users.digest_enabled` + `users.last_digest_sent_at` columns, then restart to clear cached bootstrap failure.
+
+---
+
+## [Infra] Standardize Health Endpoints (2)
+
+**Goal:** Single, standard health endpoint under `/api/health` (no `/api/system/health`, no root `/health`).
+
+- [x] Move health routes to `/api/health` + `/api/livez` and remove `/api/system/health`.
+- [x] Update all callers (frontend, tests, control plane, CLI, scripts).
+- [x] Regenerate OpenAPI schema + frontend types.
 
 ---
 
@@ -901,7 +911,7 @@ Suggested flow:
 2. Build demo DB (`demo-db`) and validate schema
 3. Run `make onboarding-sqlite`
 4. Boot demo stack (short-lived) and verify:
-   - /api/system/health
+   - /api/health
    - /api/agents/sessions
    - demo timeline displays sessions
 5. Run `make test` + `make test-frontend-unit`
@@ -928,7 +938,7 @@ P0 (now)
 - Add installer/CLI tests (install.sh, longhouse onboard, longhouse serve).
 - Make demo DB build + demo load test part of OSS gate.
 - Fix commis/session-continuity E2E timeouts (core suite must be 100% pass).
-- Stabilize /api/system/health checks in tests (already in onboarding-sqlite).
+- Stabilize /api/health checks in tests (already in onboarding-sqlite).
 
 P1 (next)
 - Shipper E2E run in CI with a local backend (no skip).

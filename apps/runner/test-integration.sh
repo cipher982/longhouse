@@ -14,7 +14,7 @@ API_URL=${API_URL:-"http://localhost:47300"}
 AUTH_HEADER="Authorization: Bearer test-token-user1"
 
 # Check if backend is running
-if ! curl -s "${API_URL}/health" > /dev/null 2>&1; then
+if ! curl -s "${API_URL}/api/health" > /dev/null 2>&1; then
     echo "❌ Backend not running at ${API_URL}"
     echo "Please start the backend with: make zerg"
     exit 1

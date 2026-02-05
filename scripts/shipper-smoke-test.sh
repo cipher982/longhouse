@@ -17,7 +17,7 @@ echo "Temp dir: $TEMP_CLAUDE_DIR"
 echo ""
 
 # 1. Health check
-if ! curl -sf "$BACKEND_URL/health" > /dev/null; then
+if ! curl -sf "$BACKEND_URL/api/health" > /dev/null; then
   echo "ERROR: Backend not reachable at $BACKEND_URL"
   echo "Start with: make dev"
   exit 1

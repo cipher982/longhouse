@@ -143,10 +143,10 @@ echo "🚀 Starting Longhouse (demo) at ${BASE_URL}"
 ) >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 
-echo "⏳ Waiting for /health..."
+echo "⏳ Waiting for /api/health..."
 ready=0
 for _ in $(seq 1 60); do
-  if curl -fsS "${BASE_URL}/health" >/dev/null 2>&1; then
+  if curl -fsS "${BASE_URL}/api/health" >/dev/null 2>&1; then
     ready=1
     break
   fi

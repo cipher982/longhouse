@@ -36,7 +36,7 @@ def _agents_headers() -> dict:
 @pytest.fixture(scope="session", autouse=True)
 def ensure_backend_running():
     try:
-        response = httpx.get(f"{BASE_URL}/health", timeout=5)
+        response = httpx.get(f"{BASE_URL}/api/health", timeout=5)
         response.raise_for_status()
     except Exception as exc:
         pytest.fail(f"Backend not reachable at {BASE_URL}. Start with `make dev`. Error: {exc}")

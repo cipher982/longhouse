@@ -108,7 +108,7 @@ sleep 8
 
 # Verify services are responding
 echo "  🔍 Verifying services..."
-if ! curl -s http://localhost:$BACKEND_PORT/health > /dev/null; then
+if ! curl -s http://localhost:$BACKEND_PORT/api/health > /dev/null; then
     echo "❌ Backend failed to start on port $BACKEND_PORT!"
     echo "Backend logs:"
     cat visual-backend.log 2>/dev/null || echo "No backend logs available"
