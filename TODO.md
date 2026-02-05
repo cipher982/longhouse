@@ -527,9 +527,9 @@ User-facing strings, metadata, and package descriptions must stop mentioning Swa
 
 Package and binary naming so OSS users see Longhouse everywhere.
 
-- [ ] Decide npm scope/name for runner: `@longhouse/runner` or `longhouse-runner`
+- [x] Decide npm scope/name for runner: `@longhouse/runner` (package.json already uses this)
 - [ ] Update docker image name in README/examples (ghcr.io/.../longhouse)
-- [ ] Update installer scripts to new names (12 refs across 4 scripts)
+- [ ] Update installer scripts to new names (install-runner still points at `daverosedavis/zerg`)
 
 ---
 
