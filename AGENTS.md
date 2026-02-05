@@ -224,4 +224,4 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-05) [ops] longhouse.ai and api.longhouse.ai currently return HTTP 525 (Cloudflare origin handshake failure); smoke-after-deploy health checks fail.
 - (2026-02-05) [db] SQLite FTS5 index (`events_fts`) now backs session search when available.
 - (2026-02-05) [e2e] E2E forces `gpt-scripted` for new fiches; ScriptedChatLLM streams tokens to exercise chat streaming UI.
-- (2026-02-05) [e2e] WebSocket stream events use envelope `type` (stream_start/chunk/end); realtime_updates now waits via ready signals instead of timeouts.
+- (2026-02-05) [e2e] WebSocket stream events use envelope `type` (stream_start/chunk/end); topics may be `user:{id}`, so tests should rely on `data.thread_id` over topic.
