@@ -6,4 +6,5 @@ Provides command-line tools for interacting with Longhouse:
 - longhouse ship: One-shot sync of Claude Code sessions to Longhouse
 - longhouse connect: Continuous polling sync of sessions
 - longhouse auth: Authenticate with remote Longhouse server
+- longhouse doctor: Self-diagnosis for server health, shipper status, config
 """
