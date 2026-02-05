@@ -191,64 +191,20 @@ class AgentsStore:
             }
         return matches
 
-    def _ilike_match_map(self, session_ids: list[UUID], query: str) -> dict[UUID, dict[str, Any]]:
-        """Return best match per session using ILIKE fallback."""
-        if not session_ids:
-            return {}
-
-        pattern = f"%{query}%"
-        stmt = (
-            select(
-                AgentEvent.session_id,
-                AgentEvent.id,
-                AgentEvent.role,
-                AgentEvent.tool_name,
-                AgentEvent.content_text,
-                AgentEvent.tool_output_text,
-            )
-            .where(AgentEvent.session_id.in_(session_ids))
-            .where(
-                or_(
-                    AgentEvent.content_text.ilike(pattern),
-                    AgentEvent.tool_name.ilike(pattern),
-                    AgentEvent.tool_output_text.ilike(pattern),
-                )
-            )
-            .order_by(AgentEvent.timestamp.desc())
-        )
-
-        rows = self.db.execute(stmt).fetchall()
-        matches: dict[UUID, dict[str, Any]] = {}
-        for row in rows:
-            if row.session_id in matches:
-                continue
-            snippet = (
-                self._build_snippet(row.content_text, query)
-                or self._build_snippet(row.tool_output_text, query)
-                or self._build_snippet(row.tool_name, query)
-                or ""
-            )
-            matches[row.session_id] = {
-                "event_id": row.id,
-                "snippet": snippet,
-                "role": row.role,
-            }
-        return matches
-
     def get_session_matches(self, session_ids: list[UUID], query: str) -> dict[UUID, dict[str, Any]]:
         """Return a match map keyed by session id for a query."""
         if not query or not session_ids:
             return {}
-        if self._fts_available():
-            return self._fts_match_map(session_ids, query)
-        return self._ilike_match_map(session_ids, query)
+        if not self._fts_available():
+            raise RuntimeError("FTS5 is required for session search but is not available.")
+        return self._fts_match_map(session_ids, query)
 
     def _fts_session_ids(self, query: str) -> Optional[list[UUID]]:
-        """Return session ids matching the FTS query (or None on failure)."""
+        """Return session ids matching the FTS query."""
         if not query:
             return None
         if not self._fts_available():
-            return None
+            raise RuntimeError("FTS5 is required for session search but is not available.")
         try:
             rows = self.db.execute(
                 text("SELECT DISTINCT session_id FROM events_fts WHERE events_fts MATCH :query"),
@@ -256,8 +212,7 @@ class AgentsStore:
             ).fetchall()
             return [row[0] for row in rows]
         except Exception as exc:
-            logger.warning("FTS5 search failed, falling back to ILIKE: %s", exc)
-            return None
+            raise RuntimeError(f"FTS5 search failed: {exc}") from exc
 
     def _compute_event_hash(self, event: EventIngest) -> str:
         """Compute a hash for deduplication.
@@ -445,21 +400,6 @@ class AgentsStore:
                 if not session_ids:
                     return [], 0
                 stmt = stmt.where(AgentSession.id.in_(session_ids))
-            else:
-                pattern = f"%{query}%"
-                subq = (
-                    select(AgentEvent.session_id)
-                    .where(
-                        or_(
-                            AgentEvent.content_text.ilike(pattern),
-                            AgentEvent.tool_name.ilike(pattern),
-                            AgentEvent.tool_output_text.ilike(pattern),
-                        )
-                    )
-                    .distinct()
-                    .subquery()
-                )
-                stmt = stmt.where(AgentSession.id.in_(select(subq.c.session_id)))
 
         # Get total count
         count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -673,7 +613,6 @@ class AgentsStore:
         Returns:
             Number of sessions deleted.
         """
-        from sqlalchemy import or_
 
         if not patterns:
             return 0

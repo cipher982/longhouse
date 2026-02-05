@@ -855,7 +855,7 @@ Scope: SQLite-only, timeline-first product with dual-path positioning (self-host
 10) OSS user QA script exists (`scripts/qa-oss.sh`), but CI wiring is still pending.
 11) Timeline search E2E lives in `tests/sessions.spec.ts` but is not part of `test-e2e-core` gating (regressions can ship).
 12) Oikos session discovery tools (`search_sessions`, `grep_sessions`, `filter_sessions`, `get_session_detail`) have no unit/integration tests.
-13) No test for FTS fallback path (when FTS5 unavailable) or trigger integrity on update/delete.
+13) No tests for FTS trigger integrity (insert/update/delete -> index consistency).
 
 ### Virtual QA Team (Agent Roles)
 Use commis/runners + hatch agents to form a lightweight QA org that runs locally or in CI.
