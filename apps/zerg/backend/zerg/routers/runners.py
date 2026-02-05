@@ -64,7 +64,6 @@ _REGISTER_LOCK = threading.Lock()
 def get_install_script(
     enroll_token: str,
     runner_name: str | None = None,
-    swarmlet_url: str | None = None,  # Deprecated: use longhouse_url instead
     longhouse_url: str | None = None,
     mode: str | None = None,  # Reserved for future: user|system
 ) -> Response:
@@ -108,9 +107,8 @@ def get_install_script(
             status_code=400,
         )
 
-    # Prefer longhouse_url, fall back to swarmlet_url (deprecated), then settings
-    # Note: We don't accept arbitrary URLs from query params for security
-    api_url = swarmlet_url  # Only accept deprecated param for backwards compat
+    # Use longhouse_url if provided, otherwise fall back to settings
+    api_url = None
     if longhouse_url:
         # Validate URL format to prevent injection
         if not re.match(r"^https?://[A-Za-z0-9._-]+(:[0-9]+)?(/.*)?$", longhouse_url):

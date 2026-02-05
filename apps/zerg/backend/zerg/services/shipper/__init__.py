@@ -21,7 +21,7 @@ Usage:
 
     # Service management
     from zerg.services.shipper import install_service, get_service_status
-    install_service(url="https://api.swarmlet.com", token="xxx")
+    install_service(url="https://api.longhouse.ai", token="xxx")
     status = get_service_status()  # "running", "stopped", "not-installed"
 """
 

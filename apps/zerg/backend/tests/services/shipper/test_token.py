@@ -118,10 +118,10 @@ class TestUrlStorage:
         config_dir = tmp_path / "claude"
         config_dir.mkdir()
 
-        save_zerg_url("https://api.swarmlet.com", config_dir)
+        save_zerg_url("https://api.longhouse.ai", config_dir)
         loaded = get_zerg_url(config_dir)
 
-        assert loaded == "https://api.swarmlet.com"
+        assert loaded == "https://api.longhouse.ai"
 
     def test_load_url_nonexistent(self, tmp_path: Path):
         """Load returns None when no URL exists."""
@@ -137,7 +137,7 @@ class TestUrlStorage:
         config_dir = tmp_path / "claude"
         config_dir.mkdir()
 
-        save_zerg_url("  https://api.swarmlet.com  ", config_dir)
+        save_zerg_url("  https://api.longhouse.ai  ", config_dir)
         loaded = get_zerg_url(config_dir)
 
-        assert loaded == "https://api.swarmlet.com"
+        assert loaded == "https://api.longhouse.ai"

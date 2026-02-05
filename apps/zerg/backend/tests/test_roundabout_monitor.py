@@ -24,7 +24,7 @@ async def test_roundabout_records_tool_events(monkeypatch, db_session, tmp_path)
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
 
     # Isolate commis artifacts
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    monkeypatch.setenv("LONGHOUSE_DATA_PATH", str(tmp_path / "commis"))
     store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     # Reset event bus subscribers for isolation
@@ -88,7 +88,7 @@ async def test_roundabout_records_tool_events(monkeypatch, db_session, tmp_path)
 async def test_roundabout_monitor_timeout_sets_flag(monkeypatch, db_session, tmp_path):
     """Monitor timeout should report monitor_timeout and note commis still running."""
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    monkeypatch.setenv("LONGHOUSE_DATA_PATH", str(tmp_path / "commis"))
     store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
@@ -272,7 +272,7 @@ async def test_roundabout_warns_but_continues_on_no_progress(monkeypatch, db_ses
     """
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
     monkeypatch.setattr(rm, "ROUNDABOUT_NO_PROGRESS_POLLS", 3)  # Lower for fast test
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    monkeypatch.setenv("LONGHOUSE_DATA_PATH", str(tmp_path / "commis"))
     store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
@@ -329,7 +329,7 @@ async def test_roundabout_warns_but_continues_on_no_progress(monkeypatch, db_ses
 async def test_roundabout_correlates_events_by_job_id(monkeypatch, db_session, tmp_path):
     """Monitor should correlate tool events by job_id (regression test for event filtering bug)."""
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    monkeypatch.setenv("LONGHOUSE_DATA_PATH", str(tmp_path / "commis"))
     store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
@@ -460,7 +460,7 @@ class TestRoundaboutDecisionModes:
 async def test_roundabout_with_llm_mode_exit(monkeypatch, db_session, tmp_path):
     """LLM mode should exit early when LLM says exit."""
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    monkeypatch.setenv("LONGHOUSE_DATA_PATH", str(tmp_path / "commis"))
     store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
@@ -515,7 +515,7 @@ async def test_roundabout_with_llm_mode_exit(monkeypatch, db_session, tmp_path):
 async def test_roundabout_with_llm_mode_cancel(monkeypatch, db_session, tmp_path):
     """LLM mode should cancel when LLM says cancel."""
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    monkeypatch.setenv("LONGHOUSE_DATA_PATH", str(tmp_path / "commis"))
     store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
@@ -569,7 +569,7 @@ async def test_roundabout_with_llm_mode_cancel(monkeypatch, db_session, tmp_path
 async def test_roundabout_llm_budget_enforcement(monkeypatch, db_session, tmp_path):
     """LLM mode should respect max calls budget."""
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    monkeypatch.setenv("LONGHOUSE_DATA_PATH", str(tmp_path / "commis"))
     store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
@@ -630,7 +630,7 @@ async def test_roundabout_llm_budget_enforcement(monkeypatch, db_session, tmp_pa
 async def test_roundabout_llm_interval_enforcement(monkeypatch, db_session, tmp_path):
     """LLM mode should respect poll interval."""
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    monkeypatch.setenv("LONGHOUSE_DATA_PATH", str(tmp_path / "commis"))
     store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
@@ -690,7 +690,7 @@ async def test_roundabout_llm_interval_enforcement(monkeypatch, db_session, tmp_
 async def test_roundabout_hybrid_mode_heuristic_takes_precedence(monkeypatch, db_session, tmp_path):
     """Hybrid mode should use heuristic decision when it's not WAIT."""
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    monkeypatch.setenv("LONGHOUSE_DATA_PATH", str(tmp_path / "commis"))
     store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
@@ -745,7 +745,7 @@ async def test_roundabout_heuristic_mode_no_llm_calls(monkeypatch, db_session, t
     """Heuristic mode should never call LLM."""
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
     monkeypatch.setattr(rm, "ROUNDABOUT_NO_PROGRESS_POLLS", 2)  # Quick cancel
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    monkeypatch.setenv("LONGHOUSE_DATA_PATH", str(tmp_path / "commis"))
     store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
@@ -796,7 +796,7 @@ async def test_roundabout_heuristic_mode_no_llm_calls(monkeypatch, db_session, t
 async def test_roundabout_llm_timeout_fallback(monkeypatch, db_session, tmp_path):
     """LLM timeout should fall back to wait."""
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    monkeypatch.setenv("LONGHOUSE_DATA_PATH", str(tmp_path / "commis"))
     store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}

@@ -445,7 +445,7 @@ test-prompts: ## @internal Run live prompt quality tests (requires backend runni
 	@echo "   Setting LLM_REQUEST_LOG=1 for debugging..."
 	cd apps/zerg/backend && \
 		LLM_REQUEST_LOG=1 \
-		SWARMLET_DATA_PATH=$${SWARMLET_DATA_PATH:-/tmp/swarmlet} \
+		LONGHOUSE_DATA_PATH=$${LONGHOUSE_DATA_PATH:-/tmp/longhouse} \
 		uv run pytest tests/live/test_prompt_quality.py \
 		--live-url http://localhost:30080 \
 		--live-token $(TOKEN) \

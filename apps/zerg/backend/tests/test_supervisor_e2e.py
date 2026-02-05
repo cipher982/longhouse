@@ -27,7 +27,7 @@ class TestOikosE2EFlow:
     def temp_artifact_path(self, monkeypatch):
         """Create temporary artifact store path."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            monkeypatch.setenv("SWARMLET_DATA_PATH", tmpdir)
+            monkeypatch.setenv("LONGHOUSE_DATA_PATH", tmpdir)
             yield tmpdir
 
     def test_oikos_dispatch_returns_stream_url(self, client, db_session, test_user, temp_artifact_path):
@@ -127,7 +127,7 @@ class TestOikosServiceDirect:
     def temp_artifact_path(self, monkeypatch):
         """Create temporary artifact store path."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            monkeypatch.setenv("SWARMLET_DATA_PATH", tmpdir)
+            monkeypatch.setenv("LONGHOUSE_DATA_PATH", tmpdir)
             yield tmpdir
 
     @pytest.mark.asyncio
@@ -220,7 +220,7 @@ class TestCommisSpawning:
     def temp_artifact_path(self, monkeypatch):
         """Create temporary artifact store path."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            monkeypatch.setenv("SWARMLET_DATA_PATH", tmpdir)
+            monkeypatch.setenv("LONGHOUSE_DATA_PATH", tmpdir)
             yield tmpdir
 
     def test_spawn_commis_creates_job(self, db_session, test_user, temp_artifact_path):
@@ -291,7 +291,7 @@ class TestOikosMemoryE2E:
     def temp_artifact_path(self, monkeypatch):
         """Create temporary artifact store path."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            monkeypatch.setenv("SWARMLET_DATA_PATH", tmpdir)
+            monkeypatch.setenv("LONGHOUSE_DATA_PATH", tmpdir)
             yield tmpdir
 
     @pytest.mark.asyncio

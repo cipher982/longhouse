@@ -36,7 +36,7 @@ async def test_commis_fails_fast_on_critical_error(db_session, tmp_path, monkeyp
     """Commis should fail immediately when a critical error is encountered."""
     from zerg.services.commis_artifact_store import CommisArtifactStore
 
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    monkeypatch.setenv("LONGHOUSE_DATA_PATH", str(tmp_path / "commis"))
 
     artifact_store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
@@ -102,7 +102,7 @@ async def test_commis_succeeds_without_critical_error(db_session, tmp_path, monk
     """Commis should complete successfully when no critical errors occur."""
     from zerg.services.commis_artifact_store import CommisArtifactStore
 
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    monkeypatch.setenv("LONGHOUSE_DATA_PATH", str(tmp_path / "commis"))
 
     artifact_store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
@@ -205,7 +205,7 @@ async def test_roundabout_exits_immediately_on_commis_failure(db_session, tmp_pa
 
     # Speed up polling
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
-    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "commis"))
+    monkeypatch.setenv("LONGHOUSE_DATA_PATH", str(tmp_path / "commis"))
     store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
 
     # Reset event bus - use shallow copy to avoid pickling asyncio Futures

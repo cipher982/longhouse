@@ -28,7 +28,7 @@ from zerg.tools.builtin.oikos_tools import spawn_commis_async
 def temp_artifact_path(monkeypatch):
     """Create temporary artifact store path."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        monkeypatch.setenv("SWARMLET_DATA_PATH", tmpdir)
+        monkeypatch.setenv("LONGHOUSE_DATA_PATH", tmpdir)
         yield tmpdir
 
 
