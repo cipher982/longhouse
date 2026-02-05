@@ -188,3 +188,4 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-04) [product] Jobs should live in a local repo inside the instance and auto-commit changes; optional UI-driven remote sync (e.g., GitHub) for backups.
 - (2026-02-04) [fix] Jobs repo API endpoints wired: `get_jobs_repo_status()`, `init_jobs_repo()`, `sync_jobs_repo()` now exported from `jobs_repo.py`; `enable()`/`disable()` call `auto_commit_if_dirty()`.
 - (2026-02-04) [arch] Local manifest loading already works—`/data/jobs/manifest.py` loads when `JOBS_GIT_REPO_URL` not set. Job queue env-gate only affects backfill (cron still fires).
+- (2026-02-05) [db] Alembic migrations removed (versions dir empty); treat migration tasks as deprecated.
