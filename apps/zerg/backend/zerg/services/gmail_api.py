@@ -337,3 +337,109 @@ def get_message_metadata(access_token: str, msg_id: str) -> Dict[str, Any]:  # n
         "labelIds": payload.get("labelIds", []),
         "headers": headers_dict,
     }
+
+
+# ---------------------------------------------------------------------------
+# Gmail Send helpers
+# ---------------------------------------------------------------------------
+
+
+def get_profile(access_token: str) -> Dict[str, Any]:
+    """Get the authenticated user's Gmail profile.
+
+    Returns dict with emailAddress, messagesTotal, threadsTotal, historyId.
+    Returns empty dict on failure.
+    """
+    url = "https://gmail.googleapis.com/gmail/v1/users/me/profile"
+
+    try:
+        with _make_request(url, access_token) as resp:
+            return json.loads(resp.read().decode())
+    except Exception as exc:
+        logger.warning("get_profile network failure: %s", exc)
+        return {}
+
+
+def send_email(
+    access_token: str,
+    to: str,
+    subject: str,
+    body_text: str,
+    body_html: str | None = None,
+    from_email: str | None = None,
+) -> str | None:
+    """Send an email via Gmail API.
+
+    Args:
+        access_token: OAuth access token with gmail.send scope
+        to: Recipient email address
+        subject: Email subject
+        body_text: Plain text body
+        body_html: Optional HTML body (creates multipart message)
+        from_email: Sender email (must match authenticated user or alias)
+
+    Returns:
+        Message ID if sent successfully, None on failure.
+
+    Note:
+        Requires the gmail.send OAuth scope. If the token doesn't have this
+        scope, the API will return 403.
+    """
+    import base64
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    # Build MIME message
+    if body_html:
+        msg = MIMEMultipart("alternative")
+        msg.attach(MIMEText(body_text, "plain", "utf-8"))
+        msg.attach(MIMEText(body_html, "html", "utf-8"))
+    else:
+        msg = MIMEText(body_text, "plain", "utf-8")
+
+    msg["To"] = to
+    msg["Subject"] = subject
+    if from_email:
+        msg["From"] = from_email
+
+    # Base64url encode the message
+    raw_message = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
+
+    # Send via Gmail API
+    url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
+
+    try:
+        result = _post_json(url, access_token, {"raw": raw_message})
+        message_id = result.get("id")
+        logger.info("Gmail message sent: %s", message_id)
+        return message_id
+    except Exception as exc:
+        logger.error("send_email failed: %s", exc)
+        return None
+
+
+@async_retry(provider="gmail")
+async def async_get_profile(access_token: str) -> Dict[str, Any]:
+    """Async wrapper for get_profile with retry."""
+    return await asyncio.to_thread(get_profile, access_token)
+
+
+@async_retry(provider="gmail")
+async def async_send_email(
+    access_token: str,
+    to: str,
+    subject: str,
+    body_text: str,
+    body_html: str | None = None,
+    from_email: str | None = None,
+) -> str | None:
+    """Async wrapper for send_email with retry."""
+    return await asyncio.to_thread(
+        send_email,
+        access_token,
+        to,
+        subject,
+        body_text,
+        body_html,
+        from_email,
+    )

@@ -77,6 +77,15 @@ class User(Base):
 
         return self.gmail_refresh_token is not None
 
+    # -------------------------------------------------------------------
+    # Daily Digest Preferences
+    # -------------------------------------------------------------------
+    # When enabled, the daily-digest job sends session summaries to the user
+    # via their connected Gmail account (sends from themselves to themselves).
+    digest_enabled = Column(Boolean, nullable=False, default=False)
+    # Tracks when the last digest was sent for idempotency (prevent duplicates)
+    last_digest_sent_at = Column(DateTime, nullable=True)
+
     # Timestamps -------------------------------------------------------------
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
