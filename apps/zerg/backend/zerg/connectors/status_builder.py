@@ -394,9 +394,9 @@ def build_fiche_context(
         XML-formatted string with current_time and connector_status blocks
 
     Example output:
-        <current_time>2025-01-17T15:00:00Z</current_time>
+        <current_time>2025-01-17T15:00Z</current_time>
 
-        <connector_status captured_at="2025-01-17T15:00:00Z">
+        <connector_status captured_at="2025-01-17T15:00Z">
         {
           "github": {
             "status": "connected",
@@ -407,8 +407,10 @@ def build_fiche_context(
         }
         </connector_status>
     """
-    # Get current time in UTC with Z suffix
-    current_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Get current time in UTC, rounded to the minute.
+    # Dropping seconds improves LLM prompt-cache hit rate: all requests
+    # within the same minute produce identical dynamic context strings.
+    current_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
 
     # Build connector status
     connector_status = build_connector_status(
@@ -430,7 +432,7 @@ def build_fiche_context(
         connector_status = filtered
 
     # Format as XML with JSON inside
-    json_kwargs: dict[str, Any] = {"ensure_ascii": False}
+    json_kwargs: dict[str, Any] = {"ensure_ascii": False, "sort_keys": True}
     if compact_json:
         json_kwargs.update(separators=(",", ":"))
     else:
