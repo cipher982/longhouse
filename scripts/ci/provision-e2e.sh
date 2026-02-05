@@ -50,7 +50,11 @@ FERNET_SECRET="$(make_secret)"
 TRIGGER_SECRET="$(make_secret)"
 
 CONTROL_PLANE_DB="/tmp/longhouse-control-plane.db"
-INSTANCE_DATA_ROOT="/tmp/longhouse-instance-data"
+if [[ -d "/home/runner/_work" ]]; then
+  INSTANCE_DATA_ROOT="/home/runner/_work/longhouse-instance-data"
+else
+  INSTANCE_DATA_ROOT="/tmp/longhouse-instance-data"
+fi
 mkdir -p "$INSTANCE_DATA_ROOT"
 
 cleanup() {

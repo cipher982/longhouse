@@ -78,6 +78,8 @@ def _volume_for(subdomain: str) -> tuple[str, dict[str, str]]:
     # Set ownership to UID 1000 (longhouse user inside container) when possible.
     if os.geteuid() == 0:
         os.chown(data_path, 1000, 1000)
+    else:
+        os.chmod(data_path, 0o777)
     return data_path, {data_path: {"bind": "/data", "mode": "rw"}}
 
 
