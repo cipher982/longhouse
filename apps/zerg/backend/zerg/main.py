@@ -334,6 +334,24 @@ async def lifespan(app: FastAPI):
             raise
         logger.info("Database tables initialized")
 
+        # FTS5 is a hard requirement for session search (SQLite only).
+        try:
+            from sqlalchemy import text
+
+            from zerg.database import default_engine
+
+            if default_engine is not None and default_engine.dialect.name == "sqlite":
+                with default_engine.connect() as conn:
+                    fts_row = conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")).fetchone()
+                    if not fts_row:
+                        raise RuntimeError("events_fts table is missing (FTS5 required).")
+                    # Validate FTS module by executing a no-op MATCH query.
+                    conn.execute(text("SELECT rowid FROM events_fts WHERE events_fts MATCH 'fts5' LIMIT 1")).fetchone()
+        except Exception as fts_error:
+            app.state.fts_violation = str(fts_error)
+            logger.error(f"FTS5 readiness check failed: {fts_error}")
+            raise
+
         # Single-tenant enforcement and owner bootstrap
         # Must run after DB init but before other services
         if _settings.single_tenant and not _settings.testing:
@@ -778,7 +796,7 @@ async def health_db():
     from zerg.database import default_engine
 
     # Critical tables that must exist for the app to function
-    required_tables = ["users", "fiches", "threads", "runs", "commis_jobs", "sessions", "events"]
+    required_tables = ["users", "fiches", "threads", "runs", "commis_jobs", "sessions", "events", "events_fts"]
 
     try:
         with default_engine.connect() as conn:
@@ -863,7 +881,24 @@ async def health_check():
         checks["database"] = {"status": "fail", "error": str(e)}
         health_status["status"] = "unhealthy"
 
-    # 3. Migration status
+    # 3. SQLite FTS5 readiness (required for session search)
+    try:
+        from zerg.database import default_engine
+
+        if default_engine is not None and default_engine.dialect.name == "sqlite":
+            with default_engine.connect() as conn:
+                fts_row = conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")).fetchone()
+                if not fts_row:
+                    raise RuntimeError("events_fts table is missing (FTS5 required).")
+                conn.execute(text("SELECT rowid FROM events_fts WHERE events_fts MATCH 'fts5' LIMIT 1")).fetchone()
+            checks["fts5"] = {"status": "pass"}
+        else:
+            checks["fts5"] = {"status": "skip", "reason": "non-sqlite"}
+    except Exception as e:
+        checks["fts5"] = {"status": "fail", "error": str(e)}
+        health_status["status"] = "unhealthy"
+
+    # 4. Migration status
     migration_log_file = Path("/app/static/migration.log")
     migration_status = {"log_exists": migration_log_file.exists(), "log_content": None}
 
