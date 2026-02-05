@@ -180,3 +180,4 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-05) [ops] Instance health uses `/api/health` (readiness) and `/api/livez` (liveness); no root `/health`.
 - (2026-02-05) [ops] longhouse.ai and api.longhouse.ai currently return HTTP 525 (Cloudflare origin handshake failure); smoke-after-deploy health checks fail.
 - (2026-02-05) [db] SQLite FTS5 index (`events_fts`) now backs session search when available.
+- (2026-02-05) [e2e] Chat UI can include existing commis cards; E2E commis UI assertions should target `data-tool-call-id` for the injected tool.

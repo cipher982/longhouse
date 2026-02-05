@@ -18,7 +18,8 @@ test.describe('Infrastructure - Core', () => {
 
     const body = await response.json();
     expect(body).toHaveProperty('status');
-    expect(body).toHaveProperty('db');
+    expect(body).toHaveProperty('checks');
+    expect(body.checks).toHaveProperty('database');
   });
 
   test('frontend loads successfully', async ({ page }) => {
@@ -51,6 +52,6 @@ test.describe('Infrastructure - Core', () => {
     expect(response.status()).toBe(200);
 
     const body = await response.json();
-    expect(body?.db?.status).toBe('ok');
+    expect(body?.checks?.database?.status).toBe('pass');
   });
 });
