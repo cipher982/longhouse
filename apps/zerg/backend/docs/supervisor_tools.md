@@ -28,6 +28,21 @@ The oikos tools layer enables Zerg's oikos/commis architecture by providing tool
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## Bootstrap vs Registry Tools
+
+Oikos tools come from two paths so we keep the agent boot sequence fast while still
+supporting a large tool catalog.
+
+- **Bootstrap/core tools** are pre-loaded for every oikos run (commis orchestration +
+  discovery utilities). Source of truth is `zerg/tools/builtin/oikos_tools.py`
+  (`OIKOS_TOOL_NAMES`), which feeds `CORE_TOOLS` in `zerg/tools/catalog.py`.
+- **Registry tools** are everything else in `BUILTIN_TOOLS` plus runtime/MCP tools.
+  They live in the registry and are lazy-loaded via `ToolResolver` + `LazyToolBinder`
+  on first use.
+
+Rule of thumb: if a tool is required for the very first turn, it must be in
+`OIKOS_TOOL_NAMES`; otherwise it can stay registry-only.
+
 ## Tools
 
 ### spawn_commis(task: str, model: str | None = None) -> str
