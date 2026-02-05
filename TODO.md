@@ -35,7 +35,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | QA Infrastructure | ~10% | UI capture fix done; readme test runner + CI still missing |
 | Install/Onboarding | ~15% | Missing doctor, device token UI, fresh-shell shim verify; connect default URL mismatch |
 | OSS First-Run UX | ~25% | `--demo` works, but onboarding doesn’t seed demo data or guided empty state |
-| Control Plane | ~35% | Scaffold + provisioner + admin UI exist; OAuth/billing/runtime image pending |
+| Control Plane | ~40% | Scaffold + provisioner + admin UI + CI provisioning gate; OAuth/billing/runtime image pending |
 
 ### ❌ NOT STARTED
 | Section | Status | Notes |
@@ -386,6 +386,12 @@ Update screenshots to show Timeline, not old dashboard.
 - [ ] Add health check polling after provision (method exists, not wired in routes/UI)
 - [ ] Build and push runtime image (`docker/runtime.dockerfile`) to ghcr.io
 - [ ] Update CONTROL_PLANE_IMAGE to use runtime image (currently uses backend-only)
+
+### Phase 3.5: Provisioning E2E Gate ✅
+
+- [x] Add CI provisioning script (`scripts/ci/provision-e2e.sh`) with real control-plane + instance smoke checks
+- [x] Add GitHub workflow on cube ARC runners (`.github/workflows/provision-e2e.yml`)
+- [x] Add CI-only port publishing + writable instance data root for provisioning tests
 
 ### Phase 4: Cross-Subdomain Auth (2)
 

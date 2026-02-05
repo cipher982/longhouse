@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     image: str = "ghcr.io/cipher982/longhouse:latest"
     instance_port: int = 8000
     instance_data_root: str = "/var/lib/docker/data/longhouse"
+    publish_ports: bool = False
 
     # Routing/proxy
     root_domain: str = "longhouse.ai"

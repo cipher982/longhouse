@@ -75,8 +75,9 @@ def _env_for(subdomain: str, owner_email: str) -> dict[str, str]:
 def _volume_for(subdomain: str) -> tuple[str, dict[str, str]]:
     data_path = os.path.join(settings.instance_data_root, subdomain)
     os.makedirs(data_path, exist_ok=True)
-    # Set ownership to UID 1000 (longhouse user inside container)
-    os.chown(data_path, 1000, 1000)
+    # Set ownership to UID 1000 (longhouse user inside container) when possible.
+    if os.geteuid() == 0:
+        os.chown(data_path, 1000, 1000)
     return data_path, {data_path: {"bind": "/data", "mode": "rw"}}
 
 
@@ -102,6 +103,10 @@ class Provisioner:
         labels = _labels_for(subdomain)
         env = _env_for(subdomain, owner_email)
 
+        ports = None
+        if settings.publish_ports:
+            ports = {settings.instance_port: settings.instance_port}
+
         container = self.client.containers.run(
             image=settings.image,
             name=container_name,
@@ -109,6 +114,7 @@ class Provisioner:
             labels=labels,
             environment=env,
             volumes=volumes,
+            ports=ports,
         )
 
         self.ensure_network(container)
