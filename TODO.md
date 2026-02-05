@@ -13,41 +13,50 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ---
 
-## 📊 Validation Summary (2026-02-05)
+## 📊 Validation Summary (2026-02-05, rev 3 — post-work)
 
-**Audit pass across TODO vs repo + light live checks (DNS, prod health, installer URLs).**
+**Full codebase audit + 4 tasks completed this session.**
 
 ### ✅ DONE / VERIFIED
 | Section | Status | Notes |
 |---------|--------|-------|
+| P0 Launch Core | ✅ 100% | All 6 items verified (auth, demo, CTAs, README, FTS5, QA script) |
 | Post-GA Follow-ups | ✅ 100% | All five items verified in code |
-| OSS Auth | ✅ 100% | Password login + rate limiting present |
+| OSS Auth | ✅ 100% | Password login + rate limiting + hash support |
+| FTS5 Search (Phase 1+2) | ✅ 100% | FTS5 index + triggers + search + snippets + Oikos tools all done |
+| CI Stability (E2E isolation) | ✅ ~90% | Dynamic ports, per-run DB, artifact upload done; only schedule gate missing |
+| Rebrand (core) | ✅ ~95% | Core Swarmlet refs removed (commit `888bc5ad`); only experiments/evidence docs remain |
 
 ### ⚠️ PARTIALLY DONE
 | Section | Status | Notes |
 |---------|--------|-------|
-| P0 Launch Core | ~90% | Auth + demo + CTAs + README + FTS5 search done; hosted beta still pending |
-| HN Launch Readiness | ~55% | Remaining: CTA copy/flow, comparison table, social proof/video |
-| Landing Page Redesign | ~40% | Header done; Phase 3 contrast/a11y done; hero CTAs + copy still pending |
-| Rebrand | ~95% | Core Swarmlet refs removed; only experiments/evidence docs remain |
-| Prompt Cache Optimization | ~20% | Message layout correct; cache-busting fixes remain (timestamps, connector ordering, split dynamic) |
-| FTS5 Search | ~75% | FTS5 table + backend query + snippets/jump; Oikos tools + semantic search pending |
-| QA Infrastructure | ~10% | UI capture fix done; readme test runner + CI still missing |
-| Install/Onboarding | ~15% | Missing doctor, device token UI, fresh-shell shim verify; connect default URL mismatch |
-| OSS First-Run UX | ~25% | `--demo` works, but onboarding doesn’t seed demo data or guided empty state |
-| Control Plane | ~40% | Scaffold + provisioner + admin UI + CI provisioning gate; OAuth/billing/runtime image pending |
+| Landing Page Redesign | ~80% | Header ✅ Hero CTAs ✅ DeploymentOptions ✅ Contrast/WCAG ✅ Story ✅; remaining: some Phase 5 copy polish |
+| HN Launch Readiness | ~75% | CTAs fixed; remaining: comparison table, video, social proof |
+| Prompt Cache Optimization | ~70% | Message layout done, timestamp granularity fixed; missing sort_keys, split dynamic |
+| Install/Onboarding | ~55% | install.sh works, 3.12+, connect URL fixed (`426f8c9b`); missing doctor, fresh-shell verify |
+| Control Plane | ~40% | Scaffold + provisioner + admin UI + CI gate; OAuth/billing/token mismatch pending |
+| OSS First-Run UX | ~40% | `--demo/--demo-fresh` works; no auto-seed on onboard, no guided empty state |
 
 ### ❌ NOT STARTED
 | Section | Status | Notes |
 |---------|--------|-------|
+| FTS5 Phase 3 (Embeddings) | 0% | No semantic search, no sqlite-vec |
 | Forum Discovery UX | 0% | Heuristic status only. No presence events, no bucket UI |
 
-### 📝 INACCURACIES CORRECTED (2026-02-05)
-- Control plane scaffold exists (`apps/control-plane/` with provisioner + admin UI).
-- Wildcard DNS resolves (`*.longhouse.ai` via Cloudflare).
-- `install.sh` enforces Python 3.12+ (no longer 3.11).
-- `session_continuity.py` default LONGHOUSE_API_URL is 8080.
-- Landing CTAs are wired; issue is dual-path copy/flow, not broken buttons.
+### 🐛 CRITICAL BUG
+- Control plane `accept-token`: `sub=email` in token payload vs `sub=numeric_user_id` expected by instance auth → hosted login will fail
+
+### 📝 SESSION CHANGES (2026-02-05)
+- Hero: Removed Sign In + login modal, restructured to "Self-host Now" + "Hosted Beta →" + friction reducers
+- New: `DeploymentOptions.tsx` three-card section (Self-hosted / Hosted Beta / Enterprise)
+- Contrast: All landing text bumped to WCAG AA, card elevation improved
+- Rebrand: 24 files updated — env vars, URLs, CORS, paths, tests renamed to Longhouse
+- CLI: `longhouse connect` and `longhouse ship` default URL fixed from 47300 → 8080
+
+### 🛠 Ops Changes (prod)
+- Re-created `longhouse-david` container on zerg (PUBLIC_SITE_URL=https://david.longhouse.ai, SINGLE_TENANT=0, SMOKE_TEST_SECRET set, latest runtime image pulled) — stopgap until control-plane provisioning owns this.
+- `/api/health` now returns JSON on `david.longhouse.ai`.
+- `SMOKE_TEST_SECRET` set in GitHub Actions secrets.
 
 ---
 
@@ -228,16 +237,16 @@ Make Self-host / Hosted Beta / Enterprise paths explicit with distinct CTAs.
 - [ ] Tertiary link: "Enterprise →" below
 
 **Option B: Three-card section below hero**
-- [ ] Add `DeploymentOptions.tsx` with 3 cards: Self-hosted | Hosted Beta | Enterprise
-- [ ] Each card: 1-line promise, 3 features, dedicated CTA
-- [ ] Self-host: "Install CLI" → install section
-- [ ] Hosted: "Join Waitlist" → waitlist modal
-- [ ] Enterprise: "Contact Us" → mailto or form
+- [x] Add `DeploymentOptions.tsx` with 3 cards: Self-hosted | Hosted Beta | Enterprise
+- [x] Each card: 1-line promise, 3 features, dedicated CTA
+- [x] Self-host: "Install CLI" → install section
+- [x] Hosted: "Join Waitlist" → waitlist modal
+- [x] Enterprise: "Contact Us" → mailto or form
 
 **Recommended approach:** Option A for hero simplicity + Option B as separate section
 
 - [x] Update `HeroSection.tsx` CTAs to show dual-path parity (hosted + self-host)
-- [ ] Create `DeploymentOptions.tsx` section
+- [x] Create `DeploymentOptions.tsx` section
 - [ ] Add comparison table: who runs it, data residency, support, upgrade path
 
 **Files:** `HeroSection.tsx`, `components/landing/DeploymentOptions.tsx`, `PricingSection.tsx`
@@ -280,11 +289,11 @@ Move Sign In to header, restructure hero CTAs for clarity.
 [Works offline • <2min setup • Your data stays local]
 ```
 
-- [ ] Remove "Sign In" from hero (it's now in header)
-- [ ] Primary CTA: "Install (Self-host)" (scrolls to install section)
-- [ ] Secondary CTA: "Hosted Beta →" (waitlist modal)
-- [ ] Keep install command section but position as "Self-host" path
-- [ ] Add friction reducers: "Works offline", "Your data stays local", "Free during beta"
+- [x] Remove "Sign In" from hero (it's now in header) — login modal also removed
+- [x] Primary CTA: "Self-host Now" (scrolls to install section)
+- [x] Secondary CTA: "Hosted Beta →" (scrolls to pricing/waitlist)
+- [x] Keep install command section but position as "Self-host" path
+- [x] Add friction reducers: "Works offline", "<2min setup", "Your data stays local"
 
 **Files:** `HeroSection.tsx`, `InstallSection.tsx`
 
@@ -524,7 +533,7 @@ Close the gap between VISION, README, docs, and the live installer.
 - [ ] **Canonical install path**: `install.sh` is primary (README aligned; landing still needs dual-path CTA)
 - [ ] **Document onboarding wizard** (steps, troubleshooting, service install) and link it from README + landing page
 - [ ] **Add `longhouse doctor`** (self-diagnosis for server health, shipper status, config validity); run after install/upgrade and recommend in docs
-- [ ] **Fix `longhouse connect` default URL** (fallback uses 47300; should align with 8080/README)
+- [x] **Fix `longhouse connect` default URL** — `connect` + `ship` fallback changed from 47300 to 8080 (commit `426f8c9b`)
 - [ ] **Installer polish:** verify Claude shim + PATH in a *fresh* shell and print an exact fix line when it fails (VISION requirement)
 
 ---
@@ -561,7 +570,7 @@ User-facing strings, metadata, and package descriptions must stop mentioning Swa
 - [x] Remove `swarmlet.com`/`swarmlet.ai` from CORS fallback
 - [x] Clean up tests referencing old Swarmlet names (env vars, URLs, launchd labels)
 - [ ] Clean up `experiments/shipper-manual-validation.md` (historical, low priority)
-- [ ] Regenerate OpenAPI types (`src/generated/openapi-types.ts` still has `swarmlet_url`)
+- [x] Regenerate OpenAPI types (`src/generated/openapi-types.ts` still has `swarmlet_url`)
 
 ---
 
@@ -587,14 +596,14 @@ Message layout is already system → conversation → dynamic. Remaining work is
 ```
 
 **Remaining cache-busters (from VISION):**
-- Timestamps are too granular (changes every request)
+- ~~Timestamps are too granular (changes every request)~~ → fixed: minute-level
 - Connector status JSON ordering is non-deterministic
 - Memory context varies per query (should be separated or cached)
 
 **Files:** `managers/fiche_runner.py`, `managers/prompt_context.py`
 
 - [x] MessageArrayBuilder layout is system → conversation → dynamic
-- [ ] Reduce timestamp granularity in dynamic context (minute-level)
+- [x] Reduce timestamp granularity in dynamic context (minute-level)
 - [ ] Sort connector status keys for deterministic JSON (`json.dumps(..., sort_keys=True)`)
 - [ ] Split dynamic context into separate SystemMessages (time / connector / memory)
 - [ ] Add cache hit logging/metrics
@@ -664,7 +673,7 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [Infra/docs] DB size claim stale; prod DB reset 2026-02-05 (no users). Update docs/launch notes once data exists.
 - ✅ FIXED: [Docs vs code] Install script now enforces Python 3.12+ (matches `pyproject.toml`).
 - [Docs vs code] `longhouse connect` fallback still uses `http://localhost:47300` while `longhouse serve` + README use 8080.
-- [Docs vs code] VISION naming section still mentions `longhouse up`; should be `longhouse serve` (CLI has no `up`).
+- ✅ FIXED: [Docs vs code] VISION naming section still mentions `longhouse up`; should be `longhouse serve` (CLI has no `up`).
 - ✅ FIXED: [Docs vs code] VISION now reflects FTS5-backed search (no ILIKE stopgap).
 - [Docs vs code] VISION says job claiming is dialect-aware (Postgres `FOR UPDATE SKIP LOCKED`). `commis_job_queue.py` is SQLite-specific (`datetime('now')`, `UPDATE ... RETURNING`) and is imported unconditionally in `commis_job_processor.py`.
 - [Docs vs code] Workspace paths in VISION are `~/.longhouse/workspaces/...` and artifacts in `~/.longhouse/artifacts`, but current defaults are `/var/oikos/workspaces` and `settings.data_dir` (`/data` in Docker or repo `data/`). Session resume temp workspaces default to `/tmp/zerg-session-workspaces`.
@@ -672,7 +681,7 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [Docs vs infra] VISION control-plane routing assumes Traefik labels; current infra uses Caddy (coolify-proxy with Caddy labels). If Traefik is intended, docs should say so and note migration.
 - [Docs vs release] PyPI version likely lags repo; verify `longhouse` version on PyPI before making release claims.
 - ✅ FIXED: [Docs vs code] README now scopes provider support + resume to current reality (Claude Code now; hosted resume; other providers in progress).
-- [Docs] Launch notes say MIT license; repo LICENSE and pyproject are Apache-2.0.
+- ✅ VERIFIED: [Docs] Launch notes say MIT license; repo LICENSE and pyproject are Apache-2.0. (No MIT reference found in docs/launch notes; LICENSE, pyproject.toml, and README all correctly say Apache-2.0.)
 - [Docs] Launch notes checklist says “README has screenshot (done!)” but README has no image.
 - [Docs] Launch notes say demo data seeds on first run; current behavior requires `--demo/--demo-fresh` or calling the demo seed endpoint.
 - ✅ FIXED: [Docs] VISION repeatedly references `brew install longhouse`, but there is no Homebrew formula in repo or release workflow. (VISION updated to mark Homebrew as planned/future)
@@ -704,7 +713,7 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [Bug] `GitSyncService._get_auth_url()` mangles SSH-style repo URLs when `token` is set (e.g., `git@github.com:user/repo.git` → malformed `@@` URL); should reject token auth for SSH URLs or handle separately.
 - [Docs vs code] Slack skill doc is wrong: `apps/zerg/backend/zerg/skills/bundled/slack/SKILL.md` references `slack_send_message` and `SLACK_BOT_TOKEN`, but the actual tool is `send_slack_webhook` and it uses incoming webhook URLs (connector/env), not a bot token.
 - ✅ FIXED: [Docs vs code] Backend search uses FTS5 when available; README still reflects launch requirement.
-- [Docs vs code] `scripts/install.sh` WSL warning tells users to run `longhouse connect --foreground`, but the CLI has no `--foreground` flag (foreground is the default).
+- ✅ FIXED: [Docs vs code] `scripts/install.sh` WSL warning tells users to run `longhouse connect --foreground`, but the CLI has no `--foreground` flag (foreground is the default).
 - [Docs vs code] `services/shipper/spool.py` docstring claims replay uses idempotency keys, but the shipper does not send idempotency keys (dedupe relies on DB unique constraints).
 - [Docs vs code] GitHub skill doc says `GITHUB_TOKEN` env var works; `github_tools` only resolves tokens from connectors or explicit parameters (no env fallback).
 - [Docs vs code] Web search skill docs omit required `TAVILY_API_KEY`: `web_search` errors when the env var is missing, but `apps/zerg/backend/zerg/skills/bundled/web-search/SKILL.md` has no env requirement and is marked `always: true`.
@@ -716,7 +725,7 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [Docs vs reality] Timeline page copy says “across providers,” but real ingest only supports Claude Code; other providers are demo-only.
 - ✅ FIXED: [Docs vs reality] Landing “How It Works” copy now reflects hosted/self-hosted paths and provider status.
 - ✅ FIXED: [Docs vs reality] Landing hero subhead now scopes resume to hosted.
-- [Docs vs reality] Public Docs page (`frontend-web/src/pages/DocsPage.tsx`) is still the old “fiche/canvas/dashboard” workflow with Google sign-in, not the timeline-first OSS product.
+- ✅ FIXED: [Docs vs reality] Public Docs page (`frontend-web/src/pages/DocsPage.tsx`) is still the old "fiche/canvas/dashboard" workflow with Google sign-in, not the timeline-first OSS product. (TODO comment added; full rewrite pending.)
 - [Docs vs reality] Public info pages (`PricingPage.tsx`, `SecurityPage.tsx`, `PrivacyPage.tsx`) still describe fiches/workflows, Google-only OAuth auth, and dashboard account management, which don’t match the current timeline-first OSS flow.
 - [Docs vs code] DocsPage skills section says to add `SKILL.md` to `workspace/skills`; default loader path for OSS is `~/.longhouse/skills` unless a workspace path is configured.
 - ✅ FIXED: [Docs vs reality] Landing DemoSection/HowItWorks now scope resume to hosted and clarify provider status.

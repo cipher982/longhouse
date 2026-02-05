@@ -20,7 +20,7 @@ This is a living vision doc. It captures both the direction and the reasoning th
 **Do:**
 - Use **Longhouse** in marketing, UI, and docs
 - Use **Oikos** only for the assistant feature
-- Keep CLI verbs neutral (`longhouse up`, `longhouse onboard`, `longhouse connect`)
+- Keep CLI verbs neutral (`longhouse serve`, `longhouse onboard`, `longhouse connect`)
 
 **Don't:**
 - Mix Longhouse and Zerg in user-facing copy
