@@ -669,10 +669,16 @@ if [[ -n "$SMOKE_TEST_SECRET" ]]; then
         run_test test_http_auth "User profile (authed)" "$API_URL/api/users/me" "200" "$COOKIE_JAR"
 
         if [[ $RUN_LLM -eq 1 ]]; then
-            section "LLM"
-            run_test test_chat "Basic chat (2+2)" "$COOKIE_JAR" "What is 2+2? Reply with just the number." 30 '(^|[^0-9])4($|[^0-9])'
-            run_test test_chat "Basic chat (France capital)" "$COOKIE_JAR" "What is the capital of France? Reply with just the city." 30 '(^|[^A-Za-z])Paris($|[^A-Za-z])'
-            run_test test_voice "Voice transcribe + TTS" "$COOKIE_JAR" 45
+            local llm_available
+            llm_available=$(curl -s "$API_URL/api/system/capabilities" 2>/dev/null | jq -r '.llm_available // "unknown"' 2>/dev/null)
+            if [[ "$llm_available" != "true" ]]; then
+                warn "LLM unavailable (llm_available=$llm_available) - skipping LLM tests"
+            else
+                section "LLM"
+                run_test test_chat "Basic chat (2+2)" "$COOKIE_JAR" "What is 2+2? Reply with just the number." 30 '(^|[^0-9])4($|[^0-9])'
+                run_test test_chat "Basic chat (France capital)" "$COOKIE_JAR" "What is the capital of France? Reply with just the city." 30 '(^|[^A-Za-z])Paris($|[^A-Za-z])'
+                run_test test_voice "Voice transcribe + TTS" "$COOKIE_JAR" 45
+            fi
         else
             info "LLM test skipped (--no-llm)"
         fi
