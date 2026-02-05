@@ -1,0 +1,32 @@
+name: Provisioning E2E
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+jobs:
+  provision-e2e:
+    runs-on: cube
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Docker gate
+        run: |
+          set -euo pipefail
+          command -v docker
+          docker info
+
+      - name: Provisioning E2E (control plane + instance)
+        run: ./scripts/ci/provision-e2e.sh
