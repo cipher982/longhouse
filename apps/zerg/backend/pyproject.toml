@@ -60,6 +60,8 @@ dependencies = [
     "watchdog>=6.0.0",
     # Dead code detection
     "vulture>=2.11",
+    # Token counting for digest jobs
+    "tiktoken>=0.7.0",
 ]
 
 [project.scripts]
