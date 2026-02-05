@@ -160,8 +160,8 @@ jobs:
     - name: Install build tools
       run: sudo apt-get update && sudo apt-get install -y make
 
-    - name: Install Playwright browsers
-      run: cd apps/zerg/e2e && bunx playwright install chromium
+    - name: Install Playwright browsers + deps
+      run: cd apps/zerg/e2e && bunx playwright install --with-deps chromium
 
     - name: Build frontend (required by hatch)
       run: cd apps/zerg/frontend-web && bun install && bun run build
