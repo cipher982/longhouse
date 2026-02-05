@@ -23,7 +23,7 @@ test.describe('Accessibility and UI/UX', () => {
 
     // Navigate to application
     await page.goto('/');
-    await page.waitForTimeout(2000);
+    await page.waitForLoadState('domcontentloaded');
 
     // Test 1: Basic semantic structure
     console.log('📊 Test 1: Checking semantic structure...');
@@ -114,14 +114,13 @@ test.describe('Accessibility and UI/UX', () => {
     console.log('🚀 Starting keyboard navigation test...');
 
     await page.goto('/');
-    await page.waitForTimeout(1000);
+    await page.waitForLoadState('domcontentloaded');
 
     // Test 1: Tab order and focus management
     console.log('📊 Test 1: Testing tab order...');
 
     // Start from the beginning of the page
     await page.keyboard.press('Tab');
-    await page.waitForTimeout(200);
 
     // Track focus progression
     const focusableElements = [];
@@ -144,7 +143,6 @@ test.describe('Accessibility and UI/UX', () => {
       }
 
       await page.keyboard.press('Tab');
-      await page.waitForTimeout(100);
     }
 
     const uniqueFocusableElements = new Set(focusableElements.map(el => `${el.tagName}-${el.testId}`)).size;
@@ -159,7 +157,6 @@ test.describe('Accessibility and UI/UX', () => {
 
     try {
       await page.keyboard.press('Escape');
-      await page.waitForTimeout(200);
       console.log('✅ Escape key press handled');
     } catch (error) {
       console.log('📊 Escape key test:', error.message);
@@ -173,7 +170,6 @@ test.describe('Accessibility and UI/UX', () => {
     if (buttons > 0) {
       await page.locator('button, [role="button"]').first().focus();
       await page.keyboard.press('Enter');
-      await page.waitForTimeout(200);
       console.log('✅ Enter key activation tested');
     }
 
@@ -184,9 +180,7 @@ test.describe('Accessibility and UI/UX', () => {
     if (lists > 0) {
       await page.locator('[role="listbox"], [role="menu"], [role="tablist"]').first().focus();
       await page.keyboard.press('ArrowDown');
-      await page.waitForTimeout(200);
       await page.keyboard.press('ArrowUp');
-      await page.waitForTimeout(200);
       console.log('✅ Arrow key navigation tested');
     }
 
@@ -197,7 +191,7 @@ test.describe('Accessibility and UI/UX', () => {
     console.log('🚀 Starting screen reader compatibility test...');
 
     await page.goto('/');
-    await page.waitForTimeout(1000);
+    await page.waitForLoadState('domcontentloaded');
 
     // Test 1: Page title and document structure
     console.log('📊 Test 1: Checking page title and structure...');
@@ -275,7 +269,7 @@ test.describe('Accessibility and UI/UX', () => {
     console.log('🚀 Starting color contrast test...');
 
     await page.goto('/');
-    await page.waitForTimeout(1000);
+    await page.waitForLoadState('domcontentloaded');
 
     // Test 1: Check for color-only information
     console.log('📊 Test 1: Analyzing color usage...');
@@ -298,7 +292,6 @@ test.describe('Accessibility and UI/UX', () => {
 
     // Tab to an element and check if focus is visible
     await page.keyboard.press('Tab');
-    await page.waitForTimeout(200);
 
     const focusStyles = await page.evaluate(() => {
       const focused = document.activeElement;
@@ -343,8 +336,6 @@ test.describe('Accessibility and UI/UX', () => {
     await page.evaluate(() => {
       document.body.style.fontSize = '120%';
     });
-
-    await page.waitForTimeout(500);
 
     const scaledTextSizes = await page.evaluate(() => {
       const elements = Array.from(document.querySelectorAll('p, h1, h2, h3, h4, h5, h6, span, div'));
@@ -477,14 +468,13 @@ test.describe('Accessibility and UI/UX', () => {
     console.log('📊 Test 1: Testing fiche creation flow...');
 
     await page.goto('/');
-    await page.waitForTimeout(1000);
+    await page.waitForLoadState('domcontentloaded');
 
     const flowSteps = [];
 
     // Step 1: Navigate to dashboard
     const step1Start = Date.now();
     await page.locator('.header-nav').click();
-    await page.waitForTimeout(500);
     const step1Time = Date.now() - step1Start;
     flowSteps.push({ step: 'Navigate to dashboard', time: step1Time });
 
@@ -520,9 +510,8 @@ test.describe('Accessibility and UI/UX', () => {
 
       // Step 3: Verify fiche appears in dashboard
       await page.reload();
-      await page.waitForTimeout(1000);
+      await page.waitForLoadState('domcontentloaded');
       await page.locator('.header-nav').click();
-      await page.waitForTimeout(500);
 
       const ficheVisible = await page.locator(`text=${fiche.name}`).isVisible();
       console.log('📊 Fiche visible in dashboard:', ficheVisible);
@@ -548,7 +537,7 @@ test.describe('Accessibility and UI/UX', () => {
     // Try to trigger a recoverable error
     try {
       await page.goto('/invalid-route');
-      await page.waitForTimeout(1000);
+      await page.waitForLoadState('domcontentloaded');
 
       // Check if user can recover (navigate back, error page with navigation, etc.)
       const recoveryElements = await page.locator('button:has-text("Back"), a:has-text("Home"), nav').count();
@@ -560,7 +549,7 @@ test.describe('Accessibility and UI/UX', () => {
 
       // Navigate back to main app
       await page.goto('/');
-      await page.waitForTimeout(500);
+      await page.waitForLoadState('domcontentloaded');
     } catch (error) {
       console.log('📊 Error recovery test:', error.message);
     }

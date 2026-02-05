@@ -56,6 +56,10 @@ async function createFicheAndGetId(page: Page): Promise<string> {
   return ficheId;
 }
 
+async function waitForChatReady(page: Page): Promise<void> {
+  await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 15000 });
+}
+
 test.describe('Automation History Section', () => {
   test('Collapsible section toggles visibility', async ({ page, request }) => {
     console.log('🎯 Testing: Automation history collapse/expand toggle');
@@ -86,8 +90,7 @@ test.describe('Automation History Section', () => {
 
     // Navigate to chat to see automation history
     await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
-    await page.waitForLoadState('networkidle');
-    // Wait for chat interface to be ready (deterministic)
+    await waitForChatReady(page);
 
     // Verify automation history section is visible
     await expect(page.locator('[data-testid="automation-history"]')).toBeVisible({ timeout: 5000 });
@@ -142,8 +145,7 @@ test.describe('Automation History Section', () => {
     console.log(`📊 Created scheduled thread ID: ${thread.id}`);
 
     await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
-    await page.waitForLoadState('networkidle');
-    // Wait for chat interface to be ready (deterministic)
+    await waitForChatReady(page);
 
     // Expand automation history
     await page.locator('[data-testid="automation-history-header"]').click();
@@ -192,8 +194,7 @@ test.describe('Automation History Section', () => {
     console.log(`📊 Created manual thread ID: ${thread.id}`);
 
     await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
-    await page.waitForLoadState('networkidle');
-    // Wait for chat interface to be ready (deterministic)
+    await waitForChatReady(page);
 
     // Expand automation history
     await page.locator('[data-testid="automation-history-header"]').click();
@@ -243,8 +244,7 @@ test.describe('Automation History Section', () => {
     console.log(`📊 Created scheduled thread ID: ${scheduledThread.id}`);
 
     await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
-    await page.waitForLoadState('networkidle');
-    // Wait for chat interface to be ready (deterministic)
+    await waitForChatReady(page);
 
     // Verify chat thread appears in main thread list (not automation section)
     const chatThreads = page.locator('.thread-list .thread-item');
@@ -299,8 +299,7 @@ test.describe('Automation History Section', () => {
     console.log('📊 Created 3 automation threads');
 
     await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
-    await page.waitForLoadState('networkidle');
-    // Wait for chat interface to be ready (deterministic)
+    await waitForChatReady(page);
 
     // Verify count badge shows 3
     const countBadge = page.locator('[data-testid="automation-count"]');
@@ -343,8 +342,7 @@ test.describe('Automation History Section', () => {
     const thread = await response.json();
 
     await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
-    await page.waitForLoadState('networkidle');
-    // Wait for chat interface to be ready (deterministic)
+    await waitForChatReady(page);
 
     // Expand automation history
     await page.locator('[data-testid="automation-history-header"]').click();
@@ -379,9 +377,7 @@ test.describe('Automation History Section', () => {
     });
 
     await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
-
-    // Wait for chat interface to load (don't use networkidle as it may timeout)
-    await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
+    await waitForChatReady(page);
 
     // Verify chat thread still works
     await expect(page.locator('.thread-list .thread-item')).toHaveCount(1, { timeout: 10000 });
