@@ -104,6 +104,8 @@ make test          # Unit tests
 make test-e2e      # End-to-end tests
 ```
 
+Note: pre-commit hooks may auto-fix files (ruff/ruff-format, etc.). Re-stage before committing.
+
 ## Architecture
 
 ```
