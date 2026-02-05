@@ -26,15 +26,15 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 ### ⚠️ PARTIALLY DONE
 | Section | Status | Notes |
 |---------|--------|-------|
-| P0 OSS GA | ~90% | Auth + demo + QA script done; README/landing still overpromise and CTAs aren’t OSS-first |
-| HN Launch Readiness | ~70% | Remaining: CTA copy/flow, comparison table, social proof/video |
-| Landing Page Redesign | ~25% | Header done; hero CTAs + copy + contrast still pending |
+| P0 OSS GA | ~60% | Auth + demo + QA script done; README/landing still overpromise and CTAs aren’t OSS-first |
+| HN Launch Readiness | ~55% | Remaining: CTA copy/flow, comparison table, social proof/video |
+| Landing Page Redesign | ~20% | Header done; hero CTAs + copy + contrast still pending |
 | Rebrand | ~65% | ~13 Swarmlet matches in core code; ~50 total incl tests/docs |
-| Prompt Cache Optimization | ~60% | Message layout correct; cache-busting fixes remain (timestamps, connector ordering, split dynamic) |
+| Prompt Cache Optimization | ~20% | Message layout correct; cache-busting fixes remain (timestamps, connector ordering, split dynamic) |
 | FTS5 Search | 25% | Search bar UI exists but uses ILIKE; no FTS5 tables or Oikos tools |
-| QA Infrastructure | 80% | `make test-readmes` aggregator + runner missing |
-| Install/Onboarding | ~50% | Missing doctor, device token UI, fresh-shell shim verify; connect default URL mismatch |
-| OSS First-Run UX | ~40% | `--demo` works, but onboarding doesn’t seed demo data or guided empty state |
+| QA Infrastructure | ~10% | UI capture fix done; readme test runner + CI still missing |
+| Install/Onboarding | ~15% | Missing doctor, device token UI, fresh-shell shim verify; connect default URL mismatch |
+| OSS First-Run UX | ~25% | `--demo` works, but onboarding doesn’t seed demo data or guided empty state |
 | Control Plane | ~35% | Scaffold + provisioner + admin UI exist; OAuth/billing/runtime image pending |
 
 ### ❌ NOT STARTED
@@ -616,10 +616,9 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 
 (Former FOUND.md. Keep this list updated here only.)
 
-- [Infra/docs] API host mismatch: backend is configured for `api-david.longhouse.ai`, but TODO Domain Split still references `api.david.longhouse.ai`. `curl https://api-david.longhouse.ai/health` returns 200; `curl https://api.david.longhouse.ai/health` fails, and container labels only include `api-david.longhouse.ai`.
 - [Infra/docs] `longhouse.ai/install.sh` serves the SPA HTML (not the installer). The working installer URL is `get.longhouse.ai/install.sh` (302 to GitHub raw). ✅ FIXED: Scripts now use correct URL.
 - [Infra/docs] Wildcard DNS is now configured (dig `test-longhouse-audit.longhouse.ai` resolves); VISION still says "needs setup" in Control Plane section.
-- [Infra/docs] DB size claim likely stale; re-check `/data/longhouse.db` on server and update docs/launch notes.
+- [Infra/docs] DB size claim stale; prod DB reset 2026-02-05 (no users). Update docs/launch notes once data exists.
 - ✅ FIXED: [Docs vs code] Install script now enforces Python 3.12+ (matches `pyproject.toml`).
 - [Docs vs code] `longhouse connect` fallback still uses `http://localhost:47300` while `longhouse serve` + README use 8080.
 - [Docs vs code] VISION naming section still mentions `longhouse up`; should be `longhouse serve` (CLI has no `up`).
@@ -673,7 +672,7 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [Docs vs code] `scripts/install.sh` only documents `LONGHOUSE_API_URL`; CLI reads it, but `longhouse connect` fallback still uses 47300 (docs imply 8080).
 - [Docs vs reality] Timeline page copy says “across providers,” but real ingest only supports Claude Code; other providers are demo-only.
 - [Docs vs reality] Landing “How It Works” copy in `frontend-web/src/components/landing/HowItWorksSection.tsx` claims: (a) sessions auto-sync from Claude/Codex/Cursor, (b) FTS5-powered search, (c) resume any conversation from any device — all currently false.
-- [Docs vs reality] Landing hero subhead still claims “Resume from anywhere” (`HeroSection.tsx`); cross-device resume isn’t implemented (cloud phrasing removed).
+- [Docs vs reality] Landing hero subhead still claims “Resume from anywhere” (`HeroSection.tsx`); cross-device resume isn’t implemented.
 - [Docs vs reality] Public Docs page (`frontend-web/src/pages/DocsPage.tsx`) is still the old “fiche/canvas/dashboard” workflow with Google sign-in, not the timeline-first OSS product.
 - [Docs vs reality] Public info pages (`PricingPage.tsx`, `SecurityPage.tsx`, `PrivacyPage.tsx`) still describe fiches/workflows, Google-only OAuth auth, and dashboard account management, which don’t match the current timeline-first OSS flow.
 - [Docs vs code] DocsPage skills section says to add `SKILL.md` to `workspace/skills`; default loader path for OSS is `~/.longhouse/skills` unless a workspace path is configured.
@@ -698,60 +697,7 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 Best → worst. Run scripts from the repo root.
 
 ### Postgres Cleanup (SQLite-only OSS Pivot)
-
-01. [ID 01] Remove agents schema mapping for SQLite-only core.
-Evidence: `ideas/evidence/21_evidence_agents_schema_mapping.sh`
-
-02. [ID 02] Drop ensure_agents_schema Postgres-only schema creation.
-Evidence: `ideas/evidence/22_evidence_ensure_agents_schema_postgres.sh`
-
-03. [ID 03] Replace postgresql.UUID or JSONB in agents schema migration.
-Evidence: `ideas/evidence/23_evidence_alembic_0002_postgres_types.sh`
-
-04. [ID 04] Replace postgresql.UUID in device tokens migration.
-Evidence: `ideas/evidence/24_evidence_alembic_0004_postgres_uuid.sh`
-
-05. [ID 05] Replace postgresql.UUID in memories migration.
-Evidence: `ideas/evidence/25_evidence_alembic_0007_postgres_uuid.sh`
-
-06. [ID 06] Move Postgres checkpointer to optional module.
-Evidence: `ideas/evidence/26_evidence_checkpointer_postgres_path.sh`
-
-07. [ID 07] Remove Postgres advisory lock support from fiche_state_recovery.
-Evidence: `ideas/evidence/27_evidence_fiche_state_recovery_advisory.sh`
-
-08. [ID 08] Simplify task_runner Postgres guard logic in SQLite-only mode.
-Evidence: `ideas/evidence/28_evidence_task_runner_postgres_guard.sh`
-
-09. [ID 09] Remove asyncpg stub ops_db module that raises NotImplemented.
-Evidence: `ideas/evidence/29_evidence_ops_db_asyncpg_stub.sh`
-
-10. [ID 10] Move legacy Postgres test suite out of core repo.
-Evidence: `ideas/evidence/30_evidence_tests_readme_legacy_postgres.sh`
-
-11. [ID 11] Remove run_backend_tests.sh legacy Postgres runner.
-Evidence: `ideas/evidence/31_evidence_run_backend_tests_postgres.sh`
-
-12. [ID 12] Archive dev-docker Postgres script if Docker is legacy.
-Evidence: `ideas/evidence/32_evidence_dev_docker_postgres.sh`
-
-13. [ID 13] Archive stop-docker Postgres script if Docker is legacy.
-Evidence: `ideas/evidence/33_evidence_stop_docker_postgres.sh`
-
-14. [ID 14] Move Postgres-only checkpointer tests out of default suite.
-Evidence: `ideas/evidence/34_evidence_test_checkpointer_postgres.sh`
-
-15. [ID 15] Remove device-token tests that expect Postgres-only behavior.
-Evidence: `ideas/evidence/35_evidence_test_device_tokens_postgres.sh`
-
-16. [ID 16] Remove asyncpg result handling tests once asyncpg removed.
-Evidence: `ideas/evidence/36_evidence_test_qa_fiche_asyncpg.sh`
-
-17. [ID 17] Remove advisory-lock support tests after SQLite-only pivot.
-Evidence: `ideas/evidence/37_evidence_test_fiche_state_recovery_postgres.sh`
-
-18. [ID 18] Revisit timeseries compatibility tests tied to Postgres assumptions.
-Evidence: `ideas/evidence/38_evidence_test_ops_service_timeseries.sh`
+(Archived 2026-02-05 — alembic migrations removed; per user request ignore migration cleanup items. See git history or `ideas/evidence/` if needed.)
 
 ### Legacy Tool Registry + Deprecated Code
 
