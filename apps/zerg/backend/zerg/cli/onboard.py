@@ -168,6 +168,11 @@ def onboard(
         "--no-shipper",
         help="Skip shipper installation",
     ),
+    no_demo: bool = typer.Option(
+        False,
+        "--no-demo",
+        help="Skip seeding demo sessions",
+    ),
 ) -> None:
     """Run the Longhouse onboarding wizard.
 
@@ -312,8 +317,38 @@ def onboard(
 
     typer.echo("")
 
-    # Step 5: Save config
-    typer.secho("Step 5: Saving configuration", fg=typer.colors.BLUE, bold=True)
+    # Step 5: Seed demo sessions
+    typer.secho("Step 5: Demo data", fg=typer.colors.BLUE, bold=True)
+    typer.echo("")
+
+    if no_demo:
+        typer.echo("  Skipping demo data (--no-demo)")
+    elif _check_server_health(host, port):
+        typer.echo("  Seeding demo sessions...")
+        try:
+            with httpx.Client(timeout=10) as client:
+                resp = client.post(f"{api_url}/api/agents/demo")
+                if resp.status_code == 200:
+                    result = resp.json()
+                    if result.get("seeded"):
+                        typer.secho(
+                            f"  [OK] Seeded {result['sessions_created']} demo sessions",
+                            fg=typer.colors.GREEN,
+                        )
+                        typer.echo("       Run 'longhouse ship' to sync your real sessions.")
+                    else:
+                        typer.secho("  [OK] Demo sessions already present", fg=typer.colors.GREEN)
+                else:
+                    typer.secho("  [WARN] Could not seed demo data", fg=typer.colors.YELLOW)
+        except Exception as e:
+            typer.secho(f"  [WARN] Demo seeding failed: {e}", fg=typer.colors.YELLOW)
+    else:
+        typer.echo("  Skipping demo data (server not running)")
+
+    typer.echo("")
+
+    # Step 6: Save config
+    typer.secho("Step 6: Saving configuration", fg=typer.colors.BLUE, bold=True)
     typer.echo("")
 
     config_data = {
@@ -335,7 +370,7 @@ def onboard(
 
     typer.echo("")
 
-    # Step 6: Open browser (if GUI available)
+    # Step 7: Open browser (if GUI available)
     if _has_gui() and _check_server_health(host, port):
         if quick or typer.confirm("Open Longhouse in browser?", default=True):
             typer.echo(f"  Opening {api_url}...")
