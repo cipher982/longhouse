@@ -7,7 +7,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { test, expect, type Page } from './fixtures';
+import { test, expect, type Page } from '../fixtures';
 
 async function ensureDemoProviders(page: Page): Promise<void> {
   const providerSelect = page.locator('select[aria-label="provider"]');
