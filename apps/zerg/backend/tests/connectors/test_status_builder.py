@@ -290,7 +290,7 @@ def test_build_fiche_context_format(db_session: Session, test_user: User):
 
 
 def test_build_fiche_context_timestamp_format(db_session: Session, test_user: User):
-    """Test build_fiche_context uses correct ISO 8601 timestamp format with Z suffix."""
+    """Test build_fiche_context uses minute-level timestamp for cache friendliness."""
     # Mock datetime to control timestamp
     mock_time = datetime(2025, 1, 17, 15, 30, 45, tzinfo=timezone.utc)
     with patch("zerg.connectors.status_builder.datetime") as mock_datetime:
@@ -303,8 +303,8 @@ def test_build_fiche_context_timestamp_format(db_session: Session, test_user: Us
             fiche_id=None,
         )
 
-        # Should contain the exact timestamp we mocked
-        expected_timestamp = "2025-01-17T15:30:45Z"
+        # Seconds are dropped to improve LLM prompt-cache hit rate
+        expected_timestamp = "2025-01-17T15:30Z"
         assert expected_timestamp in context
 
         # Should appear in both current_time and captured_at
