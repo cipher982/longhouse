@@ -516,7 +516,7 @@ seed-marketing: ## Seed marketing data (workflows, agents, chat thread)
 
 marketing-capture: ## Capture all marketing screenshots (manifest-driven)
 	@echo "📸 Capturing marketing screenshots..."
-	@if ! curl -sf http://localhost:30080/health >/dev/null 2>&1; then \
+	@if ! curl -sf http://localhost:30080/api/health >/dev/null 2>&1; then \
 		echo "❌ Dev stack not running. Start with 'make dev'"; \
 		exit 1; \
 	fi
@@ -525,7 +525,7 @@ marketing-capture: ## Capture all marketing screenshots (manifest-driven)
 
 marketing-single: ## Capture specific screenshot (usage: make marketing-single NAME=chat-preview)
 	@test -n "$(NAME)" || (echo "❌ Usage: make marketing-single NAME=<screenshot-name>" && exit 1)
-	@if ! curl -sf http://localhost:30080/health >/dev/null 2>&1; then \
+	@if ! curl -sf http://localhost:30080/api/health >/dev/null 2>&1; then \
 		echo "❌ Dev stack not running. Start with 'make dev'"; \
 		exit 1; \
 	fi
@@ -553,7 +553,7 @@ video-record: ## Record video scenes (headless, requires audio + dev stack)
 		echo "❌ Audio not found. Run 'make video-audio' first"; \
 		exit 1; \
 	fi
-	@if ! curl -sf http://localhost:30080/health >/dev/null 2>&1; then \
+	@if ! curl -sf http://localhost:30080/api/health >/dev/null 2>&1; then \
 		echo "❌ Dev stack not running. Start with 'make dev'"; \
 		exit 1; \
 	fi

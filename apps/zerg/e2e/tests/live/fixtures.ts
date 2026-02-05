@@ -13,7 +13,7 @@ type RequestFactory = { newContext: (options?: { baseURL?: string; timeout?: num
 
 /**
  * Wait for the API to be healthy before running tests.
- * Polls /api/system/health until status is "ok" twice consecutively.
+ * Polls /api/health until status is "ok" twice consecutively.
  * This prevents flaky tests during deploy windows.
  */
 export async function waitForHealthy(
@@ -35,7 +35,7 @@ export async function waitForHealthy(
     while (Date.now() - startTime < timeoutMs) {
       attempt++;
       try {
-        const response = await healthRequest.get('/api/system/health');
+        const response = await healthRequest.get('/api/health');
         if (response.ok()) {
           const data = await response.json();
           if (data.status === 'healthy' || data.status === 'ok') {

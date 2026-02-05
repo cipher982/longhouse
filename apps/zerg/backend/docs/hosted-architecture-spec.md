@@ -55,7 +55,7 @@ Define the complete hosted architecture: control plane, instance provisioning, j
 - Signup (Google OAuth)
 - Billing (Stripe checkout, webhooks, portal)
 - Provisioning (Docker API → create container with Caddy labels)
-- Health monitoring (poll `/api/system/health`)
+- Health monitoring (poll `/api/health`)
 - Instance management (start, stop, deprovision)
 
 **What it does NOT do:**
@@ -103,7 +103,7 @@ Define the complete hosted architecture: control plane, instance provisioning, j
      ghcr.io/cipher982/longhouse-runtime:latest
    ```
 4. Connect container to `coolify` network
-5. Wait for `/api/system/health` to return 200
+5. Wait for `/api/health` to return 200
 6. Redirect user to `{subdomain}.longhouse.ai`
 
 **Volume structure:**

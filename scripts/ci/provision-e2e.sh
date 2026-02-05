@@ -141,7 +141,7 @@ PY
 
 printf "\n==> Waiting for instance health (%s)\n" "$CONTAINER_NAME"
 for _ in {1..40}; do
-  if curl -sf "${INSTANCE_URL}/api/system/health" >/dev/null; then
+  if curl -sf "${INSTANCE_URL}/api/health" >/dev/null; then
     break
   fi
   sleep 2
@@ -152,7 +152,7 @@ for _ in {1..40}; do
   fi
 done
 
-if ! curl -sf "${INSTANCE_URL}/api/system/health" >/dev/null; then
+if ! curl -sf "${INSTANCE_URL}/api/health" >/dev/null; then
   echo "Instance health check failed." >&2
   docker ps -a
   docker logs "$CONTAINER_NAME" || true
@@ -160,8 +160,8 @@ if ! curl -sf "${INSTANCE_URL}/api/system/health" >/dev/null; then
 fi
 
 printf "\n==> Running smoke checks\n"
-curl -sf "${INSTANCE_URL}/health" >/dev/null
-curl -sf "${INSTANCE_URL}/api/system/health" >/dev/null
+curl -sf "${INSTANCE_URL}/api/health" >/dev/null
+curl -sf "${INSTANCE_URL}/api/health" >/dev/null
 curl -sf "${INSTANCE_URL}/timeline" >/dev/null
 
 echo "✅ Provisioning E2E checks passed."

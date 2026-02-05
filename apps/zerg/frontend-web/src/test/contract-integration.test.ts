@@ -64,7 +64,7 @@ describeContract('Backend API Contract Integration', () => {
 
   describe('System Health', () => {
     it('should return valid health check', async () => {
-      const result = await apiCall('/api/system/health');
+      const result = await apiCall('/api/health');
 
       expect(result.status).toBe(200);
       expect(result.data).toBeTruthy();

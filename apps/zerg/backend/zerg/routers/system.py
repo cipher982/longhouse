@@ -1,9 +1,7 @@
 """System configuration & feature-flag endpoints (public).
 
-Provides a *single* unauthenticated JSON endpoint so that the WASM frontend
-can discover runtime flags (currently only `auth_disabled`) without the
-developer having to keep environment variables in sync between the Python
-and Rust build steps.
+Provides unauthenticated JSON endpoints so the frontend can discover runtime
+flags without keeping environment variables in sync between build steps.
 """
 
 from typing import Any
@@ -15,11 +13,6 @@ from sqlalchemy import text
 
 from zerg.config import get_settings
 from zerg.database import get_session_factory
-
-try:  # optional – ws manager may not be present in minimal builds
-    from zerg.websocket.manager import topic_manager  # type: ignore
-except Exception:  # pragma: no cover – keep health resilient if import fails
-    topic_manager = None  # type: ignore
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -50,54 +43,6 @@ def system_capabilities() -> Dict[str, Any]:
     return {
         "llm_available": _settings.llm_available,
         "auth_disabled": _settings.auth_disabled,
-    }
-
-
-@router.get("/health", status_code=status.HTTP_200_OK)
-def health() -> Dict[str, Any]:
-    """Lightweight readiness probe used by E2E tests.
-
-    Returns JSON with overall status and basic subsystem stats. Keeps work
-    minimal to avoid impacting test performance.
-    """
-    db_ok = True
-    alembic_version = None
-    try:
-        session_factory = get_session_factory()
-        with session_factory() as s:  # type: ignore[arg-type]
-            s.execute(text("SELECT 1"))
-
-            # Get current alembic version (may not exist in test databases)
-            try:
-                result = s.execute(text("SELECT version_num FROM alembic_version LIMIT 1"))
-                row = result.fetchone()
-                if row:
-                    alembic_version = row[0]
-            except Exception:
-                # alembic_version table doesn't exist - not an error
-                pass
-    except Exception:  # pragma: no cover – defensive: surface as unhealthy but do not raise
-        db_ok = False
-
-    ws_stats: Dict[str, Any] = {
-        "available": topic_manager is not None,
-    }
-    if topic_manager is not None:
-        try:
-            ws_stats.update(
-                active_connections=len(topic_manager.active_connections),
-                topics=len(topic_manager.topic_subscriptions),
-            )
-        except Exception:  # pragma: no cover – never fail health due to stats
-            pass
-
-    return {
-        "status": "ok" if db_ok else "degraded",
-        "db": {
-            "status": "ok" if db_ok else "error",
-            "alembic_version": alembic_version,
-        },
-        "ws": ws_stats,
     }
 
 

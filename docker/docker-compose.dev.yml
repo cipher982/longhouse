@@ -80,7 +80,7 @@ services:
       # E2E test fixtures (for tool stubbing)
       - ../apps/zerg/e2e/fixtures:/app/e2e-fixtures:ro
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
       <<: *healthcheck-defaults
       start_period: 2s
     networks:
@@ -141,7 +141,7 @@ services:
       backend:
         condition: service_started
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/api/health"]
       <<: *healthcheck-defaults
     networks:
       - swarm-network

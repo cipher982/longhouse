@@ -133,7 +133,7 @@ class Provisioner:
 
     def wait_for_health(self, subdomain: str, timeout: int = 120) -> bool:
         host = _host_for(subdomain)
-        url = f"https://{host}/api/system/health"
+        url = f"https://{host}/api/health"
         deadline = time.time() + timeout
         last_error = None
 

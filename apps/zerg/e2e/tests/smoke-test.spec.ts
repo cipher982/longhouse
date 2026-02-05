@@ -13,7 +13,7 @@ import { test, expect } from './fixtures';
 test.describe('Infrastructure Smoke Test', () => {
 
   test('backend health check responds', async ({ request }) => {
-    const response = await request.get('/api/system/health');
+    const response = await request.get('/api/health');
     expect(response.status()).toBe(200);
 
     const body = await response.json();

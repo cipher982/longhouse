@@ -187,7 +187,7 @@ export class ApiClient {
   }
 
   async healthCheck(): Promise<any> {
-    return await this.request('GET', '/');
+    return await this.request('GET', '/api/health');
   }
 }
 

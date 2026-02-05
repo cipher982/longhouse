@@ -141,7 +141,7 @@ Onboarding contract (CI). Do not edit unless the README steps change.
     "cd {{WORKDIR}}/apps/zerg/backend && uv sync",
     "cd {{WORKDIR}}/apps/zerg/backend && HOME={{WORKDIR}}/.qa-home uv run longhouse serve --demo-fresh --host 127.0.0.1 --port 8080 --daemon",
     "sleep 5",
-    "curl -fsS http://127.0.0.1:8080/health"
+    "curl -fsS http://127.0.0.1:8080/api/health"
   ],
   "cleanup": [
     "cd {{WORKDIR}}/apps/zerg/backend && HOME={{WORKDIR}}/.qa-home uv run longhouse serve --stop || true",

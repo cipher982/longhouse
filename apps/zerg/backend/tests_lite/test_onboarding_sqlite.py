@@ -25,7 +25,7 @@ def test_sqlite_onboarding_complete():
     This single test validates the full OSS onboarding flow:
     1. Create a temp SQLite database
     2. Boot the FastAPI server (in-process via TestClient)
-    3. Verify /health endpoint returns 200 with valid JSON status
+    3. Verify /api/health endpoint returns 200 with valid JSON status
     4. Verify /api/agents/sessions endpoint works
     5. Verify database file was created
 
@@ -50,10 +50,9 @@ from zerg.main import app
 client = TestClient(app)
 
 # Test 1: Health endpoint returns 200
-# Use /api/system/health which is the canonical API health endpoint
-# (the catch-all SPA route intercepts /health when frontend is mounted)
+# Use /api/health which is the canonical API health endpoint
 print("Test 1: Health endpoint...")
-response = client.get("/api/system/health")
+response = client.get("/api/health")
 print(f"  Status: {response.status_code}")
 print(f"  Content-Type: {response.headers.get('content-type', 'N/A')}")
 print(f"  Body length: {len(response.content)} bytes")
@@ -70,7 +69,7 @@ data = response.json()  # Let JSONDecodeError propagate
 status = data.get("status")
 print(f"  Health status: {status}")
 
-if status not in ("healthy", "ok"):  # /api/system/health uses "ok"
+if status not in ("healthy", "ok"):  # /api/health uses "ok"
     raise AssertionError(f"Unexpected health status: {status}")
 
 # Test 3: Sessions endpoint works

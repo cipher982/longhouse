@@ -175,9 +175,8 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-04) [infra] Decision: keep control plane + instances on zerg; avoid Coolify for dynamic provisioning (control plane uses Docker API directly).
 - (2026-02-04) [ops] FERNET_SECRET must be urlsafe base64 32-byte key; hex strings cause instance startup failure.
 - (2026-02-04) [arch] Runtime image (`docker/runtime.dockerfile`) bundles frontend+backend; backend serves frontend via StaticFiles at `/app/frontend-web/dist`.
-- (2026-02-04) [arch] Sauron is folded into the standard Longhouse instance; scheduled jobs run in-process per user, not as a separate service.
 - (2026-02-05) [db] Alembic migrations removed (versions dir empty); treat migration tasks as deprecated.
 - (2026-02-05) [security] Avoid storing admin tokens in AI session notes; rotate any exposed token immediately.
 - (2026-02-05) [ci] Provisioning E2E runs on cube ARC (DIND), builds runtime image, provisions instance, and hits health + timeline smoke checks.
-- (2026-02-05) [ops] Instance health uses `/api/system/health`; `/health` caches single-tenant bootstrap failures until restart.
+- (2026-02-05) [ops] Instance health uses `/api/health` (readiness) and `/api/livez` (liveness); no root `/health`.
 - (2026-02-05) [ops] longhouse.ai and api.longhouse.ai currently return HTTP 525 (Cloudflare origin handshake failure); smoke-after-deploy health checks fail.

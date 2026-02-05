@@ -87,7 +87,7 @@ function parseArgs(): Options {
 
 async function checkDevRunning(backendUrl: string): Promise<boolean> {
   try {
-    const response = await fetch(`${backendUrl}/health`);
+    const response = await fetch(`${backendUrl}/api/health`);
     return response.ok;
   } catch {
     return false;

@@ -2858,29 +2858,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/system/health": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Health
-         * @description Lightweight readiness probe used by E2E tests.
-         *
-         *     Returns JSON with overall status and basic subsystem stats. Keeps work
-         *     minimal to avoid impacting test performance.
-         */
-        get: operations["health_api_system_health_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/system/reset-sessions": {
         parameters: {
             query?: never;
@@ -3327,6 +3304,89 @@ export interface paths {
          *     signups from visitors who haven't signed up yet.
          */
         post: operations["join_waitlist_api_waitlist_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/repo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Jobs Repo Status
+         * @description Get the status of the jobs repository.
+         *
+         *     Returns information about:
+         *     - Whether the repo is initialized (has .git directory)
+         *     - Whether a remote is configured
+         *     - Last commit time and message
+         *     - Number of jobs in the manifest
+         */
+        get: operations["get_jobs_repo_status_api_jobs_repo_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/repo/init": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Init Jobs Repo
+         * @description Initialize the jobs repository.
+         *
+         *     Creates the jobs directory structure if it doesn't exist:
+         *     - /data/jobs/manifest.py (job definitions)
+         *     - /data/jobs/jobs/ (job modules)
+         *     - Runs git init
+         *
+         *     This is normally done automatically on first boot, but can be
+         *     triggered manually if needed.
+         */
+        post: operations["init_jobs_repo_api_jobs_repo_init_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/repo/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sync Jobs Repo
+         * @description Sync the jobs repository with its remote.
+         *
+         *     If a remote is configured, this will:
+         *     - Pull changes from remote
+         *     - Push local commits to remote
+         *     - Handle merge conflicts (if any)
+         *
+         *     Note: Remote sync is optional. Jobs work fine with local-only versioning.
+         *
+         *     Currently returns not_implemented as remote sync is not yet built.
+         */
+        post: operations["sync_jobs_repo_api_jobs_repo_sync_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4137,7 +4197,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/health/db": {
+    "/api/health/db": {
         parameters: {
             query?: never;
             header?: never;
@@ -4161,7 +4221,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/health": {
+    "/api/livez": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Livez Check
+         * @description Liveness probe: process is up and serving requests.
+         */
+        get: operations["livez_check_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/health": {
         parameters: {
             query?: never;
             header?: never;
@@ -4170,7 +4250,7 @@ export interface paths {
         };
         /**
          * Health Check
-         * @description Health check endpoint with comprehensive system validation.
+         * @description Readiness probe: core dependencies are available.
          */
         get: operations["health_check_get"];
         put?: never;
@@ -5405,6 +5485,50 @@ export interface components {
             error?: string | null;
             /** Error Type */
             error_type?: string | null;
+        };
+        /**
+         * JobsRepoInitResponse
+         * @description Response for jobs repo initialization.
+         */
+        JobsRepoInitResponse: {
+            /** Success */
+            success: boolean;
+            /** Message */
+            message: string;
+            /** Jobs Dir */
+            jobs_dir: string;
+        };
+        /**
+         * JobsRepoStatusResponse
+         * @description Response for jobs repo status.
+         */
+        JobsRepoStatusResponse: {
+            /** Initialized */
+            initialized: boolean;
+            /** Has Remote */
+            has_remote: boolean;
+            /** Remote Url */
+            remote_url: string | null;
+            /** Last Commit Time */
+            last_commit_time: string | null;
+            /** Last Commit Message */
+            last_commit_message: string | null;
+            /** Jobs Dir */
+            jobs_dir: string;
+            /** Job Count */
+            job_count: number;
+        };
+        /**
+         * JobsRepoSyncResponse
+         * @description Response for jobs repo sync.
+         */
+        JobsRepoSyncResponse: {
+            /** Success */
+            success: boolean;
+            /** Message */
+            message: string;
+            /** Status */
+            status: string;
         };
         /** KnowledgeDocument */
         KnowledgeDocument: {
@@ -12441,26 +12565,6 @@ export interface operations {
             };
         };
     };
-    health_api_system_health_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-        };
-    };
     reset_sessions_api_system_reset_sessions_post: {
         parameters: {
             query?: never;
@@ -13123,6 +13227,99 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WaitlistResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_jobs_repo_status_api_jobs_repo_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobsRepoStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    init_jobs_repo_api_jobs_repo_init_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobsRepoInitResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sync_jobs_repo_api_jobs_repo_sync_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobsRepoSyncResponse"];
                 };
             };
             /** @description Validation Error */
@@ -14526,6 +14723,26 @@ export interface operations {
         };
     };
     health_db_check: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    livez_check_get: {
         parameters: {
             query?: never;
             header?: never;

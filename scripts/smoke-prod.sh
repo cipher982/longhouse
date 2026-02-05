@@ -69,9 +69,9 @@ section() {
 }
 
 # Wait for API health to return "healthy" status
-# Polls /health until status is "healthy" three times consecutively (or timeout)
+# Polls /api/health until status is "healthy" three times consecutively (or timeout)
 wait_for_health() {
-    local url="${1:-$API_URL/health}"
+    local url="${1:-$API_URL/api/health}"
     local max_attempts="${2:-45}"   # 45 * 2s = 90s max
     local interval="${3:-2}"
     local required_consecutive=3
@@ -442,10 +442,10 @@ test_caddy() {
 }
 
 run_health_checks() {
-    run_test test_http "API health" "$API_URL/health" "200"
-    run_test test_json "Health status" "$API_URL/health" ".status" "healthy"
-    run_test test_json "Auth enabled" "$API_URL/health" ".checks.environment.auth_enabled" "true"
-    run_test test_json "DB connected" "$API_URL/health" ".checks.database.status" "pass"
+    run_test test_http "API health" "$API_URL/api/health" "200"
+    run_test test_json "Health status" "$API_URL/api/health" ".status" "healthy"
+    run_test test_json "Auth enabled" "$API_URL/api/health" ".checks.environment.auth_enabled" "true"
+    run_test test_json "DB connected" "$API_URL/api/health" ".checks.database.status" "pass"
 }
 
 run_frontend_checks() {
@@ -606,14 +606,14 @@ echo ""
 
 # Wait if requested - polls health instead of static sleep
 if [[ $WAIT -eq 1 ]]; then
-    wait_for_health "$API_URL/health"
+    wait_for_health "$API_URL/api/health"
     echo ""
 fi
 
 # === Quick mode: just health checks ===
 if [[ "$MODE" == "quick" ]]; then
     section "Health (quick)"
-    run_test test_http "API health" "$API_URL/health" "200"
+    run_test test_http "API health" "$API_URL/api/health" "200"
     run_test test_http "Frontend" "$FRONTEND_URL" "200"
     echo ""
     echo "================================================"

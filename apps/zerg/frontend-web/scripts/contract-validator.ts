@@ -150,7 +150,7 @@ class ContractValidator {
 
     // These endpoints can be tested without authentication in dev mode
     const testableEndpoints = [
-      '/api/system/health',
+      '/api/health',
     ];
 
     for (const endpoint of testableEndpoints) {
@@ -197,7 +197,7 @@ class ContractValidator {
    */
   private async checkBackendAvailability(): Promise<boolean> {
     try {
-      const response = await fetch(`${this.apiBaseUrl}/api/system/health`, {
+      const response = await fetch(`${this.apiBaseUrl}/api/health`, {
         signal: AbortSignal.timeout(1000) // 1 second timeout
       });
       return response.ok;
