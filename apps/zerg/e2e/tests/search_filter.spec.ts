@@ -13,16 +13,4 @@ test.describe('Fiche search & filtering', () => {
     await page.keyboard.press('Enter');
     await expect(page.locator('tr[data-fiche-id]')).toHaveCount(0);
   });
-
-  test('Filter by fiche status placeholder', async () => {
-    test.skip();
-  });
-
-  test('Sort by name asc/desc placeholder', async () => {
-    test.skip();
-  });
-
-  test('Combine search and filters placeholder', async () => {
-    test.skip();
-  });
 });
