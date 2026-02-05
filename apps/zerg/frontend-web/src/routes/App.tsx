@@ -126,17 +126,12 @@ export default function App() {
       )
     },
   ] : [
-    // Root route: redirect to timeline when auth disabled (dev/test mode)
-    // In production (auth enabled), show landing page (it handles its own auth redirect)
+    // Root route: always redirect to timeline
+    // AuthGuard will show login if unauthenticated
+    // Marketing site uses marketingOnly=true (separate routes block above)
     {
       path: "/",
-      element: config.authEnabled ? (
-        <ErrorBoundary>
-          <LandingPage />
-        </ErrorBoundary>
-      ) : (
-        <Navigate to="/timeline" replace />
-      )
+      element: <Navigate to="/timeline" replace />
     },
     // Landing page accessible at /landing for dev preview when auth is disabled
     {
@@ -358,17 +353,12 @@ export default function App() {
         },
       ]
     },
-    // Fallback for unknown SPA routes - redirect to timeline (dev) or landing (prod)
+    // Fallback for unknown SPA routes - redirect to timeline
+    // AuthGuard will show login if unauthenticated
     // NOTE: Static files (.html, .js, etc.) are served by Vite before reaching React Router
     {
       path: "*",
-      element: config.authEnabled ? (
-        <ErrorBoundary>
-          <LandingPage />
-        </ErrorBoundary>
-      ) : (
-        <Navigate to="/timeline" replace />
-      )
+      element: <Navigate to="/timeline" replace />
     },
   ]);
 
