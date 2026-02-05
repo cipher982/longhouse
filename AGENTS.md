@@ -171,7 +171,6 @@ Two separate things exist — don't conflate or rebuild:
 
 <!-- Agents: append below. Keep last 7 days or 10 entries max. -->
 - (2026-02-04) [arch] Single-domain architecture: each user subdomain (alice.longhouse.ai) serves both frontend and API; nginx proxies /api/* to backend via BACKEND_HOST env var. No separate api-alice subdomain needed.
-- (2026-02-04) [infra] Control plane uses Coolify's Caddy proxy (caddy-docker-proxy) for routing; wildcard DNS `*.longhouse.ai` now configured in Cloudflare.
 - (2026-02-04) [ops] FERNET_SECRET must be urlsafe base64 32-byte key; hex strings cause instance startup failure.
 - (2026-02-04) [arch] Runtime image (`docker/runtime.dockerfile`) bundles frontend+backend; backend serves frontend via StaticFiles at `/app/frontend-web/dist`.
 - (2026-02-05) [db] Alembic migrations removed (versions dir empty); treat migration tasks as deprecated.
