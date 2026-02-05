@@ -190,8 +190,8 @@ export default function LandingPage() {
     document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" });
   };
 
-  const scrollToInstall = () => {
-    document.querySelector(".install-section")?.scrollIntoView({ behavior: "smooth" });
+  const scrollToPricing = () => {
+    document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
   };
 
   const handleSignIn = () => {
@@ -203,7 +203,7 @@ export default function LandingPage() {
   return (
     <div className="landing-page" data-fx-hero={heroAnimationsEnabled ? "1" : "0"} data-fx-particles={particlesEnabled ? "1" : "0"}>
       {/* Sticky Header */}
-      <LandingHeader onSignIn={handleSignIn} onGetStarted={scrollToInstall} />
+      <LandingHeader onSignIn={handleSignIn} onGetStarted={scrollToPricing} />
 
       {/* Particle background */}
       {particlesEnabled && <div className="particle-bg" />}

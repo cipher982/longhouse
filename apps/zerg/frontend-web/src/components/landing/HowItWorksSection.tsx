@@ -2,7 +2,7 @@
  * HowItWorksSection
  *
  * Simple 3-step explanation of how Longhouse works.
- * Local-first: Install → Search → Resume.
+ * Dual-path: Hosted or Self-hosted → Search → Resume.
  */
 
 import config from "../../lib/config";
@@ -20,39 +20,26 @@ const steps: Step[] = [
   {
     icon: <DownloadIcon width={32} height={32} />,
     number: "1",
-    title: "Install",
-    description: "curl -fsSL https://get.longhouse.ai/install.sh | bash. Sessions sync automatically from Claude, Codex, Cursor."
+    title: "Choose a path",
+    description: "Hosted beta or self-host in minutes. Claude Code syncs today; Codex/Cursor/Gemini are in progress."
   },
   {
     icon: <SearchIcon width={32} height={32} />,
     number: "2",
     title: "Search",
-    description: "Find where you solved it. FTS5-powered instant search across all sessions."
+    description: "Find where you solved it. FTS5-powered instant search across all sessions (launch requirement)."
   },
   {
     icon: <SmartphoneIcon width={32} height={32} />,
     number: "3",
     title: "Resume",
-    description: "Continue any conversation from any device. Your history follows you."
+    description: "Continue any conversation from any device. Hosted keeps agents always-on."
   }
 ];
 
 export function HowItWorksSection() {
   const handleGetStarted = () => {
-    if (config.marketingOnly) {
-      document.querySelector(".install-section")?.scrollIntoView({ behavior: "smooth" });
-      return;
-    }
-    // If auth is disabled (dev mode), go directly to timeline
-    if (!config.authEnabled) {
-      window.location.href = '/timeline';
-      return;
-    }
-    // Scroll to top and trigger login
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-    setTimeout(() => {
-      document.querySelector<HTMLButtonElement>('.landing-cta-main')?.click();
-    }, 500);
+    document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
   };
 
   return (
@@ -60,7 +47,7 @@ export function HowItWorksSection() {
       <div className="landing-section-inner">
         <h2 className="landing-section-title">How It Works</h2>
         <p className="landing-section-subtitle">
-          Your local archive. Setup in 2 minutes.
+          Hosted or self-hosted. Setup in 2 minutes.
         </p>
 
         <div className="landing-steps-row">

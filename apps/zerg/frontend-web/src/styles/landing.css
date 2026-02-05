@@ -422,7 +422,7 @@
     flex-wrap: wrap;
   }
 
-  .landing-cta-main {
+  .landing-cta-main.ui-button--primary {
     padding: var(--space-4) var(--space-8) !important;
     font-size: var(--font-size-lg) !important;
     font-weight: var(--font-weight-bold) !important;
@@ -435,13 +435,17 @@
     transition: all var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
-  .landing-cta-main:hover {
+  .landing-cta-main.ui-button--primary:hover {
     box-shadow:
       0 0 28px rgb(99 102 241 / 50%),
       0 0 56px rgb(99 102 241 / 30%),
       0 6px 16px rgba(0, 0, 0, 0.4);
     transform: translateY(-3px);
     border-color: rgb(99 102 241 / 80%) !important;
+  }
+
+  .landing-hero-cta-secondary {
+    margin-top: var(--space-3);
   }
 
   .landing-cta-text {

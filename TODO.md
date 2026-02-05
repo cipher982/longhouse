@@ -60,12 +60,12 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 |----------|------|-----|
 | 1 | OSS Password Auth ✅ | 1 day |
 | 2 | Demo mode flag ✅ | 0.5 day |
-| 3 | Landing Page CTAs (dual-path: Self-host + Hosted) ⚠️ | 0.5 day |
-| 4 | README rewrite (Timeline + dual-path install) ⚠️ | 0.5 day |
+| 3 | Landing Page CTAs (dual-path: Self-host + Hosted) ✅ | 0.5 day |
+| 4 | README rewrite (Timeline + dual-path install) ✅ | 0.5 day |
 | 5 | FTS5 search (launch requirement) ⚠️ | 2 days |
 | 6 | OSS GA QA script + README onboarding contract ✅ | 1 day |
 
-**Notes:** CTAs are wired, but hero/landing copy is not dual-path. README must match launch requirements (FTS5 + hosted path).
+**Notes:** CTAs are dual-path; README now matches launch requirements (FTS5 + hosted path). Remaining gap is implementation of FTS5 + hosted beta.
 
 ### P1 — Hosted Beta (Stretch)
 | Priority | Task | Est |
@@ -189,17 +189,16 @@ See this file for the current launch analysis.
 **Goal:** Clear user paths, visible CTAs, better contrast. Visitor instantly understands: what it is, who it's for, how to get started.
 
 **⚠️ DEPENDS ON LAUNCH DECISION:**
-- **OSS GA (current):** Hero should emphasize `install.sh`, self-host, "your data stays local"
-- **Hosted Beta:** Secondary CTA or "Join waitlist" copy only
+- **Dual-path (current):** Hosted beta + self-hosted parity in copy and CTAs
 
 Current copy is a mix of both stories. Align to dual-path parity.
 
 **Problems identified (2026-02-05):**
-1. Hero CTAs are ghost + not dual-path (both self-host + hosted should be visible)
+1. ✅ FIXED: Hero CTAs were ghost + not dual-path (both self-host + hosted now visible)
 2. Colors too dark — low contrast text, cards blend into background
-3. No explicit self-host vs hosted paths; waitlist CTA is buried
-4. Story copy overpromises cross-provider + FTS5 + resume-anywhere
-5. Several CTAs route to sign-in modal even on marketing-only (should emphasize install/scroll)
+3. ✅ FIXED: Explicit self-host vs hosted paths (hosted waitlist + self-host install in hero/CTA)
+4. ✅ FIXED: Story copy overpromises cross-provider + FTS5 + resume-anywhere
+5. ✅ FIXED: CTAs now route to pricing/install (sign-in only when explicitly chosen)
 
 ### Phase 1: Header + Navigation (done)
 
@@ -224,8 +223,8 @@ Add a persistent sticky header following dev-tool best practices (Vercel, Supaba
 Make Self-host / Hosted Beta / Enterprise paths explicit with distinct CTAs.
 
 **Option A: Hero with dual path**
-- [ ] Primary CTA: "Install (Self-host)" → scrolls to install section
-- [ ] Secondary CTA: "Hosted Beta" → waitlist modal
+- [x] Primary CTA: "Hosted Beta" → waitlist modal
+- [x] Secondary CTA: "Self-host Now" → install section
 - [ ] Tertiary link: "Enterprise →" below
 
 **Option B: Three-card section below hero**
@@ -237,7 +236,7 @@ Make Self-host / Hosted Beta / Enterprise paths explicit with distinct CTAs.
 
 **Recommended approach:** Option A for hero simplicity + Option B as separate section
 
-- [ ] Update `HeroSection.tsx` CTAs to emphasize Self-host path
+- [x] Update `HeroSection.tsx` CTAs to show dual-path parity (hosted + self-host)
 - [ ] Create `DeploymentOptions.tsx` section
 - [ ] Add comparison table: who runs it, data residency, support, upgrade path
 
@@ -662,13 +661,13 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - ✅ FIXED: [Docs vs code] Install script now enforces Python 3.12+ (matches `pyproject.toml`).
 - [Docs vs code] `longhouse connect` fallback still uses `http://localhost:47300` while `longhouse serve` + README use 8080.
 - [Docs vs code] VISION naming section still mentions `longhouse up`; should be `longhouse serve` (CLI has no `up`).
-- ✅ FIXED: [Docs vs code] VISION claims FTS5-powered timeline search; current search is `ilike` join on events (no FTS5 tables/queries present). (VISION updated to say FTS5 is planned)
+- [Docs vs code] VISION now marks FTS5 as a launch requirement; implementation is still pending (ILike stopgap).
 - [Docs vs code] VISION says job claiming is dialect-aware (Postgres `FOR UPDATE SKIP LOCKED`). `commis_job_queue.py` is SQLite-specific (`datetime('now')`, `UPDATE ... RETURNING`) and is imported unconditionally in `commis_job_processor.py`.
 - [Docs vs code] Workspace paths in VISION are `~/.longhouse/workspaces/...` and artifacts in `~/.longhouse/artifacts`, but current defaults are `/var/oikos/workspaces` and `settings.data_dir` (`/data` in Docker or repo `data/`). Session resume temp workspaces default to `/tmp/zerg-session-workspaces`.
 - ✅ FIXED: [Docs vs code] `apps/control-plane/` now exists in repo (scaffold + provisioner).
 - [Docs vs infra] VISION control-plane routing assumes Traefik labels; current infra uses Caddy (coolify-proxy with Caddy labels). If Traefik is intended, docs should say so and note migration.
 - [Docs vs release] PyPI version likely lags repo; verify `longhouse` version on PyPI before making release claims.
-- [Docs vs code] README + HN launch copy claim multi-provider search + “resume anywhere,” but shipper/parser only supports Claude Code JSONL and Timeline resume isn’t implemented. Demo seeds include Codex/Gemini, but real ingest is Claude-only.
+- ✅ FIXED: [Docs vs code] README now scopes provider support + resume to current reality (Claude Code now; hosted resume; other providers in progress).
 - [Docs] Launch notes say MIT license; repo LICENSE and pyproject are Apache-2.0.
 - [Docs] Launch notes checklist says “README has screenshot (done!)” but README has no image.
 - [Docs] Launch notes say demo data seeds on first run; current behavior requires `--demo/--demo-fresh` or calling the demo seed endpoint.
@@ -700,7 +699,7 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [Bug] `jobs/commis.py` `_run_job` returns early if `extend_lease` fails before execution, leaving the job in `claimed` state until lease expiry (no reschedule/mark-dead handling).
 - [Bug] `GitSyncService._get_auth_url()` mangles SSH-style repo URLs when `token` is set (e.g., `git@github.com:user/repo.git` → malformed `@@` URL); should reject token auth for SSH URLs or handle separately.
 - [Docs vs code] Slack skill doc is wrong: `apps/zerg/backend/zerg/skills/bundled/slack/SKILL.md` references `slack_send_message` and `SLACK_BOT_TOKEN`, but the actual tool is `send_slack_webhook` and it uses incoming webhook URLs (connector/env), not a bot token.
-- [Docs vs code] README features claim “FTS5-powered” search; backend search is `ilike`-based with no FTS5 tables/queries.
+- [Docs vs code] README keeps FTS5 as a launch requirement; backend search is still `ilike`-based (implementation pending).
 - [Docs vs code] `scripts/install.sh` WSL warning tells users to run `longhouse connect --foreground`, but the CLI has no `--foreground` flag (foreground is the default).
 - [Docs vs code] `services/shipper/spool.py` docstring claims replay uses idempotency keys, but the shipper does not send idempotency keys (dedupe relies on DB unique constraints).
 - [Docs vs code] GitHub skill doc says `GITHUB_TOKEN` env var works; `github_tools` only resolves tokens from connectors or explicit parameters (no env fallback).
@@ -711,12 +710,12 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [Docs vs code] CLI docs in `zerg/cli/__init__.py` and `zerg/cli/main.py` say `longhouse connect` is “continuous polling,” but the CLI defaults to watch mode (polling only with `--poll`/`--interval`).
 - [Docs vs code] `scripts/install.sh` only documents `LONGHOUSE_API_URL`; CLI reads it, but `longhouse connect` fallback still uses 47300 (docs imply 8080).
 - [Docs vs reality] Timeline page copy says “across providers,” but real ingest only supports Claude Code; other providers are demo-only.
-- [Docs vs reality] Landing “How It Works” copy in `frontend-web/src/components/landing/HowItWorksSection.tsx` claims: (a) sessions auto-sync from Claude/Codex/Cursor, (b) FTS5-powered search, (c) resume any conversation from any device — all currently false.
-- [Docs vs reality] Landing hero subhead still claims “Resume from anywhere” (`HeroSection.tsx`); cross-device resume isn’t implemented.
+- ✅ FIXED: [Docs vs reality] Landing “How It Works” copy now reflects hosted/self-hosted paths and provider status.
+- ✅ FIXED: [Docs vs reality] Landing hero subhead now scopes resume to hosted.
 - [Docs vs reality] Public Docs page (`frontend-web/src/pages/DocsPage.tsx`) is still the old “fiche/canvas/dashboard” workflow with Google sign-in, not the timeline-first OSS product.
 - [Docs vs reality] Public info pages (`PricingPage.tsx`, `SecurityPage.tsx`, `PrivacyPage.tsx`) still describe fiches/workflows, Google-only OAuth auth, and dashboard account management, which don’t match the current timeline-first OSS flow.
 - [Docs vs code] DocsPage skills section says to add `SKILL.md` to `workspace/skills`; default loader path for OSS is `~/.longhouse/skills` unless a workspace path is configured.
-- [Docs vs reality] Landing DemoSection + Pricing/HowItWorks still claim cross-device resume / cloud backup (`DemoSection.tsx`, `PricingSection.tsx`, `HowItWorksSection.tsx`) — not implemented.
+- ✅ FIXED: [Docs vs reality] Landing DemoSection/HowItWorks now scope resume to hosted and clarify provider status.
 - [Docs vs code] Landing SkillsSection says Slack skill can “manage channels,” but Slack tool is webhook-only (send message); no channel management/listing tools exist.
 - ✅ FIXED: [Docs vs code] VISION "Runner registration" says `longhouse runner register` generates credentials, but the CLI has no `runner` command; registration happens via the runner installer hitting `/api/runners/register`. (VISION updated to describe actual flow)
 - ✅ FIXED: [Docs vs code] VISION CLI section says `longhouse status` shows running jobs and `longhouse logs <job_id>` tails job logs, but `longhouse status` only prints configuration and there is no `logs` command. (VISION updated - `logs` marked as planned)
