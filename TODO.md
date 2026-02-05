@@ -56,6 +56,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 - E2E: chat token streaming suite re-enabled + selectors hardened; removed placeholder chat/thread specs
 - E2E: core chat streaming + follow-up flow added; correlation ID test now deterministic
 - E2E: removed placeholder specs (trigger email/perf/errors) and trimmed scheduling/search placeholders
+- E2E: realtime_updates now event-driven (ready signals + stream event asserts) and removed lint allowlist entry
 
 ### 🛠 Ops Changes (prod)
 - Re-created `longhouse-david` container on zerg (PUBLIC_SITE_URL=https://david.longhouse.ai, SINGLE_TENANT=0, SMOKE_TEST_SECRET set, latest runtime image pulled) — stopgap until control-plane provisioning owns this.

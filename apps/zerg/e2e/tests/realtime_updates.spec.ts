@@ -1,27 +1,13 @@
 import { test, expect } from './fixtures';
 import { resetDatabase } from './test-utils';
+import { createFicheViaUI } from './helpers/fiche-helpers';
+import { waitForPageReady } from './helpers/ready-signals';
 
 // Ensure every test in this file starts with an empty DB so row counts are
 // deterministic across parallel pages.
 // Uses strict reset that throws on failure to fail fast
 test.beforeEach(async ({ request }) => {
   await resetDatabase(request);
-});
-
-test('Dashboard live update placeholder', async ({ browser }) => {
-  test.skip(true, 'Multi-tab real-time sync requires SSE/WebSocket mocking');
-  // Open two tabs to simulate multi-tab sync
-  const context = await browser.newContext();
-  const page1 = await context.newPage();
-  await page1.goto('/');
-  const page2 = await context.newPage();
-  await page2.goto('/');
-
-  // Trigger create in page1
-  await page1.locator('[data-testid="create-fiche-btn"]').click();
-
-  // Expect row appears in page2 after some time
-  await expect(page2.locator('tr[data-fiche-id]')).toHaveCount(1, { timeout: 15_000 });
 });
 
 test('WebSocket connection establishes successfully', async ({ page }) => {
@@ -41,33 +27,27 @@ test('WebSocket connection establishes successfully', async ({ page }) => {
     expect(url).toContain('commis=');
   });
 
+  const wsPromise = page.waitForEvent('websocket', { timeout: 10000 });
+
   // Navigate to app
   await page.goto('/');
-  await page.waitForLoadState('networkidle');
-  await page.waitForTimeout(2000);
+  await waitForPageReady(page);
+
+  await wsPromise;
 
   // Verify at least one WebSocket connection was established
+  await expect
+    .poll(() => wsConnections.length, { timeout: 10000 })
+    .toBeGreaterThan(0);
   expect(wsConnected).toBe(true);
-  expect(wsConnections.length).toBeGreaterThan(0);
   console.log(`✅ WebSocket connections established: ${wsConnections.length}`);
 });
 
-test('Message streaming via WebSocket', async ({ page, request }) => {
-  test.skip(true, 'Streaming test requires LLM mocking');
+test('Message streaming via WebSocket', async ({ page }) => {
   console.log('🎯 Testing: Message streaming through WebSocket');
 
-  // Create fiche
-  const ficheResponse = await request.post('/api/fiches', {
-    data: {
-      name: 'WebSocket Streaming Fiche',
-      system_instructions: 'Test fiche',
-      task_instructions: 'Respond briefly',
-      model: 'gpt-5-nano',
-    }
-  });
-  expect(ficheResponse.status()).toBe(201);
-  const fiche = await ficheResponse.json();
-  console.log(`✅ Created fiche ID: ${fiche.id}`);
+  const ficheId = await createFicheViaUI(page);
+  console.log(`✅ Created fiche ID: ${ficheId}`);
 
   // Track WebSocket messages
   const wsMessages: any[] = [];
@@ -78,8 +58,9 @@ test('Message streaming via WebSocket', async ({ page, request }) => {
       try {
         const message = JSON.parse(event.payload);
         wsMessages.push(message);
-        if (message.event_type) {
-          console.log(`📨 Received: ${message.event_type}`);
+        const messageType = message.type || message.event_type;
+        if (messageType) {
+          console.log(`📨 Received: ${messageType}`);
         }
       } catch (error) {
         // Ignore non-JSON frames
@@ -88,37 +69,38 @@ test('Message streaming via WebSocket', async ({ page, request }) => {
   });
 
   // Navigate to chat
-  await page.goto('/');
-  await page.waitForLoadState('networkidle');
-  await page.locator(`[data-testid="chat-fiche-${fiche.id}"]`).click();
-  await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
+  await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
+  await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 10000 });
 
   // Send message that will trigger streaming
   await page.getByTestId('chat-input').fill('Say hello');
   await page.getByTestId('send-message-btn').click();
 
   // Wait for streaming to occur
-  await page.waitForTimeout(5000);
+  await expect
+    .poll(
+      () =>
+        wsMessages.some((m: any) =>
+          ['stream_start', 'stream_chunk', 'stream_end'].includes(m.type)
+        ),
+      { timeout: 15000 }
+    )
+    .toBe(true);
 
   // Verify we received WebSocket messages
   expect(wsMessages.length).toBeGreaterThan(0);
   console.log(`✅ Received ${wsMessages.length} WebSocket messages`);
 
   // Check for streaming-related events
-  const streamEvents = wsMessages.filter(m =>
-    m.event_type && (
-      m.event_type.includes('stream') ||
-      m.event_type === 'stream_start' ||
-      m.event_type === 'stream_chunk' ||
-      m.event_type === 'stream_end'
-    )
+  const streamEvents = wsMessages.filter((m: any) =>
+    ['stream_start', 'stream_chunk', 'stream_end'].includes(m.type)
   );
 
   // CRITICAL: Must detect actual streaming events to prove streaming works
   // Logging event types for debugging, but FAILING if no stream events found
   if (streamEvents.length === 0) {
     const eventTypes = wsMessages
-      .map(m => m.event_type)
+      .map(m => m.type)
       .filter(Boolean)
       .slice(0, 10);
     console.log(`❌ No streaming events found. Event types received: ${eventTypes.join(', ')}`);
@@ -149,22 +131,24 @@ test('WebSocket connection recovery after disconnect', async ({ page }) => {
 
   // Navigate to app (first load)
   await page.goto('/');
-  await page.waitForLoadState('networkidle');
-  await page.waitForTimeout(2000);
+  await waitForPageReady(page);
 
   // CRITICAL: Capture initial connection count
+  await expect
+    .poll(() => connectionCount, { timeout: 10000 })
+    .toBeGreaterThan(0);
   const initialConnectionCount = connectionCount;
-  expect(initialConnectionCount).toBeGreaterThan(0);
   console.log(`✅ Initial WebSocket connections: ${initialConnectionCount}`);
 
   // Simulate disconnect via page navigation
-  await page.goto('/');
-  await page.waitForLoadState('networkidle');
-  await page.waitForTimeout(2000);
+  await page.reload();
+  await waitForPageReady(page);
 
   // CRITICAL: Verify NEW connections were created (reconnection occurred)
+  await expect
+    .poll(() => connectionCount, { timeout: 10000 })
+    .toBeGreaterThan(initialConnectionCount);
   const finalConnectionCount = connectionCount;
-  expect(finalConnectionCount).toBeGreaterThan(initialConnectionCount);
   console.log(`✅ WebSocket reconnection detected: ${initialConnectionCount} → ${finalConnectionCount}`);
   console.log('✅ Connection recovery validated');
 });
