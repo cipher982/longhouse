@@ -98,18 +98,10 @@ Current reality (as of 2026-02-05):
 - **ONE SQLite database** at `/data/longhouse.db` (size varies; check on server)
 - **No production control plane** — repo scaffold exists but not wired to signup/billing
 - **"david.longhouse.ai" is cosmetic** — just DNS routing to shared infra
-- **Prod health logs** show Alembic upgrade failure (`20260131_llm_audit` missing) but server starts
 
 **Target state:** Control plane provisions isolated containers per user (Docker API + Caddy labels; Traefik optional). See VISION.md for architecture.
 
 See this file for the current launch analysis.
-
----
-
-## [Infra] Migration Health / Alembic Drift (2)
-
-- [ ] Fix missing Alembic revision `20260131_llm_audit` seen in prod health logs; migrations should run cleanly on SQLite.
-- [ ] Verify Alembic env uses SQLite (not PostgresqlImpl) in runtime containers and health checks.
 
 ---
 
