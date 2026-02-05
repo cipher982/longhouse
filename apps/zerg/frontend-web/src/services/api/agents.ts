@@ -257,3 +257,15 @@ export async function fetchAgentFilters(
     method: "GET",
   });
 }
+
+export interface DemoSeedResponse {
+  seeded: boolean;
+  sessions_created: number;
+}
+
+/**
+ * Seed demo sessions for the timeline (idempotent).
+ */
+export async function seedDemoSessions(): Promise<DemoSeedResponse> {
+  return request<DemoSeedResponse>("/agents/demo", { method: "POST" });
+}

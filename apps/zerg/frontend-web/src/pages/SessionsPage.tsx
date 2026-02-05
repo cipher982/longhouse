@@ -16,6 +16,7 @@ import { useAgentSessions, useAgentFilters } from "../hooks/useAgentSessions";
 import {
   type AgentSession,
   type AgentSessionFilters,
+  seedDemoSessions,
 } from "../services/api/agents";
 import {
   Button,
@@ -400,6 +401,21 @@ export default function SessionsPage() {
   }, []);
 
 
+  // Demo seeding state
+  const [demoLoading, setDemoLoading] = useState(false);
+
+  const handleSeedDemo = useCallback(async () => {
+    setDemoLoading(true);
+    try {
+      await seedDemoSessions();
+      refetch();
+    } catch {
+      // Silently fail - the empty state remains visible
+    } finally {
+      setDemoLoading(false);
+    }
+  }, [refetch]);
+
   const hasFilters = project || provider || daysBack !== 14 || searchQuery;
   const showGuidedEmptyState = sessions.length === 0 && !hasFilters;
 
@@ -489,7 +505,17 @@ export default function SessionsPage() {
         {showGuidedEmptyState ? (
           <EmptyState
             title="No sessions yet"
-            description="Sessions sync from Claude Code. Run 'longhouse ship' to sync now."
+            description="Sessions sync from Claude Code. Run 'longhouse ship' to sync now, or load sample data to explore the timeline."
+            action={
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={handleSeedDemo}
+                disabled={demoLoading}
+              >
+                {demoLoading ? "Loading..." : "Load demo data"}
+              </Button>
+            }
           />
         ) : sessions.length === 0 ? (
           <EmptyState
