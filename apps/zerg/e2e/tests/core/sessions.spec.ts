@@ -92,7 +92,7 @@ test.describe('Sessions Page', () => {
       data: {
         id: sessionId,
         provider: 'claude',
-        environment: 'test',
+        environment: 'development',
         project: 'fts-e2e',
         device_id: 'e2e-device',
         cwd: '/tmp',
