@@ -55,11 +55,11 @@ if [ ! -d "node_modules" ]; then
     bun install
 fi
 
-# Build demo DB if missing
-if [ ! -f "$DEMO_DB_PATH" ]; then
-    echo "Building demo database..."
-    uv run python apps/zerg/backend/scripts/build_demo_db.py --output "$DEMO_DB_PATH"
-fi
+# Build demo DB (always rebuild for fresh data)
+echo "Building demo database..."
+rm -f "$DEMO_DB_PATH"
+mkdir -p "$(dirname "$DEMO_DB_PATH")"
+(cd apps/zerg/backend && uv run python scripts/build_demo_db.py --output "$DEMO_DB_PATH")
 
 # Function to cleanup on exit
 cleanup() {

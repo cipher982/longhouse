@@ -30,6 +30,7 @@ Usage:
 import argparse
 import json
 import logging
+import os
 import platform
 import re
 import shutil
@@ -45,7 +46,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 SCENARIO_DIR = Path(__file__).parent / "video-scenarios"
-BASE_URL = "http://localhost:30080"
+BASE_URL = os.environ.get("VIDEO_BASE_URL", "http://localhost:30080")
 VIEWPORT = {"width": 1920, "height": 1080}
 
 
