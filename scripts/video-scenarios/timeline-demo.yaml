@@ -1,0 +1,112 @@
+# Timeline Demo Scenario
+# Showcases the timeline-first product: session cards, FTS5 search, session detail, install CTA
+#
+# Prerequisites:
+#   - Server running with demo data: longhouse serve --demo-fresh
+#   - Audio generated: make video-audio SCENARIO=timeline-demo
+#
+# Usage:
+#   make video-all SCENARIO=timeline-demo
+
+name: timeline-demo
+description: Timeline product demo — session browsing, search, detail view, and install CTA
+
+voiceover:
+  voice: "nova"
+  model: "gpt-4o-mini-tts"
+
+scenes:
+  # Scene 1: Timeline Overview — Show session cards across providers
+  - id: timeline-overview
+    voiceover: |
+      Longhouse gives you a unified timeline of every AI coding session across Claude, Codex, and Gemini.
+      See what each agent did, which tools it used, and how long it took — all in one place.
+    steps:
+      - action: navigate
+        url: /timeline?effects=off&clock=frozen
+        wait_for: '[data-ready="true"]'
+      - action: pause
+        duration_ms: 1500
+      - action: scroll
+        direction: "down"
+        amount: 300
+      - action: pause
+        duration_ms: 1000
+      - action: scroll
+        direction: "up"
+        amount: 300
+      - action: pause
+        duration_ms: 500
+      - action: pause_for_audio
+
+  # Scene 2: Search — Type a query and show FTS5 results with highlights
+  - id: timeline-search
+    voiceover: |
+      Full-text search finds any session instantly. Type a keyword and Longhouse searches
+      across every message, tool call, and output — with highlighted snippets showing exactly where it matched.
+    steps:
+      - action: navigate
+        url: /timeline?effects=off&clock=frozen
+        wait_for: '.sessions-search-input'
+      - action: pause
+        duration_ms: 800
+      - action: click
+        selector: '.sessions-search-input'
+      - action: pause
+        duration_ms: 400
+      - action: type
+        selector: '.sessions-search-input'
+        text: "health endpoint"
+        delay_ms: 60
+      - action: pause
+        duration_ms: 2000
+      - action: pause_for_audio
+
+  # Scene 3: Session Detail — Click into a session, show event timeline with tool calls
+  - id: session-detail
+    voiceover: |
+      Click into any session to see the full conversation. Every message, every tool call,
+      every file read and edit — with expandable details so you can trace exactly what happened.
+    steps:
+      - action: navigate
+        url: /timeline?effects=off&clock=frozen
+        wait_for: '.session-card'
+      - action: pause
+        duration_ms: 800
+      - action: click
+        selector: '.session-card'
+      - action: wait
+        selector: '.timeline-events'
+        timeout_ms: 10000
+      - action: pause
+        duration_ms: 1500
+      - action: click
+        selector: '.event-tool-header'
+      - action: pause
+        duration_ms: 1500
+      - action: scroll
+        direction: "down"
+        amount: 400
+      - action: pause
+        duration_ms: 1000
+      - action: pause_for_audio
+
+  # Scene 4: Install CTA — Landing page with install command
+  - id: install-cta
+    voiceover: |
+      Get started in one command. Longhouse is fully self-hosted — your data never leaves your machine.
+      Install now and start tracking your AI sessions in under a minute.
+    steps:
+      - action: navigate
+        url: /landing?noredirect=1&fx=off
+        wait_for: '.install-section'
+      - action: pause
+        duration_ms: 1000
+      - action: scroll
+        direction: "down"
+        amount: 400
+      - action: pause
+        duration_ms: 1500
+      - action: pause_for_audio
+      - action: pause
+        duration_ms: 2000
