@@ -1,12 +1,14 @@
-"""Daily digest job - emails a summary of AI coding sessions from the previous day.
+"""Daily digest job - emails users summaries of their AI coding sessions.
 
 This job uses a map-reduce pattern:
 1. MAP: Summarize each session individually (parallel, max 3 concurrent)
-2. REDUCE: Aggregate summaries into an HTML digest email
+2. REDUCE: Aggregate summaries into a plain-text digest email
 
-Configuration:
-- DIGEST_EMAIL: Target email address (required to enable job)
-- DIGEST_CRON: Schedule (default: "0 8 * * *" = 8 AM daily)
+Users must:
+1. Connect their Gmail account (OAuth)
+2. Enable digest in their settings (digest_enabled = True)
+
+The digest is sent via the user's own Gmail account (from themselves to themselves).
 """
 
 from __future__ import annotations
@@ -32,10 +34,13 @@ from zerg.jobs.registry import JobConfig
 from zerg.jobs.registry import job_registry
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.connector import Connector
+from zerg.models.user import User
 from zerg.models_config import get_model_for_use_case
+from zerg.services import gmail_api
 from zerg.shared import redact_text
-from zerg.shared import send_digest_email
 from zerg.shared import truncate_to_tokens
+from zerg.utils import crypto
 
 logger = logging.getLogger(__name__)
 
@@ -100,13 +105,14 @@ class Usage:
 
 
 @dataclass
-class DigestResult:
-    """Result of the digest job."""
+class UserDigestResult:
+    """Result of sending digest to a single user."""
 
+    user_id: int
+    user_email: str
     success: bool
-    sessions_processed: int
-    sessions_summarized: int
-    email_sent: bool
+    sessions_processed: int = 0
+    sessions_summarized: int = 0
     message_id: str | None = None
     error: str | None = None
     usage: Usage = field(default_factory=Usage)
@@ -116,15 +122,10 @@ class DigestResult:
 # Noise stripping patterns
 # -----------------------------------------------------------------------------
 
-# Patterns to strip from content before summarization
 NOISE_PATTERNS = [
-    # System reminders
     re.compile(r"<system-reminder>[\s\S]*?</system-reminder>", re.IGNORECASE),
-    # Function results (long tool outputs)
     re.compile(r"<function_results>[\s\S]*?</function_results>", re.IGNORECASE),
-    # Verbose XML tags
     re.compile(r"<env>[\s\S]*?</env>", re.IGNORECASE),
-    # Claude background info
     re.compile(r"<claude_background_info>[\s\S]*?</claude_background_info>", re.IGNORECASE),
 ]
 
@@ -136,7 +137,6 @@ def strip_noise(content: str) -> str:
     result = content
     for pattern in NOISE_PATTERNS:
         result = pattern.sub("", result)
-    # Collapse multiple newlines
     result = re.sub(r"\n{3,}", "\n\n", result)
     return result.strip()
 
@@ -147,16 +147,7 @@ def strip_noise(content: str) -> str:
 
 
 def fetch_sessions_for_day(db: Session, target_date: datetime) -> list[SessionData]:
-    """Fetch all production sessions for a given day.
-
-    Args:
-        db: Database session
-        target_date: The date to fetch sessions for
-
-    Returns:
-        List of SessionData for the day
-    """
-    # Calculate day boundaries in UTC
+    """Fetch all production sessions for a given day."""
     day_start = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
     day_end = day_start + timedelta(days=1)
 
@@ -192,34 +183,17 @@ def fetch_sessions_for_day(db: Session, target_date: datetime) -> list[SessionDa
 
 
 def fetch_session_thread(db: Session, session_id: str) -> list[Message]:
-    """Fetch all events for a session as a simplified message thread.
-
-    Args:
-        db: Database session
-        session_id: The session ID
-
-    Returns:
-        List of Message objects representing the conversation
-    """
+    """Fetch all events for a session as a simplified message thread."""
     stmt = select(AgentEvent).where(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp)
-
     events = db.execute(stmt).scalars().all()
 
     messages = []
     for event in events:
         content = event.content_text or ""
-        # Include tool output in content if present
         if event.tool_output_text:
             content = f"{content}\n\nTool output: {event.tool_output_text[:500]}..."
-
         if content.strip():
-            messages.append(
-                Message(
-                    role=event.role,
-                    content=content,
-                    tool_name=event.tool_name,
-                )
-            )
+            messages.append(Message(role=event.role, content=content, tool_name=event.tool_name))
 
     return messages
 
@@ -230,36 +204,19 @@ def fetch_session_thread(db: Session, session_id: str) -> list[Message]:
 
 
 def prepare_thread(messages: list[Message], budget_tokens: int) -> str:
-    """Prepare a thread for summarization.
-
-    Applies noise stripping, redaction, and truncation.
-
-    Args:
-        messages: List of messages
-        budget_tokens: Max tokens for the output
-
-    Returns:
-        Formatted thread string
-    """
-    # Format messages
+    """Prepare a thread for summarization with noise stripping and truncation."""
     parts = []
     for msg in messages:
         role_label = msg.role.upper()
         if msg.tool_name:
             role_label = f"{role_label} (tool: {msg.tool_name})"
-
-        # Clean and truncate individual message
         content = strip_noise(msg.content)
         content = redact_text(content)
         content, _ = truncate_to_tokens(content, MESSAGE_TOKEN_LIMIT)
-
         parts.append(f"[{role_label}]\n{content}")
 
     thread_text = "\n\n---\n\n".join(parts)
-
-    # Truncate entire thread to budget
     thread_text, _ = truncate_to_tokens(thread_text, budget_tokens)
-
     return thread_text
 
 
@@ -275,33 +232,19 @@ async def map_session(
     model: str,
     semaphore: asyncio.Semaphore,
 ) -> tuple[SessionSummary | None, Usage]:
-    """Summarize a single session (map phase).
-
-    Args:
-        session: Session metadata
-        db: Database session
-        client: OpenAI client
-        model: Model ID to use
-        semaphore: Concurrency limiter
-
-    Returns:
-        Tuple of (SessionSummary or None, Usage)
-    """
+    """Summarize a single session (map phase)."""
     usage = Usage()
 
     async with semaphore:
         try:
-            # Fetch and prepare thread
             messages = fetch_session_thread(db, session.id)
             if not messages:
-                logger.debug("Session %s has no messages, skipping", session.id)
                 return None, usage
 
             thread_text = prepare_thread(messages, SESSION_TOKEN_BUDGET)
             if not thread_text.strip():
                 return None, usage
 
-            # Build context
             context_parts = []
             if session.project:
                 context_parts.append(f"Project: {session.project}")
@@ -311,7 +254,6 @@ async def map_session(
                 context_parts.append(f"Branch: {session.git_branch}")
             context = ", ".join(context_parts) if context_parts else "Unknown context"
 
-            # Call LLM
             prompt = f"""Summarize this AI coding session in 2-4 sentences.
 Focus on: what was worked on, what was accomplished, notable outcomes.
 Be specific about files, features, or bugs mentioned.
@@ -327,7 +269,6 @@ Session transcript:
                 messages=[{"role": "user", "content": prompt}],
             )
 
-            # Track usage
             if response.usage:
                 usage.prompt_tokens = response.usage.prompt_tokens
                 usage.completion_tokens = response.usage.completion_tokens
@@ -354,27 +295,9 @@ Session transcript:
             return None, usage
 
 
-async def reduce_digest(
-    summaries: list[SessionSummary],
-    client: AsyncOpenAI,
-    model: str,
-    target_date: datetime,
-) -> tuple[bool, str | None, str | None, Usage]:
-    """Generate the final digest HTML from summaries (reduce phase).
-
-    Args:
-        summaries: List of session summaries
-        client: OpenAI client
-        model: Model ID to use
-        target_date: The date being summarized
-
-    Returns:
-        Tuple of (success, html, error, usage)
-    """
-    usage = Usage()
-
-    if not summaries:
-        return False, None, "No summaries to reduce", usage
+def format_plain_text_digest(summaries: list[SessionSummary], target_date: datetime) -> str:
+    """Generate plain-text digest from summaries (no LLM needed for MVP)."""
+    date_str = target_date.strftime("%Y-%m-%d")
 
     # Group by project
     by_project: dict[str, list[SessionSummary]] = {}
@@ -382,55 +305,183 @@ async def reduce_digest(
         project = s.project or "Unspecified"
         by_project.setdefault(project, []).append(s)
 
-    # Format summaries for LLM
-    summary_lines = []
+    lines = [
+        f"AI Coding Digest - {date_str}",
+        "=" * 40,
+        "",
+    ]
+
     for project, project_summaries in sorted(by_project.items()):
-        summary_lines.append(f"\n## {project}")
+        lines.append(f"## {project}")
+        lines.append("")
         for s in project_summaries:
             time_str = s.started_at.strftime("%H:%M")
             stats = f"({s.user_messages}u/{s.assistant_messages}a/{s.tool_calls}t)"
-            summary_lines.append(f"- [{time_str}] {s.provider} {stats}: {s.summary}")
+            lines.append(f"  [{time_str}] {s.provider} {stats}")
+            lines.append(f"    {s.summary}")
+            lines.append("")
 
-    summaries_text = "\n".join(summary_lines)
-    date_str = target_date.strftime("%Y-%m-%d")
-    total_sessions = len(summaries)
+    lines.append("-" * 40)
+    lines.append(f"Total: {len(summaries)} sessions")
 
-    prompt = f"""Generate a daily work digest email in HTML format for {date_str}.
+    return "\n".join(lines)
 
-Requirements:
-- Executive summary (2-3 sentences) highlighting key accomplishments
-- Sections for each project with bullet points
-- Footer with total session count ({total_sessions} sessions)
-- Clean, professional HTML (inline styles OK)
-- Use a simple color scheme (dark text, light background)
 
-Session summaries by project:
-{summaries_text}
+# -----------------------------------------------------------------------------
+# Per-user digest sending
+# -----------------------------------------------------------------------------
 
-Generate ONLY the HTML body content (no doctype, html, head, or body tags)."""
 
-    try:
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
+async def send_user_digest(
+    user_id: int,
+    target_date: datetime,
+    openai_client: AsyncOpenAI,
+    model: str,
+) -> UserDigestResult:
+    """Send digest to a single user via their Gmail connector."""
+    result = UserDigestResult(user_id=user_id, user_email="", success=False)
+
+    with db_session() as db:
+        # Get user
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            result.error = "User not found"
+            return result
+
+        result.user_email = user.email
+
+        # Idempotency check - don't send if already sent today
+        if user.last_digest_sent_at:
+            last_sent_date = user.last_digest_sent_at.date()
+            if last_sent_date >= target_date.date():
+                result.error = f"Already sent digest for {last_sent_date}"
+                result.success = True  # Not a failure, just skipped
+                return result
+
+        # Get Gmail connector
+        connector = (
+            db.query(Connector)
+            .filter(
+                Connector.owner_id == user_id,
+                Connector.type == "email",
+                Connector.provider == "gmail",
+            )
+            .first()
         )
 
-        if response.usage:
-            usage.prompt_tokens = response.usage.prompt_tokens
-            usage.completion_tokens = response.usage.completion_tokens
-            usage.total_tokens = response.usage.total_tokens
+        if not connector:
+            result.error = "No Gmail connector configured"
+            return result
 
-        html = response.choices[0].message.content or ""
+        # Get refresh token
+        config = connector.config or {}
+        enc_token = config.get("refresh_token")
+        if not enc_token:
+            result.error = "Gmail connector missing refresh token"
+            return result
 
-        # Basic validation
-        if not html.strip():
-            return False, None, "Empty response from LLM", usage
+        try:
+            refresh_token = crypto.decrypt(enc_token)
+        except Exception as e:
+            result.error = f"Failed to decrypt refresh token: {e}"
+            return result
 
-        return True, html.strip(), None, usage
+        # Get stored email or fetch from profile
+        user_gmail = config.get("email")
+        if not user_gmail:
+            try:
+                access_token = await gmail_api.async_exchange_refresh_token(refresh_token)
+                profile = await gmail_api.async_get_profile(access_token)
+                user_gmail = profile.get("emailAddress")
+                if not user_gmail:
+                    result.error = "Could not get Gmail address from profile"
+                    return result
+            except Exception as e:
+                result.error = f"Failed to get Gmail profile: {e}"
+                return result
+
+        # Fetch sessions for the target date
+        sessions = fetch_sessions_for_day(db, target_date)
+
+    result.sessions_processed = len(sessions)
+
+    if not sessions:
+        # No sessions - update last_sent_at anyway to prevent re-checking
+        with db_session() as db:
+            user = db.query(User).filter(User.id == user_id).first()
+            if user:
+                user.last_digest_sent_at = datetime.now(UTC)
+                db.commit()
+        result.success = True
+        result.error = "No sessions to summarize"
+        return result
+
+    # MAP phase: summarize sessions
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_MAPS)
+    summaries: list[SessionSummary] = []
+
+    async def process_session(session: SessionData) -> tuple[SessionSummary | None, Usage]:
+        with db_session() as db:
+            return await map_session(session, db, openai_client, model, semaphore)
+
+    tasks = [process_session(s) for s in sessions]
+    map_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for r in map_results:
+        if isinstance(r, Exception):
+            logger.error("Session processing error: %s", r)
+            continue
+        summary, usage = r
+        result.usage.add(usage)
+        if summary:
+            summaries.append(summary)
+
+    result.sessions_summarized = len(summaries)
+
+    if not summaries:
+        with db_session() as db:
+            user = db.query(User).filter(User.id == user_id).first()
+            if user:
+                user.last_digest_sent_at = datetime.now(UTC)
+                db.commit()
+        result.success = True
+        result.error = "No sessions had content to summarize"
+        return result
+
+    # Format digest (plain text for MVP - no LLM reduce phase needed)
+    digest_text = format_plain_text_digest(summaries, target_date)
+
+    # Send via Gmail
+    try:
+        access_token = await gmail_api.async_exchange_refresh_token(refresh_token)
+        date_str = target_date.strftime("%Y-%m-%d")
+        subject = f"AI Coding Digest - {date_str}"
+
+        message_id = await gmail_api.async_send_email(
+            access_token=access_token,
+            to=user_gmail,
+            subject=subject,
+            body_text=digest_text,
+        )
+
+        if message_id:
+            result.success = True
+            result.message_id = message_id
+
+            # Update last_digest_sent_at
+            with db_session() as db:
+                user = db.query(User).filter(User.id == user_id).first()
+                if user:
+                    user.last_digest_sent_at = datetime.now(UTC)
+                    db.commit()
+        else:
+            result.error = "Gmail API returned no message ID"
 
     except Exception as e:
-        logger.exception("Failed to generate digest: %s", e)
-        return False, None, str(e), usage
+        result.error = f"Failed to send email: {e}"
+        logger.exception("Failed to send digest for user %d: %s", user_id, e)
+
+    return result
 
 
 # -----------------------------------------------------------------------------
@@ -439,31 +490,17 @@ Generate ONLY the HTML body content (no doctype, html, head, or body tags)."""
 
 
 async def run() -> dict[str, Any]:
-    """Run the daily digest job.
+    """Run the daily digest job for all users with digest enabled.
 
     Returns:
         Dict with job results
     """
-    # Check if configured
-    digest_email = os.getenv("DIGEST_EMAIL")
-    if not digest_email:
-        logger.info("DIGEST_EMAIL not set, skipping digest job")
-        return {
-            "success": True,
-            "skipped": True,
-            "reason": "DIGEST_EMAIL not configured",
-        }
-
-    # Check for OpenAI API key
+    # Check for OpenAI API key (required for summarization)
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         logger.error("OPENAI_API_KEY not set")
-        return {
-            "success": False,
-            "error": "OPENAI_API_KEY not configured",
-        }
+        return {"success": False, "error": "OPENAI_API_KEY not configured"}
 
-    # Get model for summarization
     model = get_model_for_use_case("summarization")
     logger.info("Using model %s for summarization", model)
 
@@ -471,144 +508,80 @@ async def run() -> dict[str, Any]:
     now = datetime.now(UTC)
     yesterday = now - timedelta(days=1)
 
-    total_usage = Usage()
-    result = DigestResult(
-        success=False,
-        sessions_processed=0,
-        sessions_summarized=0,
-        email_sent=False,
-    )
+    # Find users with digest enabled
+    with db_session() as db:
+        users = db.query(User).filter(User.digest_enabled == True).all()  # noqa: E712
+        user_ids = [u.id for u in users]
 
-    try:
-        # Create OpenAI client
-        client = AsyncOpenAI(api_key=api_key)
+    if not user_ids:
+        logger.info("No users have digest enabled")
+        return {"success": True, "users_processed": 0, "message": "No users have digest enabled"}
 
-        # Fetch sessions
-        with db_session() as db:
-            sessions = fetch_sessions_for_day(db, yesterday)
+    logger.info("Processing digests for %d users", len(user_ids))
 
-        result.sessions_processed = len(sessions)
-        logger.info("Found %d sessions for %s", len(sessions), yesterday.strftime("%Y-%m-%d"))
+    # Create OpenAI client
+    openai_client = AsyncOpenAI(api_key=api_key)
 
-        if not sessions:
-            result.success = True
-            return {
-                "success": True,
-                "sessions_processed": 0,
-                "message": "No sessions found for yesterday",
-            }
-
-        # MAP phase: summarize each session (parallel with semaphore)
-        semaphore = asyncio.Semaphore(MAX_CONCURRENT_MAPS)
-        summaries: list[SessionSummary] = []
-
-        async def process_session(session: SessionData) -> tuple[SessionSummary | None, Usage]:
-            with db_session() as db:
-                return await map_session(session, db, client, model, semaphore)
-
-        tasks = [process_session(s) for s in sessions]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        for r in results:
-            if isinstance(r, Exception):
-                logger.error("Session processing error: %s", r)
-                continue
-            summary, usage = r
-            total_usage.add(usage)
-            if summary:
-                summaries.append(summary)
-
-        result.sessions_summarized = len(summaries)
-        logger.info("Summarized %d/%d sessions", len(summaries), len(sessions))
-
-        if not summaries:
-            result.success = True
-            return {
-                "success": True,
-                "sessions_processed": result.sessions_processed,
-                "sessions_summarized": 0,
-                "message": "No sessions had content to summarize",
-            }
-
-        # REDUCE phase: generate digest
-        success, html, error, reduce_usage = await reduce_digest(summaries, client, model, yesterday)
-        total_usage.add(reduce_usage)
-
-        if not success:
-            result.error = error
-            return {
-                "success": False,
-                "error": error,
-                "sessions_processed": result.sessions_processed,
-                "sessions_summarized": result.sessions_summarized,
-            }
-
-        # Send email
-        date_str = yesterday.strftime("%Y-%m-%d")
-        subject = f"AI Coding Digest - {date_str}"
-        plain_text = f"Daily digest for {date_str}. View in HTML-capable email client."
-
-        message_id = send_digest_email(
-            subject,
-            plain_text,
-            html=html,
-            job_id="daily-digest",
-            metadata={
-                "date": date_str,
-                "sessions": result.sessions_summarized,
-                "usage": {
-                    "prompt_tokens": total_usage.prompt_tokens,
-                    "completion_tokens": total_usage.completion_tokens,
-                    "total_tokens": total_usage.total_tokens,
-                },
-            },
+    # Process each user
+    results: list[UserDigestResult] = []
+    for user_id in user_ids:
+        result = await send_user_digest(user_id, yesterday, openai_client, model)
+        results.append(result)
+        logger.info(
+            "User %d (%s): success=%s, sessions=%d, error=%s",
+            result.user_id,
+            result.user_email,
+            result.success,
+            result.sessions_summarized,
+            result.error,
         )
 
-        result.email_sent = message_id is not None
-        result.message_id = message_id
-        result.success = result.email_sent
-        result.usage = total_usage
+    # Aggregate results
+    total_success = sum(1 for r in results if r.success)
+    total_failed = len(results) - total_success
+    total_sessions = sum(r.sessions_summarized for r in results)
+    total_usage = Usage()
+    for r in results:
+        total_usage.add(r.usage)
 
-        if not result.email_sent:
-            result.error = "Failed to send email (check SES configuration)"
-
-        return {
-            "success": result.success,
-            "sessions_processed": result.sessions_processed,
-            "sessions_summarized": result.sessions_summarized,
-            "email_sent": result.email_sent,
-            "message_id": result.message_id,
-            "error": result.error,
-            "usage": {
-                "prompt_tokens": total_usage.prompt_tokens,
-                "completion_tokens": total_usage.completion_tokens,
-                "total_tokens": total_usage.total_tokens,
-            },
-        }
-
-    except Exception as e:
-        logger.exception("Daily digest job failed: %s", e)
-        return {
-            "success": False,
-            "error": str(e),
-            "sessions_processed": result.sessions_processed,
-            "sessions_summarized": result.sessions_summarized,
-        }
+    return {
+        "success": total_failed == 0,
+        "users_processed": len(results),
+        "users_success": total_success,
+        "users_failed": total_failed,
+        "total_sessions_summarized": total_sessions,
+        "usage": {
+            "prompt_tokens": total_usage.prompt_tokens,
+            "completion_tokens": total_usage.completion_tokens,
+            "total_tokens": total_usage.total_tokens,
+        },
+        "user_results": [
+            {
+                "user_id": r.user_id,
+                "email": r.user_email,
+                "success": r.success,
+                "sessions": r.sessions_summarized,
+                "message_id": r.message_id,
+                "error": r.error,
+            }
+            for r in results
+        ],
+    }
 
 
 # -----------------------------------------------------------------------------
 # Job registration
 # -----------------------------------------------------------------------------
 
-# Register the job - auto-enabled when DIGEST_EMAIL is set
+# Always enabled - the job checks for users with digest_enabled
 job_registry.register(
     JobConfig(
         id="daily-digest",
         cron=os.getenv("DIGEST_CRON", "0 8 * * *"),
         func=run,
-        enabled=bool(os.getenv("DIGEST_EMAIL")),
+        enabled=True,  # Always enabled, user preference controls delivery
         timeout_seconds=600,  # 10 minutes
         tags=["digest", "email", "builtin"],
-        description="Daily email digest of AI coding sessions",
+        description="Daily email digest of AI coding sessions via Gmail",
     )
 )
