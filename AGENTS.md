@@ -170,23 +170,13 @@ Two separate things exist — don't conflate or rebuild:
 ## Learnings (Recent - Human compacts weekly)
 
 <!-- Agents: append below. Keep last 7 days or 10 entries max. -->
-- (2026-02-03) [ops] Installer lives at `get.longhouse.ai/install.sh`; `longhouse.ai/install.sh` serves the SPA, and `api-david.longhouse.ai` is the working API subdomain (not api.david).
-- (2026-02-04) [docs] CLI has no `longhouse logs` or `longhouse runner` commands; `longhouse status` only prints config (no job list).
-- (2026-02-04) [gotcha] `_apply_lite_mode_defaults()` must run BEFORE demo mode in serve.py—demo imports trigger config loading which needs FERNET_SECRET and TRIGGER_SIGNING_SECRET.
-- (2026-02-04) [ci] SQLite-only pivot broke `backend-tests` CI job (used Postgres). Fix: removed job, moved hatch-agent/install-runner tests to sqlite-tests.
-- (2026-02-04) [docs] Docs policy: keep only `README.md`, `TODO.md`, `VISION.md` as canonical; fold other root docs into TODO to avoid drift.
 - (2026-02-04) [arch] Single-domain architecture: each user subdomain (alice.longhouse.ai) serves both frontend and API; nginx proxies /api/* to backend via BACKEND_HOST env var. No separate api-alice subdomain needed.
-- (2026-02-04) [gotcha] Coolify stores docker-compose defaults in DB, not git. Delete env vars via API then redeploy to pick up new defaults. Or manually update via Coolify UI.
-- (2026-02-04) [ops] SINGLE_TENANT=1 now works with smoke tests: service accounts (provider="service") excluded from user count. No need to disable single-tenant mode.
-- (2026-02-04) [arch] Backend router surface still includes legacy fiche/workflow/connectors/etc. (see `apps/zerg/backend/zerg/main.py` include_router list); candidate for slimming to sessions+shipper core.
 - (2026-02-04) [infra] Control plane uses Coolify's Caddy proxy (caddy-docker-proxy) for routing; wildcard DNS `*.longhouse.ai` now configured in Cloudflare.
 - (2026-02-04) [infra] Decision: keep control plane + instances on zerg; avoid Coolify for dynamic provisioning (control plane uses Docker API directly).
 - (2026-02-04) [ops] FERNET_SECRET must be urlsafe base64 32-byte key; hex strings cause instance startup failure.
 - (2026-02-04) [arch] Runtime image (`docker/runtime.dockerfile`) bundles frontend+backend; backend serves frontend via StaticFiles at `/app/frontend-web/dist`.
-- (2026-02-04) [docs] TODO.md control plane status is stale; `apps/control-plane/` exists with Docker API provisioner + env-driven runtime image.
 - (2026-02-04) [arch] Sauron is folded into the standard Longhouse instance; scheduled jobs run in-process per user, not as a separate service.
-- (2026-02-04) [product] Jobs are core; default to local instance job manifests (no repo required). Private git sync (e.g., `sauron-jobs`) is just one storage option.
-- (2026-02-04) [product] Jobs should live in a local repo inside the instance and auto-commit changes; optional UI-driven remote sync (e.g., GitHub) for backups.
-- (2026-02-04) [fix] Jobs repo API endpoints wired: `get_jobs_repo_status()`, `init_jobs_repo()`, `sync_jobs_repo()` now exported from `jobs_repo.py`; `enable()`/`disable()` call `auto_commit_if_dirty()`.
 - (2026-02-04) [arch] Local manifest loading already works—`/data/jobs/manifest.py` loads when `JOBS_GIT_REPO_URL` not set. Job queue env-gate only affects backfill (cron still fires).
 - (2026-02-05) [db] Alembic migrations removed (versions dir empty); treat migration tasks as deprecated.
+- (2026-02-05) [security] Avoid storing admin tokens in AI session notes; rotate any exposed token immediately.
+- (2026-02-05) [ci] Provisioning E2E runs on cube ARC (DIND), builds runtime image, provisions instance, and hits health + timeline smoke checks.
