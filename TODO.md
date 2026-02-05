@@ -150,6 +150,16 @@ See this file for the current launch analysis.
 
 ---
 
+## [Infra] Instance Health Route Returns HTML (1)
+
+**Goal:** `/health` and `/api/system/health` return JSON on `david.longhouse.ai` (no SPA fallback).
+
+- [x] Ensure runtime image includes the FastAPI route-order fix (catch-all registered last).
+- [x] Reprovision `longhouse-david` and verify `/health` returns JSON.
+- [x] Backfill missing `users.digest_enabled` + `users.last_digest_sent_at` columns, then restart to clear cached bootstrap failure.
+
+---
+
 ## [Product] Landing Page Redesign — Full (6)
 
 **Goal:** Clear user paths, visible CTAs, better contrast. Visitor instantly understands: what it is, who it's for, how to get started.

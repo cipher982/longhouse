@@ -176,7 +176,7 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-04) [ops] FERNET_SECRET must be urlsafe base64 32-byte key; hex strings cause instance startup failure.
 - (2026-02-04) [arch] Runtime image (`docker/runtime.dockerfile`) bundles frontend+backend; backend serves frontend via StaticFiles at `/app/frontend-web/dist`.
 - (2026-02-04) [arch] Sauron is folded into the standard Longhouse instance; scheduled jobs run in-process per user, not as a separate service.
-- (2026-02-04) [arch] Local manifest loading already works—`/data/jobs/manifest.py` loads when `JOBS_GIT_REPO_URL` not set. Job queue env-gate only affects backfill (cron still fires).
 - (2026-02-05) [db] Alembic migrations removed (versions dir empty); treat migration tasks as deprecated.
 - (2026-02-05) [security] Avoid storing admin tokens in AI session notes; rotate any exposed token immediately.
 - (2026-02-05) [ci] Provisioning E2E runs on cube ARC (DIND), builds runtime image, provisions instance, and hits health + timeline smoke checks.
+- (2026-02-05) [ops] Instance health uses `/api/system/health`; `/health` caches single-tenant bootstrap failures until restart.
