@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from time import perf_counter
 from typing import Any
@@ -261,9 +262,17 @@ async def create_fiche(
     current_user=Depends(get_current_user),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ):
-    _validate_model_or_400(fiche.model)
+    settings = get_settings()
+    model_override = None
+    if settings.testing and (settings.environment or "").lower() == "test:e2e":
+        override = os.getenv("E2E_DEFAULT_MODEL", "").strip()
+        if override:
+            model_override = override
+
+    model_id = model_override or fiche.model
+    _validate_model_or_400(model_id)
     # Enforce role-based allowlist for non-admin users
-    model_to_use = _enforce_model_allowlist_or_422(fiche.model, current_user)
+    model_to_use = _enforce_model_allowlist_or_422(model_id, current_user)
 
     # Check idempotency cache to prevent double-creation
     if idempotency_key:
