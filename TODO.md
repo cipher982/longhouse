@@ -145,7 +145,7 @@ See this file for the current launch analysis.
 
 **Remaining issues:**
 - [ ] Cross-subdomain OAuth code exists (`/auth/accept-token`) but targets non-existent per-user architecture — needs control plane to work as designed
-- [ ] Marketing mode defaults were removed (broke auth) — needs cleaner hostname detection
+- [ ] Marketing-only mode requires explicit `VITE_MARKETING_HOSTNAMES`; longhouse.ai won’t be marketing-only unless configured
 - [ ] For now, use password auth on subdomains; Google OAuth only makes sense at control plane (longhouse.ai)
 
 ---
@@ -383,7 +383,7 @@ Update screenshots to show Timeline, not old dashboard.
 - [x] Provision container with Caddy labels for subdomain routing
 - [x] Create SQLite volume per user at `/var/lib/docker/data/longhouse/{subdomain}`
 - [x] Implement deprovision (stop + remove container)
-- [x] Add health check polling after provision
+- [ ] Add health check polling after provision (method exists, not wired in routes/UI)
 - [ ] Build and push runtime image (`docker/runtime.dockerfile`) to ghcr.io
 - [ ] Update CONTROL_PLANE_IMAGE to use runtime image (currently uses backend-only)
 
@@ -481,7 +481,7 @@ Eliminate the "empty timeline" anticlimactic moment and improve discovery for us
 
 Close the gap between VISION, README, docs, and the live installer.
 
-- [x] **Canonical install path**: `install.sh` is primary (README + landing aligned)
+- [ ] **Canonical install path**: `install.sh` is primary (README aligned; landing still needs OSS-first CTA)
 - [ ] **Document onboarding wizard** (steps, troubleshooting, service install) and link it from README + landing page
 - [ ] **Add `longhouse doctor`** (self-diagnosis for server health, shipper status, config validity); run after install/upgrade and recommend in docs
 - [ ] **Fix `longhouse connect` default URL** (fallback uses 47300; should align with 8080/README)
