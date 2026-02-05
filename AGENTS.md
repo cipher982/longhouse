@@ -167,6 +167,9 @@ Two separate things exist — don't conflate or rebuild:
 - GH actions use runners on Cube
 - if you are manually patching things for coolify you likely did something wrong. Remember infra-as-code.
 
+## CI Test Runner
+- Run: `scripts/ci/run-on-ci.sh <suite> [ref] [--test <path>]` (details: `scripts/ci/README.md`).
+
 ## Learnings (Recent - Human compacts weekly)
 
 <!-- Agents: append below. Keep last 7 days or 10 entries max. -->
