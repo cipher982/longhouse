@@ -33,19 +33,23 @@ class SingleTenantViolation(Exception):
 
 
 def validate_single_tenant(db: Session) -> None:
-    """Validate that at most one user exists in the database.
+    """Validate that at most one real user exists in the database.
 
-    Raises SingleTenantViolation if >1 user exists.
+    Raises SingleTenantViolation if >1 real user exists.
+    Service accounts (provider="service") are excluded from the count,
+    allowing smoke test users alongside the real owner.
+
     Called during startup to enforce single-tenant invariant.
     """
     settings = get_settings()
     if not settings.single_tenant:
         return  # Multi-tenant mode, skip validation
 
-    user_count = crud.count_users(db)
+    # Exclude service accounts (smoke test users) from the count
+    user_count = crud.count_users(db, exclude_service=True)
     if user_count > 1:
         raise SingleTenantViolation(
-            f"Single-tenant violation: {user_count} users exist (expected 0 or 1). "
+            f"Single-tenant violation: {user_count} real users exist (expected 0 or 1). "
             f"This Zerg instance is configured for single-tenant mode. "
             f"Delete extra users or disable SINGLE_TENANT to allow multiple users."
         )

@@ -29,9 +29,17 @@ def get_user_by_email(db: Session, email: str) -> Optional[User]:
     )
 
 
-def count_users(db: Session) -> int:
-    """Return total number of users in the system."""
-    return db.query(User).count()
+def count_users(db: Session, exclude_service: bool = False) -> int:
+    """Return total number of users in the system.
+
+    Args:
+        db: Database session
+        exclude_service: If True, exclude service accounts (provider="service")
+    """
+    query = db.query(User)
+    if exclude_service:
+        query = query.filter(User.provider != "service")
+    return query.count()
 
 
 def create_user(

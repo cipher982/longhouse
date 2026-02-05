@@ -389,6 +389,7 @@ Update screenshots to show Timeline, not old dashboard.
 
 ### Phase 4: Cross-Subdomain Auth (2)
 
+- Note: current control-plane `/api/instances/{id}/login-token` uses `sub=email` + control-plane JWT secret; instance `/api/auth/accept-token` expects numeric user_id + instance secret → will fail until aligned.
 - [ ] Control plane issues JWT on successful OAuth
 - [ ] Redirect to `{user}.longhouse.ai?auth_token=xxx`
 - [ ] Instance validates token at `/api/auth/accept-token` (code exists)
