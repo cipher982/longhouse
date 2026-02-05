@@ -9,7 +9,7 @@
  */
 
 import { useState, useEffect, useMemo } from "react";
-import { useParams, useNavigate, useLocation } from "react-router-dom";
+import { useParams, useNavigate, useLocation, useSearchParams } from "react-router-dom";
 import { useAgentSession, useAgentSessionEvents } from "../hooks/useAgentSessions";
 import type { AgentEvent } from "../services/api/agents";
 import {
@@ -104,11 +104,15 @@ function getToolDisplayInfo(toolName: string): { icon: string; color: string } {
 
 interface UserMessageProps {
   event: AgentEvent;
+  isHighlighted?: boolean;
 }
 
-function UserMessage({ event }: UserMessageProps) {
+function UserMessage({ event, isHighlighted }: UserMessageProps) {
   return (
-    <div className="event-item event-user">
+    <div
+      id={`event-${event.id}`}
+      className={`event-item event-user${isHighlighted ? " event-highlight" : ""}`}
+    >
       <div className="event-header">
         <span className="event-role event-role-user">You</span>
         <span className="event-time">{formatTime(event.timestamp)}</span>
@@ -122,11 +126,15 @@ function UserMessage({ event }: UserMessageProps) {
 
 interface AssistantMessageProps {
   event: AgentEvent;
+  isHighlighted?: boolean;
 }
 
-function AssistantMessage({ event }: AssistantMessageProps) {
+function AssistantMessage({ event, isHighlighted }: AssistantMessageProps) {
   return (
-    <div className="event-item event-assistant">
+    <div
+      id={`event-${event.id}`}
+      className={`event-item event-assistant${isHighlighted ? " event-highlight" : ""}`}
+    >
       <div className="event-header">
         <span className="event-role event-role-assistant">AI</span>
         <span className="event-time">{formatTime(event.timestamp)}</span>
@@ -142,9 +150,10 @@ interface ToolCallProps {
   event: AgentEvent;
   isExpanded: boolean;
   onToggle: () => void;
+  isHighlighted?: boolean;
 }
 
-function ToolCall({ event, isExpanded, onToggle }: ToolCallProps) {
+function ToolCall({ event, isExpanded, onToggle, isHighlighted }: ToolCallProps) {
   const toolInfo = getToolDisplayInfo(event.tool_name || "");
   const hasInput = event.tool_input_json && Object.keys(event.tool_input_json).length > 0;
   const hasOutput = event.tool_output_text && event.tool_output_text.length > 0;
@@ -167,7 +176,10 @@ function ToolCall({ event, isExpanded, onToggle }: ToolCallProps) {
   const summary = getSummary();
 
   return (
-    <div className={`event-item event-tool ${isExpanded ? "expanded" : ""}`}>
+    <div
+      id={`event-${event.id}`}
+      className={`event-item event-tool ${isExpanded ? "expanded" : ""}${isHighlighted ? " event-highlight" : ""}`}
+    >
       <button
         className="event-tool-header"
         onClick={onToggle}
@@ -223,6 +235,14 @@ export default function SessionDetailPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
+
+  const highlightEventId = useMemo(() => {
+    const raw = searchParams.get("event_id");
+    if (!raw) return null;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  }, [searchParams]);
 
   // Fetch session and events
   const { data: session, isLoading: sessionLoading, error: sessionError } = useAgentSession(sessionId || null);
@@ -234,6 +254,7 @@ export default function SessionDetailPage() {
 
   // Expanded state for tool calls
   const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
+  const [highlightedEventId, setHighlightedEventId] = useState<number | null>(null);
 
   // Toggle individual tool
   const toggleTool = (eventId: number) => {
@@ -270,6 +291,16 @@ export default function SessionDetailPage() {
     }
     return () => document.body.removeAttribute("data-ready");
   }, [sessionLoading, eventsLoading]);
+
+  // Scroll to matched event when arriving from search results
+  useEffect(() => {
+    if (!highlightEventId || events.length === 0) return;
+    const target = document.getElementById(`event-${highlightEventId}`);
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlightedEventId(highlightEventId);
+    }
+  }, [highlightEventId, events]);
 
   // Back navigation - preserve filters from location state
   const handleBack = () => {
@@ -399,11 +430,12 @@ export default function SessionDetailPage() {
           ) : (
             <div className="timeline-events">
               {events.map((event) => {
+                const isHighlighted = highlightedEventId === event.id;
                 if (event.role === "user") {
-                  return <UserMessage key={event.id} event={event} />;
+                  return <UserMessage key={event.id} event={event} isHighlighted={isHighlighted} />;
                 }
                 if (event.role === "assistant") {
-                  return <AssistantMessage key={event.id} event={event} />;
+                  return <AssistantMessage key={event.id} event={event} isHighlighted={isHighlighted} />;
                 }
                 if (event.role === "tool") {
                   return (
@@ -412,12 +444,17 @@ export default function SessionDetailPage() {
                       event={event}
                       isExpanded={expandedTools.has(event.id)}
                       onToggle={() => toggleTool(event.id)}
+                      isHighlighted={isHighlighted}
                     />
                   );
                 }
                 // Unknown role - render as generic
                 return (
-                  <div key={event.id} className="event-item event-unknown">
+                  <div
+                    key={event.id}
+                    id={`event-${event.id}`}
+                    className={`event-item event-unknown${isHighlighted ? " event-highlight" : ""}`}
+                  >
                     <div className="event-header">
                       <span className="event-role">{event.role}</span>
                       <span className="event-time">{formatTime(event.timestamp)}</span>

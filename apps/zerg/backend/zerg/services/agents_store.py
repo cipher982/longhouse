@@ -7,6 +7,7 @@ from any provider (Claude Code, Codex, Gemini, Cursor, Oikos).
 import hashlib
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Any
 from typing import Dict
@@ -17,6 +18,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 from pydantic import Field
+from sqlalchemy import bindparam
 from sqlalchemy import func
 from sqlalchemy import or_
 from sqlalchemy import select
@@ -101,6 +103,145 @@ class AgentsStore:
         """Normalize raw text into a safe FTS query."""
         cleaned = (raw or "").replace('"', '""').strip()
         return cleaned
+
+    def _build_snippet(self, text: Optional[str], query: str, radius: int = 80) -> Optional[str]:
+        """Return a short snippet around the first query token match."""
+        if not text:
+            return None
+
+        terms = [t for t in re.split(r"\s+", query.strip()) if t]
+        if not terms:
+            return text[:160] + ("..." if len(text) > 160 else "")
+
+        lowered = text.lower()
+        match_index = -1
+        match_len = 0
+        for term in terms:
+            idx = lowered.find(term.lower())
+            if idx != -1:
+                match_index = idx
+                match_len = len(term)
+                break
+
+        if match_index == -1:
+            return text[:160] + ("..." if len(text) > 160 else "")
+
+        start = max(0, match_index - radius)
+        end = min(len(text), match_index + match_len + radius)
+        snippet = text[start:end]
+        if start > 0:
+            snippet = "..." + snippet
+        if end < len(text):
+            snippet = snippet + "..."
+        return snippet
+
+    def _fts_match_map(self, session_ids: list[UUID], query: str) -> dict[UUID, dict[str, Any]]:
+        """Return best match per session using FTS5."""
+        if not session_ids or not self._fts_available():
+            return {}
+        try:
+            stmt = text(
+                """
+                WITH ranked AS (
+                    SELECT
+                        e.session_id AS session_id,
+                        e.id AS event_id,
+                        e.role AS role,
+                        e.tool_name AS tool_name,
+                        e.content_text AS content_text,
+                        e.tool_output_text AS tool_output_text,
+                        row_number() OVER (
+                            PARTITION BY e.session_id
+                            ORDER BY bm25(events_fts)
+                        ) AS rn
+                    FROM events_fts
+                    JOIN events e ON e.id = events_fts.rowid
+                    WHERE events_fts MATCH :query
+                      AND e.session_id IN :session_ids
+                )
+                SELECT session_id, event_id, role, tool_name, content_text, tool_output_text
+                FROM ranked
+                WHERE rn = 1
+                """
+            ).bindparams(bindparam("session_ids", expanding=True))
+
+            rows = self.db.execute(
+                stmt,
+                {
+                    "query": self._fts_query(query),
+                    "session_ids": [str(session_id) for session_id in session_ids],
+                },
+            ).fetchall()
+        except Exception as exc:
+            logger.warning("FTS5 match lookup failed: %s", exc)
+            return {}
+
+        matches: dict[UUID, dict[str, Any]] = {}
+        for row in rows:
+            snippet = (
+                self._build_snippet(row.content_text, query)
+                or self._build_snippet(row.tool_output_text, query)
+                or self._build_snippet(row.tool_name, query)
+                or ""
+            )
+            matches[row.session_id] = {
+                "event_id": row.event_id,
+                "snippet": snippet,
+                "role": row.role,
+            }
+        return matches
+
+    def _ilike_match_map(self, session_ids: list[UUID], query: str) -> dict[UUID, dict[str, Any]]:
+        """Return best match per session using ILIKE fallback."""
+        if not session_ids:
+            return {}
+
+        pattern = f"%{query}%"
+        stmt = (
+            select(
+                AgentEvent.session_id,
+                AgentEvent.id,
+                AgentEvent.role,
+                AgentEvent.tool_name,
+                AgentEvent.content_text,
+                AgentEvent.tool_output_text,
+            )
+            .where(AgentEvent.session_id.in_(session_ids))
+            .where(
+                or_(
+                    AgentEvent.content_text.ilike(pattern),
+                    AgentEvent.tool_name.ilike(pattern),
+                    AgentEvent.tool_output_text.ilike(pattern),
+                )
+            )
+            .order_by(AgentEvent.timestamp.desc())
+        )
+
+        rows = self.db.execute(stmt).fetchall()
+        matches: dict[UUID, dict[str, Any]] = {}
+        for row in rows:
+            if row.session_id in matches:
+                continue
+            snippet = (
+                self._build_snippet(row.content_text, query)
+                or self._build_snippet(row.tool_output_text, query)
+                or self._build_snippet(row.tool_name, query)
+                or ""
+            )
+            matches[row.session_id] = {
+                "event_id": row.id,
+                "snippet": snippet,
+                "role": row.role,
+            }
+        return matches
+
+    def get_session_matches(self, session_ids: list[UUID], query: str) -> dict[UUID, dict[str, Any]]:
+        """Return a match map keyed by session id for a query."""
+        if not query or not session_ids:
+            return {}
+        if self._fts_available():
+            return self._fts_match_map(session_ids, query)
+        return self._ilike_match_map(session_ids, query)
 
     def _fts_session_ids(self, query: str) -> Optional[list[UUID]]:
         """Return session ids matching the FTS query (or None on failure)."""

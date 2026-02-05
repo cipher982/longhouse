@@ -24,6 +24,9 @@ export interface AgentSession {
   user_messages: number;
   assistant_messages: number;
   tool_calls: number;
+  match_event_id?: number | null;
+  match_snippet?: string | null;
+  match_role?: string | null;
 }
 
 export interface AgentSessionsListResponse {

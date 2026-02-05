@@ -255,6 +255,9 @@ class SessionResponse(BaseModel):
     user_messages: int = Field(..., description="User message count")
     assistant_messages: int = Field(..., description="Assistant message count")
     tool_calls: int = Field(..., description="Tool call count")
+    match_event_id: Optional[int] = Field(None, description="Matching event id for search queries")
+    match_snippet: Optional[str] = Field(None, description="Snippet of matching content")
+    match_role: Optional[str] = Field(None, description="Role for matching event")
 
 
 class SessionSummaryResponse(BaseModel):
@@ -533,6 +536,8 @@ async def list_sessions(
             offset=offset,
         )
 
+        match_map = store.get_session_matches([s.id for s in sessions], query) if query else {}
+
         return SessionsListResponse(
             sessions=[
                 SessionResponse(
@@ -548,6 +553,9 @@ async def list_sessions(
                     user_messages=s.user_messages or 0,
                     assistant_messages=s.assistant_messages or 0,
                     tool_calls=s.tool_calls or 0,
+                    match_event_id=(match_map.get(s.id) or {}).get("event_id"),
+                    match_snippet=(match_map.get(s.id) or {}).get("snippet"),
+                    match_role=(match_map.get(s.id) or {}).get("role"),
                 )
                 for s in sessions
             ],

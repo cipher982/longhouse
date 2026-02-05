@@ -65,3 +65,8 @@ def test_agents_search_fts_sqlite(tmp_path):
         sessions, total = store.list_sessions(include_test=True, query="grep")
         assert total == 1
         assert len(sessions) == 1
+
+        matches = store.get_session_matches([sessions[0].id], "grep")
+        assert sessions[0].id in matches
+        assert matches[sessions[0].id]["event_id"]
+        assert "grep" in (matches[sessions[0].id]["snippet"] or "").lower()
