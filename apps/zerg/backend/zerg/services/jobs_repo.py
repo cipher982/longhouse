@@ -342,10 +342,76 @@ def auto_commit_if_dirty(data_dir: str | Path, context: str = "auto") -> dict[st
     return commit_changes(data_dir, message)
 
 
+# ---------------------------------------------------------------------------
+# Router-compatible wrappers (use settings.data_dir by default)
+# ---------------------------------------------------------------------------
+
+
+def get_jobs_repo_status() -> dict[str, Any]:
+    """Get jobs repo status using default data_dir from settings.
+
+    This is a router-compatible wrapper around get_repo_status.
+    """
+    from zerg.config import get_settings
+
+    settings = get_settings()
+    raw = get_repo_status(settings.data_dir)
+    last_commit = raw.get("last_commit") or {}
+    return {
+        "initialized": raw["initialized"],
+        "has_remote": raw["has_remote"],
+        "remote_url": raw["remote_url"],
+        "last_commit_time": last_commit.get("date"),
+        "last_commit_message": last_commit.get("message"),
+        "jobs_dir": str(raw["jobs_dir"]),
+        "job_count": raw.get("files", 0),
+    }
+
+
+def init_jobs_repo() -> dict[str, Any]:
+    """Initialize jobs repo using default data_dir from settings.
+
+    This is a router-compatible wrapper around bootstrap_jobs_repo.
+    """
+    from zerg.config import get_settings
+
+    settings = get_settings()
+    result = bootstrap_jobs_repo(settings.data_dir)
+    # Success if no errors (idempotent - already initialized is fine)
+    has_errors = bool(result.get("errors"))
+    return {
+        "success": not has_errors,
+        "message": "Jobs repo initialized" if not has_errors else "; ".join(result["errors"]),
+        "jobs_dir": str(result["jobs_dir"]),
+    }
+
+
+def sync_jobs_repo() -> dict[str, Any]:
+    """Stub for jobs repo sync - git sync handled by git_sync service.
+
+    This is a router-compatible wrapper that returns not_implemented status.
+    Remote sync is optional and configured via JOBS_GIT_REPO_URL.
+    """
+    from zerg.config import get_settings
+
+    settings = get_settings()
+    jobs_dir = settings.data_dir / "jobs"
+    return {
+        "success": False,
+        "message": "Remote sync not yet implemented. Jobs work fine with local-only versioning.",
+        "status": "not_implemented",
+        "jobs_dir": str(jobs_dir),
+    }
+
+
 __all__ = [
     "bootstrap_jobs_repo",
     "get_repo_status",
     "commit_changes",
     "auto_commit_if_dirty",
     "MANIFEST_TEMPLATE",
+    # Router-compatible wrappers
+    "get_jobs_repo_status",
+    "init_jobs_repo",
+    "sync_jobs_repo",
 ]
