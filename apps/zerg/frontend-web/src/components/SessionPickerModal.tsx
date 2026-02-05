@@ -267,6 +267,7 @@ export function SessionPickerModal({
 
   // Focus search input when modal opens
   useEffect(() => {
+    let focusTimer: ReturnType<typeof setTimeout> | null = null;
     if (isOpen) {
       if (!wasOpenRef.current) {
         setSearchQuery(safeInitialFilters.query || "");
@@ -275,9 +276,15 @@ export function SessionPickerModal({
         setSelectedIndex(0);
         setSelectedSessionId(null);
       }
-      setTimeout(() => searchInputRef.current?.focus(), 100);
+      focusTimer = setTimeout(() => searchInputRef.current?.focus(), 100);
     }
     wasOpenRef.current = isOpen;
+
+    return () => {
+      if (focusTimer) {
+        clearTimeout(focusTimer);
+      }
+    };
   }, [isOpen, safeInitialFilters]);
 
   // Keyboard navigation
