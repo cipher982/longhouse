@@ -93,9 +93,9 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 **VISION.md describes per-user isolated instances. That doesn't exist YET.**
 
 Current reality (as of 2026-02-05):
-- **ONE backend container** serves both `api.longhouse.ai` and `api-david.longhouse.ai`
+- **ONE backend container** (API served via same-host `/api` proxy; `api-*` subdomains are legacy/optional)
 - **ONE frontend container** serves both `longhouse.ai` and `david.longhouse.ai`
-- **ONE SQLite database** at `/data/longhouse.db` (size varies; check on server)
+- **ONE SQLite database** at `/data/longhouse.db` (reset 2026-02-05; no users yet)
 - **No production control plane** — repo scaffold exists but not wired to signup/billing
 - **"david.longhouse.ai" is cosmetic** — just DNS routing to shared infra
 
