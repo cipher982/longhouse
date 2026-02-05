@@ -134,6 +134,48 @@ Bun-compiled binary for command execution on user infrastructure. Connects via W
 
 **Entrypoints:** `apps/runner/src/index.ts` (daemon), `apps/runner/src/executor.ts` (command exec), `zerg/services/runner_job_dispatcher.py` (backend dispatch). Release workflow: `.github/workflows/runner-release.yml`.
 
+## Feature Index (What Exists — check before building)
+
+**Scripts & Pipelines:**
+| Feature | Location | Notes |
+|---------|----------|-------|
+| Video pipeline | `scripts/capture_demo_video.py`, `make video-all` | TTS voiceover → headless ProRes capture → web MP4. Scenario-driven via YAML. |
+| Video scenarios | `scripts/video-scenarios/*.yaml` | Scene definitions with golden data, click actions, audio sync |
+| Video post-process | `scripts/process_video.sh` | ffmpeg concat + compress (ProRes → H.264 CRF 18 → web CRF 23) |
+| Marketing screenshots | `scripts/capture_marketing.py` | YAML manifest, viewport-specific, deterministic via `data-screenshot-ready` |
+| UI debug capture | `scripts/ui-capture.ts`, `/zerg-ui` skill | Screenshots + Playwright trace + a11y + console logs for agents |
+| QA script | `scripts/qa-oss.sh`, `make qa-oss` | Full OSS journey smoke test (demo-fresh → health → Playwright → E2E) |
+| OpenAPI codegen | `scripts/generate_openapi.py` + `bun run generate:api` | Backend schema → `openapi.json` → `generated/openapi-types.ts` |
+
+**Backend Services:**
+| Feature | Location | Notes |
+|---------|----------|-------|
+| FTS5 search | `database.py` (table+triggers), `agents_store.py` (query) | Virtual table, BM25 ranking, ILIKE fallback, snippet generation |
+| Session tools | `tools/builtin/session_tools.py` | 4 Oikos tools: search, grep, filter, get_detail |
+| Replay mode | `services/replay_service.py` | Deterministic demos via `?replay=scenario&clock=frozen` with golden data |
+| Demo seeding | `services/demo_sessions.py` | `--demo`/`--demo-fresh` flags, `POST /api/agents/demo` endpoint |
+| Shipper | `services/shipper/` | JSONL file watch/poll → ingest pipeline (Claude Code sessions) |
+| Password auth | `routers/auth.py` | `LONGHOUSE_PASSWORD[_HASH]`, pbkdf2/argon2/bcrypt, rate limiting |
+| Cross-subdomain auth | `routers/auth.py` `/api/auth/accept-token` | JWT from control plane, dual secret validation |
+| Prompt cache | `connectors/status_builder.py`, `managers/message_array_builder.py` | Split SystemMessages: connectors → memory → time. sort_keys + minute timestamps |
+
+**CLI Commands:**
+| Command | Location | Notes |
+|---------|----------|-------|
+| `longhouse serve` | `cli/serve.py` | SQLite server, `--demo`/`--demo-fresh`/`--host`/`--port` |
+| `longhouse connect` | `cli/connect.py` | Shipper: watch mode (default) or `--poll` |
+| `longhouse ship` | `cli/connect.py` | One-shot sync of sessions |
+| `longhouse onboard` | `cli/onboard.py` | Interactive setup wizard, auto-seeds demo data |
+| `longhouse doctor` | `cli/doctor.py` | Self-diagnosis: env, server, shipper, config checks |
+
+**Infrastructure:**
+| Feature | Location | Notes |
+|---------|----------|-------|
+| Control plane | `apps/control-plane/` | Docker provisioning + Caddy labels + admin UI |
+| Runner daemon | `apps/runner/` | Bun-compiled binary, WebSocket, command exec |
+| CI pipeline | `.github/workflows/contract-first-ci.yml` | validate → tests → E2E → QA gate |
+| Provisioning E2E | `.github/workflows/provision-e2e.yml` | Builds runtime image, provisions instance, smoke checks |
+
 ## Deep Dives
 
 | Topic | Guide |
