@@ -50,6 +50,22 @@
 
   "runner_exec": [
     {
+      "$comment": "Disk space check - deterministic output for gpt-scripted commis",
+      "match": {
+        "command_contains": "df -h"
+      },
+      "result": {
+        "ok": true,
+        "data": {
+          "target": "cube",
+          "command": "df -h",
+          "exit_code": 0,
+          "stdout": "Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1       100G   45G   55G  45% /\ntmpfs           7.8G     0  7.8G   0% /dev/shm\n/dev/sdb1       500G  200G  300G  40% /data\n\nNotes: Docker images/volumes are the biggest consumers.",
+          "stderr": ""
+        }
+      }
+    },
+    {
       "$comment": "Notes search - returns deterministic results",
       "match": {
         "tool_name_contains": "search_notes"

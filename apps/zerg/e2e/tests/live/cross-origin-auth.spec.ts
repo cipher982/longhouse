@@ -1,5 +1,5 @@
 /**
- * Cross-Origin Authentication Tests - Core Suite
+ * Cross-Origin Authentication Tests - Live Suite
  *
  * These tests verify cookie-based authentication works across different domains
  * (split deployment: longhouse.ai for frontend, api.longhouse.ai for backend).
@@ -11,10 +11,10 @@
  * - Secure: Required when SameSite=None
  * - Domain=.longhouse.ai: Optional, enables subdomain sharing
  *
- * CORE SUITE: 0 skipped, 0 flaky, retries: 0
+ * Live suite: requires prod-like domains + SMOKE_TEST_SECRET
  */
 
-import { test, expect } from '../fixtures';
+import { test, expect } from './fixtures';
 
 function normalizeSecret(value: string | undefined): string | undefined {
   if (!value) return undefined;
@@ -30,7 +30,7 @@ function normalizeSecret(value: string | undefined): string | undefined {
 const secret = normalizeSecret(process.env.SMOKE_TEST_SECRET);
 const shouldRun = !!secret;
 
-test.describe('Cross-Origin Authentication - Core', () => {
+test.describe('Cross-Origin Authentication - Live', () => {
   test.skip(!shouldRun, 'SMOKE_TEST_SECRET required for cross-origin tests');
 
   test('service login sets cookie with correct attributes', async ({ request }) => {

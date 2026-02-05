@@ -6,7 +6,7 @@
  * - spawn_commis without git_repo (scratch workspace)
  * - spawn_commis with git_repo (workspace with git)
  * - commis_summary_ready event emission
- * - runner_exec from Oikos (graceful failure without runner)
+ * - runner_exec via commis (stubbed in E2E for deterministic output)
  */
 
 import { randomUUID } from 'node:crypto';
@@ -138,6 +138,7 @@ test.describe('Commis Simplification - Single Execution Mode', () => {
     // Verify commis_summary_ready event was emitted
     expect(summaryEvents.length).toBeGreaterThanOrEqual(1);
     expect(summaryEvents[0].payload?.summary).toBeTruthy();
+    expect(summaryEvents[0].payload?.summary).toContain('45%');
   });
 
   test('workspace commis (spawn_commis with git_repo)', async ({ request, backendUrl, commisId }) => {
@@ -228,20 +229,6 @@ test.describe('Commis Simplification - Single Execution Mode', () => {
 
     // Verify summary event
     expect(summaryEvents.length).toBeGreaterThanOrEqual(1);
-  });
-
-  test.skip('runner_exec requires connected runner infrastructure', async () => {
-    // runner_exec is now available to Oikos directly, but testing it requires:
-    // 1. A connected runner (daemon process with WebSocket connection)
-    // 2. A registered runner in the database with matching owner
-    //
-    // This is tested at the unit level in test_runner_exec.py:
-    // - test_runner_exec_requires_context: Validates context requirements
-    // - test_runner_exec_runner_not_found: Validates graceful error handling
-    // - test_runner_exec_success: Validates successful execution path
-    //
-    // E2E testing of runner_exec requires full runner infrastructure setup
-    // which is out of scope for automated E2E tests.
   });
 
   test('parallel commis spawning (multiple spawn_commis calls)', async ({

@@ -94,6 +94,7 @@ if (!fs.existsSync(e2eDbDir)) {
 }
 const dbPath = path.join(e2eDbDir, `e2e_${port}.db`);
 const databaseUrl = `sqlite:///${dbPath}`;
+const toolStubsPath = join(__dirname, 'fixtures', 'tool-stubs.json');
 
 console.log(`[spawn-backend] Starting E2E backend on port ${port} with SQLite: ${dbPath}`);
 
@@ -126,6 +127,8 @@ const backend = spawn('uv', [
         CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR || os.tmpdir() + '/zerg-e2e-claude',
         // Mock hatch CLI for workspace agents in E2E (can't run real Claude Code fiches)
         E2E_HATCH_PATH: join(__dirname, 'bin', 'hatch'),
+        // Deterministic tool stubs for E2E (runner_exec/ssh_exec/web_search)
+        LONGHOUSE_TOOL_STUBS_PATH: toolStubsPath,
         // Suppress Python logging noise for E2E tests
         LOG_LEVEL: 'ERROR',
     },
