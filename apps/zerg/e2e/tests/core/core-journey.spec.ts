@@ -30,6 +30,16 @@ async function navigateToChatPage(page: Page): Promise<void> {
 }
 
 /**
+ * Ensure event bus is ready and tool listeners are attached before emitting test events.
+ */
+async function waitForEventBusReady(page: Page): Promise<void> {
+  await page.waitForFunction(() => {
+    const bus = (window as any).__oikos?.eventBus;
+    return !!bus && typeof bus.listenerCount === 'function' && bus.listenerCount('oikos:tool_started') > 0;
+  }, null, { timeout: 15000 });
+}
+
+/**
  * Query run events from the API
  */
 async function getRunEvents(
@@ -151,9 +161,7 @@ test.describe('Core User Journey - Scripted LLM', () => {
     console.log('[Commis Tool UI] Starting test');
 
     await navigateToChatPage(page);
-
-    // Ensure dev-only event bus is available (Playwright uses Vite dev server).
-    await page.waitForFunction(() => (window as any).__oikos?.eventBus != null, null, { timeout: 15000 });
+    await waitForEventBusReady(page);
 
     const runId = 101;
     const toolCallId = 'call-spawn-1';
@@ -222,7 +230,7 @@ test.describe('Core User Journey - Scripted LLM', () => {
     console.log('[Details Drawer] Starting test');
 
     await navigateToChatPage(page);
-    await page.waitForFunction(() => (window as any).__oikos?.eventBus != null, null, { timeout: 15000 });
+    await waitForEventBusReady(page);
 
     const runId = 201;
     const toolCallId = 'call-spawn-details';
@@ -298,7 +306,7 @@ test.describe('Core User Journey - Scripted LLM', () => {
     console.log('[Source Badge] Starting test');
 
     await navigateToChatPage(page);
-    await page.waitForFunction(() => (window as any).__oikos?.eventBus != null, null, { timeout: 15000 });
+    await waitForEventBusReady(page);
 
     const runId = 202;
     const toolCallId = 'call-spawn-source';
@@ -355,7 +363,7 @@ test.describe('Core User Journey - Scripted LLM', () => {
     console.log('[Offline Badge] Starting test');
 
     await navigateToChatPage(page);
-    await page.waitForFunction(() => (window as any).__oikos?.eventBus != null, null, { timeout: 15000 });
+    await waitForEventBusReady(page);
 
     const runId = 203;
     const toolCallId = 'call-spawn-offline';
@@ -420,7 +428,7 @@ test.describe('Core User Journey - Scripted LLM', () => {
     console.log('[Compact Mode] Starting test');
 
     await navigateToChatPage(page);
-    await page.waitForFunction(() => (window as any).__oikos?.eventBus != null, null, { timeout: 15000 });
+    await waitForEventBusReady(page);
 
     const runId = 204;
     const toolCallId = 'call-spawn-compact';
@@ -495,7 +503,7 @@ test.describe('Core User Journey - Scripted LLM', () => {
     console.log('[Copy Button] Starting test');
 
     await navigateToChatPage(page);
-    await page.waitForFunction(() => (window as any).__oikos?.eventBus != null, null, { timeout: 15000 });
+    await waitForEventBusReady(page);
 
     const runId = 205;
     const toolCallId = 'call-spawn-copy';
