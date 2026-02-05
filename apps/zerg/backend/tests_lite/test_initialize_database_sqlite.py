@@ -22,3 +22,4 @@ def test_initialize_database_sqlite_creates_tables(tmp_path):
     # Agents tables (no schema in SQLite)
     assert "sessions" in tables
     assert "events" in tables
+    assert "events_fts" in tables

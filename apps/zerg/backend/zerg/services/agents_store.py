@@ -18,6 +18,7 @@ from uuid import uuid4
 from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy import func
+from sqlalchemy import or_
 from sqlalchemy import select
 from sqlalchemy import text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -84,6 +85,38 @@ class AgentsStore:
 
     def __init__(self, db: Session):
         self.db = db
+
+    def _fts_available(self) -> bool:
+        """Return True if FTS5 index exists for agent events (SQLite only)."""
+        bind = self.db.get_bind()
+        if bind is None or bind.dialect.name != "sqlite":
+            return False
+        try:
+            row = self.db.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")).fetchone()
+            return row is not None
+        except Exception:
+            return False
+
+    def _fts_query(self, raw: str) -> str:
+        """Normalize raw text into a safe FTS query."""
+        cleaned = (raw or "").replace('"', '""').strip()
+        return cleaned
+
+    def _fts_session_ids(self, query: str) -> Optional[list[UUID]]:
+        """Return session ids matching the FTS query (or None on failure)."""
+        if not query:
+            return None
+        if not self._fts_available():
+            return None
+        try:
+            rows = self.db.execute(
+                text("SELECT DISTINCT session_id FROM events_fts WHERE events_fts MATCH :query"),
+                {"query": self._fts_query(query)},
+            ).fetchall()
+            return [row[0] for row in rows]
+        except Exception as exc:
+            logger.warning("FTS5 search failed, falling back to ILIKE: %s", exc)
+            return None
 
     def _compute_event_hash(self, event: EventIngest) -> str:
         """Compute a hash for deduplication.
@@ -266,8 +299,26 @@ class AgentsStore:
 
         # Content search requires joining events
         if query:
-            subq = select(AgentEvent.session_id).where(AgentEvent.content_text.ilike(f"%{query}%")).distinct().subquery()
-            stmt = stmt.where(AgentSession.id.in_(select(subq.c.session_id)))
+            session_ids = self._fts_session_ids(query)
+            if session_ids is not None:
+                if not session_ids:
+                    return [], 0
+                stmt = stmt.where(AgentSession.id.in_(session_ids))
+            else:
+                pattern = f"%{query}%"
+                subq = (
+                    select(AgentEvent.session_id)
+                    .where(
+                        or_(
+                            AgentEvent.content_text.ilike(pattern),
+                            AgentEvent.tool_name.ilike(pattern),
+                            AgentEvent.tool_output_text.ilike(pattern),
+                        )
+                    )
+                    .distinct()
+                    .subquery()
+                )
+                stmt = stmt.where(AgentSession.id.in_(select(subq.c.session_id)))
 
         # Get total count
         count_stmt = select(func.count()).select_from(stmt.subquery())
