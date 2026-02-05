@@ -621,11 +621,11 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 
 ### Phase 2: Oikos Session Discovery Tools
 
-- [ ] Add `search_sessions` tool (FTS5 search, returns session summaries)
-- [ ] Add `grep_sessions` tool (regex search over event content)
-- [ ] Add `filter_sessions` tool (by project, date range, provider, tool usage)
-- [ ] Add `get_session_detail` tool (fetch full session with events)
-- [ ] Register tools in Oikos core tools
+- [x] Add `search_sessions` tool (FTS5 search, returns session summaries)
+- [x] Add `grep_sessions` tool (regex search over event content)
+- [x] Add `filter_sessions` tool (by project, date range, provider, tool usage)
+- [x] Add `get_session_detail` tool (fetch full session with events)
+- [x] Register tools in Oikos core tools
 
 **Files:** `tools/builtin/session_tools.py`, `oikos_tools.py`
 
@@ -680,7 +680,7 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [Docs vs code] VISION specifies shipper batching “1 second or 100 events”; implementation ships per file with no time-window batching (only `batch_size` for spool replay).
 - [Docs vs code] VISION says shipper replay uses idempotency keys; shipper does not send idempotency keys/headers (dedupe relies on DB unique index).
 - [Docs vs UI] “Resume from anywhere / Timeline resume” is not in Timeline UI; resume is only implemented in Forum Drop-In (Claude-only) and not exposed on `/timeline`.
-- [Docs vs code] VISION lists Oikos discovery tools (`search_sessions`, `grep_sessions`, `filter_sessions`, `get_session_detail`) but no such tool implementations exist.
+- ✅ FIXED: [Docs vs code] Oikos discovery tools now implemented and registered (`search_sessions`, `grep_sessions`, `filter_sessions`, `get_session_detail`).
 - [Docs vs code] VISION says cross-subdomain auth tokens are one-time with nonce stored server-side and validated via control plane/JWKS; current `POST /api/auth/accept-token` just validates JWT and sets cookie (no nonce/one-time guard).
 - [Docs/infra] `install-claude.sh` is broken: `longhouse.ai/install-claude.sh` serves the SPA HTML, `get.longhouse.ai/install-claude.sh` redirects to `scripts/install-claude.sh` which 404s. ✅ PARTIAL: Shim script now points users to Anthropic docs instead of broken URL.
 - [Docs vs code] VISION requires a PATH-based Claude shim + verification in a fresh shell; current installer only adds a hook unless `~/.longhouse/install-claude-shim.sh` already exists and does not verify in a new shell.
