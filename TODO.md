@@ -33,7 +33,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | Landing Page Redesign | ~80% | Header ✅ Hero CTAs ✅ DeploymentOptions ✅ Contrast/WCAG ✅ Story ✅; remaining: some Phase 5 copy polish |
 | HN Launch Readiness | ~75% | CTAs fixed; remaining: comparison table, video, social proof |
 | Prompt Cache Optimization | ~70% | Message layout done, timestamp granularity fixed; missing sort_keys, split dynamic |
-| Install/Onboarding | ~55% | install.sh works, 3.12+, connect URL fixed (`426f8c9b`); missing doctor, fresh-shell verify |
+| Install/Onboarding | ~65% | install.sh works, 3.12+, connect URL fixed (`426f8c9b`), doctor done; missing fresh-shell verify |
 | Control Plane | ~40% | Scaffold + provisioner + admin UI + CI gate; OAuth/billing/token mismatch pending |
 | OSS First-Run UX | ~40% | `--demo/--demo-fresh` works; no auto-seed on onboard, no guided empty state |
 
@@ -532,7 +532,7 @@ Close the gap between VISION, README, docs, and the live installer.
 
 - [ ] **Canonical install path**: `install.sh` is primary (README aligned; landing still needs dual-path CTA)
 - [ ] **Document onboarding wizard** (steps, troubleshooting, service install) and link it from README + landing page
-- [ ] **Add `longhouse doctor`** (self-diagnosis for server health, shipper status, config validity); run after install/upgrade and recommend in docs
+- [x] **Add `longhouse doctor`** (self-diagnosis for server health, shipper status, config validity); run after install/upgrade and recommend in docs
 - [x] **Fix `longhouse connect` default URL** — `connect` + `ship` fallback changed from 47300 to 8080 (commit `426f8c9b`)
 - [ ] **Installer polish:** verify Claude shim + PATH in a *fresh* shell and print an exact fix line when it fails (VISION requirement)
 

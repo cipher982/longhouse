@@ -7,12 +7,14 @@ Usage:
     longhouse ship          # One-shot sync
     longhouse connect       # Continuous polling
     longhouse onboard       # Run onboarding wizard
+    longhouse doctor        # Self-diagnosis
     longhouse --help        # Show help
 """
 
 import typer
 
 from zerg.cli.connect import app as connect_app
+from zerg.cli.doctor import doctor
 from zerg.cli.onboard import onboard
 from zerg.cli.serve import app as serve_app
 from zerg.cli.serve import serve
@@ -78,6 +80,9 @@ app.command(name="connect")(_cmd_lookup["connect"])
 
 # Onboarding wizard
 app.command(name="onboard")(onboard)
+
+# Self-diagnosis
+app.command(name="doctor")(doctor)
 
 
 def main():
