@@ -215,7 +215,6 @@ Two separate things exist — don't conflate or rebuild:
 ## Learnings (Recent - Human compacts weekly)
 
 <!-- Agents: append below. Keep last 7 days or 10 entries max. -->
-- (2026-02-04) [ops] FERNET_SECRET must be urlsafe base64 32-byte key; hex strings cause instance startup failure.
 - (2026-02-04) [arch] Runtime image (`docker/runtime.dockerfile`) bundles frontend+backend; backend serves frontend via StaticFiles at `/app/frontend-web/dist`.
 - (2026-02-05) [db] Alembic migrations removed (versions dir empty); treat migration tasks as deprecated.
 - (2026-02-05) [security] Avoid storing admin tokens in AI session notes; rotate any exposed token immediately.
@@ -225,3 +224,4 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-05) [db] SQLite FTS5 index (`events_fts`) now backs session search when available.
 - (2026-02-05) [e2e] E2E forces `gpt-scripted` for new fiches; ScriptedChatLLM streams tokens to exercise chat streaming UI.
 - (2026-02-05) [e2e] WebSocket stream events use envelope `type` (stream_start/chunk/end); topics may be `user:{id}`, so tests should rely on `data.thread_id` over topic.
+- (2026-02-05) [e2e] Commis tool card selectors are more stable when anchored on nested tool text than tool_call_id in CI.
