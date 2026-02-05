@@ -58,6 +58,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 - E2E: removed placeholder specs (trigger email/perf/errors) and trimmed scheduling/search placeholders
 - E2E: realtime_updates now event-driven (ready signals + stream event asserts) and removed lint allowlist entry
 - E2E: realtime_websocket_monitoring now asserts stream envelope fields; removed timeout allowlist entry
+- E2E: comprehensive_database_isolation now asserts API + commis isolation without timeouts; removed allowlist entry
 
 ### 🛠 Ops Changes (prod)
 - Re-created `longhouse-david` container on zerg (PUBLIC_SITE_URL=https://david.longhouse.ai, SINGLE_TENANT=0, SMOKE_TEST_SECRET set, latest runtime image pulled) — stopgap until control-plane provisioning owns this.
