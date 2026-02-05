@@ -22,7 +22,7 @@ export function LandingHeader({ onSignIn, onGetStarted }: LandingHeaderProps) {
 
   const navLinks = [
     { label: "Product", href: "#how-it-works" },
-    { label: "Docs", href: "https://github.com/anthropics/claude-code", external: true },
+    { label: "Docs", href: "https://github.com/cipher982/longhouse", external: true },
     { label: "Pricing", href: "#pricing" },
   ];
 
