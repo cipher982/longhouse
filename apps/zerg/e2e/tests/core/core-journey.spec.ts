@@ -167,9 +167,11 @@ test.describe('Core User Journey - Scripted LLM', () => {
     const toolCallId = 'call-spawn-1';
     const commisId = 'e2e-commis-1';
     const jobId = 9001;
+    const uniqueToken = `e2e-${randomUUID().slice(0, 8)}`;
+    const task = `Check disk space (${uniqueToken})`;
 
     await page.evaluate(
-      ({ runId, toolCallId, commisId, jobId }) => {
+      ({ runId, toolCallId, commisId, jobId, task }) => {
         const bus = (window as any).__oikos.eventBus;
         const now = Date.now();
 
@@ -179,12 +181,12 @@ test.describe('Core User Journey - Scripted LLM', () => {
           toolName: 'spawn_commis',
           toolCallId,
           argsPreview: 'spawn_commis args',
-          args: { task: 'Check disk space on cube' },
+          args: { task },
           timestamp: now + 1,
         });
         bus.emit('oikos:commis_spawned', {
           jobId,
-          task: 'Check disk space on cube',
+          task,
           toolCallId,
           timestamp: now + 2,
         });
@@ -209,10 +211,10 @@ test.describe('Core User Journey - Scripted LLM', () => {
           timestamp: now + 5,
         });
       },
-      { runId, toolCallId, commisId, jobId }
+      { runId, toolCallId, commisId, jobId, task }
     );
 
-    const commisCard = page.locator(`[data-testid="commis-tool-card"][data-tool-call-id="${toolCallId}"]`);
+    const commisCard = page.locator('[data-testid="commis-tool-card"]', { hasText: uniqueToken });
     await expect(commisCard).toBeVisible({ timeout: 5000 });
 
     const commandLabel = commisCard.locator('.nested-tool-name--command');
