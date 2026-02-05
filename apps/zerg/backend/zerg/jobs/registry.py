@@ -378,23 +378,6 @@ async def register_all_jobs(scheduler: AsyncIOScheduler | None = None, use_queue
 
     Returns count of jobs scheduled.
     """
-    # Import builtin job modules to trigger registration
-    # pylint: disable=import-outside-toplevel,unused-import
-    try:
-        from zerg.jobs.backups import backup_sentinel  # noqa: F401
-    except ImportError as e:
-        logger.warning("Could not import backup jobs: %s", e)
-
-    try:
-        from zerg.jobs.monitoring import disk_health  # noqa: F401
-    except ImportError as e:
-        logger.warning("Could not import monitoring jobs: %s", e)
-
-    try:
-        from zerg.jobs import qa  # noqa: F401
-    except ImportError as e:
-        logger.warning("Could not import qa jobs: %s", e)
-
     # Load external jobs from git manifest (if configured)
     # Wrapped in try/except so manifest failures don't block builtin jobs
     try:
