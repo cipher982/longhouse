@@ -16,6 +16,7 @@ import { SkillsSection } from "../components/landing/SkillsSection";
 import { PricingSection } from "../components/landing/PricingSection";
 import { TrustSection } from "../components/landing/TrustSection";
 import { DeploymentOptions } from "../components/landing/DeploymentOptions";
+import { ComparisonTable } from "../components/landing/ComparisonTable";
 import { FooterCTA } from "../components/landing/FooterCTA";
 
 type LandingFxName = "particles" | "hero";
@@ -216,6 +217,7 @@ export default function LandingPage() {
         <HeroSection onScrollToHowItWorks={scrollToHowItWorks} heroAnimationsEnabled={heroAnimationsEnabled} />
         <HowItWorksSection />
         <DeploymentOptions />
+        <ComparisonTable />
         <DemoSection />
         <IntegrationsSection />
         <SkillsSection />
