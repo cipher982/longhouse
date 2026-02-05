@@ -751,77 +751,6 @@ except ImportError:  # pragma: no cover – should not happen
 # Note: logger is now defined earlier for lifespan handler usage
 
 
-# ---------------------------------------------------------------------------
-# Frontend static serving for pip install deployment
-# ---------------------------------------------------------------------------
-# When running `zerg serve` from a pip-installed package, serve the bundled
-# frontend directly. In dev mode (nginx proxy), this is bypassed.
-#
-# Mount order matters: API routes are registered above, so they take precedence.
-# The catch-all route only handles requests that don't match any API endpoint.
-# ---------------------------------------------------------------------------
-
-if FRONTEND_DIST_DIR is not None:
-    # Mount frontend assets (JS, CSS, images) at /assets
-    _assets_dir = FRONTEND_DIST_DIR / "assets"
-    if _assets_dir.is_dir():
-        app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="frontend_assets")
-
-    # Mount root-level static files (favicon, manifest, etc.)
-    # These are served at their exact paths from the dist root
-    app.mount("/frontend-static", StaticFiles(directory=str(FRONTEND_DIST_DIR)), name="frontend_root")
-
-    # Pre-resolve the base path for containment checks
-    _frontend_dist_resolved = FRONTEND_DIST_DIR.resolve()
-
-    # Serve index.html for SPA routes (catch-all for non-API paths)
-    @app.get("/{path:path}", include_in_schema=False)
-    async def serve_spa(path: str):
-        """Serve the SPA index.html for client-side routing.
-
-        This catch-all route serves index.html for any path that:
-        - Doesn't match an API route
-        - Doesn't match a static file
-        - Is likely a client-side route (dashboard, chat, etc.)
-
-        API routes take precedence because they're registered first.
-
-        SECURITY: Path traversal is prevented by resolving paths and checking
-        they remain within FRONTEND_DIST_DIR before serving.
-        """
-        from fastapi.responses import FileResponse
-        from fastapi.responses import RedirectResponse
-
-        # SECURITY: Reject paths with traversal attempts or absolute paths
-        if ".." in path or path.startswith("/"):
-            # For traversal attempts, just serve index.html (SPA fallback)
-            index_path = _frontend_dist_resolved / "index.html"
-            if index_path.is_file():
-                return FileResponse(index_path)
-            return RedirectResponse(url="/")
-
-        # Check if it's a root-level static file (favicon.ico, manifest, etc.)
-        # SECURITY: Resolve and verify path stays within frontend dist
-        try:
-            static_file = (_frontend_dist_resolved / path).resolve()
-            # Containment check: ensure resolved path is within frontend dist
-            if static_file.is_relative_to(_frontend_dist_resolved) and static_file.is_file():
-                return FileResponse(static_file)
-        except (ValueError, OSError):
-            # Invalid path or resolution error - fall through to SPA
-            pass
-
-        # For all other paths, serve index.html (SPA routing)
-        index_path = _frontend_dist_resolved / "index.html"
-        if index_path.is_file():
-            return FileResponse(index_path)
-
-        # Fallback: redirect to root if no index.html
-        return RedirectResponse(url="/")
-
-    logger.info(f"Frontend bundled assets mounted from {FRONTEND_DIST_DIR}")
-
-
 # Root endpoint (API info when frontend not bundled, or HTML when it is)
 @app.get("/", include_in_schema=False)
 async def read_root():
@@ -949,3 +878,54 @@ async def health_check():
 
 
 # Redundant reset-database endpoint removed - use /admin/reset-database instead
+
+
+# ---------------------------------------------------------------------------
+# Frontend static serving (MUST be last - catch-all route)
+# ---------------------------------------------------------------------------
+# When running `zerg serve` from a pip-installed package, serve the bundled
+# frontend directly. This catch-all MUST be registered after all API routes.
+# ---------------------------------------------------------------------------
+
+if FRONTEND_DIST_DIR is not None:
+    # Mount frontend assets (JS, CSS, images) at /assets
+    _assets_dir = FRONTEND_DIST_DIR / "assets"
+    if _assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="frontend_assets")
+
+    # Mount root-level static files (favicon, manifest, etc.)
+    app.mount("/frontend-static", StaticFiles(directory=str(FRONTEND_DIST_DIR)), name="frontend_root")
+
+    # Pre-resolve the base path for containment checks
+    _frontend_dist_resolved = FRONTEND_DIST_DIR.resolve()
+
+    # Serve index.html for SPA routes (catch-all for non-API paths)
+    @app.get("/{path:path}", include_in_schema=False)
+    async def serve_spa(path: str):
+        """Serve the SPA index.html for client-side routing."""
+        from fastapi.responses import FileResponse
+        from fastapi.responses import RedirectResponse
+
+        # SECURITY: Reject paths with traversal attempts
+        if ".." in path or path.startswith("/"):
+            index_path = _frontend_dist_resolved / "index.html"
+            if index_path.is_file():
+                return FileResponse(index_path)
+            return RedirectResponse(url="/")
+
+        # Check for static files
+        try:
+            static_file = (_frontend_dist_resolved / path).resolve()
+            if static_file.is_relative_to(_frontend_dist_resolved) and static_file.is_file():
+                return FileResponse(static_file)
+        except (ValueError, OSError):
+            pass
+
+        # Serve index.html for SPA routing
+        index_path = _frontend_dist_resolved / "index.html"
+        if index_path.is_file():
+            return FileResponse(index_path)
+
+        return RedirectResponse(url="/")
+
+    logger.info(f"Frontend catch-all route registered (FRONTEND_DIST_DIR={FRONTEND_DIST_DIR})")
