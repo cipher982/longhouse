@@ -853,6 +853,9 @@ Scope: SQLite-only, timeline-first product with dual-path positioning (self-host
 8) Real-time events (SSE/WS) tests are disabled due to flakiness.
 9) No formal OS matrix for OSS install (macOS/Linux/WSL).
 10) OSS user QA script exists (`scripts/qa-oss.sh`), but CI wiring is still pending.
+11) Timeline search E2E lives in `tests/sessions.spec.ts` but is not part of `test-e2e-core` gating (regressions can ship).
+12) Oikos session discovery tools (`search_sessions`, `grep_sessions`, `filter_sessions`, `get_session_detail`) have no unit/integration tests.
+13) No test for FTS fallback path (when FTS5 unavailable) or trigger integrity on update/delete.
 
 ### Virtual QA Team (Agent Roles)
 Use commis/runners + hatch agents to form a lightweight QA org that runs locally or in CI.
