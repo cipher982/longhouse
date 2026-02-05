@@ -358,7 +358,7 @@ Update screenshots to show Timeline, not old dashboard.
 - [x] Wildcard DNS `*.longhouse.ai` resolves via Cloudflare (verified 2026-02-05)
 - [ ] Routing layer: Caddy (existing coolify-proxy) with caddy-docker-proxy labels (needs live verify)
 - [ ] Manual provision smoke test: test2/test3 instances provisioned + routed (needs rerun)
-- [ ] Add control-plane → instance auth bridge endpoint (control plane issues token; instance sets cookie for owner)
+- [ ] Add control-plane → instance auth bridge endpoint (login-token exists but payload/secret mismatch with instance)
 
 ### Phase 1: Scaffold + Auth ⚠️ PARTIAL
 
