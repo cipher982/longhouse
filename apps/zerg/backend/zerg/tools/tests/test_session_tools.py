@@ -3,67 +3,21 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime
-from datetime import timezone
-from uuid import uuid4
 
 from sqlalchemy.orm import sessionmaker
+from tests.helpers.agents_seed import seed_agent_session
 from zerg.database import initialize_database
 from zerg.database import make_engine
-from zerg.services.agents_store import AgentsStore
-from zerg.services.agents_store import EventIngest
-from zerg.services.agents_store import SessionIngest
 from zerg.tools.builtin import BUILTIN_TOOLS
 from zerg.tools.builtin import session_tools
 from zerg.tools.registry import ImmutableToolRegistry
 from zerg.tools.unified_access import create_tool_resolver
 
 
-def _seed_session(engine) -> str:
+def _seed_session(engine, **kwargs) -> str:
     SessionLocal = sessionmaker(bind=engine)
-    session_id = uuid4()
-    timestamp = datetime(2026, 2, 5, tzinfo=timezone.utc)
-
     with SessionLocal() as db:
-        store = AgentsStore(db)
-        store.ingest_session(
-            SessionIngest(
-                id=session_id,
-                provider="claude",
-                environment="test",
-                project="session-tools",
-                device_id="dev-machine",
-                cwd="/tmp",
-                git_repo=None,
-                git_branch=None,
-                started_at=timestamp,
-                events=[
-                    EventIngest(
-                        role="user",
-                        content_text="alpha beta",
-                        timestamp=timestamp,
-                        source_path="/tmp/session.jsonl",
-                        source_offset=0,
-                    ),
-                    EventIngest(
-                        role="assistant",
-                        content_text="gamma delta",
-                        timestamp=timestamp,
-                        source_path="/tmp/session.jsonl",
-                        source_offset=1,
-                    ),
-                    EventIngest(
-                        role="tool",
-                        tool_name="Bash",
-                        tool_output_text="grep needle output",
-                        timestamp=timestamp,
-                        source_path="/tmp/session.jsonl",
-                        source_offset=2,
-                    ),
-                ],
-            )
-        )
-    return str(session_id)
+        return seed_agent_session(db, **kwargs)
 
 
 def _patch_db_session(monkeypatch, engine):
