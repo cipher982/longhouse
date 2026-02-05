@@ -386,9 +386,11 @@ def _extract_conversation(messages: List[BaseMessage]) -> List[BaseMessage]:
 def _extract_dynamic_blocks(messages: List[BaseMessage]) -> List[DynamicContextBlock]:
     """Extract tagged dynamic context blocks from messages.
 
-    Note: MessageArrayBuilder combines connector and memory context into a single
-    SystemMessage. We extract it as a single DYNAMIC block to avoid duplication
-    when using context_to_messages().
+    The MessageArrayBuilder emits separate SystemMessages for each dynamic
+    context category (connector status, memory, time).  We preserve them
+    as individual DynamicContextBlock entries with appropriate tags so that
+    context_to_messages() can re-emit them as separate SystemMessages for
+    optimal LLM prefix-cache hit rates.
     """
     from zerg.types.messages import SystemMessage
 
@@ -396,14 +398,16 @@ def _extract_dynamic_blocks(messages: List[BaseMessage]) -> List[DynamicContextB
     for msg in messages:
         if isinstance(msg, SystemMessage):
             content = msg.content or ""
-            # Check for dynamic context markers (connector status and/or memory)
-            has_connector = "[INTERNAL CONTEXT" in content
+            has_connector = "<connector_status" in content
+            has_time = "<current_time>" in content
             has_memory = "[MEMORY CONTEXT]" in content
 
-            if has_connector or has_memory:
-                # Store as single DYNAMIC block to avoid duplication in context_to_messages()
-                # The builder already combines these, so we preserve the combined form
-                blocks.append(DynamicContextBlock(tag="DYNAMIC", content=content))
+            if has_connector:
+                blocks.append(DynamicContextBlock(tag="CONNECTOR_STATUS", content=content))
+            elif has_memory:
+                blocks.append(DynamicContextBlock(tag="MEMORY", content=content))
+            elif has_time:
+                blocks.append(DynamicContextBlock(tag="CURRENT_TIME", content=content))
     return blocks
 
 
@@ -415,8 +419,15 @@ def _extract_dynamic_blocks(messages: List[BaseMessage]) -> List[DynamicContextB
 def context_to_messages(context: PromptContext) -> List[BaseMessage]:
     """Convert PromptContext to a message array for LLM invocation.
 
-    This is a convenience function for cases where you need the raw
-    message array instead of the structured PromptContext.
+    Each dynamic context block is emitted as its own SystemMessage so that
+    LLM prefix-caching only invalidates the *changed* segment.
+
+    Layout (most stable first):
+        [system - static instructions]   -- never changes
+        [conversation history]           -- grows each turn
+        [system - connector status]      -- rarely changes
+        [system - memory context]        -- changes per-query sometimes
+        [system - current time]          -- changes every minute
 
     Args:
         context: PromptContext to convert
@@ -435,9 +446,8 @@ def context_to_messages(context: PromptContext) -> List[BaseMessage]:
     # Conversation history (includes tool messages from continuations)
     messages.extend(context.conversation_history)
 
-    # Dynamic context at the end
-    if context.dynamic_context:
-        combined = "\n\n".join(block.content for block in context.dynamic_context)
-        messages.append(SystemMessage(content=combined))
+    # Dynamic context -- each block as a separate SystemMessage for cache optimization
+    for block in context.dynamic_context:
+        messages.append(SystemMessage(content=block.content))
 
     return messages

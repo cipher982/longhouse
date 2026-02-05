@@ -16,9 +16,18 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from tests.conftest import TEST_COMMIS_MODEL
+from zerg.connectors.status_builder import FicheContextParts
 from zerg.crud import crud
 from zerg.managers.fiche_runner import RuntimeView
 from zerg.managers.message_array_builder import MessageArrayBuilder, MessageArrayResult
+
+
+def _mock_fiche_context_parts(**kwargs):
+    """Return a mock FicheContextParts for testing."""
+    return FicheContextParts(
+        connector_status='<connector_status captured_at="2026-01-01T00:00Z">\n{}\n</connector_status>',
+        current_time="<current_time>2026-01-01T00:00Z</current_time>",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -262,14 +271,14 @@ class TestToolMessages:
         builder.with_system_prompt(test_fiche)
         builder.with_conversation(test_thread.id)
         builder.with_tool_messages([])
-        with patch("zerg.connectors.status_builder.build_fiche_context") as mock_ctx:
-            mock_ctx.return_value = "{}"
+        with patch("zerg.connectors.status_builder.build_fiche_context_parts", side_effect=_mock_fiche_context_parts):
             builder.with_dynamic_context()
         result = builder.build()
 
-        # System + dynamic context (no tool messages)
-        assert len(result.messages) == 2
+        # System + connector_status + time (no tool messages, 2 dynamic msgs)
+        assert len(result.messages) == 3
         assert isinstance(result.messages[-1], SystemMessage)
+        assert "<current_time>" in result.messages[-1].content
 
     def test_tool_messages_after_conversation(self, db_session, runtime_view, test_fiche, test_thread):
         from zerg.services.thread_service import ThreadService
@@ -300,35 +309,38 @@ class TestToolMessages:
 
 
 class TestDynamicContext:
-    def test_adds_connector_context(self, db_session, runtime_view, test_fiche, test_thread):
+    def test_adds_separate_connector_and_time_context(self, db_session, runtime_view, test_fiche, test_thread):
         builder = MessageArrayBuilder(db_session, runtime_view)
         builder.with_system_prompt(test_fiche)
         builder.with_conversation(test_thread.id)
 
-        # Mock connector context builder (must patch where it's used, not defined)
-        with patch("zerg.connectors.status_builder.build_fiche_context") as mock_ctx:
-            mock_ctx.return_value = '{"connectors": []}'
+        with patch("zerg.connectors.status_builder.build_fiche_context_parts", side_effect=_mock_fiche_context_parts):
             builder.with_dynamic_context(allowed_tools=None)
 
         result = builder.build()
 
-        # System + dynamic context
-        assert len(result.messages) == 2
-        last_msg = result.messages[-1]
-        assert isinstance(last_msg, SystemMessage)
-        assert "[INTERNAL CONTEXT" in last_msg.content
+        # System + connector_status + time = 3 messages
+        assert len(result.messages) == 3
+        # Connector status message
+        assert isinstance(result.messages[1], SystemMessage)
+        assert "<connector_status" in result.messages[1].content
+        assert "[INTERNAL CONTEXT" in result.messages[1].content
+        # Time message (last, least stable)
+        assert isinstance(result.messages[2], SystemMessage)
+        assert "<current_time>" in result.messages[2].content
+        assert "[INTERNAL CONTEXT" in result.messages[2].content
 
     def test_handles_connector_context_failure(self, db_session, runtime_view, test_fiche, test_thread):
         builder = MessageArrayBuilder(db_session, runtime_view)
         builder.with_system_prompt(test_fiche)
         builder.with_conversation(test_thread.id)
 
-        # Mock connector context builder to fail (patch where it's imported)
-        with patch("zerg.connectors.status_builder.build_fiche_context") as mock_ctx:
+        # Mock connector context builder to fail
+        with patch("zerg.connectors.status_builder.build_fiche_context_parts") as mock_ctx:
             mock_ctx.side_effect = Exception("DB error")
             builder.with_dynamic_context()
 
-        # Should still work, just without connector context
+        # Should still work, just without connector/time context
         result = builder.build()
         assert result.messages is not None
 
@@ -349,16 +361,17 @@ class TestDynamicContext:
         builder.with_system_prompt(test_fiche)
         builder.with_conversation(test_thread.id)
 
-        with patch("zerg.connectors.status_builder.build_fiche_context") as mock_ctx:
-            mock_ctx.return_value = '{"connectors": []}'
+        with patch("zerg.connectors.status_builder.build_fiche_context_parts", side_effect=_mock_fiche_context_parts):
             builder.with_dynamic_context()
 
         result = builder.build()
 
-        # System -> Human -> AI -> DynamicContext (at end)
-        assert len(result.messages) == 4
-        assert isinstance(result.messages[-1], SystemMessage)
-        assert "[INTERNAL CONTEXT" in result.messages[-1].content
+        # System -> Human -> AI -> Connector -> Time (at end)
+        assert len(result.messages) == 5
+        assert isinstance(result.messages[3], SystemMessage)
+        assert "<connector_status" in result.messages[3].content
+        assert isinstance(result.messages[4], SystemMessage)
+        assert "<current_time>" in result.messages[4].content
 
     def test_can_call_after_tool_messages(self, db_session, runtime_view, test_fiche, test_thread):
         builder = MessageArrayBuilder(db_session, runtime_view)
@@ -366,16 +379,19 @@ class TestDynamicContext:
         builder.with_conversation(test_thread.id)
         builder.with_tool_messages([ToolMessage(content="R", tool_call_id="t1", name="test")])
 
-        with patch("zerg.connectors.status_builder.build_fiche_context") as mock_ctx:
-            mock_ctx.return_value = "{}"
+        with patch("zerg.connectors.status_builder.build_fiche_context_parts", side_effect=_mock_fiche_context_parts):
             builder.with_dynamic_context()
 
         # Should work without error
         result = builder.build()
-        assert len(result.messages) == 3
+        # System + Tool + Connector + Time = 4
+        assert len(result.messages) == 4
         assert isinstance(result.messages[0], SystemMessage)
         assert isinstance(result.messages[1], ToolMessage)
-        assert isinstance(result.messages[2], SystemMessage)
+        assert isinstance(result.messages[2], SystemMessage)  # connector
+        assert "<connector_status" in result.messages[2].content
+        assert isinstance(result.messages[3], SystemMessage)  # time
+        assert "<current_time>" in result.messages[3].content
 
 
 # ---------------------------------------------------------------------------
@@ -410,15 +426,14 @@ class TestBuildResult:
         builder.with_system_prompt(test_fiche)
         builder.with_conversation(test_thread.id)
 
-        with patch("zerg.connectors.status_builder.build_fiche_context") as mock_ctx:
-            mock_ctx.return_value = "{}"
+        with patch("zerg.connectors.status_builder.build_fiche_context_parts", side_effect=_mock_fiche_context_parts):
             builder.with_dynamic_context()
 
         result = builder.build()
 
-        # System + Human + DynamicContext = 3
-        assert result.message_count_with_context == 3
-        assert len(result.messages) == 3
+        # System + Human + Connector + Time = 4
+        assert result.message_count_with_context == 4
+        assert len(result.messages) == 4
 
 
 # ---------------------------------------------------------------------------
@@ -427,7 +442,7 @@ class TestBuildResult:
 
 
 class TestMessageOrdering:
-    def test_order_system_conversation_dynamic(self, db_session, runtime_view, test_fiche, test_thread):
+    def test_order_system_conversation_connector_time(self, db_session, runtime_view, test_fiche, test_thread):
         from zerg.services.thread_service import ThreadService
 
         ThreadService.save_new_messages(
@@ -444,19 +459,20 @@ class TestMessageOrdering:
         builder.with_system_prompt(test_fiche)
         builder.with_conversation(test_thread.id)
 
-        with patch("zerg.connectors.status_builder.build_fiche_context") as mock_ctx:
-            mock_ctx.return_value = '{"test": true}'
+        with patch("zerg.connectors.status_builder.build_fiche_context_parts", side_effect=_mock_fiche_context_parts):
             builder.with_dynamic_context()
 
         result = builder.build()
 
-        # Verify order: System -> Human -> AI -> DynamicContext
+        # Verify order: System -> Human -> AI -> Connector -> Time
         assert isinstance(result.messages[0], SystemMessage)
         assert "You are a helpful assistant" in result.messages[0].content
         assert isinstance(result.messages[1], HumanMessage)
         assert isinstance(result.messages[2], AIMessage)
         assert isinstance(result.messages[3], SystemMessage)
-        assert "[INTERNAL CONTEXT" in result.messages[3].content
+        assert "<connector_status" in result.messages[3].content
+        assert isinstance(result.messages[4], SystemMessage)
+        assert "<current_time>" in result.messages[4].content
 
     def test_order_with_tool_messages(self, db_session, runtime_view, test_fiche, test_thread):
         from zerg.services.thread_service import ThreadService
@@ -473,17 +489,19 @@ class TestMessageOrdering:
         builder.with_conversation(test_thread.id)
         builder.with_tool_messages([ToolMessage(content="Done", tool_call_id="t1", name="spawn_commis")])
 
-        with patch("zerg.connectors.status_builder.build_fiche_context") as mock_ctx:
-            mock_ctx.return_value = "{}"
+        with patch("zerg.connectors.status_builder.build_fiche_context_parts", side_effect=_mock_fiche_context_parts):
             builder.with_dynamic_context()
 
         result = builder.build()
 
-        # Verify order: System -> Human -> Tool -> DynamicContext
+        # Verify order: System -> Human -> Tool -> Connector -> Time
         assert isinstance(result.messages[0], SystemMessage)
         assert isinstance(result.messages[1], HumanMessage)
         assert isinstance(result.messages[2], ToolMessage)
-        assert isinstance(result.messages[3], SystemMessage)
+        assert isinstance(result.messages[3], SystemMessage)  # connector
+        assert "<connector_status" in result.messages[3].content
+        assert isinstance(result.messages[4], SystemMessage)  # time
+        assert "<current_time>" in result.messages[4].content
 
 
 # ---------------------------------------------------------------------------
@@ -492,6 +510,14 @@ class TestMessageOrdering:
 
 
 class TestMemoryContext:
+    def _find_memory_message(self, messages):
+        """Find the memory context SystemMessage from the message array."""
+        for msg in messages:
+            content = getattr(msg, "content", "") or ""
+            if "[MEMORY CONTEXT]" in content:
+                return msg
+        return None
+
     def test_memory_context_uses_unprocessed_rows(self, db_session, runtime_view, test_fiche, test_thread):
         builder = MessageArrayBuilder(db_session, runtime_view)
         builder.with_system_prompt(test_fiche)
@@ -505,7 +531,7 @@ class TestMemoryContext:
         long_snippet = "x" * 300
 
         with (
-            patch("zerg.connectors.status_builder.build_fiche_context", return_value="{}"),
+            patch("zerg.connectors.status_builder.build_fiche_context_parts", side_effect=_mock_fiche_context_parts),
             patch(
                 "zerg.services.memory_search.search_memory_files",
                 return_value=[{"path": "memory.txt", "snippets": [long_snippet]}],
@@ -517,8 +543,9 @@ class TestMemoryContext:
             result = builder.build()
 
         assert mock_search.call_args.kwargs["query"] == "What is the weather?"
-        content = result.messages[-1].content
-        assert "[MEMORY CONTEXT]" in content
+        memory_msg = self._find_memory_message(result.messages)
+        assert memory_msg is not None
+        content = memory_msg.content
         line = next(line for line in content.splitlines() if line.startswith("- memory.txt:"))
         snippet = line.split(":", 1)[1].strip()
         assert snippet.endswith("...")
@@ -540,7 +567,7 @@ class TestMemoryContext:
         builder.with_conversation(test_thread.id)
 
         with (
-            patch("zerg.connectors.status_builder.build_fiche_context", return_value="{}"),
+            patch("zerg.connectors.status_builder.build_fiche_context_parts", side_effect=_mock_fiche_context_parts),
             patch("zerg.services.memory_search.search_memory_files", return_value=[{"path": "memory.txt", "snippets": ["Note"]}]) as mock_search,
             patch("zerg.crud.knowledge_crud.search_knowledge_documents", return_value=[]),
             patch("zerg.services.memory_embeddings.embeddings_enabled", return_value=False),
@@ -549,7 +576,8 @@ class TestMemoryContext:
             result = builder.build()
 
         assert mock_search.call_args.kwargs["query"] == "Tell me about Python"
-        assert "[MEMORY CONTEXT]" in result.messages[-1].content
+        memory_msg = self._find_memory_message(result.messages)
+        assert memory_msg is not None
 
     def test_memory_context_skips_internal_messages(self, db_session, runtime_view, test_fiche, test_thread):
         builder = MessageArrayBuilder(db_session, runtime_view)
@@ -567,7 +595,7 @@ class TestMemoryContext:
         mock_real.content = "Real message"
 
         with (
-            patch("zerg.connectors.status_builder.build_fiche_context", return_value="{}"),
+            patch("zerg.connectors.status_builder.build_fiche_context_parts", side_effect=_mock_fiche_context_parts),
             patch("zerg.services.memory_search.search_memory_files", return_value=[{"path": "memory.txt", "snippets": ["Note"]}]) as mock_search,
             patch("zerg.crud.knowledge_crud.search_knowledge_documents", return_value=[]),
             patch("zerg.services.memory_embeddings.embeddings_enabled", return_value=False),
@@ -576,7 +604,34 @@ class TestMemoryContext:
             result = builder.build()
 
         assert mock_search.call_args.kwargs["query"] == "Real message"
-        assert "[MEMORY CONTEXT]" in result.messages[-1].content
+        memory_msg = self._find_memory_message(result.messages)
+        assert memory_msg is not None
+
+    def test_memory_between_connector_and_time(self, db_session, runtime_view, test_fiche, test_thread):
+        """Memory context should appear between connector and time messages."""
+        builder = MessageArrayBuilder(db_session, runtime_view)
+        builder.with_system_prompt(test_fiche)
+        builder.with_conversation(test_thread.id)
+
+        mock_row = MagicMock()
+        mock_row.role = "user"
+        mock_row.internal = False
+        mock_row.content = "test query"
+
+        with (
+            patch("zerg.connectors.status_builder.build_fiche_context_parts", side_effect=_mock_fiche_context_parts),
+            patch("zerg.services.memory_search.search_memory_files", return_value=[{"path": "m.txt", "snippets": ["hit"]}]),
+            patch("zerg.crud.knowledge_crud.search_knowledge_documents", return_value=[]),
+            patch("zerg.services.memory_embeddings.embeddings_enabled", return_value=False),
+        ):
+            builder.with_dynamic_context(unprocessed_rows=[mock_row])
+            result = builder.build()
+
+        # System + Connector + Memory + Time = 4
+        assert len(result.messages) == 4
+        assert "<connector_status" in result.messages[1].content
+        assert "[MEMORY CONTEXT]" in result.messages[2].content
+        assert "<current_time>" in result.messages[3].content
 
 # ---------------------------------------------------------------------------
 # Golden equivalence tests (builder matches legacy run_thread output)
@@ -652,7 +707,7 @@ class TestGoldenEquivalence:
         assert result.messages[2].content.endswith("Hi there") or "Hi there" in result.messages[2].content
 
     def test_with_dynamic_context_equivalence(self, db_session, test_user):
-        """Dynamic context should be at end."""
+        """Dynamic context messages should be at end, split into connector + time."""
         from zerg.services.thread_service import ThreadService
 
         # Create fresh fiche and thread for this test
@@ -694,12 +749,12 @@ class TestGoldenEquivalence:
         builder.with_system_prompt(fiche)
         builder.with_conversation(thread.id)
 
-        with patch("zerg.connectors.status_builder.build_fiche_context") as mock_ctx:
-            mock_ctx.return_value = '{"connectors": []}'
+        with patch("zerg.connectors.status_builder.build_fiche_context_parts", side_effect=_mock_fiche_context_parts):
             builder.with_dynamic_context()
 
         result = builder.build()
 
-        # Legacy: [System, Human, DynamicContext]
-        assert len(result.messages) == 3
-        assert "[INTERNAL CONTEXT" in result.messages[-1].content
+        # [System, Human, Connector, Time]
+        assert len(result.messages) == 4
+        assert "<connector_status" in result.messages[2].content
+        assert "<current_time>" in result.messages[3].content

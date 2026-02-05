@@ -605,7 +605,7 @@ Message layout is already system → conversation → dynamic. Remaining work is
 - [x] MessageArrayBuilder layout is system → conversation → dynamic
 - [x] Reduce timestamp granularity in dynamic context (minute-level)
 - [ ] Sort connector status keys for deterministic JSON (`json.dumps(..., sort_keys=True)`)
-- [ ] Split dynamic context into separate SystemMessages (time / connector / memory)
+- [x] Split dynamic context into separate SystemMessages (time / connector / memory)
 - [ ] Add cache hit logging/metrics
 
 ---
