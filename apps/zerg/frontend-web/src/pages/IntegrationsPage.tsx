@@ -112,6 +112,7 @@ export default function IntegrationsPage() {
   };
 
   // Group connectors by category
+  const llmProviders = connectors?.filter((c) => c.category === "llm_provider") ?? [];
   const notifications = connectors?.filter((c) => c.category === "notifications") ?? [];
   const projectManagement = connectors?.filter((c) => c.category === "project_management") ?? [];
   const personal = connectors?.filter((c) => c.category === "personal") ?? [];
@@ -153,6 +154,27 @@ export default function IntegrationsPage() {
           />
         ) : (
           <div className="connector-groups">
+            {llmProviders.length > 0 && (
+              <div className="connector-group">
+                <h3>LLM Providers</h3>
+                <p className="section-description">
+                  Configure API keys for AI chat. At least one provider is required for Oikos to work.
+                </p>
+                <div className="connector-cards">
+                  {llmProviders.map((connector) => (
+                    <ConnectorCard
+                      key={connector.type}
+                      connector={connector}
+                      onConfigure={() => openConfigModal(connector)}
+                      onTest={() => handleTest(connector)}
+                      onDelete={() => handleDelete(connector)}
+                      isTesting={testConnector.isPending}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="connector-group">
               <h3>Notifications</h3>
               <p className="section-description">

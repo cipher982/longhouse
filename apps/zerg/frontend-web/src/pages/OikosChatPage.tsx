@@ -57,7 +57,8 @@ export default function OikosChatPage() {
         if (!cancelled) {
           setLlmAvailable(caps.llm_available);
           // Show modal if LLM is not available
-          if (!caps.llm_available && !isE2E) {
+          const isReplay = !!(window as Window & { __REPLAY_SCENARIO?: string }).__REPLAY_SCENARIO;
+          if (!caps.llm_available && !isE2E && !isReplay) {
             setShowApiKeyModal(true);
           }
         }
@@ -79,7 +80,7 @@ export default function OikosChatPage() {
 
   const handleOpenIntegrations = useCallback(() => {
     setShowApiKeyModal(false);
-    navigate('/integrations');
+    navigate('/settings/integrations');
   }, [navigate]);
 
   // Handle session picker event from oikos
