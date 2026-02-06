@@ -1,6 +1,8 @@
+import { useNavigate } from "react-router-dom";
 import { Button } from "../ui";
 import { AppScreenshotFrame } from "./AppScreenshotFrame";
 import { InstallSection } from "./InstallSection";
+import config from "../../lib/config";
 
 interface HeroSectionProps {
   onScrollToHowItWorks: () => void;
@@ -8,6 +10,8 @@ interface HeroSectionProps {
 }
 
 export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _heroAnimationsEnabled }: HeroSectionProps) {
+  const navigate = useNavigate();
+
   const handleSelfHost = () => {
     document.querySelector(".install-section")?.scrollIntoView({ behavior: "smooth" });
   };
@@ -45,9 +49,15 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
             <Button variant="primary" size="lg" className="landing-cta-main" onClick={handleSelfHost}>
               Self-host Now
             </Button>
-            <Button variant="secondary" size="lg" onClick={handleHostedBeta}>
-              Hosted Beta &rarr;
-            </Button>
+            {config.demoMode ? (
+              <Button variant="secondary" size="lg" onClick={() => navigate("/timeline")}>
+                Try Live Demo &rarr;
+              </Button>
+            ) : (
+              <Button variant="secondary" size="lg" onClick={handleHostedBeta}>
+                Hosted Beta &rarr;
+              </Button>
+            )}
           </div>
 
           <div className="landing-hero-friction-reducers">

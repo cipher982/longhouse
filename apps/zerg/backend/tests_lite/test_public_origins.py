@@ -14,6 +14,7 @@ def _make_settings(**overrides):
         testing=True,
         auth_disabled=True,
         single_tenant=True,
+        demo_mode=False,
         jwt_secret="test-secret",
         longhouse_password="",
         longhouse_password_hash="",

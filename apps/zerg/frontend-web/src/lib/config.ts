@@ -10,6 +10,7 @@ export interface AppConfig {
   googleClientId: string;
   authEnabled: boolean;
   marketingOnly: boolean;
+  demoMode: boolean;
 
   // Environment
   isDevelopment: boolean;
@@ -33,6 +34,7 @@ declare global {
   interface Window {
     API_BASE_URL?: string;
     WS_BASE_URL?: string;
+    __LONGHOUSE_DEMO__?: boolean;
   }
 }
 
@@ -152,6 +154,7 @@ function loadConfig(): AppConfig {
   const isProduction = import.meta.env.MODE === 'production';
   const isTesting = import.meta.env.MODE === 'test';
   const marketingOnly = resolveMarketingOnly();
+  const demoMode = typeof window !== 'undefined' && window.__LONGHOUSE_DEMO__ === true;
 
   // FAIL FAST: No fallbacks, no silent defaults
   // Production MUST have config.js loaded with API_BASE_URL and WS_BASE_URL
@@ -193,7 +196,7 @@ function loadConfig(): AppConfig {
   apiBaseUrl = normalizeApiBaseUrl(apiBaseUrl);
 
   // Validate required config in production
-  if (isProduction && !marketingOnly) {
+  if (isProduction && !marketingOnly && !demoMode) {
     if (!apiBaseUrl) {
       throw new Error('FATAL: API_BASE_URL not configured! Add window.API_BASE_URL in config.js');
     }
@@ -211,6 +214,7 @@ function loadConfig(): AppConfig {
     googleClientId: import.meta.env.VITE_GOOGLE_CLIENT_ID || "658453123272-gt664mlo8q3pra3u1h3oflbmrdi94lld.apps.googleusercontent.com",
     authEnabled: import.meta.env.VITE_AUTH_ENABLED !== 'false',
     marketingOnly,
+    demoMode,
 
     // Environment
     isDevelopment,
