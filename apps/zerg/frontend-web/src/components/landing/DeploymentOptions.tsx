@@ -3,12 +3,15 @@
  *
  * Two-card section showing deployment paths:
  * Self-hosted (primary) and Hosted Beta.
+ *
+ * Focuses on the HOW — infrastructure and setup method.
+ * PricingSection covers the WHAT — features and cost.
  */
 
 import { useState } from "react";
 import { Button } from "../ui";
 import { CheckCircleIcon } from "../icons";
-import config from "../../lib/config";
+import { WaitlistModal } from "./WaitlistModal";
 
 interface DeploymentOption {
   name: string;
@@ -19,82 +22,6 @@ interface DeploymentOption {
   ctaVariant: "primary" | "secondary";
   highlighted?: boolean;
   badge?: string;
-}
-
-interface WaitlistModalProps {
-  onClose: () => void;
-}
-
-function WaitlistModal({ onClose }: WaitlistModalProps) {
-  const [email, setEmail] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!email || isSubmitting) return;
-
-    setIsSubmitting(true);
-    try {
-      const response = await fetch(`${config.apiBaseUrl}/waitlist`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, source: "deployment_hosted" }),
-      });
-      const data = await response.json();
-      setResult({ success: data.success, message: data.message });
-    } catch {
-      setResult({ success: false, message: "Something went wrong. Please try again." });
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  return (
-    <div className="landing-login-overlay" onClick={onClose}>
-      <div className="landing-login-modal waitlist-modal" onClick={(e) => e.stopPropagation()}>
-        <button className="landing-login-close" onClick={onClose}>
-          x
-        </button>
-
-        {result ? (
-          <div className="waitlist-result">
-            <div className={`waitlist-result-icon ${result.success ? "success" : "error"}`}>
-              {result.success ? "OK" : "!"}
-            </div>
-            <p className="waitlist-result-message">{result.message}</p>
-            <Button variant="primary" size="lg" onClick={onClose}>
-              Got it
-            </Button>
-          </div>
-        ) : (
-          <>
-            <h2>Join the Hosted Waitlist</h2>
-            <p className="landing-login-subtext">
-              Be the first to know when Longhouse hosted launches with always-on sync and cross-device access.
-            </p>
-
-            <form onSubmit={handleSubmit} className="waitlist-form">
-              <input
-                type="email"
-                placeholder="Enter your email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="waitlist-input"
-                required
-                autoFocus
-              />
-              <Button type="submit" variant="primary" size="lg" disabled={isSubmitting}>
-                {isSubmitting ? "Joining..." : "Join Waitlist"}
-              </Button>
-            </form>
-
-            <p className="waitlist-privacy">No spam, ever. Unsubscribe anytime.</p>
-          </>
-        )}
-      </div>
-    </div>
-  );
 }
 
 export function DeploymentOptions() {
@@ -111,11 +38,11 @@ export function DeploymentOptions() {
   const options: DeploymentOption[] = [
     {
       name: "Self-hosted",
-      promise: "Full control",
+      promise: "One command, your machine",
       features: [
-        "Your data stays local",
-        "No account needed",
-        "Works offline",
+        "SQLite — no external services",
+        "Runs on any Mac, Linux, or VPS",
+        "Works offline, data stays local",
         "Open source (Apache 2.0)",
       ],
       ctaText: "Install CLI",
@@ -125,11 +52,11 @@ export function DeploymentOptions() {
     },
     {
       name: "Hosted Beta",
-      promise: "Zero setup",
+      promise: "We run it, you use it",
       features: [
-        "Managed hosting",
-        "Automatic updates",
-        "Team sharing",
+        "Always-on — agents keep working",
+        "Access from any device",
+        "Automatic updates and backups",
         "Your own subdomain",
       ],
       ctaText: "Join Waitlist",
@@ -143,9 +70,9 @@ export function DeploymentOptions() {
     <section id="deployment-options" className="landing-deployment">
       <div className="landing-section-inner">
         <p className="landing-section-label">Deploy Your Way</p>
-        <h2 className="landing-section-title">Choose Your Path</h2>
+        <h2 className="landing-section-title">Two Ways to Run</h2>
         <p className="landing-section-subtitle">
-          Run locally with full control, or let us handle hosting.
+          Install locally in under 2 minutes, or let us handle the infrastructure.
         </p>
 
         <div className="landing-deployment-grid">
@@ -185,7 +112,7 @@ export function DeploymentOptions() {
         </div>
       </div>
 
-      {showWaitlist && <WaitlistModal onClose={() => setShowWaitlist(false)} />}
+      {showWaitlist && <WaitlistModal onClose={() => setShowWaitlist(false)} source="deployment_hosted" />}
     </section>
   );
 }
