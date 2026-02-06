@@ -14,7 +14,7 @@ export interface ConnectorStatus {
   type: string;
   name: string;
   description: string;
-  category: "notifications" | "project_management" | "personal" | "advanced";
+  category: "llm_provider" | "notifications" | "project_management" | "personal" | "advanced";
   icon: string;
   docs_url: string;
   fields: CredentialField[];
@@ -52,10 +52,12 @@ export interface ConnectorSuccessResponse {
  */
 export type AccountConnectorStatus = ConnectorStatus;
 
-export type ConnectorCategory = "notifications" | "project_management" | "personal" | "advanced";
+export type ConnectorCategory = "llm_provider" | "notifications" | "project_management" | "personal" | "advanced";
 
 // Connector type identifiers
 export type ConnectorType =
+  | "openai"
+  | "anthropic"
   | "slack"
   | "discord"
   | "email"
@@ -71,6 +73,8 @@ export type ConnectorType =
 
 // Icon mapping for connectors (Lucide icon names)
 export const CONNECTOR_ICONS: Record<string, string> = {
+  openai: "zap",
+  anthropic: "bot",
   slack: "slack",
   discord: "discord",
   email: "mail",

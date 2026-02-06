@@ -16,6 +16,10 @@ from typing import TypedDict
 class ConnectorType(str, Enum):
     """Enum of supported connector types."""
 
+    # LLM Providers
+    OPENAI = "openai"
+    ANTHROPIC = "anthropic"
+
     SLACK = "slack"
     DISCORD = "discord"
     EMAIL = "email"
@@ -54,6 +58,40 @@ class ConnectorDefinition(TypedDict):
 
 
 CONNECTOR_REGISTRY: dict[ConnectorType, ConnectorDefinition] = {
+    ConnectorType.OPENAI: {
+        "type": ConnectorType.OPENAI,
+        "name": "OpenAI",
+        "description": "Use GPT models for chat. Get a key at openai.com",
+        "category": "llm_provider",
+        "icon": "zap",
+        "docs_url": "https://platform.openai.com/api-keys",
+        "fields": [
+            {
+                "key": "api_key",
+                "label": "API Key",
+                "type": "password",
+                "placeholder": "sk-...",
+                "required": True,
+            }
+        ],
+    },
+    ConnectorType.ANTHROPIC: {
+        "type": ConnectorType.ANTHROPIC,
+        "name": "Anthropic",
+        "description": "Use Claude models for chat. Get a key at anthropic.com",
+        "category": "llm_provider",
+        "icon": "bot",
+        "docs_url": "https://console.anthropic.com/settings/keys",
+        "fields": [
+            {
+                "key": "api_key",
+                "label": "API Key",
+                "type": "password",
+                "placeholder": "sk-ant-...",
+                "required": True,
+            }
+        ],
+    },
     ConnectorType.SLACK: {
         "type": ConnectorType.SLACK,
         "name": "Slack",

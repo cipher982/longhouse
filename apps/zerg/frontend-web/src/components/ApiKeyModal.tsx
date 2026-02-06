@@ -43,14 +43,22 @@ export function ApiKeyModal({
           </p>
 
           <div className="api-key-modal__options">
-            <div className="api-key-modal__option">
+            <button
+              type="button"
+              className="api-key-modal__option"
+              onClick={onOpenIntegrations}
+            >
               <h3>OpenAI</h3>
               <p>Use GPT models for chat. Get a key at openai.com</p>
-            </div>
-            <div className="api-key-modal__option">
+            </button>
+            <button
+              type="button"
+              className="api-key-modal__option"
+              onClick={onOpenIntegrations}
+            >
               <h3>Anthropic</h3>
               <p>Use Claude models for chat. Get a key at anthropic.com</p>
-            </div>
+            </button>
           </div>
 
           <p className="api-key-modal__note">

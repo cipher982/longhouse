@@ -42,8 +42,23 @@ def system_capabilities() -> Dict[str, Any]:
     Used by frontend to determine which features are available based on
     configured API keys and services.
     """
+    llm_available = _settings.llm_available
+
+    # Also check if any user has configured LLM provider keys via connectors
+    if not llm_available:
+        from zerg.connectors.registry import ConnectorType
+        from zerg.models.models import AccountConnectorCredential
+
+        session_factory = get_session_factory()
+        with session_factory() as db:
+            llm_types = [ConnectorType.OPENAI.value, ConnectorType.ANTHROPIC.value]
+            has_llm_connector = (
+                db.query(AccountConnectorCredential).filter(AccountConnectorCredential.connector_type.in_(llm_types)).first()
+            ) is not None
+            llm_available = has_llm_connector
+
     return {
-        "llm_available": _settings.llm_available,
+        "llm_available": llm_available,
         "auth_disabled": _settings.auth_disabled,
     }
 
