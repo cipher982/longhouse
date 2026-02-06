@@ -120,10 +120,12 @@ def execute_step(
     step: dict,
     audio_duration: float | None,
     frame_recorder: "FrameCaptureRecorder | None" = None,
+    scene_frame_start: int = 0,
 ) -> None:
     """Execute a single scenario step.
 
     If frame_recorder is provided, captures frames during waits/pauses.
+    scene_frame_start is the frame count when the scene started (for computing video elapsed time).
     """
     action = step["action"]
 
@@ -158,10 +160,12 @@ def execute_step(
         logger.info(f"  Typing into {selector}: {text[:30]}...")
 
         if frame_recorder:
-            # Capture frames while typing (align delays to video time)
+            # Progressive fill: set value to text[:i+1] for each char.
+            # Works with React controlled inputs (keyboard events alone don't trigger onChange).
             per_char_delay = max(1, int(delay))
-            for char in text:
-                page.type(selector, char, delay=0)
+            locator = page.locator(selector)
+            for i in range(len(text)):
+                locator.fill(text[: i + 1])
                 frame_recorder.capture_for_duration(per_char_delay)
         else:
             page.type(selector, text, delay=delay)
@@ -196,11 +200,27 @@ def execute_step(
         wait_with_frames(duration_ms)
 
     elif action == "pause_for_audio":
-        # KEY: Use actual audio duration + buffer
-        if audio_duration:
+        # Pause for the REMAINING audio time (audio_duration - video_elapsed_so_far)
+        # Uses frame count to compute video time (wall clock != video time due to capture overhead).
+        if audio_duration and frame_recorder:
+            frames_in_scene = frame_recorder._frame_count - scene_frame_start
+            video_elapsed = frames_in_scene / frame_recorder.fps
+            remaining = audio_duration - video_elapsed + 0.3  # small buffer
+            wait_ms = max(300, int(remaining * 1000))
+            logger.info(
+                f"  Pausing for audio: {audio_duration:.1f}s total, "
+                f"{video_elapsed:.1f}s video elapsed ({frames_in_scene} frames), "
+                f"{remaining:.1f}s remaining"
+            )
+            wait_with_frames(wait_ms)
+        elif audio_duration:
+            # No frame recorder — fall back to full duration
             wait_ms = int((audio_duration + 0.5) * 1000)
             logger.info(f"  Pausing for audio: {audio_duration:.1f}s + 0.5s buffer = {wait_ms}ms")
-            wait_with_frames(wait_ms)
+            if frame_recorder:
+                wait_with_frames(wait_ms)
+            else:
+                page.wait_for_timeout(wait_ms)
         else:
             # Fallback when no audio
             logger.info("  No audio duration, using 3s fallback")
@@ -209,13 +229,18 @@ def execute_step(
     elif action == "scroll":
         direction = step.get("direction", "down")
         amount = step.get("amount", 300)
-        delta = amount if direction == "down" else -amount
-        logger.info(f"  Scrolling {direction} by {amount}px")
+        duration_ms = step.get("duration_ms", 1000)
+        sign = 1 if direction == "down" else -1
+        logger.info(f"  Scrolling {direction} by {amount}px over {duration_ms}ms")
         if frame_recorder:
-            frame_recorder.capture_frame()  # Before scroll
-        page.mouse.wheel(0, delta)
-        if frame_recorder:
-            wait_with_frames(300)  # Capture smooth scroll
+            # Smooth scroll: small increments over duration
+            steps_count = max(1, duration_ms // 33)  # ~30fps increments
+            px_per_step = amount / steps_count
+            for _ in range(steps_count):
+                page.mouse.wheel(0, sign * px_per_step)
+                frame_recorder.capture_for_duration(33)
+        else:
+            page.mouse.wheel(0, sign * amount)
 
     else:
         logger.warning(f"  Unknown action: {action}")
@@ -544,11 +569,14 @@ def record_scene(
         else:
             logger.info("  No audio for this scene")
 
+        # Track starting frame count for pause_for_audio to compute video elapsed time
+        scene_frame_start = frame_recorder._frame_count if frame_recorder else 0
+
         for step in scene["steps"]:
             # Skip the first navigate if we already did it for frames mode
             if record_mode == "frames" and pre_nav_step is not None and step is pre_nav_step:
                 continue
-            execute_step(page, step, audio_duration, frame_recorder)
+            execute_step(page, step, audio_duration, frame_recorder, scene_frame_start)
 
         # Small buffer at end
         if frame_recorder:
