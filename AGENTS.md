@@ -97,7 +97,9 @@ Import from `../components/ui`. **Check here before building custom UI.**
 
 ## Pushing Changes
 
-**Prod URLs**: https://longhouse.ai (frontend) | https://api.longhouse.ai (API)
+**Prod instance**: https://david.longhouse.ai (frontend + API at `/api`)
+
+**Deployment architecture**: Control plane + marketing site run on Coolify (clifford). User instances (like `david.longhouse.ai`) are Docker containers on the `zerg` server, managed manually for now (control plane provisioning is WIP). Coolify does NOT auto-deploy user instances.
 
 ### Before Push
 ```bash
@@ -106,23 +108,30 @@ make test-e2e          # Core E2E + a11y - must pass 100%
 ```
 
 ### After Push
-Coolify auto-deploys `main`. **Always verify your deploy:**
+Push to main triggers `runtime-image.yml` which builds and publishes `ghcr.io/cipher982/longhouse-runtime:latest` to GHCR. **This does NOT auto-deploy.** You must manually update the instance:
+```bash
+ssh zerg 'docker pull ghcr.io/cipher982/longhouse-runtime:latest'
+ssh zerg 'docker stop longhouse-david && docker rm longhouse-david'
+# Recreate with same env vars, volume, network (see scripts or control-plane)
+```
+
+### Verify Deploy
 ```bash
 make verify-prod       # Full validation: API + browser (~80s)
 ```
-This waits for health, runs API checks (auth, LLM, voice, CRUD), then browser tests.
 
 ### If Something Breaks
 ```bash
-./scripts/get-coolify-logs.sh 1   # Check deploy logs
+ssh zerg 'docker logs longhouse-david --tail 50'
 ```
 
 ### Checklist for Agents
 1. ✅ `make test` passes locally
 2. ✅ `make test-e2e` passes locally
-3. ✅ Push to main
-4. ✅ Run `make verify-prod` (~80s)
-5. ✅ Report result to user
+3. ✅ Push to main (triggers GHCR image build)
+4. ✅ Pull + recreate container on zerg server
+5. ✅ Run `make verify-prod` (~80s)
+6. ✅ Report result to user
 
 ## apps/sauron - Scheduler (Folded In)
 
