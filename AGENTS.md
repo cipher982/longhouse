@@ -226,6 +226,6 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-05) [e2e] WebSocket stream events use envelope `type` (stream_start/chunk/end); topics may be `user:{id}`, so tests should rely on `data.thread_id` over topic.
 - (2026-02-05) [e2e] Commis tool card selectors are more stable when anchored on nested tool text than tool_call_id in CI; E2E lint now has no waitForTimeout/networkidle allowlist.
 - (2026-02-06) [e2e] Removed permanently skipped placeholder/dev-only E2E specs; perf/visual suites now gated by RUN_PERF/RUN_VISUAL; track future coverage in TODO instead.
-- (2026-02-06) [arch] Mode system centralized: `AppMode` enum (dev/demo/production) in backend config, `modeConfig.ts` on frontend. `marketingOnly` concept deleted. All mode decisions in one lookup table.
+- (2026-02-06) [arch] Mode system: backend has `AppMode` enum (dev/demo/production) derived from `DEMO_MODE`/`AUTH_DISABLED` env vars. Frontend uses `config.demoMode` / `config.authEnabled` directly — no separate modeConfig file. `marketingOnly` concept deleted.
 - (2026-02-06) [arch] Backend serves dynamic `GET /config.js` with `window.__APP_MODE__`; static `public/config.js` deleted. HTML injection (`_maybe_inject_demo_flag`) removed.
-- (2026-02-06) [arch] Root "/" now serves LandingPage in all modes; redirect to /timeline only in production when authenticated (via `modeConfig.landingRedirectsWhenAuthed`).
+- (2026-02-06) [arch] Root "/" redirects to /timeline in all modes. Landing page lives at "/landing" (dev preview) or "/" in demo mode only. Don't put LandingPage at "/" for self-hosted/dev users.
