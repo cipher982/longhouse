@@ -20,9 +20,8 @@ voiceover:
 
 scenes:
   # Scene 1: Timeline Overview (voiceover ~12s)
-  # VO: "Longhouse gives you a unified timeline of every AI coding session
-  #      across Claude, Codex, and Gemini. See what each agent did, which
-  #      tools it used, and how long it took — all in one place."
+  # At 1920x1080 all 7 cards fit on screen — no scroll needed.
+  # Use hover effects on cards to draw the eye across the grid.
   - id: timeline-overview
     voiceover: |
       Longhouse gives you a unified timeline of every AI coding session across Claude, Codex, and Gemini.
@@ -31,29 +30,36 @@ scenes:
       - action: navigate
         url: /timeline?effects=off&clock=frozen
         wait_for: '[data-ready="true"]'
-      # Let the viewer absorb the full timeline (0-3s)
+      # Let the viewer absorb the full timeline (0-2.5s)
       - action: pause
-        duration_ms: 3000
-      # Slow scroll down to reveal second row of cards (3-5s)
-      - action: scroll
-        direction: "down"
-        amount: 350
-        duration_ms: 2000
-      # Hold on the lower cards (5-8s)
+        duration_ms: 2500
+      # Hover first card — cursor pagination session (2.5s, triggers lift + glow)
+      - action: hover
+        selector: '.session-card:has-text("feat/cursor-pagination")'
       - action: pause
-        duration_ms: 3000
-      # Scroll back up to show the full view (8-10s)
-      - action: scroll
-        direction: "up"
-        amount: 350
-        duration_ms: 2000
-      # Hold until voiceover ends (10-12.6s)
+        duration_ms: 1500
+      # Hover second card — FTS5 session (4s)
+      - action: hover
+        selector: '.session-card:has-text("feat/fts5-search")'
+      - action: pause
+        duration_ms: 1500
+      # Hover third card — onboarding branch (5.5s)
+      - action: hover
+        selector: '.session-card:has-text("feature/onboarding")'
+      - action: pause
+        duration_ms: 1500
+      # Hover a Claude session (7s)
+      - action: hover
+        selector: '.session-card:has-text("claude")'
+      - action: pause
+        duration_ms: 1500
+      # Move away — let all cards settle back (8.5s)
+      - action: hover
+        selector: '.sessions-search-input'
+      # Hold until voiceover ends (8.5-12.6s)
       - action: pause_for_audio
 
   # Scene 2: Search (voiceover ~11s)
-  # VO: "Full-text search finds any session instantly. Type a keyword and
-  #      Longhouse searches across every message, tool call, and output —
-  #      with highlighted snippets showing exactly where it matched."
   - id: timeline-search
     voiceover: |
       Full-text search finds any session instantly. Type a keyword and Longhouse searches
@@ -82,9 +88,6 @@ scenes:
       - action: pause_for_audio
 
   # Scene 3: Session Detail (voiceover ~11s)
-  # VO: "Click into any session to see the full conversation. Every message,
-  #      every tool call, every file read and edit — with expandable details
-  #      so you can trace exactly what happened."
   - id: session-detail
     voiceover: |
       Click into any session to see the full conversation. Every message, every tool call,
@@ -120,9 +123,6 @@ scenes:
       - action: pause_for_audio
 
   # Scene 4: Install CTA (voiceover ~11s)
-  # VO: "Get started in one command. Longhouse is fully self-hosted — your
-  #      data never leaves your machine. Install now and start tracking your
-  #      AI sessions in under a minute."
   - id: install-cta
     voiceover: |
       Get started in one command. Longhouse is fully self-hosted — your data never leaves your machine.
