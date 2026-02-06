@@ -230,17 +230,64 @@ def execute_step(
         direction = step.get("direction", "down")
         amount = step.get("amount", 300)
         duration_ms = step.get("duration_ms", 1000)
+        target_selector = step.get("selector")
         sign = 1 if direction == "down" else -1
         logger.info(f"  Scrolling {direction} by {amount}px over {duration_ms}ms")
+        if target_selector:
+            logger.info(f"  Scroll target: {target_selector}")
+        else:
+            logger.info("  Scroll target: auto")
+
+        page.evaluate(
+            """(selector) => {
+                const pickScrollable = () => {
+                    const preferred = document.querySelector('.page-shell');
+                    if (preferred && preferred.scrollHeight > preferred.clientHeight) {
+                        return preferred;
+                    }
+                    const nodes = Array.from(document.querySelectorAll('*'));
+                    for (const el of nodes) {
+                        const style = getComputedStyle(el);
+                        if ((style.overflowY === 'auto' || style.overflowY === 'scroll')
+                            && el.scrollHeight > el.clientHeight) {
+                            return el;
+                        }
+                    }
+                    return document.scrollingElement || document.documentElement;
+                };
+                const explicit = selector ? document.querySelector(selector) : null;
+                window.__demoScrollTarget = explicit || pickScrollable();
+            }""",
+            target_selector,
+        )
         if frame_recorder:
-            # Smooth scroll: small increments over duration
+            # Smooth scroll: small JS increments over duration (mouse.wheel is unreliable headless)
             steps_count = max(1, duration_ms // 33)  # ~30fps increments
             px_per_step = amount / steps_count
             for _ in range(steps_count):
-                page.mouse.wheel(0, sign * px_per_step)
+                page.evaluate(
+                    """(dy) => {
+                        const el = window.__demoScrollTarget || document.scrollingElement || document.documentElement;
+                        if (el) el.scrollBy(0, dy);
+                    }""",
+                    sign * px_per_step,
+                )
                 frame_recorder.capture_for_duration(33)
         else:
-            page.mouse.wheel(0, sign * amount)
+            page.evaluate(
+                """(dy) => {
+                    const el = window.__demoScrollTarget || document.scrollingElement || document.documentElement;
+                    if (el) el.scrollBy(0, dy);
+                }""",
+                sign * amount,
+            )
+
+    elif action == "hover":
+        selector = step["selector"]
+        logger.info(f"  Hovering: {selector}")
+        page.hover(selector)
+        if frame_recorder:
+            wait_with_frames(100)
 
     else:
         logger.warning(f"  Unknown action: {action}")
