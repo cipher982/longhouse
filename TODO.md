@@ -51,6 +51,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 - E2E cleanup: removed dev-only + unimplemented feature specs (session picker/event bus, commis reconnect, scheduling, triggers).
 - E2E: perf/visual specs now gated via RUN_PERF/RUN_VISUAL; `make test-perf` sets RUN_PERF.
 - E2E: search filter test now asserts search input presence (no silent skip).
+- E2E: chat token streaming no longer skips on missing new-thread button (asserts presence).
 
 ### 📝 SESSION CHANGES (2026-02-05)
 - Hero: Removed Sign In + login modal, restructured to "Self-host Now" + "Hosted Beta →" + friction reducers

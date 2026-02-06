@@ -228,12 +228,7 @@ test.describe('Chat Token Streaming Tests', () => {
 
     // Create and switch to Thread B while streaming is active
     const newThreadBtn = page.locator('[data-testid="new-thread-btn"]');
-    if (await newThreadBtn.count() === 0) {
-      console.log('⚠️  New thread button not found - skipping test');
-      test.skip();
-      return;
-    }
-
+    await expect(newThreadBtn).toBeVisible({ timeout: 5000 });
     await newThreadBtn.click();
     await page.waitForURL((url) => url.pathname.includes('/thread/') && !url.pathname.includes(`/thread/${threadAId}`), {
       timeout: 15000,
@@ -301,12 +296,7 @@ test.describe('Chat Token Streaming Tests', () => {
 
     // Create new thread (navigate away from streaming thread)
     const newThreadBtn = page.locator('[data-testid="new-thread-btn"]');
-    if (await newThreadBtn.count() === 0) {
-      console.log('⚠️  New thread button not found - skipping test');
-      test.skip();
-      return;
-    }
-
+    await expect(newThreadBtn).toBeVisible({ timeout: 5000 });
     await newThreadBtn.click();
     await page.waitForURL((url) => url.pathname.includes('/thread/') && !url.pathname.includes(`/thread/${threadId}`), {
       timeout: 15000,
