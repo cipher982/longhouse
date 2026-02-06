@@ -7,7 +7,6 @@ import { AuthProvider } from "./lib/auth";
 import { ConfirmProvider } from "./components/confirm";
 import { SessionPickerProvider } from "./components/SessionPickerProvider";
 import config from "./lib/config";
-import { modeConfig } from "./lib/modeConfig";
 
 // Global stylesheet entrypoint
 import "./styles/app.css";
@@ -32,7 +31,7 @@ if (!isLocalhost && umamiWebsiteId) {
 }
 
 // Global error beacon - captures JS errors from all users (including anonymous)
-if (modeConfig.mode !== 'demo') {
+if (!config.demoMode) {
   window.onerror = (msg, src, line, col, err) => {
     fetch("/api/ops/beacon", {
       method: "POST",

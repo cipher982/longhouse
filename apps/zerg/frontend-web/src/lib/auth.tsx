@@ -2,7 +2,6 @@ import React, { createContext, useContext, useEffect, useState, type ReactNode }
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 import config from './config';
-import { modeConfig } from './modeConfig';
 import { useServiceHealth, isServiceUnavailable } from './useServiceHealth';
 import { ServiceUnavailable } from '../components/ServiceUnavailable';
 
@@ -114,7 +113,8 @@ interface AuthProviderProps {
 }
 
 export function AuthProvider({ children }: AuthProviderProps) {
-  if (modeConfig.authBehavior === 'disabled') {
+  // Dev mode: auth disabled, no user
+  if (!config.authEnabled) {
     const value: AuthContextType = {
       user: null,
       isAuthenticated: false,
@@ -127,7 +127,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
   }
 
-  if (modeConfig.authBehavior === 'synthetic') {
+  // Demo mode: synthetic user, no real auth
+  if (config.demoMode) {
     const value: AuthContextType = {
       user: {
         id: 0,
@@ -579,7 +580,7 @@ export function AuthGuard({ children, clientId }: AuthGuardProps) {
   const { status: serviceStatus, retryCount, retry } = useServiceHealth();
 
   // Skip auth guard if authentication is not real (dev/demo modes)
-  if (modeConfig.authBehavior !== 'real') {
+  if (!config.authEnabled || config.demoMode) {
     return <>{children}</>;
   }
 
