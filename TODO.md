@@ -46,6 +46,9 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 ### 🐛 CRITICAL BUG
 - Control plane `accept-token`: `sub=email` in token payload vs `sub=numeric_user_id` expected by instance auth → hosted login will fail
 
+### 📝 SESSION CHANGES (2026-02-06)
+- E2E cleanup: removed 13 permanently skipped placeholder specs (obsolete auth/WS/perf/style/multi-user/data persistence).
+
 ### 📝 SESSION CHANGES (2026-02-05)
 - Hero: Removed Sign In + login modal, restructured to "Self-host Now" + "Hosted Beta →" + friction reducers
 - New: `DeploymentOptions.tsx` three-card section (Self-hosted / Hosted Beta / Enterprise)
@@ -872,10 +875,10 @@ Scope: SQLite-only, timeline-first product with dual-path positioning (self-host
 2) Installer + CLI onboarding flows lack robust automated tests across OS targets.
 3) Demo DB pipeline is new; no automated validation that demo DB builds and UI uses it.
 4) E2E commis/session-continuity failures (timeouts) -> core suite stability risk.
-5) Many E2E suites are skipped (LLM streaming, websocket, perf, visual, auth flows).
+5) Remaining E2E skips are perf/visual/dev-only suites; placeholder auth/WS protocol specs removed and tracked in TODO instead of skipped tests.
 6) Shipper end-to-end is opt-in and skipped by default; no required CI gate.
 7) Runner and commis execution lack full integration tests with real WebSocket channel.
-8) Real-time events (SSE/WS) tests are disabled due to flakiness.
+8) Real-time events (SSE/WS) core coverage is enabled; advanced WS protocol/queue tests are deferred until backend ack support exists.
 9) No formal OS matrix for OSS install (macOS/Linux/WSL).
 10) OSS user QA script exists (`scripts/qa-oss.sh`), but CI wiring is still pending.
 11) ✅ FIXED: Timeline search E2E is now part of `test-e2e-core` gating.
