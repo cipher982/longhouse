@@ -20,8 +20,8 @@ const steps: Step[] = [
   {
     icon: <DownloadIcon width={32} height={32} />,
     number: "1",
-    title: "Choose a path",
-    description: "Hosted beta or self-host in minutes. Claude Code syncs today; Codex/Cursor/Gemini are in progress."
+    title: "Install",
+    description: "Self-host in under 2 minutes, or sign up for hosted beta. Claude Code syncs today; Codex/Cursor/Gemini in progress."
   },
   {
     icon: <SearchIcon width={32} height={32} />,

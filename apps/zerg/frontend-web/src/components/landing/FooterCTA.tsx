@@ -19,7 +19,7 @@ export function FooterCTA() {
             Hosted or self-hosted — never lose an AI session again.
           </blockquote>
           <Button variant="primary" size="lg" className="landing-cta-main" onClick={handleStartFree}>
-            Choose Your Path
+            See Pricing
           </Button>
         </div>
 
