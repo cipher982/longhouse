@@ -6,8 +6,8 @@ test.describe('Fiche search & filtering', () => {
     // Ensure at least one fiche exists
     await page.locator('[data-testid="create-fiche-btn"]').click();
 
-    const search = page.locator('[data-testid="dashboard-search-input"], input[placeholder="Search fiches"]');
-    if ((await search.count()) === 0) test.skip();
+    const search = page.locator('[data-testid="dashboard-search-input"], input[placeholder="Search fiches"]').first();
+    await expect(search).toBeVisible({ timeout: 10000 });
 
     await search.fill('NonExistingXYZ');
     await page.keyboard.press('Enter');
