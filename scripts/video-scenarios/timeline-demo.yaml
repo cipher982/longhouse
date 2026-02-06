@@ -5,6 +5,9 @@
 #   - Server running with demo data: longhouse serve --demo-fresh
 #   - Audio generated: make video-audio SCENARIO=timeline-demo
 #
+# Timing: voiceover starts at second 0 of each scene. Actions should be
+# spread across the full voiceover duration so the viewer always sees motion.
+#
 # Usage:
 #   make video-all SCENARIO=timeline-demo
 
@@ -16,7 +19,10 @@ voiceover:
   model: "gpt-4o-mini-tts"
 
 scenes:
-  # Scene 1: Timeline Overview — Show session cards across providers
+  # Scene 1: Timeline Overview (voiceover ~12s)
+  # VO: "Longhouse gives you a unified timeline of every AI coding session
+  #      across Claude, Codex, and Gemini. See what each agent did, which
+  #      tools it used, and how long it took — all in one place."
   - id: timeline-overview
     voiceover: |
       Longhouse gives you a unified timeline of every AI coding session across Claude, Codex, and Gemini.
@@ -25,21 +31,29 @@ scenes:
       - action: navigate
         url: /timeline?effects=off&clock=frozen
         wait_for: '[data-ready="true"]'
+      # Let the viewer absorb the full timeline (0-3s)
       - action: pause
-        duration_ms: 1500
+        duration_ms: 3000
+      # Slow scroll down to reveal second row of cards (3-5s)
       - action: scroll
         direction: "down"
-        amount: 300
+        amount: 350
+        duration_ms: 2000
+      # Hold on the lower cards (5-8s)
       - action: pause
-        duration_ms: 1000
+        duration_ms: 3000
+      # Scroll back up to show the full view (8-10s)
       - action: scroll
         direction: "up"
-        amount: 300
-      - action: pause
-        duration_ms: 500
+        amount: 350
+        duration_ms: 2000
+      # Hold until voiceover ends (10-12.6s)
       - action: pause_for_audio
 
-  # Scene 2: Search — Type a query and show FTS5 results with highlights
+  # Scene 2: Search (voiceover ~11s)
+  # VO: "Full-text search finds any session instantly. Type a keyword and
+  #      Longhouse searches across every message, tool call, and output —
+  #      with highlighted snippets showing exactly where it matched."
   - id: timeline-search
     voiceover: |
       Full-text search finds any session instantly. Type a keyword and Longhouse searches
@@ -48,21 +62,29 @@ scenes:
       - action: navigate
         url: /timeline?effects=off&clock=frozen
         wait_for: '.sessions-search-input'
+      # Let viewer see the full timeline first (0-2s)
       - action: pause
-        duration_ms: 800
+        duration_ms: 2000
+      # Click into search bar (2s)
       - action: click
         selector: '.sessions-search-input'
       - action: pause
-        duration_ms: 400
+        duration_ms: 500
+      # Type query slowly — one char at a time during "Type a keyword" (2.5-5s)
       - action: type
         selector: '.sessions-search-input'
         text: "health endpoint"
-        delay_ms: 60
+        delay_ms: 80
+      # Let search results settle and display (5-8s)
       - action: pause
-        duration_ms: 2000
+        duration_ms: 3000
+      # Hold on results until voiceover ends (8-11.6s)
       - action: pause_for_audio
 
-  # Scene 3: Session Detail — Click into a session, show event timeline with tool calls
+  # Scene 3: Session Detail (voiceover ~11s)
+  # VO: "Click into any session to see the full conversation. Every message,
+  #      every tool call, every file read and edit — with expandable details
+  #      so you can trace exactly what happened."
   - id: session-detail
     voiceover: |
       Click into any session to see the full conversation. Every message, every tool call,
@@ -71,27 +93,36 @@ scenes:
       - action: navigate
         url: /timeline?effects=off&clock=frozen
         wait_for: '.session-card'
+      # Brief pause to orient viewer (0-1.5s)
       - action: pause
-        duration_ms: 800
+        duration_ms: 1500
+      # Click into first session card (1.5s)
       - action: click
         selector: '.session-card'
       - action: wait
         selector: '.timeline-events'
         timeout_ms: 10000
+      # Let viewer absorb the session detail view (2-4.5s)
       - action: pause
-        duration_ms: 1500
+        duration_ms: 2500
+      # Expand a tool call to show details (4.5s)
       - action: click
         selector: '.event-tool-header'
+      # Let expanded tool details settle (4.5-7s)
       - action: pause
-        duration_ms: 1500
+        duration_ms: 2500
+      # Scroll down through more events (7-9s)
       - action: scroll
         direction: "down"
         amount: 400
-      - action: pause
-        duration_ms: 1000
+        duration_ms: 2000
+      # Hold until voiceover ends (9-11.8s)
       - action: pause_for_audio
 
-  # Scene 4: Install CTA — Landing page with install command
+  # Scene 4: Install CTA (voiceover ~11s)
+  # VO: "Get started in one command. Longhouse is fully self-hosted — your
+  #      data never leaves your machine. Install now and start tracking your
+  #      AI sessions in under a minute."
   - id: install-cta
     voiceover: |
       Get started in one command. Longhouse is fully self-hosted — your data never leaves your machine.
@@ -100,13 +131,18 @@ scenes:
       - action: navigate
         url: /landing?noredirect=1&fx=off
         wait_for: '.install-section'
+      # Show hero section first (0-3s)
       - action: pause
-        duration_ms: 1000
+        duration_ms: 3000
+      # Scroll to install section (3-5s)
       - action: scroll
         direction: "down"
-        amount: 400
+        amount: 300
+        duration_ms: 2000
+      # Hold on install command (5-9s)
       - action: pause
-        duration_ms: 1500
+        duration_ms: 4000
+      # Hold until voiceover ends + final buffer (9-13s)
       - action: pause_for_audio
       - action: pause
-        duration_ms: 2000
+        duration_ms: 1500
