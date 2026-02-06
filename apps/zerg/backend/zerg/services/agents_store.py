@@ -99,6 +99,15 @@ class AgentsStore:
         except Exception:
             return False
 
+    def rebuild_fts(self) -> None:
+        """Rebuild the FTS5 index when available (SQLite only)."""
+        if not self._fts_available():
+            return
+        try:
+            self.db.execute(text("INSERT INTO events_fts(events_fts) VALUES('rebuild')"))
+        except Exception as exc:
+            logger.warning("FTS5 rebuild failed: %s", exc)
+
     def _fts_query(self, raw: str) -> str:
         """Normalize raw text into a safe FTS query."""
         cleaned = (raw or "").replace('"', '""').strip()

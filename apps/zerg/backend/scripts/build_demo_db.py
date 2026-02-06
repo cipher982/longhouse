@@ -20,6 +20,7 @@ from sqlalchemy.orm import sessionmaker
 
 from zerg.crud import crud
 from zerg.database import Base
+from zerg.database import _ensure_agents_fts
 from zerg.database import make_engine
 from zerg.models.agents import AgentsBase
 from zerg.models.models import User
@@ -92,10 +93,14 @@ def main() -> int:
                 clean=True,  # Demo DB is built fresh, so clean is OK
             )
 
+        # Create FTS5 virtual table + triggers before inserting events
+        _ensure_agents_fts(engine)
+
         # Seed demo agent sessions (AI session timeline)
         store = AgentsStore(db)
         for session in build_demo_agent_sessions():
             store.ingest_session(session)
+        db.commit()
 
         print(f"Demo DB created: {output_path}")
     except ScenarioError as exc:
