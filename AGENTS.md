@@ -225,4 +225,4 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-05) [e2e] E2E forces `gpt-scripted` for new fiches; ScriptedChatLLM streams tokens to exercise chat streaming UI.
 - (2026-02-05) [e2e] WebSocket stream events use envelope `type` (stream_start/chunk/end); topics may be `user:{id}`, so tests should rely on `data.thread_id` over topic.
 - (2026-02-05) [e2e] Commis tool card selectors are more stable when anchored on nested tool text than tool_call_id in CI; E2E lint now has no waitForTimeout/networkidle allowlist.
-- (2026-02-06) [e2e] Removed permanently skipped placeholder E2E specs (auth/WS/perf/style/etc.) to keep CI signal honest; track future coverage in TODO instead.
+- (2026-02-06) [e2e] Removed permanently skipped placeholder/dev-only E2E specs; perf/visual suites now gated by RUN_PERF/RUN_VISUAL; track future coverage in TODO instead.

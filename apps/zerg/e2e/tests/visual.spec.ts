@@ -3,15 +3,18 @@ import fs from 'fs';
 import pixelmatch from 'pixelmatch';
 import { PNG } from 'pngjs';
 
-// Skip: Visual regression tests require baseline images that may not exist
-test.skip();
+const shouldRun = process.env.RUN_VISUAL === '1' || process.env.RUN_VISUAL === 'true';
+test.skip(!shouldRun, 'Set RUN_VISUAL=1 to run visual regression tests');
 
 const routes = ['/'];
 
 routes.forEach((route) => {
   test(`visual regression – ${route}`, async ({ page }, testInfo) => {
-    await page.goto(route);
-    await page.waitForLoadState('networkidle');
+    await page.goto(route, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => {
+      const root = document.querySelector('#root');
+      return !!root && root.children.length > 0;
+    });
 
     const screenshot = await page.screenshot({ fullPage: true });
     const dir = 'visual-baseline';

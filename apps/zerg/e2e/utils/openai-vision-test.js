@@ -256,7 +256,7 @@ async function main() {
     }
   } else {
     console.log("⚠️  visual-baseline directory not found");
-    console.log("   Run visual tests first: npm test visual.spec.ts");
+    console.log("   Run visual tests first: RUN_VISUAL=1 make test-e2e-single TEST=tests/visual.spec.ts");
   }
 
   console.log("\n✅ Vision API test complete!");

@@ -48,6 +48,8 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ### 📝 SESSION CHANGES (2026-02-06)
 - E2E cleanup: removed 13 permanently skipped placeholder specs (obsolete auth/WS/perf/style/multi-user/data persistence).
+- E2E cleanup: removed dev-only + unimplemented feature specs (session picker/event bus, commis reconnect, scheduling, triggers).
+- E2E: perf/visual specs now gated via RUN_PERF/RUN_VISUAL; `make test-perf` sets RUN_PERF.
 
 ### 📝 SESSION CHANGES (2026-02-05)
 - Hero: Removed Sign In + login modal, restructured to "Self-host Now" + "Hosted Beta →" + friction reducers
@@ -875,7 +877,7 @@ Scope: SQLite-only, timeline-first product with dual-path positioning (self-host
 2) Installer + CLI onboarding flows lack robust automated tests across OS targets.
 3) Demo DB pipeline is new; no automated validation that demo DB builds and UI uses it.
 4) E2E commis/session-continuity failures (timeouts) -> core suite stability risk.
-5) Remaining E2E skips are perf/visual/dev-only suites; placeholder auth/WS protocol specs removed and tracked in TODO instead of skipped tests.
+5) Remaining E2E skips are perf/visual suites only; dev-only/event-bus + unimplemented-feature specs removed and tracked in TODO instead.
 6) Shipper end-to-end is opt-in and skipped by default; no required CI gate.
 7) Runner and commis execution lack full integration tests with real WebSocket channel.
 8) Real-time events (SSE/WS) core coverage is enabled; advanced WS protocol/queue tests are deferred until backend ack support exists.
@@ -884,6 +886,7 @@ Scope: SQLite-only, timeline-first product with dual-path positioning (self-host
 11) ✅ FIXED: Timeline search E2E is now part of `test-e2e-core` gating.
 12) ✅ FIXED: Oikos session discovery tools now have unit coverage.
 13) ✅ FIXED: FTS trigger integrity tests cover update/delete index consistency.
+14) Scheduling/trigger management UI remains unimplemented; E2E specs removed until product work lands.
 
 ### Virtual QA Team (Agent Roles)
 Use commis/runners + hatch agents to form a lightweight QA org that runs locally or in CI.
