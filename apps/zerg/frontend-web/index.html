@@ -36,11 +36,8 @@
       content="Your own super-Siri for email, health, chats, and home. Link all your apps into one AI that quietly handles the annoying stuff."
     />
     <meta name="twitter:image" content="/og-image.png" />
-    <!--
-      Runtime config must NOT be cached long-term.
-      Version query busts any previously cached immutable /config.js.
-    -->
-    <script src="/config.js?v=2025-12-13-1"></script>
+    <!-- Runtime config served dynamically by backend (Cache-Control: no-cache) -->
+    <script src="/config.js"></script>
     <script defer src="/funnel.js"></script>
   </head>
   <body>

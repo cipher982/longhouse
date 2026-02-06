@@ -799,13 +799,31 @@ except ImportError:  # pragma: no cover – should not happen
 # Note: logger is now defined earlier for lifespan handler usage
 
 
-def _maybe_inject_demo_flag(html_bytes: bytes) -> bytes:
-    """Inject ``window.__LONGHOUSE_DEMO__=true`` into index.html when demo_mode is on."""
-    if not _settings.demo_mode:
-        return html_bytes
-    tag = b"<script>window.__LONGHOUSE_DEMO__=true</script>"
-    # Insert before </head> for earliest execution
-    return html_bytes.replace(b"</head>", tag + b"</head>", 1)
+# Dynamic /config.js — replaces static public/config.js with runtime values
+@app.get("/config.js", include_in_schema=False)
+async def serve_config_js():
+    """Serve runtime configuration as JavaScript for the frontend."""
+    from fastapi.responses import Response
+
+    ws_scheme = "wss" if (_settings.public_site_url or "").startswith("https") else "ws"
+    ws_host = ""
+    if _settings.public_site_url:
+        from urllib.parse import urlparse as _urlparse
+
+        parsed = _urlparse(_settings.public_site_url)
+        ws_host = f"{ws_scheme}://{parsed.netloc}"
+
+    js = (
+        f'window.API_BASE_URL="/api";\n'
+        f'window.WS_BASE_URL="{ws_host or ""}";\n'
+        f'window.__APP_MODE__="{_settings.app_mode.value}";\n'
+        f'window.__GOOGLE_CLIENT_ID__="{_settings.google_client_id or ""}";\n'
+    )
+    return Response(
+        content=js,
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
 
 
 # Root endpoint (API info when frontend not bundled, or HTML when it is)
@@ -813,12 +831,11 @@ def _maybe_inject_demo_flag(html_bytes: bytes) -> bytes:
 async def read_root():
     """Serve frontend index.html or API info message."""
     if FRONTEND_DIST_DIR is not None:
-        from fastapi.responses import HTMLResponse
+        from fastapi.responses import FileResponse
 
         index_path = FRONTEND_DIST_DIR / "index.html"
         if index_path.is_file():
-            raw = index_path.read_bytes()
-            return HTMLResponse(content=_maybe_inject_demo_flag(raw))
+            return FileResponse(index_path, media_type="text/html")
 
     return {"message": "Longhouse API is running"}
 
@@ -986,14 +1003,12 @@ if FRONTEND_DIST_DIR is not None:
     async def serve_spa(path: str):
         """Serve the SPA index.html for client-side routing."""
         from fastapi.responses import FileResponse
-        from fastapi.responses import HTMLResponse
         from fastapi.responses import RedirectResponse
 
-        def _serve_index() -> HTMLResponse | RedirectResponse:
+        def _serve_index() -> FileResponse | RedirectResponse:
             index_path = _frontend_dist_resolved / "index.html"
             if index_path.is_file():
-                raw = index_path.read_bytes()
-                return HTMLResponse(content=_maybe_inject_demo_flag(raw))
+                return FileResponse(index_path, media_type="text/html")
             return RedirectResponse(url="/")
 
         # SECURITY: Reject paths with traversal attempts

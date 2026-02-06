@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState, type ReactNode }
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 import config from './config';
+import { modeConfig } from './modeConfig';
 import { useServiceHealth, isServiceUnavailable } from './useServiceHealth';
 import { ServiceUnavailable } from '../components/ServiceUnavailable';
 
@@ -113,7 +114,7 @@ interface AuthProviderProps {
 }
 
 export function AuthProvider({ children }: AuthProviderProps) {
-  if (config.marketingOnly) {
+  if (modeConfig.authBehavior === 'disabled') {
     const value: AuthContextType = {
       user: null,
       isAuthenticated: false,
@@ -126,8 +127,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
   }
 
-  // Demo mode: synthetic authenticated user (read-only, no real auth)
-  if (config.demoMode) {
+  if (modeConfig.authBehavior === 'synthetic') {
     const value: AuthContextType = {
       user: {
         id: 0,
@@ -397,7 +397,15 @@ interface LoginOverlayProps {
 }
 
 export function LoginOverlay({ clientId }: LoginOverlayProps) {
+  const [authMethods, setAuthMethods] = useState<AuthMethods | null>(null);
+  const [password, setPassword] = useState('');
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [isPasswordLoading, setIsPasswordLoading] = useState(false);
   const [isDevLoginLoading, setIsDevLoginLoading] = useState(false);
+
+  useEffect(() => {
+    getAuthMethods().then(setAuthMethods);
+  }, []);
 
   const handleLoginSuccess = () => {
     // The AuthProvider will handle updating the authentication state
@@ -407,11 +415,29 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
     toast.error(error);
   };
 
+  const handlePasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!password.trim()) return;
+    setIsPasswordLoading(true);
+    setPasswordError(null);
+    try {
+      const result = await loginWithPassword(password);
+      if (result.ok) {
+        window.location.reload();
+      } else {
+        setPasswordError(result.error || 'Invalid password');
+      }
+    } catch {
+      setPasswordError('Login failed. Please try again.');
+    } finally {
+      setIsPasswordLoading(false);
+    }
+  };
+
   const handleDevLogin = async () => {
     setIsDevLoginLoading(true);
     try {
       await loginWithDevAccount();
-      // Cookie is set by server; reload to trigger auth state update
       window.location.reload();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Dev login failed');
@@ -419,6 +445,9 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
       setIsDevLoginLoading(false);
     }
   };
+
+  const showGoogle = authMethods?.google ?? false;
+  const showPassword = authMethods?.password ?? false;
 
   return (
     <div
@@ -443,14 +472,75 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
           borderRadius: '8px',
           boxShadow: '0 4px 20px rgba(0, 0, 0, 0.1)',
           textAlign: 'center',
+          minWidth: '320px',
         }}
       >
-        <h2 style={{ marginBottom: '1rem', color: '#333' }}>Sign in to Zerg</h2>
-        <GoogleSignInButton
-          clientId={clientId}
-          onSuccess={handleLoginSuccess}
-          onError={handleLoginError}
-        />
+        <h2 style={{ marginBottom: '1rem', color: '#333' }}>Sign in to Longhouse</h2>
+
+        {!authMethods && (
+          <div style={{ color: '#666', padding: '1rem 0' }}>Loading...</div>
+        )}
+
+        {showPassword && (
+          <form onSubmit={handlePasswordSubmit} style={{ marginBottom: showGoogle ? '0' : '0' }}>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => { setPassword(e.target.value); setPasswordError(null); }}
+              placeholder="Enter password"
+              autoFocus
+              style={{
+                width: '100%',
+                padding: '0.75rem',
+                border: `1px solid ${passwordError ? '#ef4444' : '#d1d5db'}`,
+                borderRadius: '4px',
+                fontSize: '14px',
+                boxSizing: 'border-box',
+                marginBottom: '0.5rem',
+              }}
+            />
+            {passwordError && (
+              <div style={{ color: '#ef4444', fontSize: '13px', marginBottom: '0.5rem', textAlign: 'left' }}>
+                {passwordError}
+              </div>
+            )}
+            <button
+              type="submit"
+              disabled={isPasswordLoading || !password.trim()}
+              style={{
+                width: '100%',
+                padding: '0.75rem',
+                background: '#2563eb',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                fontSize: '14px',
+                fontWeight: 600,
+                cursor: isPasswordLoading || !password.trim() ? 'not-allowed' : 'pointer',
+                opacity: isPasswordLoading || !password.trim() ? 0.6 : 1,
+              }}
+            >
+              {isPasswordLoading ? 'Signing in...' : 'Sign In'}
+            </button>
+          </form>
+        )}
+
+        {showPassword && showGoogle && (
+          <div style={{ margin: '1rem 0', color: '#999', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <div style={{ flex: 1, height: '1px', background: '#e5e7eb' }} />
+            <span>or</span>
+            <div style={{ flex: 1, height: '1px', background: '#e5e7eb' }} />
+          </div>
+        )}
+
+        {showGoogle && (
+          <GoogleSignInButton
+            clientId={clientId}
+            onSuccess={handleLoginSuccess}
+            onError={handleLoginError}
+          />
+        )}
+
         {config.isDevelopment && (
           <>
             <div style={{ margin: '1rem 0', color: '#666' }}>or</div>
@@ -488,8 +578,8 @@ export function AuthGuard({ children, clientId }: AuthGuardProps) {
   const { isAuthenticated, isLoading } = useAuth();
   const { status: serviceStatus, retryCount, retry } = useServiceHealth();
 
-  // Skip auth guard if authentication is disabled (for demos/tests)
-  if (!config.authEnabled) {
+  // Skip auth guard if authentication is not real (dev/demo modes)
+  if (modeConfig.authBehavior !== 'real') {
     return <>{children}</>;
   }
 
