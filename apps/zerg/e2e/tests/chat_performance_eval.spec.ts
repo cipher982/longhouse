@@ -22,8 +22,8 @@
 
 import { test, expect, type Page } from './fixtures';
 
-// Skip: Chat performance evaluation tests are expensive and not critical for CI
-test.skip();
+const shouldRun = process.env.RUN_PERF === '1' || process.env.RUN_PERF === 'true';
+test.skip(!shouldRun, 'Set RUN_PERF=1 to run performance evaluation tests');
 import type { APIRequestContext } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';

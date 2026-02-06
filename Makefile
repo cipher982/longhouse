@@ -341,7 +341,7 @@ qa-ui-full: ## Full UI regression sweep (a11y + desktop + mobile baselines)
 
 test-perf: ## Run performance evaluation tests (chat latency profiling)
 	@echo "🧪 Running performance evaluation tests..."
-	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/chat_performance_eval.spec.ts
+	cd apps/zerg/e2e && RUN_PERF=1 BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/chat_performance_eval.spec.ts
 	@echo "✅ Performance tests complete. Metrics exported to apps/zerg/e2e/metrics/"
 
 test-backend-docker: ## @internal Backend tests with Docker/testcontainers (local dev)
