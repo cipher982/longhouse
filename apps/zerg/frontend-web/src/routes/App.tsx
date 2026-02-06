@@ -20,6 +20,7 @@ import TraceExplorerPage from "../pages/TraceExplorerPage";
 import ReliabilityPage from "../pages/ReliabilityPage";
 import SessionsPage from "../pages/SessionsPage";
 import SessionDetailPage from "../pages/SessionDetailPage";
+import DemoBanner from "../components/DemoBanner";
 import { Spinner } from "../components/ui";
 import { AuthGuard } from "../lib/auth";
 
@@ -56,6 +57,18 @@ function AuthenticatedApp() {
   );
 }
 
+// Demo app wrapper — Layout with DemoBanner, no AuthGuard
+function DemoApp() {
+  return (
+    <ShelfProvider>
+      <DemoBanner />
+      <Layout>
+        <Outlet />
+      </Layout>
+    </ShelfProvider>
+  );
+}
+
 export default function App() {
   // Performance monitoring
   usePerformanceMonitoring('App');
@@ -68,7 +81,90 @@ export default function App() {
     }
   }, []);
 
-  const routes = useRoutes(config.marketingOnly ? [
+  const demoRoutes = [
+    // Marketing / public pages
+    {
+      path: "/",
+      element: (
+        <ErrorBoundary>
+          <LandingPage />
+        </ErrorBoundary>
+      )
+    },
+    {
+      path: "/pricing",
+      element: (
+        <ErrorBoundary>
+          <PricingPage />
+        </ErrorBoundary>
+      )
+    },
+    {
+      path: "/docs",
+      element: (
+        <ErrorBoundary>
+          <DocsPage />
+        </ErrorBoundary>
+      )
+    },
+    {
+      path: "/changelog",
+      element: (
+        <ErrorBoundary>
+          <ChangelogPage />
+        </ErrorBoundary>
+      )
+    },
+    {
+      path: "/privacy",
+      element: (
+        <ErrorBoundary>
+          <PrivacyPage />
+        </ErrorBoundary>
+      )
+    },
+    {
+      path: "/security",
+      element: (
+        <ErrorBoundary>
+          <SecurityPage />
+        </ErrorBoundary>
+      )
+    },
+    // Demo timeline — wrapped in Layout with DemoBanner, no AuthGuard
+    {
+      element: <DemoApp />,
+      children: [
+        {
+          path: "/timeline",
+          element: (
+            <ErrorBoundary>
+              <SessionsPage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/timeline/:sessionId",
+          element: (
+            <ErrorBoundary>
+              <SessionDetailPage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/demo",
+          element: <Navigate to="/timeline" replace />
+        },
+      ]
+    },
+    // Fallback: anything else -> landing
+    {
+      path: "*",
+      element: <Navigate to="/" replace />
+    },
+  ];
+
+  const marketingOnlyRoutes = [
     {
       path: "/",
       element: (
@@ -125,7 +221,9 @@ export default function App() {
         </ErrorBoundary>
       )
     },
-  ] : [
+  ];
+
+  const routes = useRoutes(config.demoMode ? demoRoutes : config.marketingOnly ? marketingOnlyRoutes : [
     // Root route: always redirect to timeline
     // AuthGuard will show login if unauthenticated
     // Marketing site uses marketingOnly=true (separate routes block above)

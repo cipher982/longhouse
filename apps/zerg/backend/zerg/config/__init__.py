@@ -48,6 +48,7 @@ class Settings:  # noqa: D401 – simple data container
     testing: bool
     auth_disabled: bool
     single_tenant: bool
+    demo_mode: bool
 
     # Secrets & IDs -----------------------------------------------------
     jwt_secret: str
@@ -381,10 +382,13 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
                 if value is not None:
                     os.environ[key] = value
 
+    demo_mode = _truthy(os.getenv("DEMO_MODE"))
+
     return Settings(
         testing=testing,
-        auth_disabled=_truthy(os.getenv("AUTH_DISABLED")) or testing,
+        auth_disabled=_truthy(os.getenv("AUTH_DISABLED")) or testing or demo_mode,
         single_tenant=_truthy(os.getenv("SINGLE_TENANT", "1")),
+        demo_mode=demo_mode,
         jwt_secret=os.getenv("JWT_SECRET", "dev-secret"),
         longhouse_password=os.getenv("LONGHOUSE_PASSWORD", ""),
         longhouse_password_hash=os.getenv("LONGHOUSE_PASSWORD_HASH", ""),
@@ -483,6 +487,16 @@ def _validate_required(settings: Settings) -> None:  # noqa: D401 – helper
         )
 
     if settings.testing:  # Unit-/integration tests run with stubbed LLMs
+        return
+
+    # Demo mode: read-only demo needs minimal config.
+    # Auto-generate a throwaway Fernet key and skip DATABASE_URL check
+    # (empty URL → SQLite, which is correct for demo).
+    if settings.demo_mode:
+        if not settings.fernet_secret:
+            from cryptography.fernet import Fernet
+
+            settings.fernet_secret = Fernet.generate_key().decode()
         return
 
     # Critical configuration validation - fail fast on missing required vars

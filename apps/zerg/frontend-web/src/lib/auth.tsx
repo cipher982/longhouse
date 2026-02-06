@@ -126,6 +126,29 @@ export function AuthProvider({ children }: AuthProviderProps) {
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
   }
 
+  // Demo mode: synthetic authenticated user (read-only, no real auth)
+  if (config.demoMode) {
+    const value: AuthContextType = {
+      user: {
+        id: 0,
+        email: 'demo@longhouse.ai',
+        display_name: 'Demo User',
+        avatar_url: null,
+        is_active: true,
+        created_at: new Date().toISOString(),
+        last_login: null,
+        role: 'USER',
+      },
+      isAuthenticated: true,
+      isLoading: false,
+      login: async () => ({ access_token: '', expires_in: 0 }),
+      logout: () => {},
+      getToken: () => null,
+    };
+
+    return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  }
+
   return <AuthProviderInner>{children}</AuthProviderInner>;
 }
 

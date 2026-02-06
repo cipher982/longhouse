@@ -391,6 +391,30 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"Auto-seed failed (non-fatal): {e}")
 
+        # Demo mode: auto-seed demo sessions if DB is empty
+        if _settings.demo_mode and not _settings.testing:
+            try:
+                from sqlalchemy import text
+
+                from zerg.database import get_session_factory
+                from zerg.services.agents_store import AgentsStore
+                from zerg.services.demo_sessions import build_demo_agent_sessions
+
+                session_factory = get_session_factory()
+                with session_factory() as db:
+                    row = db.execute(text("SELECT COUNT(*) FROM sessions")).scalar()
+                    if row == 0:
+                        demo_sessions = build_demo_agent_sessions()
+                        store = AgentsStore(db)
+                        for session in demo_sessions:
+                            store.ingest_session(session)
+                        db.commit()
+                        logger.info("Demo mode: seeded %d demo sessions", len(demo_sessions))
+                    else:
+                        logger.info("Demo mode: %d sessions already present, skipping seed", row)
+            except Exception as e:
+                logger.warning(f"Demo mode auto-seed failed (non-fatal): {e}")
+
         # Bootstrap jobs repository (creates /data/jobs/ with git versioning)
         # Non-fatal: dev mode may not have /data mounted
         if not _settings.testing:
@@ -694,6 +718,12 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
+# Demo mode: block all write operations on /api/* (read-only demo)
+if _settings.demo_mode:
+    from zerg.middleware.demo_guard import DemoGuardMiddleware
+
+    app.add_middleware(DemoGuardMiddleware)
+
 # Test-only commis DB routing (E2E isolation).
 app.add_middleware(TestCommisContextMiddleware)
 
@@ -769,16 +799,26 @@ except ImportError:  # pragma: no cover – should not happen
 # Note: logger is now defined earlier for lifespan handler usage
 
 
+def _maybe_inject_demo_flag(html_bytes: bytes) -> bytes:
+    """Inject ``window.__LONGHOUSE_DEMO__=true`` into index.html when demo_mode is on."""
+    if not _settings.demo_mode:
+        return html_bytes
+    tag = b"<script>window.__LONGHOUSE_DEMO__=true</script>"
+    # Insert before </head> for earliest execution
+    return html_bytes.replace(b"</head>", tag + b"</head>", 1)
+
+
 # Root endpoint (API info when frontend not bundled, or HTML when it is)
 @app.get("/", include_in_schema=False)
 async def read_root():
     """Serve frontend index.html or API info message."""
     if FRONTEND_DIST_DIR is not None:
-        from fastapi.responses import FileResponse
+        from fastapi.responses import HTMLResponse
 
         index_path = FRONTEND_DIST_DIR / "index.html"
         if index_path.is_file():
-            return FileResponse(index_path)
+            raw = index_path.read_bytes()
+            return HTMLResponse(content=_maybe_inject_demo_flag(raw))
 
     return {"message": "Longhouse API is running"}
 
@@ -946,14 +986,19 @@ if FRONTEND_DIST_DIR is not None:
     async def serve_spa(path: str):
         """Serve the SPA index.html for client-side routing."""
         from fastapi.responses import FileResponse
+        from fastapi.responses import HTMLResponse
         from fastapi.responses import RedirectResponse
+
+        def _serve_index() -> HTMLResponse | RedirectResponse:
+            index_path = _frontend_dist_resolved / "index.html"
+            if index_path.is_file():
+                raw = index_path.read_bytes()
+                return HTMLResponse(content=_maybe_inject_demo_flag(raw))
+            return RedirectResponse(url="/")
 
         # SECURITY: Reject paths with traversal attempts
         if ".." in path or path.startswith("/"):
-            index_path = _frontend_dist_resolved / "index.html"
-            if index_path.is_file():
-                return FileResponse(index_path)
-            return RedirectResponse(url="/")
+            return _serve_index()
 
         # Check for static files
         try:
@@ -964,10 +1009,6 @@ if FRONTEND_DIST_DIR is not None:
             pass
 
         # Serve index.html for SPA routing
-        index_path = _frontend_dist_resolved / "index.html"
-        if index_path.is_file():
-            return FileResponse(index_path)
-
-        return RedirectResponse(url="/")
+        return _serve_index()
 
     logger.info(f"Frontend catch-all route registered (FRONTEND_DIST_DIR={FRONTEND_DIST_DIR})")

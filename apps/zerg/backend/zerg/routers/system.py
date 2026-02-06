@@ -30,6 +30,7 @@ def system_info() -> Dict[str, Any]:
         "app_public_url": _settings.app_public_url,
         "public_site_url": _settings.public_site_url,
         "public_api_url": _settings.public_api_url,
+        "demo_mode": _settings.demo_mode,
     }
 
 
@@ -71,9 +72,9 @@ async def seed_demo_sessions() -> Dict[str, Any]:
     """Seed demo agent sessions for marketing/onboarding.
 
     Public endpoint (no auth) for dev/demo purposes.
-    Disabled in production.
+    Disabled in production unless demo_mode is enabled.
     """
-    if _settings.environment and _settings.environment.lower() == "production":
+    if _settings.environment and _settings.environment.lower() == "production" and not _settings.demo_mode:
         return {"error": "Demo seeding disabled in production"}
 
     from zerg.services.agents_store import AgentsStore
