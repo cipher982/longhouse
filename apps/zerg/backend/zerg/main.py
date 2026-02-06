@@ -822,7 +822,7 @@ async def serve_config_js():
     return Response(
         content=js,
         media_type="application/javascript",
-        headers={"Cache-Control": "no-cache, must-revalidate"},
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
     )
 
 
@@ -835,7 +835,11 @@ async def read_root():
 
         index_path = FRONTEND_DIST_DIR / "index.html"
         if index_path.is_file():
-            return FileResponse(index_path, media_type="text/html")
+            return FileResponse(
+                index_path,
+                media_type="text/html",
+                headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+            )
 
     return {"message": "Longhouse API is running"}
 
@@ -1008,7 +1012,11 @@ if FRONTEND_DIST_DIR is not None:
         def _serve_index() -> FileResponse | RedirectResponse:
             index_path = _frontend_dist_resolved / "index.html"
             if index_path.is_file():
-                return FileResponse(index_path, media_type="text/html")
+                return FileResponse(
+                    index_path,
+                    media_type="text/html",
+                    headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+                )
             return RedirectResponse(url="/")
 
         # SECURITY: Reject paths with traversal attempts
