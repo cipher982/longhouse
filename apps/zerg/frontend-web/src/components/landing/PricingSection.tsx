@@ -6,7 +6,6 @@
 
 import { useState } from "react";
 import config from "../../lib/config";
-import { modeConfig } from "../../lib/modeConfig";
 import { CheckCircleIcon } from "../icons";
 import { Button } from "../ui";
 
@@ -102,12 +101,10 @@ export function PricingSection() {
   const [showWaitlist, setShowWaitlist] = useState(false);
 
   const handleGetStarted = () => {
-    if (modeConfig.authBehavior !== 'real') {
-      // Dev/demo: go directly to timeline
+    if (config.demoMode || !config.authEnabled) {
       window.location.href = "/timeline";
       return;
     }
-    // Scroll to install section for self-host path
     document.querySelector(".install-section")?.scrollIntoView({ behavior: "smooth" });
   };
 

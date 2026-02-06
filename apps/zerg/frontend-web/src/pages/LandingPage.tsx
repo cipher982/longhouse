@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import config from "../lib/config";
-import { modeConfig } from "../lib/modeConfig";
 import { SwarmLogo } from "../components/SwarmLogo";
 import { usePublicPageScroll } from "../hooks/usePublicPageScroll";
 import "../styles/landing.css";
@@ -169,7 +168,7 @@ export default function LandingPage() {
 
   // If already logged in, redirect to timeline (production only)
   useEffect(() => {
-    if (!modeConfig.landingRedirectsWhenAuthed) return;
+    if (!config.authEnabled || config.demoMode) return;
     const params = new URLSearchParams(window.location.search);
     if (params.get("noredirect") === "1") return;
     if (isAuthenticated && !isLoading) {

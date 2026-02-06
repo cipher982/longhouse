@@ -1,4 +1,4 @@
-import { modeConfig } from "../../lib/modeConfig";
+import config from "../../lib/config";
 
 export type NavItem = {
   label: string;
@@ -21,7 +21,7 @@ const DEMO_ITEMS: NavItem[] = [
 ];
 
 export function getNavItems(role?: string | null): NavItem[] {
-  if (modeConfig.demoNavOnly) return [...DEMO_ITEMS];
+  if (config.demoMode) return [...DEMO_ITEMS];
   const items = [...BASE_ITEMS];
   if (role === "ADMIN") {
     items.push({ label: "Admin", href: "/admin", testId: "global-admin-tab" });

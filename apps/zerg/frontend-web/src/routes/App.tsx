@@ -33,7 +33,6 @@ import { ShelfProvider } from "../lib/useShelfState";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { usePerformanceMonitoring, useBundleSizeWarning } from "../lib/usePerformance";
 import config from "../lib/config";
-import { modeConfig } from "../lib/modeConfig";
 
 // Loading fallback for lazy-loaded pages
 function PageLoader() {
@@ -165,10 +164,15 @@ export default function App() {
     },
   ];
 
-  const routes = useRoutes(modeConfig.mode === 'demo' ? demoRoutes : [
-    // Root: landing page (handles auth redirect internally via modeConfig)
+  const routes = useRoutes(config.demoMode ? demoRoutes : [
+    // Root: go straight to the app
     {
       path: "/",
+      element: <Navigate to="/timeline" replace />
+    },
+    // Landing page at /landing for dev preview
+    {
+      path: "/landing",
       element: (
         <ErrorBoundary>
           <LandingPage />

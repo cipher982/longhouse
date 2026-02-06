@@ -2,7 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "../ui";
 import { AppScreenshotFrame } from "./AppScreenshotFrame";
 import { InstallSection } from "./InstallSection";
-import { modeConfig } from "../../lib/modeConfig";
+import config from "../../lib/config";
 
 interface HeroSectionProps {
   onScrollToHowItWorks: () => void;
@@ -49,7 +49,7 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
             <Button variant="primary" size="lg" className="landing-cta-main" onClick={handleSelfHost}>
               Self-host Now
             </Button>
-            {modeConfig.mode === 'demo' ? (
+            {config.demoMode ? (
               <Button variant="secondary" size="lg" onClick={() => navigate("/timeline")}>
                 Try Live Demo &rarr;
               </Button>

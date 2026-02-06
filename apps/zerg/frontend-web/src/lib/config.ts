@@ -1,10 +1,39 @@
 // Configuration management for React frontend
 // Centralizes environment variables and settings
-//
-// Mode decisions (auth behavior, nav items, routing) live in modeConfig.ts.
-// This file handles API URLs, feature flags, and runtime settings.
 
-import { modeConfig, type AppMode } from './modeConfig';
+export type AppMode = 'dev' | 'demo' | 'production';
+
+// Extend window for runtime config injected by backend /config.js
+declare global {
+  interface Window {
+    __APP_MODE__?: string;
+  }
+}
+
+/**
+ * Resolve AppMode from runtime config.
+ *
+ * Priority:
+ *   1. window.__APP_MODE__ (set by backend /config.js)
+ *   2. Vite env: VITE_AUTH_ENABLED=false -> dev
+ *   3. Vite dev server -> dev
+ *   4. Default: production
+ */
+function resolveAppMode(): AppMode {
+  if (typeof window !== 'undefined' && window.__APP_MODE__) {
+    const raw = window.__APP_MODE__.toLowerCase();
+    if (raw === 'dev' || raw === 'demo' || raw === 'production') {
+      return raw;
+    }
+  }
+  if (import.meta.env.VITE_AUTH_ENABLED === 'false') {
+    return 'dev';
+  }
+  if (import.meta.env.MODE === 'development') {
+    return 'dev';
+  }
+  return 'production';
+}
 
 export interface AppConfig {
   // API Configuration
@@ -14,10 +43,9 @@ export interface AppConfig {
   // Mode
   appMode: AppMode;
 
-  // Authentication (legacy — prefer modeConfig.authBehavior)
+  // Authentication
   googleClientId: string;
   authEnabled: boolean;
-  /** @deprecated Use modeConfig.mode === 'demo' */
   demoMode: boolean;
 
   // Environment
@@ -137,7 +165,7 @@ export function buildAuthRedirectUrl(): string {
 
 // Load configuration from environment variables
 function loadConfig(): AppConfig {
-  const appMode = modeConfig.mode;
+  const appMode = resolveAppMode();
   const isDevelopment = import.meta.env.MODE === 'development';
   const isProduction = import.meta.env.MODE === 'production';
   const isTesting = import.meta.env.MODE === 'test';
@@ -263,7 +291,7 @@ export const getWebSocketConfig = () => ({
   baseUrl: config.wsBaseUrl,
   reconnectInterval: config.wsReconnectInterval,
   maxReconnectAttempts: config.wsMaxReconnectAttempts,
-  includeAuth: modeConfig.wsIncludeAuth,
+  includeAuth: config.authEnabled && !config.demoMode,
 });
 
 export const getPerformanceConfig = () => ({
