@@ -36,8 +36,8 @@
       content="Your own super-Siri for email, health, chats, and home. Link all your apps into one AI that quietly handles the annoying stuff."
     />
     <meta name="twitter:image" content="/og-image.png" />
-    <!-- Runtime config served dynamically by backend (Cache-Control: no-cache) -->
-    <script src="/config.js"></script>
+    <!-- Runtime config served dynamically by backend — cache-busted to defeat CDN stale cache -->
+    <script src="/config.js?v=__BUILD_HASH__"></script>
     <script defer src="/funnel.js"></script>
   </head>
   <body>
