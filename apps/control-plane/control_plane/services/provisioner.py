@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import os
+import secrets
 import time
 from dataclasses import dataclass
+from dataclasses import field
 
 import docker
 import httpx
@@ -10,10 +13,24 @@ import httpx
 from control_plane.config import settings
 
 
+def _generate_password() -> tuple[str, str]:
+    """Generate a random password and its PBKDF2 hash.
+
+    Returns (plaintext, hash_string).
+    """
+    password = secrets.token_urlsafe(24)
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 600_000)
+    hash_string = f"pbkdf2:sha256:600000${salt.hex()}${dk.hex()}"
+    return password, hash_string
+
+
 @dataclass
 class ProvisionResult:
     container_name: str
     data_path: str
+    password: str | None = field(default=None)
+    password_hash: str | None = field(default=None)
 
 
 def _host_for(subdomain: str) -> str:
@@ -44,10 +61,11 @@ def _labels_for(subdomain: str) -> dict[str, str]:
     return labels
 
 
-def _env_for(subdomain: str, owner_email: str) -> dict[str, str]:
+def _env_for(subdomain: str, owner_email: str, password: str | None = None) -> dict[str, str]:
     env: dict[str, str] = {
         "INSTANCE_ID": subdomain,
         "OWNER_EMAIL": owner_email,
+        "ADMIN_EMAILS": owner_email,
         "SINGLE_TENANT": "1",
         "AUTH_DISABLED": "1" if settings.instance_auth_disabled else "0",
         "APP_PUBLIC_URL": f"https://{_host_for(subdomain)}",
@@ -60,15 +78,8 @@ def _env_for(subdomain: str, owner_email: str) -> dict[str, str]:
         "TRIGGER_SIGNING_SECRET": settings.instance_trigger_signing_secret,
     }
 
-    if settings.instance_password:
-        env["LONGHOUSE_PASSWORD"] = settings.instance_password
-    if settings.instance_password_hash:
-        env["LONGHOUSE_PASSWORD_HASH"] = settings.instance_password_hash
-
-    if settings.instance_google_client_id:
-        env["GOOGLE_CLIENT_ID"] = settings.instance_google_client_id
-    if settings.instance_google_client_secret:
-        env["GOOGLE_CLIENT_SECRET"] = settings.instance_google_client_secret
+    if password:
+        env["LONGHOUSE_PASSWORD"] = password
 
     return env
 
@@ -94,7 +105,13 @@ class Provisioner:
         network = self.client.networks.get(settings.proxy_network)
         network.connect(container)
 
-    def provision_instance(self, subdomain: str, owner_email: str) -> ProvisionResult:
+    def provision_instance(
+        self,
+        subdomain: str,
+        owner_email: str,
+        *,
+        password: str | None = None,
+    ) -> ProvisionResult:
         container_name = f"longhouse-{subdomain}"
 
         existing = self.client.containers.list(all=True, filters={"name": container_name})
@@ -102,9 +119,15 @@ class Provisioner:
             container = existing[0]
             return ProvisionResult(container_name=container.name, data_path="")
 
+        # Use provided password or generate a new one
+        if password:
+            password_hash: str | None = None  # caller handles hashing
+        else:
+            password, password_hash = _generate_password()
+
         data_path, volumes = _volume_for(subdomain)
         labels = _labels_for(subdomain)
-        env = _env_for(subdomain, owner_email)
+        env = _env_for(subdomain, owner_email, password=password)
 
         ports = None
         if settings.publish_ports:
@@ -122,7 +145,12 @@ class Provisioner:
 
         self.ensure_network(container)
 
-        return ProvisionResult(container_name=container.name, data_path=data_path)
+        return ProvisionResult(
+            container_name=container.name,
+            data_path=data_path,
+            password=password,
+            password_hash=password_hash,
+        )
 
     def deprovision_instance(self, container_name: str) -> None:
         try:

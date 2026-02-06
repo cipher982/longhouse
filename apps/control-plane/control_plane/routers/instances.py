@@ -23,6 +23,7 @@ from control_plane.schemas import InstanceList
 from control_plane.schemas import InstanceOut
 from control_plane.schemas import TokenOut
 from control_plane.services.provisioner import Provisioner
+from control_plane.services.provisioner import _generate_password
 
 router = APIRouter(prefix="/api/instances", tags=["instances"])
 
@@ -117,6 +118,7 @@ def create_instance(payload: InstanceCreate, db: Session = Depends(get_db)):
         subdomain=subdomain,
         container_name=result.container_name,
         data_path=result.data_path,
+        password_hash=result.password_hash,
         status="provisioning",
     )
     db.add(instance)
@@ -129,6 +131,7 @@ def create_instance(payload: InstanceCreate, db: Session = Depends(get_db)):
         subdomain=instance.subdomain,
         container_name=instance.container_name,
         status=instance.status,
+        password=result.password,  # Shown once at creation
         created_at=instance.created_at,
         last_health_at=instance.last_health_at,
     )
@@ -165,6 +168,39 @@ def deprovision_instance(instance_id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
+@router.post("/{instance_id}/regenerate-password", response_model=InstanceOut, dependencies=[Depends(require_admin)])
+def regenerate_password(instance_id: int, db: Session = Depends(get_db)):
+    """Generate a new password for an instance and update its container env."""
+    row = db.query(Instance, User).join(User, Instance.user_id == User.id).filter(Instance.id == instance_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="instance not found")
+    inst, user = row
+
+    password, password_hash = _generate_password()
+    inst.password_hash = password_hash
+    db.commit()
+
+    # Update running container env — requires deprovision + reprovision
+    provisioner = Provisioner()
+    provisioner.deprovision_instance(inst.container_name)
+    result = provisioner.provision_instance(inst.subdomain, owner_email=user.email, password=password)
+    inst.container_name = result.container_name
+    inst.status = "provisioning"
+    db.commit()
+    db.refresh(inst)
+
+    return InstanceOut(
+        id=inst.id,
+        email=user.email,
+        subdomain=inst.subdomain,
+        container_name=inst.container_name,
+        status=inst.status,
+        password=password,  # Shown once
+        created_at=inst.created_at,
+        last_health_at=inst.last_health_at,
+    )
+
+
 @router.post("/{instance_id}/reprovision", response_model=InstanceOut, dependencies=[Depends(require_admin)])
 def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
     """Reprovision a stopped/deprovisioned instance."""
@@ -178,6 +214,8 @@ def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
 
     inst.status = "provisioning"
     inst.container_name = result.container_name
+    if result.password_hash:
+        inst.password_hash = result.password_hash
     db.commit()
     db.refresh(inst)
 
@@ -187,6 +225,7 @@ def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
         subdomain=inst.subdomain,
         container_name=inst.container_name,
         status=inst.status,
+        password=result.password,  # New password on reprovision
         created_at=inst.created_at,
         last_health_at=inst.last_health_at,
     )

@@ -16,6 +16,7 @@ class InstanceOut(BaseModel):
     subdomain: str
     container_name: str
     status: str
+    password: str | None = None  # Only set on create/regenerate (shown once)
     created_at: datetime | None = None
     last_health_at: datetime | None = None
 
