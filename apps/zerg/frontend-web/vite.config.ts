@@ -1,6 +1,25 @@
+import { execSync } from "node:child_process";
 import path from "node:path";
-import { defineConfig, loadEnv } from "vite";
+import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
+
+/** Replace __BUILD_HASH__ in index.html with the short git SHA. */
+function buildHashPlugin(): Plugin {
+  let hash = "dev";
+  return {
+    name: "build-hash",
+    configResolved() {
+      try {
+        hash = execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim();
+      } catch {
+        hash = Date.now().toString(36);
+      }
+    },
+    transformIndexHtml(html) {
+      return html.replace(/__BUILD_HASH__/g, hash);
+    },
+  };
+}
 
 export default defineConfig(({ mode }) => {
   // Load .env from repo root (monorepo root contains single .env file)
@@ -18,7 +37,7 @@ export default defineConfig(({ mode }) => {
   const proxyTarget = process.env.VITE_PROXY_TARGET || rootEnv.VITE_PROXY_TARGET || "http://backend:8000";
 
   return {
-    plugins: [react()],
+    plugins: [react(), buildHashPlugin()],
     base: basePath,
     resolve: {
       preserveSymlinks: false,
