@@ -1,15 +1,23 @@
 // Configuration management for React frontend
 // Centralizes environment variables and settings
+//
+// Mode decisions (auth behavior, nav items, routing) live in modeConfig.ts.
+// This file handles API URLs, feature flags, and runtime settings.
+
+import { modeConfig, type AppMode } from './modeConfig';
 
 export interface AppConfig {
   // API Configuration
   apiBaseUrl: string;
   wsBaseUrl: string;
 
-  // Authentication
+  // Mode
+  appMode: AppMode;
+
+  // Authentication (legacy — prefer modeConfig.authBehavior)
   googleClientId: string;
   authEnabled: boolean;
-  marketingOnly: boolean;
+  /** @deprecated Use modeConfig.mode === 'demo' */
   demoMode: boolean;
 
   // Environment
@@ -34,7 +42,6 @@ declare global {
   interface Window {
     API_BASE_URL?: string;
     WS_BASE_URL?: string;
-    __LONGHOUSE_DEMO__?: boolean;
   }
 }
 
@@ -78,26 +85,6 @@ function normalizeApiBaseUrl(value: string): string {
 
   const normalizedPath = normalizeApiPathname(url.pathname || "/");
   return `${url.origin}${normalizedPath}`;
-}
-
-function resolveMarketingOnly(): boolean {
-  const envValue = import.meta.env.VITE_MARKETING_ONLY;
-  if (envValue === "true") return true;
-  if (envValue === "false") return false;
-
-  if (typeof window === "undefined") return false;
-
-  const host = window.location.hostname.toLowerCase();
-  const envHosts = (import.meta.env.VITE_MARKETING_HOSTNAMES || "")
-    .split(",")
-    .map((value: string) => value.trim().toLowerCase())
-    .filter(Boolean);
-
-  // No default marketing hosts - all domains are functional apps
-  // Set VITE_MARKETING_HOSTNAMES explicitly if you want marketing-only pages
-  if (envHosts.length === 0) return false;
-
-  return envHosts.includes(host);
 }
 
 /**
@@ -150,11 +137,11 @@ export function buildAuthRedirectUrl(): string {
 
 // Load configuration from environment variables
 function loadConfig(): AppConfig {
+  const appMode = modeConfig.mode;
   const isDevelopment = import.meta.env.MODE === 'development';
   const isProduction = import.meta.env.MODE === 'production';
   const isTesting = import.meta.env.MODE === 'test';
-  const marketingOnly = resolveMarketingOnly();
-  const demoMode = typeof window !== 'undefined' && window.__LONGHOUSE_DEMO__ === true;
+  const demoMode = appMode === 'demo';
 
   // FAIL FAST: No fallbacks, no silent defaults
   // Production MUST have config.js loaded with API_BASE_URL and WS_BASE_URL
@@ -196,7 +183,7 @@ function loadConfig(): AppConfig {
   apiBaseUrl = normalizeApiBaseUrl(apiBaseUrl);
 
   // Validate required config in production
-  if (isProduction && !marketingOnly && !demoMode) {
+  if (isProduction && appMode === 'production') {
     if (!apiBaseUrl) {
       throw new Error('FATAL: API_BASE_URL not configured! Add window.API_BASE_URL in config.js');
     }
@@ -210,10 +197,12 @@ function loadConfig(): AppConfig {
     apiBaseUrl,
     wsBaseUrl,
 
+    // Mode
+    appMode,
+
     // Authentication
     googleClientId: import.meta.env.VITE_GOOGLE_CLIENT_ID || "658453123272-gt664mlo8q3pra3u1h3oflbmrdi94lld.apps.googleusercontent.com",
-    authEnabled: import.meta.env.VITE_AUTH_ENABLED !== 'false',
-    marketingOnly,
+    authEnabled: appMode !== 'dev',
     demoMode,
 
     // Environment
@@ -241,11 +230,11 @@ export const config: AppConfig = loadConfig();
 export function validateConfig(): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
 
-  if (!config.marketingOnly && !config.googleClientId) {
+  if (config.appMode === 'production' && !config.googleClientId) {
     errors.push('VITE_GOOGLE_CLIENT_ID is required for authentication');
   }
 
-  if (!config.marketingOnly && !config.apiBaseUrl) {
+  if (config.appMode !== 'demo' && !config.apiBaseUrl) {
     errors.push('API base URL is required');
   }
 
@@ -274,7 +263,7 @@ export const getWebSocketConfig = () => ({
   baseUrl: config.wsBaseUrl,
   reconnectInterval: config.wsReconnectInterval,
   maxReconnectAttempts: config.wsMaxReconnectAttempts,
-  includeAuth: config.authEnabled && !config.marketingOnly,
+  includeAuth: modeConfig.wsIncludeAuth,
 });
 
 export const getPerformanceConfig = () => ({
@@ -295,9 +284,9 @@ if (config.isDevelopment) {
   // Log current configuration in development
   console.log('🔧 App Configuration:', {
     environment: import.meta.env.MODE,
+    appMode: config.appMode,
     apiBaseUrl: config.apiBaseUrl,
     authEnabled: config.authEnabled,
-    marketingOnly: config.marketingOnly,
     performanceMonitoring: config.enablePerformanceMonitoring,
   });
 }

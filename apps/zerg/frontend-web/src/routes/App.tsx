@@ -33,6 +33,7 @@ import { ShelfProvider } from "../lib/useShelfState";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { usePerformanceMonitoring, useBundleSizeWarning } from "../lib/usePerformance";
 import config from "../lib/config";
+import { modeConfig } from "../lib/modeConfig";
 
 // Loading fallback for lazy-loaded pages
 function PageLoader() {
@@ -164,76 +165,10 @@ export default function App() {
     },
   ];
 
-  const marketingOnlyRoutes = [
+  const routes = useRoutes(modeConfig.mode === 'demo' ? demoRoutes : [
+    // Root: landing page (handles auth redirect internally via modeConfig)
     {
       path: "/",
-      element: (
-        <ErrorBoundary>
-          <LandingPage />
-        </ErrorBoundary>
-      )
-    },
-    {
-      path: "/pricing",
-      element: (
-        <ErrorBoundary>
-          <PricingPage />
-        </ErrorBoundary>
-      )
-    },
-    {
-      path: "/docs",
-      element: (
-        <ErrorBoundary>
-          <DocsPage />
-        </ErrorBoundary>
-      )
-    },
-    {
-      path: "/changelog",
-      element: (
-        <ErrorBoundary>
-          <ChangelogPage />
-        </ErrorBoundary>
-      )
-    },
-    {
-      path: "/privacy",
-      element: (
-        <ErrorBoundary>
-          <PrivacyPage />
-        </ErrorBoundary>
-      )
-    },
-    {
-      path: "/security",
-      element: (
-        <ErrorBoundary>
-          <SecurityPage />
-        </ErrorBoundary>
-      )
-    },
-    {
-      path: "*",
-      element: (
-        <ErrorBoundary>
-          <LandingPage />
-        </ErrorBoundary>
-      )
-    },
-  ];
-
-  const routes = useRoutes(config.demoMode ? demoRoutes : config.marketingOnly ? marketingOnlyRoutes : [
-    // Root route: always redirect to timeline
-    // AuthGuard will show login if unauthenticated
-    // Marketing site uses marketingOnly=true (separate routes block above)
-    {
-      path: "/",
-      element: <Navigate to="/timeline" replace />
-    },
-    // Landing page accessible at /landing for dev preview when auth is disabled
-    {
-      path: "/landing",
       element: (
         <ErrorBoundary>
           <LandingPage />

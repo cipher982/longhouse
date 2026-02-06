@@ -3,6 +3,7 @@
 These helpers drive CORS defaults and funnel origin checks.
 """
 
+from zerg.config import AppMode
 from zerg.config import Settings
 from zerg.config import get_funnel_allowed_hosts
 from zerg.config import get_public_origins
@@ -11,6 +12,7 @@ from zerg.config import resolve_cors_origins
 
 def _make_settings(**overrides):
     base = dict(
+        app_mode=AppMode.DEV,
         testing=True,
         auth_disabled=True,
         single_tenant=True,

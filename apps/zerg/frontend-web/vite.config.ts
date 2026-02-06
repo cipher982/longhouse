@@ -34,6 +34,10 @@ export default defineConfig(({ mode }) => {
         interval: 1000,
       },
       proxy: {
+        "/config.js": {
+          target: proxyTarget,
+          changeOrigin: true,
+        },
         "/api/ws": {
           target: proxyTarget,
           ws: true,

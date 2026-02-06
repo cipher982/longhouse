@@ -24,6 +24,7 @@ def system_info() -> Dict[str, Any]:
     """Return non-sensitive runtime switches used by the SPA at startup."""
 
     return {
+        "app_mode": _settings.app_mode.value,
         "auth_disabled": _settings.auth_disabled,
         "google_client_id": _settings.google_client_id,
         # Surface public URL so frontend can compute callback routes when needed

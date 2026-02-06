@@ -16,9 +16,11 @@ class TestDbIsSqlite:
     def _make_settings(self, database_url: str):
         """Create a Settings instance with the given DATABASE_URL."""
         # Import here to avoid module-level side effects
+        from zerg.config import AppMode
         from zerg.config import Settings
 
         return Settings(
+            app_mode=AppMode.DEV,
             testing=True,
             auth_disabled=True,
             single_tenant=True,

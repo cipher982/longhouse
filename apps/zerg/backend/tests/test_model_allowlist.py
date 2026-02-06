@@ -29,6 +29,7 @@ def _mock_settings_with_allowlist(allowed_model: str):
 
     # Create a new Settings instance with modified allowed_models_non_admin
     mock_settings = Settings(
+        app_mode=real_settings.app_mode,
         testing=real_settings.testing,
         auth_disabled=real_settings.auth_disabled,
         demo_mode=real_settings.demo_mode,

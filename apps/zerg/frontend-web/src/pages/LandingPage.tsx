@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import config from "../lib/config";
+import { modeConfig } from "../lib/modeConfig";
 import { SwarmLogo } from "../components/SwarmLogo";
 import { usePublicPageScroll } from "../hooks/usePublicPageScroll";
 import "../styles/landing.css";
@@ -166,15 +167,12 @@ export default function LandingPage() {
     };
   }, [particlesEnabled, heroAnimationsEnabled]);
 
-  // If already logged in, redirect to timeline
-  // SKIP redirect when:
-  // - authEnabled=false (dev mode - fake auth, don't redirect)
-  // - noredirect=1 query param (manual override for testing)
+  // If already logged in, redirect to timeline (production only)
   useEffect(() => {
-    if (!config.authEnabled || config.marketingOnly) return; // Dev/marketing: never redirect
+    if (!modeConfig.landingRedirectsWhenAuthed) return;
     const params = new URLSearchParams(window.location.search);
-    const skipRedirect = params.get("noredirect") === "1";
-    if (isAuthenticated && !isLoading && !skipRedirect) {
+    if (params.get("noredirect") === "1") return;
+    if (isAuthenticated && !isLoading) {
       navigate("/timeline");
     }
   }, [isAuthenticated, isLoading, navigate]);

@@ -1,3 +1,5 @@
+import { modeConfig } from "../../lib/modeConfig";
+
 export type NavItem = {
   label: string;
   href: string;
@@ -14,7 +16,12 @@ const BASE_ITEMS: NavItem[] = [
   { label: "Runners", href: "/runners", testId: "global-runners-tab" },
 ];
 
+const DEMO_ITEMS: NavItem[] = [
+  { label: "Timeline", href: "/timeline", testId: "global-timeline-tab" },
+];
+
 export function getNavItems(role?: string | null): NavItem[] {
+  if (modeConfig.demoNavOnly) return [...DEMO_ITEMS];
   const items = [...BASE_ITEMS];
   if (role === "ADMIN") {
     items.push({ label: "Admin", href: "/admin", testId: "global-admin-tab" });

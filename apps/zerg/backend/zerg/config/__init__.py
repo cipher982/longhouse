@@ -10,13 +10,23 @@ while covering all current needs.
 
 from __future__ import annotations
 
+import enum
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from dotenv import load_dotenv
+
+class AppMode(enum.Enum):
+    """Application runtime mode — single source of truth for mode decisions."""
+
+    DEV = "dev"
+    DEMO = "demo"
+    PRODUCTION = "production"
+
+
+from dotenv import load_dotenv  # noqa: E402
 
 # ``_REPO_ROOT`` points to the top-level repository directory.
 # Detect environment:
@@ -40,11 +50,35 @@ def _truthy(value: str | None) -> bool:  # noqa: D401 – small helper
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def resolve_app_mode() -> AppMode:
+    """Resolve the application mode from environment variables.
+
+    Priority:
+      1. Explicit APP_MODE env var
+      2. DEMO_MODE=1 → demo
+      3. AUTH_DISABLED=1 or TESTING=1 → dev
+      4. Otherwise → production
+    """
+    explicit = os.getenv("APP_MODE", "").strip().lower()
+    if explicit:
+        try:
+            return AppMode(explicit)
+        except ValueError:
+            pass
+
+    if _truthy(os.getenv("DEMO_MODE")):
+        return AppMode.DEMO
+    if _truthy(os.getenv("AUTH_DISABLED")) or _truthy(os.getenv("TESTING")):
+        return AppMode.DEV
+    return AppMode.PRODUCTION
+
+
 @dataclass
 class Settings:  # noqa: D401 – simple data container
     """Lightweight settings container populated from environment variables."""
 
     # Runtime flags -----------------------------------------------------
+    app_mode: AppMode
     testing: bool
     auth_disabled: bool
     single_tenant: bool
@@ -383,8 +417,10 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
                     os.environ[key] = value
 
     demo_mode = _truthy(os.getenv("DEMO_MODE"))
+    app_mode = resolve_app_mode()
 
     return Settings(
+        app_mode=app_mode,
         testing=testing,
         auth_disabled=_truthy(os.getenv("AUTH_DISABLED")) or testing or demo_mode,
         single_tenant=_truthy(os.getenv("SINGLE_TENANT", "1")),
@@ -552,6 +588,8 @@ def get_settings() -> Settings:  # noqa: D401 – public accessor
 
 
 __all__ = [
+    "AppMode",
     "Settings",
     "get_settings",
+    "resolve_app_mode",
 ]

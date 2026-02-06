@@ -6,6 +6,7 @@
 
 import { useState } from "react";
 import config from "../../lib/config";
+import { modeConfig } from "../../lib/modeConfig";
 import { CheckCircleIcon } from "../icons";
 import { Button } from "../ui";
 
@@ -101,20 +102,13 @@ export function PricingSection() {
   const [showWaitlist, setShowWaitlist] = useState(false);
 
   const handleGetStarted = () => {
-    if (config.marketingOnly) {
-      document.querySelector(".install-section")?.scrollIntoView({ behavior: "smooth" });
-      return;
-    }
-    // If auth is disabled (dev mode), go directly to timeline
-    if (!config.authEnabled) {
+    if (modeConfig.authBehavior !== 'real') {
+      // Dev/demo: go directly to timeline
       window.location.href = "/timeline";
       return;
     }
-    // Scroll to top and trigger login
-    window.scrollTo({ top: 0, behavior: "smooth" });
-    setTimeout(() => {
-      document.querySelector<HTMLButtonElement>(".landing-cta-main")?.click();
-    }, 500);
+    // Scroll to install section for self-host path
+    document.querySelector(".install-section")?.scrollIntoView({ behavior: "smooth" });
   };
 
   const handleJoinWaitlist = () => {
