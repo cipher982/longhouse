@@ -808,6 +808,10 @@ async def seed_demo_sessions(
     for session in sessions:
         store.ingest_session(session)
 
+    # Rebuild FTS5 index so timeline search works on demo data
+    store.rebuild_fts()
+    db.commit()
+
     return DemoSeedResponse(seeded=True, sessions_created=len(sessions))
 
 
