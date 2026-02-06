@@ -165,9 +165,9 @@ See this file for the current launch analysis.
 
 **Goal:** longhouse.ai runs in demo mode; david.longhouse.ai is the app (single-tenant).
 
-**Status:** ~~DONE~~ — `marketingOnly` concept removed. longhouse.ai uses `APP_MODE=demo` (centralized `AppMode` enum). Domain split is cosmetic routing to one deployment.
+**Status:** ~~DONE~~ — `marketingOnly` concept removed. Existing `DEMO_MODE=1` env var now resolves to `AppMode.DEMO` via centralized `resolve_app_mode()`. No new env vars needed. Domain split is cosmetic routing to one deployment.
 
-- [x] Add marketing-only frontend flag → **replaced by `APP_MODE=demo`**
+- [x] Add marketing-only frontend flag → **replaced by centralized `AppMode` enum (demo mode via existing `DEMO_MODE=1`)**
 - [x] Update Coolify domains: zerg-web -> david.longhouse.ai, zerg-api -> api-david.longhouse.ai
 - [x] Update zerg-api env: APP_PUBLIC_URL/PUBLIC_SITE_URL to david, CORS to include longhouse.ai + david
 - [x] Add Cloudflare DNS for david.longhouse.ai + api-david.longhouse.ai (and optional wildcard)
