@@ -1,8 +1,8 @@
 /**
  * DeploymentOptions
  *
- * Three-card section showing deployment paths:
- * Self-hosted (primary), Hosted Beta, and Enterprise.
+ * Two-card section showing deployment paths:
+ * Self-hosted (primary) and Hosted Beta.
  */
 
 import { useState } from "react";
@@ -108,10 +108,6 @@ export function DeploymentOptions() {
     setShowWaitlist(true);
   };
 
-  const handleContactUs = () => {
-    window.location.href = "mailto:david010@gmail.com?subject=Longhouse%20Enterprise%20Inquiry";
-  };
-
   const options: DeploymentOption[] = [
     {
       name: "Self-hosted",
@@ -141,19 +137,6 @@ export function DeploymentOptions() {
       ctaVariant: "secondary",
       badge: "Coming Soon",
     },
-    {
-      name: "Enterprise",
-      promise: "Custom deployment",
-      features: [
-        "SSO integration",
-        "Dedicated instance",
-        "SLA guarantees",
-        "Priority support",
-      ],
-      ctaText: "Contact Us",
-      ctaAction: handleContactUs,
-      ctaVariant: "secondary",
-    },
   ];
 
   return (
@@ -162,7 +145,7 @@ export function DeploymentOptions() {
         <p className="landing-section-label">Deploy Your Way</p>
         <h2 className="landing-section-title">Choose Your Path</h2>
         <p className="landing-section-subtitle">
-          Run locally with full control, let us handle hosting, or get a custom enterprise deployment.
+          Run locally with full control, or let us handle hosting.
         </p>
 
         <div className="landing-deployment-grid">
