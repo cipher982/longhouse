@@ -9,13 +9,13 @@ Skills-Dir: .agents/skills
 ## Philosophy
 
 - **Read VISION.md first** — It's the guiding light. Understand the strategic direction before diving into implementation.
-- **Read VISION.md (SQLite-only OSS Pivot section)** — Details the SQLite pivot plan. Don't invest in Postgres-specific infrastructure.
+- **SQLite-only core** — SQLite pivot is complete. Don't invest in Postgres-specific infrastructure. See VISION.md.
 - **Progressive disclosure** — AGENTS.md should point to deeper docs/runbooks so agents know what they don't know.
 - Always commit changes as you go (no lingering uncommitted work).
 
 **"Trust the AI"** — Modern LLMs are smart enough to figure things out. Give them context and autonomy, not rigid decision trees. No keyword routing, no specialized commiss.
 
-**Current Direction (2026-01):** Migrating to SQLite-only for OSS. Postgres is control-plane only. See VISION.md § "No Postgres in core."
+**Current Direction:** SQLite-only for OSS (complete). Postgres is control-plane only. See VISION.md § "No Postgres in core."
 
 ## Task Tracking
 
@@ -31,7 +31,7 @@ Skills-Dir: .agents/skills
 |-----|------|
 | localhost:47200 | Frontend (dev) |
 | localhost:47300 | Backend API (dev) |
-| localhost:47300/health | Health check |
+| localhost:47300/api/health | Health check |
 
 ## Essential Commands
 
@@ -229,12 +229,7 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-05) [security] Avoid storing admin tokens in AI session notes; rotate any exposed token immediately.
 - (2026-02-05) [ci] Provisioning E2E runs on cube ARC (DIND), builds runtime image, provisions instance, and hits health + timeline smoke checks.
 - (2026-02-05) [ops] Instance health uses `/api/health` (readiness) and `/api/livez` (liveness); no root `/health`.
-- (2026-02-05) [ops] longhouse.ai and api.longhouse.ai currently return HTTP 525 (Cloudflare origin handshake failure); smoke-after-deploy health checks fail.
 - (2026-02-05) [db] SQLite FTS5 index (`events_fts`) now backs session search when available.
-- (2026-02-05) [e2e] E2E forces `gpt-scripted` for new fiches; ScriptedChatLLM streams tokens to exercise chat streaming UI.
-- (2026-02-05) [e2e] WebSocket stream events use envelope `type` (stream_start/chunk/end); topics may be `user:{id}`, so tests should rely on `data.thread_id` over topic.
-- (2026-02-05) [e2e] Commis tool card selectors are more stable when anchored on nested tool text than tool_call_id in CI; E2E lint now has no waitForTimeout/networkidle allowlist.
-- (2026-02-06) [e2e] Removed permanently skipped placeholder/dev-only E2E specs; perf/visual suites now gated by RUN_PERF/RUN_VISUAL; track future coverage in TODO instead.
-- (2026-02-06) [arch] Mode system: backend has `AppMode` enum (dev/demo/production) derived from `DEMO_MODE`/`AUTH_DISABLED` env vars. Frontend uses `config.demoMode` / `config.authEnabled` directly — no separate modeConfig file. `marketingOnly` concept deleted.
-- (2026-02-06) [arch] Backend serves dynamic `GET /config.js` with `window.__APP_MODE__`; static `public/config.js` deleted. HTML injection (`_maybe_inject_demo_flag`) removed.
-- (2026-02-06) [arch] Root "/" redirects to /timeline in all modes. Landing page lives at "/landing" (dev preview) or "/" in demo mode only. Don't put LandingPage at "/" for self-hosted/dev users.
+- (2026-02-05) [e2e] E2E uses `gpt-scripted` for fiches; WS stream events use envelope `type`; tool card selectors anchor on nested tool text; no waitForTimeout/networkidle.
+- (2026-02-06) [arch] Mode system: `AppMode` enum (dev/demo/production) from `DEMO_MODE`/`AUTH_DISABLED`. Frontend uses `config.demoMode`/`config.authEnabled`. Backend serves dynamic `/config.js`.
+- (2026-02-06) [arch] Root "/" shows LandingPage in all modes; LandingPage auto-redirects authenticated users to /timeline. `/landing` is a redirect alias to `/`.

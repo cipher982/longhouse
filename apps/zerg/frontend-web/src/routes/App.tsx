@@ -165,19 +165,19 @@ export default function App() {
   ];
 
   const routes = useRoutes(config.demoMode ? demoRoutes : [
-    // Root: go straight to the app
+    // Root: landing page for visitors, auto-redirects authenticated users to /timeline
     {
       path: "/",
-      element: <Navigate to="/timeline" replace />
-    },
-    // Landing page at /landing for dev preview
-    {
-      path: "/landing",
       element: (
         <ErrorBoundary>
           <LandingPage />
         </ErrorBoundary>
       )
+    },
+    // Keep /landing as an alias (bookmarks, old links)
+    {
+      path: "/landing",
+      element: <Navigate to="/" replace />
     },
     // Public info pages - NO AuthGuard
     {
@@ -390,12 +390,11 @@ export default function App() {
         },
       ]
     },
-    // Fallback for unknown SPA routes - redirect to timeline
-    // AuthGuard will show login if unauthenticated
+    // Fallback for unknown SPA routes - send to landing page
     // NOTE: Static files (.html, .js, etc.) are served by Vite before reaching React Router
     {
       path: "*",
-      element: <Navigate to="/timeline" replace />
+      element: <Navigate to="/" replace />
     },
   ]);
 
