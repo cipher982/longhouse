@@ -807,7 +807,7 @@ def password_login(
     # Get or create default user for password auth
     user = crud.get_user_by_email(db, "local@longhouse")
     if not user:
-        user = crud.create_user(db, email="local@longhouse", display_name="Local User", provider="password")
+        user = crud.create_user(db, email="local@longhouse", provider="password")
 
     # Issue token and set cookie
     expires_in = 30 * 60  # 30 minutes
