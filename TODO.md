@@ -163,20 +163,17 @@ See this file for the current launch analysis.
 
 ## [Infra] Domain Split — Marketing vs Personal Instance (4)
 
-**Goal:** longhouse.ai is marketing-only; david.longhouse.ai is the app (single-tenant).
+**Goal:** longhouse.ai runs in demo mode; david.longhouse.ai is the app (single-tenant).
 
-**Status:** DNS routing complete. Marketing mode logic exists but has issues.
+**Status:** ~~DONE~~ — `marketingOnly` concept removed. longhouse.ai uses `APP_MODE=demo` (centralized `AppMode` enum). Domain split is cosmetic routing to one deployment.
 
-- [x] Add marketing-only frontend flag (hostname-driven) to disable auth + app routes on longhouse.ai
+- [x] Add marketing-only frontend flag → **replaced by `APP_MODE=demo`**
 - [x] Update Coolify domains: zerg-web -> david.longhouse.ai, zerg-api -> api-david.longhouse.ai
 - [x] Update zerg-api env: APP_PUBLIC_URL/PUBLIC_SITE_URL to david, CORS to include longhouse.ai + david
 - [x] Add Cloudflare DNS for david.longhouse.ai + api-david.longhouse.ai (and optional wildcard)
 
-**Reality check:** This is DNS routing to ONE shared deployment, not isolated instances. The "david" subdomain is cosmetic. See Architecture Reality Check above.
-
 **Remaining issues:**
 - [ ] Cross-subdomain OAuth code exists (`/auth/accept-token`) but targets non-existent per-user architecture — needs control plane to work as designed
-- [ ] Marketing-only mode requires explicit `VITE_MARKETING_HOSTNAMES`; longhouse.ai won’t be marketing-only unless configured
 - [ ] For now, use password auth on subdomains; Google OAuth only makes sense at control plane (longhouse.ai)
 
 ---
@@ -359,7 +356,7 @@ Update screenshots to show Timeline, not old dashboard.
 - [ ] CTAs: hero + header + mid-page + footer; labels match next step
 - [x] Dark theme: text ≥ 4.5:1, UI components ≥ 3:1 (Phase 3 done; focus indicators still TODO)
 - [ ] Sticky header doesn't obscure focus / anchors
-- [ ] Self-host responsibilities spelled out (not marketing-only)
+- [ ] Self-host responsibilities spelled out
 
 ---
 
