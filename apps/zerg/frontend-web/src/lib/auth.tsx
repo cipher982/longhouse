@@ -458,8 +458,7 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
         left: 0,
         right: 0,
         bottom: 0,
-        background: 'rgba(255, 255, 255, 0.1)',
-        backdropFilter: 'blur(4px)',
+        background: '#030305',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -468,22 +467,26 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
     >
       <div
         style={{
-          background: 'white',
-          padding: '2rem',
-          borderRadius: '8px',
-          boxShadow: '0 4px 20px rgba(0, 0, 0, 0.1)',
+          background: 'rgba(255, 255, 255, 0.03)',
+          border: '1px solid rgba(255, 255, 255, 0.08)',
+          backdropFilter: 'blur(16px)',
+          padding: '2.5rem',
+          borderRadius: '16px',
           textAlign: 'center',
-          minWidth: '320px',
+          minWidth: '340px',
+          maxWidth: '400px',
         }}
       >
-        <h2 style={{ marginBottom: '1rem', color: '#333' }}>Sign in to Longhouse</h2>
+        <h2 style={{ marginBottom: '1.5rem', color: 'rgba(255, 255, 255, 0.95)', fontSize: '20px', fontWeight: 600 }}>
+          Sign in to Longhouse
+        </h2>
 
         {!authMethods && (
-          <div style={{ color: '#666', padding: '1rem 0' }}>Loading...</div>
+          <div style={{ color: 'rgba(255, 255, 255, 0.5)', padding: '1rem 0' }}>Loading...</div>
         )}
 
         {showPassword && (
-          <form onSubmit={handlePasswordSubmit} style={{ marginBottom: showGoogle ? '0' : '0' }}>
+          <form onSubmit={handlePasswordSubmit}>
             <input
               type="password"
               value={password}
@@ -492,12 +495,15 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
               autoFocus
               style={{
                 width: '100%',
-                padding: '0.75rem',
-                border: `1px solid ${passwordError ? '#ef4444' : '#d1d5db'}`,
-                borderRadius: '4px',
+                padding: '0.75rem 1rem',
+                background: 'rgba(255, 255, 255, 0.07)',
+                border: `1px solid ${passwordError ? '#ef4444' : 'rgba(255, 255, 255, 0.12)'}`,
+                borderRadius: '8px',
                 fontSize: '14px',
+                color: 'rgba(255, 255, 255, 0.9)',
                 boxSizing: 'border-box',
                 marginBottom: '0.5rem',
+                outline: 'none',
               }}
             />
             {passwordError && (
@@ -511,14 +517,15 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
               style={{
                 width: '100%',
                 padding: '0.75rem',
-                background: '#2563eb',
-                color: 'white',
+                background: 'linear-gradient(135deg, #06b6d4 0%, #22d3ee 100%)',
+                color: '#030305',
                 border: 'none',
-                borderRadius: '4px',
+                borderRadius: '8px',
                 fontSize: '14px',
                 fontWeight: 600,
                 cursor: isPasswordLoading || !password.trim() ? 'not-allowed' : 'pointer',
-                opacity: isPasswordLoading || !password.trim() ? 0.6 : 1,
+                opacity: isPasswordLoading || !password.trim() ? 0.5 : 1,
+                marginTop: '0.25rem',
               }}
             >
               {isPasswordLoading ? 'Signing in...' : 'Sign In'}
@@ -527,10 +534,10 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
         )}
 
         {showPassword && showGoogle && (
-          <div style={{ margin: '1rem 0', color: '#999', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <div style={{ flex: 1, height: '1px', background: '#e5e7eb' }} />
+          <div style={{ margin: '1rem 0', color: 'rgba(255, 255, 255, 0.3)', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <div style={{ flex: 1, height: '1px', background: 'rgba(255, 255, 255, 0.1)' }} />
             <span>or</span>
-            <div style={{ flex: 1, height: '1px', background: '#e5e7eb' }} />
+            <div style={{ flex: 1, height: '1px', background: 'rgba(255, 255, 255, 0.1)' }} />
           </div>
         )}
 
@@ -544,20 +551,20 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
 
         {config.isDevelopment && (
           <>
-            <div style={{ margin: '1rem 0', color: '#666' }}>or</div>
+            <div style={{ margin: '1rem 0', color: 'rgba(255, 255, 255, 0.3)' }}>or</div>
             <button
               onClick={handleDevLogin}
               disabled={isDevLoginLoading}
               style={{
                 padding: '0.75rem 2rem',
-                background: '#10b981',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
+                background: 'rgba(16, 185, 129, 0.2)',
+                color: '#10b981',
+                border: '1px solid rgba(16, 185, 129, 0.3)',
+                borderRadius: '8px',
                 fontSize: '14px',
                 fontWeight: 600,
                 cursor: isDevLoginLoading ? 'not-allowed' : 'pointer',
-                opacity: isDevLoginLoading ? 0.6 : 1,
+                opacity: isDevLoginLoading ? 0.5 : 1,
               }}
             >
               {isDevLoginLoading ? 'Logging in...' : 'Dev Login (Local Only)'}
