@@ -11,6 +11,7 @@ unset DATABASE_URL
 export DATABASE_URL="sqlite:///$HOME/.longhouse/dev.db"
 export AUTH_DISABLED="${AUTH_DISABLED:-1}"
 export SINGLE_TENANT="${SINGLE_TENANT:-1}"
+export VITE_PROXY_TARGET="${VITE_PROXY_TARGET:-http://localhost:47300}"
 
 # Generate Fernet key if not set
 if [ -z "$FERNET_SECRET" ]; then
