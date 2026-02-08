@@ -154,6 +154,7 @@ Bun-compiled binary for command execution on user infrastructure. Connects via W
 | Marketing screenshots | `scripts/capture_marketing.py` | YAML manifest, viewport-specific, deterministic via `data-screenshot-ready` |
 | UI debug capture | `scripts/ui-capture.ts`, `/zerg-ui` skill | Screenshots + Playwright trace + a11y + console logs for agents |
 | QA script | `scripts/qa-oss.sh`, `make qa-oss` | Full OSS journey smoke test (demo-fresh → health → Playwright → E2E) |
+| Vibetest | `scripts/run-vibetest.sh`, `make vibetest` | LLM browser agents (vibetest-use) find UI bugs. Advisory only, needs GOOGLE_API_KEY. |
 | OpenAPI codegen | `scripts/generate_openapi.py` + `bun run generate:api` | Backend schema → `openapi.json` → `generated/openapi-types.ts` |
 
 **Backend Services:**

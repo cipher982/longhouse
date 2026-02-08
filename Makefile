@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-lite test-legacy test-integration test-unit test-e2e test-e2e-core test-all test-full test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-hatch-agent test-runner-unit test-install-runner test-install test-provision-e2e test-prompts test-ci test-backend-docker test-backend-ci test-super-fast--unit-backend-frontend-hatch-runner-install--approx-36s test-push-ci--e2e-core-a11y--approx-50s test-pre-merge-or-nightly--evals-live-openai--approx-4m test-validate-contracts-and-lints--approx-10s test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite ui-capture
+.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-lite test-legacy test-integration test-unit test-e2e test-e2e-core test-all test-full test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-hatch-agent test-runner-unit test-install-runner test-install test-provision-e2e test-prompts test-ci test-backend-docker test-backend-ci test-super-fast--unit-backend-frontend-hatch-runner-install--approx-36s test-push-ci--e2e-core-a11y--approx-50s test-pre-merge-or-nightly--evals-live-openai--approx-4m test-validate-contracts-and-lints--approx-10s test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local
 
 
 # ---------------------------------------------------------------------------
@@ -564,6 +564,24 @@ video-clean: ## Remove generated video files
 video-list: ## List available video scenarios
 	@uv run --with pyyaml scripts/capture_demo_video.py --list
 
+video-studio: ## Open Remotion Studio for video editing
+	@cd apps/video && bunx remotion studio
+
+video-remotion: ## Render timeline demo via Remotion
+	@echo "🎬 Rendering TimelineDemo via Remotion..."
+	@cd apps/video && bunx remotion render TimelineDemo out/timeline-demo.mp4 --codec h264 --crf 18
+	@echo "✅ Rendered: apps/video/out/timeline-demo.mp4"
+
+video-remotion-web: ## Render + compress for web (CRF 23)
+	@echo "🎬 Rendering TimelineDemo for web..."
+	@cd apps/video && bunx remotion render TimelineDemo out/timeline-demo.mp4 --codec h264 --crf 23
+	@cp apps/video/out/timeline-demo.mp4 apps/zerg/frontend-web/public/videos/timeline-demo.mp4
+	@echo "✅ Copied to frontend public/videos/"
+
+video-remotion-preview: ## Render single frame for quick preview
+	@cd apps/video && bunx remotion still TimelineDemo out/preview.jpg --frame 150
+	@echo "✅ Preview: apps/video/out/preview.jpg"
+
 # ---------------------------------------------------------------------------
 # UI Capture (Debug Bundles for Agents)
 # ---------------------------------------------------------------------------
@@ -782,3 +800,14 @@ onboarding-sqlite: ## SQLite-only onboarding smoke test (no Docker)
 
 qa-oss: ## Full OSS QA (isolated clone + UI gate)
 	@./scripts/qa-oss.sh $(ARGS)
+
+# ---------------------------------------------------------------------------
+# Vibetest (LLM-powered browser QA — advisory only, never blocks CI)
+# ---------------------------------------------------------------------------
+VIBETEST_AGENTS ?= 3
+
+vibetest: ## Run vibetest against isolated server (advisory, needs GOOGLE_API_KEY)
+	@./scripts/run-vibetest.sh --agents $(VIBETEST_AGENTS)
+
+vibetest-local: ## Run vibetest against running dev server (make dev)
+	@./scripts/run-vibetest.sh --use-running http://localhost:47200 --agents $(VIBETEST_AGENTS)
