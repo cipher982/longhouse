@@ -1,7 +1,7 @@
 """Waitlist API endpoints.
 
 Public endpoints for collecting email signups for features not yet available.
-No authentication required.
+No authentication required. Signups go to Discord; no local DB dependency.
 """
 
 import logging
@@ -10,16 +10,10 @@ import re
 import httpx
 from fastapi import APIRouter
 from fastapi import BackgroundTasks
-from fastapi import Depends
 from pydantic import BaseModel
 from pydantic import field_validator
-from sqlalchemy import func
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
-from zerg.database import get_db
-from zerg.models import WaitlistEntry
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/waitlist", tags=["waitlist"])
@@ -31,7 +25,7 @@ class WaitlistRequest(BaseModel):
     """Request body for waitlist signup."""
 
     email: str
-    source: str = "pricing_pro"
+    source: str = "pricing_hosted"
     notes: str | None = None
 
     @field_validator("email")
@@ -50,16 +44,16 @@ class WaitlistResponse(BaseModel):
     message: str
 
 
-def _send_discord_alert_sync(email: str, source: str, count: int) -> None:
-    """Send Discord alert synchronously (for background tasks)."""
+def _send_discord_notification(email: str, source: str) -> None:
+    """Send waitlist signup to Discord (the durable record)."""
     settings = get_settings()
     webhook_url = settings.discord_webhook_url
-    alerts_enabled = settings.discord_enable_alerts
 
-    if settings.testing or not alerts_enabled or not webhook_url:
+    if settings.testing or not webhook_url:
+        logger.info("Waitlist signup (no webhook): %s from %s", email, source)
         return
 
-    content = f"📋 **Waitlist Signup!** {email} joined the {source} waitlist (#{count} on waitlist)"
+    content = f"📋 **Waitlist Signup!** {email} (source: {source})"
 
     try:
         with httpx.Client(timeout=5.0) as client:
@@ -74,36 +68,15 @@ def _send_discord_alert_sync(email: str, source: str, count: int) -> None:
 def join_waitlist(
     request: WaitlistRequest,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
 ) -> WaitlistResponse:
-    """Add email to waitlist.
+    """Add email to waitlist via Discord notification.
 
     This endpoint is public (no auth required) since we want to collect
     signups from visitors who haven't signed up yet.
     """
-    entry = WaitlistEntry(
-        email=request.email.lower(),
-        source=request.source,
-        notes=request.notes,
-    )
-    db.add(entry)
-    try:
-        db.commit()
-    except IntegrityError:
-        # Email already exists
-        db.rollback()
-        return WaitlistResponse(
-            success=True,
-            message="You're already on the waitlist! We'll notify you when Pro launches.",
-        )
-
-    # Get total count for Discord alert
-    total_count = db.query(func.count(WaitlistEntry.id)).scalar()
-
-    # Send Discord notification in background
-    background_tasks.add_task(_send_discord_alert_sync, request.email.lower(), request.source, total_count)
+    background_tasks.add_task(_send_discord_notification, request.email, request.source)
 
     return WaitlistResponse(
         success=True,
-        message="Thanks for joining! We'll notify you when Pro launches.",
+        message="Thanks for joining! We'll notify you when hosted launches.",
     )
