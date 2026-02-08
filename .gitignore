@@ -227,3 +227,9 @@ artifacts/ui-capture/
 **/legacy/
 **/*_legacy*
 apps/zerg/backend/.qa-home/
+
+# Vibetest results
+vibetest-results/
+
+# Remotion video output
+apps/video/out/
