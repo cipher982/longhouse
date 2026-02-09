@@ -34,7 +34,7 @@ export function loadConfig(): RunnerConfig {
   } else if (urlEnv) {
     longhouseUrls = [urlEnv];
   } else {
-    longhouseUrls = ['ws://localhost:47300'];
+    longhouseUrls = ['ws://localhost:8080'];
   }
 
   // Validate at least one URL is configured
