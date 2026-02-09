@@ -46,38 +46,19 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 ### 🐛 CRITICAL BUG
 - Control plane `accept-token`: `sub=email` in token payload vs `sub=numeric_user_id` expected by instance auth → hosted login will fail
 
-### 📝 SESSION CHANGES (2026-02-06)
-- E2E cleanup: removed 13 permanently skipped placeholder specs (obsolete auth/WS/perf/style/multi-user/data persistence).
-- E2E cleanup: removed dev-only + unimplemented feature specs (session picker/event bus, commis reconnect, scheduling, triggers).
-- E2E: perf/visual specs now gated via RUN_PERF/RUN_VISUAL; `make test-perf` sets RUN_PERF.
-- E2E: search filter test now asserts search input presence (no silent skip).
-- E2E: chat token streaming no longer skips on missing new-thread button (asserts presence).
-- Video demo: capture scroll now targets page-shell; timeline scene 1 uses hover selectors for stability.
-- Demo seeding/dev: FTS rebuild helper + explicit commit; dev scripts set Vite proxy to local backend.
+### Session Changes
+> Detailed changelogs archived. See git log for 2026-02-05 and 2026-02-06 sessions.
 
-### 📝 SESSION CHANGES (2026-02-05)
-- Hero: Removed Sign In + login modal, restructured to "Self-host Now" + "Hosted Beta →" + friction reducers
-- New: `DeploymentOptions.tsx` three-card section (Self-hosted / Hosted Beta / Enterprise)
-- Contrast: All landing text bumped to WCAG AA, card elevation improved
-- Rebrand: 24 files updated — env vars, URLs, CORS, paths, tests renamed to Longhouse
-- CLI: `longhouse connect` and `longhouse ship` default URL fixed from 47300 → 8080
-- E2E: gpt-scripted now streams tokens; E2E default model forced to `gpt-scripted`
-- E2E: chat token streaming suite re-enabled + selectors hardened; removed placeholder chat/thread specs
-- E2E: core chat streaming + follow-up flow added; correlation ID test now deterministic
-- E2E: removed placeholder specs (trigger email/perf/errors) and trimmed scheduling/search placeholders
-- E2E: realtime_updates now event-driven (ready signals + stream event asserts) and removed lint allowlist entry
-- E2E: realtime_websocket_monitoring now asserts stream envelope fields; removed timeout allowlist entry
-- E2E: comprehensive_database_isolation now asserts API + commis isolation without timeouts; removed allowlist entry
-- E2E: core-journey commis drawer test now locates card by nested tool text to avoid CI flake
-- CI: provision-e2e now waits for control-plane deps before health check (avoid false failures)
-- E2E: automation_history now uses chat ready signals instead of networkidle; removed allowlist entry
-- E2E: error_handling_edge_cases now waits on real UI signals (no networkidle)
-- E2E: accessibility_ui_ux no longer uses arbitrary timeouts; lint allowlist cleared
+---
 
-### 🛠 Ops Changes (prod)
-- Re-created `longhouse-david` container on zerg (PUBLIC_SITE_URL=https://david.longhouse.ai, SINGLE_TENANT=0, SMOKE_TEST_SECRET set, latest runtime image pulled) — stopgap until control-plane provisioning owns this.
-- `/api/health` now returns JSON on `david.longhouse.ai`.
-- `SMOKE_TEST_SECRET` set in GitHub Actions secrets.
+## [Product] 🧠 Unified Memory Bridge (Read-Through Dogfood) (4)
+
+**Goal:** Let Longhouse dogfood the timeline UI while Life Hub remains canonical for agent logs. No workflow break.
+
+- [ ] Write spec: read-through adapter + migration path (apps/zerg/backend/docs/specs/unified-memory-bridge.md)
+- [ ] Add AgentsBackend interface + LifeHubAgentsBackend (HTTP client to Life Hub)
+- [ ] Wire /api/agents/* + session tools to backend switch (AGENTS_BACKEND=life_hub|local)
+- [ ] Add backfill + cutover checklist (dual-write optional)
 
 ---
 
@@ -86,16 +67,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 **Decision:** OSS GA + Hosted Beta in parallel (50/50 positioning). No "OSS-first" bias in copy/CTAs.
 
 ### P0 — Launch Core (Required)
-| Priority | Task | Est |
-|----------|------|-----|
-| 1 | OSS Password Auth ✅ | 1 day |
-| 2 | Demo mode flag ✅ | 0.5 day |
-| 3 | Landing Page CTAs (dual-path: Self-host + Hosted) ✅ | 0.5 day |
-| 4 | README rewrite (Timeline + dual-path install) ✅ | 0.5 day |
-| 5 | FTS5 search (launch requirement) ✅ | 2 days |
-| 6 | OSS GA QA script + README onboarding contract ✅ | 1 day |
-
-**Notes:** CTAs are dual-path; README now matches launch requirements. Remaining gap is hosted beta + search UX polish (snippets/highlights + Oikos tools).
+> ✅ **Archived** — All 6 P0 items complete (auth, demo, CTAs, README, FTS5, QA). See git history.
 
 ### P1 — Hosted Beta (Stretch)
 | Priority | Task | Est |
@@ -111,11 +83,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ## [Launch] Post-GA Follow-ups (From 2026-02-03 Swarm)
 
-- [x] Add rate limiting on `POST /auth/password`
-- [x] Support `LONGHOUSE_PASSWORD_HASH` (bcrypt/argon2)
-- [x] UI fallback if `/auth/methods` fails
-- [x] Add `--demo-fresh` flag to rebuild demo DB
-- [x] Remove workflow/canvas feature (backend + frontend + deps + tests)
+> ✅ **Archived** — All 5 items complete (rate limiting, hash support, UI fallback, demo-fresh, workflow removal). See git history.
 
 ---
 
@@ -138,26 +106,7 @@ See this file for the current launch analysis.
 
 ## [Launch] 🚨 OSS Auth — Password Login for Self-Hosters (3)
 
-**Priority: CRITICAL for HN launch**
-
-**Problem:** Only Google OAuth exists. OSS self-hosters must either:
-- Set up their own Google Console project (unreasonable)
-- Disable auth entirely (`AUTH_DISABLED=1`) (insecure for remote access)
-
-**Solution:** Add simple password auth via environment variable.
-
-- [x] Add `LONGHOUSE_PASSWORD` config var in `apps/zerg/backend/zerg/config/__init__.py`
-- [x] Add `POST /api/auth/password` endpoint in `routers/auth.py`
-  - If `LONGHOUSE_PASSWORD` is set, enable password login
-  - If not set + localhost, auto-authenticate (current dev behavior)
-  - If not set + remote, require password or Google OAuth
-- [x] Add password login UI to `HeroSection.tsx` login modal
-  - Show password field when `LONGHOUSE_PASSWORD` is configured
-  - Keep Google OAuth as alternative
-- [x] Update frontend config to detect password auth availability
-- [x] Test full OSS flow: `install.sh` → `longhouse serve` → password login → timeline
-
-**Files:** `config/__init__.py`, `routers/auth.py`, `HeroSection.tsx`, `config.ts`
+> ✅ **Archived** — Password auth fully implemented. See git history.
 
 ---
 
@@ -180,21 +129,13 @@ See this file for the current launch analysis.
 
 ## [Infra] Instance Health Route Returns HTML (1)
 
-**Goal:** `/api/health` returns JSON on `david.longhouse.ai` (no SPA fallback).
-
-- [x] Ensure runtime image includes the FastAPI route-order fix (catch-all registered last).
-- [x] Reprovision `longhouse-david` and verify `/api/health` returns JSON.
-- [x] Backfill missing `users.digest_enabled` + `users.last_digest_sent_at` columns, then restart to clear cached bootstrap failure.
+> ✅ **Archived** — /api/health returns JSON, route-order fix deployed. See git history.
 
 ---
 
 ## [Infra] Standardize Health Endpoints (2)
 
-**Goal:** Single, standard health endpoint under `/api/health` (no `/api/system/health`, no root `/health`).
-
-- [x] Move health routes to `/api/health` + `/api/livez` and remove `/api/system/health`.
-- [x] Update all callers (frontend, tests, control plane, CLI, scripts).
-- [x] Regenerate OpenAPI schema + frontend types.
+> ✅ **Archived** — Health routes at /api/health + /api/livez, all callers updated. See git history.
 
 ---
 
@@ -640,25 +581,10 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - **Oikos**: Agentic multi-tool discovery. Semantic search, grep, filters, cross-referencing.
 
 ### Phase 1: FTS5 Search Bar (Timeline)
-
-- [x] Add FTS5 virtual table for `agents.events` content (`content_text`, `tool_name`, etc.)
-- [x] Use FTS5 for session queries on `GET /api/agents/sessions?query=...`
-- [x] Add search bar UI to Timeline page (debounced, instant results)
-- [x] Add match snippets + event jump for query results (backend + UI)
-- [x] Results show matching snippets with highlights
-- [x] Click result → opens session detail at relevant event
-
-**Files:** `models/agents.py`, `services/agents_store.py`, `routers/agents.py`, `SessionsPage.tsx`
+> ✅ **Archived** — FTS5 virtual table, search bar UI, snippets, highlights all done. See git history.
 
 ### Phase 2: Oikos Session Discovery Tools
-
-- [x] Add `search_sessions` tool (FTS5 search, returns session summaries)
-- [x] Add `grep_sessions` tool (regex search over event content)
-- [x] Add `filter_sessions` tool (by project, date range, provider, tool usage)
-- [x] Add `get_session_detail` tool (fetch full session with events)
-- [x] Register tools in Oikos core tools
-
-**Files:** `tools/builtin/session_tools.py`, `oikos_tools.py`
+> ✅ **Archived** — 4 session tools (search, grep, filter, get_detail) implemented and registered. See git history.
 
 ### Phase 3: Embeddings for Oikos (Optional)
 
@@ -685,79 +611,51 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 
 ## [Docs/Drift] Findings / Drift Audit (2026-02-05)
 
-(Former FOUND.md. Keep this list updated here only.)
+(Former FOUND.md. Keep this list updated here only. Fixed items stripped — see git history.)
 
-- [Infra/docs] `longhouse.ai/install.sh` serves the SPA HTML (not the installer). The working installer URL is `get.longhouse.ai/install.sh` (302 to GitHub raw). ✅ FIXED: Scripts now use correct URL.
 - [Infra/docs] Wildcard DNS is now configured (dig `test-longhouse-audit.longhouse.ai` resolves); VISION still says "needs setup" in Control Plane section.
 - [Infra/docs] DB size claim stale; prod DB reset 2026-02-05 (no users). Update docs/launch notes once data exists.
-- ✅ FIXED: [Docs vs code] Install script now enforces Python 3.12+ (matches `pyproject.toml`).
 - [Docs vs code] `longhouse connect` fallback still uses `http://localhost:47300` while `longhouse serve` + README use 8080.
-- ✅ FIXED: [Docs vs code] VISION naming section still mentions `longhouse up`; should be `longhouse serve` (CLI has no `up`).
-- ✅ FIXED: [Docs vs code] VISION now reflects FTS5-backed search (no ILIKE stopgap).
 - [Docs vs code] VISION says job claiming is dialect-aware (Postgres `FOR UPDATE SKIP LOCKED`). `commis_job_queue.py` is SQLite-specific (`datetime('now')`, `UPDATE ... RETURNING`) and is imported unconditionally in `commis_job_processor.py`.
 - [Docs vs code] Workspace paths in VISION are `~/.longhouse/workspaces/...` and artifacts in `~/.longhouse/artifacts`, but current defaults are `/var/oikos/workspaces` and `settings.data_dir` (`/data` in Docker or repo `data/`). Session resume temp workspaces default to `/tmp/zerg-session-workspaces`.
-- ✅ FIXED: [Docs vs code] `apps/control-plane/` now exists in repo (scaffold + provisioner).
 - [Docs vs infra] VISION control-plane routing assumes Traefik labels; current infra uses Caddy (coolify-proxy with Caddy labels). If Traefik is intended, docs should say so and note migration.
 - [Docs vs release] PyPI version likely lags repo; verify `longhouse` version on PyPI before making release claims.
-- ✅ FIXED: [Docs vs code] README now scopes provider support + resume to current reality (Claude Code now; hosted resume; other providers in progress).
-- ✅ VERIFIED: [Docs] Launch notes say MIT license; repo LICENSE and pyproject are Apache-2.0. (No MIT reference found in docs/launch notes; LICENSE, pyproject.toml, and README all correctly say Apache-2.0.)
-- [Docs] Launch notes checklist says “README has screenshot (done!)” but README has no image.
+- [Docs] Launch notes checklist says "README has screenshot (done!)" but README has no image.
 - [Docs] Launch notes say demo data seeds on first run; current behavior requires `--demo/--demo-fresh` or calling the demo seed endpoint.
-- ✅ FIXED: [Docs] VISION repeatedly references `brew install longhouse`, but there is no Homebrew formula in repo or release workflow. (VISION updated to mark Homebrew as planned/future)
 - [Docs conflict] Launch plan notes suggest provisioning via Coolify API; VISION explicitly says not to use Coolify for dynamic provisioning.
-- [Docs vs code] VISION onboarding-contract example is Docker-centric (`cp .env.example`, `docker compose up`), but README’s contract runs bun+uv + `longhouse serve`; VISION’s example is stale.
+- [Docs vs code] VISION onboarding-contract example is Docker-centric (`cp .env.example`, `docker compose up`), but README's contract runs bun+uv + `longhouse serve`; VISION's example is stale.
 - [Docs vs code] VISION says `longhouse connect <url>` installs and starts the shipper; actual CLI only installs when `--install` is passed (default runs foreground watch/poll).
 - [Docs vs code] VISION says device token is issued during `longhouse connect`; actual flow requires manual token creation in UI (`/dashboard/settings/devices`) and paste into CLI.
-- [Docs vs code] VISION specifies shipper batching “1 second or 100 events”; implementation ships per file with no time-window batching (only `batch_size` for spool replay).
+- [Docs vs code] VISION specifies shipper batching "1 second or 100 events"; implementation ships per file with no time-window batching (only `batch_size` for spool replay).
 - [Docs vs code] VISION says shipper replay uses idempotency keys; shipper does not send idempotency keys/headers (dedupe relies on DB unique index).
-- [Docs vs UI] “Resume from anywhere / Timeline resume” is not in Timeline UI; resume is only implemented in Forum Drop-In (Claude-only) and not exposed on `/timeline`.
-- ✅ FIXED: [Docs vs code] Oikos discovery tools now implemented and registered (`search_sessions`, `grep_sessions`, `filter_sessions`, `get_session_detail`).
+- [Docs vs UI] "Resume from anywhere / Timeline resume" is not in Timeline UI; resume is only implemented in Forum Drop-In (Claude-only) and not exposed on `/timeline`.
 - [Docs vs code] VISION says cross-subdomain auth tokens are one-time with nonce stored server-side and validated via control plane/JWKS; current `POST /api/auth/accept-token` just validates JWT and sets cookie (no nonce/one-time guard).
-- [Docs/infra] `install-claude.sh` is broken: `longhouse.ai/install-claude.sh` serves the SPA HTML, `get.longhouse.ai/install-claude.sh` redirects to `scripts/install-claude.sh` which 404s. ✅ PARTIAL: Shim script now points users to Anthropic docs instead of broken URL.
 - [Docs vs code] VISION requires a PATH-based Claude shim + verification in a fresh shell; current installer only adds a hook unless `~/.longhouse/install-claude-shim.sh` already exists and does not verify in a new shell.
 - [Docs] Launch notes claim session files in `~/.codex/sessions/*` etc; current shipper/parser only reads Claude Code (`~/.claude/projects/...`).
-- [Docs vs code] Password-only auth isn't actually possible in production: `_validate_required()` always requires `GOOGLE_CLIENT_ID/SECRET` when `AUTH_DISABLED=0`, even if `LONGHOUSE_PASSWORD[_HASH]` is set. README/launch notes imply password-only is supported. ✅ FIXED: Google OAuth validation now skipped when password auth is configured.
-- ✅ FIXED: [Docs vs code] `session_continuity.py` default LONGHOUSE_API_URL is now 8080.
 - [Docs vs UI] `longhouse auth` instructs users to open `/dashboard/settings/devices`, but there is no device-token UI or route; frontend only has `/settings` and no device token page.
 - [Code inconsistency] `WorkspaceManager` defaults to `/var/oikos/workspaces` while settings default `OIKOS_WORKSPACE_PATH` to `~/.longhouse/workspaces`; local OSS may try to write to `/var/oikos` without permission.
-- [Docs vs UI] VISION describes a 3-step guided empty state with “Load demo” CTA; Timeline empty state is a single sentence (“Run 'longhouse ship'”) with no demo button.
-- [Docs vs repo] README “Docker” install says `docker compose up`, but there is no root `docker-compose.yml` or `compose.yaml`; Docker configs live under `docker/` (e.g., `docker/docker-compose.dev.yml`).
+- [Docs vs UI] VISION describes a 3-step guided empty state with "Load demo" CTA; Timeline empty state is a single sentence ("Run 'longhouse ship'") with no demo button.
+- [Docs vs repo] README "Docker" install says `docker compose up`, but there is no root `docker-compose.yml` or `compose.yaml`; Docker configs live under `docker/` (e.g., `docker/docker-compose.dev.yml`).
 - [Docs vs code] `apps/runner/README.md` uses `LONGHOUSE_URL=http://localhost:30080` for dev/Docker; runner defaults to `ws://localhost:47300` and `longhouse serve` uses 8080, so the example points at the wrong port/service.
-- STALE: [Docs vs code] `experiments/shipper-manual-validation.md` is legacy: uses `zerg` CLI, old token/url files (`zerg-device-token`, `zerg-url`), old launchd label `com.swarmlet.shipper`, old frontend port 30080, and claims no sessions UI exists (Timeline now exists). (Experiments doc is historical, can be deleted or archived)
 - [Docs vs code] `apps/zerg/backend/docs/specs/shipper.md` still documents `zerg` commands and `~/.claude/zerg-device-token`; current CLI is `longhouse` and tokens are stored at `~/.claude/longhouse-device-token` (legacy `zerg-` paths are migration-only).
-- [Docs] `apps/zerg/backend/docs/supervisor_tools.md` references non-existent paths/tests: `apps/zerg/backend/docs/oikos_tools.md`, `examples/oikos_tools_demo.py`, `tests/test_oikos_tools.py`, `tests/test_oikos_tools_integration.py`, and “20/20 tests passing” despite those files not existing (only `tests/tools/test_oikos_tools_errors.py` exists).
-- [Docs vs code] `oikos_react_engine.py` module docstring claims “spawn_commis raises FicheInterrupted directly”; in parallel execution `_execute_tools_parallel` uses two-phase commit and does NOT raise FicheInterrupted (returns ToolMessages + interrupt_value instead).
-- [Docs vs code] `jobs/git_sync.py` class docstring says “Thread-safety: Uses file lock,” but the implementation is async with asyncio + `asynccontextmanager` and `asyncio.to_thread`; it’s concurrency-safety, not thread-safety.
+- [Docs] `apps/zerg/backend/docs/supervisor_tools.md` references non-existent paths/tests: `apps/zerg/backend/docs/oikos_tools.md`, `examples/oikos_tools_demo.py`, `tests/test_oikos_tools.py`, `tests/test_oikos_tools_integration.py`, and "20/20 tests passing" despite those files not existing (only `tests/tools/test_oikos_tools_errors.py` exists).
+- [Docs vs code] `oikos_react_engine.py` module docstring claims "spawn_commis raises FicheInterrupted directly"; in parallel execution `_execute_tools_parallel` uses two-phase commit and does NOT raise FicheInterrupted (returns ToolMessages + interrupt_value instead).
+- [Docs vs code] `jobs/git_sync.py` class docstring says "Thread-safety: Uses file lock," but the implementation is async with asyncio + `asynccontextmanager` and `asyncio.to_thread`; it's concurrency-safety, not thread-safety.
 - [Bug] `jobs/commis.py` `_run_job` returns early if `extend_lease` fails before execution, leaving the job in `claimed` state until lease expiry (no reschedule/mark-dead handling).
 - [Bug] `GitSyncService._get_auth_url()` mangles SSH-style repo URLs when `token` is set (e.g., `git@github.com:user/repo.git` → malformed `@@` URL); should reject token auth for SSH URLs or handle separately.
 - [Docs vs code] Slack skill doc is wrong: `apps/zerg/backend/zerg/skills/bundled/slack/SKILL.md` references `slack_send_message` and `SLACK_BOT_TOKEN`, but the actual tool is `send_slack_webhook` and it uses incoming webhook URLs (connector/env), not a bot token.
-- ✅ FIXED: [Docs vs code] Backend search uses FTS5 when available; README still reflects launch requirement.
-- ✅ FIXED: [Docs vs code] `scripts/install.sh` WSL warning tells users to run `longhouse connect --foreground`, but the CLI has no `--foreground` flag (foreground is the default).
 - [Docs vs code] `services/shipper/spool.py` docstring claims replay uses idempotency keys, but the shipper does not send idempotency keys (dedupe relies on DB unique constraints).
 - [Docs vs code] GitHub skill doc says `GITHUB_TOKEN` env var works; `github_tools` only resolves tokens from connectors or explicit parameters (no env fallback).
 - [Docs vs code] Web search skill docs omit required `TAVILY_API_KEY`: `web_search` errors when the env var is missing, but `apps/zerg/backend/zerg/skills/bundled/web-search/SKILL.md` has no env requirement and is marked `always: true`.
-- [Docs/infra] `scripts/install-runner.sh` advertises `curl -sSL https://longhouse.ai/install-runner.sh | bash`, but that URL serves the SPA HTML. ✅ FIXED: Script now uses correct URL.
 - [Docs vs infra] VISION Life Hub config uses `ZERG_API_URL=https://longhouse.ai/api`, but `https://longhouse.ai/api/*` returns 502; the working API host is `https://api.longhouse.ai`.
 - [Docs vs UI] Backend notifications use `https://longhouse.ai/runs/{run.id}` (see `oikos_service.py`), but the frontend has no `/runs/:id` route; unknown paths redirect to LandingPage/Timeline, so run links are broken.
-- [Docs vs code] CLI docs in `zerg/cli/__init__.py` and `zerg/cli/main.py` say `longhouse connect` is “continuous polling,” but the CLI defaults to watch mode (polling only with `--poll`/`--interval`).
+- [Docs vs code] CLI docs in `zerg/cli/__init__.py` and `zerg/cli/main.py` say `longhouse connect` is "continuous polling," but the CLI defaults to watch mode (polling only with `--poll`/`--interval`).
 - [Docs vs code] `scripts/install.sh` only documents `LONGHOUSE_API_URL`; CLI reads it, but `longhouse connect` fallback still uses 47300 (docs imply 8080).
-- [Docs vs reality] Timeline page copy says “across providers,” but real ingest only supports Claude Code; other providers are demo-only.
-- ✅ FIXED: [Docs vs reality] Landing “How It Works” copy now reflects hosted/self-hosted paths and provider status.
-- ✅ FIXED: [Docs vs reality] Landing hero subhead now scopes resume to hosted.
-- ✅ FIXED: [Docs vs reality] Public Docs page (`frontend-web/src/pages/DocsPage.tsx`) is still the old "fiche/canvas/dashboard" workflow with Google sign-in, not the timeline-first OSS product. (TODO comment added; full rewrite pending.)
-- [Docs vs reality] Public info pages (`PricingPage.tsx`, `SecurityPage.tsx`, `PrivacyPage.tsx`) still describe fiches/workflows, Google-only OAuth auth, and dashboard account management, which don’t match the current timeline-first OSS flow.
+- [Docs vs reality] Timeline page copy says "across providers," but real ingest only supports Claude Code; other providers are demo-only.
+- [Docs vs reality] Public info pages (`PricingPage.tsx`, `SecurityPage.tsx`, `PrivacyPage.tsx`) still describe fiches/workflows, Google-only OAuth auth, and dashboard account management, which don't match the current timeline-first OSS flow.
 - [Docs vs code] DocsPage skills section says to add `SKILL.md` to `workspace/skills`; default loader path for OSS is `~/.longhouse/skills` unless a workspace path is configured.
-- ✅ FIXED: [Docs vs reality] Landing DemoSection/HowItWorks now scope resume to hosted and clarify provider status.
-- [Docs vs code] Landing SkillsSection says Slack skill can “manage channels,” but Slack tool is webhook-only (send message); no channel management/listing tools exist.
-- ✅ FIXED: [Docs vs code] VISION "Runner registration" says `longhouse runner register` generates credentials, but the CLI has no `runner` command; registration happens via the runner installer hitting `/api/runners/register`. (VISION updated to describe actual flow)
-- ✅ FIXED: [Docs vs code] VISION CLI section says `longhouse status` shows running jobs and `longhouse logs <job_id>` tails job logs, but `longhouse status` only prints configuration and there is no `logs` command. (VISION updated - `logs` marked as planned)
-- ✅ FIXED: [Docs vs code] VISION "File Structure (After)" claims `~/.longhouse/logs/` with per-job logs and shows `→ http://0.0.0.0:8080`; actual logging is `~/.longhouse/server.log` (server) + `~/.claude/shipper.log` (shipper) and `longhouse serve` defaults to `127.0.0.1:8080` unless `--host` is set. (VISION updated with correct paths and port)
-- ✅ FIXED: [Docs vs code] VISION says runners are "Node.js" daemons, but the runner is Bun-based (`apps/runner` uses Bun scripts and builds a Bun-compiled binary); Node isn't required. (VISION updated to say Bun-compiled)
-- ✅ FIXED: [Docs vs code] VISION OSS local path says the shipper runs "zero config" alongside `longhouse up`; in reality the shipper is not auto-started by `longhouse serve` and requires `longhouse connect`/`onboard` to install or run. (VISION updated to note shipper requires `longhouse connect`)
-- ✅ FIXED: [Docs vs repo] VISION "Docker alternative" says `docker compose up` for full stack with Postgres, but there is no root compose file; Docker configs live under `docker/` (same drift as README). (VISION updated to use correct path `docker/docker-compose.dev.yml`)
-- [Docs] QA job prompt (`apps/zerg/backend/zerg/jobs/qa/prompt.md`) still brands alerts as “SWARMLET QA”; should be Longhouse (brand drift).
-- ✅ FIXED: [Docs conflict] TODO now reflects that message layout is already system→conversation→dynamic; remaining cache-busters are listed.
-- ✅ FIXED: [Docs vs code] VISION Homebrew formula sketch depends on `python@3.11`, but backend requires Python 3.12+ per `pyproject.toml` (same mismatch as install.sh). (VISION updated to python@3.12)
+- [Docs vs code] Landing SkillsSection says Slack skill can "manage channels," but Slack tool is webhook-only (send message); no channel management/listing tools exist.
+- [Docs] QA job prompt (`apps/zerg/backend/zerg/jobs/qa/prompt.md`) still brands alerts as "SWARMLET QA"; should be Longhouse (brand drift).
 
 ---
 
