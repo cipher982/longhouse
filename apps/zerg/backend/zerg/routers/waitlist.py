@@ -2,6 +2,9 @@
 
 Public endpoints for collecting email signups for features not yet available.
 No authentication required. Signups go to Discord; no local DB dependency.
+
+Discord is the durable record — if the webhook is not configured or fails,
+the endpoint returns an error so the user knows their signup wasn't recorded.
 """
 
 import logging
@@ -9,7 +12,7 @@ import re
 
 import httpx
 from fastapi import APIRouter
-from fastapi import BackgroundTasks
+from fastapi import Response
 from pydantic import BaseModel
 from pydantic import field_validator
 
@@ -26,7 +29,6 @@ class WaitlistRequest(BaseModel):
 
     email: str
     source: str = "pricing_hosted"
-    notes: str | None = None
 
     @field_validator("email")
     @classmethod
@@ -44,37 +46,51 @@ class WaitlistResponse(BaseModel):
     message: str
 
 
-def _send_discord_notification(email: str, source: str) -> None:
-    """Send waitlist signup to Discord (the durable record)."""
+@router.post("", response_model=WaitlistResponse)
+def join_waitlist(request: WaitlistRequest, response: Response) -> WaitlistResponse:
+    """Add email to waitlist via Discord webhook.
+
+    This endpoint is public (no auth required). Discord is the durable
+    record — the call is synchronous so we know if it succeeded before
+    telling the user.
+    """
     settings = get_settings()
     webhook_url = settings.discord_webhook_url
 
-    if settings.testing or not webhook_url:
-        logger.info("Waitlist signup (no webhook): %s from %s", email, source)
-        return
+    if settings.testing:
+        logger.info("Waitlist signup (test mode): %s from %s", request.email, request.source)
+        return WaitlistResponse(
+            success=True,
+            message="Thanks for joining! We'll notify you when hosted launches.",
+        )
 
-    content = f"📋 **Waitlist Signup!** {email} (source: {source})"
+    if not webhook_url:
+        logger.error("Waitlist signup failed: DISCORD_WEBHOOK_URL not configured")
+        response.status_code = 503
+        return WaitlistResponse(
+            success=False,
+            message="Waitlist is temporarily unavailable. Please try again later.",
+        )
+
+    content = f"**Waitlist Signup** | {request.email} | source: {request.source}"
 
     try:
         with httpx.Client(timeout=5.0) as client:
             resp = client.post(webhook_url, json={"content": content})
             if resp.status_code >= 300:
-                logger.warning("Discord webhook returned %s: %s", resp.status_code, resp.text)
+                logger.error("Waitlist Discord webhook returned %s: %s", resp.status_code, resp.text)
+                response.status_code = 502
+                return WaitlistResponse(
+                    success=False,
+                    message="Waitlist is temporarily unavailable. Please try again later.",
+                )
     except Exception as exc:
-        logger.warning("Discord webhook error: %s", exc)
-
-
-@router.post("", response_model=WaitlistResponse)
-def join_waitlist(
-    request: WaitlistRequest,
-    background_tasks: BackgroundTasks,
-) -> WaitlistResponse:
-    """Add email to waitlist via Discord notification.
-
-    This endpoint is public (no auth required) since we want to collect
-    signups from visitors who haven't signed up yet.
-    """
-    background_tasks.add_task(_send_discord_notification, request.email, request.source)
+        logger.error("Waitlist Discord webhook error: %s", exc)
+        response.status_code = 502
+        return WaitlistResponse(
+            success=False,
+            message="Waitlist is temporarily unavailable. Please try again later.",
+        )
 
     return WaitlistResponse(
         success=True,
