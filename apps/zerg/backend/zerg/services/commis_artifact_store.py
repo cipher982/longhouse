@@ -70,7 +70,7 @@ class CommisArtifactStore:
             2. If LONGHOUSE_DATA_PATH env var is set, use it (fail if not writable)
             3. Otherwise, use get_settings().data_dir / "commis"
         """
-        env_path = os.getenv("LONGHOUSE_DATA_PATH") or os.getenv("SWARMLET_DATA_PATH")
+        env_path = os.getenv("LONGHOUSE_DATA_PATH")
 
         if base_path:
             self.base_path = Path(base_path)
