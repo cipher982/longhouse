@@ -72,17 +72,17 @@ The shipper syncs Claude Code (and other CLI agent) sessions to Zerg in real-tim
 ### Phase 2D: Service Installation ✅ COMPLETE
 - launchd plist for macOS
 - systemd unit for Linux
-- `zerg connect --install` to set up
-- `zerg connect --uninstall` to remove
-- `zerg connect --status` to check status
+- `longhouse connect --install` to set up
+- `longhouse connect --uninstall` to remove
+- `longhouse connect --status` to check status
 
 **Files:** service.py, connect.py updates
 
 **Acceptance criteria:**
-- [x] `zerg connect --install` creates and starts service
+- [x] `longhouse connect --install` creates and starts service
 - [x] Service auto-starts on boot
 - [x] Service restarts on failure
-- [x] `zerg connect --uninstall` stops and removes service
+- [x] `longhouse connect --uninstall` stops and removes service
 - [x] Works on macOS (launchd) and Linux (systemd)
 
 **Commits:** 8efd6779, 98c46708 (KeepAlive fix), + CLI interval/status fixes
