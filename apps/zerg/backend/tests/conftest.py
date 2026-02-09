@@ -18,7 +18,6 @@ if not os.environ.get("FERNET_SECRET"):
 
 import asyncio
 import sys
-import tempfile
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
@@ -78,19 +77,15 @@ else:
 
 
 # ---------------------------------------------------------------------------
-# SQLite test database setup
+# SQLite test database setup — in-memory for zero disk I/O
 # ---------------------------------------------------------------------------
-# Each pytest-xdist worker gets its own SQLite file for isolation
+# Each pytest-xdist worker runs in its own process, so each gets a separate
+# in-memory SQLite database automatically (no cross-process sharing needed).
+# StaticPool in make_engine keeps the single connection alive for the
+# lifetime of the engine so tables/data persist across sessions.
 
-_XDIST_WORKER = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
-
-# Create per-worker SQLite database file
-_TEST_DB_DIR = Path(tempfile.gettempdir()) / "zerg_tests"
-_TEST_DB_DIR.mkdir(exist_ok=True)
-_TEST_DB_FILE = _TEST_DB_DIR / f"test_{_XDIST_WORKER}.db"
-
-# Set DATABASE_URL for this test worker BEFORE importing zerg.database
-os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB_FILE}"
+# Set DATABASE_URL BEFORE importing zerg.database
+os.environ["DATABASE_URL"] = "sqlite://"
 
 import zerg.database as _db_mod
 import zerg.routers.websocket as _ws_router
@@ -107,8 +102,8 @@ from zerg.models.models import ThreadMessage
 from zerg.services.scheduler_service import scheduler_service
 from zerg.websocket.manager import topic_manager
 
-# Create test engine and session factory
-SQLALCHEMY_DATABASE_URL = f"sqlite:///{_TEST_DB_FILE}"
+# Create test engine and session factory (in-memory, StaticPool applied by make_engine)
+SQLALCHEMY_DATABASE_URL = "sqlite://"
 test_engine = make_engine(SQLALCHEMY_DATABASE_URL)
 TestingSessionLocal = make_sessionmaker(test_engine)
 
@@ -310,16 +305,7 @@ def _db_schema():
     AgentsBase.metadata.create_all(bind=test_engine)
 
     yield
-
-    # Cleanup: delete test database file
-    if os.environ.get("LONGHOUSE_KEEP_TEST_DB") != "1":
-        try:
-            _TEST_DB_FILE.unlink(missing_ok=True)
-            # Also clean up WAL and SHM files
-            Path(str(_TEST_DB_FILE) + "-wal").unlink(missing_ok=True)
-            Path(str(_TEST_DB_FILE) + "-shm").unlink(missing_ok=True)
-        except Exception:
-            pass
+    # In-memory DB is discarded when the engine is garbage-collected; nothing to clean up.
 
 
 def _truncate_all_tables(connection):
