@@ -19,7 +19,7 @@ mkdir -p "$XDG_CACHE_HOME" "$TMPDIR"
 
 export TESTING=1
 
-# Always use SQLite for lite tests (ignore any Postgres URL in environment)
-export DATABASE_URL="sqlite:///${SCRIPT_DIR}/.lite_test.db"
+# Always use in-memory SQLite for lite tests — zero disk I/O
+export DATABASE_URL="sqlite://"
 
 uv run pytest tests_lite/ -p no:warnings --tb=short "$@"

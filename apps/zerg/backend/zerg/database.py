@@ -22,6 +22,7 @@ from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from zerg.config import get_settings
 
@@ -193,9 +194,17 @@ def make_engine(db_url: str, **kwargs) -> Engine:
     # SQLite configuration
     connect_args = kwargs.setdefault("connect_args", {})
     connect_args.setdefault("check_same_thread", False)
-    if "timeout" not in connect_args:
-        busy_timeout_ms = int(os.getenv("SQLITE_BUSY_TIMEOUT_MS", "5000"))
-        connect_args["timeout"] = busy_timeout_ms / 1000.0
+
+    # In-memory SQLite (sqlite:// with no path) requires StaticPool to keep
+    # a single connection alive — otherwise each pool checkout creates a new
+    # empty database.  File-backed SQLite uses the default QueuePool.
+    is_memory = parsed.database in (None, "", ":memory:")
+    if is_memory:
+        kwargs.setdefault("poolclass", StaticPool)
+    else:
+        if "timeout" not in connect_args:
+            busy_timeout_ms = int(os.getenv("SQLITE_BUSY_TIMEOUT_MS", "5000"))
+            connect_args["timeout"] = busy_timeout_ms / 1000.0
 
     engine = create_engine(db_url, **kwargs)
     _configure_sqlite_engine(engine)
