@@ -55,7 +55,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 **Goal:** Let Longhouse dogfood the timeline UI while Life Hub remains canonical for agent logs. No workflow break.
 
-- [ ] Write spec: read-through adapter + migration path (apps/zerg/backend/docs/specs/unified-memory-bridge.md)
+- [x] Write spec: read-through adapter + migration path (apps/zerg/backend/docs/specs/unified-memory-bridge.md)
 - [ ] Add AgentsBackend interface + LifeHubAgentsBackend (HTTP client to Life Hub)
 - [ ] Wire /api/agents/* + session tools to backend switch (AGENTS_BACKEND=life_hub|local)
 - [ ] Add backfill + cutover checklist (dual-write optional)
