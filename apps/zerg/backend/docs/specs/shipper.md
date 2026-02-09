@@ -47,7 +47,7 @@ The shipper syncs Claude Code (and other CLI agent) sessions to Zerg in real-tim
 - watchdog for file system events
 - Debounce rapid writes (500ms)
 - Fallback scan every 5 minutes
-- `zerg connect` defaults to watch mode
+- `longhouse connect` defaults to watch mode
 
 **Files:** watcher.py, connect.py updates
 
@@ -90,20 +90,20 @@ The shipper syncs Claude Code (and other CLI agent) sessions to Zerg in real-tim
 ---
 
 ### Phase 3: Per-Device Tokens ✅ COMPLETE
-- Issue device-specific tokens during `zerg auth`
+- Issue device-specific tokens during `longhouse auth`
 - Token scoped to user's instance
 - Revocable if device compromised
-- Store in ~/.claude/zerg-device-token
+- Store in ~/.claude/longhouse-device-token
 
 **Files:**
 - models/device_token.py - DeviceToken SQLAlchemy model
 - routers/device_tokens.py - CRUD API endpoints
 - services/shipper/token.py - Local token storage
-- cli/connect.py - `zerg auth` command
+- cli/connect.py - `longhouse auth` command
 
 **Acceptance criteria:**
-- [x] `zerg auth` command to obtain device token
-- [x] Token persisted locally at ~/.claude/zerg-device-token
+- [x] `longhouse auth` command to obtain device token
+- [x] Token persisted locally at ~/.claude/longhouse-device-token
 - [x] Token validated on each ingest (X-Agents-Token header)
 - [x] API to list/revoke device tokens (/api/devices/tokens)
 - [x] Revoked tokens fail gracefully (401)
@@ -132,8 +132,8 @@ Per VISION.md lines 339-361:
 ### Phase 5: OSS Packaging ✅ COMPLETE
 Per VISION.md lines 421-467:
 
-- [x] `zerg ship` one-time manual sync
-- [x] `zerg connect <url>` for remote instances
+- [x] `longhouse ship` one-time manual sync
+- [x] `longhouse connect <url>` for remote instances
 - [x] Local auto-detect (default: localhost:47300)
 - [ ] Homebrew formula (future release task)
 

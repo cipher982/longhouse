@@ -246,29 +246,15 @@ We use **lazy imports** - `CommisRunner` is imported inside the `spawn_commis` f
 
 ## Testing
 
-### Unit Tests
+### Error Handling Tests
 
-**Location:** `tests/test_oikos_tools.py`
+**Location:** `tests/tools/test_oikos_tools_errors.py`
 
 **Coverage:**
 
-- All 6 tools with success and error cases
+- Tool error cases and edge conditions
 - Path traversal security
-- Time filters
-- Status filters
-- Case-insensitive search
-- Multiple commis workflows
-
-**Results:** 20/20 tests passing
-
-### Integration Tests
-
-**Location:** `tests/test_oikos_tools_integration.py`
-
-**Tests:**
-
-- Tool registration in BUILTIN_TOOLS
-- End-to-end agent usage (requires tool allowlist configuration)
+- Graceful failure modes
 
 ## Usage Example
 
@@ -291,29 +277,6 @@ commiss = list_commiss(limit=5, status="success")
 # Read a specific result
 commis_result = read_commis_result("2024-12-03T14-32-00_analyze-logs")
 ```
-
-## Demo
-
-Run the interactive demo:
-
-```bash
-cd apps/zerg/backend
-uv run python examples/oikos_tools_demo.py
-```
-
-## Files Created/Modified
-
-### Created:
-
-- `zerg/tools/builtin/oikos_tools.py` - Tool implementations
-- `tests/test_oikos_tools.py` - Unit tests
-- `tests/test_oikos_tools_integration.py` - Integration tests
-- `examples/oikos_tools_demo.py` - Demo script
-- `apps/zerg/backend/docs/oikos_tools.md` - This document
-
-### Modified:
-
-- `zerg/tools/builtin/__init__.py` - Registered oikos tools
 
 ## Next Steps
 
