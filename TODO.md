@@ -112,10 +112,10 @@ These 9 services are actively used — decouple from FicheRunner so they work wi
 
 Skills are a platform feature shared by Oikos and commis. Match industry pattern (Claude Code, Cursor) for progressive loading.
 - [x] Change `SkillIntegration` to inject **index only** (name + description, one line each) into system prompt by default — not full SKILL.md content
-- [ ] Load full skill content into conversation only when: user invokes `/skill-name`, OR Oikos auto-selects based on description matching the request
-- [ ] Add `skills` parameter to `spawn_workspace_commis` — pass selected skill content to commis prompt so CLI agents inherit user skills
-- [ ] Respect character budget for skill index (cap total index tokens, drop lowest-priority skills if over budget)
-- [ ] Supporting files in skill directories loaded only when skill is active and references them
+- [x] Load full skill content into conversation only when: user invokes `/skill-name`, OR Oikos auto-selects based on description matching the request
+- [x] Add `skills` parameter to `spawn_workspace_commis` — pass selected skill content to commis prompt so CLI agents inherit user skills
+- [x] Respect character budget for skill index (cap total index tokens, drop lowest-priority skills if over budget)
+- [x] Supporting files in skill directories loaded only when skill is active and references them
 - [ ] Document skill format compatibility: users can adapt Claude Code `.claude/skills/` and Cursor `.cursor/rules/` into `~/.longhouse/skills/`
 - [ ] Support Codex-style AGENTS.md instruction chain in commis workspaces (global → repo → subdir, with override files) for cross-agent compatibility
 
