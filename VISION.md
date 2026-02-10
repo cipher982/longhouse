@@ -107,13 +107,13 @@ This is the product. Everything else supports it.
 **Longhouse does not build its own LLM execution loop.** Claude Code, Codex CLI, and Gemini CLI are agent harnesses built by teams of hundreds. Longhouse cannot and should not compete with them. Instead:
 
 - **Commis = CLI agent subprocess.** Every commis spawns a real CLI agent (Claude Code via `hatch`) in an isolated workspace. The user gets the exact same agent they use in terminal — same tools, same context management, same capabilities.
-- **Standard mode (in-process ReAct loop) is deprecated.** The ~25K LOC custom harness (fiche_runner, 31 builtin tools, message assembly, tool registry, skills system) is legacy from pre-pivot. It will be removed incrementally.
-- **Oikos is a thin coordinator, not an agent harness.** Oikos uses direct LLM API calls for conversation + orchestration (spawn commis, summarize results, contact user). It does NOT need its own tool execution engine — it delegates real work to commis.
+- **Standard mode (in-process ReAct loop) is deprecated.** The custom harness infrastructure (fiche_runner, message assembly, tool registry, skills system, ReAct engine — ~15K LOC) is legacy from pre-pivot. It will be removed incrementally. The ~60 builtin tools themselves are kept as a modular toolbox.
+- **Oikos is a thin coordinator with configurable tools.** Oikos uses a simple LLM API loop (not a custom ReAct engine) with a configured subset of the toolbox. It delegates complex multi-step work to commis but can perform quick actions directly (send email, post to Slack, search sessions, etc.).
 - **Commis sessions appear in the timeline.** When a commis finishes, its session JSONL is ingested through the same `/api/agents/ingest` path as shipped terminal sessions. All sessions are unified in one archive.
 
-**What Longhouse owns:** orchestration, job queue, workspace isolation, timeline, search, resume, always-on infrastructure, runner coordination.
+**What Longhouse owns:** orchestration, job queue, workspace isolation, timeline, search, resume, always-on infrastructure, runner coordination, modular toolbox (integrations, memory, communication).
 
-**What CLI agents own:** the agent loop, tool execution, file editing, bash, MCP servers, context management, streaming.
+**What CLI agents own:** the agent loop, tool execution, file editing, bash, MCP servers, context management, streaming. (CLI agents can also call back into Longhouse's toolbox via MCP — stretch goal.)
 
 ---
 
@@ -262,7 +262,7 @@ This is not a modal or tour - it's inline content that disappears once sessions 
 
 **Docs-as-source validation:**
 README contains an `onboarding-contract` JSON block that CI executes:
-- Steps to run (`cp .env.example .env`, `docker compose up`, health check)
+- Steps to run (`pip install longhouse`, `longhouse serve`, health check)
 - Cleanup commands
 - CTA selectors to verify (e.g., `[data-testid='demo-cta']`)
 
@@ -336,23 +336,20 @@ We do NOT use Coolify for dynamic provisioning (API can't create apps). Instead,
 - If remote access is required, use SSH + `docker context` (no open TCP socket)
 - Lock down the control plane service user to Docker-only permissions
 
-```python
-# Control plane calls Docker API directly
+```bash
+# Control plane calls Docker API directly (Caddy labels for coolify-proxy)
 docker run -d \
   --name longhouse-alice \
-  --label traefik.enable=true \
-  --label "traefik.http.routers.alice.rule=Host(\`alice.longhouse.ai\`)" \
-  --label "traefik.http.routers.alice.entrypoints=websecure" \
-  --label "traefik.http.routers.alice.tls=true" \
-  --label "traefik.http.routers.alice.tls.certresolver=letsencrypt" \
-  --label "traefik.http.services.alice.loadbalancer.server.port=8000" \
+  --network coolify \
+  --label caddy=alice.longhouse.ai \
+  --label "caddy.reverse_proxy={{upstreams 8000}}" \
   -v /data/longhouse-alice:/data \
   -e INSTANCE_ID=alice \
   -e SINGLE_TENANT=1 \
   -e APP_PUBLIC_URL=https://alice.longhouse.ai \
   -e PUBLIC_SITE_URL=https://longhouse.ai \
   -e DATABASE_URL=sqlite:////data/longhouse.db \
-  ghcr.io/cipher982/longhouse:latest
+  ghcr.io/cipher982/longhouse-runtime:latest
 ```
 
 **Control plane stack:**
@@ -371,8 +368,8 @@ apps/control-plane/           # NEW - tiny FastAPI app
 ```
 
 **Routing:**
-- Wildcard DNS: `*.longhouse.ai -> zerg server IP` (needs setup — not currently configured)
-- Self-managed reverse proxy on zerg (Caddy Docker Proxy preferred; Traefik also viable) routes by container labels
+- Wildcard DNS: `*.longhouse.ai -> zerg server IP` (✅ configured 2026-02-05, proxied through Cloudflare)
+- Caddy Docker Proxy on zerg (existing coolify-proxy) routes by caddy-docker-proxy labels
 - Each container gets unique subdomain automatically
 
 **Provisioning guarantees:**
@@ -938,6 +935,8 @@ Optional safety step:
 
 ## Prompt Cache Optimization (LLM Cost/Latency)
 
+> **Note:** `MessageArrayBuilder` and `prompt_context` are slated for removal in Phase 3 (Slim Oikos). The simple loop replacement will use provider-native prompt caching (stable system message + tool schemas as prefix). This section documents the legacy approach for reference.
+
 **Current state:** `MessageArrayBuilder` already follows good cache patterns:
 1) Static system content first
 2) Conversation history next
@@ -1017,7 +1016,7 @@ This is David's personal integration. OSS users don't need Life Hub at all.
 6. Runner daemon packaging: separate install or bundle with `longhouse` CLI?
 7. Secrets for jobs: job-scoped encrypted bundles (age) vs sops vs external secrets manager?
 8. Jobs pack UX: local template by default vs required private repo from day one?
-9. Session discovery: semantic search (embeddings) priority vs FTS5-only for MVP?
+9. ~~Session discovery: semantic search (embeddings) priority vs FTS5-only for MVP?~~ → FTS5 for MVP (done), embeddings as Phase 4 enhancement. Memory system already has OpenAI embeddings infra.
 
 ---
 
@@ -1498,7 +1497,7 @@ Logs are written to `~/.longhouse/server.log` (server) and `~/.claude/shipper.lo
 | Concurrent commis | ✅ | ✅ |
 | Durable job queue | ✅ | ✅ |
 | Job queue (multi-node) | ❌ | ✅ |
-| Full-text search | Basic | ✅ Advanced |
+| Full-text search | ✅ FTS5 | ✅ FTS5 |
 | Multi-user | ❌ | ✅ |
 
 **Lite = single node, full features. Postgres = horizontal scale.**
