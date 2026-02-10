@@ -51,6 +51,9 @@ class TriggerConfig(BaseModel):  # noqa: D101 – obvious from context
     # Optional filter definition used by *email_filtering.matches*.
     filters: Optional[Dict[str, Any]] = Field(None, description="User supplied filter rules")
 
+    # FK reference to the Connector row that holds OAuth tokens for this trigger.
+    connector_id: Optional[int] = Field(None, description="ID of the associated connector")
+
     model_config = {
         "extra": "forbid",
         "frozen": True,  # hashable so it can be cached if needed
