@@ -18,6 +18,7 @@ from zerg.crud import crud
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
 from zerg.schemas.schemas import Fiche
+from zerg.tools import get_registry
 
 # MCP manager singleton – needed by several endpoints
 from zerg.tools.mcp_adapter import MCPManager  # noqa: E402 – placed after stdlib imports
@@ -26,7 +27,6 @@ from zerg.tools.mcp_exceptions import MCPConfigurationError
 from zerg.tools.mcp_exceptions import MCPConnectionError
 from zerg.tools.mcp_presets import PRESET_MCP_SERVERS
 from zerg.tools.mcp_transport import MCPServerConfig
-from zerg.tools.unified_access import get_tool_resolver
 from zerg.utils import crypto
 from zerg.utils.json_helpers import set_json_field
 
@@ -141,7 +141,7 @@ async def list_mcp_servers(
 
     # Build response with tool information
     response = []
-    resolver = get_tool_resolver()
+    resolver = get_registry()
 
     for server_config in mcp_servers:
         if "preset" in server_config:
@@ -414,7 +414,7 @@ async def test_mcp_connection(
         manager.add_server(server_config)
 
         # Get tools that were registered
-        resolver = get_tool_resolver()
+        resolver = get_registry()
         if request.preset:
             preset = PRESET_MCP_SERVERS.get(request.preset)
             tool_prefix = f"mcp_{preset.name}_" if preset else f"mcp_{request.preset}_"
@@ -467,7 +467,7 @@ async def get_available_tools(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this fiche")
 
     # Get all tools from registry (built-in + MCP)
-    resolver = get_tool_resolver()
+    resolver = get_registry()
     all_tools = resolver.get_all_tools()
 
     # Categorize tools

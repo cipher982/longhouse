@@ -129,7 +129,7 @@ class MCPToolAdapter:
                     # Register with mutable runtime registry so callers can rebuild
                     # the immutable production registry to include these tools.
                     try:
-                        from zerg.tools.registry import ToolRegistry
+                        from zerg.tools import ToolRegistry
                         from zerg.types.tools import Tool as StructuredTool
 
                         tool = StructuredTool.from_function(
@@ -392,10 +392,10 @@ class MCPManager:
         # After successful registration, refresh immutable registry view
         try:
             from zerg.tools import refresh_registry
-            from zerg.tools.unified_access import reset_tool_resolver
+            from zerg.tools import reset_registry
 
             refresh_registry()
-            reset_tool_resolver()
+            reset_registry()
         except Exception:  # pragma: no cover – best-effort refresh
             pass
 

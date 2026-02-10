@@ -1116,18 +1116,18 @@ async def run_oikos_loop(
 
     # Set up tool binder (lazy or eager)
     if lazy_loading:
-        from zerg.tools.catalog import build_catalog
-        from zerg.tools.catalog import format_catalog_for_prompt
+        from zerg.tools import get_registry
         from zerg.tools.lazy_binder import LazyToolBinder
+        from zerg.tools.tool_search import build_catalog
         from zerg.tools.tool_search import clear_search_context
+        from zerg.tools.tool_search import format_catalog_for_prompt
         from zerg.tools.tool_search import set_search_context
-        from zerg.tools.unified_access import get_tool_resolver
 
-        # Build lazy binder from resolver (not pre-filtered tools)
-        resolver = get_tool_resolver()
+        # Build lazy binder from registry (not pre-filtered tools)
+        registry = get_registry()
         # Extract allowlist from tools if filtering was applied
         allowed_names = [t.name for t in tools]
-        lazy_binder = LazyToolBinder(resolver, allowed_tools=allowed_names)
+        lazy_binder = LazyToolBinder(registry, allowed_tools=allowed_names)
 
         # Set search context so search_tools respects allowlist and rebind cap
         # MAX_TOOLS_FROM_SEARCH is defined below in _maybe_rebind_after_tool_search

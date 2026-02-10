@@ -8,10 +8,9 @@ from sqlalchemy.orm import sessionmaker
 from tests.helpers.agents_seed import seed_agent_session
 from zerg.database import initialize_database
 from zerg.database import make_engine
+from zerg.tools import ImmutableToolRegistry
 from zerg.tools.builtin import BUILTIN_TOOLS
 from zerg.tools.builtin import session_tools
-from zerg.tools.registry import ImmutableToolRegistry
-from zerg.tools.unified_access import create_tool_resolver
 
 
 def _seed_session(engine, **kwargs) -> str:
@@ -102,9 +101,8 @@ def test_tool_resolver_invokes_search_sessions(tmp_path, monkeypatch):
     _patch_db_session(monkeypatch, engine)
 
     registry = ImmutableToolRegistry.build([BUILTIN_TOOLS])
-    resolver = create_tool_resolver(registry)
 
-    tool = resolver.get_tool("search_sessions")
+    tool = registry.get("search_sessions")
     assert tool is not None
 
     result = tool.invoke({"query": "alpha", "limit": 5})

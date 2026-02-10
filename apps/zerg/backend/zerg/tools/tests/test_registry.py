@@ -1,8 +1,8 @@
 """Tests for ImmutableToolRegistry and tool aggregation."""
 
 import pytest
+from zerg.tools import ImmutableToolRegistry
 from zerg.tools.builtin import BUILTIN_TOOLS
-from zerg.tools.registry import ImmutableToolRegistry
 from zerg.types.tools import Tool as StructuredTool
 
 
@@ -59,7 +59,7 @@ def test_builtin_tools_aggregation():
     names = [tool.name for tool in BUILTIN_TOOLS]
     assert len(names) == len(set(names)), "Duplicate tool names in BUILTIN_TOOLS"
     # Spot check for expected tools
-    expected = {"get_current_time", "datetime_diff", "http_request", "math_eval", "container_exec"}
+    expected = {"get_current_time", "datetime_diff", "http_request", "web_search"}
     assert expected.issubset(set(names))
     # Ensure generate_uuid is NOT in user-facing tools
     assert "generate_uuid" not in names

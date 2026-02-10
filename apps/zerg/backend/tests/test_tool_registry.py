@@ -1,11 +1,10 @@
 """Tests for the tool registry and built-in tools."""
 
 import pytest
-from langchain_core.tools import StructuredTool
 
-from zerg.tools.registry import ToolRegistry
-from zerg.tools.registry import get_registry
-from zerg.tools.registry import register_tool
+from zerg.tools import ToolRegistry
+from zerg.tools import register_tool
+from zerg.types.tools import Tool as ZergTool
 
 
 class TestToolRegistry:
@@ -20,7 +19,7 @@ class TestToolRegistry:
     def test_register_tool_decorator(self):
         """Test the @register_tool decorator."""
         # Get registry but don't clear it (to avoid affecting other tests)
-        registry = get_registry()
+        registry = ToolRegistry()
 
         @register_tool(name="test_tool", description="A test tool")
         def my_test_tool(x: int) -> int:
@@ -30,7 +29,7 @@ class TestToolRegistry:
         # Check tool was registered
         tool = registry.get_tool("test_tool")
         assert tool is not None
-        assert isinstance(tool, StructuredTool)
+        assert isinstance(tool, ZergTool)
         assert tool.name == "test_tool"
         assert tool.description == "A test tool"
 
@@ -44,11 +43,9 @@ class TestToolRegistry:
         test_registry = ToolRegistry()
         test_registry._tools = {}  # Clear it
 
-        # Create tools directly as StructuredTool instances
-        from langchain_core.tools import StructuredTool
-
-        tool1 = StructuredTool.from_function(func=lambda: "tool1", name="tool1", description="Tool 1")
-        tool2 = StructuredTool.from_function(func=lambda: "tool2", name="tool2", description="Tool 2")
+        # Create tools directly as ZergTool instances
+        tool1 = ZergTool.from_function(func=lambda: "tool1", name="tool1", description="Tool 1")
+        tool2 = ZergTool.from_function(func=lambda: "tool2", name="tool2", description="Tool 2")
 
         test_registry.register(tool1)
         test_registry.register(tool2)
@@ -65,16 +62,14 @@ class TestToolRegistry:
         test_registry = ToolRegistry()
         test_registry._tools = {}  # Clear it
 
-        # Create tools directly as StructuredTool instances
-        from langchain_core.tools import StructuredTool
-
-        http_request_tool = StructuredTool.from_function(
+        # Create tools directly as ZergTool instances
+        http_request_tool = ZergTool.from_function(
             func=lambda: "http_request", name="http_request", description="HTTP Request"
         )
-        http_post_tool = StructuredTool.from_function(
+        http_post_tool = ZergTool.from_function(
             func=lambda: "http_post", name="http_post", description="HTTP POST"
         )
-        math_eval_tool = StructuredTool.from_function(
+        math_eval_tool = ZergTool.from_function(
             func=lambda: "math_eval", name="math_eval", description="Math eval"
         )
 
@@ -115,7 +110,7 @@ class TestBuiltinTools:
         # Import builtin tools to trigger registration
         import zerg.tools.builtin  # noqa: F401
 
-        registry = get_registry()
+        registry = ToolRegistry()
 
         # Check that expected tools are registered
         expected_tools = [
