@@ -78,26 +78,47 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 **Architecture:** Single toolbox, many agents. All ~60 tools stay as a library. Each agent (Oikos, commis, future) is configured with a subset. The loop and tool infrastructure are what get replaced, not the tools themselves.
 
-**3a: Replace the loop**
-- [ ] Replace `run_oikos_loop()` / `oikos_react_engine.py` with simple while loop: `llm.call(messages + tools) → execute tools → repeat` (~1.5K LOC → ~200 LOC)
-- [ ] Remove `fiche_runner.py`, `message_array_builder.py`, `prompt_context.py` (~2K LOC)
-- [ ] Use Claude Compaction API (server-side) or custom summarizer for "infinite thread" context management
+**3a: Simplify the loop (refactor, not rewrite)**
+- [ ] Simplify `oikos_react_engine.py` (~1.5K LOC → ~400-500 LOC): strip over-abstraction but **keep** parallel tool exec (`asyncio.gather`), interrupt-resume with barriers, iteration guards, empty response recovery
+- [ ] Merge `message_array_builder.py` + `prompt_context.py` into one module (~975 LOC → ~300 LOC): keep cache-optimized message layout (separate SystemMessages per layer), drop phase-based builder ceremony
+- [ ] Simplify `fiche_runner.py` (~974 LOC → ~300-400 LOC): keep run lifecycle, interrupt-resume, credential injection; strip boilerplate
 - [ ] Implement Oikos dispatch contract from spec: direct vs quick-tool vs CLI delegation, with explicit backend intent routing (Claude/Codex/Gemini) and repo-vs-scratch delegation modes
+- [ ] Use Claude Compaction API (server-side) or custom summarizer for "infinite thread" context management
 
 **3b: Flatten tool infrastructure**
-- [ ] Replace tool registry + lazy binder + catalog + unified_access + tool_search with flat dict of tool functions + schemas (~4K LOC → ~200 LOC)
-- [ ] Remove skills loading system (loader, registry, parser, integration) — tools are the extension surface, not skills
-- [ ] Tool subsets configured per agent type (Oikos gets ~30 tools, commis gets different set, user-configurable)
-- [ ] Kill only true dead-weight utility tools: math_tools, uuid_tools, datetime_diff, tool_discovery, container_tools (~600 LOC)
+- [ ] Remove `catalog.py`, `unified_access.py`, `tool_search.py` (embedding-based discovery), registry singleton pattern (~1.1K LOC) — over-abstracted layers around what should be a dict + allowlist
+- [ ] Simplify `lazy_binder.py` (~221 LOC → ~100 LOC): keep allowlist filtering with wildcard support, remove runtime rebinding (skills handle discovery now)
+- [ ] Tool subsets configured per agent type (Oikos gets ~20-30 tools, commis gets different set, user-configurable)
+- [ ] Kill dead-weight utility tools: math_tools, uuid_tools, datetime_diff, tool_discovery, container_tools (~600 LOC)
 
-**3c: Kill standard mode dead code**
-- [ ] Remove commis_resume, roundabout_monitor, commis_artifact_store, fiche_state_recovery, fiche_locks, commis_output_buffer, evidence_compiler, llm_decider, trace_debugger (~6.5K LOC)
+**3c: Decouple standard-mode services from FicheRunner (refactor, not delete)**
+
+These 9 services are actively used — decouple from FicheRunner so they work with the simplified loop. Remove only deprecated code paths.
+- [ ] `commis_resume.py` — keep barrier coordination; make it a generic continuation service
+- [ ] `roundabout_monitor.py` — keep monitoring loop + LLM decision; remove deprecated heuristic path
+- [ ] `commis_artifact_store.py` — keep as-is (already modular)
+- [ ] `fiche_state_recovery.py` — keep as-is (essential crash recovery on startup)
+- [ ] `fiche_locks.py` — keep as-is (concurrency control)
+- [ ] `commis_output_buffer.py` — keep as-is (streaming optimization)
+- [ ] `evidence_compiler.py` — keep Mount phase; decouple from CommisArtifactStore
+- [ ] `llm_decider.py` — keep as-is (already well-decoupled)
+- [ ] `trace_debugger.py` — keep as-is (observability)
 
 **3d: Memory consolidation**
 - [ ] Consolidate 3 memory systems: keep Oikos Memory (4 tools) + Memory Files (embeddings); evaluate Fiche Memory KV
 - [ ] Move David-specific tools (personal_tools: Traccar/WHOOP/Obsidian) to external plugin, not OSS core
 
-**3e: Expose toolbox to CLI agents (stretch)**
+**3e: Skills progressive disclosure + unified inheritance**
+
+Skills are a platform feature shared by Oikos and commis. Match industry pattern (Claude Code, Cursor) for progressive loading.
+- [ ] Change `SkillIntegration` to inject **index only** (name + description, one line each) into system prompt by default — not full SKILL.md content
+- [ ] Load full skill content into conversation only when: user invokes `/skill-name`, OR Oikos auto-selects based on description matching the request
+- [ ] Add `skills` parameter to `spawn_workspace_commis` — pass selected skill content to commis prompt so CLI agents inherit user skills
+- [ ] Respect character budget for skill index (cap total index tokens, drop lowest-priority skills if over budget)
+- [ ] Supporting files in skill directories loaded only when skill is active and references them
+- [ ] Document skill format compatibility: users can adapt Claude Code `.claude/skills/` and Cursor `.cursor/rules/` into `~/.longhouse/skills/`
+
+**3f: Expose toolbox to CLI agents (stretch)**
 - [ ] Expose Longhouse toolbox as MCP server so hatch CLI agents can call back into memory, session search, email, etc.
 
 ### Phase 4: Semantic Search (4)
