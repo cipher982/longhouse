@@ -16,7 +16,7 @@ from zerg.tools.builtin.oikos_tools import OIKOS_TOOL_NAMES
 from zerg.tools.builtin.oikos_tools import OIKOS_UTILITY_TOOLS
 from zerg.tools.builtin.oikos_tools import TOOLS as OIKOS_TOOLS
 from zerg.tools.builtin.oikos_tools import get_oikos_allowed_tools
-from zerg.tools.catalog import CORE_TOOLS
+from zerg.tools.lazy_binder import CORE_TOOLS
 
 
 def test_core_tools_are_builtin():

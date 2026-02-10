@@ -52,7 +52,7 @@ from zerg.models.models import ThreadMessage
 from zerg.models.models import CommisJob
 from zerg.services.oikos_service import OikosService
 from zerg.services.commis_artifact_store import CommisArtifactStore
-from zerg.tools.unified_access import get_tool_resolver
+from zerg.tools import get_registry
 
 # Configure logging
 logging.basicConfig(
@@ -264,8 +264,8 @@ class ToolMocker:
 
     def __enter__(self):
         """Patch the tool's coroutine and func attributes."""
-        resolver = get_tool_resolver()
-        self.tool = resolver.get_tool(self.tool_name)
+        resolver = get_registry()
+        self.tool = resolver.get(self.tool_name)
 
         if self.tool is None:
             raise ValueError(f"Tool '{self.tool_name}' not found in registry")

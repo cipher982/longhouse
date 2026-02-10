@@ -4,22 +4,20 @@ These tests verify that the lazy loading infrastructure actually works
 and that CORE_TOOLS are available to the LLM at startup.
 """
 
+from zerg.tools import ImmutableToolRegistry
 from zerg.tools.builtin import BUILTIN_TOOLS
-from zerg.tools.catalog import CORE_TOOLS
+from zerg.tools.lazy_binder import CORE_TOOLS
 from zerg.tools.lazy_binder import LazyToolBinder
-from zerg.tools.registry import ImmutableToolRegistry
-from zerg.tools.unified_access import ToolResolver
 
 
 def test_lazy_binder_preloads_core_tools():
     """LazyToolBinder must pre-load all CORE_TOOLS at init.
 
     This catches the scenario where a tool is in CORE_TOOLS but
-    the LazyToolBinder fails to load it (e.g., resolver issue).
+    the LazyToolBinder fails to load it (e.g., registry issue).
     """
     registry = ImmutableToolRegistry.build([list(BUILTIN_TOOLS)])
-    resolver = ToolResolver.from_registry(registry)
-    binder = LazyToolBinder(resolver)
+    binder = LazyToolBinder(registry)
 
     missing = sorted(CORE_TOOLS - binder.loaded_tool_names)
     assert not missing, f"LazyToolBinder failed to preload core tools: {missing}"
@@ -28,8 +26,7 @@ def test_lazy_binder_preloads_core_tools():
 def test_lazy_binder_get_bound_tools_includes_core():
     """get_bound_tools() must return all CORE_TOOLS for LLM binding."""
     registry = ImmutableToolRegistry.build([list(BUILTIN_TOOLS)])
-    resolver = ToolResolver.from_registry(registry)
-    binder = LazyToolBinder(resolver)
+    binder = LazyToolBinder(registry)
 
     bound_tools = binder.get_bound_tools()
     bound_names = {t.name for t in bound_tools}
@@ -47,8 +44,7 @@ def test_lazy_binder_core_tools_count():
 def test_lazy_binder_loads_non_core_on_demand():
     """Non-core tools should not be loaded at init."""
     registry = ImmutableToolRegistry.build([list(BUILTIN_TOOLS)])
-    resolver = ToolResolver.from_registry(registry)
-    binder = LazyToolBinder(resolver)
+    binder = LazyToolBinder(registry)
 
     # Find a non-core tool
     all_tool_names = {t.name for t in BUILTIN_TOOLS}

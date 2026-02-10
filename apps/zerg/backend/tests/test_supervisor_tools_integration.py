@@ -11,8 +11,8 @@ from zerg.connectors.resolver import CredentialResolver
 from zerg.crud import crud
 from zerg.managers.fiche_runner import FicheRunner
 from zerg.services.thread_service import ThreadService
+from zerg.tools import ImmutableToolRegistry
 from zerg.tools.builtin import BUILTIN_TOOLS
-from zerg.tools.registry import ImmutableToolRegistry
 
 
 @pytest.fixture

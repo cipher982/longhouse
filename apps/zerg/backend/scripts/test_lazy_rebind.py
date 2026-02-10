@@ -19,17 +19,17 @@ async def test_rebind_mechanism():
     """Test the rebind-after-search_tools mechanism."""
     from langchain_core.messages import ToolMessage
 
-    from zerg.tools.catalog import CORE_TOOLS
+    from zerg.tools import get_registry
+    from zerg.tools.lazy_binder import CORE_TOOLS
     from zerg.tools.lazy_binder import LazyToolBinder
-    from zerg.tools.unified_access import get_tool_resolver
 
     print("=" * 70)
     print("LAZY REBIND MECHANISM TEST")
     print("=" * 70)
 
     # Set up lazy binder
-    resolver = get_tool_resolver()
-    binder = LazyToolBinder(resolver, allowed_tools=None)
+    registry = get_registry()
+    binder = LazyToolBinder(registry, allowed_tools=None)
 
     print(f"\n1. Initial state:")
     print(f"   Core tools bound: {len(binder.get_bound_tools())}")

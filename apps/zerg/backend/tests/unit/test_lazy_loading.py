@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
-from zerg.tools.catalog import CORE_TOOLS
+from zerg.tools.lazy_binder import CORE_TOOLS
 
 
 # ---------------------------------------------------------------------------
@@ -33,7 +33,7 @@ class TestLazyToolBinderAllowlist:
         mock_resolver = MagicMock()
         mock_tool = MagicMock()
         mock_tool.name = "spawn_commis"
-        mock_resolver.get_tool.return_value = mock_tool
+        mock_resolver.get.return_value = mock_tool
 
         # Only allow spawn_commis, not other core tools
         allowed = ["spawn_commis"]
@@ -58,7 +58,7 @@ class TestLazyToolBinderAllowlist:
             tool.name = name
             return tool
 
-        mock_resolver.get_tool.side_effect = mock_get_tool
+        mock_resolver.get.side_effect = mock_get_tool
 
         # Allow all github_* tools and spawn_commis
         allowed = ["spawn_commis", "github_*"]
@@ -88,7 +88,7 @@ class TestLazyToolBinderAllowlist:
             tool.name = name
             return tool
 
-        mock_resolver.get_tool.side_effect = mock_get_tool
+        mock_resolver.get.side_effect = mock_get_tool
 
         binder = LazyToolBinder(mock_resolver, allowed_tools=None)
 
@@ -107,7 +107,7 @@ class TestLazyToolBinderAllowlist:
             tool.name = name
             return tool
 
-        mock_resolver.get_tool.side_effect = mock_get_tool
+        mock_resolver.get.side_effect = mock_get_tool
 
         allowed = ["spawn_commis", "contact_user"]
         binder = LazyToolBinder(mock_resolver, allowed_tools=allowed)
@@ -272,7 +272,7 @@ class TestRebindMechanism:
             tool.name = name
             return tool
 
-        mock_resolver.get_tool.side_effect = mock_get_tool
+        mock_resolver.get.side_effect = mock_get_tool
 
         binder = LazyToolBinder(mock_resolver, allowed_tools=None)
 
@@ -303,7 +303,7 @@ class TestRebindMechanism:
                 return tool
             return None
 
-        mock_resolver.get_tool.side_effect = mock_get_tool
+        mock_resolver.get.side_effect = mock_get_tool
 
         binder = LazyToolBinder(mock_resolver, allowed_tools=None)
 
@@ -329,7 +329,7 @@ class TestRebindMechanism:
                 tool_instances[name] = tool
             return tool_instances[name]
 
-        mock_resolver.get_tool.side_effect = mock_get_tool
+        mock_resolver.get.side_effect = mock_get_tool
 
         allowed = ["spawn_commis", "contact_user", "custom_tool"]
         binder = LazyToolBinder(mock_resolver, allowed_tools=allowed)
@@ -368,7 +368,7 @@ class TestCatalogPromptIntegration:
             tool.name = name
             return tool
 
-        mock_resolver.get_tool.side_effect = mock_get_tool
+        mock_resolver.get.side_effect = mock_get_tool
 
         # Restrict to only 2 core tools
         allowed = ["spawn_commis", "contact_user"]

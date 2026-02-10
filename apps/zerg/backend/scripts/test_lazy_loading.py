@@ -34,7 +34,8 @@ from langchain_core.messages import SystemMessage
 async def run_test():
     """Run the lazy loading validation test."""
     from zerg.tools import get_registry
-    from zerg.tools.catalog import CORE_TOOLS, build_catalog
+    from zerg.tools.lazy_binder import CORE_TOOLS
+    from zerg.tools.tool_search import build_catalog
     from zerg.services.oikos_react_engine import run_oikos_loop
 
     print("=" * 70)
