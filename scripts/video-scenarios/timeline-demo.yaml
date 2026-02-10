@@ -1,5 +1,5 @@
 # Timeline Demo Scenario
-# Showcases the timeline-first product: session cards, FTS5 search, session detail, install CTA
+# Hook → Wow → Explain → CTA structure (~37s total)
 #
 # Prerequisites:
 #   - Server running with demo data: longhouse serve --demo-fresh
@@ -12,137 +12,141 @@
 #   make video-all SCENARIO=timeline-demo
 
 name: timeline-demo
-description: Timeline product demo — session browsing, search, detail view, and install CTA
+description: Timeline product demo — hook with stat, fast search, slow explore, session detail, install CTA
 
 voiceover:
   voice: "nova"
   model: "gpt-4o-mini-tts"
 
 scenes:
-  # Scene 1: Timeline Overview (voiceover ~12s)
-  # At 1920x1080 all 7 cards fit on screen — no scroll needed.
-  # Use hover effects on cards to draw the eye across the grid.
-  - id: timeline-overview
+  # Scene 1: Hook (~4s)
+  # Big stat number to grab attention. No product shown yet.
+  - id: hook
     voiceover: |
-      Longhouse gives you a unified timeline of every AI coding session across Claude, Codex, and Gemini.
-      See what each agent did, which tools it used, and how long it took — all in one place.
+      47 AI sessions. Three different agents. Zero visibility.
     steps:
       - action: navigate
-        url: /timeline?effects=off&clock=frozen
+        url: /title-card.html?h=47&s=AI%20sessions.%20Three%20agents.%20No%20single%20view.&style=stat
         wait_for: '[data-ready="true"]'
-      # Let the viewer absorb the full timeline (0-2.5s)
+      - action: pause_for_audio
       - action: pause
-        duration_ms: 2500
-      # Hover first card — cursor pagination session (2.5s, triggers lift + glow)
+        duration_ms: 500
+
+  # Scene 2: Search Wow (~6s)
+  # Instant full-text search. Let speed speak for itself.
+  - id: search-wow
+    voiceover: |
+      Search finds anything. Instantly.
+    steps:
+      - action: navigate
+        url: /timeline?replay=timeline-demo&effects=off&clock=frozen
+        wait_for: '.sessions-search-input'
+      - action: pause
+        duration_ms: 800
+      - action: click
+        selector: '.sessions-search-input'
+      - action: pause
+        duration_ms: 300
+      # Fast typing — 60ms per char to emphasize speed
+      - action: type
+        selector: '.sessions-search-input'
+        text: "health endpoint"
+        delay_ms: 60
+      # Let results appear and settle
+      - action: pause
+        duration_ms: 2000
+      - action: pause_for_audio
+      - action: pause
+        duration_ms: 400
+
+  # Scene 3: Timeline Explore (~12s)
+  # NOW explain what Longhouse is. Slow hover across cards, then click in.
+  - id: timeline-explore
+    voiceover: |
+      Longhouse gives you one timeline for every AI session.
+      Claude, Codex, Gemini — each card shows the agent, branch, tools used, and duration.
+    steps:
+      - action: navigate
+        url: /timeline?replay=timeline-demo&effects=off&clock=frozen
+        wait_for: '.session-card'
+      # Let the full grid land (0-2s)
+      - action: pause
+        duration_ms: 2000
+      # Slow hover across cards — 1.5-2s intervals
       - action: hover
         selector: '.session-card:has-text("feat/cursor-pagination")'
       - action: pause
-        duration_ms: 1500
-      # Hover second card — FTS5 session (4s)
+        duration_ms: 1800
       - action: hover
         selector: '.session-card:has-text("feat/fts5-search")'
       - action: pause
-        duration_ms: 1500
-      # Hover third card — onboarding branch (5.5s)
+        duration_ms: 1800
       - action: hover
         selector: '.session-card:has-text("feature/onboarding")'
       - action: pause
-        duration_ms: 1500
-      # Hover a Claude session (7s)
+        duration_ms: 1800
       - action: hover
         selector: '.session-card:has-text("claude")'
       - action: pause
         duration_ms: 1500
-      # Move away — let all cards settle back (8.5s)
+      # Settle — move cursor off cards
       - action: hover
         selector: '.sessions-search-input'
-      # Hold until voiceover ends (8.5-12.6s)
       - action: pause_for_audio
 
-  # Scene 2: Search (voiceover ~11s)
-  - id: timeline-search
-    voiceover: |
-      Full-text search finds any session instantly. Type a keyword and Longhouse searches
-      across every message, tool call, and output — with highlighted snippets showing exactly where it matched.
-    steps:
-      - action: navigate
-        url: /timeline?effects=off&clock=frozen
-        wait_for: '.sessions-search-input'
-      # Let viewer see the full timeline first (0-2s)
-      - action: pause
-        duration_ms: 2000
-      # Click into search bar (2s)
-      - action: click
-        selector: '.sessions-search-input'
-      - action: pause
-        duration_ms: 500
-      # Type query slowly — one char at a time during "Type a keyword" (2.5-5s)
-      - action: type
-        selector: '.sessions-search-input'
-        text: "health endpoint"
-        delay_ms: 80
-      # Let search results settle and display (5-8s)
-      - action: pause
-        duration_ms: 3000
-      # Hold on results until voiceover ends (8-11.6s)
-      - action: pause_for_audio
-
-  # Scene 3: Session Detail (voiceover ~11s)
+  # Scene 4: Session Detail (~8s)
+  # Click into a session, expand a tool call, scroll through events.
   - id: session-detail
     voiceover: |
-      Click into any session to see the full conversation. Every message, every tool call,
-      every file read and edit — with expandable details so you can trace exactly what happened.
+      Every message, tool call, and file edit — fully expandable.
+      Trace exactly what the agent did and why.
     steps:
       - action: navigate
-        url: /timeline?effects=off&clock=frozen
+        url: /timeline?replay=timeline-demo&effects=off&clock=frozen
         wait_for: '.session-card'
-      # Brief pause to orient viewer (0-1.5s)
       - action: pause
-        duration_ms: 1500
-      # Click into first session card (1.5s)
+        duration_ms: 800
+      # Click into first session
       - action: click
         selector: '.session-card'
       - action: wait
         selector: '.timeline-events'
         timeout_ms: 10000
-      # Let viewer absorb the session detail view (2-4.5s)
       - action: pause
-        duration_ms: 2500
-      # Expand a tool call to show details (4.5s)
+        duration_ms: 1500
+      # Expand a tool call
       - action: click
         selector: '.event-tool-header'
-      # Let expanded tool details settle (4.5-7s)
       - action: pause
-        duration_ms: 2500
-      # Scroll down through more events (7-9s)
+        duration_ms: 2000
+      # Scroll through events
       - action: scroll
         direction: "down"
         amount: 400
-        duration_ms: 2000
-      # Hold until voiceover ends (9-11.8s)
+        duration_ms: 1500
       - action: pause_for_audio
 
-  # Scene 4: Install CTA (voiceover ~11s)
-  - id: install-cta
+  # Scene 5: CTA (~7s)
+  # Landing page with install command. Close the loop.
+  - id: cta
     voiceover: |
-      Get started in one command. Longhouse is fully self-hosted — your data never leaves your machine.
-      Install now and start tracking your AI sessions in under a minute.
+      One command to install. Fully self-hosted.
+      Your sessions, your machine, your data.
     steps:
       - action: navigate
-        url: /landing?noredirect=1&fx=off
+        url: /landing?noredirect=1&replay=timeline-demo&fx=off
         wait_for: '.install-section'
-      # Show hero section first (0-3s)
+      # Show hero briefly
       - action: pause
-        duration_ms: 3000
-      # Scroll to install section (3-5s)
+        duration_ms: 2000
+      # Scroll to install section
       - action: scroll
         direction: "down"
         amount: 300
-        duration_ms: 2000
-      # Hold on install command (5-9s)
+        duration_ms: 1500
+      # Hold on the install command
       - action: pause
-        duration_ms: 4000
-      # Hold until voiceover ends + final buffer (9-13s)
+        duration_ms: 2000
       - action: pause_for_audio
       - action: pause
-        duration_ms: 1500
+        duration_ms: 1000
