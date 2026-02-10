@@ -14,7 +14,7 @@ Meanwhile, commis output doesn't appear in the agent timeline — Longhouse's ow
 ## Decision
 
 1. **All commis become CLI agent subprocesses** (workspace mode). Standard mode (in-process) is deprecated.
-2. **Commis sessions are ingested into the agent timeline** via the same `/api/agents/ingest` path as shipped terminal sessions.
+2. **Commis sessions are ingested into the agent timeline** via direct `AgentsStore.ingest_session()` call (same store as the `/api/agents/ingest` endpoint).
 3. **Oikos becomes a thin coordinator** — direct LLM API calls for conversation, `spawn_commis` for real work. No custom tool execution engine.
 4. **The legacy harness is removed incrementally** — ~25K LOC of dead code cleared over time.
 5. **Semantic search added to Longhouse** — embeddings on ingest, replaces Life Hub MCP dependency.
