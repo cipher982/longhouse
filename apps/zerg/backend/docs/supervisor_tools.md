@@ -1,298 +1,87 @@
 # Oikos Tools
 
-## Overview
+## Status
 
-The oikos tools layer enables Zerg's oikos/commis architecture by providing tools that allow oikos agents to spawn, manage, and query commis agents. This implements Milestone 2 of the commis system architecture.
+- **Canonical source of truth:** `apps/zerg/backend/zerg/tools/builtin/oikos_tools.py`
+- **Companion architecture spec:** `apps/zerg/backend/docs/specs/unified-memory-bridge.md`
+- **Doc status:** current as of 2026-02-10
 
-## Architecture
+This document replaces older milestone-era descriptions that referenced removed components (e.g. `CommisRunner`) or non-existent test/doc paths.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     Oikos Agent                         │
-│  (can delegate tasks, query results, drill into artifacts)  │
-└──────────────────────┬──────────────────────────────────────┘
-                       │ uses oikos tools
-                       ↓
-┌─────────────────────────────────────────────────────────────┐
-│                   Oikos Tools                           │
-│  - spawn_commis()        - list_commiss()                    │
-│  - read_commis_result()  - read_commis_file()                │
-│  - peek_commis_output()                                      │
-│  - grep_commiss()        - get_commis_metadata()             │
-└──────────────────────┬──────────────────────────────────────┘
-                       │ wraps
-                       ↓
-┌─────────────────────────────────────────────────────────────┐
-│                Commis Services (Milestone 1)                 │
-│  - CommisRunner       - CommisArtifactStore                  │
-└─────────────────────────────────────────────────────────────┘
-```
+## Purpose
 
-## Bootstrap vs Registry Tools
+Oikos is the coordinator layer. Its tools are for:
 
-Oikos tools come from two paths so we keep the agent boot sequence fast while still
-supporting a large tool catalog.
+1. Delegating substantial work to CLI agents (commis)
+2. Tracking commis lifecycle + reading commis artifacts
+3. Running lightweight direct actions (search/memory/web/messaging) without delegation when appropriate
 
-- **Bootstrap/core tools** are pre-loaded for every oikos run (commis orchestration +
-  discovery utilities). Source of truth is `zerg/tools/builtin/oikos_tools.py`
-  (`OIKOS_TOOL_NAMES`), which feeds `CORE_TOOLS` in `zerg/tools/catalog.py`.
-- **Registry tools** are everything else in `BUILTIN_TOOLS` plus runtime/MCP tools.
-  They live in the registry and are lazy-loaded via `ToolResolver` + `LazyToolBinder`
-  on first use.
+## Tool Groups
 
-Rule of thumb: if a tool is required for the very first turn, it must be in
-`OIKOS_TOOL_NAMES`; otherwise it can stay registry-only.
+### 1) Delegation + Commis Lifecycle
 
-## Tools
+Primary delegation and lifecycle tools:
 
-### spawn_commis(task: str, model: str | None = None) -> str
+- `spawn_workspace_commis` (primary)
+- `spawn_commis` (legacy compatibility alias)
+- `list_commiss`
+- `check_commis_status`
+- `wait_for_commis`
+- `cancel_commis`
+- `read_commis_result`
+- `get_commis_metadata`
+- `peek_commis_output`
+- `grep_commiss`
+- `read_commis_file`
+- `get_commis_evidence`
+- `get_tool_output`
 
-Spawns a disposable commis agent to execute a task independently.
+### 2) Session Selection UX
 
-**Use cases:**
+- `request_session_selection`
 
-- Delegating sub-tasks from a oikos
-- Parallel execution of multiple tasks
-- Isolating verbose or risky operations
+This opens the session picker flow for resume/discovery UX when a user has not provided a specific session ID.
 
-**Example:**
+### 3) Oikos Utility Allowlist
 
-```python
-result = spawn_commis(
-    task="Check disk usage on cube server via SSH",
-)
-# Returns: "Commis job <id> queued successfully..."
-```
+In addition to the Oikos-specific tools above, Oikos receives utility tools from `OIKOS_UTILITY_TOOLS` via `get_oikos_allowed_tools()`.
 
-**Returns:**
+Current utility categories include:
 
-- A queued summary containing the `job_id`
+- Time (`get_current_time`)
+- Web (`web_search`, `web_fetch`, `http_request`)
+- Communication (`send_email`)
+- Knowledge (`knowledge_search`)
+- Memory (`save_memory`, `search_memory`, `list_memories`, `forget_memory`)
+- Session discovery (`search_sessions`, `grep_sessions`, `filter_sessions`, `get_session_detail`)
+- Runner management (`runner_list`, `runner_create_enroll_token`)
 
-**Note:** The oikos-facing `spawn_commis` tool is intentionally fire-and-forget (durable-runs model).
-Roundabout-style waiting exists in the underlying implementation but is not exposed to the LLM tool schema.
+## Current Runtime Semantics (Important)
 
----
+- Commis run through workspace-mode CLI execution (`hatch` subprocess).
+- Standard/in-process commis mode is deprecated and being removed.
+- `spawn_workspace_commis` is the intended path for new behavior.
+- `spawn_commis` exists for compatibility and should not be treated as a long-term API contract.
 
-### list_commiss(limit: int = 20, status: str = None, since_hours: int = None) -> str
+## Alignment Work In Progress
 
-Lists recent commis executions with optional filters.
+From first-principles review (2026-02-10), docs/prompt/runtime had drift around delegation semantics.
 
-**Parameters:**
+Target contract (tracked in the spec):
 
-- `limit`: Maximum commiss to return (default: 20)
-- `status`: Filter by "queued", "running", "success", "failed", or None for all
-- `since_hours`: Only show commiss from last N hours
+1. Oikos dispatches by intent: direct answer vs quick tool vs CLI delegation.
+2. Backend intent should be explicit (Claude/Codex/Gemini), not hidden.
+3. Delegation modes should be explicit (repo workspace vs scratch workspace).
 
-**Example:**
+See `apps/zerg/backend/docs/specs/unified-memory-bridge.md` Phase 3 for implementation details.
 
-```python
-# List all recent commiss
-list_commiss(limit=10)
+## Tests
 
-# List only failed commiss from last 24 hours
-list_commiss(status="failed", since_hours=24)
-```
+Primary tests touching Oikos tools and commis orchestration:
 
-**Returns:** Formatted list with commis IDs, tasks, status, timestamps
+- `apps/zerg/backend/tests/tools/test_oikos_tools_errors.py`
+- `apps/zerg/backend/tests/test_supervisor_service.py`
+- `apps/zerg/e2e/tests/core/commis-simplification.spec.ts`
+- `apps/zerg/e2e/tests/core/commis-flow.spec.ts`
 
----
-
-### read_commis_result(job_id: str) -> str
-
-Reads the final result from a completed commis.
-
-**Example:**
-
-```python
-result = read_commis_result("123")
-# Returns the commis's natural language result (includes duration if available)
-```
-
----
-
-### read_commis_file(job_id: str, file_path: str) -> str
-
-Reads a specific file from a commis's artifact directory.
-
-**Common file paths:**
-
-- `result.txt` - Final result
-- `metadata.json` - Commis metadata
-- `thread.jsonl` - Full conversation history
-- `tool_calls/001_ssh_exec.txt` - Individual tool outputs
-
-**Security:** Path traversal is blocked. Only files within the commis directory are accessible.
-
-**Example:**
-
-```python
-# Read metadata
-metadata = read_commis_file(
-    "123",
-    "metadata.json"
-)
-
-# Read a specific tool output
-output = read_commis_file(
-    "123",
-    "tool_calls/001_ssh_exec.txt"
-)
-```
-
----
-
-### peek_commis_output(job_id: str, max_bytes: int = 4000) -> str
-
-Peeks at live output for a running commis (tail buffer).
-
-**Use cases:**
-
-- Streaming runner_exec output while a commis is still running
-- Quick progress checks without waiting for completion
-
-**Example:**
-
-```python
-output = peek_commis_output("123", max_bytes=2000)
-```
-
-**Notes:**
-
-- Returns the most recent output for active commiss (best-effort).
-- Full artifacts (`thread.jsonl`, `tool_calls/*.txt`, `result.txt`) are written after completion; live tail uses `peek_commis_output` / `commis_output_chunk` SSE.
-- Workspace commiss do not stream live output.
-
----
-
-### grep_commiss(pattern: str, since_hours: int = 24) -> str
-
-Searches across commis artifacts for a text pattern.
-
-**Features:**
-
-- Case-insensitive search
-- Searches all .txt files in commis directories
-- Returns matches with context
-
-**Example:**
-
-```python
-# Find all commiss that encountered "timeout" errors
-matches = grep_commiss("timeout", since_hours=48)
-
-# Search for specific output patterns
-matches = grep_commiss("disk usage", since_hours=24)
-```
-
----
-
-### get_commis_metadata(job_id: str) -> str
-
-Gets detailed metadata about a commis execution.
-
-**Returns:**
-
-- Task description
-- Status (success/failed)
-- Timestamps (created, started, finished)
-- Duration
-- Configuration
-- Error message (if failed)
-
-**Example:**
-
-```python
-metadata = get_commis_metadata("123")
-```
-
-## Implementation Details
-
-### Database Access
-
-The tools use Zerg's existing credential resolver pattern to access the database:
-
-```python
-from zerg.connectors.context import get_credential_resolver
-
-resolver = get_credential_resolver()
-if resolver:
-    db = resolver.db  # SQLAlchemy session
-    owner_id = resolver.owner_id
-```
-
-This follows the same pattern as other Zerg tools (slack_tools, github_tools, etc.).
-
-### Async Handling
-
-`spawn_commis` is internally async. The tool wraps the async call synchronously:
-
-```python
-from zerg.utils.async_utils import run_async_safely
-
-result = run_async_safely(spawn_commis_async(...))
-```
-
-This is necessary because LangChain tools must be synchronous functions.
-
-### Circular Import Prevention
-
-To avoid circular imports between:
-
-- `oikos_tools.py` → `CommisRunner`
-- `CommisRunner` → `Runner`
-- `Runner` → `tools.builtin`
-
-We use **lazy imports** - `CommisRunner` is imported inside the `spawn_commis` function rather than at module level.
-
-## Testing
-
-### Error Handling Tests
-
-**Location:** `tests/tools/test_oikos_tools_errors.py`
-
-**Coverage:**
-
-- Tool error cases and edge conditions
-- Path traversal security
-- Graceful failure modes
-
-## Usage Example
-
-```python
-from zerg.tools.builtin.oikos_tools import (
-    spawn_commis,
-    list_commiss,
-    read_commis_result,
-)
-
-# Spawn a commis
-result = spawn_commis(
-    task="Analyze the logs from the last deployment",
-    model="gpt-4o"
-)
-
-# List recent commiss
-commiss = list_commiss(limit=5, status="success")
-
-# Read a specific result
-commis_result = read_commis_result("2024-12-03T14-32-00_analyze-logs")
-```
-
-## Next Steps
-
-### Milestone 3: Agent API Integration
-
-To expose oikos tools to agents via the API:
-
-1. **Update agent configuration** to include oikos tools in allowlist
-2. **Frontend integration** - UI to enable oikos mode for agents
-3. **Tool group creation** - Add "oikos" tool group to `constants/toolGroups.ts`
-4. **Documentation** - User-facing docs on oikos/commis patterns
-
-### Potential Enhancements
-
-1. **Commis cancellation** - Add `cancel_commis(job_id)` tool
-2. **Commis streaming** - Stream commis output in real-time
-3. **Commis pools** - Spawn multiple commiss in parallel with `spawn_commis_pool()`
-4. **Result aggregation** - Tool to aggregate results from multiple commiss
-5. **Commis retry** - Automatically retry failed commiss
+Use `make test` / `make test-e2e` from repo root.
