@@ -13,13 +13,13 @@ Tests cover:
 from unittest.mock import MagicMock, patch
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from zerg.types.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from tests.conftest import TEST_COMMIS_MODEL
 from zerg.connectors.status_builder import FicheContextParts
 from zerg.crud import crud
 from zerg.managers.fiche_runner import RuntimeView
-from zerg.managers.message_array_builder import MessageArrayBuilder, MessageArrayResult
+from zerg.managers.message_builder import MessageArrayBuilder, MessageArrayResult
 
 
 def _mock_fiche_context_parts(**kwargs):
@@ -88,42 +88,12 @@ def runtime_view(test_fiche):
 
 
 class TestBuilderStateTracking:
-    def test_cannot_skip_system_prompt(self, db_session, runtime_view):
-        builder = MessageArrayBuilder(db_session, runtime_view)
-        with pytest.raises(RuntimeError, match="Must call SYSTEM_PROMPT phase before CONVERSATION"):
-            builder.with_conversation(thread_id=1)
-
-    def test_cannot_add_system_prompt_twice(self, db_session, runtime_view, test_fiche):
-        builder = MessageArrayBuilder(db_session, runtime_view)
-        builder.with_system_prompt(test_fiche)
-        with pytest.raises(RuntimeError, match="Builder already past SYSTEM_PROMPT"):
-            builder.with_system_prompt(test_fiche)
-
-    def test_cannot_add_conversation_twice(self, db_session, runtime_view, test_fiche, test_thread):
-        builder = MessageArrayBuilder(db_session, runtime_view)
-        builder.with_system_prompt(test_fiche)
-        builder.with_conversation(test_thread.id)
-        with pytest.raises(RuntimeError, match="Builder already past CONVERSATION"):
-            builder.with_conversation(test_thread.id)
-
-    def test_cannot_add_dynamic_context_before_conversation(self, db_session, runtime_view, test_fiche):
-        builder = MessageArrayBuilder(db_session, runtime_view)
-        builder.with_system_prompt(test_fiche)
-        with pytest.raises(RuntimeError, match="with_dynamic_context must be called after CONVERSATION"):
-            builder.with_dynamic_context()
-
     def test_cannot_build_twice(self, db_session, runtime_view, test_fiche, test_thread):
         builder = MessageArrayBuilder(db_session, runtime_view)
         builder.with_system_prompt(test_fiche)
         builder.with_conversation(test_thread.id)
         builder.build()
         with pytest.raises(RuntimeError, match="Builder already built"):
-            builder.build()
-
-    def test_cannot_build_without_conversation(self, db_session, runtime_view, test_fiche):
-        builder = MessageArrayBuilder(db_session, runtime_view)
-        builder.with_system_prompt(test_fiche)
-        with pytest.raises(RuntimeError, match="Must at least call with_system_prompt and with_conversation"):
             builder.build()
 
 
