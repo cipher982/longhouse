@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1920px;
+    height: 1080px;
+    background: #0a0a0f;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: -apple-system, 'Inter', 'Segoe UI', sans-serif;
+    overflow: hidden;
+  }
+  .card {
+    text-align: center;
+    max-width: 1200px;
+    padding: 0 80px;
+    opacity: 0;
+    animation: fadeIn 0.6s ease-out forwards;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  /* Default style */
+  .headline {
+    color: #f0f0f5;
+    font-size: 64px;
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -1.5px;
+  }
+  .subline {
+    color: #888899;
+    font-size: 28px;
+    font-weight: 400;
+    margin-top: 32px;
+    line-height: 1.5;
+  }
+  .accent { color: #6C8EFF; }
+
+  /* Stat style — big impactful number */
+  .style-stat .headline {
+    font-size: 144px;
+    font-weight: 800;
+    letter-spacing: 2px;
+    line-height: 1.0;
+  }
+  .style-stat .subline {
+    margin-top: 40px;
+  }
+
+  /* Brand style — wordmark above headline */
+  .wordmark {
+    display: none;
+    color: #888899;
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 12px;
+    text-transform: uppercase;
+    font-variant: small-caps;
+    margin-bottom: 40px;
+  }
+  .style-brand .wordmark {
+    display: block;
+  }
+
+  /* Subtle vignette */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.4) 100%);
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+  <div class="card" id="card">
+    <div class="wordmark" id="wordmark">LONGHOUSE</div>
+    <div class="headline" id="headline"></div>
+    <div class="subline" id="subline"></div>
+  </div>
+  <script>
+    const params = new URLSearchParams(location.search);
+
+    // Style variant
+    const style = params.get('style') || 'default';
+    if (style === 'stat' || style === 'brand') {
+      document.getElementById('card').classList.add('style-' + style);
+    }
+
+    // Accent color override
+    const accent = params.get('accent');
+    if (accent) {
+      document.documentElement.style.setProperty('--accent', '#' + accent);
+      const sheet = document.styleSheets[0];
+      // Override .accent class with the custom color
+      for (let i = 0; i < sheet.cssRules.length; i++) {
+        if (sheet.cssRules[i].selectorText === '.accent') {
+          sheet.cssRules[i].style.color = '#' + accent;
+          break;
+        }
+      }
+    }
+
+    // Content
+    document.getElementById('headline').innerHTML = params.get('h') || 'Longhouse';
+    document.getElementById('subline').innerHTML = params.get('s') || '';
+
+    // Signal ready AFTER fade-in animation completes
+    document.getElementById('card').addEventListener('animationend', function() {
+      document.body.setAttribute('data-ready', 'true');
+    });
+    // Fallback in case animationend doesn't fire
+    setTimeout(function() {
+      document.body.setAttribute('data-ready', 'true');
+    }, 700);
+  </script>
+</body>
+</html>
