@@ -357,7 +357,7 @@ async def _execute_tool(
     else:
         try:
             # Spawn-type tools: interrupt handling for two-phase commit
-            if tool_name in ("spawn_commis", "spawn_workspace_commis", "spawn_standard_commis"):
+            if tool_name in ("spawn_commis", "spawn_workspace_commis"):
                 job_result = await _call_spawn_tool(tool_to_call, tool_args, tool_call_id)
                 if isinstance(job_result, dict):
                     job_id = job_result.get("job_id")
