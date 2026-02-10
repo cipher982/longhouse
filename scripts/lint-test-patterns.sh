@@ -101,17 +101,72 @@ else
 fi
 
 # =============================================================================
-# Check 3: waitForTimeout( in E2E spec files
+# Check 3: STRICT — waitForTimeout( / networkidle in core E2E (zero tolerance)
 # =============================================================================
-echo "3️⃣  Checking for waitForTimeout() in active E2E tests..."
+# Core E2E tests must NEVER use waitForTimeout or networkidle.
+# No allowlist, no skip escape. These patterns are banned outright in core/.
+CORE_E2E="apps/zerg/e2e/tests/core"
+
+echo "3️⃣  Checking for waitForTimeout() in core E2E tests (strict)..."
+
+core_timeout=""
+while IFS= read -r -d '' file; do
+  lines=$(grep -n 'waitForTimeout(' "$file" 2>/dev/null || true)
+  if [ -n "$lines" ]; then
+    core_timeout="${core_timeout}${file}:
+${lines}
+
+"
+  fi
+done < <(find "$CORE_E2E" -type f -name "*.spec.ts" -print0 2>/dev/null)
+
+if [ -n "$core_timeout" ]; then
+  echo "❌ Found waitForTimeout() in core E2E tests."
+  echo "   Core tests must use deterministic waits (waitFor, waitForSelector, expect.poll)."
+  echo "   waitForTimeout is BANNED in core/ — no exceptions."
+  echo ""
+  echo "$core_timeout"
+  failed=1
+else
+  echo "   ✅ No waitForTimeout() in core tests"
+fi
+
+echo "4️⃣  Checking for networkidle in core E2E tests (strict)..."
+
+core_networkidle=""
+while IFS= read -r -d '' file; do
+  lines=$(grep -n 'networkidle' "$file" 2>/dev/null || true)
+  if [ -n "$lines" ]; then
+    core_networkidle="${core_networkidle}${file}:
+${lines}
+
+"
+  fi
+done < <(find "$CORE_E2E" -type f -name "*.spec.ts" -print0 2>/dev/null)
+
+if [ -n "$core_networkidle" ]; then
+  echo "❌ Found networkidle in core E2E tests."
+  echo "   networkidle is BANNED in core/ — no exceptions."
+  echo "   Use waitForSelector or waitFor with specific conditions instead."
+  echo ""
+  echo "$core_networkidle"
+  failed=1
+else
+  echo "   ✅ No networkidle in core tests"
+fi
+
+# =============================================================================
+# Check 5: waitForTimeout( in non-core E2E spec files (with allowlist)
+# =============================================================================
+echo "5️⃣  Checking for waitForTimeout() in other active E2E tests..."
 
 violations_timeout=""
 
-# Find all spec files with waitForTimeout
+# Find all spec files with waitForTimeout (excluding core/ — already checked strictly)
 while IFS= read -r -d '' file; do
-  # Skip helper directories
+  # Skip helper directories and core/ (handled above)
   case "$file" in
-    */helpers/*) continue ;;
+    */helpers/*|*/core/*) continue ;;
   esac
 
   # Check if file has waitForTimeout
@@ -152,21 +207,21 @@ if [ -n "$violations_timeout" ]; then
   echo "$violations_timeout"
   failed=1
 else
-  echo "   ✅ No waitForTimeout() in active tests"
+  echo "   ✅ No waitForTimeout() in other active tests"
 fi
 
 # =============================================================================
-# Check 4: networkidle in E2E spec files
+# Check 6: networkidle in non-core E2E spec files (with allowlist)
 # =============================================================================
-echo "4️⃣  Checking for networkidle in active E2E tests..."
+echo "6️⃣  Checking for networkidle in other active E2E tests..."
 
 violations_networkidle=""
 
-# Find all spec files with networkidle
+# Find all spec files with networkidle (excluding core/ — already checked strictly)
 while IFS= read -r -d '' file; do
-  # Skip helper directories
+  # Skip helper directories and core/ (handled above)
   case "$file" in
-    */helpers/*) continue ;;
+    */helpers/*|*/core/*) continue ;;
   esac
 
   # Check if file has actual networkidle usage (not just comments)
@@ -207,7 +262,7 @@ if [ -n "$violations_networkidle" ]; then
   echo "$violations_networkidle"
   failed=1
 else
-  echo "   ✅ No networkidle in active tests"
+  echo "   ✅ No networkidle in other active tests"
 fi
 
 # =============================================================================
