@@ -1,0 +1,24 @@
+{
+  "name": "@longhouse/video",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "studio": "remotion studio",
+    "render": "remotion render",
+    "render:timeline-demo": "remotion render TimelineDemo out/timeline-demo.mp4",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "remotion": "4.0.261",
+    "@remotion/cli": "4.0.261",
+    "@remotion/transitions": "4.0.261",
+    "react": "19.2.1",
+    "react-dom": "19.2.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.3",
+    "typescript": "^5.5.4"
+  }
+}

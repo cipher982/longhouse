@@ -234,5 +234,8 @@ vibetest-results/
 # Temp working files
 .tmp/
 
-# Remotion video output
+# Remotion video app — binary media (captured clips, audio, renders)
 apps/video/out/
+apps/video/public/clips/
+apps/video/public/audio-clips/
+apps/video/public/audio/
