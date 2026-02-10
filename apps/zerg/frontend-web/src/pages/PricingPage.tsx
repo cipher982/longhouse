@@ -15,7 +15,7 @@ export default function PricingPage() {
     document.title = "Pricing - Longhouse";
     const metaDescription = document.querySelector('meta[name="description"]');
     if (metaDescription) {
-      metaDescription.setAttribute('content', 'Free during beta. Full access to Longhouse\'s AI fiche platform while we build and refine the product.');
+      metaDescription.setAttribute('content', 'Free during beta. Full access to Longhouse\'s AI agent platform while we build and refine the product.');
     }
   }, []);
 

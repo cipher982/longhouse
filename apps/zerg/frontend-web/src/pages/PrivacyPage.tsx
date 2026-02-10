@@ -45,13 +45,13 @@ export default function PrivacyPage() {
 
           <h3>Account Information</h3>
           <p>
-            When you sign in with Google, we receive your email address, name, and profile picture
+            When you create an account, we store your email address and display name
             to identify your account.
           </p>
 
           <h3>Your Content</h3>
           <p>
-            Your fiches and conversation history are stored to provide the service.
+            Your agent sessions and conversation history are stored to provide the service.
             This data is associated with your account.
           </p>
 
@@ -69,8 +69,8 @@ export default function PrivacyPage() {
           <h2>Your Rights</h2>
           <p>You can:</p>
           <ul>
-            <li><strong>Access</strong> your data through the dashboard</li>
-            <li><strong>Delete</strong> your account and data from settings</li>
+            <li><strong>Access</strong> your data through the timeline</li>
+            <li><strong>Delete</strong> your data from settings</li>
             <li><strong>Revoke</strong> integrations at any time</li>
           </ul>
 
@@ -82,7 +82,7 @@ export default function PrivacyPage() {
           <h2>Third-Party Services</h2>
           <p>We use:</p>
           <ul>
-            <li><strong>Google OAuth</strong> for authentication</li>
+            <li><strong>Authentication providers</strong> for sign-in</li>
             <li><strong>Cloud hosting</strong> for infrastructure</li>
           </ul>
 
