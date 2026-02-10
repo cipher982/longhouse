@@ -68,16 +68,19 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 - [x] Make workspace mode the default (and only) execution mode for new commis
 - [x] Gate standard mode behind `LEGACY_STANDARD_MODE=1` env var (escape hatch)
 - [x] Update Oikos `spawn_commis` tool to always use workspace mode (deprecated, warns)
-- [ ] Update tests that exercise standard mode
-- [ ] Remove `commis_runner.py` (in-process runner) once stable
+- [x] Update tests that exercise standard mode
+- [x] Remove `commis_runner.py` (in-process runner) — ~1K LOC + 5 test files (~1.7K LOC) deleted
+- [ ] Remove 6 skipped tests in mixed files that referenced CommisRunner (test_durable_runs, test_oikos_fiche, test_supervisor_e2e, test_supervisor_tools_integration)
 
 ### Phase 3: Slim Oikos (5)
-- [ ] Define minimal Oikos tool set: spawn_commis, session_tools, contact_user, memory
-- [ ] Replace `run_oikos_loop()` (ReAct engine) with direct LLM API + tool call for Oikos
+- [ ] Define minimal Oikos tool set: spawn_workspace_commis, session_search/grep/filter/detail, contact_user, memory_store, memory_search
+- [ ] Replace `run_oikos_loop()` (ReAct engine) with simple while loop: `llm.call(messages + tools) → execute tools → repeat`
+- [ ] Use Claude Compaction API (server-side) or custom summarizer for "infinite thread" context management
+- [ ] Add `memory` tool — file-backed (Markdown) + sqlite-vec semantic index (a la OpenClaw pattern)
 - [ ] Remove Oikos dependency on fiche_runner, message_array_builder, prompt_context
 - [ ] Remove builtin tools not needed by Oikos (Jira, GitHub, email, SSH, etc.)
 - [ ] Remove skills loading system, tool registry, lazy binder
-- [ ] Design "infinite thread" context management (pruning + summarization + memory)
+- [ ] Clean up dead code: roundabout_monitor, commis_resume, commis_artifact_store, etc. (~25K LOC total)
 
 ### Phase 4: Semantic Search (4)
 - [ ] Choose embedding approach: sqlite-vec vs API-call-on-ingest
