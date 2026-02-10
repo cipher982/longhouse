@@ -408,7 +408,7 @@ class CommisJobProcessor:
         """
         # First, fetch job data and determine execution mode
         # This session is short-lived - we extract data and close before execution
-        execution_mode = "standard"
+        execution_mode = "workspace"
         oikos_run_id = None
         job_task_preview = ""
 
@@ -424,9 +424,22 @@ class CommisJobProcessor:
                     logger.debug(f"Job {job_id} already being processed (status: {job.status})")
                     return
 
-            # Check for workspace execution mode
+            # Determine execution mode (workspace is default since 2026-02)
             job_config = job.config or {}
-            execution_mode = job_config.get("execution_mode", "standard")
+            execution_mode = job_config.get("execution_mode", "workspace")
+
+            # Standard mode is deprecated — only allow with LEGACY_STANDARD_MODE=1
+            if execution_mode == "standard":
+                import os
+
+                if not os.environ.get("LEGACY_STANDARD_MODE"):
+                    logger.warning(
+                        f"Commis job {job_id} requested standard mode but LEGACY_STANDARD_MODE is not set. "
+                        "Standard mode is deprecated — forcing workspace mode."
+                    )
+                    execution_mode = "workspace"
+                else:
+                    logger.warning(f"Commis job {job_id} using deprecated standard mode (LEGACY_STANDARD_MODE=1).")
 
             if execution_mode not in {"standard", "workspace"}:
                 job.status = "failed"

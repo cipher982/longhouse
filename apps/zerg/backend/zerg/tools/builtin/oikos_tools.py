@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 async def spawn_commis_async(
     task: str,
     model: str | None = None,
-    execution_mode: str = "standard",
+    execution_mode: str = "workspace",
     git_repo: str | None = None,
     resume_session_id: str | None = None,
     *,
@@ -50,22 +50,21 @@ async def spawn_commis_async(
     Args:
         task: Natural language description of what the commis should do
         model: LLM model for the commis (default: gpt-5-mini)
-        execution_mode: "standard" (default) runs via WebSocket runner, "workspace"
-            runs headless on the server in a git workspace. Accepts "local" and
-            "cloud" for backward compatibility.
+        execution_mode: "workspace" (default) runs headless CLI agent in a git
+            workspace. "standard" is deprecated (requires LEGACY_STANDARD_MODE=1).
+            Accepts "local" and "cloud" for backward compatibility.
         git_repo: Git repository URL (required if execution_mode="workspace").
             The repo is cloned, agent makes changes, and diff is captured.
-        resume_session_id: Life Hub session UUID to resume (workspace mode only).
+        resume_session_id: Session UUID to resume (workspace mode only).
             Enables cross-environment session continuity.
 
     Returns:
         The commis's result after completion
 
     Example:
-        spawn_commis("Check disk usage on prod-web server via SSH")
-        spawn_commis("Research vacuums and recommend the best one")
-        spawn_commis("Fix typo in README", execution_mode="workspace", git_repo="git@github.com:user/repo.git")
-        spawn_commis("Continue work", execution_mode="workspace", git_repo="...", resume_session_id="abc-123")
+        spawn_commis("Fix typo in README", git_repo="git@github.com:user/repo.git")
+        spawn_commis("Analyze dependencies", git_repo="https://github.com/org/repo.git")
+        spawn_commis("Continue work", git_repo="...", resume_session_id="abc-123")
     """
     from zerg.models.models import CommisJob
 
@@ -262,9 +261,11 @@ async def spawn_standard_commis_async(
     _tool_call_id: str | None = None,
     _return_structured: bool = False,
 ) -> str | dict:
-    """Spawn a commis for general tasks (server commands, research, etc).
+    """Spawn a commis for general tasks.
 
-    For repository/code tasks, use spawn_workspace_commis instead.
+    DEPRECATED: Standard mode is deprecated. This now routes to workspace mode
+    (the job processor will force workspace unless LEGACY_STANDARD_MODE=1 is set).
+    Prefer spawn_workspace_commis for all new usage.
 
     Args:
         task: Natural language description of what the commis should do
@@ -273,6 +274,7 @@ async def spawn_standard_commis_async(
     Returns:
         The commis's result after completion
     """
+    logger.warning("spawn_standard_commis_async is deprecated — standard mode is being removed. " "Use spawn_workspace_commis instead.")
     return await spawn_commis_async(
         task=task,
         model=model,
@@ -287,9 +289,9 @@ def spawn_commis(
     task: str,
     model: str | None = None,
 ) -> str:
-    """Spawn a commis for general tasks (server commands, research, etc).
+    """Spawn a commis (deprecated standard mode wrapper).
 
-    For repository/code tasks, use spawn_workspace_commis instead.
+    DEPRECATED: Use spawn_workspace_commis instead.
     """
     from zerg.utils.async_utils import run_async_safely
 
@@ -1420,17 +1422,17 @@ TOOLS: List[StructuredTool] = [
         func=spawn_commis,
         coroutine=spawn_standard_commis_async,
         name="spawn_commis",
-        description="Spawn a commis for server tasks, research, or investigations. "
-        "Commiss can run commands on servers via runner_exec. "
-        "For repository/code tasks, use spawn_workspace_commis instead.",
+        description="DEPRECATED: Use spawn_workspace_commis instead. "
+        "This tool uses the legacy standard mode which is being removed. "
+        "Standard mode jobs are forced to workspace mode unless LEGACY_STANDARD_MODE=1 is set.",
     ),
     StructuredTool.from_function(
         func=spawn_workspace_commis,
         coroutine=spawn_workspace_commis_async,
         name="spawn_workspace_commis",
-        description="Spawn a commis to work in a git repository. "
-        "Clones the repo, runs the agent in an isolated workspace, and captures any changes. "
-        "Use this for: reading code, analyzing dependencies, making changes, running tests.",
+        description="Spawn a commis to work in a git repository (PRIMARY tool for all commis work). "
+        "Clones the repo, runs a CLI agent (Claude Code) in an isolated workspace, and captures changes. "
+        "Use this for: reading code, analyzing dependencies, making changes, running tests, research.",
     ),
     StructuredTool.from_function(
         func=list_commiss,
