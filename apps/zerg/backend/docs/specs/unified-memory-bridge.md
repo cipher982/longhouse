@@ -1,183 +1,154 @@
-# Unified Memory Bridge (Read-Through Dogfood)
+# Harness Simplification & Commis-to-Timeline Unification
 
-**Status:** Draft
+**Status:** Active
 **Owner:** David Rose
-**Last updated:** 2026-02-09
+**Created:** 2026-02-09
+**Replaces:** Unified Memory Bridge spec (read-through adapter approach abandoned)
 
-## Why this exists
+## Why
 
-Longhouse is the product we want to dogfood, but Life Hub is the system that actually works day-to-day. This spec defines a low-risk bridge so Longhouse can **read through** Life Hub for agent memory while we keep shipping, then cut over cleanly later.
+Longhouse accumulated ~55K LOC of custom agent harness (in-process ReAct loop, 31 builtin tools, skills system, prompt assembly, etc.) across multiple pivots. This competes with what Claude Code / Codex / Gemini CLI already do better with teams of hundreds.
 
-The goal is to make Longhouse feel like the canonical memory UI **without forcing a big-bang migration**.
+Meanwhile, commis output doesn't appear in the agent timeline — Longhouse's own work is invisible to its own product.
 
-## Goals
+## Decision
 
-- Longhouse UI and Oikos tools can query agent memory even if Life Hub remains canonical.
-- No workflow break for current Life Hub users.
-- Clear migration path to make Longhouse canonical later.
-- Minimal surface area: use existing Life Hub API endpoints (not new DB links).
+1. **All commis become CLI agent subprocesses** (workspace mode). Standard mode (in-process) is deprecated.
+2. **Commis sessions are ingested into the agent timeline** via the same `/api/agents/ingest` path as shipped terminal sessions.
+3. **Oikos becomes a thin coordinator** — direct LLM API calls for conversation, `spawn_commis` for real work. No custom tool execution engine.
+4. **The legacy harness is removed incrementally** — ~25K LOC of dead code cleared over time.
+5. **Semantic search added to Longhouse** — embeddings on ingest, replaces Life Hub MCP dependency.
 
-## Non-goals
+## What Longhouse Owns vs What CLI Agents Own
 
-- Multi-tenant support (still single-tenant).
-- New UI for agent rooms (separate spec).
-- Full semantic search in OSS on day one.
+| Longhouse | CLI Agents (Claude Code, Codex, etc.) |
+|-----------|---------------------------------------|
+| Orchestration (spawn, cancel, monitor) | The agent loop |
+| Job queue + workspace isolation | Tool execution (file edit, bash, MCP) |
+| Timeline (unified searchable archive) | Context management + prompt caching |
+| Search (FTS5 + semantic) | Streaming + error recovery |
+| Resume (pick up any session) | The entire harness |
+| Always-on infrastructure | — |
+| Runner coordination | — |
 
-## Current state (verified in code)
+## Phase 1: Commis → Timeline Unification
 
-### Local → Longhouse shipper
+**Goal:** When a commis runs, its session appears in the timeline — indistinguishable from a shipped terminal session.
 
-- Watches `~/.claude/projects/**/*.jsonl` and ships to `/api/agents/ingest`.
-- Tracks byte offsets in `~/.claude/zerg-shipper-state.json`.
-- Spools offline payloads to `~/.claude/zerg-shipper-spool.db`.
+### Changes
 
-Refs: `zerg/services/shipper/shipper.py`, `zerg/services/shipper/state.py`, `docs/specs/shipper.md`.
+1. **Post-execution ingest in `commis_job_processor.py`:**
+   - After workspace mode hatch subprocess completes, find the session JSONL it produced
+   - Push it through `AgentsStore.ingest_session()` (same path as shipper)
+   - Tag with `environment=commis` or `source=longhouse` for filtering
 
-### Longhouse session resume
+2. **Verify workspace mode produces JSONL:**
+   - `hatch` wraps Claude Code which writes to `~/.claude/projects/`
+   - The workspace is isolated, so the JSONL lands in the workspace's Claude state dir
+   - Need to confirm path and wire ingestion
 
-- **Export** JSONL from DB → write to server `~/.claude/projects/...` → `claude --resume`.
-- **Ship back** server-local JSONL to `/api/agents/ingest` so the DB has the new events.
+3. **Commis timeline integration:**
+   - Timeline UI shows commis sessions alongside shipped sessions
+   - Filter option to show/hide commis vs terminal sessions
+   - Session detail links back to the commis job for context
 
-Refs: `zerg/services/session_continuity.py`, `zerg/routers/session_chat.py`.
+### Files
+- `services/commis_job_processor.py` — add post-execution ingest
+- `services/cloud_executor.py` — capture session JSONL path from hatch output
+- `services/agents_store.py` — may need minor changes for commis metadata
 
-### Memory split today
+## Phase 2: Deprecate Standard Mode
 
-- Longhouse: keyword search using SQLite FTS5 (`events_fts`).
-- Life Hub: semantic search via embeddings + pgvector; MCP server exposes `search_agents`.
+**Goal:** Remove the in-process execution path. All commis use workspace mode (CLI agents).
 
-Refs: `zerg/services/agents_store.py`, `zerg/database.py`, `life_hub/mcp_server.py`.
+### What becomes dead code
+- `services/commis_runner.py` (1,051 LOC) — in-process runner
+- `managers/fiche_runner.py` (974 LOC) — message assembly + LLM dispatch
+- `managers/message_array_builder.py` (523 LOC) — prompt construction
+- `managers/prompt_context.py` (452 LOC) — context builder
+- `services/oikos_react_engine.py` (1,483 LOC) — the ReAct loop itself
+- `tools/builtin/` (31 files, 11,997 LOC) — all custom tools
+- `tools/` infrastructure (registry, lazy binder, catalog) — partial removal
+- `skills/` (14 files) — skill loading pipeline
+- `callbacks/` — token streaming callbacks
+- `prompts/` — prompt templates
 
-## Problem statement
+### Migration steps
+1. Make workspace mode the default (and only) execution mode for commis
+2. Gate standard mode behind `LEGACY_STANDARD_MODE=1` env var (escape hatch)
+3. Update all tests that use standard mode to use workspace mode
+4. Remove standard mode code paths once stable
+5. Remove dead tool/skills/callback code incrementally
 
-Longhouse and Life Hub both store agent logs, but there is no single canonical memory.
-This blocks dogfooding because:
+### What stays
+- `services/commis_job_processor.py` — job queue consumer (refactored)
+- `services/commis_job_queue.py` — job queue
+- `services/workspace_manager.py` — workspace isolation
+- `services/cloud_executor.py` — hatch subprocess spawning
+- All DB models, CRUD, auth, routing
+- Agent timeline (agents_store, agents router)
+- Thread/run models (for Oikos conversation history)
 
-- Longhouse UI search is incomplete (no semantic search).
-- Life Hub has strong memory but no Longhouse UX.
-- Switching would require abandoning the current, working system.
+## Phase 3: Slim Oikos
 
-## Decision: Read-through bridge
+**Goal:** Oikos becomes a thin conversation coordinator, not an agent harness.
 
-Longhouse should **read agent memory from Life Hub** when configured, while keeping the same Longhouse API surface for UI and tools.
+### Oikos needs only:
+- **Direct LLM API call** for conversation (no ReAct loop, no tool dispatch)
+- **`spawn_commis`** — kick off CLI agent work
+- **Session tools** — search/grep/filter agent timeline
+- **`contact_user`** — ask the user questions
+- **Memory** — the infinite thread with context management
 
-This enables immediate dogfooding of the Longhouse UI without migration risk.
+### Oikos does NOT need:
+- 31 builtin tools (Jira, GitHub, email, SSH, etc.)
+- Custom tool registry / lazy binder / MCP adapter
+- Skills loading system
+- Token streaming callbacks
+- Message array builder with cache optimization
 
-## Architecture (read-through)
-
-### Diagram: read-through path
-
+### Architecture
 ```
-Longhouse UI / Oikos tools
-          |
-          v
-   Longhouse API (/api/agents/*)
-          |
-          +--------------------+
-          | AGENTS_BACKEND=local   -> Local DB (SQLite/Postgres)
-          | AGENTS_BACKEND=life_hub -> Life Hub API (canonical)
-          +--------------------+
+User message → Oikos (thin coordinator)
+  → If task: spawn_commis → CLI agent does the work
+  → If question about past work: search_sessions / recall
+  → If conversation: direct LLM response
+  → If needs info: contact_user
 ```
 
-### Diagram: current shipper + resume flows (for context)
+### The "infinite thread" implementation
+- Oikos is a single permanent thread per user
+- Old messages are pruned/summarized to maintain context window
+- Memory system persists key facts across pruning
+- This is a product design problem, not an agent harness problem
 
-```
-Local Claude JSONL -> Shipper -> /api/agents/ingest -> Longhouse DB
+## Phase 4: Semantic Search
 
-Longhouse chat:
-  export JSONL -> write server ~/.claude/... -> claude --resume -> re-ingest
-```
+**Goal:** Replace Life Hub MCP `recall`/`search_agent_logs` with Longhouse-native semantic search.
 
-## Interface proposal
+### Approach
+- Compute embeddings on session event ingest (background or sync)
+- Store in SQLite via sqlite-vec (optional dependency: `pip install longhouse[semantic]`)
+- Add `semantic_search_sessions` tool for Oikos
+- FTS5 remains the default; semantic is an enhancement
+- No pgvector dependency; hosted can use it optionally
 
-Add a thin `AgentsBackend` abstraction in Longhouse:
-
-```text
-list_sessions(filters) -> {sessions, total}
-get_session(session_id) -> session
-get_session_events(session_id, filters) -> {events, total}
-search_sessions(query, filters) -> {sessions, total, matches}
-export_session_jsonl(session_id) -> (bytes, cwd, provider_session_id)
-```
-
-### Implementations
-
-- `LocalAgentsBackend`: wraps existing `AgentsStore` (current behavior).
-- `LifeHubAgentsBackend`: HTTP client to Life Hub endpoints.
-
-### Config
-
-- `AGENTS_BACKEND=local|life_hub` (default `local`)
-- `LIFE_HUB_BASE_URL` (e.g. `https://data.drose.io`)
-- `LIFE_HUB_API_KEY`
-
-## Life Hub endpoints (confirmed)
-
-From `life_hub/api/routers/agents.py`:
-
-- `POST /ingest/agents/events` (write)
-- `GET /query/agents/sessions`
-- `GET /query/agents/sessions/{id}`
-- `GET /query/agents/sessions/{id}/events`
-- `GET /query/agents/search` (full-text)
-- `GET /query/agents/sessions/{id}/export` (JSONL)
-- `GET /api/agents/full/semantic-search` (semantic)
-
-## Search behavior
-
-- If backend = `local`: keep FTS5 keyword search (`events_fts`).
-- If backend = `life_hub`: prefer semantic search when available.
-  - First attempt: `/api/agents/full/semantic-search`
-  - Fallback: `/query/agents/search` (FTS)
-
-## Data mapping notes
-
-Longhouse uses:
-- `AgentSession`: `id`, `provider`, `project`, `cwd`, `git_repo`, `git_branch`, timestamps, counters.
-- `AgentEvent`: `role`, `content_text`, `tool_name`, `tool_input_json`, `tool_output_text`, `timestamp`.
-
-Life Hub returns similar fields but different envelopes (`data`, `count`).
-Bridge should normalize to the existing Longhouse shapes.
-
-## Migration plan
-
-### Phase 0 — Read-through (now)
-
-- Longhouse reads from Life Hub when `AGENTS_BACKEND=life_hub`.
-- No migration, no data copying.
-- Dogfood Longhouse UI immediately.
-
-### Phase 1 — Write-through (optional)
-
-- Shipper continues sending to Life Hub.
-- Longhouse ingest optionally forwards to Life Hub (dual-write) for testing.
-
-### Phase 2 — Backfill + Cutover
-
-- Backfill Life Hub sessions into Longhouse DB.
-- Switch `AGENTS_BACKEND=local`.
-- Stop dual-write.
-
-### Phase 3 — Simplify
-
-- Remove Life Hub adapter paths when stable.
+### David-specific: Historical Backfill
+- One-time script: pull sessions from Life Hub API → push to Longhouse `/api/agents/ingest`
+- Run once, not an ongoing bridge
+- Verify counts match, then stop using Life Hub for agent memory
 
 ## Risks
 
-- Semantic search availability (Life Hub depends on embeddings + vector index).
-- Session export/resume must use the same backend (read-through adapter must handle export).
-- Potential drift if local shipper and Life Hub diverge during cutover.
+- Workspace mode is slower to start than in-process (subprocess + git clone overhead)
+- hatch/Claude Code may not be installed on all user machines
+- Session JSONL format may vary across CLI providers
+- Removing the harness may break Oikos features that depend on builtin tools
 
-## Implementation checklist
+## Success Criteria
 
-- [ ] Add `AgentsBackend` interface + two implementations.
-- [ ] Wire `/api/agents/*` router to backend.
-- [ ] Wire session tools (`search_sessions`, `get_session_detail`, etc.) to backend.
-- [ ] Wire session export for resume to backend.
-- [ ] Add config + env docs.
-- [ ] Add integration tests for both backends (smoke only).
-
-## Open questions
-
-1) Should Longhouse ever write directly to Life Hub (dual-write), or stay read-only during Phase 0?
-2) Should MCP tools point to Longhouse once read-through is live?
-3) Do we want semantic search in OSS (sqlite-vec) later, or keep it hosted-only?
+1. Commis sessions appear in timeline within 30s of completion
+2. Standard mode fully removed, no regression in commis functionality
+3. Oikos works with only: LLM API, spawn_commis, session tools, contact_user
+4. Semantic search returns relevant results for "find where I did X"
+5. Total backend LOC reduced by ~20K+
