@@ -731,7 +731,7 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - ~~[Docs vs reality] Public info pages (`PricingPage.tsx`, `SecurityPage.tsx`, `PrivacyPage.tsx`) still describe fiches/workflows, Google-only OAuth auth, and dashboard account management, which don't match the current timeline-first OSS flow.~~ ✅ Fixed (2026-02-10)
 - ~~[Docs vs code] DocsPage skills section says to add `SKILL.md` to `workspace/skills`; default loader path for OSS is `~/.longhouse/skills` unless a workspace path is configured.~~ ✅ Fixed (2026-02-10)
 - ~~[Docs vs code] Landing SkillsSection says Slack skill can "manage channels," but Slack tool is webhook-only (send message); no channel management/listing tools exist.~~ ✅ Fixed (2026-02-10)
-- [Docs] QA job prompt (`apps/zerg/backend/zerg/jobs/qa/prompt.md`) still brands alerts as "SWARMLET QA"; should be Longhouse (brand drift).
+- ~~[Docs] QA job prompt (`apps/zerg/backend/zerg/jobs/qa/prompt.md`) still brands alerts as "SWARMLET QA"; should be Longhouse (brand drift).~~ ✅ File doesn't exist (2026-02-10)
 
 ---
 
@@ -755,7 +755,7 @@ Evidence: `ideas/evidence/80_evidence_builtin_init_legacy_registry.sh`
 21. [ID 21] Drop non-lazy binder compatibility path.
 Evidence: `ideas/evidence/40_evidence_lazy_binder_compat.sh`
 
-22. [ID 22] Remove deprecated publish_event_safe wrapper.
+22. ~~[ID 22] Remove deprecated publish_event_safe wrapper.~~ ✅ Already gone (2026-02-10)
 Evidence: `ideas/evidence/41_evidence_events_publisher_deprecated.sh`
 
 23. [ID 23] Require envelope-only WS messages, remove legacy wrapping.
@@ -764,7 +764,7 @@ Evidence: `ideas/evidence/42_evidence_websocket_legacy_wrap.sh`
 24. ~~[ID 24] Remove legacy admin routes without api prefix.~~ ✅ Done (2026-02-10)
 Evidence: `ideas/evidence/43_evidence_admin_legacy_router.sh`
 
-25. [ID 25] Remove deprecated workflow start route.
+25. ~~[ID 25] Remove deprecated workflow start route.~~ ✅ Already gone (2026-02-10)
 Evidence: `ideas/evidence/44_evidence_workflow_exec_deprecated_route.sh`
 
 26. ~~[ID 26] Remove deprecated TextChannelController.~~ ✅ Already gone (2026-02-10)
@@ -773,13 +773,13 @@ Evidence: `ideas/evidence/51_evidence_text_channel_controller_deprecated.sh`
 27. [ID 27] Remove deprecated session handler API.
 Evidence: `ideas/evidence/52_evidence_session_handler_deprecated.sh`
 
-28. [ID 28] Remove compatibility methods in feedback system.
+28. [ID 28] ~~Remove~~ Relabel compatibility methods in feedback system — methods are actively called, not dead code.
 Evidence: `ideas/evidence/53_evidence_feedback_system_compat.sh`
 
 29. [ID 29] Remove deprecated heuristic or hybrid decision modes in roundabout monitor.
 Evidence: `ideas/evidence/54_evidence_roundabout_monitor_deprecated_modes.sh`
 
-30. [ID 30] Remove HEURISTIC or HYBRID decision modes in LLM decider.
+30. ~~[ID 30] Remove HEURISTIC or HYBRID decision modes in LLM decider.~~ ✅ Already gone (2026-02-10)
 Evidence: `ideas/evidence/55_evidence_llm_decider_deprecated_modes.sh`
 
 31. [ID 31] Simplify unified_access legacy behavior.
