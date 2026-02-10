@@ -13,7 +13,6 @@ from zerg.services.roundabout_monitor import DecisionContext
 from zerg.services.roundabout_monitor import RoundaboutDecision
 from zerg.services.roundabout_monitor import RoundaboutMonitor
 from zerg.services.roundabout_monitor import ToolActivity
-from zerg.services.roundabout_monitor import make_heuristic_decision
 from zerg.services.commis_artifact_store import CommisArtifactStore
 
 
@@ -124,143 +123,6 @@ async def test_roundabout_monitor_timeout_sets_flag(monkeypatch, db_session, tmp
         assert monitor._event_subscription is None
     finally:
         event_bus._subscribers = original_subs
-
-
-# ============================================================================
-# Phase 4: Heuristic Decision Tests
-# ============================================================================
-
-
-class TestMakeHeuristicDecision:
-    """Tests for the heuristic decision function."""
-
-    def _make_context(self, **overrides) -> DecisionContext:
-        """Helper to create a DecisionContext with defaults."""
-        defaults = {
-            "job_id": 1,
-            "commis_id": "test-commis-123",
-            "task": "Test task",
-            "status": "running",
-            "elapsed_seconds": 10.0,
-            "tool_activities": [],
-            "current_operation": None,
-            "is_stuck": False,
-            "stuck_seconds": 0.0,
-            "polls_without_progress": 0,
-            "last_tool_output": None,
-        }
-        defaults.update(overrides)
-        return DecisionContext(**defaults)
-
-    def test_wait_when_running_normally(self):
-        """Should return WAIT when commis is running normally."""
-        ctx = self._make_context(status="running")
-        decision, reason = make_heuristic_decision(ctx)
-
-        assert decision == RoundaboutDecision.WAIT
-        assert "Continuing" in reason
-
-    def test_exit_when_status_success(self):
-        """Should return EXIT when commis status is success."""
-        ctx = self._make_context(status="success")
-        decision, reason = make_heuristic_decision(ctx)
-
-        assert decision == RoundaboutDecision.EXIT
-        assert "success" in reason
-
-    def test_exit_when_status_failed(self):
-        """Should return EXIT when commis status is failed."""
-        ctx = self._make_context(status="failed")
-        decision, reason = make_heuristic_decision(ctx)
-
-        assert decision == RoundaboutDecision.EXIT
-        assert "failed" in reason
-
-    def test_exit_on_final_answer_pattern(self):
-        """Should return EXIT when final answer pattern detected in output."""
-        ctx = self._make_context(status="running", last_tool_output="Result: The disk is 78% full.")
-        decision, reason = make_heuristic_decision(ctx)
-
-        assert decision == RoundaboutDecision.EXIT
-        assert "pattern" in reason.lower()
-
-    def test_warn_when_stuck_too_long(self):
-        """v2.2: Should return WAIT (not CANCEL) when stuck beyond threshold - just warns."""
-        ctx = self._make_context(
-            status="running",
-            is_stuck=True,
-            stuck_seconds=65.0,  # Beyond 60s threshold
-        )
-        decision, reason = make_heuristic_decision(ctx)
-
-        # v2.2: Timeouts stop waiting, not working. We warn but don't cancel.
-        assert decision == RoundaboutDecision.WAIT
-        assert "monitor" in reason.lower() or "continuing" in reason.lower()
-
-    def test_warn_when_no_progress_with_tool_activity(self):
-        """v2.2: Should return WAIT (not CANCEL) after too many polls without progress - just warns."""
-        ctx = self._make_context(
-            status="running",
-            polls_without_progress=7,  # Beyond 6 poll threshold
-            elapsed_seconds=25.0,  # Beyond min_elapsed guard (20s)
-            tool_activities=[ToolActivity("http_request", "completed", datetime.now(timezone.utc))],
-        )
-        decision, reason = make_heuristic_decision(ctx)
-
-        # v2.2: Timeouts stop waiting, not working. We warn but don't cancel.
-        assert decision == RoundaboutDecision.WAIT
-        assert "monitor" in reason.lower() or "continuing" in reason.lower()
-
-    def test_no_cancel_when_no_progress_but_too_early(self):
-        """Should NOT cancel if no progress but not enough time elapsed."""
-        ctx = self._make_context(
-            status="running",
-            polls_without_progress=7,
-            elapsed_seconds=15.0,  # Less than min_elapsed guard (20s)
-            tool_activities=[ToolActivity("http_request", "completed", datetime.now(timezone.utc))],
-        )
-        decision, reason = make_heuristic_decision(ctx)
-
-        # Should wait, not cancel
-        assert decision == RoundaboutDecision.WAIT
-
-    def test_warn_when_no_tool_activity_after_extended_time(self):
-        """v2.2: Should return WAIT (not CANCEL) if no tool activity after extended grace period - just warns."""
-        ctx = self._make_context(
-            status="running",
-            polls_without_progress=15,
-            elapsed_seconds=65.0,  # Beyond ROUNDABOUT_CANCEL_STUCK_THRESHOLD (60s)
-            tool_activities=[],  # No tool activity
-        )
-        decision, reason = make_heuristic_decision(ctx)
-
-        # v2.2: Timeouts stop waiting, not working. We warn but don't cancel.
-        assert decision == RoundaboutDecision.WAIT
-        assert "monitor" in reason.lower() or "continuing" in reason.lower()
-
-    def test_no_cancel_when_no_tool_activity_but_under_threshold(self):
-        """Should NOT cancel if no tool activity but under 60s threshold."""
-        ctx = self._make_context(
-            status="running",
-            polls_without_progress=7,
-            elapsed_seconds=45.0,  # Under ROUNDABOUT_CANCEL_STUCK_THRESHOLD (60s)
-            tool_activities=[],  # No tool activity
-        )
-        decision, reason = make_heuristic_decision(ctx)
-
-        # Should wait, not cancel - commis may still be in initial model call
-        assert decision == RoundaboutDecision.WAIT
-
-    def test_wait_when_stuck_but_under_threshold(self):
-        """Should still WAIT when stuck but under cancel threshold."""
-        ctx = self._make_context(
-            status="running",
-            is_stuck=True,
-            stuck_seconds=40.0,  # Under 60s threshold
-        )
-        decision, reason = make_heuristic_decision(ctx)
-
-        assert decision == RoundaboutDecision.WAIT
 
 
 @pytest.mark.asyncio
@@ -427,7 +289,6 @@ async def test_roundabout_correlates_events_by_job_id(monkeypatch, db_session, t
 # Phase 5: LLM-Gated Decision Tests
 # ============================================================================
 
-from unittest.mock import MagicMock
 from unittest.mock import patch
 
 from zerg.services.llm_decider import DecisionMode
@@ -682,112 +543,6 @@ async def test_roundabout_llm_interval_enforcement(monkeypatch, db_session, tmp_
 
             # Should have skipped some polls due to interval
             assert result.activity_summary.get("llm_skipped_interval", 0) > 0
-    finally:
-        event_bus._subscribers = original_subs
-
-
-@pytest.mark.asyncio
-async def test_roundabout_hybrid_mode_heuristic_takes_precedence(monkeypatch, db_session, tmp_path):
-    """Hybrid mode should use heuristic decision when it's not WAIT."""
-    monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
-    monkeypatch.setenv("LONGHOUSE_DATA_PATH", str(tmp_path / "commis"))
-    store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
-
-    original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
-    event_bus._subscribers.clear()
-
-    try:
-        commis_id = store.create_commis("Test task", owner_id=1)
-        store.start_commis(commis_id)
-
-        job = CommisJob(
-            owner_id=1,
-            task="Test task",
-            model=TEST_COMMIS_MODEL,
-            status="success",  # Heuristic will say EXIT
-            commis_id=commis_id,
-        )
-        db_session.add(job)
-        db_session.commit()
-        db_session.refresh(job)
-
-        # Complete commis artifacts
-        store.save_result(commis_id, "OK")
-        store.complete_commis(commis_id, status="success")
-
-        llm_called = False
-
-        async def mock_decide(*args, **kwargs):
-            nonlocal llm_called
-            llm_called = True
-            return ("wait", "LLM decided: wait", MagicMock())
-
-        with patch("zerg.services.roundabout_monitor.decide_roundabout_action", mock_decide):
-            monitor = RoundaboutMonitor(
-                db_session,
-                job.id,
-                owner_id=1,
-                timeout_seconds=2,
-                decision_mode=DecisionMode.HYBRID,
-            )
-
-            result = await monitor.wait_for_completion()
-
-            # Heuristic should have exited immediately, no LLM call needed
-            assert result.status == "complete"
-            assert not llm_called
-    finally:
-        event_bus._subscribers = original_subs
-
-
-@pytest.mark.asyncio
-async def test_roundabout_heuristic_mode_no_llm_calls(monkeypatch, db_session, tmp_path):
-    """Heuristic mode should never call LLM."""
-    monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
-    monkeypatch.setattr(rm, "ROUNDABOUT_NO_PROGRESS_POLLS", 2)  # Quick cancel
-    monkeypatch.setenv("LONGHOUSE_DATA_PATH", str(tmp_path / "commis"))
-    store = CommisArtifactStore(base_path=str(tmp_path / "commis"))
-
-    original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
-    event_bus._subscribers.clear()
-
-    try:
-        commis_id = store.create_commis("Test task", owner_id=1)
-        store.start_commis(commis_id)
-
-        job = CommisJob(
-            owner_id=1,
-            task="Test task",
-            model=TEST_COMMIS_MODEL,
-            status="running",
-            commis_id=commis_id,
-        )
-        db_session.add(job)
-        db_session.commit()
-        db_session.refresh(job)
-
-        llm_called = False
-
-        async def mock_decide(*args, **kwargs):
-            nonlocal llm_called
-            llm_called = True
-            return ("wait", "LLM decided: wait", MagicMock())
-
-        with patch("zerg.services.roundabout_monitor.decide_roundabout_action", mock_decide):
-            monitor = RoundaboutMonitor(
-                db_session,
-                job.id,
-                owner_id=1,
-                timeout_seconds=2,
-                decision_mode=DecisionMode.HEURISTIC,  # Default mode
-            )
-
-            result = await monitor.wait_for_completion()
-
-            # LLM should never have been called
-            assert not llm_called
-            assert result.activity_summary["decision_mode"] == "heuristic"
-            assert "llm_calls" not in result.activity_summary
     finally:
         event_bus._subscribers = original_subs
 

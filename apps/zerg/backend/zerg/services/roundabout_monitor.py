@@ -29,7 +29,6 @@ Decision mode (v2.0 default: LLM):
 import asyncio
 import json
 import logging
-import re
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import datetime
@@ -62,15 +61,6 @@ ROUNDABOUT_STUCK_THRESHOLD = 30  # seconds - flag operation as slow
 ROUNDABOUT_ACTIVITY_LOG_MAX = 20  # max entries to track
 ROUNDABOUT_CANCEL_STUCK_THRESHOLD = 60  # seconds - auto-cancel if stuck this long
 ROUNDABOUT_NO_PROGRESS_POLLS = 6  # consecutive polls with no new events before cancel
-
-# Patterns that suggest commis has a final answer (case-insensitive)
-FINAL_ANSWER_PATTERNS = [
-    r"Result:",
-    r"Summary:",
-    r"Completed successfully",
-    r"Task complete",
-    r"Done\.",
-]
 
 
 class RoundaboutDecision(Enum):
@@ -159,58 +149,6 @@ class RoundaboutResult:
     drill_down_hint: str | None = None  # For peek: what to read next
     tool_index: list[ToolIndexEntry] = field(default_factory=list)  # Execution metadata for tool calls
     run_id: int | None = None  # Oikos run ID for evidence correlation
-
-
-def make_heuristic_decision(ctx: DecisionContext) -> tuple[RoundaboutDecision, str]:
-    """Make a heuristic-based decision about what to do next in the roundabout.
-
-    DEPRECATED (v2.0): This is the v1.0 approach using pre-programmed rules.
-    v2.0 default is LLM mode - let the AI interpret status and decide.
-
-    Kept for backwards compatibility only. Use DecisionMode.LLM instead.
-
-    Args:
-        ctx: Decision context with current state
-
-    Returns:
-        Tuple of (decision, reason)
-    """
-    # Priority 1: Commis completed - exit immediately
-    if ctx.status in ("success", "failed"):
-        return RoundaboutDecision.EXIT, f"Commis status changed to {ctx.status}"
-
-    # Priority 2: Check for final answer patterns in last tool output
-    if ctx.last_tool_output:
-        for pattern in FINAL_ANSWER_PATTERNS:
-            if re.search(pattern, ctx.last_tool_output, re.IGNORECASE):
-                return (
-                    RoundaboutDecision.EXIT,
-                    f"Final answer pattern detected: {pattern}",
-                )
-
-    # Priority 3: Warn (not cancel) if stuck too long
-    # v2.2: Timeouts stop waiting, not working. Let hard timeout be the safety net.
-    if ctx.is_stuck and ctx.stuck_seconds > ROUNDABOUT_CANCEL_STUCK_THRESHOLD:
-        logger.warning(f"Job {ctx.job_id}: operation stuck for {ctx.stuck_seconds:.0f}s - " "continuing (hard timeout is safety net)")
-        # Don't cancel - just log. LLM may be thinking or waiting for SSH response.
-
-    # Priority 4: Warn (not cancel) if no progress for too many polls
-    # v2.2: Timeouts stop waiting, not working. Let hard timeout be the safety net.
-    if ctx.polls_without_progress >= ROUNDABOUT_NO_PROGRESS_POLLS:
-        logger.warning(
-            f"Job {ctx.job_id}: {ctx.polls_without_progress} polls without progress - " "continuing (hard timeout is safety net)"
-        )
-        # Don't cancel - just log. LLM may be reasoning or waiting for external service.
-
-    # Priority 5: Suggest peek if stuck but not cancel-worthy yet
-    # (Future: could trigger LLM decision here)
-    if ctx.is_stuck and ctx.stuck_seconds > ROUNDABOUT_STUCK_THRESHOLD:
-        # For now, just flag as slow but continue waiting
-        # A more sophisticated version might return PEEK
-        logger.debug(f"Job {ctx.job_id} operation slow ({ctx.stuck_seconds:.0f}s) but not cancel-worthy yet")
-
-    # Default: continue waiting
-    return RoundaboutDecision.WAIT, "Continuing to monitor"
 
 
 class RoundaboutMonitor:
