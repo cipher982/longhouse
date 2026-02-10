@@ -13,7 +13,7 @@ if [[ "$tag" != "v0.1.0" ]]; then
   exit 1
 fi
 
-expected_url="https://github.com/daverosedavis/zerg/archive/refs/tags/v0.1.0.tar.gz"
+expected_url="https://github.com/cipher982/longhouse/archive/refs/tags/v0.1.0.tar.gz"
 archive_url="$(build_runner_archive_url "$tag")"
 if [[ "$archive_url" != "$expected_url" ]]; then
   echo "Expected archive URL $expected_url, got $archive_url"

@@ -31,7 +31,7 @@ CONFIG_DIR="/etc/longhouse"
 CONFIG_FILE="${CONFIG_DIR}/runner.env"
 SERVICE_NAME="longhouse-runner"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-GITHUB_REPO="daverosedavis/zerg"
+GITHUB_REPO="cipher982/longhouse"
 RUNNER_VERSION="${RUNNER_VERSION:-latest}"
 
 # ----- Colors for output -----
