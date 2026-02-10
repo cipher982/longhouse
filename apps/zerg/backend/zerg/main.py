@@ -790,16 +790,6 @@ app.include_router(agents_router, prefix=f"{API_PREFIX}")  # Agents schema for c
 app.include_router(device_tokens_router, prefix=f"{API_PREFIX}")  # Per-device authentication tokens
 
 # ---------------------------------------------------------------------------
-# Legacy admin routes without /api prefix – keep at very end so they override
-# nothing and remain an optional convenience for old tests.
-# ---------------------------------------------------------------------------
-
-try:
-    from zerg.routers.admin import _mount_legacy  # noqa: E402
-
-    _mount_legacy(app)
-except ImportError:  # pragma: no cover – should not happen
-    pass
 
 # Legacy logging setup (kept to avoid breaking existing comment reference)
 # Set up logging

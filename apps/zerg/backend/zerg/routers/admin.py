@@ -6,9 +6,7 @@ from typing import Optional
 
 # FastAPI helpers
 from fastapi import APIRouter
-from fastapi import APIRouter as _AR
 from fastapi import Depends
-from fastapi import FastAPI as _FastAPI
 from fastapi import HTTPException
 from fastapi import Query
 from fastapi.responses import JSONResponse
@@ -431,15 +429,6 @@ def _reset_database_sync(request: DatabaseResetRequest, current_user):
         return JSONResponse(status_code=500, content={"detail": f"Failed to reset database: {str(e)}"})
 
 
-# ---------------------------------------------------------------------------
-# Backwards-compatibility route (no /api prefix) so legacy Playwright specs
-# that still call ``POST /admin/reset-database`` continue to work.  We simply
-# delegate to the main handler.
-# ---------------------------------------------------------------------------
-
-_legacy_router = _AR(prefix="/admin")
-
-
 @router.get("/migration-log")
 async def get_migration_log():
     """Get the migration log from container startup."""
@@ -670,18 +659,3 @@ async def get_user_usage_details(
     if result is None:
         raise HTTPException(status_code=404, detail="User not found")
     return result
-
-
-@_legacy_router.post("/reset-database")
-async def _legacy_reset_database(
-    request: DatabaseResetRequest,
-    current_user=Depends(require_super_admin),
-):  # noqa: D401 – thin wrapper
-    return _reset_database_sync(request, current_user)  # noqa: WPS110 – re-use logic
-
-
-# mount the legacy router without the global /api prefix
-
-
-def _mount_legacy(app: _FastAPI):  # noqa: D401 – helper
-    app.include_router(_legacy_router)
