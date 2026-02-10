@@ -17,14 +17,27 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from pathlib import Path
+from typing import Protocol
+from typing import runtime_checkable
 
 from sqlalchemy.orm import Session
 
 from zerg.crud.crud_commis_jobs import get_by_oikos_run
-from zerg.services.commis_artifact_store import CommisArtifactStore
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class ArtifactReader(Protocol):
+    """Protocol for reading commis artifacts.
+
+    CommisArtifactStore satisfies this protocol. Any object implementing
+    these three methods can be used as an artifact source for EvidenceCompiler.
+    """
+
+    def get_commis_metadata(self, commis_id: str, owner_id: int | None = None) -> dict: ...
+    def list_tool_call_files(self, commis_id: str) -> list[tuple[str, int]]: ...
+    def read_commis_file(self, commis_id: str, relative_path: str) -> str: ...
 
 
 @dataclass
@@ -48,7 +61,7 @@ class EvidenceCompiler:
 
     def __init__(
         self,
-        artifact_store: CommisArtifactStore | None = None,
+        artifact_store: ArtifactReader | None = None,
         db: Session | None = None,
     ):
         """Initialize the evidence compiler.
@@ -56,11 +69,16 @@ class EvidenceCompiler:
         Parameters
         ----------
         artifact_store
-            Artifact store for reading commis files. Creates default if None.
+            Any object satisfying the ArtifactReader protocol. Creates a
+            default CommisArtifactStore if None.
         db
             Database session for querying CommisJob metadata. Optional.
         """
-        self.artifact_store = artifact_store or CommisArtifactStore()
+        if artifact_store is None:
+            from zerg.services.commis_artifact_store import CommisArtifactStore
+
+            artifact_store = CommisArtifactStore()
+        self.artifact_store = artifact_store
         self.db = db
 
     def compile(
@@ -245,17 +263,14 @@ class EvidenceCompiler:
         list[ToolArtifact]
             List of discovered artifacts with metadata
         """
-        commis_dir = self.artifact_store._get_commis_dir(commis_id)
-        tool_calls_dir = commis_dir / "tool_calls"
-
-        if not tool_calls_dir.exists():
+        file_list = self.artifact_store.list_tool_call_files(commis_id)
+        if not file_list:
             return []
 
         artifacts = []
 
-        for filepath in sorted(tool_calls_dir.glob("*.txt")):
+        for filename, size_bytes in file_list:
             # Parse filename: "001_ssh_exec.txt" -> sequence=1, tool_name="ssh_exec"
-            filename = filepath.name
             try:
                 seq_str, tool_name_ext = filename.split("_", 1)
                 sequence = int(seq_str)
@@ -264,11 +279,8 @@ class EvidenceCompiler:
                 logger.warning(f"Skipping malformed artifact filename: {filename}")
                 continue
 
-            # Get file size
-            size_bytes = filepath.stat().st_size
-
             # Try to extract exit_code from tool output (best effort)
-            exit_code, failed = self._extract_exit_code(filepath)
+            exit_code, failed = self._extract_exit_code_from_content(commis_id, filename)
 
             artifacts.append(
                 ToolArtifact(
@@ -283,7 +295,7 @@ class EvidenceCompiler:
 
         return artifacts
 
-    def _extract_exit_code(self, filepath: Path) -> tuple[int | None, bool]:
+    def _extract_exit_code_from_content(self, commis_id: str, filename: str) -> tuple[int | None, bool]:
         """Extract exit code from tool output (best effort).
 
         Tool outputs are JSON envelopes with structure:
@@ -293,8 +305,10 @@ class EvidenceCompiler:
 
         Parameters
         ----------
-        filepath
-            Path to tool output file
+        commis_id
+            Commis ID for reading the file via artifact reader
+        filename
+            Tool call filename (e.g., "001_ssh_exec.txt")
 
         Returns
         -------
@@ -302,7 +316,7 @@ class EvidenceCompiler:
             (exit_code, failed) - exit_code is None if not extractable
         """
         try:
-            content = filepath.read_text()
+            content = self.artifact_store.read_commis_file(commis_id, f"tool_calls/{filename}")
             data = json.loads(content)
 
             # Check if this is an error envelope
@@ -319,7 +333,7 @@ class EvidenceCompiler:
 
             return (None, False)
 
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError, FileNotFoundError):
             # Can't parse - assume not failed
             return (None, False)
 
@@ -439,4 +453,4 @@ class EvidenceCompiler:
         return f"{head}{marker}{tail}"
 
 
-__all__ = ["EvidenceCompiler", "ToolArtifact"]
+__all__ = ["ArtifactReader", "EvidenceCompiler", "ToolArtifact"]
