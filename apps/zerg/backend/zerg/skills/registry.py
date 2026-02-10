@@ -172,12 +172,18 @@ class SkillRegistry:
         skills: Optional[List[Skill]] = None,
         max_skills: Optional[int] = None,
         include_content: bool = True,
+        char_budget: Optional[int] = None,
     ) -> str:
         """Format skills for system prompt injection.
 
         Args:
             skills: Skills to format (default: eligible skills)
             max_skills: Maximum number of skills to include
+            include_content: If True, include full SKILL.md content. If False,
+                emit a compact index (name + one-line description per skill).
+            char_budget: Maximum characters for the index section. Skills are
+                dropped (lowest priority first) when over budget. Only applies
+                when include_content=False.
 
         Returns:
             Markdown-formatted skills section
@@ -194,23 +200,31 @@ class SkillRegistry:
         if not skills:
             return ""
 
-        lines = ["# Available Skills", ""]
+        sorted_skills = sorted(skills, key=lambda s: s.name)
 
-        for skill in sorted(skills, key=lambda s: s.name):
-            if include_content:
+        if include_content:
+            lines = ["# Available Skills", ""]
+            for skill in sorted_skills:
                 lines.append(skill.format_for_prompt())
-            else:
-                header = f"## {skill.manifest.emoji} {skill.manifest.name}" if skill.manifest.emoji else f"## {skill.manifest.name}"
-                lines.append(header)
-                if skill.manifest.description:
-                    lines.append("")
-                    lines.append(f"*{skill.manifest.description}*")
-                if skill.manifest.tool_dispatch:
-                    lines.append("")
-                    lines.append(f"Tool: `{skill.manifest.tool_dispatch}`")
-            lines.append("")
+                lines.append("")
+            return "\n".join(lines)
 
-        return "\n".join(lines)
+        # Index-only mode: compact list with optional char_budget
+        header = "# Available Skills\n\nUse `/skill-name` to invoke a skill.\n"
+        index_lines = [skill.format_for_index() for skill in sorted_skills]
+
+        # Apply character budget — drop skills from the end until within budget
+        if char_budget is not None and char_budget > 0:
+            while index_lines:
+                candidate = header + "\n".join(index_lines)
+                if len(candidate) <= char_budget:
+                    break
+                index_lines.pop()
+
+        if not index_lines:
+            return ""
+
+        return header + "\n".join(index_lines)
 
     def get_snapshot(
         self,

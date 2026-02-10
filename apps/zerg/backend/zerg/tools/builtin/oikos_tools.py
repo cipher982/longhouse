@@ -41,6 +41,7 @@ async def spawn_commis_async(
     _tool_call_id: str | None = None,  # Internal: passed by _call_tool_async for idempotency
     _skip_interrupt: bool = False,  # Internal: legacy param, now ignored
     _return_structured: bool = False,  # Internal: return dict instead of string for oikos_react_engine
+    _skills: list[str] | None = None,  # Internal: resolved skill content for commis prompt injection
 ) -> str | dict:
     """Spawn a commis agent to execute a task and wait for completion.
 
@@ -114,6 +115,8 @@ async def spawn_commis_async(
         }
         if resume_session_id:
             job_config["resume_session_id"] = resume_session_id
+        if _skills:
+            job_config["skills"] = _skills
 
     try:
         # IDEMPOTENCY: Prevent duplicate commiss on retry/resume.
@@ -303,6 +306,7 @@ async def spawn_workspace_commis_async(
     git_repo: str,
     model: str | None = None,
     resume_session_id: str | None = None,
+    skills: list[str] | None = None,
     *,
     _tool_call_id: str | None = None,
     _return_structured: bool = False,
@@ -317,6 +321,9 @@ async def spawn_workspace_commis_async(
         git_repo: Repository URL (https://github.com/org/repo.git or git@github.com:org/repo.git)
         model: LLM model for the commis (optional)
         resume_session_id: Life Hub session UUID to resume (for session continuity)
+        skills: List of skill names to activate for the commis. The full
+            skill content is resolved from the user's loaded skills and
+            injected into the commis prompt.
 
     Returns:
         The commis's result after completion
@@ -335,6 +342,31 @@ async def spawn_workspace_commis_async(
     except ValueError as exc:
         return tool_error(ErrorType.VALIDATION_ERROR, str(exc))
 
+    # Resolve skill content from user's loaded skills (if any requested)
+    resolved_skills: list[str] | None = None
+    if skills:
+        try:
+            resolver = get_credential_resolver()
+            if resolver:
+                from zerg.skills.integration import SkillIntegration
+
+                integration = SkillIntegration(
+                    db=resolver.db,
+                    owner_id=resolver.owner_id,
+                    include_user=True,
+                )
+                resolved = []
+                for skill_name in skills:
+                    content = integration.get_skill_content(skill_name)
+                    if content:
+                        resolved.append(content)
+                    else:
+                        logger.warning("Skill '%s' not found for commis injection", skill_name)
+                if resolved:
+                    resolved_skills = resolved
+        except Exception:
+            logger.warning("Failed to resolve skills for commis", exc_info=True)
+
     # Delegate to the core implementation with workspace mode forced
     return await spawn_commis_async(
         task=task,
@@ -344,6 +376,7 @@ async def spawn_workspace_commis_async(
         resume_session_id=resume_session_id,
         _tool_call_id=_tool_call_id,
         _return_structured=_return_structured,
+        _skills=resolved_skills,
     )
 
 
@@ -352,11 +385,12 @@ def spawn_workspace_commis(
     git_repo: str,
     model: str | None = None,
     resume_session_id: str | None = None,
+    skills: list[str] | None = None,
 ) -> str:
     """Sync wrapper for spawn_workspace_commis_async."""
     from zerg.utils.async_utils import run_async_safely
 
-    return run_async_safely(spawn_workspace_commis_async(task, git_repo, model, resume_session_id))
+    return run_async_safely(spawn_workspace_commis_async(task, git_repo, model, resume_session_id, skills))
 
 
 async def list_commiss_async(
@@ -1432,7 +1466,8 @@ TOOLS: List[StructuredTool] = [
         name="spawn_workspace_commis",
         description="Spawn a commis to work in a git repository (PRIMARY tool for all commis work). "
         "Clones the repo, runs a CLI agent (Claude Code) in an isolated workspace, and captures changes. "
-        "Use this for: reading code, analyzing dependencies, making changes, running tests, research.",
+        "Use this for: reading code, analyzing dependencies, making changes, running tests, research. "
+        "Pass skills=['skill-name'] to activate user skills in the commis prompt.",
     ),
     StructuredTool.from_function(
         func=list_commiss,
