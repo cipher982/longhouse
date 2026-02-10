@@ -1,30 +1,7 @@
 """LangGraph-free ReAct engine for oikos fiches.
 
-This module provides a pure async ReAct loop for oikos execution without
-LangGraph checkpointing or interrupt() semantics. It replaces the @entrypoint-
-decorated graph with explicit control flow.
-
-Key differences from LangGraph-based implementation:
-- No checkpointer - state is managed via DB thread messages
-- No interrupt() - spawn_commis raises FicheInterrupted directly
-- No add_messages() - plain list operations
-- Returns (messages, usage) tuple for explicit persistence
-
-Lazy Loading (optional):
-- When lazy_loading=True, only core tools are bound initially
-- Tool catalog is injected into system prompt for awareness
-- Non-core tools are loaded on-demand via LazyToolBinder
-- LLM is rebound when new tools are loaded
-
-Usage:
-    result = await run_oikos_loop(
-        messages=db_messages,
-        fiche_row=fiche,
-        tools=tool_list,
-        lazy_loading=True,  # Enable lazy loading
-    )
-    new_messages = result.messages
-    usage = result.usage
+Pure async ReAct loop: messages in, messages + usage out. No checkpointer,
+no interrupt() — spawn_commis raises FicheInterrupted directly.
 """
 
 from __future__ import annotations
@@ -33,6 +10,7 @@ import asyncio
 import contextvars
 import json
 import logging
+import time
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import datetime
@@ -54,55 +32,34 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Usage tracking (thread-local accumulator)
+# Usage tracking (context-var accumulator)
 # ---------------------------------------------------------------------------
 
-# Use None as default to avoid mutable default footgun
 _llm_usage_var: contextvars.ContextVar[dict | None] = contextvars.ContextVar("llm_usage", default=None)
-
-# Maximum iterations in the ReAct loop to prevent infinite loops
 MAX_REACT_ITERATIONS = 50
 
 
 def _empty_usage() -> dict:
-    """Return a fresh empty usage dict."""
-    return {
-        "prompt_tokens": 0,
-        "completion_tokens": 0,
-        "total_tokens": 0,
-        "reasoning_tokens": 0,
-    }
+    return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "reasoning_tokens": 0}
 
 
 def reset_llm_usage() -> None:
     """Reset accumulated LLM usage. Call before starting a new run."""
-    # Keep as None until we observe real usage metadata from the provider.
-    # This preserves legacy semantics where missing usage stays NULL in DB.
     _llm_usage_var.set(None)
 
 
 def get_llm_usage() -> dict:
-    """Get accumulated LLM usage from current run."""
     usage = _llm_usage_var.get()
-    if usage is None:
-        return {}
-    return usage
+    return usage if usage is not None else {}
 
 
 def _accumulate_llm_usage(usage: dict) -> None:
-    """Add usage from an LLM call to the accumulated total."""
-    current = _llm_usage_var.get()
-    if current is None:
-        current = _empty_usage()
-
+    current = _llm_usage_var.get() or _empty_usage()
     current["prompt_tokens"] += usage.get("prompt_tokens", 0) or 0
     current["completion_tokens"] += usage.get("completion_tokens", 0) or 0
     current["total_tokens"] += usage.get("total_tokens", 0) or 0
-
-    # Extract reasoning_tokens from completion_tokens_details
     details = usage.get("completion_tokens_details") or {}
     current["reasoning_tokens"] += details.get("reasoning_tokens", 0) or 0
-
     _llm_usage_var.set(current)
 
 
@@ -116,16 +73,9 @@ class OikosResult:
     """Result from oikos ReAct loop execution."""
 
     messages: list[BaseMessage]
-    """Full message history including new messages from this run."""
-
     usage: dict = field(default_factory=dict)
-    """Accumulated token usage for this run."""
-
     interrupted: bool = False
-    """True if execution was interrupted (spawn_commis called)."""
-
     interrupt_value: dict | None = None
-    """Interrupt payload if interrupted=True."""
 
 
 # ---------------------------------------------------------------------------
@@ -140,88 +90,60 @@ def _make_llm(
     reasoning_effort: str = "none",
     tool_choice: dict | str | bool | None = None,
 ):
-    """Create a tool-bound ChatOpenAI instance."""
+    """Create a tool-bound LLM instance."""
     from zerg.config import get_settings
     from zerg.testing.test_models import is_test_model
     from zerg.testing.test_models import warn_if_test_model
 
-    # Handle mock/scripted models for testing
     if is_test_model(model):
         warn_if_test_model(model)
-
         if model == "gpt-mock":
             from zerg.testing.mock_llm import MockChatLLM
 
             llm = MockChatLLM()
-            try:
-                return llm.bind_tools(tools, tool_choice=tool_choice)
-            except TypeError:
-                return llm.bind_tools(tools)
-
-        if model == "gpt-scripted":
-            # ScriptedChatLLM not typically used for oikos
+        elif model == "gpt-scripted":
             from zerg.testing.scripted_llm import ScriptedChatLLM
 
             llm = ScriptedChatLLM(sequences=[])
-            try:
-                return llm.bind_tools(tools, tool_choice=tool_choice)
-            except TypeError:
-                return llm.bind_tools(tools)
+        else:
+            raise ValueError(f"Unknown test model: {model}")
+        try:
+            return llm.bind_tools(tools, tool_choice=tool_choice)
+        except TypeError:
+            return llm.bind_tools(tools)
 
-    # Look up model config for provider routing
     from zerg.models_config import ModelProvider
     from zerg.models_config import get_all_models
     from zerg.models_config import get_model_by_id
 
     model_config = get_model_by_id(model)
-    settings = get_settings()
-
-    # Validate model exists
     if not model_config:
         available = [m.id for m in get_all_models()]
         raise ValueError(f"Unknown model: {model}. Available: {available}")
 
-    # Select API key and base_url based on provider
+    settings = get_settings()
     provider = model_config.provider
-
-    if provider == ModelProvider.GROQ:
-        api_key = settings.groq_api_key
-        base_url = model_config.base_url
-        # Validate Groq API key exists
-        if not api_key:
-            raise ValueError(f"GROQ_API_KEY not configured but Groq model '{model}' selected")
-    else:
-        api_key = settings.openai_api_key
-        base_url = None
 
     kwargs: dict = {
         "model": model,
         "streaming": settings.llm_token_stream,
-        "api_key": api_key,
+        "api_key": settings.groq_api_key if provider == ModelProvider.GROQ else settings.openai_api_key,
     }
-
-    # Check if model supports reasoning
-    capabilities = model_config.capabilities or {}
-    supports_reasoning = capabilities.get("reasoning", False)
-    supports_reasoning_none = capabilities.get("reasoningNone", False)
-
-    # Add base_url and provider-specific config
     if provider == ModelProvider.GROQ:
-        kwargs["base_url"] = base_url
+        kwargs["base_url"] = model_config.base_url
+        if not kwargs["api_key"]:
+            raise ValueError(f"GROQ_API_KEY not configured but Groq model '{model}' selected")
 
-    # Only pass reasoning_effort if model supports it
-    if supports_reasoning:
-        # If model doesn't support 'none', use 'low' as fallback
+    capabilities = model_config.capabilities or {}
+    if capabilities.get("reasoning", False):
         effort = reasoning_effort
-        if reasoning_effort == "none" and not supports_reasoning_none:
+        if effort == "none" and not capabilities.get("reasoningNone", False):
             effort = "low"
         kwargs["reasoning_effort"] = effort
 
     llm = OpenAIChat(**kwargs)
-
     if tool_choice is None:
         return llm.bind_tools(tools)
-
     try:
         return llm.bind_tools(tools, tool_choice=tool_choice)
     except TypeError:
@@ -233,22 +155,16 @@ def _make_llm(
 # ---------------------------------------------------------------------------
 
 
-async def _emit_heartbeats(
-    heartbeat_cancelled: asyncio.Event,
-    run_id: int | None,
-    owner_id: int | None,
-    phase: str,
-) -> None:
-    """Emit heartbeats every 10 seconds during LLM call."""
+async def _emit_heartbeats(cancelled: asyncio.Event, run_id: int | None, owner_id: int | None, phase: str) -> None:
+    """Emit heartbeats every 10s during LLM call."""
     from zerg.events import EventType
     from zerg.events import event_bus
 
     try:
-        while not heartbeat_cancelled.is_set():
+        while not cancelled.is_set():
             await asyncio.sleep(10)
-            if heartbeat_cancelled.is_set():
+            if cancelled.is_set():
                 break
-
             if run_id is not None:
                 await event_bus.publish(
                     EventType.OIKOS_HEARTBEAT,
@@ -261,11 +177,8 @@ async def _emit_heartbeats(
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     },
                 )
-                logger.debug(f"Emitted heartbeat for oikos run {run_id} during {phase}")
-    except asyncio.CancelledError:
+    except (asyncio.CancelledError, Exception):
         pass
-    except Exception as e:
-        logger.warning(f"Error in heartbeat task: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -287,18 +200,13 @@ async def _call_llm(
     """Call LLM with heartbeats, audit logging, and usage tracking."""
     from zerg.services.llm_audit import audit_logger
 
-    start_time = datetime.now(timezone.utc)
-
-    # Start heartbeat task - must be inside try to ensure cleanup
+    start = datetime.now(timezone.utc)
     heartbeat_cancelled = asyncio.Event()
     heartbeat_task = asyncio.create_task(_emit_heartbeats(heartbeat_cancelled, run_id, owner_id, phase))
-
-    # Initialize to avoid UnboundLocalError if log_request fails
-    audit_correlation_id = None
+    audit_id = None
 
     try:
-        # Audit log request (inside try to ensure heartbeat cleanup on failure)
-        audit_correlation_id = await audit_logger.log_request(
+        audit_id = await audit_logger.log_request(
             run_id=run_id,
             commis_id=None,
             owner_id=owner_id,
@@ -310,81 +218,96 @@ async def _call_llm(
         if enable_token_stream:
             from zerg.callbacks.token_stream import WsTokenCallback
 
-            callback = WsTokenCallback()
-            result = await llm_with_tools.ainvoke(messages, config={"callbacks": [callback]})
+            result = await llm_with_tools.ainvoke(messages, config={"callbacks": [WsTokenCallback()]})
         else:
             result = await llm_with_tools.ainvoke(messages)
-
     except Exception as e:
-        # Audit log error (only if we got a correlation_id)
-        error_duration = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
-        if audit_correlation_id is not None:
+        duration_ms = int((datetime.now(timezone.utc) - start).total_seconds() * 1000)
+        if audit_id is not None:
             try:
                 await audit_logger.log_response(
-                    correlation_id=audit_correlation_id,
+                    correlation_id=audit_id,
                     content=None,
                     tool_calls=None,
                     input_tokens=None,
                     output_tokens=None,
                     reasoning_tokens=None,
-                    duration_ms=error_duration,
+                    duration_ms=duration_ms,
                     error=str(e),
                 )
-            except Exception as log_err:
-                logger.warning(f"Failed to log audit error: {log_err}")
+            except Exception:
+                pass
         raise
-
     finally:
-        # Stop heartbeat
         heartbeat_cancelled.set()
         try:
             await asyncio.wait_for(heartbeat_task, timeout=1.0)
-        except asyncio.TimeoutError:
+        except (asyncio.TimeoutError, asyncio.CancelledError):
             heartbeat_task.cancel()
             try:
                 await heartbeat_task
             except asyncio.CancelledError:
                 pass
 
-    end_time = datetime.now(timezone.utc)
-    duration_ms = int((end_time - start_time).total_seconds() * 1000)
+    duration_ms = int((datetime.now(timezone.utc) - start).total_seconds() * 1000)
 
     # Audit log response
     try:
-        audit_content = None
-        audit_tool_calls = None
-        audit_usage = None
-
-        if isinstance(result, AIMessage):
-            audit_content = result.content
-            audit_tool_calls = result.tool_calls
-            audit_usage = getattr(result, "usage_metadata", {}) or {}
-
+        usage_meta = getattr(result, "usage_metadata", {}) or {} if isinstance(result, AIMessage) else {}
         await audit_logger.log_response(
-            correlation_id=audit_correlation_id,
-            content=audit_content,
-            tool_calls=audit_tool_calls,
-            input_tokens=audit_usage.get("input_tokens") if audit_usage else None,
-            output_tokens=audit_usage.get("output_tokens") if audit_usage else None,
-            reasoning_tokens=(audit_usage.get("output_token_details", {}).get("reasoning") if audit_usage else None),
+            correlation_id=audit_id,
+            content=result.content if isinstance(result, AIMessage) else None,
+            tool_calls=result.tool_calls if isinstance(result, AIMessage) else None,
+            input_tokens=usage_meta.get("input_tokens"),
+            output_tokens=usage_meta.get("output_tokens"),
+            reasoning_tokens=(usage_meta.get("output_token_details", {}).get("reasoning") if usage_meta else None),
             duration_ms=duration_ms,
         )
-    except Exception as e:
-        logger.warning(f"Failed to log audit response: {e}")
+    except Exception:
+        pass
 
     # Accumulate usage
     if isinstance(result, AIMessage):
         usage_meta = getattr(result, "usage_metadata", None)
         if usage_meta:
-            usage_dict = {
-                "prompt_tokens": usage_meta.get("input_tokens", 0),
-                "completion_tokens": usage_meta.get("output_tokens", 0),
-                "total_tokens": usage_meta.get("total_tokens", 0),
-                "completion_tokens_details": {"reasoning_tokens": usage_meta.get("output_token_details", {}).get("reasoning", 0)},
-            }
-            _accumulate_llm_usage(usage_dict)
+            _accumulate_llm_usage(
+                {
+                    "prompt_tokens": usage_meta.get("input_tokens", 0),
+                    "completion_tokens": usage_meta.get("output_tokens", 0),
+                    "total_tokens": usage_meta.get("total_tokens", 0),
+                    "completion_tokens_details": {"reasoning_tokens": usage_meta.get("output_token_details", {}).get("reasoning", 0)},
+                }
+            )
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _extract_text_content(msg: AIMessage) -> str:
+    """Extract text content from an AIMessage (handles str or list-of-parts)."""
+    content = msg.content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                parts.append(str(part.get("text") or ""))
+            elif isinstance(part, str):
+                parts.append(part)
+        return "".join(parts)
+    return str(content or "")
+
+
+def _json_default(obj):
+    """JSON serializer for datetime objects in tool results."""
+    from datetime import date as date_type
+
+    if isinstance(obj, (datetime, date_type)):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
 
 
 # ---------------------------------------------------------------------------
@@ -402,22 +325,8 @@ async def _execute_tool(
 ) -> ToolMessage:
     """Execute a single tool call with event emission.
 
-    For spawn_commis, raises FicheInterrupted instead of returning ToolMessage.
-    For other tools, returns ToolMessage with result.
-
-    Args:
-        tool_call: Tool call dict with name, args, id.
-        tools_by_name: Dict mapping tool names to BaseTool instances.
-        run_id: Oikos run ID for event correlation.
-        owner_id: Owner ID for event correlation.
-        tool_getter: Optional callable for lazy tool loading. If provided,
-            called with tool_name to get/load the tool. Used for lazy loading.
-
-    Raises:
-        FicheInterrupted: If spawn_commis is called and job is queued (not already complete).
+    For spawn_commis variants, raises FicheInterrupted for queued jobs.
     """
-    import json
-
     from zerg.events import get_emitter
     from zerg.tools.result_utils import check_tool_error
     from zerg.tools.result_utils import redact_sensitive_args
@@ -426,14 +335,9 @@ async def _execute_tool(
     tool_name = tool_call.get("name", "unknown_tool")
     tool_args = tool_call.get("args", {})
     tool_call_id = tool_call.get("id", "")
-
-    # Get emitter for event emission
     emitter = get_emitter()
-
-    # Redact sensitive fields
     safe_args = redact_sensitive_args(tool_args)
 
-    # Emit STARTED event
     if emitter:
         await emitter.emit_tool_started(
             tool_name=tool_name,
@@ -443,88 +347,22 @@ async def _execute_tool(
         )
 
     start_time = datetime.now(timezone.utc)
-    result_content = None  # May be set by spawn_commis or error handling
-    observation = None  # Set by normal tool execution
+    result_content = None
 
-    # Get tool using tool_getter (lazy loading) or tools_by_name (eager)
-    if tool_getter is not None:
-        tool_to_call = tool_getter(tool_name)
-    else:
-        tool_to_call = tools_by_name.get(tool_name)
-
+    # Resolve tool
+    tool_to_call = tool_getter(tool_name) if tool_getter else tools_by_name.get(tool_name)
     if not tool_to_call:
         result_content = f"Error: Tool '{tool_name}' not found."
         logger.error(result_content)
     else:
         try:
-            # Special handling for spawn_commis - needs interrupt handling
-            if tool_name == "spawn_commis":
-                # Import here to avoid circular dependency
-                from zerg.tools.builtin.oikos_tools import spawn_commis_async
-
-                # Call spawn_commis_async directly with tool_call_id for idempotency
-                # Pass _return_structured=True to get job_id directly without regex
-                # Note: We handle interrupt ourselves via FicheInterrupted below
-                job_result = await spawn_commis_async(
-                    task=tool_args.get("task", ""),
-                    model=tool_args.get("model"),
-                    _tool_call_id=tool_call_id,
-                    _return_structured=True,  # Get dict with job_id directly
-                )
-
-                # Handle structured response (dict) or string response
-                if isinstance(job_result, dict):
-                    # Structured response: {"job_id": X, "status": "queued", "task": ...}
-                    job_id = job_result.get("job_id")
-                    if job_result.get("status") == "queued" and job_id is not None:
-                        # Emit tool completion before interrupting
-                        end_time = datetime.now(timezone.utc)
-                        duration_ms = int((end_time - start_time).total_seconds() * 1000)
-                        if emitter:
-                            await emitter.emit_tool_completed(
-                                tool_name=tool_name,
-                                tool_call_id=tool_call_id,
-                                duration_ms=duration_ms,
-                                result_preview=f"Commis job {job_id} spawned",
-                                result=str(job_result),
-                            )
-
-                        # Raise interrupt to pause oikos
-                        raise FicheInterrupted(
-                            {
-                                "type": "commis_pending",
-                                "job_id": job_id,
-                                "task": tool_args.get("task", "")[:100],
-                                "model": tool_args.get("model"),
-                                "tool_call_id": tool_call_id,
-                            }
-                        )
-                    else:
-                        # Unexpected dict response (shouldn't happen with _return_structured=True)
-                        result_content = json.dumps(job_result)
-                else:
-                    # String response - typically an error or completed result
-                    result_content = str(job_result)
-
-            # Special handling for spawn_workspace_commis - needs interrupt handling
-            elif tool_name == "spawn_workspace_commis":
-                from zerg.tools.builtin.oikos_tools import spawn_workspace_commis_async
-
-                job_result = await spawn_workspace_commis_async(
-                    task=tool_args.get("task", ""),
-                    git_repo=tool_args.get("git_repo", ""),
-                    model=tool_args.get("model"),
-                    resume_session_id=tool_args.get("resume_session_id"),
-                    _tool_call_id=tool_call_id,
-                    _return_structured=True,
-                )
-
-                # Handle structured response (dict) or string response
+            # Spawn-type tools: interrupt handling for two-phase commit
+            if tool_name in ("spawn_commis", "spawn_workspace_commis", "spawn_standard_commis"):
+                job_result = await _call_spawn_tool(tool_to_call, tool_args, tool_call_id)
                 if isinstance(job_result, dict):
                     job_id = job_result.get("job_id")
                     if job_result.get("status") == "queued" and job_id is not None:
-                        end_time = datetime.now(timezone.utc)
-                        duration_ms = int((end_time - start_time).total_seconds() * 1000)
+                        duration_ms = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
                         if emitter:
                             await emitter.emit_tool_completed(
                                 tool_name=tool_name,
@@ -542,180 +380,49 @@ async def _execute_tool(
                                 "tool_call_id": tool_call_id,
                             }
                         )
-                    else:
-                        result_content = json.dumps(job_result)
+                    result_content = json.dumps(job_result)
                 else:
                     result_content = str(job_result)
 
-            # Special handling for spawn_standard_commis - needs interrupt handling
-            elif tool_name == "spawn_standard_commis":
-                from zerg.tools.builtin.oikos_tools import spawn_standard_commis_async
-
-                job_result = await spawn_standard_commis_async(
-                    task=tool_args.get("task", ""),
-                    model=tool_args.get("model"),
-                    _tool_call_id=tool_call_id,
-                    _return_structured=True,
-                )
-
-                # Handle structured response (dict) or string response
-                if isinstance(job_result, dict):
-                    job_id = job_result.get("job_id")
-                    if job_result.get("status") == "queued" and job_id is not None:
-                        end_time = datetime.now(timezone.utc)
-                        duration_ms = int((end_time - start_time).total_seconds() * 1000)
-                        if emitter:
-                            await emitter.emit_tool_completed(
-                                tool_name=tool_name,
-                                tool_call_id=tool_call_id,
-                                duration_ms=duration_ms,
-                                result_preview=f"Commis job {job_id} spawned",
-                                result=str(job_result),
-                            )
-                        raise FicheInterrupted(
-                            {
-                                "type": "commis_pending",
-                                "job_id": job_id,
-                                "task": tool_args.get("task", "")[:100],
-                                "model": tool_args.get("model"),
-                                "tool_call_id": tool_call_id,
-                            }
-                        )
-                    else:
-                        result_content = json.dumps(job_result)
-                else:
-                    result_content = str(job_result)
-
-            # Special handling for wait_for_commis (needs tool_call_id for resume)
             elif tool_name == "wait_for_commis":
                 from zerg.tools.builtin.oikos_tools import wait_for_commis_async
 
-                # Pass tool_call_id for proper resume handling
-                observation = await wait_for_commis_async(
-                    job_id=tool_args.get("job_id", ""),
-                    _tool_call_id=tool_call_id,
-                )
+                observation = await wait_for_commis_async(job_id=tool_args.get("job_id", ""), _tool_call_id=tool_call_id)
+                result_content = json.dumps(observation, default=_json_default) if isinstance(observation, dict) else str(observation)
 
-            # Check if tool has async implementation
             elif getattr(tool_to_call, "coroutine", None):
                 observation = await tool_to_call.ainvoke(tool_args)
+                result_content = json.dumps(observation, default=_json_default) if isinstance(observation, dict) else str(observation)
             else:
-                # Run sync tool in thread
                 observation = await asyncio.to_thread(tool_to_call.invoke, tool_args)
-
-            # Serialize observation (only if not already set by spawn_commis)
-            if observation is not None and result_content is None:
-                if isinstance(observation, dict):
-                    from datetime import date as date_type
-
-                    def datetime_handler(obj):
-                        if isinstance(obj, (datetime, date_type)):
-                            return obj.isoformat()
-                        raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
-
-                    result_content = json.dumps(observation, default=datetime_handler)
-                else:
-                    result_content = str(observation)
+                result_content = json.dumps(observation, default=_json_default) if isinstance(observation, dict) else str(observation)
 
         except FicheInterrupted:
-            # Re-raise interrupt
             raise
         except Exception as exc:
             result_content = f"<tool-error> {exc}"
             logger.exception("Error executing tool %s", tool_name)
 
-    end_time = datetime.now(timezone.utc)
-    duration_ms = int((end_time - start_time).total_seconds() * 1000)
-
-    # Defensive: ensure result_content is not None
+    duration_ms = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
     if result_content is None:
         result_content = "(No result)"
 
-    raw_result_content = str(result_content)
+    raw_result = str(result_content)
+    is_error, error_msg = check_tool_error(raw_result)
 
-    # Check for errors on the raw content (before any truncation)
-    is_error, error_msg = check_tool_error(raw_result_content)
-
-    # If critical error detected, mark context and emitter for fail-fast
-    if is_error and is_critical_tool_error(raw_result_content, error_msg, tool_name=tool_name):
-        critical_msg = error_msg or raw_result_content
-        # Mark context (used by commis job processor to flip status to failed)
+    # Critical error detection (marks commis context + emitter for fail-fast)
+    if is_error and is_critical_tool_error(raw_result, error_msg, tool_name=tool_name):
         ctx = get_commis_context()
         if ctx:
-            ctx.mark_critical_error(critical_msg)
-        # Mark emitter (sets flag for SSE and activity tracking)
+            ctx.mark_critical_error(error_msg or raw_result)
         if emitter:
-            emitter.mark_critical_error(critical_msg)
-        logger.warning(f"Critical tool error detected in {tool_name}: {critical_msg}")
+            emitter.mark_critical_error(error_msg or raw_result)
+        logger.warning(f"Critical tool error in {tool_name}: {error_msg or raw_result}")
 
-    # Optionally store large tool outputs out-of-band
-    from zerg.config import get_settings
-    from zerg.services.tool_output_store import ToolOutputStore
+    # Tool result truncation: large outputs stored as artifacts
+    result_content = _maybe_truncate_result(raw_result, tool_name, run_id, owner_id, tool_call_id)
 
-    settings = get_settings()
-    max_chars = max(0, int(settings.oikos_tool_output_max_chars or 0))
-    preview_chars = max(0, int(settings.oikos_tool_output_preview_chars or 0))
-
-    result_content = raw_result_content
-
-    should_store = max_chars > 0 and len(raw_result_content) > max_chars and tool_name != "get_tool_output"
-
-    if should_store:
-        if preview_chars <= 0:
-            preview_chars = min(200, max_chars)
-        else:
-            preview_chars = min(preview_chars, max_chars)
-
-        stored = False
-        artifact_id = None
-        store_reason = None
-
-        if owner_id is None:
-            store_reason = "no owner_id available"
-        else:
-            try:
-                store = ToolOutputStore()
-                artifact_id = store.save_output(
-                    owner_id=owner_id,
-                    tool_name=tool_name,
-                    content=raw_result_content,
-                    run_id=run_id,
-                    tool_call_id=tool_call_id,
-                )
-                stored = True
-            except Exception:
-                store_reason = "storage failed"
-                logger.exception("Failed to store tool output for %s", tool_name)
-
-        preview = raw_result_content[:preview_chars]
-
-        if stored and artifact_id:
-            size_bytes = len(raw_result_content.encode("utf-8"))
-            marker = f"[TOOL_OUTPUT:artifact_id={artifact_id},tool={tool_name},bytes={size_bytes}]"
-            error_line = ""
-            if is_error:
-                error_line = f"\nTool error detected: {safe_preview(error_msg or raw_result_content, 500)}"
-
-            result_content = (
-                f"{marker}\n"
-                f"Tool output exceeded {max_chars} characters and was stored out of band."
-                f"{error_line}\n"
-                f"Preview (first {preview_chars} chars):\n"
-                f"{preview}\n\n"
-                "Use get_tool_output(artifact_id) to fetch the full output."
-            )
-        else:
-            reason_line = "Full output was not stored."
-            if store_reason:
-                reason_line = f"Full output was not stored ({store_reason})."
-            result_content = (
-                f"(Tool output truncated; exceeded {max_chars} characters.)\n"
-                f"{reason_line}\n"
-                f"Preview (first {preview_chars} chars):\n"
-                f"{preview}"
-            )
-
-    # Emit COMPLETED/FAILED event
+    # Emit completion event
     if emitter:
         if is_error:
             await emitter.emit_tool_failed(
@@ -736,6 +443,56 @@ async def _execute_tool(
     return ToolMessage(content=result_content, tool_call_id=tool_call_id, name=tool_name)
 
 
+async def _call_spawn_tool(tool: BaseTool, tool_args: dict, tool_call_id: str):
+    """Invoke a spawn_commis variant and return structured result."""
+    args = dict(tool_args)
+    args["_tool_call_id"] = tool_call_id
+    args["_return_structured"] = True
+    if getattr(tool, "coroutine", None):
+        return await tool.ainvoke(args)
+    return await asyncio.to_thread(tool.invoke, args)
+
+
+def _maybe_truncate_result(
+    raw: str,
+    tool_name: str,
+    run_id: int | None,
+    owner_id: int | None,
+    tool_call_id: str,
+) -> str:
+    """Store large tool outputs out-of-band and return truncated preview."""
+    from zerg.config import get_settings
+    from zerg.services.tool_output_store import ToolOutputStore
+
+    settings = get_settings()
+    max_chars = max(0, int(settings.oikos_tool_output_max_chars or 0))
+    if max_chars <= 0 or len(raw) <= max_chars or tool_name == "get_tool_output":
+        return raw
+
+    preview_chars = max(0, int(settings.oikos_tool_output_preview_chars or 0))
+    preview_chars = min(preview_chars, max_chars) if preview_chars > 0 else min(200, max_chars)
+    preview = raw[:preview_chars]
+
+    if owner_id is None:
+        return f"(Tool output truncated; exceeded {max_chars} characters.)\nFull output was not stored (no owner_id).\nPreview:\n{preview}"
+
+    try:
+        store = ToolOutputStore()
+        artifact_id = store.save_output(owner_id=owner_id, tool_name=tool_name, content=raw, run_id=run_id, tool_call_id=tool_call_id)
+        size_bytes = len(raw.encode("utf-8"))
+        return (
+            f"[TOOL_OUTPUT:artifact_id={artifact_id},tool={tool_name},bytes={size_bytes}]\n"
+            f"Tool output exceeded {max_chars} characters and was stored out of band.\n"
+            f"Preview (first {preview_chars} chars):\n{preview}\n\n"
+            "Use get_tool_output(artifact_id) to fetch the full output."
+        )
+    except Exception:
+        logger.exception("Failed to store tool output for %s", tool_name)
+        return (
+            f"(Tool output truncated; exceeded {max_chars} characters.)\nFull output was not stored (storage failed).\nPreview:\n{preview}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Parallel Tool Execution
 # ---------------------------------------------------------------------------
@@ -749,329 +506,236 @@ async def _execute_tools_parallel(
     owner_id: int | None,
     tool_getter: callable | None = None,
 ) -> tuple[list[ToolMessage], dict | None]:
-    """Execute tools in parallel, handling spawn_commis specially.
+    """Execute tools in parallel with two-phase commit for spawn_commis.
 
-    Implements the parallel-first pattern:
-    1. Non-spawn tools execute concurrently via asyncio.gather()
-    2. Spawn_commis calls are collected (not executed immediately)
-    3. Returns interrupt info with ALL spawn_commis job_ids for barrier creation
-
-    Two-Phase Commit for spawn_commis:
-    - Jobs are created with status='created' (not 'queued')
-    - Caller (oikos_service) creates CommisBarrier + flips to 'queued'
-    - This prevents the "fast commis" race condition
-
-    Args:
-        tool_calls: List of tool call dicts from LLM response.
-        tools_by_name: Dict mapping tool names to BaseTool instances.
-        run_id: Oikos run ID for event correlation.
-        owner_id: Owner ID for event correlation.
-        tool_getter: Optional callable for lazy tool loading.
-
-    Returns:
-        Tuple of (tool_results, interrupt_value):
-        - tool_results: List of ToolMessages from non-spawn tools
-        - interrupt_value: Dict with spawn_commis info if any, None otherwise
-
-    Note:
-        Does NOT raise FicheInterrupted - caller handles interruption.
+    Non-spawn tools run concurrently via asyncio.gather().
+    Spawn_commis calls create jobs with status='created' (not 'queued').
+    Returns (tool_results, interrupt_value) where interrupt_value triggers barrier creation.
     """
-
-    # Separate spawn_commis from other tools
     spawn_calls = [tc for tc in tool_calls if tc.get("name") == "spawn_commis"]
     other_calls = [tc for tc in tool_calls if tc.get("name") != "spawn_commis"]
-
     tool_results: list[ToolMessage] = []
 
-    # Phase 1: Execute non-spawn tools in parallel
+    # Phase 1: Execute non-spawn tools concurrently
     if other_calls:
 
-        async def execute_single_tool(tc: dict) -> ToolMessage:
-            """Execute a single tool, catching exceptions."""
+        async def _exec(tc: dict) -> ToolMessage:
             try:
-                return await _execute_tool(
-                    tc,
-                    tools_by_name,
-                    run_id=run_id,
-                    owner_id=owner_id,
-                    tool_getter=tool_getter,
-                )
+                return await _execute_tool(tc, tools_by_name, run_id=run_id, owner_id=owner_id, tool_getter=tool_getter)
             except FicheInterrupted:
-                # Re-raise - shouldn't happen for non-spawn tools
                 raise
             except Exception as exc:
-                logger.exception(f"Error in parallel tool execution: {tc.get('name')}")
-                return ToolMessage(
-                    content=f"<tool-error>{exc}</tool-error>",
-                    tool_call_id=tc.get("id", ""),
-                    name=tc.get("name", "unknown"),
-                )
+                logger.exception(f"Parallel tool error: {tc.get('name')}")
+                return ToolMessage(content=f"<tool-error>{exc}</tool-error>", tool_call_id=tc.get("id", ""), name=tc.get("name", "unknown"))
 
-        # Execute all non-spawn tools concurrently
-        results = await asyncio.gather(
-            *[execute_single_tool(tc) for tc in other_calls],
-            return_exceptions=True,
-        )
-
-        # Process results, preserving order
-        # CRITICAL: Check for FicheInterrupted first - it must propagate, not become a ToolMessage
+        results = await asyncio.gather(*[_exec(tc) for tc in other_calls], return_exceptions=True)
         for tc, result in zip(other_calls, results):
             if isinstance(result, FicheInterrupted):
-                # Re-raise interrupt (e.g., from wait_for_commis)
-                # This ensures the oikos enters WAITING state
-                logger.info(f"[INTERRUPT] Re-raising FicheInterrupted from {tc.get('name')}")
                 raise result
             elif isinstance(result, Exception):
-                # Shouldn't happen often since execute_single_tool catches exceptions
                 tool_results.append(
-                    ToolMessage(
-                        content=f"<tool-error>{result}</tool-error>",
-                        tool_call_id=tc.get("id", ""),
-                        name=tc.get("name", "unknown"),
-                    )
+                    ToolMessage(content=f"<tool-error>{result}</tool-error>", tool_call_id=tc.get("id", ""), name=tc.get("name", "unknown"))
                 )
             else:
                 tool_results.append(result)
 
-    # Phase 2: Process spawn_commis (two-phase commit pattern)
+    # Phase 2: Two-phase commit for spawn_commis
     if spawn_calls:
-        import time
+        results, interrupt = await _handle_spawn_calls(spawn_calls, run_id, owner_id)
+        tool_results.extend(results)
+        if interrupt:
+            return tool_results, interrupt
 
-        from zerg.connectors.context import get_credential_resolver
-        from zerg.events.oikos_emitter import OikosEmitter
-        from zerg.models.models import CommisJob
-        from zerg.services.oikos_context import get_oikos_context
+    return tool_results, None
 
-        # Get context for job creation
-        resolver = get_credential_resolver()
-        ctx = get_oikos_context()
 
-        # Create emitter for tool lifecycle events
-        emitter = None
-        if ctx:
-            emitter = OikosEmitter(
-                run_id=ctx.run_id,
-                owner_id=ctx.owner_id,
-                message_id=ctx.message_id,
-                trace_id=ctx.trace_id,
+async def _handle_spawn_calls(
+    spawn_calls: list[dict],
+    run_id: int | None,
+    owner_id: int | None,
+) -> tuple[list[ToolMessage], dict | None]:
+    """Handle spawn_commis calls with two-phase commit pattern.
+
+    Jobs created as 'created' (not 'queued'). Caller (oikos_service) creates
+    CommisBarrier and flips to 'queued' to prevent the fast-commis race.
+    """
+    import uuid as uuid_module
+
+    from zerg.connectors.context import get_credential_resolver
+    from zerg.events.oikos_emitter import OikosEmitter
+    from zerg.models.models import CommisJob
+    from zerg.services.oikos_context import get_oikos_context
+
+    resolver = get_credential_resolver()
+    ctx = get_oikos_context()
+    tool_results: list[ToolMessage] = []
+
+    emitter = None
+    if ctx:
+        emitter = OikosEmitter(run_id=ctx.run_id, owner_id=ctx.owner_id, message_id=ctx.message_id, trace_id=ctx.trace_id)
+
+    if not resolver:
+        for tc in spawn_calls:
+            tool_results.append(
+                ToolMessage(
+                    content="<tool-error>Cannot spawn commis - no credential context</tool-error>",
+                    tool_call_id=tc.get("id", ""),
+                    name="spawn_commis",
+                )
+            )
+        return tool_results, None
+
+    db = resolver.db
+    oikos_run_id = ctx.run_id if ctx else None
+    trace_id = ctx.trace_id if ctx else None
+    commis_model = (ctx.model if ctx else None) or "gpt-5-mini"
+    commis_reasoning_effort = (ctx.reasoning_effort if ctx else None) or "none"
+
+    created_jobs: list[dict] = []
+
+    for tc in spawn_calls:
+        tool_args = tc.get("args", {})
+        task = tool_args.get("task", "")
+        model_override = tool_args.get("model")
+        git_repo = tool_args.get("git_repo")
+        resume_session_id = tool_args.get("resume_session_id")
+        tool_call_id = tc.get("id", "")
+        start = time.time()
+
+        # Build workspace config
+        job_config: dict | None = None
+        if git_repo:
+            job_config = {"execution_mode": "workspace", "git_repo": git_repo}
+            if resume_session_id:
+                job_config["resume_session_id"] = resume_session_id
+        elif resume_session_id:
+            job_config = {"resume_session_id": resume_session_id}
+
+        if emitter:
+            await emitter.emit_tool_started(
+                tool_name="spawn_commis",
+                tool_call_id=tool_call_id,
+                tool_args_preview=task[:100],
+                tool_args={"task": task, "model": model_override},
             )
 
-        if not resolver:
-            # No credential context - return error for each spawn_commis
-            for tc in spawn_calls:
-                tool_results.append(
-                    ToolMessage(
-                        content="<tool-error>Cannot spawn commis - no credential context</tool-error>",
-                        tool_call_id=tc.get("id", ""),
-                        name="spawn_commis",
+        try:
+            # Idempotency: check for existing job
+            existing_job = None
+            if tool_call_id and oikos_run_id:
+                existing_job = (
+                    db.query(CommisJob)
+                    .filter(
+                        CommisJob.oikos_run_id == oikos_run_id,
+                        CommisJob.tool_call_id == tool_call_id,
                     )
-                )
-            return tool_results, None
-
-        db = resolver.db
-        oikos_run_id = ctx.run_id if ctx else None
-        trace_id = ctx.trace_id if ctx else None
-
-        # Commis inherits model and reasoning_effort from oikos context
-        commis_model = (ctx.model if ctx else None) or "gpt-5-mini"
-        commis_reasoning_effort = (ctx.reasoning_effort if ctx else None) or "none"
-
-        created_jobs: list[dict] = []
-
-        for tc in spawn_calls:
-            tool_args = tc.get("args", {})
-            task = tool_args.get("task", "")
-            model_override = tool_args.get("model")
-            git_repo = tool_args.get("git_repo")
-            resume_session_id = tool_args.get("resume_session_id")
-            tool_call_id = tc.get("id", "")
-            start_time = time.time()
-
-            # Build job config for workspace execution (git_repo, resume_session_id)
-            # This mirrors the logic in spawn_commis_async for consistency
-            job_config: dict | None = None
-            if git_repo:
-                # When git_repo is provided, use workspace execution mode
-                # This matches the behavior in spawn_commis_async
-                job_config = {
-                    "execution_mode": "workspace",
-                    "git_repo": git_repo,
-                }
-                if resume_session_id:
-                    job_config["resume_session_id"] = resume_session_id
-            elif resume_session_id:
-                # resume_session_id without git_repo - just store it
-                job_config = {"resume_session_id": resume_session_id}
-
-            # Emit tool_started event for UI
-            if emitter:
-                await emitter.emit_tool_started(
-                    tool_name="spawn_commis",
-                    tool_call_id=tool_call_id,
-                    tool_args_preview=task[:100] if task else "",
-                    tool_args={"task": task, "model": model_override},
+                    .first()
                 )
 
-            try:
-                # Check for existing job with same tool_call_id (idempotency)
-                existing_job = None
-                if tool_call_id and oikos_run_id:
-                    existing_job = (
-                        db.query(CommisJob)
-                        .filter(
-                            CommisJob.oikos_run_id == oikos_run_id,
-                            CommisJob.tool_call_id == tool_call_id,
+            if existing_job and existing_job.status == "success":
+                from zerg.services.commis_artifact_store import CommisArtifactStore
+
+                artifact_store = CommisArtifactStore()
+                try:
+                    metadata = artifact_store.get_commis_metadata(existing_job.commis_id)
+                    result = metadata.get("summary") or artifact_store.get_commis_result(existing_job.commis_id)
+                    tool_results.append(
+                        ToolMessage(
+                            content=f"Commis job {existing_job.id} completed:\n\n{result}",
+                            tool_call_id=tool_call_id,
+                            name="spawn_commis",
                         )
-                        .first()
                     )
-
-                if existing_job and existing_job.status == "success":
-                    # Already completed - return cached result
-                    from zerg.services.commis_artifact_store import CommisArtifactStore
-
-                    artifact_store = CommisArtifactStore()
-                    try:
-                        metadata = artifact_store.get_commis_metadata(existing_job.commis_id)
-                        summary = metadata.get("summary")
-                        result = summary or artifact_store.get_commis_result(existing_job.commis_id)
-                        tool_results.append(
-                            ToolMessage(
-                                content=f"Commis job {existing_job.id} completed:\n\n{result}",
-                                tool_call_id=tool_call_id,
-                                name="spawn_commis",
-                            )
-                        )
-                        # Emit tool_completed for idempotent cached result
-                        if emitter:
-                            duration_ms = int((time.time() - start_time) * 1000)
-                            await emitter.emit_tool_completed(
-                                tool_name="spawn_commis",
-                                tool_call_id=tool_call_id,
-                                duration_ms=duration_ms,
-                                result_preview=f"Cached result for job {existing_job.id}",
-                                result={"job_id": existing_job.id, "status": "success", "cached": True},
-                            )
-                        continue  # Skip to next spawn_commis
-                    except FileNotFoundError:
-                        pass  # Fall through to create new job
-
-                if existing_job and existing_job.status in ["queued", "running", "created"]:
-                    # Reuse existing job
-                    created_jobs.append(
-                        {
-                            "job": existing_job,
-                            "tool_call_id": tool_call_id,
-                            "task": task[:100],
-                        }
-                    )
-                    # Emit tool_completed for reused job (include job_id for frontend mapping)
                     if emitter:
-                        duration_ms = int((time.time() - start_time) * 1000)
                         await emitter.emit_tool_completed(
                             tool_name="spawn_commis",
                             tool_call_id=tool_call_id,
-                            duration_ms=duration_ms,
-                            result_preview=f"Reusing existing job {existing_job.id}",
-                            result={"job_id": existing_job.id, "status": existing_job.status, "task": task[:100]},
+                            duration_ms=int((time.time() - start) * 1000),
+                            result_preview=f"Cached result for job {existing_job.id}",
+                            result={"job_id": existing_job.id, "status": "success", "cached": True},
                         )
                     continue
+                except FileNotFoundError:
+                    pass
 
-                # Create new job with status='created' (TWO-PHASE COMMIT)
-                # Commis won't pick up jobs with status='created'
-                import uuid as uuid_module
-
-                commis_job = CommisJob(
-                    owner_id=resolver.owner_id,
-                    oikos_run_id=oikos_run_id,
-                    tool_call_id=tool_call_id,
-                    trace_id=uuid_module.UUID(trace_id) if trace_id else None,
-                    task=task,
-                    model=model_override or commis_model,
-                    reasoning_effort=commis_reasoning_effort,
-                    status="created",  # NOT 'queued' - two-phase commit pattern
-                    config=job_config,  # Workspace config (git_repo, resume_session_id)
-                )
-                db.add(commis_job)
-                db.commit()
-                db.refresh(commis_job)
-
-                logger.info(
-                    f"[PARALLEL-SPAWN] Created commis job {commis_job.id} with status='created'"
-                    + (f", config={job_config}" if job_config else "")
-                )
-
-                created_jobs.append(
-                    {
-                        "job": commis_job,
-                        "tool_call_id": tool_call_id,
-                        "task": task[:100],
-                    }
-                )
-
-                # Emit tool_completed for new job (include job_id for frontend mapping)
+            if existing_job and existing_job.status in ("queued", "running", "created"):
+                created_jobs.append({"job": existing_job, "tool_call_id": tool_call_id, "task": task[:100]})
                 if emitter:
-                    duration_ms = int((time.time() - start_time) * 1000)
                     await emitter.emit_tool_completed(
                         tool_name="spawn_commis",
                         tool_call_id=tool_call_id,
-                        duration_ms=duration_ms,
-                        result_preview=f"Created job {commis_job.id}",
-                        result={"job_id": commis_job.id, "status": "created", "task": task[:100]},
+                        duration_ms=int((time.time() - start) * 1000),
+                        result_preview=f"Reusing existing job {existing_job.id}",
+                        result={"job_id": existing_job.id, "status": existing_job.status, "task": task[:100]},
                     )
+                continue
 
-            except Exception as exc:
-                logger.exception(f"Error creating spawn_commis job: {task[:50]}")
-                db.rollback()  # Clear error state so subsequent operations work
-
-                # Emit tool_failed event
-                if emitter:
-                    duration_ms = int((time.time() - start_time) * 1000)
-                    await emitter.emit_tool_failed(
-                        tool_name="spawn_commis",
-                        tool_call_id=tool_call_id,
-                        duration_ms=duration_ms,
-                        error=str(exc),
-                    )
-
-                tool_results.append(
-                    ToolMessage(
-                        content=f"<tool-error>Failed to spawn commis: {exc}</tool-error>",
-                        tool_call_id=tool_call_id,
-                        name="spawn_commis",
-                    )
-                )
-
-        # If we created/found jobs, return interrupt_value for barrier creation
-        # This triggers the two-phase commit in oikos_service.py
-        if created_jobs:
-            # Build ToolMessages for spawn_commis results
-            for job_info in created_jobs:
-                job = job_info["job"]
-                tool_call_id = job_info["tool_call_id"]
-                task = job_info.get("task", job.task[:100] if job.task else "")
-                tool_results.append(
-                    ToolMessage(
-                        content=f"Commis job {job.id} spawned successfully. Working on: {task}\n\n" f"Waiting for commis to complete...",
-                        tool_call_id=tool_call_id,
-                        name="spawn_commis",
-                    )
-                )
-
-            # NOTE: Do NOT flip jobs to 'queued' here - oikos_service handles this
-            # as part of the two-phase commit (barrier creation + job activation)
-
-            # Build interrupt_value for barrier creation in oikos_service
-            # This matches the expected format at lines 804-867 of oikos_service.py
-            interrupt_value = {
-                "type": "commiss_pending",
-                "job_ids": [job_info["job"].id for job_info in created_jobs],
-                "created_jobs": created_jobs,  # Full info for barrier job records
-            }
+            # Create new job with status='created' (TWO-PHASE COMMIT)
+            commis_job = CommisJob(
+                owner_id=resolver.owner_id,
+                oikos_run_id=oikos_run_id,
+                tool_call_id=tool_call_id,
+                trace_id=uuid_module.UUID(trace_id) if trace_id else None,
+                task=task,
+                model=model_override or commis_model,
+                reasoning_effort=commis_reasoning_effort,
+                status="created",
+                config=job_config,
+            )
+            db.add(commis_job)
+            db.commit()
+            db.refresh(commis_job)
 
             logger.info(
-                f"[PARALLEL-SPAWN] Returning interrupt_value with {len(created_jobs)} jobs " f"for barrier creation (two-phase commit)"
+                f"[PARALLEL-SPAWN] Created commis job {commis_job.id} status='created'" + (f", config={job_config}" if job_config else "")
             )
-            return tool_results, interrupt_value
+
+            created_jobs.append({"job": commis_job, "tool_call_id": tool_call_id, "task": task[:100]})
+
+            if emitter:
+                await emitter.emit_tool_completed(
+                    tool_name="spawn_commis",
+                    tool_call_id=tool_call_id,
+                    duration_ms=int((time.time() - start) * 1000),
+                    result_preview=f"Created job {commis_job.id}",
+                    result={"job_id": commis_job.id, "status": "created", "task": task[:100]},
+                )
+
+        except Exception as exc:
+            logger.exception(f"Error creating spawn_commis job: {task[:50]}")
+            db.rollback()
+            if emitter:
+                await emitter.emit_tool_failed(
+                    tool_name="spawn_commis",
+                    tool_call_id=tool_call_id,
+                    duration_ms=int((time.time() - start) * 1000),
+                    error=str(exc),
+                )
+            tool_results.append(
+                ToolMessage(
+                    content=f"<tool-error>Failed to spawn commis: {exc}</tool-error>",
+                    tool_call_id=tool_call_id,
+                    name="spawn_commis",
+                )
+            )
+
+    if created_jobs:
+        for job_info in created_jobs:
+            job = job_info["job"]
+            tool_results.append(
+                ToolMessage(
+                    content=f"Commis job {job.id} spawned successfully. Working on: {job_info.get('task', '')}\n\nWaiting for commis to complete...",
+                    tool_call_id=job_info["tool_call_id"],
+                    name="spawn_commis",
+                )
+            )
+        interrupt_value = {
+            "type": "commiss_pending",
+            "job_ids": [j["job"].id for j in created_jobs],
+            "created_jobs": created_jobs,
+        }
+        logger.info(f"[PARALLEL-SPAWN] Interrupt with {len(created_jobs)} jobs for barrier creation")
+        return tool_results, interrupt_value
 
     return tool_results, None
 
@@ -1092,29 +756,11 @@ async def run_oikos_loop(
     enable_token_stream: bool = False,
     lazy_loading: bool = False,
 ) -> OikosResult:
-    """Run the oikos ReAct loop until completion or interrupt.
-
-    This is the main entry point for LangGraph-free oikos execution.
-
-    Args:
-        messages: Initial message history (from DB).
-        fiche_row: Fiche ORM row or FicheRuntimeView with model config.
-        tools: List of available tools.
-        run_id: Oikos run ID for event correlation.
-        owner_id: Owner ID for event correlation.
-        trace_id: End-to-end trace ID for debugging.
-        enable_token_stream: Whether to stream tokens.
-        lazy_loading: If True, use lazy tool loading with catalog injection.
-            Core tools are always bound; other tools load on-demand.
-
-    Returns:
-        OikosResult with messages, usage, and interrupt status.
-        If interrupted=True, caller should persist messages and set run to WAITING.
-    """
+    """Run the oikos ReAct loop until completion or interrupt."""
     if tools is None:
         tools = []
 
-    # Set up tool binder (lazy or eager)
+    # Set up tool binding (lazy or eager)
     if lazy_loading:
         from zerg.tools import get_registry
         from zerg.tools.lazy_binder import LazyToolBinder
@@ -1123,108 +769,62 @@ async def run_oikos_loop(
         from zerg.tools.tool_search import format_catalog_for_prompt
         from zerg.tools.tool_search import set_search_context
 
-        # Build lazy binder from registry (not pre-filtered tools)
         registry = get_registry()
-        # Extract allowlist from tools if filtering was applied
         allowed_names = [t.name for t in tools]
         lazy_binder = LazyToolBinder(registry, allowed_tools=allowed_names)
-
-        # Set search context so search_tools respects allowlist and rebind cap
-        # MAX_TOOLS_FROM_SEARCH is defined below in _maybe_rebind_after_tool_search
         set_search_context(allowed_tools=allowed_names, max_results=8)
 
-        # Use only loaded tools for binding
         bound_tools = lazy_binder.get_bound_tools()
-        tools_by_name = {t.name: t for t in tools}  # Full set for execution
+        tools_by_name = {t.name: t for t in tools}
 
-        # Inject catalog into first system message
-        # Use actually loaded core tools (respects allowlist) not the full CORE_TOOLS set
+        # Inject tool catalog into system prompt
         loaded_core_names = sorted(lazy_binder.loaded_tool_names)
         catalog = build_catalog()
         catalog_text = format_catalog_for_prompt(catalog, exclude_core=True)
-        catalog_instructions = "You have access to the following tools. Core tools are always available."
+        instructions = "You have access to the following tools. Core tools are always available."
         if "search_tools" in loaded_core_names:
-            catalog_instructions += (
-                " For other tools, first call `search_tools` with a query describing what you need. "
-                "The matching tools will be available on your next turn."
-            )
-
+            instructions += " For other tools, first call `search_tools` with a query describing what you need."
         catalog_header = (
-            "\n\n## Available Tools\n"
-            f"{catalog_instructions}\n"
-            f"\n### Core Tools (always loaded): {', '.join(loaded_core_names)}\n"
-            f"{catalog_text}"
+            f"\n\n## Available Tools\n{instructions}\n" f"\n### Core Tools (always loaded): {', '.join(loaded_core_names)}\n{catalog_text}"
         )
-
-        # Inject catalog after first system message
         if messages and hasattr(messages[0], "type") and messages[0].type == "system":
-            original_content = messages[0].content
-            messages = [SystemMessage(content=original_content + catalog_header)] + list(messages[1:])
+            messages = [SystemMessage(content=messages[0].content + catalog_header)] + list(messages[1:])
 
-        logger.info(
-            f"[LazyLoading] Initialized with {len(bound_tools)} core tools, " f"{len(tools)} total tools available, catalog injected"
-        )
+        logger.info(f"[LazyLoading] {len(bound_tools)} core tools, {len(tools)} total, catalog injected")
     else:
-        # Eager loading - all tools bound upfront (original behavior)
         lazy_binder = None
         bound_tools = tools
-        tools_by_name = {tool.name: tool for tool in tools}
+        tools_by_name = {t.name: t for t in tools}
 
-    # Get model and reasoning effort from fiche config
     model = fiche_row.model
     cfg = getattr(fiche_row, "config", {}) or {}
     reasoning_effort = (cfg.get("reasoning_effort") or "none").lower()
-
-    # Reset usage tracking
     reset_llm_usage()
 
     try:
-        # Create LLM with bound tools (core-only for lazy, all for eager)
-        llm_with_tools = _make_llm(
-            model=model,
-            tools=bound_tools,
-            reasoning_effort=reasoning_effort,
-        )
+        llm_with_tools = _make_llm(model=model, tools=bound_tools, reasoning_effort=reasoning_effort)
+        current_messages = list(messages)
 
-        current_messages = list(messages)  # Copy to avoid mutation
-
-        # Helper to get tool and handle lazy loading
+        # Lazy tool loading: get tool and rebind LLM if needed
         def get_tool_for_execution(tool_name: str) -> BaseTool | None:
-            """Get a tool for execution, handling lazy loading if enabled."""
             nonlocal llm_with_tools, bound_tools
-
-            if lazy_binder:
-                tool = lazy_binder.get_tool(tool_name)
-                # Check if we need to rebind (new tools were loaded)
-                if lazy_binder.needs_rebind():
-                    bound_tools = lazy_binder.get_bound_tools()
-                    llm_with_tools = _make_llm(
-                        model=model,
-                        tools=bound_tools,
-                        reasoning_effort=reasoning_effort,
-                    )
-                    lazy_binder.clear_rebind_flag()
-                    logger.info(f"[LazyLoading] Rebound LLM with {len(bound_tools)} tools after loading '{tool_name}'")
-                return tool
-            else:
+            if not lazy_binder:
                 return tools_by_name.get(tool_name)
+            tool = lazy_binder.get_tool(tool_name)
+            if lazy_binder.needs_rebind():
+                bound_tools = lazy_binder.get_bound_tools()
+                llm_with_tools = _make_llm(model=model, tools=bound_tools, reasoning_effort=reasoning_effort)
+                lazy_binder.clear_rebind_flag()
+                logger.info(f"[LazyLoading] Rebound LLM with {len(bound_tools)} tools after loading '{tool_name}'")
+            return tool
 
-        # Maximum tools to load from a single search_tools call
         MAX_TOOLS_FROM_SEARCH = 8
 
         def _maybe_rebind_after_tool_search(tool_results: list[ToolMessage]) -> None:
-            """Rebind LLM with tools discovered via search_tools.
-
-            This implements the Claude Code pattern: after search_tools returns,
-            we parse the tool names and bind them BEFORE the next LLM call.
-            This allows the LLM to actually call the discovered tools.
-            """
+            """Rebind LLM with tools discovered via search_tools (Claude Code pattern)."""
             nonlocal llm_with_tools, bound_tools
-
             if not lazy_binder:
                 return
-
-            # Collect tool names returned by search_tools
             names: list[str] = []
             for msg in tool_results:
                 if msg.name != "search_tools":
@@ -1232,50 +832,37 @@ async def run_oikos_loop(
                 try:
                     payload = json.loads(msg.content)
                 except Exception:
-                    logger.debug("[LazyLoading] search_tools result not JSON; skipping")
                     continue
-
                 for entry in payload.get("tools") or []:
                     name = entry.get("name")
                     if isinstance(name, str) and name:
                         names.append(name)
-
             if not names:
                 return
-
-            # De-dupe and cap to prevent context explosion
             seen: set[str] = set()
-            deduped: list[str] = []
-            for name in names:
-                if name not in seen:
-                    seen.add(name)
-                    deduped.append(name)
-            deduped = deduped[:MAX_TOOLS_FROM_SEARCH]
-
+            deduped = [n for n in names if not (n in seen or seen.add(n))][:MAX_TOOLS_FROM_SEARCH]
             loaded = lazy_binder.load_tools(deduped)
             if lazy_binder.needs_rebind():
                 bound_tools = lazy_binder.get_bound_tools()
-                llm_with_tools = _make_llm(
-                    model=model,
-                    tools=bound_tools,
-                    reasoning_effort=reasoning_effort,
-                )
+                llm_with_tools = _make_llm(model=model, tools=bound_tools, reasoning_effort=reasoning_effort)
                 lazy_binder.clear_rebind_flag()
-                logger.info(f"[LazyLoading] Rebound after search_tools; loaded={loaded}, total bound={len(bound_tools)}")
+                logger.info(f"[LazyLoading] Rebound after search_tools; loaded={loaded}, total={len(bound_tools)}")
+
+        # Shared LLM call kwargs
+        llm_kwargs = dict(run_id=run_id, owner_id=owner_id, model=model, trace_id=trace_id, enable_token_stream=enable_token_stream)
 
         # Check for pending tool calls (resume case)
+        phase = "initial"
         if current_messages:
             last_msg = current_messages[-1]
             if isinstance(last_msg, AIMessage) and last_msg.tool_calls:
-                pending_tool_ids = {tc["id"] for tc in last_msg.tool_calls}
-                responded_tool_ids = {m.tool_call_id for m in current_messages if isinstance(m, ToolMessage)}
-                unresponded = pending_tool_ids - responded_tool_ids
+                pending_ids = {tc["id"] for tc in last_msg.tool_calls}
+                responded_ids = {m.tool_call_id for m in current_messages if isinstance(m, ToolMessage)}
+                unresponded = pending_ids - responded_ids
 
                 if unresponded:
-                    # Resume: execute pending tools in PARALLEL
                     logger.info(f"Resuming with {len(unresponded)} pending tool call(s)")
                     pending_calls = [tc for tc in last_msg.tool_calls if tc["id"] in unresponded]
-
                     tool_results, interrupt_value = await _execute_tools_parallel(
                         pending_calls,
                         tools_by_name,
@@ -1283,153 +870,52 @@ async def run_oikos_loop(
                         owner_id=owner_id,
                         tool_getter=get_tool_for_execution if lazy_binder else None,
                     )
-
-                    # Handle interruption from spawn_commis (barrier pattern)
                     if interrupt_value:
                         current_messages.extend(tool_results)
                         return OikosResult(
-                            messages=current_messages,
-                            usage=get_llm_usage(),
-                            interrupted=True,
-                            interrupt_value=interrupt_value,
+                            messages=current_messages, usage=get_llm_usage(), interrupted=True, interrupt_value=interrupt_value
                         )
-
                     current_messages.extend(tool_results)
-
-                    # Rebind tools if search_tools was called (Claude Code pattern)
                     _maybe_rebind_after_tool_search(tool_results)
+                    phase = "resume_synthesis"
 
-                    # Call LLM with tool results
-                    llm_response = await _call_llm(
-                        current_messages,
-                        llm_with_tools,
-                        phase="resume_synthesis",
-                        run_id=run_id,
-                        owner_id=owner_id,
-                        model=model,
-                        trace_id=trace_id,
-                        enable_token_stream=enable_token_stream,
+        llm_response = await _call_llm(current_messages, llm_with_tools, phase=phase, **llm_kwargs)
+
+        # Empty response recovery: retry once with tool_choice=required
+        if isinstance(llm_response, AIMessage) and not llm_response.tool_calls and not _extract_text_content(llm_response).strip():
+            logger.warning("Fiche produced empty response; retrying once")
+            current_messages.append(
+                SystemMessage(
+                    content=(
+                        "Your previous response was empty. You MUST either:\n"
+                        "1) Call the appropriate tool(s), OR\n"
+                        "2) Provide a final answer.\n\nDo not return an empty message."
                     )
-                else:
-                    # All tool calls responded, proceed normally
-                    llm_response = await _call_llm(
-                        current_messages,
-                        llm_with_tools,
-                        phase="initial",
-                        run_id=run_id,
-                        owner_id=owner_id,
-                        model=model,
-                        trace_id=trace_id,
-                        enable_token_stream=enable_token_stream,
-                    )
-            else:
-                # No pending tool calls
-                llm_response = await _call_llm(
-                    current_messages,
-                    llm_with_tools,
-                    phase="initial",
-                    run_id=run_id,
-                    owner_id=owner_id,
-                    model=model,
-                    trace_id=trace_id,
-                    enable_token_stream=enable_token_stream,
                 )
-        else:
-            # Empty messages (shouldn't happen in production)
+            )
             llm_response = await _call_llm(
                 current_messages,
-                llm_with_tools,
-                phase="initial",
-                run_id=run_id,
-                owner_id=owner_id,
-                model=model,
-                trace_id=trace_id,
-                enable_token_stream=enable_token_stream,
+                _make_llm(
+                    model=model, tools=bound_tools, reasoning_effort=reasoning_effort, tool_choice="required" if bound_tools else None
+                ),
+                phase="empty_retry",
+                **llm_kwargs,
             )
-
-        # Handle empty response retry
-        if isinstance(llm_response, AIMessage) and not llm_response.tool_calls:
-            content = llm_response.content
-            content_text = ""
-            if isinstance(content, list):
-                for part in content:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        content_text += str(part.get("text") or "")
-                    elif isinstance(part, str):
-                        content_text += part
-            else:
-                content_text = str(content or "")
-
-            if not content_text.strip():
-                logger.warning("Fiche produced empty response; retrying once")
-                current_messages.append(
-                    SystemMessage(
-                        content=(
-                            "Your previous response was empty. You MUST either:\n"
-                            "1) Call the appropriate tool(s), OR\n"
-                            "2) Provide a final answer.\n\n"
-                            "Do not return an empty message."
-                        )
-                    )
-                )
-                llm_response = await _call_llm(
-                    current_messages,
-                    _make_llm(
-                        model=model,
-                        tools=bound_tools,
-                        reasoning_effort=reasoning_effort,
-                        tool_choice="required" if bound_tools else None,
-                    ),
-                    phase="empty_retry",
-                    run_id=run_id,
-                    owner_id=owner_id,
-                    model=model,
-                    trace_id=trace_id,
-                    enable_token_stream=enable_token_stream,
-                )
-
-                # Still empty? Return error message
-                if isinstance(llm_response, AIMessage) and not llm_response.tool_calls:
-                    retry_text = ""
-                    retry_content = llm_response.content
-                    if isinstance(retry_content, list):
-                        for part in retry_content:
-                            if isinstance(part, dict) and part.get("type") == "text":
-                                retry_text += str(part.get("text") or "")
-                            elif isinstance(part, str):
-                                retry_text += part
-                    else:
-                        retry_text = str(retry_content or "")
-
-                    if not retry_text.strip():
-                        logger.error("Fiche produced empty response after retry")
-                        llm_response = AIMessage(content=("Error: LLM returned an empty response twice. This is a provider/model issue."))
+            if isinstance(llm_response, AIMessage) and not llm_response.tool_calls and not _extract_text_content(llm_response).strip():
+                logger.error("Fiche produced empty response after retry")
+                llm_response = AIMessage(content="Error: LLM returned an empty response twice. This is a provider/model issue.")
 
         # Main ReAct loop with iteration guard
         iteration = 0
         while isinstance(llm_response, AIMessage) and llm_response.tool_calls:
             iteration += 1
             if iteration > MAX_REACT_ITERATIONS:
-                logger.error(f"ReAct loop exceeded {MAX_REACT_ITERATIONS} iterations. " "Possible infinite loop detected. Returning error.")
-                error_msg = AIMessage(
-                    content=(
-                        f"Error: Oikos exceeded maximum of {MAX_REACT_ITERATIONS} "
-                        "tool iterations. This may indicate a loop or overly complex task."
-                    )
-                )
-                current_messages.append(error_msg)
-                return OikosResult(
-                    messages=current_messages,
-                    usage=get_llm_usage(),
-                    interrupted=False,
-                    interrupt_value=None,
-                )
+                logger.error(f"ReAct loop exceeded {MAX_REACT_ITERATIONS} iterations")
+                current_messages.append(AIMessage(content=f"Error: Oikos exceeded maximum of {MAX_REACT_ITERATIONS} tool iterations."))
+                return OikosResult(messages=current_messages, usage=get_llm_usage())
 
-            # Add AIMessage to history
             current_messages.append(llm_response)
 
-            # Execute tools in PARALLEL (non-spawn tools run concurrently,
-            # spawn_commis use two-phase commit for barrier synchronization)
             tool_results, interrupt_value = await _execute_tools_parallel(
                 llm_response.tool_calls,
                 tools_by_name,
@@ -1438,46 +924,18 @@ async def run_oikos_loop(
                 tool_getter=get_tool_for_execution if lazy_binder else None,
             )
 
-            # Handle interruption from spawn_commis (barrier pattern)
             if interrupt_value:
-                # Non-spawn tool results are included, spawn_commis trigger barrier
                 current_messages.extend(tool_results)
-                return OikosResult(
-                    messages=current_messages,
-                    usage=get_llm_usage(),
-                    interrupted=True,
-                    interrupt_value=interrupt_value,
-                )
+                return OikosResult(messages=current_messages, usage=get_llm_usage(), interrupted=True, interrupt_value=interrupt_value)
 
-            # Add tool results to history
             current_messages.extend(tool_results)
-
-            # Rebind tools if search_tools was called (Claude Code pattern)
             _maybe_rebind_after_tool_search(tool_results)
 
-            # Call LLM again
-            llm_response = await _call_llm(
-                current_messages,
-                llm_with_tools,
-                phase="tool_iteration",
-                run_id=run_id,
-                owner_id=owner_id,
-                model=model,
-                trace_id=trace_id,
-                enable_token_stream=enable_token_stream,
-            )
+            llm_response = await _call_llm(current_messages, llm_with_tools, phase="tool_iteration", **llm_kwargs)
 
-        # Add final response
         current_messages.append(llm_response)
-
-        return OikosResult(
-            messages=current_messages,
-            usage=get_llm_usage(),
-            interrupted=False,
-            interrupt_value=None,
-        )
+        return OikosResult(messages=current_messages, usage=get_llm_usage())
 
     finally:
-        # Clear search context (only needed for lazy loading, but safe to call always)
         if lazy_loading:
             clear_search_context()
