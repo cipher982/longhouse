@@ -143,71 +143,25 @@ Bun-compiled binary for command execution on user infrastructure. Connects via W
 
 **Entrypoints:** `apps/runner/src/index.ts` (daemon), `apps/runner/src/executor.ts` (command exec), `zerg/services/runner_job_dispatcher.py` (backend dispatch). Release workflow: `.github/workflows/runner-release.yml`.
 
-## Feature Index (What Exists — check before building)
+## Product Surface (Canonical)
 
-**Scripts & Pipelines:**
-| Feature | Location | Notes |
-|---------|----------|-------|
-| Video pipeline | `scripts/capture_demo_video.py`, `make video-all` | TTS voiceover → headless ProRes capture → web MP4. Scenario-driven via YAML. |
-| Video scenarios | `scripts/video-scenarios/*.yaml` | Scene definitions with golden data, click actions, audio sync |
-| Video post-process | `scripts/process_video.sh` | ffmpeg concat + compress (ProRes → H.264 CRF 18 → web CRF 23) |
-| Marketing screenshots | `scripts/capture_marketing.py` | YAML manifest, viewport-specific, deterministic via `data-screenshot-ready` |
-| UI debug capture | `scripts/ui-capture.ts`, `/zerg-ui` skill | Screenshots + Playwright trace + a11y + console logs for agents |
-| QA script | `scripts/qa-oss.sh`, `make qa-oss` | Full OSS journey smoke test (demo-fresh → health → Playwright → E2E) |
-| Vibetest | `scripts/run-vibetest.sh`, `make vibetest` | LLM browser agents (vibetest-use) find UI bugs. Advisory only, needs GOOGLE_API_KEY. |
-| OpenAPI codegen | `scripts/generate_openapi.py` + `bun run generate:api` | Backend schema → `openapi.json` → `generated/openapi-types.ts` |
+Source of truth for product surface and priorities: `VISION.md` section **"Product Surface (2026-02 Decision)"**.
 
-**Backend Services:**
-| Feature | Location | Notes |
-|---------|----------|-------|
-| FTS5 search | `database.py` (table+triggers), `agents_store.py` (query) | Virtual table, BM25 ranking, ILIKE fallback, snippet generation |
-| Session tools | `tools/builtin/session_tools.py` | 4 Oikos tools: search, grep, filter, get_detail |
-| Replay mode | `services/replay_service.py` | Deterministic demos via `?replay=scenario&clock=frozen` with golden data |
-| Demo seeding | `services/demo_sessions.py` | `--demo`/`--demo-fresh` flags, `POST /api/agents/demo` endpoint |
-| Shipper | `services/shipper/` | JSONL file watch/poll → ingest pipeline (Claude Code sessions) |
-| Password auth | `routers/auth.py` | `LONGHOUSE_PASSWORD[_HASH]`, pbkdf2/argon2/bcrypt, rate limiting |
-| Cross-subdomain auth | `routers/auth.py` `/api/auth/accept-token` | JWT from control plane, dual secret validation |
-| Prompt cache | `connectors/status_builder.py`, `managers/message_array_builder.py` | Split SystemMessages: connectors → memory → time. sort_keys + minute timestamps |
-
-**CLI Commands:**
-| Command | Location | Notes |
-|---------|----------|-------|
-| `longhouse serve` | `cli/serve.py` | SQLite server, `--demo`/`--demo-fresh`/`--host`/`--port` |
-| `longhouse connect` | `cli/connect.py` | Shipper: watch mode (default) or `--poll` |
-| `longhouse ship` | `cli/connect.py` | One-shot sync of sessions |
-| `longhouse onboard` | `cli/onboard.py` | Interactive setup wizard, auto-seeds demo data |
-| `longhouse doctor` | `cli/doctor.py` | Self-diagnosis: env, server, shipper, config checks |
-
-**Infrastructure:**
-| Feature | Location | Notes |
-|---------|----------|-------|
-| Control plane | `apps/control-plane/` | Docker provisioning + Caddy labels + admin UI |
-| Runner daemon | `apps/runner/` | Bun-compiled binary, WebSocket, command exec |
-| CI pipeline | `.github/workflows/contract-first-ci.yml` | validate → tests → E2E → QA gate |
-| Provisioning E2E | `.github/workflows/provision-e2e.yml` | Builds runtime image, provisions instance, smoke checks |
-
-## Deep Dives
-
-| Topic | Guide |
-|-------|-------|
-| **Strategic direction** | `VISION.md` — read first! |
-| **SQLite pivot plan** | `VISION.md` (SQLite-only OSS Pivot section) |
-| Oikos Tools | `apps/zerg/backend/docs/supervisor_tools.md` |
-| Sauron scheduler | `apps/sauron/README.md` |
-| Sauron job definitions | `~/git/sauron-jobs/` |
-| Gmail Pub/Sub architecture | `~/git/life-hub/docs/specs/gmail-pubsub-realtime.md` |
-| UI Capture | `/zerg-ui` skill — debug bundles with trace/a11y, `make ui-capture` |
+Do not maintain a second feature catalog in this file. Keep AGENTS focused on execution rules and link to canonical docs:
+- Oikos tool contract: `apps/zerg/backend/docs/supervisor_tools.md`
+- Harness simplification plan: `apps/zerg/backend/docs/specs/unified-memory-bridge.md`
+- Runner daemon docs: `apps/runner/README.md`
+- Control plane docs: `apps/control-plane/README.md`
+- Shipper internals: `apps/zerg/backend/zerg/services/shipper/`
+- Demo/video tooling: `scripts/capture_demo_video.py`, `scripts/video-scenarios/`, `scripts/capture_marketing.py`
 
 ## Jobs: Builtin vs External
 
 Jobs can live in two places:
+- **Builtin** (`zerg/jobs/`): Product functionality OSS users need.
+- **External** (`sauron-jobs/`): David-specific automation/integrations.
 
-| Location | When to use |
-|----------|-------------|
-| **Builtin** (`zerg/jobs/`) | Product functionality - backup-sentinel, QA checks, things OSS users need |
-| **External** (`sauron-jobs/`) | David-specific automation - worklog, google-ads-digest, life-hub integrations |
-
-**Rule of thumb:** If an OSS user wouldn't need it, put it in `sauron-jobs/`.
+Rule of thumb: if an OSS user wouldn't need it, put it in `sauron-jobs/`.
 
 ## Demo & Seed Data
 
@@ -222,20 +176,15 @@ Two separate things exist — don't conflate or rebuild:
 ## CI Test Runner
 - Run: `scripts/ci/run-on-ci.sh <suite> [ref] [--test <path>]` (details: `scripts/ci/README.md`).
 
-## Learnings (Recent - Human compacts weekly)
+## Learnings (High-Signal Only)
 
-<!-- Agents: append below. Keep last 7 days or 10 entries max. -->
-- (2026-02-04) [arch] Runtime image (`docker/runtime.dockerfile`) bundles frontend+backend; backend serves frontend via StaticFiles at `/app/frontend-web/dist`.
-- (2026-02-05) [db] Alembic migrations removed (versions dir empty); treat migration tasks as deprecated.
-- (2026-02-05) [security] Avoid storing admin tokens in AI session notes; rotate any exposed token immediately.
-- (2026-02-05) [ci] Provisioning E2E runs on cube ARC (DIND), builds runtime image, provisions instance, and hits health + timeline smoke checks.
-- (2026-02-05) [ops] Instance health uses `/api/health` (readiness) and `/api/livez` (liveness); no root `/health`.
-- (2026-02-05) [db] SQLite FTS5 index (`events_fts`) now backs session search when available.
-- (2026-02-05) [e2e] E2E uses `gpt-scripted` for fiches; WS stream events use envelope `type`; tool card selectors anchor on nested tool text; no waitForTimeout/networkidle.
-- (2026-02-06) [arch] Mode system: `AppMode` enum (dev/demo/production) from `DEMO_MODE`/`AUTH_DISABLED`. Frontend uses `config.demoMode`/`config.authEnabled`. Backend serves dynamic `/config.js`.
-- (2026-02-06) [arch] Root "/" shows LandingPage in all modes; LandingPage auto-redirects authenticated users to /timeline. `/landing` is a redirect alias to `/`.
-- (2026-02-09) [arch] Standard mode commis (in-process ReAct loop) is deprecated. All commis use workspace mode (hatch subprocess). See VISION.md "No Custom Agent Harness."
-- (2026-02-09) [arch] Oikos chat and commis currently use separate table systems: Oikos→threads/runs/messages, agent timeline→agent_sessions/agent_events. Commis output is NOT in the timeline yet.
-- (2026-02-09) [arch] Custom agent harness infrastructure (~15K LOC: fiche_runner, ReAct engine, tool registry, skills system) is legacy. The ~60 builtin tools stay as modular toolbox; agents get configured subsets. Longhouse delegates complex work to CLI agents.
-- (2026-02-09) [arch] 3 memory systems already built: (1) Oikos Memory 4 tools (save/search/list/forget, in `oikos_memory_tools.py`), (2) Memory Files + OpenAI embeddings + auto episodic summarizer (`memory_tools.py`, `memory_embeddings.py`, `memory_summarizer.py`), (3) Fiche Memory KV (`fiche_memory_tools.py`). Don't rebuild — consolidate.
-- (2026-02-09) [arch] Phase 3 target: replace loop + tool infra (~15K LOC), keep all tools. One toolbox dir, agents get configured subsets. Spec: `docs/specs/unified-memory-bridge.md`.
+<!-- Agents: keep this tight (<=10). Keep durable invariants only. If a learning is code-fixable confusion, add TODO work and remove it after the fix lands. -->
+- (2026-02-04) [arch] Runtime image (`docker/runtime.dockerfile`) bundles frontend+backend; backend serves built frontend from `/app/frontend-web/dist`.
+- (2026-02-05) [db] Alembic migrations are deprecated for core app work; `apps/zerg/backend/alembic/versions` is intentionally empty.
+- (2026-02-05) [security] Never store admin/device tokens in AI session notes; rotate immediately if exposed.
+- (2026-02-05) [ops] Instance health endpoints are `/api/health` (readiness) and `/api/livez` (liveness); no root `/health`.
+- (2026-02-06) [arch] App mode contract is `APP_MODE` > `DEMO_MODE` > `AUTH_DISABLED/TESTING`; frontend reads runtime mode from backend-served `/config.js`.
+- (2026-02-09) [arch] Standard mode commis (in-process loop) is deprecated; workspace CLI subprocess mode is the default execution path.
+- (2026-02-10) [arch] Commis sessions are ingested into timeline tables (`agent_sessions`/`agent_events`) with `environment=commis`; timeline source/filter UX is still tracked in TODO.
+- (2026-02-09) [arch] Custom harness infrastructure is legacy; keep builtin tools as a modular toolbox and remove loop/registry/skills infra per `docs/specs/unified-memory-bridge.md`.
+- (2026-02-09) [arch] Three memory systems already exist (Oikos Memory, Memory Files + embeddings, Fiche Memory KV); consolidate rather than rebuild.
