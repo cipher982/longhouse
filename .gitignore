@@ -231,5 +231,8 @@ apps/zerg/backend/.qa-home/
 # Vibetest results
 vibetest-results/
 
+# Temp working files
+.tmp/
+
 # Remotion video output
 apps/video/out/
