@@ -253,38 +253,6 @@ class TestCommisSpawning:
         finally:
             set_credential_resolver(None)
 
-    @pytest.mark.skip(reason="CommisRunner removed — standard mode deprecated")
-    @pytest.mark.asyncio
-    async def test_commis_job_has_correct_tools(self, db_session, test_user, temp_artifact_path):
-        """Test that commis fiches are created with infrastructure tools."""
-        from tests.conftest import TEST_COMMIS_MODEL
-        from zerg.services.commis_artifact_store import CommisArtifactStore
-        from zerg.services.commis_runner import CommisRunner
-
-        store = CommisArtifactStore(base_path=temp_artifact_path)
-        runner = CommisRunner(artifact_store=store)
-
-        # Create a temporary fiche to check its tools
-        temp_agent = await runner._create_temporary_fiche(
-            db=db_session,
-            task="test infrastructure tools",
-            config={"owner_id": test_user.id, "model": TEST_COMMIS_MODEL},
-        )
-
-        try:
-            # Verify infrastructure tools are present
-            assert "ssh_exec" in temp_agent.allowed_tools
-            assert "http_request" in temp_agent.allowed_tools
-            assert "get_current_time" in temp_agent.allowed_tools
-
-        finally:
-            # Clean up
-            from zerg.crud import crud
-
-            crud.delete_fiche(db_session, temp_agent.id)
-            db_session.commit()
-
-
 class TestOikosMemoryE2E:
     """End-to-end memory tool flow via OikosService + scripted model."""
 

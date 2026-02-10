@@ -14,9 +14,7 @@ class ToolName(str, Enum):
     FICHE_MEMORY_GET = "fiche_memory_get"
     FICHE_MEMORY_SET = "fiche_memory_set"
     CONTACT_USER = "contact_user"
-    CONTAINER_EXEC = "container_exec"
     DATETIME_DIFF = "datetime_diff"
-    GENERATE_UUID = "generate_uuid"
     GET_CURRENT_LOCATION = "get_current_location"
     GET_CURRENT_TIME = "get_current_time"
     GET_WHOOP_DATA = "get_whoop_data"
@@ -47,7 +45,6 @@ class ToolName(str, Enum):
     LINEAR_UPDATE_ISSUE = "linear_update_issue"
     LIST_IMESSAGE_MESSAGES = "list_imessage_messages"
     LIST_COMMISS = "list_commiss"
-    MATH_EVAL = "math_eval"
     MEMORY_DELETE = "memory_delete"
     MEMORY_LS = "memory_ls"
     MEMORY_READ = "memory_read"
@@ -87,8 +84,6 @@ class ToolName(str, Enum):
     TASK_DELETE = "task_delete"
     TASK_LIST = "task_list"
     TASK_UPDATE = "task_update"
-    LIST_TOOLS = "list_tools"
-    SEARCH_TOOLS = "search_tools"
     WEB_FETCH = "web_fetch"
     WEB_SEARCH = "web_search"
 
@@ -99,7 +94,6 @@ class ServerName(str, Enum):
     FICHE_MEMORY = "fiche_memory"
     CONNECTOR = "connector"
     CONTACT_USER = "contact_user"
-    CONTAINER = "container"
     DATETIME = "datetime"
     DISCORD = "discord"
     EMAIL = "email"
@@ -109,7 +103,6 @@ class ServerName(str, Enum):
     JIRA = "jira"
     KNOWLEDGE = "knowledge"
     LINEAR = "linear"
-    MATH = "math"
     MEMORY = "memory"
     NOTION = "notion"
     PERSONAL = "personal"
@@ -120,8 +113,6 @@ class ServerName(str, Enum):
     SSH = "ssh"
     OIKOS = "oikos"
     TASK = "task"
-    TOOL_DISCOVERY = "tool_discovery"
-    UUID = "uuid"
     WEB_FETCH = "web_fetch"
     WEB_SEARCH = "web_search"
 
@@ -133,9 +124,7 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.FICHE_MEMORY_GET: ServerName.FICHE_MEMORY,
     ToolName.FICHE_MEMORY_SET: ServerName.FICHE_MEMORY,
     ToolName.CONTACT_USER: ServerName.CONTACT_USER,
-    ToolName.CONTAINER_EXEC: ServerName.CONTAINER,
     ToolName.DATETIME_DIFF: ServerName.DATETIME,
-    ToolName.GENERATE_UUID: ServerName.UUID,
     ToolName.GET_CURRENT_LOCATION: ServerName.PERSONAL,
     ToolName.GET_CURRENT_TIME: ServerName.DATETIME,
     ToolName.GET_WHOOP_DATA: ServerName.PERSONAL,
@@ -166,7 +155,6 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.LINEAR_UPDATE_ISSUE: ServerName.LINEAR,
     ToolName.LIST_IMESSAGE_MESSAGES: ServerName.IMESSAGE,
     ToolName.LIST_COMMISS: ServerName.OIKOS,
-    ToolName.MATH_EVAL: ServerName.MATH,
     ToolName.MEMORY_DELETE: ServerName.MEMORY,
     ToolName.MEMORY_LS: ServerName.MEMORY,
     ToolName.MEMORY_READ: ServerName.MEMORY,
@@ -206,8 +194,6 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.TASK_DELETE: ServerName.TASK,
     ToolName.TASK_LIST: ServerName.TASK,
     ToolName.TASK_UPDATE: ServerName.TASK,
-    ToolName.LIST_TOOLS: ServerName.TOOL_DISCOVERY,
-    ToolName.SEARCH_TOOLS: ServerName.TOOL_DISCOVERY,
     ToolName.WEB_FETCH: ServerName.WEB_FETCH,
     ToolName.WEB_SEARCH: ServerName.WEB_SEARCH,
 }

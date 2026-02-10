@@ -23,7 +23,6 @@ from zerg.crud import crud
 from zerg.events import EventType
 from zerg.events import event_bus
 from zerg.models.enums import RunStatus
-from zerg.models.enums import RunTrigger
 from zerg.models.models import Run
 from zerg.services.oikos_service import OikosService
 
@@ -270,80 +269,6 @@ class TestResumeFlow:
         # Verify it was skipped (idempotent)
         assert result["status"] == "skipped"
         assert "not WAITING" in result["reason"]
-
-    @pytest.mark.asyncio
-    @pytest.mark.skip(reason="CommisRunner removed — standard mode deprecated")
-    async def test_commis_completion_triggers_resume(
-        self, db_session, test_user, sample_fiche, temp_artifact_path
-    ):
-        """Test that commis completion calls resume when run is WAITING."""
-        from zerg.services.commis_runner import CommisRunner
-
-        # Create a WAITING oikos run (interrupted by spawn_commis)
-        thread = crud.create_thread(
-            db=db_session,
-            fiche_id=sample_fiche.id,
-            title="Test thread",
-            active=True,
-        )
-        waiting_run = Run(
-            fiche_id=sample_fiche.id,
-            thread_id=thread.id,
-            status=RunStatus.WAITING,
-        )
-        db_session.add(waiting_run)
-        db_session.commit()
-        db_session.refresh(waiting_run)
-
-        # Mock FicheRunner to return immediately
-        with patch("zerg.services.commis_runner.FicheRunner") as mock_runner_class:
-            mock_runner_instance = AsyncMock()
-            mock_runner_instance.run_thread = AsyncMock(
-                return_value=[AsyncMock(role="assistant", content="Done")]
-            )
-            mock_runner_class.return_value = mock_runner_instance
-
-            # Run commis with event context
-            runner = CommisRunner()
-            created_tasks = []
-            real_create_task = asyncio.create_task
-
-            def _capture_task(coro):
-                task = real_create_task(coro)
-                created_tasks.append(task)
-                return task
-
-            # Mock the resume function to track calls
-            resume_calls = []
-
-            async def mock_resume(db, run_id, commis_result):
-                resume_calls.append({"run_id": run_id, "commis_result": commis_result})
-                return {"status": "success"}
-
-            with patch("zerg.services.commis_runner.asyncio.create_task", side_effect=_capture_task):
-                with patch(
-                    "zerg.services.commis_resume.resume_oikos_with_commis_result",
-                    side_effect=mock_resume,
-                ):
-                    result = await runner.run_commis(
-                        db=db_session,
-                        task="Test task",
-                        fiche=sample_fiche,
-                        timeout=10,
-                        event_context={"run_id": waiting_run.id},
-                        job_id=123,
-                    )
-
-            # Verify commis completed
-            assert result.status == "success"
-
-            # Ensure the background resume task finishes
-            if created_tasks:
-                await asyncio.gather(*created_tasks, return_exceptions=True)
-
-            # Verify resume was called (fire-and-forget, so may or may not have completed)
-            # The key is that the task was created to call resume
-
 
 @pytest.mark.timeout(30)
 class TestHeartbeatCounterReset:

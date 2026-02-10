@@ -153,6 +153,42 @@
     text-transform: capitalize;
   }
 
+  .environment-badge {
+    font-size: 10px;
+    font-weight: var(--font-weight-medium);
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: var(--radius-full);
+    text-transform: lowercase;
+    background: var(--surface-glass-2);
+    color: var(--color-text-muted);
+    border: 1px solid var(--border-glass-1);
+  }
+
+  .environment-badge--commis {
+    background: color-mix(in srgb, var(--color-brand-accent) 15%, transparent);
+    color: var(--color-brand-accent);
+    border-color: color-mix(in srgb, var(--color-brand-accent) 30%, transparent);
+  }
+
+  .environment-badge--terminal {
+    background: color-mix(in srgb, var(--color-intent-success) 15%, transparent);
+    color: var(--color-intent-success);
+    border-color: color-mix(in srgb, var(--color-intent-success) 30%, transparent);
+  }
+
+  .environment-badge--development {
+    background: color-mix(in srgb, var(--color-neon-cyan) 15%, transparent);
+    color: var(--color-neon-cyan);
+    border-color: color-mix(in srgb, var(--color-neon-cyan) 30%, transparent);
+  }
+
+  .environment-badge--test {
+    background: color-mix(in srgb, var(--color-brand-primary) 15%, transparent);
+    color: var(--color-brand-primary);
+    border-color: color-mix(in srgb, var(--color-brand-primary) 30%, transparent);
+  }
+
   .session-card-time {
     font-size: var(--font-size-xs);
     color: var(--color-text-muted);
