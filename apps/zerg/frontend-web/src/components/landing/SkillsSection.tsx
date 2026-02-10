@@ -3,7 +3,7 @@ import { SparklesIcon, GlobeIcon, GithubIcon, SlackIcon, ZapIcon } from "../icon
 const builtInSkills = [
   { name: "Web Search", icon: GlobeIcon, description: "Search the web for current information" },
   { name: "GitHub", icon: GithubIcon, description: "Interact with repos, issues, and PRs" },
-  { name: "Slack", icon: SlackIcon, description: "Send messages and manage channels" },
+  { name: "Slack", icon: SlackIcon, description: "Send messages to Slack channels" },
   { name: "Quick Search", icon: ZapIcon, description: "Fast web lookup shortcut" },
 ];
 
