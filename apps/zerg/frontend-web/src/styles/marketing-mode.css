@@ -117,6 +117,16 @@
   }
 
   /* ============================================================================
+   * VIDEO / SCREENSHOT CLEANUP
+   * ============================================================================ */
+
+  /* Hide status bar during marketing captures and video recording */
+  body.marketing-mode .status-bar,
+  body.replay-mode .status-bar {
+    display: none !important;
+  }
+
+  /* ============================================================================
    * VIDEO RECORDING HELPERS
    * ============================================================================ */
 
