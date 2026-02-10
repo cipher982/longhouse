@@ -96,42 +96,88 @@ Meanwhile, commis output doesn't appear in the agent timeline — Longhouse's ow
 
 **Goal:** Oikos becomes a thin conversation coordinator, not an agent harness.
 
-### Oikos architecture: simple loop + configurable toolbox
+### First-Principles Findings (2026-02-10)
 
-Oikos uses a simple `while` loop (`llm.call(messages + tools) → execute tools → repeat`) with a configured subset of the modular toolbox. No ReAct engine, no tool registry, no skills system.
+1. **Oikos prompt/tool contract drifted from runtime reality.**
+   - Prompt/docs still frame Oikos as an ops assistant that spawns `spawn_commis` for server checks.
+   - Runtime is workspace CLI delegation, and legacy `spawn_commis` semantics are ambiguous under workspace-only execution.
 
-**Oikos tool subset (configurable):**
-- Commis lifecycle: spawn, list, check, cancel, wait
-- Session discovery: search, grep, filter, detail
-- Memory: save, search, list, forget + embeddings search
-- Communication: contact_user, send_email, send_sms, send_imessage, slack, discord
-- Web: web_search, web_fetch, http_request
-- Infrastructure: runner_list, runner_exec, ssh_exec
-- Knowledge: knowledge_search
-- Internal: task CRUD, connector status
-- (User-configurable: agents can have different tool subsets)
+2. **Commis backend choice is implicit, not user-intent driven.**
+   - Hatch already supports multiple backends (`claude`/`codex`/`gemini`/`zai`), but Oikos does not expose a clean intent contract for selecting one.
 
-**Oikos does NOT need:**
-- Custom tool registry / lazy binder / catalog / unified_access
-- Skills loading system
-- Token streaming callbacks
-- Message array builder with cache optimization
-- ReAct prompt templates
+3. **Oikos still carries pre-pivot harness complexity.**
+   - `fiche_runner` + `oikos_react_engine` + lazy tool infra are heavier than needed for a coordinator role.
 
-### Architecture
-```
-User message → Oikos (simple loop + toolbox subset)
-  → Quick action: Oikos handles directly (send email, search sessions, etc.)
-  → Complex task: spawn_commis → CLI agent does multi-step work
-  → Question about past work: search_sessions / memory_search
-  → Conversation: direct LLM response
-```
+### Target Oikos Contract
 
-### The "infinite thread" implementation
-- Oikos is a single permanent thread per user
-- Old messages are pruned/summarized to maintain context window
-- Memory system persists key facts across pruning
-- This is a product design problem, not an agent harness problem
+Oikos chooses one of three paths per user message:
+
+1. **Direct response** — no tools, just answer.
+2. **Quick tool action** — Oikos executes direct tools (session search, memory, web, messaging).
+3. **CLI delegation** — Oikos spawns a commis (Claude/Codex/Gemini/etc.) for multi-step work.
+
+This keeps Oikos as a router/coordinator, not a second agent harness.
+
+### 3a: Dispatch Contract (Keyword + Intent)
+
+Add an explicit dispatch rule set:
+
+- If user specifies an agent/backend (e.g. "use Claude Code", "run this with Codex", "do this in Gemini"), Oikos honors it.
+- If user specifies a git repo, Oikos uses repo workspace delegation.
+- If user requests complex work without repo context, Oikos uses scratch delegation (ephemeral workspace) instead of pretending it can run ops inline.
+
+**Backend mapping (target):**
+- `claude` intent → `bedrock/claude-sonnet` (or configured Claude default)
+- `codex` intent → `codex/gpt-5.2` (or configured Codex default)
+- `gemini` intent → `gemini/gemini-pro` (or configured Gemini default)
+- No explicit intent → configured default backend/model
+
+Persist backend choice on the commis job metadata so timeline + tooling can filter/audit by backend.
+
+### 3b: Delegation Modes (Repo vs Scratch)
+
+Define delegation modes explicitly:
+
+- **Repo workspace mode**
+  - Requires `git_repo`
+  - Uses `WorkspaceManager` clone/branch flow
+  - Captures diff artifacts
+
+- **Scratch workspace mode**
+  - No `git_repo` required
+  - Creates ephemeral working directory for CLI agent execution
+  - Intended for analysis/research/ops-style tasks where no repo clone is needed
+
+This removes the current ambiguity where Oikos prompt examples and runtime constraints do not match.
+
+### 3c: Tool Contract Cleanup
+
+- Make `spawn_workspace_commis` the canonical delegation tool in prompt + docs.
+- Keep `spawn_commis` only as a compatibility alias with explicit semantics (no "standard mode" behavior).
+- Remove deprecated execution-mode vocabulary (`standard`, `cloud`, `local`) from user-facing docs.
+- Keep `wait_for_commis` as explicit opt-in blocking behavior; default remains async inbox.
+
+### 3d: Loop + Infra Simplification
+
+Oikos should run a simple loop:
+
+`llm.call(messages + tools) -> execute tools -> repeat`
+
+No custom registry/lazy binder/catalog stack, no skills loader, no bespoke ReAct scaffolding.
+
+### 3e: Prompt Contract Refresh
+
+Update Oikos prompt templates so they reflect actual product direction:
+
+- Oikos is orchestration-first, not "server shell proxy."
+- Tool examples match current tool schema (no non-existent args like `wait=True`).
+- Delegation guidance emphasizes backend intent + repo/scratch mode selection.
+
+### 3f: "Infinite Thread" Handling
+
+- Keep one long-lived Oikos thread per user.
+- Summarize/prune old turns for token budget.
+- Persist durable memory separately (memory tools + search), not by retaining full raw transcript forever.
 
 ## Phase 4: Semantic Search
 

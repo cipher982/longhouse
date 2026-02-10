@@ -4,6 +4,12 @@ Longhouse is an AI agent orchestration platform where AI does the work and human
 
 This is a living vision doc. It captures both the direction and the reasoning that got us here, so we can make fast decisions without re-litigating the fundamentals.
 
+## How to Read This Doc
+
+- Unless explicitly marked otherwise, statements in this document describe the **target architecture**.
+- Sections labeled **Current State (as of YYYY-MM-DD)** are point-in-time implementation snapshots.
+- For operational truth and execution status, use `TODO.md` and `AGENTS.md`.
+
 ## Read Next
 
 - **SQLite-only OSS plan:** this doc (see "SQLite-only OSS Pivot (Consolidated)" below)
@@ -94,9 +100,9 @@ This revealed the deeper issue: Longhouse was not standalone. OSS users who inst
 
 ## The Core Shift
 
-**Longhouse is now primarily an orchestration layer around CLI agents.**
+**Target direction:** Longhouse is primarily an orchestration layer around CLI agents.
 
-- Commis runs ARE Claude Code sessions (workspace mode via `hatch` subprocess). There is no separate in-process agent harness.
+- Commis runs are Claude Code sessions (workspace mode via `hatch` subprocess). There is no separate in-process commis harness.
 - The archive of truth is the provider session log, not Longhouse's internal thread state.
 - The "magic" is taking obscure JSONL logs and turning them into a searchable, unified timeline.
 
@@ -104,12 +110,41 @@ This is the product. Everything else supports it.
 
 ### No Custom Agent Harness (2026-02 Decision)
 
-**Longhouse does not build its own LLM execution loop.** Claude Code, Codex CLI, and Gemini CLI are agent harnesses built by teams of hundreds. Longhouse cannot and should not compete with them. Instead:
+**Target:** Longhouse does not build its own LLM execution loop. Claude Code, Codex CLI, and Gemini CLI are agent harnesses built by teams of hundreds. Longhouse should not compete with them.
+
+**Current State (as of 2026-02-10):**
+- Commis uses CLI subprocess execution (workspace mode) and ingests resulting sessions into timeline storage.
+- Oikos still runs through legacy in-process loop/runtime code (`fiche_runner` + `oikos_react_engine`) while Slim Oikos (Phase 3) is in progress.
+
+**Target end-state:**
 
 - **Commis = CLI agent subprocess.** Every commis spawns a real CLI agent (Claude Code via `hatch`) in an isolated workspace. The user gets the exact same agent they use in terminal — same tools, same context management, same capabilities.
 - **Standard mode (in-process ReAct loop) is deprecated.** The custom harness infrastructure (fiche_runner, message assembly, tool registry, skills system, ReAct engine — ~15K LOC) is legacy from pre-pivot. It will be removed incrementally. The ~60 builtin tools themselves are kept as a modular toolbox.
 - **Oikos is a thin coordinator with configurable tools.** Oikos uses a simple LLM API loop (not a custom ReAct engine) with a configured subset of the toolbox. It delegates complex multi-step work to commis but can perform quick actions directly (send email, post to Slack, search sessions, etc.).
 - **Commis sessions appear in the timeline.** When a commis finishes, its session JSONL is ingested through the same `/api/agents/ingest` path as shipped terminal sessions. All sessions are unified in one archive.
+
+### Oikos Dispatch Contract (Target)
+
+Oikos is a coordinator, so every turn should follow a simple dispatch decision:
+
+1. **Direct response** (no tool call)
+2. **Quick tool action** (search/memory/web/messaging)
+3. **CLI delegation** (spawn commis with explicit backend + workspace mode)
+
+Dispatch should honor user intent for backend selection:
+- "use Claude/Claude Code" -> Claude backend
+- "use Codex" -> Codex backend
+- "use Gemini" -> Gemini backend
+- no explicit preference -> configured default backend
+
+Delegation modes should be explicit:
+- **Repo mode:** git repo provided, clone/branch/diff flow
+- **Scratch mode:** no repo, ephemeral workspace for analysis/research/ops-style tasks
+
+**Current State (as of 2026-02-10):**
+- Oikos still uses legacy prompt/tool guidance that is partly ops-era and not fully aligned with workspace-only delegation semantics.
+- Backend selection for commis is mostly implicit (model mapping) rather than first-class user intent.
+- See `apps/zerg/backend/docs/specs/unified-memory-bridge.md` (Phase 3) for the implementation plan.
 
 **What Longhouse owns:** orchestration, job queue, workspace isolation, timeline, search, resume, always-on infrastructure, runner coordination, modular toolbox (integrations, memory, communication).
 
@@ -429,14 +464,21 @@ Each user's Longhouse instance only sees their own runners. Isolation is natural
 
 ## Commis Execution Model
 
-Commis are background agent jobs. **All commis run as CLI agent subprocesses** (workspace mode).
+Commis are background agent jobs. **All commis run as CLI agent subprocesses** via `hatch`.
 
 **How it works:**
 - Spawns `hatch` CLI (wraps Claude Code / Codex / Gemini CLI) as subprocess
-- Isolated git workspace per job
+- Uses explicit delegation mode:
+  - repo workspace (git clone/branch/diff)
+  - scratch workspace (no repo clone)
 - Long-running tasks (up to 1 hour)
-- Changes captured as git diff
+- Captures artifacts (and diff when repo mode is used)
 - Session JSONL ingested into agent timeline on completion
+
+**Current State (as of 2026-02-10):**
+- Repo workspace mode is implemented end-to-end.
+- Scratch-mode delegation is a target contract but not fully standardized in tool/docs yet.
+- Legacy `spawn_commis` naming/semantics still exist for compatibility and are being simplified.
 
 **Standard mode (in-process) is deprecated.** The legacy in-process ReAct loop with custom tools is being removed. See "No Custom Agent Harness" above.
 
@@ -469,6 +511,10 @@ Workspace mode provides directory-based isolation so multiple commis can work on
 5. Artifacts stored for Oikos to reference
 6. Workspace cleaned up (or retained for debugging)
 
+**Current State (as of 2026-02-10):**
+- Runtime default path is `/var/oikos/workspaces` unless `OIKOS_WORKSPACE_PATH` is set.
+- `~/.longhouse/workspaces` remains the preferred OSS target path but is not yet the universal runtime default.
+
 **Directory structure:**
 ```
 ~/.longhouse/
@@ -492,7 +538,9 @@ This enables the "multiple agents adding features to the same codebase" pattern.
 
 ## Shipper (Real-Time Sync)
 
-We need real-time sync (not polling). The shipper:
+**Target:** real-time sync is default and feels instant.
+
+The shipper:
 
 - Watches local provider session files via OS file watching (FSEvents/inotify)
 - Debounces rapid writes (Claude streams to file)
@@ -501,9 +549,10 @@ We need real-time sync (not polling). The shipper:
 - Falls back to periodic scan to catch missed events/rotations
 - Spools locally when offline, syncs on reconnect
 
-Commands:
-- `longhouse connect <url>` installs and starts the shipper for remote hosted instances.
-- Local installs auto-detect and run inline.
+**Current State (as of 2026-02-10):**
+- `longhouse connect` runs in foreground (watch mode by default; polling with `--poll` or custom `--interval`).
+- `longhouse connect --install` installs/starts the background service.
+- `longhouse auth` handles device-token setup; `connect` then uses the stored token.
 
 **Magic moment:** user types in Claude Code -> shipper fires -> session appears in Longhouse before they switch tabs.
 
@@ -513,18 +562,22 @@ Commands:
 
 The shipper-to-Longhouse ingest must be robust:
 
-**Batching:**
+**Target batching:**
 - Collect events for up to 1 second or 100 events, whichever first
 - Gzip compress payload
 - Single HTTP POST per batch
 
-**Offline resilience:**
+**Current State (as of 2026-02-10):**
+- Shipper posts per parsed file chunk (with gzip support) rather than a strict 1s/100-events window.
+- Offline spool replay relies on DB dedupe (`source_path`, `source_offset`, `event_hash`) rather than explicit idempotency headers.
+
+**Offline resilience target:**
 - Local SQLite spool when Longhouse unreachable
 - Replay on reconnect with idempotency keys
 - Dedup by (session_id, source_path, source_offset, event_hash)
 
-**Authentication:**
-- Per-device token issued during `longhouse connect`
+**Authentication (current):**
+- Per-device token is created via auth/UI flow, then used by `longhouse connect`/`longhouse ship`
 - Token scoped to user's instance
 - Revocable if device compromised
 
@@ -663,7 +716,7 @@ Longhouse owns this data. Life Hub becomes a reader.
 We avoid most multi-tenant risk by isolating users. Remaining risks:
 
 - **Ingest endpoint**: must authenticate and protect against replay/injection.
-- **Device identity**: issue per-device tokens during `longhouse connect`.
+- **Device identity**: issue per-device tokens via auth flow and require them for shipper ingest.
 - **Rate limits**: basic caps per device to prevent abuse.
 - **Data leakage**: isolated instance prevents cross-user leaks by default.
 
@@ -776,7 +829,8 @@ Users bring their own LLM API keys. Longhouse stores and uses them securely.
 **Commands:**
 ```bash
 longhouse serve           # Start local server (SQLite, port 8080)
-longhouse connect <url>   # Connect shipper to remote instance
+longhouse connect --url <url>   # Run shipper in foreground (watch mode by default)
+longhouse connect --url <url> --install   # Install/start shipper service
 longhouse ship            # One-time manual sync
 longhouse status          # Show current configuration
 ```

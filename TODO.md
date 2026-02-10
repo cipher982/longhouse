@@ -80,6 +80,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 - [ ] Replace `run_oikos_loop()` / `oikos_react_engine.py` with simple while loop: `llm.call(messages + tools) → execute tools → repeat` (~1.5K LOC → ~200 LOC)
 - [ ] Remove `fiche_runner.py`, `message_array_builder.py`, `prompt_context.py` (~2K LOC)
 - [ ] Use Claude Compaction API (server-side) or custom summarizer for "infinite thread" context management
+- [ ] Implement Oikos dispatch contract from spec: direct vs quick-tool vs CLI delegation, with explicit backend intent routing (Claude/Codex/Gemini) and repo-vs-scratch delegation modes
 
 **3b: Flatten tool infrastructure**
 - [ ] Replace tool registry + lazy binder + catalog + unified_access + tool_search with flat dict of tool functions + schemas (~4K LOC → ~200 LOC)
@@ -661,6 +662,8 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 
 (Former FOUND.md. Keep this list updated here only. Fixed items stripped — see git history.)
 
+- [x] [Docs] Clarify `VISION.md` semantics: explicitly mark target architecture vs current implementation snapshots to reduce ambiguity. (2026-02-10)
+- [x] [Docs] Oikos first-principles alignment: codify dispatch contract (direct/quick/delegate), backend keyword routing (Claude/Codex/Gemini), and reconcile `spawn_commis` semantics across VISION/spec/tools docs. (2026-02-10)
 - [Infra/docs] Wildcard DNS is now configured (dig `test-longhouse-audit.longhouse.ai` resolves); VISION still says "needs setup" in Control Plane section.
 - [Infra/docs] DB size claim stale; prod DB reset 2026-02-05 (no users). Update docs/launch notes once data exists.
 - [Docs vs code] `longhouse connect` fallback still uses `http://localhost:47300` while `longhouse serve` + README use 8080.
@@ -686,7 +689,6 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [Docs vs repo] README "Docker" install says `docker compose up`, but there is no root `docker-compose.yml` or `compose.yaml`; Docker configs live under `docker/` (e.g., `docker/docker-compose.dev.yml`).
 - [Docs vs code] `apps/runner/README.md` uses `LONGHOUSE_URL=http://localhost:30080` for dev/Docker; runner defaults to `ws://localhost:47300` and `longhouse serve` uses 8080, so the example points at the wrong port/service.
 - [Docs vs code] `apps/zerg/backend/docs/specs/shipper.md` still documents `zerg` commands and `~/.claude/zerg-device-token`; current CLI is `longhouse` and tokens are stored at `~/.claude/longhouse-device-token` (legacy `zerg-` paths are migration-only).
-- [Docs] `apps/zerg/backend/docs/supervisor_tools.md` references non-existent paths/tests: `apps/zerg/backend/docs/oikos_tools.md`, `examples/oikos_tools_demo.py`, `tests/test_oikos_tools.py`, `tests/test_oikos_tools_integration.py`, and "20/20 tests passing" despite those files not existing (only `tests/tools/test_oikos_tools_errors.py` exists).
 - [Docs vs code] `oikos_react_engine.py` module docstring claims "spawn_commis raises FicheInterrupted directly"; in parallel execution `_execute_tools_parallel` uses two-phase commit and does NOT raise FicheInterrupted (returns ToolMessages + interrupt_value instead).
 - [Docs vs code] `jobs/git_sync.py` class docstring says "Thread-safety: Uses file lock," but the implementation is async with asyncio + `asynccontextmanager` and `asyncio.to_thread`; it's concurrency-safety, not thread-safety.
 - [Bug] `jobs/commis.py` `_run_job` returns early if `extend_lease` fails before execution, leaving the job in `claimed` state until lease expiry (no reschedule/mark-dead handling).
