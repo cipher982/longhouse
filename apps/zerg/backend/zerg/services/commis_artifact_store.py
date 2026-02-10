@@ -623,6 +623,31 @@ class CommisArtifactStore:
         # Apply limit
         return filtered[:limit]
 
+    def list_tool_call_files(self, commis_id: str) -> list[tuple[str, int]]:
+        """List tool call artifact files for a commis.
+
+        Parameters
+        ----------
+        commis_id
+            Unique commis identifier
+
+        Returns
+        -------
+        list[tuple[str, int]]
+            Sorted list of (filename, size_bytes) tuples for each tool call artifact.
+            Empty list if commis or tool_calls directory does not exist.
+        """
+        commis_dir = self._get_commis_dir(commis_id)
+        tool_calls_dir = commis_dir / "tool_calls"
+
+        if not tool_calls_dir.exists():
+            return []
+
+        results = []
+        for filepath in sorted(tool_calls_dir.glob("*.txt")):
+            results.append((filepath.name, filepath.stat().st_size))
+        return results
+
     def search_commis(
         self,
         pattern: str,

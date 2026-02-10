@@ -1,6 +1,6 @@
 """Commis resume handler - resumes interrupted oikos after commis completion.
 
-Uses FicheRunner.run_continuation() for DB-based resume.
+Generic continuation service usable by any loop implementation.
 
 Key requirements:
 - Idempotent: multiple callers must not resume the same run twice.
@@ -20,6 +20,10 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from typing import Any
+from typing import Callable
+from typing import Protocol
+from typing import Sequence
+from typing import runtime_checkable
 
 from sqlalchemy import func as sa_func
 from sqlalchemy.exc import IntegrityError
@@ -33,6 +37,59 @@ from zerg.models.models import Run
 from zerg.services.oikos_context import reset_seq
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Runner Protocol — decouples commis_resume from concrete FicheRunner
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class ContinuationRunner(Protocol):
+    """Protocol for a runner that can execute continuations.
+
+    FicheRunner (a.k.a. Runner) satisfies this protocol.  Any object
+    implementing these methods and attributes can be used as the runner
+    for commis resume.
+    """
+
+    usage_prompt_tokens: int | None
+    usage_completion_tokens: int | None
+    usage_total_tokens: int | None
+    usage_reasoning_tokens: int | None
+
+    async def run_continuation(
+        self,
+        db: Session,
+        thread: Any,
+        tool_call_id: str,
+        tool_result: str,
+        *,
+        run_id: int | None = None,
+        trace_id: str | None = None,
+    ) -> Sequence[Any]: ...
+
+    async def run_batch_continuation(
+        self,
+        db: Session,
+        thread: Any,
+        commis_results: list[dict],
+        *,
+        run_id: int | None = None,
+        trace_id: str | None = None,
+    ) -> Sequence[Any]: ...
+
+
+# Factory callable: (fiche, model_override, reasoning_effort) -> ContinuationRunner
+RunnerFactory = Callable[..., ContinuationRunner]
+
+
+def _default_runner_factory(fiche: Any, *, model_override: str | None = None, reasoning_effort: str | None = None) -> ContinuationRunner:
+    """Create a FicheRunner — the default runner factory."""
+    from zerg.managers.fiche_runner import FicheRunner
+
+    return FicheRunner(fiche, model_override=model_override, reasoning_effort=reasoning_effort)
+
 
 # Sentinel used when follow-up continuations should read queued commis updates from thread.
 INBOX_QUEUED_RESULT = "(Queued commis updates available in thread)"
@@ -280,6 +337,8 @@ async def resume_oikos_batch(
     db: Session,
     run_id: int,
     commis_results: list[dict[str, Any]],
+    *,
+    runner_factory: RunnerFactory = _default_runner_factory,
 ) -> dict[str, Any] | None:
     """Resume oikos with ALL commis results (batch continuation).
 
@@ -290,6 +349,8 @@ async def resume_oikos_batch(
         db: Database session.
         run_id: Run ID to resume.
         commis_results: List of dicts with tool_call_id, result, error, status.
+        runner_factory: Callable that creates a ContinuationRunner from
+            (fiche, model_override, reasoning_effort). Defaults to FicheRunner.
 
     Returns:
         Dict with {"status": "success"|"waiting"|"error"|"skipped", ...}
@@ -300,7 +361,6 @@ async def resume_oikos_batch(
     from zerg.events import reset_emitter
     from zerg.events import set_emitter
     from zerg.managers.fiche_runner import FicheInterrupted
-    from zerg.managers.fiche_runner import FicheRunner
     from zerg.services.event_store import emit_run_event
     from zerg.services.oikos_context import reset_oikos_context
     from zerg.services.oikos_context import set_oikos_context
@@ -379,8 +439,8 @@ async def resume_oikos_batch(
     _user_ctx_token = set_current_user_id(owner_id)
 
     try:
-        # Create FicheRunner and run batch continuation
-        runner = FicheRunner(
+        # Create runner via factory and run batch continuation
+        runner = runner_factory(
             fiche,
             model_override=run.model,
             reasoning_effort=run.reasoning_effort,
@@ -718,16 +778,20 @@ async def _continue_oikos_langgraph_free(
     run_id: int,
     commis_result: str,
     job_id: int | None = None,
+    *,
+    runner_factory: RunnerFactory = _default_runner_factory,
 ) -> dict[str, Any] | None:
-    """Resume oikos using the LangGraph-free FicheRunner.run_continuation().
+    """Resume oikos using a generic continuation runner.
 
-    This is the new path that doesn't rely on LangGraph checkpointing.
+    This is the LangGraph-free path that uses run_continuation().
 
     Args:
         db: Database session.
         run_id: Run ID to resume.
         commis_result: Commis's result string.
         job_id: Optional CommisJob ID to look up tool_call_id.
+        runner_factory: Callable that creates a ContinuationRunner from
+            (fiche, model_override, reasoning_effort). Defaults to FicheRunner.
 
     Returns:
         Dict with {"status": "success"|"waiting"|"error"|"skipped", ...}
@@ -738,7 +802,6 @@ async def _continue_oikos_langgraph_free(
     from zerg.events import reset_emitter
     from zerg.events import set_emitter
     from zerg.managers.fiche_runner import FicheInterrupted
-    from zerg.managers.fiche_runner import FicheRunner
     from zerg.services.event_store import emit_run_event
     from zerg.services.oikos_context import reset_oikos_context
     from zerg.services.oikos_context import set_oikos_context
@@ -900,9 +963,9 @@ async def _continue_oikos_langgraph_free(
     _user_ctx_token = set_current_user_id(owner_id)
 
     try:
-        # Create FicheRunner and run continuation
+        # Create runner via factory and run continuation
         # Inherit model/reasoning_effort from the original run for consistency
-        runner = FicheRunner(
+        runner = runner_factory(
             fiche,
             model_override=run.model,
             reasoning_effort=run.reasoning_effort,
@@ -1128,21 +1191,24 @@ async def resume_oikos_with_commis_result(
     run_id: int,
     commis_result: str,
     job_id: int | None = None,
+    *,
+    runner_factory: RunnerFactory = _default_runner_factory,
 ) -> dict[str, Any] | None:
     """Resume an interrupted oikos run with a commis result.
 
-    Uses FicheRunner.run_continuation() for DB-based resume.
+    Uses a generic ContinuationRunner for DB-based resume.
 
     Args:
         db: Database session.
         run_id: Run ID to resume.
         commis_result: Commis's result string.
         job_id: Optional CommisJob ID to look up tool_call_id.
+        runner_factory: Callable that creates a ContinuationRunner. Defaults to FicheRunner.
 
     Returns:
         Dict with {"status": "success"|"waiting"|"error"|"skipped", ...}
     """
-    return await _continue_oikos_langgraph_free(db, run_id, commis_result, job_id)
+    return await _continue_oikos_langgraph_free(db, run_id, commis_result, job_id, runner_factory=runner_factory)
 
 
 def _compute_duration_ms(started_at, *, end_time: datetime | None = None) -> int:
