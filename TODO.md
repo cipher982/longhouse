@@ -63,6 +63,8 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 - [x] Tag commis sessions with metadata (environment=commis, commis_job_id) for filtering
 - [ ] Timeline UI: show commis sessions alongside shipped sessions
 - [ ] Add filter option in Timeline to show/hide commis vs terminal sessions
+- [ ] Expose `environment` filter end-to-end in Timeline UI (`commis|production|development|test|e2e`) and show source badge on session cards.
+- [ ] Add regression test: completed workspace commis session appears in `/api/agents/sessions?environment=commis`.
 
 ### Phase 2: Deprecate Standard Mode (3)
 - [x] Make workspace mode the default (and only) execution mode for new commis
@@ -196,6 +198,7 @@ See this file for the current launch analysis.
 - [x] Smoke-after-deploy: target canonical `/api/health` and correct app domain(s).
 - [x] Add schedule gate for smoke to prevent spam during known outages.
 - [x] Replace `realtime_websocket_monitoring.spec.ts` timeouts/log-only flow with deterministic assertions (or drop the test).
+- [ ] Add core E2E guardrail script/check: fail CI on `waitForTimeout` or `networkidle` in `apps/zerg/e2e/tests/core/**` (allow scripts/visual/perf helpers).
 
 **Notes:**
 - Current prod endpoints returning HTTP 525 (Cloudflare origin handshake); fix infra routing or adjust smoke targets.
@@ -664,6 +667,8 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 
 - [x] [Docs] Clarify `VISION.md` semantics: explicitly mark target architecture vs current implementation snapshots to reduce ambiguity. (2026-02-10)
 - [x] [Docs] Oikos first-principles alignment: codify dispatch contract (direct/quick/delegate), backend keyword routing (Claude/Codex/Gemini), and reconcile `spawn_commis` semantics across VISION/spec/tools docs. (2026-02-10)
+- [x] [Docs] Prune `AGENTS.md` learnings to durable invariants only; convert code-fixable confusion into tracked TODO engineering tasks. (2026-02-10)
+- [x] [Docs] Slim `AGENTS.md` by removing duplicated feature catalog and pointing to canonical `VISION.md` Product Surface + deep-dive docs. (2026-02-10)
 - [Infra/docs] Wildcard DNS is now configured (dig `test-longhouse-audit.longhouse.ai` resolves); VISION still says "needs setup" in Control Plane section.
 - [Infra/docs] DB size claim stale; prod DB reset 2026-02-05 (no users). Update docs/launch notes once data exists.
 - [Docs vs code] `longhouse connect` fallback still uses `http://localhost:47300` while `longhouse serve` + README use 8080.
