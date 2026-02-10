@@ -16,6 +16,7 @@ export interface AgentSession {
   provider: string;
   project: string | null;
   device_id: string | null;
+  environment: string | null;
   cwd: string | null;
   git_repo: string | null;
   git_branch: string | null;
@@ -112,6 +113,7 @@ export interface AgentEventsListResponse {
 export interface AgentSessionFilters {
   project?: string;
   provider?: string;
+  environment?: string;
   device_id?: string;
   days_back?: number;
   query?: string;
@@ -156,6 +158,7 @@ export async function fetchAgentSessions(
 
   if (filters.project) params.set("project", filters.project);
   if (filters.provider) params.set("provider", filters.provider);
+  if (filters.environment) params.set("environment", filters.environment);
   if (filters.device_id) params.set("device_id", filters.device_id);
   if (filters.days_back) params.set("days_back", String(filters.days_back));
   if (filters.query) params.set("query", filters.query);

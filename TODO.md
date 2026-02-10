@@ -61,10 +61,10 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 - [x] Verify workspace mode hatch produces session JSONL and find its output path
 - [x] After workspace hatch completes, ingest session JSONL via `AgentsStore.ingest_session()` (`_ingest_workspace_session()` in commis_job_processor.py)
 - [x] Tag commis sessions with metadata (environment=commis, commis_job_id) for filtering
-- [ ] Timeline UI: show commis sessions alongside shipped sessions
-- [ ] Add filter option in Timeline to show/hide commis vs terminal sessions
-- [ ] Expose `environment` filter end-to-end in Timeline UI (`commis|production|development|test|e2e`) and show source badge on session cards.
-- [ ] Add regression test: completed workspace commis session appears in `/api/agents/sessions?environment=commis`.
+- [x] Timeline UI: show commis sessions alongside shipped sessions
+- [x] Add filter option in Timeline to show/hide commis vs terminal sessions
+- [x] Expose `environment` filter end-to-end in Timeline UI (`commis|production|development|test|e2e`) and show source badge on session cards.
+- [x] Add regression test: completed workspace commis session appears in `/api/agents/sessions?environment=commis`.
 
 ### Phase 2: Deprecate Standard Mode (3)
 - [x] Make workspace mode the default (and only) execution mode for new commis
@@ -72,7 +72,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 - [x] Update Oikos `spawn_commis` tool to always use workspace mode (deprecated, warns)
 - [x] Update tests that exercise standard mode
 - [x] Remove `commis_runner.py` (in-process runner) — ~1K LOC + 5 test files (~1.7K LOC) deleted
-- [ ] Remove 6 skipped tests in mixed files that referenced CommisRunner (test_durable_runs, test_oikos_fiche, test_supervisor_e2e, test_supervisor_tools_integration)
+- [x] Remove 6 skipped tests in mixed files that referenced CommisRunner (test_durable_runs, test_oikos_fiche, test_supervisor_e2e, test_supervisor_tools_integration)
 
 ### Phase 3: Slim Oikos (5)
 
@@ -89,7 +89,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 - [ ] Remove `catalog.py`, `unified_access.py`, `tool_search.py` (embedding-based discovery), registry singleton pattern (~1.1K LOC) — over-abstracted layers around what should be a dict + allowlist
 - [ ] Simplify `lazy_binder.py` (~221 LOC → ~100 LOC): keep allowlist filtering with wildcard support, remove runtime rebinding (skills handle discovery now)
 - [ ] Tool subsets configured per agent type (Oikos gets ~20-30 tools, commis gets different set, user-configurable)
-- [ ] Kill dead-weight utility tools: math_tools, uuid_tools, datetime_diff, tool_discovery, container_tools (~600 LOC)
+- [x] Kill dead-weight utility tools: math_tools, uuid_tools, tool_discovery, container_tools (~530 LOC removed)
 
 **3c: Decouple standard-mode services from FicheRunner (refactor, not delete)**
 

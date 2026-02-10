@@ -30,8 +30,6 @@ def test_tool_server_mapping_validation():
     """Test tool-server mapping validation."""
     # Test valid mappings
     assert validate_tool_registration("http_request", "http")
-    assert validate_tool_registration("math_eval", "math")
-    assert validate_tool_registration("generate_uuid", "uuid")
 
     # Test invalid mappings
     assert not validate_tool_registration("http_request", "math")
@@ -42,7 +40,6 @@ def test_tool_server_mapping_validation():
 def test_expected_server_lookup():
     """Test expected server lookup functionality."""
     assert get_expected_server("http_request") == "http"
-    assert get_expected_server("math_eval") == "math"
     assert get_expected_server("get_current_time") == "datetime"
     assert get_expected_server("invalid_tool") is None
 
@@ -81,22 +78,16 @@ class TestContractBreakageDetection:
         """Test that tools are in expected server modules."""
         from zerg.tools.builtin.datetime_tools import TOOLS as DATETIME_TOOLS
         from zerg.tools.builtin.http_tools import TOOLS as HTTP_TOOLS
-        from zerg.tools.builtin.math_tools import TOOLS as MATH_TOOLS
         from zerg.tools.builtin.personal_tools import TOOLS as PERSONAL_TOOLS
         from zerg.tools.builtin.ssh_tools import TOOLS as SSH_TOOLS
         from zerg.tools.builtin.oikos_tools import TOOLS as OIKOS_TOOLS
-        from zerg.tools.builtin.uuid_tools import TOOLS as UUID_TOOLS
 
         # Build actual tool-to-server mapping from module structure
         actual_mapping = {}
         for tool in HTTP_TOOLS:
             actual_mapping[tool.name] = "http"
-        for tool in MATH_TOOLS:
-            actual_mapping[tool.name] = "math"
         for tool in DATETIME_TOOLS:
             actual_mapping[tool.name] = "datetime"
-        for tool in UUID_TOOLS:
-            actual_mapping[tool.name] = "uuid"
         for tool in SSH_TOOLS:
             actual_mapping[tool.name] = "ssh"
         for tool in OIKOS_TOOLS:

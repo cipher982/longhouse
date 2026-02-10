@@ -36,6 +36,7 @@ import "../styles/sessions.css";
 
 const DAYS_OPTIONS = [7, 14, 30, 60, 90] as const;
 const PAGE_SIZE = 50;
+const ENVIRONMENT_OPTIONS = ["production", "commis", "development", "test"] as const;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -237,6 +238,11 @@ function SessionCard({ session, onClick, highlightQuery }: SessionCardProps) {
             style={{ backgroundColor: getProviderColor(session.provider) }}
           />
           <span className="provider-name">{session.provider}</span>
+          {session.environment && session.environment !== "production" && (
+            <span className={`environment-badge environment-badge--${session.environment}`}>
+              {session.environment}
+            </span>
+          )}
         </div>
         <span className="session-card-time">{formatRelativeTime(session.started_at)}</span>
       </div>
@@ -318,6 +324,7 @@ export default function SessionsPage() {
   // Filter state from URL params
   const [project, setProject] = useState(searchParams.get("project") || "");
   const [provider, setProvider] = useState(searchParams.get("provider") || "");
+  const [environment, setEnvironment] = useState(searchParams.get("environment") || "");
   const [daysBack, setDaysBack] = useState(
     Number(searchParams.get("days_back")) || 14
   );
@@ -345,26 +352,28 @@ export default function SessionsPage() {
     const params = new URLSearchParams();
     if (project) params.set("project", project);
     if (provider) params.set("provider", provider);
+    if (environment) params.set("environment", environment);
     if (daysBack !== 14) params.set("days_back", String(daysBack));
     if (debouncedQuery) params.set("query", debouncedQuery);
     setSearchParams(params, { replace: true });
-  }, [project, provider, daysBack, debouncedQuery, setSearchParams]);
+  }, [project, provider, environment, daysBack, debouncedQuery, setSearchParams]);
 
   // Reset pagination when filters change
   useEffect(() => {
     setLimit(PAGE_SIZE);
-  }, [project, provider, daysBack, debouncedQuery]);
+  }, [project, provider, environment, daysBack, debouncedQuery]);
 
   // Build filters
   const filters: AgentSessionFilters = useMemo(
     () => ({
       project: project || undefined,
       provider: provider || undefined,
+      environment: environment || undefined,
       days_back: daysBack,
       query: debouncedQuery || undefined,
       limit,
     }),
-    [project, provider, daysBack, debouncedQuery, limit]
+    [project, provider, environment, daysBack, debouncedQuery, limit]
   );
 
   // Fetch sessions with polling
@@ -396,6 +405,7 @@ export default function SessionsPage() {
   const handleClearFilters = useCallback(() => {
     setProject("");
     setProvider("");
+    setEnvironment("");
     setDaysBack(14);
     setSearchQuery("");
   }, []);
@@ -416,7 +426,7 @@ export default function SessionsPage() {
     }
   }, [refetch]);
 
-  const hasFilters = project || provider || daysBack !== 14 || searchQuery;
+  const hasFilters = project || provider || environment || daysBack !== 14 || searchQuery;
   const showGuidedEmptyState = sessions.length === 0 && !hasFilters;
 
   // Ready signal for E2E
@@ -482,6 +492,12 @@ export default function SessionsPage() {
               options={providerOptions}
               onChange={setProvider}
               loading={filtersLoading}
+            />
+            <FilterSelect
+              label="environment"
+              value={environment}
+              options={[...ENVIRONMENT_OPTIONS]}
+              onChange={setEnvironment}
             />
             <DaysSelect value={daysBack} onChange={setDaysBack} />
           </div>
