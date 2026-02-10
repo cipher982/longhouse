@@ -219,7 +219,7 @@ See this file for the current launch analysis.
 - [x] Smoke-after-deploy: target canonical `/api/health` and correct app domain(s).
 - [x] Add schedule gate for smoke to prevent spam during known outages.
 - [x] Replace `realtime_websocket_monitoring.spec.ts` timeouts/log-only flow with deterministic assertions (or drop the test).
-- [ ] Add core E2E guardrail script/check: fail CI on `waitForTimeout` or `networkidle` in `apps/zerg/e2e/tests/core/**` (allow scripts/visual/perf helpers).
+- [x] Add core E2E guardrail script/check: fail CI on `waitForTimeout` or `networkidle` in `apps/zerg/e2e/tests/core/**` (allow scripts/visual/perf helpers).
 
 **Notes:**
 - Current prod endpoints returning HTTP 525 (Cloudflare origin handshake); fix infra routing or adjust smoke targets.
@@ -728,8 +728,8 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [Docs vs code] CLI docs in `zerg/cli/__init__.py` and `zerg/cli/main.py` say `longhouse connect` is "continuous polling," but the CLI defaults to watch mode (polling only with `--poll`/`--interval`).
 - [Docs vs code] `scripts/install.sh` only documents `LONGHOUSE_API_URL`; CLI reads it, but `longhouse connect` fallback still uses 47300 (docs imply 8080).
 - [Docs vs reality] Timeline page copy says "across providers," but real ingest only supports Claude Code; other providers are demo-only.
-- [Docs vs reality] Public info pages (`PricingPage.tsx`, `SecurityPage.tsx`, `PrivacyPage.tsx`) still describe fiches/workflows, Google-only OAuth auth, and dashboard account management, which don't match the current timeline-first OSS flow.
-- [Docs vs code] DocsPage skills section says to add `SKILL.md` to `workspace/skills`; default loader path for OSS is `~/.longhouse/skills` unless a workspace path is configured.
+- ~~[Docs vs reality] Public info pages (`PricingPage.tsx`, `SecurityPage.tsx`, `PrivacyPage.tsx`) still describe fiches/workflows, Google-only OAuth auth, and dashboard account management, which don't match the current timeline-first OSS flow.~~ ✅ Fixed (2026-02-10)
+- ~~[Docs vs code] DocsPage skills section says to add `SKILL.md` to `workspace/skills`; default loader path for OSS is `~/.longhouse/skills` unless a workspace path is configured.~~ ✅ Fixed (2026-02-10)
 - [Docs vs code] Landing SkillsSection says Slack skill can "manage channels," but Slack tool is webhook-only (send message); no channel management/listing tools exist.
 - [Docs] QA job prompt (`apps/zerg/backend/zerg/jobs/qa/prompt.md`) still brands alerts as "SWARMLET QA"; should be Longhouse (brand drift).
 
