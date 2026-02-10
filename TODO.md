@@ -752,7 +752,7 @@ Evidence: `ideas/evidence/39_evidence_tool_registry_mutable_singleton.sh`
 20. [ID 20] Remove legacy ToolRegistry wiring in builtin tools init.
 Evidence: `ideas/evidence/80_evidence_builtin_init_legacy_registry.sh`
 
-21. [ID 21] Drop non-lazy binder compatibility path.
+21. ~~[ID 21] Drop non-lazy binder compatibility path.~~ ✅ Done (2026-02-10)
 Evidence: `ideas/evidence/40_evidence_lazy_binder_compat.sh`
 
 22. ~~[ID 22] Remove deprecated publish_event_safe wrapper.~~ ✅ Already gone (2026-02-10)
@@ -797,7 +797,7 @@ Evidence: `ideas/evidence/97_evidence_workflow_schema_legacy_upgrade.sh`
 35. ~~[ID 35] Remove deprecated trigger_type field in workflow_schema.py.~~ ✅ Already gone (2026-02-10)
 Evidence: `ideas/evidence/98_evidence_workflow_schema_deprecated_trigger_type.sh`
 
-36. [ID 36] Tighten trigger_config schema by removing extra allow compatibility.
+36. ~~[ID 36] Tighten trigger_config schema by removing extra allow compatibility.~~ ✅ Done (2026-02-10)
 Evidence: `ideas/evidence/99_evidence_trigger_config_extra_allow.sh`
 
 37. [ID 37] Remove legacy trigger key scanner once legacy shapes dropped.
@@ -811,7 +811,7 @@ Evidence: `ideas/evidence/45_evidence_app_ready_legacy_signal.sh`
 39. ~~[ID 39] Drop legacy React Flow selectors in CSS after test update.~~ ✅ Already gone (2026-02-10)
 Evidence: `ideas/evidence/46_evidence_canvas_react_legacy_selectors.sh`
 
-40. [ID 40] Remove legacy buttons.css compatibility layer.
+40. ~~[ID 40] Remove legacy buttons.css compatibility layer.~~ ✅ Done (2026-02-10)
 Evidence: `ideas/evidence/47_evidence_buttons_css_legacy.sh`
 
 41. [ID 41] Remove legacy modal pattern CSS.
