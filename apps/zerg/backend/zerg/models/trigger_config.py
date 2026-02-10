@@ -20,8 +20,8 @@ Introducing a **thin** Pydantic model provides two advantages while remaining
     to the new accessor.
 
 Only the fields that are currently used by the backend are declared.  The
-model is configured with ``extra="allow"`` so any future / unknown keys are
-preserved when round-tripping through the helper property.
+model forbids extra keys so unknown fields surface as validation errors
+rather than silently passing through.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ class TriggerConfig(BaseModel):  # noqa: D101 – obvious from context
     filters: Optional[Dict[str, Any]] = Field(None, description="User supplied filter rules")
 
     model_config = {
-        "extra": "allow",  # keep forward compatibility – unknown keys are retained
+        "extra": "forbid",
         "frozen": True,  # hashable so it can be cached if needed
     }
 
