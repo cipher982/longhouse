@@ -791,10 +791,10 @@ Evidence: `ideas/evidence/77_evidence_ssh_tools_legacy.sh`
 33. ~~[ID 33] Update Swarmlet user-agent branding in web_fetch tool.~~ ✅ Already done (2026-02-10)
 Evidence: `ideas/evidence/79_evidence_web_fetch_swarmlet_user_agent.sh`
 
-34. [ID 34] Remove legacy workflow trigger upgrade logic in schemas/workflow.py.
+34. ~~[ID 34] Remove legacy workflow trigger upgrade logic in schemas/workflow.py.~~ ✅ Already gone (2026-02-10)
 Evidence: `ideas/evidence/97_evidence_workflow_schema_legacy_upgrade.sh`
 
-35. [ID 35] Remove deprecated trigger_type field in workflow_schema.py.
+35. ~~[ID 35] Remove deprecated trigger_type field in workflow_schema.py.~~ ✅ Already gone (2026-02-10)
 Evidence: `ideas/evidence/98_evidence_workflow_schema_deprecated_trigger_type.sh`
 
 36. [ID 36] Tighten trigger_config schema by removing extra allow compatibility.
@@ -808,7 +808,7 @@ Evidence: `ideas/evidence/96_evidence_legacy_trigger_check_script.sh`
 38. ~~[ID 38] Remove __APP_READY__ legacy test signal once tests updated.~~ ✅ Done (2026-02-10)
 Evidence: `ideas/evidence/45_evidence_app_ready_legacy_signal.sh`
 
-39. [ID 39] Drop legacy React Flow selectors in CSS after test update.
+39. ~~[ID 39] Drop legacy React Flow selectors in CSS after test update.~~ ✅ Already gone (2026-02-10)
 Evidence: `ideas/evidence/46_evidence_canvas_react_legacy_selectors.sh`
 
 40. [ID 40] Remove legacy buttons.css compatibility layer.
