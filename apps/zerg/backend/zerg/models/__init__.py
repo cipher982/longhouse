@@ -15,7 +15,6 @@ from .fiche import FicheMessage
 from .models import AccountConnectorCredential
 from .models import CommisJob
 from .models import ConnectorCredential
-from .models import FicheMemoryKV
 from .models import KnowledgeDocument
 from .models import KnowledgeSource
 from .models import MemoryEmbedding
@@ -61,7 +60,6 @@ __all__ = [
     "CommisBarrier",
     # Remaining models (still in models.py)
     "AccountConnectorCredential",
-    "FicheMemoryKV",
     "ConnectorCredential",
     "KnowledgeDocument",
     "KnowledgeSource",

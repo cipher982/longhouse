@@ -2,6 +2,20 @@
 
 Simple tools for saving and retrieving persistent memories.
 These are designed for natural "remember X" / "what do you know about Y" usage.
+
+Memory Architecture (2 systems):
+  1. Oikos Memory (this module) — save_memory / search_memory / list_memories / forget_memory
+     - Backed by `Memory` table (UUID, content, type, confidence, fiche_id scoping)
+     - Keyword search (ILIKE). Exposed in OIKOS_UTILITY_TOOLS.
+     - Best for: quick save-and-search of notes, decisions, bugs, preferences.
+
+  2. Memory Files + Embeddings (memory_tools.py) — memory_write / memory_read / memory_ls / memory_search / memory_delete
+     - Backed by `MemoryFile` table (virtual filesystem: path + content) + `MemoryEmbedding` (text-embedding-3-small)
+     - Semantic search with keyword fallback. Auto-populated by memory_summarizer.py (episode summaries).
+     - Best for: structured long-term memory, episode logs, anything needing semantic retrieval.
+
+  Fiche Memory KV was removed as redundant with Memory Files (same key-based access
+  via path, but Memory Files adds semantic search and auto-summarization).
 """
 
 from __future__ import annotations
