@@ -154,7 +154,7 @@ class Skill:
         return self.manifest.description
 
     def format_for_prompt(self) -> str:
-        """Format skill for inclusion in system prompt.
+        """Format skill for inclusion in system prompt (full content).
 
         Returns markdown block with skill name, description, and content.
         """
@@ -177,6 +177,20 @@ class Skill:
             lines.append(self.content.strip())
 
         return "\n".join(lines)
+
+    def format_for_index(self) -> str:
+        """Format skill as a compact index entry (name + one-line description).
+
+        Used for progressive disclosure: system prompt gets the index,
+        full content is loaded only when a skill is activated.
+
+        Returns:
+            Single line: "- **name** — description" or "- **name**"
+        """
+        prefix = f"{self.manifest.emoji} " if self.manifest.emoji else ""
+        if self.manifest.description:
+            return f"- **{prefix}{self.manifest.name}** — {self.manifest.description}"
+        return f"- **{prefix}{self.manifest.name}**"
 
 
 @dataclass

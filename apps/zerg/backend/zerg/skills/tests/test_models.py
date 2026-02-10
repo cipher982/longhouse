@@ -148,6 +148,61 @@ class TestSkill:
         assert "Test description" in prompt
         assert "Use this skill for testing." in prompt
 
+    def test_format_for_index_with_emoji(self) -> None:
+        """Index format includes emoji and description."""
+        manifest = SkillManifest.from_frontmatter(
+            {
+                "name": "test-skill",
+                "description": "Test description",
+                "metadata": {"clawdbot": {"emoji": "🧪"}},
+            }
+        )
+        skill = Skill(
+            manifest=manifest,
+            content="Full content here.",
+            base_dir=Path("/tmp/skills/test-skill"),
+            file_path=Path("/tmp/skills/test-skill/SKILL.md"),
+        )
+
+        index = skill.format_for_index()
+
+        assert index == "- **🧪 test-skill** — Test description"
+        # Should NOT contain the full content
+        assert "Full content here." not in index
+
+    def test_format_for_index_no_emoji(self) -> None:
+        """Index format works without emoji."""
+        manifest = SkillManifest.from_frontmatter(
+            {
+                "name": "simple",
+                "description": "A simple skill",
+            }
+        )
+        skill = Skill(
+            manifest=manifest,
+            content="Content.",
+            base_dir=Path("/tmp/skills/simple"),
+            file_path=Path("/tmp/skills/simple/SKILL.md"),
+        )
+
+        index = skill.format_for_index()
+
+        assert index == "- **simple** — A simple skill"
+
+    def test_format_for_index_no_description(self) -> None:
+        """Index format works without description."""
+        manifest = SkillManifest.from_frontmatter({"name": "bare"})
+        skill = Skill(
+            manifest=manifest,
+            content="Content.",
+            base_dir=Path("/tmp/skills/bare"),
+            file_path=Path("/tmp/skills/bare/SKILL.md"),
+        )
+
+        index = skill.format_for_index()
+
+        assert index == "- **bare**"
+
 
 class TestSkillEntry:
     """Tests for SkillEntry model."""

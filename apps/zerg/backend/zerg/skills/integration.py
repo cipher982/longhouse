@@ -81,11 +81,26 @@ class SkillContext:
         if not self._loaded:
             self.load()
 
-    def get_prompt(self, *, include_content: bool = True, max_skills: Optional[int] = None) -> str:
-        """Get skills prompt for system prompt injection."""
+    def get_prompt(
+        self,
+        *,
+        include_content: bool = False,
+        max_skills: Optional[int] = None,
+        char_budget: Optional[int] = None,
+    ) -> str:
+        """Get skills prompt for system prompt injection.
+
+        Defaults to index-only (progressive disclosure). Pass
+        include_content=True to get full SKILL.md content.
+        """
         self.ensure_loaded()
         skills = self._registry.filter_by_allowlist(self.allowed_skills)
-        return self._registry.format_skills_prompt(skills, max_skills=max_skills, include_content=include_content)
+        return self._registry.format_skills_prompt(
+            skills,
+            max_skills=max_skills,
+            include_content=include_content,
+            char_budget=char_budget,
+        )
 
     def get_eligible_skills(self) -> List[Skill]:
         """Get eligible skills."""
@@ -153,18 +168,24 @@ def augment_system_prompt(
     system_prompt: str,
     skill_context: SkillContext,
     position: str = "end",
+    *,
+    include_content: bool = False,
 ) -> str:
     """Augment system prompt with skills.
+
+    Defaults to index-only injection (progressive disclosure). Full skill
+    content is loaded into the conversation only when a skill is activated.
 
     Args:
         system_prompt: Original system prompt
         skill_context: Skill context with loaded skills
         position: Where to insert skills ("start", "end", or "after:marker")
+        include_content: If True, inject full SKILL.md content instead of index.
 
     Returns:
         Augmented system prompt
     """
-    skill_prompt = skill_context.get_prompt()
+    skill_prompt = skill_context.get_prompt(include_content=include_content)
     if not skill_prompt:
         return system_prompt
 
@@ -248,17 +269,22 @@ class SkillIntegration:
         self,
         system_prompt: str,
         position: str = "end",
+        *,
+        include_content: bool = False,
     ) -> str:
         """Augment system prompt with skills.
+
+        Defaults to index-only injection (progressive disclosure).
 
         Args:
             system_prompt: Original system prompt
             position: Where to insert skills
+            include_content: If True, inject full content instead of index.
 
         Returns:
             Augmented system prompt
         """
-        return augment_system_prompt(system_prompt, self._context, position)
+        return augment_system_prompt(system_prompt, self._context, position, include_content=include_content)
 
     def get_tools(
         self,
@@ -283,9 +309,33 @@ class SkillIntegration:
 
         return tools
 
-    def get_prompt(self, *, include_content: bool = True, max_skills: Optional[int] = None) -> str:
-        """Get skills prompt."""
-        return self._context.get_prompt(include_content=include_content, max_skills=max_skills)
+    def get_prompt(
+        self,
+        *,
+        include_content: bool = False,
+        max_skills: Optional[int] = None,
+        char_budget: Optional[int] = None,
+    ) -> str:
+        """Get skills prompt (index-only by default)."""
+        return self._context.get_prompt(
+            include_content=include_content,
+            max_skills=max_skills,
+            char_budget=char_budget,
+        )
+
+    def get_skill_content(self, name: str) -> Optional[str]:
+        """Get full content for a specific skill (for activation/invocation).
+
+        Use this when a skill is activated (user invokes /skill-name or
+        model auto-selects) to load the full SKILL.md content into context.
+
+        Returns:
+            Full formatted skill prompt, or None if skill not found.
+        """
+        skill = self._context.get_skill(name)
+        if skill is None:
+            return None
+        return skill.format_for_prompt()
 
     def get_skill_names(self) -> List[str]:
         """Get names of loaded skills."""
