@@ -62,16 +62,19 @@ Meanwhile, commis output doesn't appear in the agent timeline — Longhouse's ow
 **Goal:** Remove the in-process execution path. All commis use workspace mode (CLI agents).
 
 ### What becomes dead code
-- `services/commis_runner.py` (1,051 LOC) — in-process runner
+- `services/commis_runner.py` (1,051 LOC) — ✅ removed 2026-02-09
 - `managers/fiche_runner.py` (974 LOC) — message assembly + LLM dispatch
 - `managers/message_array_builder.py` (523 LOC) — prompt construction
 - `managers/prompt_context.py` (452 LOC) — context builder
 - `services/oikos_react_engine.py` (1,483 LOC) — the ReAct loop itself
-- `tools/builtin/` (31 files, 11,997 LOC) — all custom tools
-- `tools/` infrastructure (registry, lazy binder, catalog) — partial removal
+- `tools/` infrastructure: registry, lazy binder, catalog, unified_access, tool_search (~4K LOC)
 - `skills/` (14 files) — skill loading pipeline
 - `callbacks/` — token streaming callbacks
 - `prompts/` — prompt templates
+- Standard mode services: commis_resume, roundabout_monitor, commis_artifact_store, etc. (~6.5K LOC)
+
+### What stays (not dead code)
+- `tools/builtin/` (~60 tools, ~9.5K LOC) — **kept as modular toolbox**. Each agent configured with a subset. Tools are product features (email, Slack, GitHub, memory, sessions, etc.), not harness code.
 
 ### Migration steps
 1. Make workspace mode the default (and only) execution mode for commis
@@ -93,27 +96,35 @@ Meanwhile, commis output doesn't appear in the agent timeline — Longhouse's ow
 
 **Goal:** Oikos becomes a thin conversation coordinator, not an agent harness.
 
-### Oikos needs only:
-- **Direct LLM API call** for conversation (no ReAct loop, no tool dispatch)
-- **`spawn_commis`** — kick off CLI agent work
-- **Session tools** — search/grep/filter agent timeline
-- **`contact_user`** — ask the user questions
-- **Memory** — the infinite thread with context management
+### Oikos architecture: simple loop + configurable toolbox
 
-### Oikos does NOT need:
-- 31 builtin tools (Jira, GitHub, email, SSH, etc.)
-- Custom tool registry / lazy binder / MCP adapter
+Oikos uses a simple `while` loop (`llm.call(messages + tools) → execute tools → repeat`) with a configured subset of the modular toolbox. No ReAct engine, no tool registry, no skills system.
+
+**Oikos tool subset (configurable):**
+- Commis lifecycle: spawn, list, check, cancel, wait
+- Session discovery: search, grep, filter, detail
+- Memory: save, search, list, forget + embeddings search
+- Communication: contact_user, send_email, send_sms, send_imessage, slack, discord
+- Web: web_search, web_fetch, http_request
+- Infrastructure: runner_list, runner_exec, ssh_exec
+- Knowledge: knowledge_search
+- Internal: task CRUD, connector status
+- (User-configurable: agents can have different tool subsets)
+
+**Oikos does NOT need:**
+- Custom tool registry / lazy binder / catalog / unified_access
 - Skills loading system
 - Token streaming callbacks
 - Message array builder with cache optimization
+- ReAct prompt templates
 
 ### Architecture
 ```
-User message → Oikos (thin coordinator)
-  → If task: spawn_commis → CLI agent does the work
-  → If question about past work: search_sessions / recall
-  → If conversation: direct LLM response
-  → If needs info: contact_user
+User message → Oikos (simple loop + toolbox subset)
+  → Quick action: Oikos handles directly (send email, search sessions, etc.)
+  → Complex task: spawn_commis → CLI agent does multi-step work
+  → Question about past work: search_sessions / memory_search
+  → Conversation: direct LLM response
 ```
 
 ### The "infinite thread" implementation

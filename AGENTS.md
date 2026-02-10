@@ -64,7 +64,7 @@ make test-full     # Full suite (unit + full E2E + evals + visual baselines)
 - **Generated code** (don't edit): `src/generated/`, `zerg/generated/`
 - **Tests**: Always use `make test*` targets, never direct pytest/playwright
 - **Tool contracts**: Edit `schemas/tools.yml`, then run `scripts/generate_tool_types.py` — never edit generated files directly
-- **Oikos tools**: Registration is centralized in `oikos_tools.py`; `CORE_TOOLS` pulls from `SUPERVISOR_TOOL_NAMES`; tests in `test_core_tools.py` catch drift
+- **Oikos tools**: Registration is centralized in `oikos_tools.py`; `OIKOS_TOOL_NAMES` + `OIKOS_UTILITY_TOOLS` define the tool subset; `get_oikos_allowed_tools()` is the single source of truth
 - **Git policy**: Work only on `main`, no worktrees; confirm `git status -sb` before changes; no stashing unless explicitly requested
 - **Concurrent edits**: Dirty trees are normal; work around existing diffs and avoid overlapping lines. Only pause to coordinate if you must edit an already-modified file.
 
@@ -236,4 +236,6 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-06) [arch] Root "/" shows LandingPage in all modes; LandingPage auto-redirects authenticated users to /timeline. `/landing` is a redirect alias to `/`.
 - (2026-02-09) [arch] Standard mode commis (in-process ReAct loop) is deprecated. All commis use workspace mode (hatch subprocess). See VISION.md "No Custom Agent Harness."
 - (2026-02-09) [arch] Oikos chat and commis currently use separate table systems: Oikos→threads/runs/messages, agent timeline→agent_sessions/agent_events. Commis output is NOT in the timeline yet.
-- (2026-02-09) [arch] ~55K LOC custom agent harness (fiche_runner, 31 builtin tools, skills, ReAct engine) is legacy. Longhouse delegates to CLI agents, doesn't build its own.
+- (2026-02-09) [arch] Custom agent harness infrastructure (~15K LOC: fiche_runner, ReAct engine, tool registry, skills system) is legacy. The ~60 builtin tools stay as modular toolbox; agents get configured subsets. Longhouse delegates complex work to CLI agents.
+- (2026-02-09) [arch] 3 memory systems already built: (1) Oikos Memory 4 tools (save/search/list/forget, in `oikos_memory_tools.py`), (2) Memory Files + OpenAI embeddings + auto episodic summarizer (`memory_tools.py`, `memory_embeddings.py`, `memory_summarizer.py`), (3) Fiche Memory KV (`fiche_memory_tools.py`). Don't rebuild — consolidate.
+- (2026-02-09) [arch] Phase 3 target: replace loop + tool infra (~15K LOC), keep all tools. One toolbox dir, agents get configured subsets. Spec: `docs/specs/unified-memory-bridge.md`.

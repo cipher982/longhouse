@@ -73,14 +73,29 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 - [ ] Remove 6 skipped tests in mixed files that referenced CommisRunner (test_durable_runs, test_oikos_fiche, test_supervisor_e2e, test_supervisor_tools_integration)
 
 ### Phase 3: Slim Oikos (5)
-- [ ] Define minimal Oikos tool set: spawn_workspace_commis, session_search/grep/filter/detail, contact_user, memory_store, memory_search
-- [ ] Replace `run_oikos_loop()` (ReAct engine) with simple while loop: `llm.call(messages + tools) → execute tools → repeat`
+
+**Architecture:** Single toolbox, many agents. All ~60 tools stay as a library. Each agent (Oikos, commis, future) is configured with a subset. The loop and tool infrastructure are what get replaced, not the tools themselves.
+
+**3a: Replace the loop**
+- [ ] Replace `run_oikos_loop()` / `oikos_react_engine.py` with simple while loop: `llm.call(messages + tools) → execute tools → repeat` (~1.5K LOC → ~200 LOC)
+- [ ] Remove `fiche_runner.py`, `message_array_builder.py`, `prompt_context.py` (~2K LOC)
 - [ ] Use Claude Compaction API (server-side) or custom summarizer for "infinite thread" context management
-- [ ] Add `memory` tool — file-backed (Markdown) + sqlite-vec semantic index (a la OpenClaw pattern)
-- [ ] Remove Oikos dependency on fiche_runner, message_array_builder, prompt_context
-- [ ] Remove builtin tools not needed by Oikos (Jira, GitHub, email, SSH, etc.)
-- [ ] Remove skills loading system, tool registry, lazy binder
-- [ ] Clean up dead code: roundabout_monitor, commis_resume, commis_artifact_store, etc. (~25K LOC total)
+
+**3b: Flatten tool infrastructure**
+- [ ] Replace tool registry + lazy binder + catalog + unified_access + tool_search with flat dict of tool functions + schemas (~4K LOC → ~200 LOC)
+- [ ] Remove skills loading system (loader, registry, parser, integration) — tools are the extension surface, not skills
+- [ ] Tool subsets configured per agent type (Oikos gets ~30 tools, commis gets different set, user-configurable)
+- [ ] Kill only true dead-weight utility tools: math_tools, uuid_tools, datetime_diff, tool_discovery, container_tools (~600 LOC)
+
+**3c: Kill standard mode dead code**
+- [ ] Remove commis_resume, roundabout_monitor, commis_artifact_store, fiche_state_recovery, fiche_locks, commis_output_buffer, evidence_compiler, llm_decider, trace_debugger (~6.5K LOC)
+
+**3d: Memory consolidation**
+- [ ] Consolidate 3 memory systems: keep Oikos Memory (4 tools) + Memory Files (embeddings); evaluate Fiche Memory KV
+- [ ] Move David-specific tools (personal_tools: Traccar/WHOOP/Obsidian) to external plugin, not OSS core
+
+**3e: Expose toolbox to CLI agents (stretch)**
+- [ ] Expose Longhouse toolbox as MCP server so hatch CLI agents can call back into memory, session search, email, etc.
 
 ### Phase 4: Semantic Search (4)
 - [ ] Choose embedding approach: sqlite-vec vs API-call-on-ingest
