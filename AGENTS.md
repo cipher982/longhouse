@@ -234,3 +234,6 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-05) [e2e] E2E uses `gpt-scripted` for fiches; WS stream events use envelope `type`; tool card selectors anchor on nested tool text; no waitForTimeout/networkidle.
 - (2026-02-06) [arch] Mode system: `AppMode` enum (dev/demo/production) from `DEMO_MODE`/`AUTH_DISABLED`. Frontend uses `config.demoMode`/`config.authEnabled`. Backend serves dynamic `/config.js`.
 - (2026-02-06) [arch] Root "/" shows LandingPage in all modes; LandingPage auto-redirects authenticated users to /timeline. `/landing` is a redirect alias to `/`.
+- (2026-02-09) [arch] Standard mode commis (in-process ReAct loop) is deprecated. All commis use workspace mode (hatch subprocess). See VISION.md "No Custom Agent Harness."
+- (2026-02-09) [arch] Oikos chat and commis currently use separate table systems: Oikos→threads/runs/messages, agent timeline→agent_sessions/agent_events. Commis output is NOT in the timeline yet.
+- (2026-02-09) [arch] ~55K LOC custom agent harness (fiche_runner, 31 builtin tools, skills, ReAct engine) is legacy. Longhouse delegates to CLI agents, doesn't build its own.
