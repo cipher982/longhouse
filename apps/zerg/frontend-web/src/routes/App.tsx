@@ -1,4 +1,4 @@
-import { useEffect, lazy, Suspense } from "react";
+import { lazy, Suspense } from "react";
 import { useRoutes, Outlet, Navigate } from "react-router-dom";
 import Layout from "../components/Layout";
 import LandingPage from "../pages/LandingPage";
@@ -73,13 +73,6 @@ export default function App() {
   // Performance monitoring
   usePerformanceMonitoring('App');
   useBundleSizeWarning();
-
-  useEffect(() => {
-    // Signal to Playwright/legacy helpers that the React app finished booting.
-    if (typeof window !== "undefined") {
-      (window as typeof window & { __APP_READY__?: boolean }).__APP_READY__ = true;
-    }
-  }, []);
 
   const demoRoutes = [
     // Marketing / public pages
