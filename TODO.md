@@ -770,13 +770,13 @@ Evidence: `ideas/evidence/44_evidence_workflow_exec_deprecated_route.sh`
 26. ~~[ID 26] Remove deprecated TextChannelController.~~ ✅ Already gone (2026-02-10)
 Evidence: `ideas/evidence/51_evidence_text_channel_controller_deprecated.sh`
 
-27. [ID 27] Remove deprecated session handler API.
+27. ~~[ID 27] Remove deprecated session handler API.~~ ✅ Done (2026-02-10)
 Evidence: `ideas/evidence/52_evidence_session_handler_deprecated.sh`
 
 28. [ID 28] ~~Remove~~ Relabel compatibility methods in feedback system — methods are actively called, not dead code.
 Evidence: `ideas/evidence/53_evidence_feedback_system_compat.sh`
 
-29. [ID 29] Remove deprecated heuristic or hybrid decision modes in roundabout monitor.
+29. ~~[ID 29] Remove deprecated heuristic or hybrid decision modes in roundabout monitor.~~ ✅ Done (2026-02-10)
 Evidence: `ideas/evidence/54_evidence_roundabout_monitor_deprecated_modes.sh`
 
 30. ~~[ID 30] Remove HEURISTIC or HYBRID decision modes in LLM decider.~~ ✅ Already gone (2026-02-10)
