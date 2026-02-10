@@ -462,8 +462,8 @@ class TestMultipleCommissContinuation:
 
 
 @pytest.mark.timeout(60)
-class TestCommisRunnerIntegration:
-    """Test commis_runner.py integration with inbox trigger."""
+class TestCommisInboxIntegration:
+    """Test commis inbox trigger integration."""
 
     @pytest.mark.asyncio
     async def test_trigger_inbox_run_called_on_terminal_run(self, db_session, test_user, sample_fiche):

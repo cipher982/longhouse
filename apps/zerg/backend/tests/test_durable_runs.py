@@ -272,6 +272,7 @@ class TestResumeFlow:
         assert "not WAITING" in result["reason"]
 
     @pytest.mark.asyncio
+    @pytest.mark.skip(reason="CommisRunner removed — standard mode deprecated")
     async def test_commis_completion_triggers_resume(
         self, db_session, test_user, sample_fiche, temp_artifact_path
     ):

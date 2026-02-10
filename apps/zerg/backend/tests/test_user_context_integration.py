@@ -177,8 +177,8 @@ class TestCommisPromptIntegration:
         assert "developer" in prompt
 
     @pytest.mark.asyncio
-    async def test_commis_runner_uses_user_context(self, db_session, test_user, test_user_context):
-        """Test that commis runner includes user context in commis prompt."""
+    async def test_commis_uses_user_context(self, db_session, test_user, test_user_context):
+        """Test that commis includes user context in commis prompt."""
 
         # Set user context
         test_user.context = test_user_context

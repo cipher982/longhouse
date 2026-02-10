@@ -6,7 +6,7 @@ useful for emitting events from deep within the fiche execution (e.g., tool call
 without modifying function signatures.
 
 Usage:
-    # In CommisRunner.run_commis():
+    # In workspace job processing:
     ctx = CommisContext(commis_id="...", owner_id=1, run_id="...")
     token = set_commis_context(ctx)
     try:
@@ -49,7 +49,7 @@ class ToolCall:
 class CommisContext:
     """Context for a running commis, accessible via contextvar.
 
-    This context is set by CommisRunner at the start of a commis run and
+    This context is set at the start of a commis run and
     can be accessed from anywhere in the call stack (including inside
     tool execution via asyncio.to_thread).
 
@@ -122,7 +122,7 @@ class CommisContext:
         self.critical_error_message = error_message
 
 
-# Global contextvar - set by CommisRunner, read anywhere in the call stack
+# Global contextvar - set by commis job processor, read anywhere in the call stack
 _commis_ctx: ContextVar[CommisContext | None] = ContextVar("commis_ctx", default=None)
 
 

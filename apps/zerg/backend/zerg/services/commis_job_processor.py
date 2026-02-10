@@ -1,7 +1,7 @@
 """Commis Job Processor Service.
 
 This service manages the execution of commis jobs in the background.
-It polls for queued commis jobs and executes them using the CommisRunner.
+It polls for queued commis jobs and executes them in workspace mode (hatch subprocess).
 
 Events emitted (for SSE streaming):
 - COMMIS_SPAWNED: When a job is picked up for processing
@@ -37,7 +37,6 @@ from zerg.services.commis_job_queue import claim_jobs
 from zerg.services.commis_job_queue import get_worker_id
 from zerg.services.commis_job_queue import reclaim_stale_jobs
 from zerg.services.commis_job_queue import update_heartbeat
-from zerg.services.commis_runner import CommisRunner
 
 logger = logging.getLogger(__name__)
 
@@ -485,95 +484,17 @@ class CommisJobProcessor:
             # No db session passed - _process_workspace_job opens/closes sessions as needed
             await self._process_workspace_job(job_id, oikos_run_id)
         else:
-            # Standard execution: use CommisRunner with its own session
-            await self._process_standard_job(job_id, oikos_run_id)
-
-    async def _process_standard_job(self, job_id: int, oikos_run_id: Optional[int]) -> None:
-        """Process a job using standard CommisRunner (in-process execution).
-
-        Opens its own short-lived db sessions as needed.
-        """
-        # Fetch job data in a short-lived session
-        with db_session() as db:
-            job = db.query(crud.CommisJob).filter(crud.CommisJob.id == job_id).first()
-            if not job:
-                logger.error(f"Job {job_id} not found when starting local execution")
-                return
-
-            # Extract all needed data
-            job_task = job.task
-            job_model = job.model
-            job_reasoning_effort = job.reasoning_effort or "none"
-            job_owner_id = job.owner_id
-            job_trace_id = str(job.trace_id) if job.trace_id else None
-
-        # Create commis runner (outside db session)
-        # Artifact store is best-effort - if init fails, run without it
-        artifact_store = None
-        try:
-            artifact_store = CommisArtifactStore()
-        except Exception as e:
-            logger.warning(f"Failed to initialize artifact store for job {job_id}, continuing without it: {e}")
-
-        try:
-            # CommisRunner may try to create artifact store if None was passed
-            # If that fails, the main try block will catch it and mark job failed
-            runner = CommisRunner(artifact_store=artifact_store)
-            # Execute the commis - CommisRunner manages its own db sessions internally
-            # Pass job_id for roundabout correlation, run_id for SSE tool events
-            # trace_id for end-to-end debugging (inherited from oikos)
-            with db_session() as exec_db:
-                result = await runner.run_commis(
-                    db=exec_db,
-                    task=job_task,
-                    fiche=None,  # Create temporary fiche
-                    fiche_config={
-                        "model": job_model,
-                        "reasoning_effort": job_reasoning_effort,
-                        "owner_id": job_owner_id,
-                    },
-                    job_id=job_id,
-                    event_context={
-                        "run_id": oikos_run_id,
-                        "trace_id": job_trace_id,
-                    },
-                )
-
-            # Update job with results in a new short-lived session
-            with db_session() as update_db:
-                update_job = update_db.query(crud.CommisJob).filter(crud.CommisJob.id == job_id).first()
-                if not update_job:
-                    logger.error(f"Job {job_id} not found when updating final status")
-                    return
-
-                # Check if job was cancelled while running - don't overwrite cancelled status
-                if update_job.status == "cancelled":
-                    logger.info(f"Commis job {job_id} was cancelled - preserving cancelled status")
-                    # Don't update anything, status is already correct
-                else:
-                    update_job.commis_id = result.commis_id
-                    update_job.finished_at = datetime.now(timezone.utc)
-
-                    if result.status == "success":
-                        update_job.status = "success"
-                        logger.info(f"Commis job {job_id} completed successfully")
-                    else:
-                        update_job.status = "failed"
-                        update_job.error = result.error or "Unknown error"
-                        logger.error(f"Commis job {job_id} failed: {update_job.error}")
-
-                    update_db.commit()
-
-        except Exception as e:
-            logger.exception(f"Failed to process local commis job {job_id}")
-            # Update job with error in a new session
-            with db_session() as error_db:
-                error_job = error_db.query(crud.CommisJob).filter(crud.CommisJob.id == job_id).first()
-                if error_job:
-                    error_job.status = "failed"
-                    error_job.error = str(e)
-                    error_job.finished_at = datetime.now(timezone.utc)
-                    error_db.commit()
+            # Standard mode is removed — fail the job with a clear error
+            with db_session() as err_db:
+                err_job = err_db.query(crud.CommisJob).filter(crud.CommisJob.id == job_id).first()
+                if err_job:
+                    err_job.status = "failed"
+                    err_job.error = (
+                        "Standard mode (in-process CommisRunner) has been removed. " "All commis must use workspace mode with a git_repo."
+                    )
+                    err_job.finished_at = datetime.now(timezone.utc)
+                    err_db.commit()
+            logger.error(f"Commis job {job_id} failed: standard mode is removed")
 
     async def _process_workspace_job(self, job_id: int, oikos_run_id: Optional[int]) -> None:
         """Process a job using workspace execution (hatch subprocess with git workspace).

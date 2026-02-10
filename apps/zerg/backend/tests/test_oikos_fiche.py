@@ -120,6 +120,7 @@ class TestOikosConfiguration:
 class TestOikosDelegation:
     """Test oikos's ability to spawn and manage commis."""
 
+    @pytest.mark.skip(reason="CommisRunner removed — standard mode deprecated")
     @pytest.mark.asyncio
     async def test_spawn_commis_integration(self, db_session, test_user, tmp_path):
         """Test that oikos can spawn a commis and get result."""
@@ -222,6 +223,7 @@ class TestOikosDelegation:
 class TestOikosEndToEnd:
     """End-to-end tests for oikos/commis interaction."""
 
+    @pytest.mark.skip(reason="CommisRunner removed — standard mode deprecated")
     @pytest.mark.asyncio
     async def test_full_delegation_flow(self, db_session, test_user, tmp_path):
         """Test complete flow: create oikos → spawn commis → retrieve result."""

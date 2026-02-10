@@ -58,7 +58,7 @@ def knowledge_search(query: str, limit: int = 5) -> List[dict]:
     # Priority: CommisContext > CredentialResolver (set by FicheRunner for all runs)
     owner_id = None
 
-    # Try CommisContext first (set by CommisRunner)
+    # Try CommisContext first (set by commis job processor)
     ctx = get_commis_context()
     if ctx is not None and ctx.owner_id is not None:
         owner_id = ctx.owner_id
