@@ -14,7 +14,7 @@ export default function SecurityPage() {
     document.title = "Security - Longhouse";
     const metaDescription = document.querySelector('meta[name="description"]');
     if (metaDescription) {
-      metaDescription.setAttribute('content', 'How Longhouse protects your data. HTTPS-only connections, OAuth 2.0 authentication, encrypted credentials, and responsible disclosure policy.');
+      metaDescription.setAttribute('content', 'How Longhouse protects your data. HTTPS-only connections, secure authentication, encrypted credentials, and responsible disclosure policy.');
     }
   }, []);
 
@@ -53,8 +53,8 @@ export default function SecurityPage() {
             <div className="security-highlight-icon">
               <LockIcon width={24} height={24} />
             </div>
-            <h3>OAuth 2.0</h3>
-            <p>Secure Google authentication</p>
+            <h3>Authentication</h3>
+            <p>Password or OAuth sign-in</p>
           </div>
           <div className="security-highlight">
             <div className="security-highlight-icon">
@@ -68,15 +68,15 @@ export default function SecurityPage() {
               <TrashIcon width={24} height={24} />
             </div>
             <h3>Data Deletion</h3>
-            <p>Delete your account anytime</p>
+            <p>Delete your data anytime</p>
           </div>
         </div>
 
         <div className="legal-content">
           <h2>Authentication</h2>
           <p>
-            Longhouse uses Google OAuth 2.0 for authentication. We never see or store your Google password.
-            You can revoke access anytime from your Google account settings.
+            Self-hosted instances use password authentication by default. The hosted service
+            supports OAuth providers. Longhouse never stores third-party passwords.
           </p>
 
           <h2>Integration Credentials</h2>
@@ -88,8 +88,8 @@ export default function SecurityPage() {
           <h2>Your Controls</h2>
           <p>You have control over your data:</p>
           <ul>
-            <li><strong>View</strong> - See your fiches and sessions in the dashboard</li>
-            <li><strong>Delete</strong> - Remove your account and data from settings</li>
+            <li><strong>View</strong> - See your sessions and timeline data</li>
+            <li><strong>Delete</strong> - Remove your data from settings</li>
             <li><strong>Revoke</strong> - Disconnect integrations and delete credentials</li>
           </ul>
 

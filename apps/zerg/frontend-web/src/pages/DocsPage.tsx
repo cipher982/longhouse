@@ -1,5 +1,3 @@
-// TODO: This page still describes the old fiche/canvas/dashboard workflow with Google sign-in.
-// It needs a full rewrite to reflect the current timeline-first OSS product (install, timeline, search, resume).
 import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { SwarmLogo } from "../components/SwarmLogo";
@@ -66,22 +64,17 @@ export default function DocsPage() {
 
           <h3>1. Sign In</h3>
           <p>
-            Click "Start Free" on the homepage and sign in with your Google account.
+            Click "Start Free" on the homepage to create an account or sign in.
           </p>
 
-          <h3>2. Explore the Dashboard</h3>
+          <h3>2. Start a Session</h3>
           <p>
-            Once signed in, you'll land on the Dashboard where you can see and manage your fiches.
+            Once signed in, start a new agent session from the main view. Tell Oikos what you want to do.
           </p>
 
-          <h3>3. Create a Fiche</h3>
+          <h3>3. Search the Timeline</h3>
           <p>
-            From the Dashboard, click "New Fiche" and configure what you want it to do.
-          </p>
-
-          <h3>4. Search the Timeline</h3>
-          <p>
-            Open the Timeline to search across your sessions and jump back in.
+            Use the Timeline to search across your sessions, review results, and resume where you left off.
           </p>
         </section>
 
@@ -113,8 +106,8 @@ export default function DocsPage() {
 
           <h3>Creating Custom Skills</h3>
           <p>
-            You can create custom skills by adding a <code>SKILL.md</code> file to your workspace's
-            <code>skills/</code> directory. Each skill has a YAML frontmatter with metadata and
+            You can create custom skills by adding a <code>SKILL.md</code> file to
+            <code>~/.longhouse/skills/</code>. Each skill has a YAML frontmatter with metadata and
             markdown content describing the skill's purpose and usage.
           </p>
           <pre><code>{`---
