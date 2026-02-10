@@ -377,6 +377,7 @@ class TestAsyncInboxModelIntegration:
                 result = await spawn_commis_async(
                     task="Test async spawn",
                     model=TEST_COMMIS_MODEL,
+                    git_repo="https://github.com/test/repo.git",
                     _tool_call_id="async-spawn-test-123",
                 )
 
