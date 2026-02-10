@@ -245,8 +245,7 @@ class Runner:  # noqa: D401
 
     async def run_thread(self, db: Session, thread: ThreadModel) -> Sequence[ThreadMessageModel]:
         """Process unprocessed messages and return created assistant message rows."""
-        from zerg.managers.prompt_context import build_prompt
-        from zerg.managers.prompt_context import context_to_messages
+        from zerg.managers.message_builder import MessageArrayBuilder
 
         agent_row = self._load_agent_row(db)
 
@@ -254,19 +253,20 @@ class Runner:  # noqa: D401
         if not unprocessed_rows:
             return []
 
-        prompt_context = build_prompt(
-            db,
-            self.agent,
-            agent_row,
-            thread_id=thread.id,
-            unprocessed_rows=unprocessed_rows,
-            allowed_tools=getattr(agent_row, "allowed_tools", None),
-            thread_service=self.thread_service,
+        build_result = (
+            MessageArrayBuilder(db, self.agent)
+            .with_system_prompt(agent_row)
+            .with_conversation(thread.id, thread_service=self.thread_service)
+            .with_dynamic_context(
+                unprocessed_rows=unprocessed_rows,
+                allowed_tools=getattr(agent_row, "allowed_tools", None),
+            )
+            .build()
         )
-        messages = context_to_messages(prompt_context)
-        messages_with_context = prompt_context.message_count_with_context
+        messages = build_result.messages
+        messages_with_context = build_result.message_count_with_context
 
-        result = await self._run_loop(db, thread, messages, agent_row, prompt_context.skill_integration)
+        result = await self._run_loop(db, thread, messages, agent_row, build_result.skill_integration)
 
         if result.interrupted:
             self.thread_service.mark_messages_processed(db, (row.id for row in unprocessed_rows))
@@ -296,8 +296,7 @@ class Runner:  # noqa: D401
         trace_id: str | None = None,
     ) -> Sequence[ThreadMessageModel]:
         """Continue oikos execution after a single commis completion."""
-        from zerg.managers.prompt_context import build_prompt
-        from zerg.managers.prompt_context import context_to_messages
+        from zerg.managers.message_builder import MessageArrayBuilder
         from zerg.types.messages import ToolMessage
 
         agent_row = self._load_agent_row(db)
@@ -322,23 +321,29 @@ class Runner:  # noqa: D401
                 parent_id=parent_id,
             )
 
-        prompt_context = build_prompt(
-            db,
-            self.agent,
-            agent_row,
-            conversation_msgs=list(db_messages),
-            tool_messages=[tool_msg] if tool_msg is not None else None,
-            allowed_tools=getattr(agent_row, "allowed_tools", None),
+        conversation = list(db_messages)
+        if tool_msg is not None:
+            conversation.append(tool_msg)
+
+        build_result = (
+            MessageArrayBuilder(db, self.agent)
+            .with_system_prompt(agent_row)
+            .with_conversation_messages(conversation, filter_system=True)
+            .with_dynamic_context(
+                allowed_tools=getattr(agent_row, "allowed_tools", None),
+                conversation_msgs=list(db_messages),
+            )
+            .build()
         )
-        messages = context_to_messages(prompt_context)
-        messages_with_context = prompt_context.message_count_with_context
+        messages = build_result.messages
+        messages_with_context = build_result.message_count_with_context
 
         result = await self._run_loop(
             db,
             thread,
             messages,
             agent_row,
-            prompt_context.skill_integration,
+            build_result.skill_integration,
             run_id=run_id,
             trace_id=trace_id,
         )
@@ -358,8 +363,7 @@ class Runner:  # noqa: D401
         trace_id: str | None = None,
     ) -> Sequence[ThreadMessageModel]:
         """Continue oikos execution after ALL commiss complete (barrier pattern)."""
-        from zerg.managers.prompt_context import build_prompt
-        from zerg.managers.prompt_context import context_to_messages
+        from zerg.managers.message_builder import MessageArrayBuilder
         from zerg.types.messages import ToolMessage
 
         agent_row = self._load_agent_row(db)
@@ -402,23 +406,29 @@ class Runner:  # noqa: D401
             )
             tool_msgs_to_inject.append(tool_msg)
 
-        prompt_context = build_prompt(
-            db,
-            self.agent,
-            agent_row,
-            conversation_msgs=list(db_messages),
-            tool_messages=tool_msgs_to_inject if tool_msgs_to_inject else None,
-            allowed_tools=getattr(agent_row, "allowed_tools", None),
+        conversation = list(db_messages)
+        if tool_msgs_to_inject:
+            conversation.extend(tool_msgs_to_inject)
+
+        build_result = (
+            MessageArrayBuilder(db, self.agent)
+            .with_system_prompt(agent_row)
+            .with_conversation_messages(conversation, filter_system=True)
+            .with_dynamic_context(
+                allowed_tools=getattr(agent_row, "allowed_tools", None),
+                conversation_msgs=list(db_messages),
+            )
+            .build()
         )
-        messages = context_to_messages(prompt_context)
-        messages_with_context = prompt_context.message_count_with_context
+        messages = build_result.messages
+        messages_with_context = build_result.message_count_with_context
 
         result = await self._run_loop(
             db,
             thread,
             messages,
             agent_row,
-            prompt_context.skill_integration,
+            build_result.skill_integration,
             run_id=run_id,
             trace_id=trace_id,
         )

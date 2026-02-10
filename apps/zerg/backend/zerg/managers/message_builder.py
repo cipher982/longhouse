@@ -1,15 +1,17 @@
-"""MessageArrayBuilder - Cache-optimized message array construction.
+"""MessageBuilder - Cache-optimized message array construction.
 
-This module centralizes message array construction, eliminating code duplication
-across run_thread(), run_continuation(), and run_batch_continuation() in FicheRunner.
+Centralizes message array construction for FicheRunner flows (run_thread,
+run_continuation, run_batch_continuation).
 
 Layout: [system] -> [conversation] -> [connectors] -> [memory] -> [time]
         ^cacheable  ^cacheable        ^rarely changes  ^per-query  ^per-minute
 
 Both OpenAI and Anthropic use prefix-based caching: identical prefix = cache hit.
 Dynamic context is split into separate SystemMessages ordered by stability so that
-only the *changed* segment busts its cache -- e.g. time ticks every minute but
-connector status stays the same for hours.
+only the *changed* segment busts its cache.
+
+Also provides DB-level helpers for tool message idempotency and parent assistant
+message lookup used by commis resume flows.
 """
 
 from __future__ import annotations
@@ -17,8 +19,6 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from enum import IntEnum
-from enum import auto
 from typing import TYPE_CHECKING
 from typing import Any
 from typing import List
@@ -57,6 +57,11 @@ def _truncate(text: str, max_chars: int = 220) -> str:
     return clean[:max_chars].rstrip() + "..."
 
 
+# ---------------------------------------------------------------------------
+# Result dataclass
+# ---------------------------------------------------------------------------
+
+
 @dataclass(frozen=True)
 class MessageArrayResult:
     """Result of MessageArrayBuilder.build()."""
@@ -66,15 +71,9 @@ class MessageArrayResult:
     skill_integration: Optional[SkillIntegration]
 
 
-class BuildPhase(IntEnum):
-    """Tracks builder state to prevent wrong ordering/double calls."""
-
-    INIT = auto()
-    SYSTEM_PROMPT = auto()
-    CONVERSATION = auto()
-    TOOL_MESSAGES = auto()
-    DYNAMIC_CONTEXT = auto()
-    BUILT = auto()
+# ---------------------------------------------------------------------------
+# MessageArrayBuilder
+# ---------------------------------------------------------------------------
 
 
 class MessageArrayBuilder:
@@ -93,35 +92,15 @@ class MessageArrayBuilder:
             .build()
         )
         messages = result.messages
-
-    State tracking prevents:
-    - Adding system prompt twice
-    - Adding conversation before system prompt
-    - Adding dynamic context before conversation
-    - Building twice
     """
 
     def __init__(self, db: Session, agent: RuntimeView) -> None:
-        """Initialize builder.
-
-        Args:
-            db: Database session (eager-load ORM objects within request scope)
-            agent: RuntimeView with agent configuration
-        """
         self._db = db
         self._agent = agent
-        self._phase = BuildPhase.INIT
         self._messages: List[BaseMessage] = []
         self._skill_integration: Optional[SkillIntegration] = None
         self._skill_max: Optional[int] = None
-
-    def _check_phase(self, required: BuildPhase, target: BuildPhase) -> None:
-        """Check and advance builder phase."""
-        if self._phase >= target:
-            raise RuntimeError(f"Builder already past {target.name} phase (current: {self._phase.name})")
-        if self._phase < required:
-            raise RuntimeError(f"Must call {required.name} phase before {target.name}")
-        self._phase = target
+        self._built = False
 
     def with_system_prompt(
         self,
@@ -129,27 +108,15 @@ class MessageArrayBuilder:
         *,
         include_skills: bool = True,
     ) -> MessageArrayBuilder:
-        """Add system prompt (protocols + instructions + skills).
-
-        Args:
-            fiche: Fiche ORM row with system_instructions
-            include_skills: Whether to include skills prompt
-
-        Returns:
-            Self for chaining
-        """
-        self._check_phase(BuildPhase.INIT, BuildPhase.SYSTEM_PROMPT)
-
+        """Add system prompt (protocols + instructions + skills)."""
         if not fiche or not fiche.system_instructions:
             raise RuntimeError(f"Fiche {self._agent.id} has no system_instructions")
 
         from zerg.prompts.connector_protocols import get_connector_protocols
 
-        # Build system content: protocols + instructions
         protocols = get_connector_protocols()
         system_content = f"{protocols}\n\n{fiche.system_instructions}"
 
-        # Add skills prompt if enabled
         if include_skills:
             self._skill_integration, self._skill_max = self._build_skill_integration(fiche)
             if self._skill_integration:
@@ -171,18 +138,7 @@ class MessageArrayBuilder:
         filter_system: bool = True,
         thread_service: Any = None,
     ) -> MessageArrayBuilder:
-        """Add conversation history from database.
-
-        Args:
-            thread_id: Thread ID to load messages from
-            filter_system: Filter out stale system messages (recommended)
-            thread_service: Thread service for loading messages (defaults to ThreadService)
-
-        Returns:
-            Self for chaining
-        """
-        self._check_phase(BuildPhase.SYSTEM_PROMPT, BuildPhase.CONVERSATION)
-
+        """Add conversation history from database."""
         if thread_service is None:
             from zerg.services.thread_service import ThreadService
 
@@ -201,16 +157,7 @@ class MessageArrayBuilder:
         *,
         filter_system: bool = True,
     ) -> MessageArrayBuilder:
-        """Add conversation history from preloaded messages.
-
-        Args:
-            conversation_msgs: Conversation messages already loaded (e.g., from DB)
-            filter_system: Filter out stale system messages (recommended)
-
-        Returns:
-            Self for chaining
-        """
-        self._check_phase(BuildPhase.SYSTEM_PROMPT, BuildPhase.CONVERSATION)
+        """Add conversation history from preloaded messages."""
         return self._add_conversation_messages(
             conversation_msgs,
             filter_system=filter_system,
@@ -221,19 +168,9 @@ class MessageArrayBuilder:
         self,
         tool_messages: Sequence[ToolMessage],
     ) -> MessageArrayBuilder:
-        """Add tool messages (e.g., commis results).
-
-        Args:
-            tool_messages: Tool messages to append
-
-        Returns:
-            Self for chaining
-        """
-        # Allow skipping TOOL_MESSAGES phase if no tool messages
+        """Add tool messages (e.g., commis results)."""
         if not tool_messages:
             return self
-
-        self._check_phase(BuildPhase.CONVERSATION, BuildPhase.TOOL_MESSAGES)
         self._messages.extend(tool_messages)
         logger.debug("[Builder] Added %d tool messages", len(tool_messages))
         return self
@@ -248,32 +185,12 @@ class MessageArrayBuilder:
     ) -> MessageArrayBuilder:
         """Add dynamic context as separate SystemMessages for cache optimization.
 
-        Each context category is emitted as its own SystemMessage so that
-        LLM prefix-caching only invalidates the *changed* segment.
-
         Order (most stable first, least stable last):
-            1. Connector status  -- rarely changes (credential additions/removals)
-            2. Memory context    -- changes when the user query triggers different recalls
+            1. Connector status  -- rarely changes
+            2. Memory context    -- changes when query triggers different recalls
             3. Current time      -- changes every minute
-
-        Args:
-            memory_query: Query string for memory/knowledge search (optional)
-            allowed_tools: Agent's allowed tools for connector filtering
-            unprocessed_rows: Unprocessed message rows for query extraction
-            conversation_msgs: Conversation messages for query extraction (fallback)
-
-        Returns:
-            Self for chaining
         """
-        # Allow calling after CONVERSATION or TOOL_MESSAGES
-        if self._phase == BuildPhase.CONVERSATION:
-            self._phase = BuildPhase.DYNAMIC_CONTEXT
-        elif self._phase == BuildPhase.TOOL_MESSAGES:
-            self._phase = BuildPhase.DYNAMIC_CONTEXT
-        else:
-            raise RuntimeError(f"with_dynamic_context must be called after CONVERSATION or TOOL_MESSAGES (current: {self._phase.name})")
-
-        # 1. Connector status context (most stable -- rarely changes)
+        # 1. Connector status context
         connector_context_msg: Optional[SystemMessage] = None
         time_context_msg: Optional[SystemMessage] = None
         try:
@@ -300,11 +217,14 @@ class MessageArrayBuilder:
                 exc_info=True,
             )
 
-        # 2. Memory recall context (moderately stable -- changes per-query)
+        # 2. Memory recall context
         memory_context_msg: Optional[SystemMessage] = None
         query = memory_query
         if query is None:
-            query = self._extract_user_query(unprocessed_rows, conversation_msgs)
+            query = derive_memory_query(
+                unprocessed_rows=unprocessed_rows,
+                conversation_msgs=conversation_msgs,
+            )
 
         if query:
             memory_context = self._build_memory_context(query)
@@ -312,8 +232,7 @@ class MessageArrayBuilder:
                 memory_context_msg = SystemMessage(content=memory_context)
                 logger.debug("[Builder] Built memory context")
 
-        # Inject as separate SystemMessages: connectors -> memory -> time
-        # Most stable first, least stable last for optimal prefix caching.
+        # Inject: connectors -> memory -> time (most stable first)
         if connector_context_msg:
             self._messages.append(connector_context_msg)
         if memory_context_msg:
@@ -330,17 +249,10 @@ class MessageArrayBuilder:
         return self
 
     def build(self) -> MessageArrayResult:
-        """Build and return the final message array.
-
-        Returns:
-            MessageArrayResult with messages, count, and skill integration
-        """
-        if self._phase == BuildPhase.BUILT:
+        """Build and return the final message array."""
+        if self._built:
             raise RuntimeError("Builder already built - create a new builder instance")
-        if self._phase < BuildPhase.CONVERSATION:
-            raise RuntimeError("Must at least call with_system_prompt and with_conversation before build")
-
-        self._phase = BuildPhase.BUILT
+        self._built = True
 
         return MessageArrayResult(
             messages=self._messages.copy(),
@@ -349,7 +261,7 @@ class MessageArrayBuilder:
         )
 
     # ------------------------------------------------------------------
-    # Private helpers (extracted from fiche_runner.py)
+    # Private helpers
     # ------------------------------------------------------------------
 
     def _add_conversation_messages(
@@ -361,7 +273,6 @@ class MessageArrayBuilder:
     ) -> MessageArrayBuilder:
         """Append conversation messages with optional system filtering."""
         if filter_system:
-            # Filter out system messages - they're injected fresh above
             filtered = [msg for msg in conversation_msgs if not (hasattr(msg, "type") and msg.type == "system")]
         else:
             filtered = list(conversation_msgs)
@@ -441,24 +352,6 @@ class MessageArrayBuilder:
         )
         return integration, max_skills
 
-    def _extract_user_query(
-        self,
-        unprocessed_rows: Optional[List[Any]] = None,
-        conversation_msgs: Optional[List[BaseMessage]] = None,
-    ) -> Optional[str]:
-        """Extract latest user query for memory search."""
-        if unprocessed_rows:
-            for row in reversed(unprocessed_rows):
-                if row.role == "user" and not getattr(row, "internal", False):
-                    return (row.content or "").strip() or None
-
-        if conversation_msgs:
-            for msg in reversed(conversation_msgs):
-                if isinstance(msg, HumanMessage):
-                    return _strip_timestamp_prefix(msg.content)
-
-        return None
-
     def _build_memory_context(
         self,
         query: str,
@@ -520,3 +413,130 @@ class MessageArrayBuilder:
                 lines.append(f"- {source.name} :: {doc.path}: {snippet}".rstrip())
 
         return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Free functions (DB helpers for commis resume)
+# ---------------------------------------------------------------------------
+
+
+def derive_memory_query(
+    *,
+    unprocessed_rows: Optional[Sequence[Any]] = None,
+    conversation_msgs: Optional[Sequence[BaseMessage]] = None,
+) -> Optional[str]:
+    """Derive the memory search query from available sources.
+
+    Priority:
+    1. Latest non-internal user message from unprocessed_rows
+    2. Latest HumanMessage from conversation_msgs
+    """
+    if unprocessed_rows:
+        for row in reversed(unprocessed_rows):
+            if row.role == "user" and not getattr(row, "internal", False):
+                content = (row.content or "").strip()
+                if content:
+                    return content
+
+    if conversation_msgs:
+        for msg in reversed(conversation_msgs):
+            if isinstance(msg, HumanMessage):
+                content = _strip_timestamp_prefix(msg.content)
+                if content:
+                    return content
+
+    return None
+
+
+def get_or_create_tool_message(
+    db: Session,
+    *,
+    thread_id: int,
+    tool_call_id: str,
+    result: str,
+    error: Optional[str] = None,
+    status: str = "completed",
+    parent_id: Optional[int] = None,
+) -> tuple[ToolMessage, bool]:
+    """Get or create a ToolMessage with DB-level idempotency.
+
+    Returns:
+        Tuple of (ToolMessage, created) where created is True if new message was created
+    """
+    from zerg.models.thread import ThreadMessage as ThreadMessageModel
+    from zerg.services.thread_service import ThreadService
+
+    existing = (
+        db.query(ThreadMessageModel)
+        .filter(
+            ThreadMessageModel.thread_id == thread_id,
+            ThreadMessageModel.role == "tool",
+            ThreadMessageModel.tool_call_id == tool_call_id,
+        )
+        .first()
+    )
+
+    if existing:
+        logger.debug(f"ToolMessage for tool_call_id={tool_call_id} already exists (id={existing.id})")
+        tool_msg = ToolMessage(
+            content=existing.content,
+            tool_call_id=tool_call_id,
+            name=existing.name or "spawn_commis",
+        )
+        return tool_msg, False
+
+    if error or status == "failed":
+        content = f"Commis failed:\n\nError: {error}\n\nPartial result: {result}"
+    else:
+        content = f"Commis completed:\n\n{result}"
+
+    tool_msg = ToolMessage(
+        content=content,
+        tool_call_id=tool_call_id,
+        name="spawn_commis",
+    )
+
+    ThreadService.save_new_messages(
+        db,
+        thread_id=thread_id,
+        messages=[tool_msg],
+        processed=True,
+        parent_id=parent_id,
+    )
+
+    logger.debug(f"Created ToolMessage for tool_call_id={tool_call_id} (parent_id={parent_id})")
+    return tool_msg, True
+
+
+def find_parent_assistant_id(
+    db: Session,
+    *,
+    thread_id: int,
+    tool_call_ids: Sequence[str],
+    fallback_to_latest: bool = True,
+) -> Optional[int]:
+    """Find the parent assistant message ID that issued the given tool_call_ids."""
+    from zerg.models.thread import ThreadMessage as ThreadMessageModel
+
+    parent_msgs = (
+        db.query(ThreadMessageModel)
+        .filter(
+            ThreadMessageModel.thread_id == thread_id,
+            ThreadMessageModel.role == "assistant",
+            ThreadMessageModel.tool_calls.isnot(None),
+        )
+        .order_by(ThreadMessageModel.sent_at.desc())
+        .all()
+    )
+
+    tool_call_set = set(tool_call_ids)
+    for msg in parent_msgs:
+        if msg.tool_calls:
+            for tc in msg.tool_calls:
+                if tc.get("id") in tool_call_set:
+                    return msg.id
+
+    if fallback_to_latest and parent_msgs:
+        return parent_msgs[0].id
+
+    return None
