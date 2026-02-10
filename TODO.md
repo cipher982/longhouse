@@ -612,9 +612,9 @@ User-facing strings, metadata, and package descriptions must stop mentioning Swa
 Package and binary naming so OSS users see Longhouse everywhere.
 
 - [x] Decide npm scope/name for runner: `@longhouse/runner` (package.json already uses this)
-- [ ] Update docker image name in README/examples (ghcr.io/.../longhouse)
-- [ ] Update installer scripts to new names (install-runner still points at `daverosedavis/zerg`)
-- [ ] Update default runner image name (`RUNNER_DOCKER_IMAGE` defaults to `ghcr.io/cipher982/zerg-runner:latest`)
+- [x] Update docker image name in README/examples (ghcr.io/.../longhouse)
+- [x] Update installer scripts to new names (install-runner still points at `daverosedavis/zerg`)
+- [x] Update default runner image name (`RUNNER_DOCKER_IMAGE` defaults to `ghcr.io/cipher982/zerg-runner:latest`)
 
 ---
 
@@ -637,7 +637,7 @@ Message layout is already system → conversation → dynamic. Remaining work is
 
 - [x] MessageArrayBuilder layout is system → conversation → dynamic
 - [x] Reduce timestamp granularity in dynamic context (minute-level)
-- [ ] Sort connector status keys for deterministic JSON (`json.dumps(..., sort_keys=True)`)
+- [x] Sort connector status keys for deterministic JSON — already done in `status_builder.py:438`
 - [x] Split dynamic context into separate SystemMessages (time / connector / memory)
 - [ ] Add cache hit logging/metrics
 
