@@ -800,7 +800,7 @@ Evidence: `ideas/evidence/98_evidence_workflow_schema_deprecated_trigger_type.sh
 36. ~~[ID 36] Tighten trigger_config schema by removing extra allow compatibility.~~ ✅ Done (2026-02-10)
 Evidence: `ideas/evidence/99_evidence_trigger_config_extra_allow.sh`
 
-37. [ID 37] Remove legacy trigger key scanner once legacy shapes dropped.
+37. ~~[ID 37] Remove legacy trigger key scanner once legacy shapes dropped.~~ ✅ Done (2026-02-10)
 Evidence: `ideas/evidence/96_evidence_legacy_trigger_check_script.sh`
 
 ### Frontend Legacy CSS + Test Signals
@@ -814,13 +814,13 @@ Evidence: `ideas/evidence/46_evidence_canvas_react_legacy_selectors.sh`
 40. ~~[ID 40] Remove legacy buttons.css compatibility layer.~~ ✅ Done (2026-02-10)
 Evidence: `ideas/evidence/47_evidence_buttons_css_legacy.sh`
 
-41. [ID 41] Remove legacy modal pattern CSS.
+41. [ID 41] ~~Remove~~ Relabel legacy modal pattern CSS — actively used by 8+ components; not dead code, would be a refactor.
 Evidence: `ideas/evidence/48_evidence_modal_css_legacy.sh`
 
-42. [ID 42] Remove legacy util margin helpers once migrated.
+42. ~~[ID 42] Remove legacy util margin helpers once migrated.~~ ✅ Done (2026-02-10)
 Evidence: `ideas/evidence/49_evidence_util_css_legacy.sh`
 
-43. [ID 43] Remove legacy token aliases after CSS migration.
+43. [ID 43] ~~Remove~~ Relabel legacy token aliases — 95+ active CSS refs; stable abstraction, not harmful to keep. Schedule with broader CSS refactor.
 Evidence: `ideas/evidence/50_evidence_tokens_css_legacy_aliases.sh`
 
 ---
