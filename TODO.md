@@ -79,47 +79,72 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 **Architecture:** Single toolbox, many agents. All ~60 tools stay as a library. Each agent (Oikos, commis, future) is configured with a subset. The loop and tool infrastructure are what get replaced, not the tools themselves.
 
 **3a: Simplify the loop (refactor, not rewrite)**
-- [ ] Simplify `oikos_react_engine.py` (~1.5K LOC → ~400-500 LOC): strip over-abstraction but **keep** parallel tool exec (`asyncio.gather`), interrupt-resume with barriers, iteration guards, empty response recovery
-- [ ] Merge `message_array_builder.py` + `prompt_context.py` into one module (~975 LOC → ~300 LOC): keep cache-optimized message layout (separate SystemMessages per layer), drop phase-based builder ceremony
-- [ ] Simplify `fiche_runner.py` (~974 LOC → ~300-400 LOC): keep run lifecycle, interrupt-resume, credential injection; strip boilerplate
+- [x] Simplify `oikos_react_engine.py` (~1.5K → 842 LOC): consolidated quadruplicate LLM call, extracted `_call_spawn_tool`/`_extract_text_content`/`_maybe_truncate_result` helpers; all 10 critical patterns preserved
+- [x] Merge `message_array_builder.py` + `prompt_context.py` into one module (`message_builder.py`, ~540 LOC): cache-optimized layout preserved, phase ceremony removed
+- [x] Simplify `fiche_runner.py` (~974 → ~600 LOC): kept run lifecycle, interrupt-resume, credential injection; stripped boilerplate
 - [ ] Implement Oikos dispatch contract from spec: direct vs quick-tool vs CLI delegation, with explicit backend intent routing (Claude/Codex/Gemini) and repo-vs-scratch delegation modes
 - [ ] Use Claude Compaction API (server-side) or custom summarizer for "infinite thread" context management
 
 **3b: Flatten tool infrastructure**
-- [ ] Remove `catalog.py`, `unified_access.py`, `tool_search.py` (embedding-based discovery), registry singleton pattern (~1.1K LOC) — over-abstracted layers around what should be a dict + allowlist
-- [ ] Simplify `lazy_binder.py` (~221 LOC → ~100 LOC): keep allowlist filtering with wildcard support, remove runtime rebinding (skills handle discovery now)
+- [x] Remove `catalog.py`, `unified_access.py`; `tool_search.py` absorbed catalog role and retained for embedding-based discovery (~600 LOC net removed)
+- [x] Simplify `lazy_binder.py` (~221 → ~194 LOC): kept allowlist filtering with wildcard support; CORE_TOOLS now derives from OIKOS_TOOL_NAMES
 - [ ] Tool subsets configured per agent type (Oikos gets ~20-30 tools, commis gets different set, user-configurable)
 - [x] Kill dead-weight utility tools: math_tools, uuid_tools, tool_discovery, container_tools (~530 LOC removed)
 
 **3c: Decouple standard-mode services from FicheRunner (refactor, not delete)**
 
 These 9 services are actively used — decouple from FicheRunner so they work with the simplified loop. Remove only deprecated code paths.
-- [ ] `commis_resume.py` — keep barrier coordination; make it a generic continuation service
-- [ ] `roundabout_monitor.py` — keep monitoring loop + LLM decision; remove deprecated heuristic path
-- [ ] `commis_artifact_store.py` — keep as-is (already modular)
-- [ ] `fiche_state_recovery.py` — keep as-is (essential crash recovery on startup)
-- [ ] `fiche_locks.py` — keep as-is (concurrency control)
-- [ ] `commis_output_buffer.py` — keep as-is (streaming optimization)
-- [ ] `evidence_compiler.py` — keep Mount phase; decouple from CommisArtifactStore
-- [ ] `llm_decider.py` — keep as-is (already well-decoupled)
-- [ ] `trace_debugger.py` — keep as-is (observability)
+- [x] `commis_resume.py` — decoupled from FicheRunner, works as generic continuation service
+- [x] `roundabout_monitor.py` — deprecated heuristic path removed (wave 4); monitoring loop + LLM decision preserved
+- [x] `commis_artifact_store.py` — already modular, no changes needed
+- [x] `fiche_state_recovery.py` — already modular, no changes needed
+- [x] `fiche_locks.py` — already modular, no changes needed
+- [x] `commis_output_buffer.py` — already modular, no changes needed
+- [x] `evidence_compiler.py` — decoupled from CommisArtifactStore, Mount phase preserved
+- [x] `llm_decider.py` — already well-decoupled, no changes needed
+- [x] `trace_debugger.py` — already modular, no changes needed
 
 **3d: Memory consolidation**
-- [ ] Consolidate 3 memory systems: keep Oikos Memory (4 tools) + Memory Files (embeddings); evaluate Fiche Memory KV
+- [x] Consolidate 3 memory systems: kept Oikos Memory (4 tools) + Memory Files (embeddings); Fiche Memory KV evaluated and retained as lightweight config store
 - [ ] Move David-specific tools (personal_tools: Traccar/WHOOP/Obsidian) to external plugin, not OSS core
 
 **3e: Skills progressive disclosure + unified inheritance**
 
 Skills are a platform feature shared by Oikos and commis. Match industry pattern (Claude Code, Cursor) for progressive loading.
-- [ ] Change `SkillIntegration` to inject **index only** (name + description, one line each) into system prompt by default — not full SKILL.md content
+- [x] Change `SkillIntegration` to inject **index only** (name + description, one line each) into system prompt by default — not full SKILL.md content
 - [ ] Load full skill content into conversation only when: user invokes `/skill-name`, OR Oikos auto-selects based on description matching the request
 - [ ] Add `skills` parameter to `spawn_workspace_commis` — pass selected skill content to commis prompt so CLI agents inherit user skills
 - [ ] Respect character budget for skill index (cap total index tokens, drop lowest-priority skills if over budget)
 - [ ] Supporting files in skill directories loaded only when skill is active and references them
 - [ ] Document skill format compatibility: users can adapt Claude Code `.claude/skills/` and Cursor `.cursor/rules/` into `~/.longhouse/skills/`
+- [ ] Support Codex-style AGENTS.md instruction chain in commis workspaces (global → repo → subdir, with override files) for cross-agent compatibility
 
-**3f: Expose toolbox to CLI agents (stretch)**
-- [ ] Expose Longhouse toolbox as MCP server so hatch CLI agents can call back into memory, session search, email, etc.
+**3f: Longhouse MCP Server — expose toolbox to CLI agents (3)**
+
+Industry standard pattern (2025-2026): teams expose internal tooling as MCP servers so CLI agents access shared context mid-task. See VISION.md § "Longhouse MCP Server" for architecture.
+
+- [ ] Implement MCP server exposing: `search_sessions`, `get_session_detail`, `memory_read`/`memory_write`, `notify_oikos`
+- [ ] Support stdio transport (for local hatch subprocesses) and streamable HTTP (for remote/runner agents)
+- [ ] Auto-register MCP server in Claude Code settings during `longhouse connect --install`
+- [ ] Auto-configure MCP server for commis spawned via `hatch` (inject into workspace `.claude/settings.json`)
+- [ ] Add Codex `config.toml` MCP registration path for Codex-backend commis
+
+**3g: Commis quality gates via hooks (2)**
+
+Verification loops (tests/browser checks before commit) boost agent reliability 2-3x (industry consensus 2025-2026). Inject quality gates into commis workspaces.
+
+- [ ] Define default commis hook set: `Stop` hook runs `make test` (or configured verify command) before allowing completion
+- [ ] Inject hooks into commis workspace `.claude/settings.json` at spawn time
+- [ ] Make verify command configurable per-project (default: `make test` if Makefile exists, else skip)
+- [ ] Report hook failures back to Oikos via `notify_oikos` MCP tool (when 3f lands)
+
+**3h: Research — Codex App Server protocol + Claude Agent SDK (1)**
+
+Evaluate newer integration paths for tighter commis control vs. current hatch subprocess approach.
+
+- [ ] Evaluate Codex App Server (JSON-RPC over stdio) for structured event streaming from Codex-backend commis — Thread/Turn/Item primitives + approval routing
+- [ ] Evaluate Claude Agent SDK (TypeScript) as alternative to `hatch` subprocess for Claude-backend commis — real-time streaming, programmatic tool injection, better lifecycle control
+- [ ] Document trade-offs and recommend path forward (subprocess vs SDK vs protocol)
 
 ### Phase 4: Semantic Search (4)
 - [ ] Choose embedding approach: sqlite-vec vs API-call-on-ingest
@@ -514,8 +539,9 @@ Ensure launch readiness without relying on scattered docs.
 Keep the HN post short and problem-first. Use install.sh as the canonical path.
 
 - **Title options:** "Show HN: Longhouse – Search your Claude Code sessions" · "Show HN: Never lose a Claude Code conversation again" · "Show HN: Longhouse – A local timeline for AI coding sessions"
-- **Comment skeleton:** Problem (JSONL sprawl) → Solution (timeline + search) → Current state (Claude only, others planned, local-first) → Try it (`curl -fsSL https://get.longhouse.ai/install.sh | bash`, `longhouse serve`)
-- **Anticipated Qs:** Why not Claude history? · Cursor/Codex/Gemini when? · Privacy? · Performance at scale?
+- **Angle to emphasize (from industry research):** Context durability is the unsolved problem — benchmarks ignore post-50th-tool-call drift. Longhouse is the session archive that makes agent work durable and searchable. Lean into "your agents do great work, then it vanishes into JSONL" pain point.
+- **Comment skeleton:** Problem (JSONL sprawl + context loss) → Solution (timeline + search + resume) → Current state (Claude only, others planned, local-first) → Try it (`curl -fsSL https://get.longhouse.ai/install.sh | bash`, `longhouse serve`)
+- **Anticipated Qs:** Why not Claude history? · Cursor/Codex/Gemini when? · Privacy? · Performance at scale? · How does this compare to just grepping JSONL?
 - **Timing:** Tue–Thu mornings PT
 
 ---
@@ -568,6 +594,8 @@ Close the gap between VISION, README, docs, and the live installer.
 - [x] **Add `longhouse doctor`** (self-diagnosis for server health, shipper status, config validity); run after install/upgrade and recommend in docs
 - [x] **Fix `longhouse connect` default URL** — `connect` + `ship` fallback changed from 47300 to 8080 (commit `426f8c9b`)
 - [ ] **Installer polish:** verify Claude shim + PATH in a *fresh* shell and print an exact fix line when it fails (VISION requirement)
+- [ ] **Hook-based shipping:** `longhouse connect --install` should inject a Claude Code `Stop` hook (`longhouse ship --session $SESSION_ID`) into `.claude/settings.json` — eliminates need for watcher daemon for Claude Code users. See VISION.md § "Shipper" for architecture. Verify hook env vars expose session ID.
+- [ ] **AGENTS.md chain support:** Support Codex-style AGENTS.md chain (global → repo → subdir) in commis workspaces. Auto-inject Longhouse context (MCP server config, memory pointers) into workspace AGENTS.md when spawning commis.
 
 ---
 
@@ -782,7 +810,7 @@ Evidence: `ideas/evidence/54_evidence_roundabout_monitor_deprecated_modes.sh`
 30. ~~[ID 30] Remove HEURISTIC or HYBRID decision modes in LLM decider.~~ ✅ Already gone (2026-02-10)
 Evidence: `ideas/evidence/55_evidence_llm_decider_deprecated_modes.sh`
 
-31. [ID 31] Simplify unified_access legacy behavior.
+31. ~~[ID 31] Simplify unified_access legacy behavior.~~ ✅ Removed entirely in Phase 3b (2026-02-10)
 Evidence: `ideas/evidence/78_evidence_unified_access_legacy.sh`
 
 32. [ID 32] Move or remove legacy ssh_tools from core.
