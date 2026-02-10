@@ -724,13 +724,13 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - [Docs vs code] GitHub skill doc says `GITHUB_TOKEN` env var works; `github_tools` only resolves tokens from connectors or explicit parameters (no env fallback).
 - [Docs vs code] Web search skill docs omit required `TAVILY_API_KEY`: `web_search` errors when the env var is missing, but `apps/zerg/backend/zerg/skills/bundled/web-search/SKILL.md` has no env requirement and is marked `always: true`.
 - [Docs vs infra] VISION Life Hub config uses `ZERG_API_URL=https://longhouse.ai/api`, but `https://longhouse.ai/api/*` returns 502; the working API host is `https://api.longhouse.ai`.
-- [Docs vs UI] Backend notifications use `https://longhouse.ai/runs/{run.id}` (see `oikos_service.py`), but the frontend has no `/runs/:id` route; unknown paths redirect to LandingPage/Timeline, so run links are broken.
+- ~~[Docs vs UI] Backend notifications use `https://longhouse.ai/runs/{run.id}` (see `oikos_service.py`), but the frontend has no `/runs/:id` route; unknown paths redirect to LandingPage/Timeline, so run links are broken.~~ ✅ Fixed — URLs now point to /timeline (2026-02-10)
 - [Docs vs code] CLI docs in `zerg/cli/__init__.py` and `zerg/cli/main.py` say `longhouse connect` is "continuous polling," but the CLI defaults to watch mode (polling only with `--poll`/`--interval`).
 - [Docs vs code] `scripts/install.sh` only documents `LONGHOUSE_API_URL`; CLI reads it, but `longhouse connect` fallback still uses 47300 (docs imply 8080).
 - [Docs vs reality] Timeline page copy says "across providers," but real ingest only supports Claude Code; other providers are demo-only.
 - ~~[Docs vs reality] Public info pages (`PricingPage.tsx`, `SecurityPage.tsx`, `PrivacyPage.tsx`) still describe fiches/workflows, Google-only OAuth auth, and dashboard account management, which don't match the current timeline-first OSS flow.~~ ✅ Fixed (2026-02-10)
 - ~~[Docs vs code] DocsPage skills section says to add `SKILL.md` to `workspace/skills`; default loader path for OSS is `~/.longhouse/skills` unless a workspace path is configured.~~ ✅ Fixed (2026-02-10)
-- [Docs vs code] Landing SkillsSection says Slack skill can "manage channels," but Slack tool is webhook-only (send message); no channel management/listing tools exist.
+- ~~[Docs vs code] Landing SkillsSection says Slack skill can "manage channels," but Slack tool is webhook-only (send message); no channel management/listing tools exist.~~ ✅ Fixed (2026-02-10)
 - [Docs] QA job prompt (`apps/zerg/backend/zerg/jobs/qa/prompt.md`) still brands alerts as "SWARMLET QA"; should be Longhouse (brand drift).
 
 ---
@@ -761,13 +761,13 @@ Evidence: `ideas/evidence/41_evidence_events_publisher_deprecated.sh`
 23. [ID 23] Require envelope-only WS messages, remove legacy wrapping.
 Evidence: `ideas/evidence/42_evidence_websocket_legacy_wrap.sh`
 
-24. [ID 24] Remove legacy admin routes without api prefix.
+24. ~~[ID 24] Remove legacy admin routes without api prefix.~~ ✅ Done (2026-02-10)
 Evidence: `ideas/evidence/43_evidence_admin_legacy_router.sh`
 
 25. [ID 25] Remove deprecated workflow start route.
 Evidence: `ideas/evidence/44_evidence_workflow_exec_deprecated_route.sh`
 
-26. [ID 26] Remove deprecated TextChannelController.
+26. ~~[ID 26] Remove deprecated TextChannelController.~~ ✅ Already gone (2026-02-10)
 Evidence: `ideas/evidence/51_evidence_text_channel_controller_deprecated.sh`
 
 27. [ID 27] Remove deprecated session handler API.
@@ -788,7 +788,7 @@ Evidence: `ideas/evidence/78_evidence_unified_access_legacy.sh`
 32. [ID 32] Move or remove legacy ssh_tools from core.
 Evidence: `ideas/evidence/77_evidence_ssh_tools_legacy.sh`
 
-33. [ID 33] Update Swarmlet user-agent branding in web_fetch tool.
+33. ~~[ID 33] Update Swarmlet user-agent branding in web_fetch tool.~~ ✅ Already done (2026-02-10)
 Evidence: `ideas/evidence/79_evidence_web_fetch_swarmlet_user_agent.sh`
 
 34. [ID 34] Remove legacy workflow trigger upgrade logic in schemas/workflow.py.
@@ -805,7 +805,7 @@ Evidence: `ideas/evidence/96_evidence_legacy_trigger_check_script.sh`
 
 ### Frontend Legacy CSS + Test Signals
 
-38. [ID 38] Remove __APP_READY__ legacy test signal once tests updated.
+38. ~~[ID 38] Remove __APP_READY__ legacy test signal once tests updated.~~ ✅ Done (2026-02-10)
 Evidence: `ideas/evidence/45_evidence_app_ready_legacy_signal.sh`
 
 39. [ID 39] Drop legacy React Flow selectors in CSS after test update.
