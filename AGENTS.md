@@ -11,7 +11,7 @@ Skills-Dir: .agents/skills
 - **Read VISION.md first** — It's the guiding light. Understand the strategic direction before diving into implementation.
 - **SQLite-only core** — SQLite pivot is complete. Don't invest in Postgres-specific infrastructure. See VISION.md.
 - **Progressive disclosure** — AGENTS.md should point to deeper docs/runbooks so agents know what they don't know.
-- Always commit changes as you go (no lingering uncommitted work).
+- Always commit changes as you go (no lingering uncommitted work). In swarm mode, **lead commits after each teammate's verified work** — don't batch everything into one mega-commit at the end.
 
 **"Trust the AI"** — Modern LLMs are smart enough to figure things out. Give them context and autonomy, not rigid decision trees. No keyword routing, no specialized commiss.
 
