@@ -447,7 +447,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         app_public_url=os.getenv("APP_PUBLIC_URL") or os.getenv("PUBLIC_SITE_URL"),
         public_site_url=os.getenv("PUBLIC_SITE_URL") or os.getenv("APP_PUBLIC_URL"),
         public_api_url=os.getenv("PUBLIC_API_URL"),
-        runner_docker_image=os.getenv("RUNNER_DOCKER_IMAGE", "ghcr.io/cipher982/zerg-runner:latest"),
+        runner_docker_image=os.getenv("RUNNER_DOCKER_IMAGE", "ghcr.io/cipher982/longhouse-runner:latest"),
         pubsub_audience=os.getenv("PUBSUB_AUDIENCE"),
         gmail_pubsub_topic=os.getenv("GMAIL_PUBSUB_TOPIC"),
         pubsub_sa_email=os.getenv("PUBSUB_SA_EMAIL"),
