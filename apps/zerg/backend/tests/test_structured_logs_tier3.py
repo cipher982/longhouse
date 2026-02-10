@@ -40,7 +40,7 @@ def test_llm_call_structured_logging(capture_logs):
 
     try:
         # Simulate LLM call completion with structured logging
-        # This is what happens in commis_runner.py during summary extraction
+        # This is what happens during commis summary extraction
         start_time = datetime.now(timezone.utc)
         end_time = datetime.now(timezone.utc)
         duration_ms = 123
@@ -55,7 +55,7 @@ def test_llm_call_structured_logging(capture_logs):
             total_tokens=150,
         )
 
-        # Emit structured log (simulating what commis_runner does)
+        # Emit structured log (simulating what commis job processor does)
         logger = logging.getLogger("zerg.test")
         log_extra = {
             "event": "llm_call_complete",

@@ -639,7 +639,7 @@ async def _execute_tool(
     # If critical error detected, mark context and emitter for fail-fast
     if is_error and is_critical_tool_error(raw_result_content, error_msg, tool_name=tool_name):
         critical_msg = error_msg or raw_result_content
-        # Mark context (used by CommisRunner to flip status to failed)
+        # Mark context (used by commis job processor to flip status to failed)
         ctx = get_commis_context()
         if ctx:
             ctx.mark_critical_error(critical_msg)

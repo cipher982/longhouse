@@ -253,6 +253,7 @@ class TestCommisSpawning:
         finally:
             set_credential_resolver(None)
 
+    @pytest.mark.skip(reason="CommisRunner removed — standard mode deprecated")
     @pytest.mark.asyncio
     async def test_commis_job_has_correct_tools(self, db_session, test_user, temp_artifact_path):
         """Test that commis fiches are created with infrastructure tools."""

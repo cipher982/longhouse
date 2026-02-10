@@ -191,6 +191,7 @@ async def test_oikos_can_list_commiss(oikos_fiche, db_session, test_user, temp_a
         set_credential_resolver(None)
 
 
+@pytest.mark.skip(reason="CommisRunner removed — standard mode deprecated")
 @pytest.mark.asyncio
 async def test_oikos_reads_commis_result(oikos_fiche, db_session, test_user, temp_artifact_path):
     """Test that a oikos can read commis results."""
@@ -292,6 +293,8 @@ async def test_tools_registered_in_builtin(db_session):
     assert "delegate" in spawn_tool.description.lower() or "spawn" in spawn_tool.description.lower()
 
 
+@pytest.mark.asyncio
+@pytest.mark.skip(reason="CommisRunner removed — standard mode deprecated")
 @pytest.mark.asyncio
 async def test_read_commis_result_includes_duration(oikos_fiche, db_session, test_user, temp_artifact_path):
     """Test that read_commis_result returns duration_ms from completed commis (Tier 1 visibility)."""

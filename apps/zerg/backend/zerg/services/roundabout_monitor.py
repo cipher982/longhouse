@@ -445,49 +445,18 @@ class RoundaboutMonitor:
             await self._unsubscribe_from_tool_events()
 
     async def _drain_job_synchronously(self, job: "CommisJob", timeout_seconds: float = 60.0) -> None:
-        """Execute a queued commis job synchronously (eval-only)."""
-        from zerg.services.commis_runner import CommisRunner
+        """Execute a queued commis job synchronously (eval-only).
+
+        NOTE: Standard mode CommisRunner has been removed. This method now fails
+        the job with a deprecation error. Eval tests should use workspace mode.
+        """
         from zerg.utils.time import utc_now_naive
 
-        # Update status to running
-        job.status = "running"
-        job.started_at = utc_now_naive()
+        job.status = "failed"
+        job.error = "Standard mode (in-process CommisRunner) has been removed. " "Eval drain must use workspace mode with a git_repo."
+        job.finished_at = utc_now_naive()
         self.db.commit()
-
-        artifact_store = CommisArtifactStore()
-        runner = CommisRunner(artifact_store=artifact_store)
-
-        try:
-            result = await runner.run_commis(
-                db=self.db,
-                task=job.task,
-                fiche=None,
-                fiche_config={"model": job.model, "owner_id": job.owner_id},
-                timeout=int(timeout_seconds),
-                event_context={"run_id": self.oikos_run_id},
-                job_id=job.id,
-            )
-
-            # Ensure job is still attached to session
-            self.db.refresh(job)
-
-            job.commis_id = result.commis_id
-            job.finished_at = utc_now_naive()
-
-            if result.status == "success":
-                job.status = "success"
-            else:
-                job.status = "failed"
-                job.error = result.error or "Unknown error"
-
-            self.db.commit()
-        except Exception as e:
-            self.db.rollback()
-            self.db.refresh(job)
-            job.status = "failed"
-            job.error = str(e)
-            job.finished_at = utc_now_naive()
-            self.db.commit()
+        logger.warning(f"Job {job.id} failed: standard mode drain is no longer supported")
 
     async def _subscribe_to_tool_events(self) -> None:
         """Subscribe to tool events for this job."""

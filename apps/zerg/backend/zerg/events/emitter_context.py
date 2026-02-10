@@ -5,7 +5,7 @@ call stack. Unlike the old pattern where contextvars determined event *type*,
 here the contextvar only *transports* an emitter whose identity is already fixed.
 
 Usage:
-    # At entry point (commis_runner.py, oikos_service.py):
+    # At entry point (commis_job_processor.py, oikos_service.py):
     from zerg.events import CommisEmitter, set_emitter, reset_emitter
 
     emitter = CommisEmitter(commis_id=..., ...)
