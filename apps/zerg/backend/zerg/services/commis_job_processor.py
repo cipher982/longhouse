@@ -24,7 +24,6 @@ from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 from typing import Optional
-from uuid import uuid4
 
 from zerg.config import get_settings
 from zerg.crud import crud
@@ -166,7 +165,9 @@ def _ingest_workspace_session(
         return
 
     # Find JSONL files modified after the job started
-    candidates = [p for p in session_dir.glob("*.jsonl") if datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc) >= job_started_at]
+    # Normalize job_started_at to naive UTC for comparison (SQLite returns naive datetimes)
+    started_naive = job_started_at.replace(tzinfo=None) if job_started_at.tzinfo else job_started_at
+    candidates = [p for p in session_dir.glob("*.jsonl") if datetime.utcfromtimestamp(p.stat().st_mtime) >= started_naive]
 
     if not candidates:
         logger.debug(f"No new JSONL files for workspace job {job_id}")
@@ -206,8 +207,15 @@ def _ingest_workspace_session(
     started_at = metadata.started_at or (min(timestamps) if timestamps else datetime.now(timezone.utc))
     ended_at = metadata.ended_at or (max(timestamps) if timestamps else None)
 
+    # Use deterministic session ID based on source file to prevent duplicates on re-ingest.
+    # If the same JSONL file is ingested twice, the same session UUID is generated.
+    import uuid as uuid_mod
+
+    provider_session_id = metadata.session_id or session_file.stem
+    session_id = uuid_mod.uuid5(uuid_mod.NAMESPACE_URL, f"commis:{source_path}")
+
     session_ingest = SessionIngest(
-        id=uuid4(),
+        id=session_id,
         provider="claude",
         environment="commis",
         project=metadata.project,
@@ -216,7 +224,7 @@ def _ingest_workspace_session(
         git_branch=metadata.git_branch,
         started_at=started_at,
         ended_at=ended_at,
-        provider_session_id=metadata.session_id,
+        provider_session_id=provider_session_id,
         events=event_ingests,
     )
 
@@ -432,12 +440,22 @@ class CommisJobProcessor:
             if execution_mode == "standard":
                 import os
 
-                if not os.environ.get("LEGACY_STANDARD_MODE"):
-                    logger.warning(
-                        f"Commis job {job_id} requested standard mode but LEGACY_STANDARD_MODE is not set. "
-                        "Standard mode is deprecated — forcing workspace mode."
-                    )
-                    execution_mode = "workspace"
+                legacy_flag = os.environ.get("LEGACY_STANDARD_MODE", "")
+                if legacy_flag not in ("1", "true", "yes"):
+                    # Only force workspace if we have a git_repo; otherwise standard mode
+                    # is the only viable path (no workspace without a repo to clone)
+                    git_repo_for_check = job_config.get("git_repo")
+                    if git_repo_for_check:
+                        logger.warning(
+                            f"Commis job {job_id} requested standard mode but LEGACY_STANDARD_MODE is not set. "
+                            "Standard mode is deprecated — forcing workspace mode."
+                        )
+                        execution_mode = "workspace"
+                    else:
+                        logger.warning(
+                            f"Commis job {job_id} using deprecated standard mode (no git_repo, "
+                            "cannot force workspace). Set LEGACY_STANDARD_MODE=1 to suppress."
+                        )
                 else:
                     logger.warning(f"Commis job {job_id} using deprecated standard mode (LEGACY_STANDARD_MODE=1).")
 
