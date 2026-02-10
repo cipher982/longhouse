@@ -69,7 +69,6 @@ CATEGORY_PREFIXES = {
     "runner_": "infrastructure",
     "container_": "infrastructure",
     "task_": "tasks",
-    "fiche_memory_": "memory",
     "memory_": "memory",
     "knowledge_": "knowledge",
     "web_": "web",

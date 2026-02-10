@@ -19,10 +19,6 @@ components:
       type: string
       description: Built-in tool names available in the registry
       enum:
-        - fiche_memory_delete
-        - fiche_memory_export
-        - fiche_memory_get
-        - fiche_memory_set
         - contact_user
         - container_exec
         - datetime_diff
@@ -107,7 +103,6 @@ components:
       type: string
       description: Server/module names for tools
       enum:
-        - fiche_memory
         - connector
         - contact_user
         - container
@@ -177,14 +172,6 @@ components:
           type: object
           description: Tool name to server mapping
           properties:
-            fiche_memory_delete:
-              const: fiche_memory
-            fiche_memory_export:
-              const: fiche_memory
-            fiche_memory_get:
-              const: fiche_memory
-            fiche_memory_set:
-              const: fiche_memory
             contact_user:
               const: contact_user
             container_exec:
@@ -343,10 +330,6 @@ components:
             web_search:
               const: web_search
           required:
-            - fiche_memory_delete
-            - fiche_memory_export
-            - fiche_memory_get
-            - fiche_memory_set
             - contact_user
             - container_exec
             - datetime_diff
