@@ -22,7 +22,9 @@ import logging
 import os
 from datetime import datetime
 from datetime import timezone
+from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
 from zerg.config import get_settings
 from zerg.crud import crud
@@ -131,6 +133,101 @@ def _build_hook_env(job_id: int) -> dict[str, str]:
     if settings.internal_api_secret:
         env_vars["COMMIS_CALLBACK_TOKEN"] = settings.internal_api_secret
     return env_vars
+
+
+def _ingest_workspace_session(
+    workspace_path: Path,
+    job_id: int,
+    commis_id: str,
+    job_started_at: datetime,
+) -> None:
+    """Ingest Claude Code session JSONL from a workspace into the agent timeline.
+
+    Finds the session JSONL that Claude Code wrote during workspace execution,
+    parses it using the shipper parser, and ingests directly via AgentsStore.
+
+    This is best-effort: failures are logged but don't affect job status.
+    Deduplication is handled by event_hash in AgentsStore.ingest_session().
+    """
+    from zerg.services.agents_store import AgentsStore
+    from zerg.services.agents_store import EventIngest
+    from zerg.services.agents_store import SessionIngest
+    from zerg.services.session_continuity import encode_cwd_for_claude
+    from zerg.services.session_continuity import get_claude_config_dir
+    from zerg.services.shipper.parser import extract_session_metadata
+    from zerg.services.shipper.parser import parse_session_file
+
+    config_dir = get_claude_config_dir()
+    encoded_cwd = encode_cwd_for_claude(str(workspace_path.absolute()))
+    session_dir = config_dir / "projects" / encoded_cwd
+
+    if not session_dir.exists():
+        logger.debug(f"No Claude session dir for workspace job {job_id}: {session_dir}")
+        return
+
+    # Find JSONL files modified after the job started
+    candidates = [p for p in session_dir.glob("*.jsonl") if datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc) >= job_started_at]
+
+    if not candidates:
+        logger.debug(f"No new JSONL files for workspace job {job_id}")
+        return
+
+    # Pick the most recently modified file
+    session_file = max(candidates, key=lambda p: p.stat().st_mtime)
+    logger.info(f"Ingesting workspace session from {session_file} for job {job_id}")
+
+    # Parse using shipper parser
+    events = list(parse_session_file(session_file))
+    if not events:
+        logger.debug(f"No events parsed from {session_file} for job {job_id}")
+        return
+
+    metadata = extract_session_metadata(session_file)
+    source_path = str(session_file)
+
+    # Convert ParsedEvents to EventIngest
+    event_ingests = [
+        EventIngest(
+            role=e.role,
+            content_text=e.content_text,
+            tool_name=e.tool_name,
+            tool_input_json=e.tool_input_json,
+            tool_output_text=e.tool_output_text,
+            timestamp=e.timestamp,
+            source_path=source_path,
+            source_offset=e.source_offset,
+            raw_json=e.raw_line if e.raw_line else None,
+        )
+        for e in events
+    ]
+
+    # Determine timestamps
+    timestamps = [e.timestamp for e in events if e.timestamp]
+    started_at = metadata.started_at or (min(timestamps) if timestamps else datetime.now(timezone.utc))
+    ended_at = metadata.ended_at or (max(timestamps) if timestamps else None)
+
+    session_ingest = SessionIngest(
+        id=uuid4(),
+        provider="claude",
+        environment="commis",
+        project=metadata.project,
+        device_id=f"commis-{commis_id}",
+        cwd=metadata.cwd or str(workspace_path),
+        git_branch=metadata.git_branch,
+        started_at=started_at,
+        ended_at=ended_at,
+        provider_session_id=metadata.session_id,
+        events=event_ingests,
+    )
+
+    with db_session() as db:
+        store = AgentsStore(db)
+        result = store.ingest_session(session_ingest)
+        logger.info(
+            f"Ingested workspace session for job {job_id}: "
+            f"{result.events_inserted} events inserted, "
+            f"{result.events_skipped} skipped"
+        )
 
 
 class CommisJobProcessor:
@@ -472,6 +569,7 @@ class CommisJobProcessor:
             job_model = job.model
             job_owner_id = job.owner_id
             job_trace_id = str(job.trace_id) if job.trace_id else None
+            job_started_at = job.started_at or datetime.now(timezone.utc)
             job_config = job.config or {}
             git_repo = job_config.get("git_repo")
             resume_session_id = job_config.get("resume_session_id")
@@ -591,17 +689,17 @@ class CommisJobProcessor:
                 logger.warning(f"Failed to capture diff for job {job_id}: {diff_error}")
                 diff = ""  # Ensure diff is empty on error
 
-            # 7. Ship session to Longhouse (best-effort, for future resumption)
+            # 7. Ingest session JSONL into agent timeline (best-effort)
             if result and result.status == "success":
                 try:
-                    from zerg.services.session_continuity import ship_session_to_zerg
-
-                    await ship_session_to_zerg(
+                    _ingest_workspace_session(
                         workspace_path=workspace.path,
+                        job_id=job_id,
                         commis_id=commis_id,
+                        job_started_at=job_started_at,
                     )
-                except Exception as ship_error:
-                    logger.warning(f"Failed to ship session to Longhouse for job {job_id}: {ship_error}")
+                except Exception as ingest_error:
+                    logger.warning(f"Failed to ingest workspace session for job {job_id}: {ingest_error}")
 
         except Exception as e:
             logger.exception(f"Cloud execution failed for job {job_id}")
