@@ -1,7 +1,7 @@
 """Tests for CommisJobProcessor session continuity integration.
 
 These tests verify that the workspace job processing correctly integrates
-with session continuity (prepare_session_for_resume and ship_session_to_zerg).
+with session continuity (prepare_session_for_resume) and direct DB ingestion (_ingest_workspace_session).
 """
 
 from __future__ import annotations
@@ -173,10 +173,10 @@ class TestWorkspaceJobSessionContinuity:
         assert run_args.kwargs.get("resume_session_id") is None
 
     @pytest.mark.asyncio
-    async def test_workspace_job_ships_session_on_success(
+    async def test_workspace_job_ingests_session_on_success(
         self, processor, mock_workspace_manager_class, mock_cloud_executor_class, db_session
     ):
-        """Test that ship_session_to_zerg is called after successful execution."""
+        """Test that _ingest_workspace_session is called after successful execution."""
         from zerg.crud import crud
 
         job = crud.CommisJob(
@@ -193,7 +193,7 @@ class TestWorkspaceJobSessionContinuity:
         db_session.commit()
         job_id = job.id
 
-        mock_ship = AsyncMock(return_value="shipped-session-456")
+        mock_ingest = MagicMock()
 
         with (
             patch(
@@ -205,22 +205,23 @@ class TestWorkspaceJobSessionContinuity:
                 mock_cloud_executor_class,
             ),
             patch(
-                "zerg.services.session_continuity.ship_session_to_zerg",
-                mock_ship,
+                "zerg.services.commis_job_processor._ingest_workspace_session",
+                mock_ingest,
             ),
             patch("zerg.services.commis_artifact_store.CommisArtifactStore"),
         ):
             await processor._process_workspace_job(job_id, oikos_run_id=None)
 
-        # Verify ship_session_to_zerg was called
-        mock_ship.assert_called_once()
-        call_args = mock_ship.call_args
-        # Commis ID should be generated and passed
-        assert "commis_id" in call_args.kwargs
+        # Verify _ingest_workspace_session was called
+        mock_ingest.assert_called_once()
+        call_kwargs = mock_ingest.call_args.kwargs
+        # Commis ID and job ID should be passed
+        assert call_kwargs["job_id"] == job_id
+        assert call_kwargs["commis_id"].startswith("ws-")
 
     @pytest.mark.asyncio
-    async def test_workspace_job_no_ship_on_failure(self, processor, mock_workspace_manager_class, db_session):
-        """Test that ship_session_to_zerg is NOT called when execution fails."""
+    async def test_workspace_job_no_ingest_on_failure(self, processor, mock_workspace_manager_class, db_session):
+        """Test that _ingest_workspace_session is NOT called when execution fails."""
         from zerg.crud import crud
 
         job = crud.CommisJob(
@@ -247,7 +248,7 @@ class TestWorkspaceJobSessionContinuity:
         mock_executor_class = MagicMock()
         mock_executor_class.return_value.run_commis = AsyncMock(return_value=failed_result)
 
-        mock_ship = AsyncMock(return_value="shipped-session-456")
+        mock_ingest = MagicMock()
 
         with (
             patch(
@@ -259,15 +260,15 @@ class TestWorkspaceJobSessionContinuity:
                 mock_executor_class,
             ),
             patch(
-                "zerg.services.session_continuity.ship_session_to_zerg",
-                mock_ship,
+                "zerg.services.commis_job_processor._ingest_workspace_session",
+                mock_ingest,
             ),
             patch("zerg.services.commis_artifact_store.CommisArtifactStore"),
         ):
             await processor._process_workspace_job(job_id, oikos_run_id=None)
 
-        # Verify ship_session_to_zerg was NOT called (only ships on success)
-        mock_ship.assert_not_called()
+        # Verify _ingest_workspace_session was NOT called (only ingests on success)
+        mock_ingest.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_workspace_job_handles_prepare_failure_gracefully(
@@ -324,10 +325,10 @@ class TestWorkspaceJobSessionContinuity:
         assert run_args.kwargs.get("resume_session_id") is None
 
     @pytest.mark.asyncio
-    async def test_workspace_job_handles_ship_failure_gracefully(
+    async def test_workspace_job_handles_ingest_failure_gracefully(
         self, processor, mock_workspace_manager_class, mock_cloud_executor_class, db_session
     ):
-        """Test that job completes even if ship_session_to_zerg fails."""
+        """Test that job completes even if _ingest_workspace_session fails."""
         from zerg.crud import crud
 
         job = crud.CommisJob(
@@ -344,8 +345,8 @@ class TestWorkspaceJobSessionContinuity:
         db_session.commit()
         job_id = job.id
 
-        # Make ship fail
-        mock_ship = AsyncMock(side_effect=Exception("Network error"))
+        # Make ingest fail
+        mock_ingest = MagicMock(side_effect=Exception("Ingest error"))
 
         with (
             patch(
@@ -357,15 +358,15 @@ class TestWorkspaceJobSessionContinuity:
                 mock_cloud_executor_class,
             ),
             patch(
-                "zerg.services.session_continuity.ship_session_to_zerg",
-                mock_ship,
+                "zerg.services.commis_job_processor._ingest_workspace_session",
+                mock_ingest,
             ),
             patch("zerg.services.commis_artifact_store.CommisArtifactStore"),
         ):
-            # Should not raise - shipping is best-effort
+            # Should not raise - ingestion is best-effort
             await processor._process_workspace_job(job_id, oikos_run_id=None)
 
-        # Verify job was marked as success (execution succeeded, ship failure doesn't affect status)
+        # Verify job was marked as success (execution succeeded, ingest failure doesn't affect status)
         db_session.refresh(job)
         assert job.status == "success"
 
