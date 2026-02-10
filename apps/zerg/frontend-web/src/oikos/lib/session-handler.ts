@@ -169,18 +169,6 @@ export class SessionHandler {
   }
 
   /**
-   * @deprecated Use connectWithHistory() via bootstrapSession() for SSOT compliance.
-   * This method is kept for backward compatibility but should not be used for new code.
-   */
-  async connect(options: SessionConnectionOptions): Promise<{ session: RealtimeSession; agent: RealtimeAgent }> {
-    // Delegate to connectWithHistory with empty history
-    return this.connectWithHistory({
-      ...options,
-      historyItems: []
-    });
-  }
-
-  /**
    * Disconnect session
    */
   async disconnect(): Promise<void> {
