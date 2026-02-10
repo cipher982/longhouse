@@ -63,6 +63,22 @@ Three promises to users:
 
 ---
 
+## Product Surface (2026-02 Decision)
+
+**Primary UX: Web timeline + Oikos chat.** The web UI is the product. Timeline is the archive and control surface; Oikos is the built-in coordinator that has visibility into all agent work (commis sessions, shipped sessions, run status).
+
+**Oikos role:** Personal assistant for your agent team. On the web, Oikos is a full chat interface with tools. Think of it as the manager who can peek into any Claude Code / commis session, surface insights, and help coordinate. On mobile, the responsive web UI covers 80% of use cases. Messaging channels (Telegram, etc.) are a secondary lightweight interface for on-the-go check-ins — "how's the team doing," approve/reject, read summaries.
+
+**Chat channels (Telegram, etc.) are secondary.** They provide a thin interface to the same Oikos — useful for quick coordination while away from desk, not the primary product experience. The web UI can do everything chat can do, plus timeline browsing, search, session detail, and visual controls.
+
+**What this means for execution:**
+- Timeline + Oikos web UX is the critical path
+- Slim Oikos dispatch contract is higher priority than channel wiring
+- Channel integration layers on top of a working web Oikos, not the other way around
+- Mobile story is "responsive web first, chat channels second"
+
+---
+
 ## Principles & Constraints
 
 - **Always-on beats cold start** for paid users. Background agents are core; sleeping instances break the product.
