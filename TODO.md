@@ -58,16 +58,16 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 **Spec:** `apps/zerg/backend/docs/specs/unified-memory-bridge.md` (renamed: Harness Simplification)
 
 ### Phase 1: Commis → Timeline Unification (3)
-- [ ] Verify workspace mode hatch produces session JSONL and find its output path
-- [ ] After workspace hatch completes, ingest session JSONL via `AgentsStore.ingest_session()`
-- [ ] Tag commis sessions with metadata (source=longhouse, commis_job_id) for filtering
+- [x] Verify workspace mode hatch produces session JSONL and find its output path
+- [x] After workspace hatch completes, ingest session JSONL via `AgentsStore.ingest_session()` (`_ingest_workspace_session()` in commis_job_processor.py)
+- [x] Tag commis sessions with metadata (environment=commis, commis_job_id) for filtering
 - [ ] Timeline UI: show commis sessions alongside shipped sessions
 - [ ] Add filter option in Timeline to show/hide commis vs terminal sessions
 
 ### Phase 2: Deprecate Standard Mode (3)
-- [ ] Make workspace mode the default (and only) execution mode for new commis
-- [ ] Gate standard mode behind `LEGACY_STANDARD_MODE=1` env var (escape hatch)
-- [ ] Update Oikos `spawn_commis` tool to always use workspace mode
+- [x] Make workspace mode the default (and only) execution mode for new commis
+- [x] Gate standard mode behind `LEGACY_STANDARD_MODE=1` env var (escape hatch)
+- [x] Update Oikos `spawn_commis` tool to always use workspace mode (deprecated, warns)
 - [ ] Update tests that exercise standard mode
 - [ ] Remove `commis_runner.py` (in-process runner) once stable
 
