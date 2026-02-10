@@ -51,14 +51,44 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ---
 
-## [Product] 🧠 Unified Memory Bridge (Read-Through Dogfood) (4)
+## [Product] 🧠 Harness Simplification & Commis-to-Timeline (8)
 
-**Goal:** Let Longhouse dogfood the timeline UI while Life Hub remains canonical for agent logs. No workflow break.
+**Goal:** Stop building our own agent harness. Lean on CLI agents (Claude Code, Codex, Gemini CLI). Make commis output visible in the timeline. Remove ~25K LOC of dead code.
 
-- [x] Write spec: read-through adapter + migration path (apps/zerg/backend/docs/specs/unified-memory-bridge.md)
-- [ ] Add AgentsBackend interface + LifeHubAgentsBackend (HTTP client to Life Hub)
-- [ ] Wire /api/agents/* + session tools to backend switch (AGENTS_BACKEND=life_hub|local)
-- [ ] Add backfill + cutover checklist (dual-write optional)
+**Spec:** `apps/zerg/backend/docs/specs/unified-memory-bridge.md` (renamed: Harness Simplification)
+
+### Phase 1: Commis → Timeline Unification (3)
+- [ ] Verify workspace mode hatch produces session JSONL and find its output path
+- [ ] After workspace hatch completes, ingest session JSONL via `AgentsStore.ingest_session()`
+- [ ] Tag commis sessions with metadata (source=longhouse, commis_job_id) for filtering
+- [ ] Timeline UI: show commis sessions alongside shipped sessions
+- [ ] Add filter option in Timeline to show/hide commis vs terminal sessions
+
+### Phase 2: Deprecate Standard Mode (3)
+- [ ] Make workspace mode the default (and only) execution mode for new commis
+- [ ] Gate standard mode behind `LEGACY_STANDARD_MODE=1` env var (escape hatch)
+- [ ] Update Oikos `spawn_commis` tool to always use workspace mode
+- [ ] Update tests that exercise standard mode
+- [ ] Remove `commis_runner.py` (in-process runner) once stable
+
+### Phase 3: Slim Oikos (5)
+- [ ] Define minimal Oikos tool set: spawn_commis, session_tools, contact_user, memory
+- [ ] Replace `run_oikos_loop()` (ReAct engine) with direct LLM API + tool call for Oikos
+- [ ] Remove Oikos dependency on fiche_runner, message_array_builder, prompt_context
+- [ ] Remove builtin tools not needed by Oikos (Jira, GitHub, email, SSH, etc.)
+- [ ] Remove skills loading system, tool registry, lazy binder
+- [ ] Design "infinite thread" context management (pruning + summarization + memory)
+
+### Phase 4: Semantic Search (4)
+- [ ] Choose embedding approach: sqlite-vec vs API-call-on-ingest
+- [ ] Compute embeddings on session event ingest (background or sync)
+- [ ] Add `semantic_search_sessions` Oikos tool
+- [ ] Make semantic search optional: `pip install longhouse[semantic]`
+
+### Phase 5: Historical Backfill (David-specific) (2)
+- [ ] Write one-time script: pull sessions from Life Hub API → Longhouse `/api/agents/ingest`
+- [ ] Verify session counts match between Life Hub and Longhouse
+- [ ] Stop using Life Hub MCP for agent memory
 
 ---
 

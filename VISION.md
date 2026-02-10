@@ -96,11 +96,24 @@ This revealed the deeper issue: Longhouse was not standalone. OSS users who inst
 
 **Longhouse is now primarily an orchestration layer around CLI agents.**
 
-- Commis runs are mostly Claude Code sessions.
+- Commis runs ARE Claude Code sessions (workspace mode via `hatch` subprocess). There is no separate in-process agent harness.
 - The archive of truth is the provider session log, not Longhouse's internal thread state.
 - The "magic" is taking obscure JSONL logs and turning them into a searchable, unified timeline.
 
 This is the product. Everything else supports it.
+
+### No Custom Agent Harness (2026-02 Decision)
+
+**Longhouse does not build its own LLM execution loop.** Claude Code, Codex CLI, and Gemini CLI are agent harnesses built by teams of hundreds. Longhouse cannot and should not compete with them. Instead:
+
+- **Commis = CLI agent subprocess.** Every commis spawns a real CLI agent (Claude Code via `hatch`) in an isolated workspace. The user gets the exact same agent they use in terminal — same tools, same context management, same capabilities.
+- **Standard mode (in-process ReAct loop) is deprecated.** The ~25K LOC custom harness (fiche_runner, 31 builtin tools, message assembly, tool registry, skills system) is legacy from pre-pivot. It will be removed incrementally.
+- **Oikos is a thin coordinator, not an agent harness.** Oikos uses direct LLM API calls for conversation + orchestration (spawn commis, summarize results, contact user). It does NOT need its own tool execution engine — it delegates real work to commis.
+- **Commis sessions appear in the timeline.** When a commis finishes, its session JSONL is ingested through the same `/api/agents/ingest` path as shipped terminal sessions. All sessions are unified in one archive.
+
+**What Longhouse owns:** orchestration, job queue, workspace isolation, timeline, search, resume, always-on infrastructure, runner coordination.
+
+**What CLI agents own:** the agent loop, tool execution, file editing, bash, MCP servers, context management, streaming.
 
 ---
 
@@ -419,19 +432,16 @@ Each user's Longhouse instance only sees their own runners. Isolation is natural
 
 ## Commis Execution Model
 
-Commis (background agent jobs) execute in two modes:
+Commis are background agent jobs. **All commis run as CLI agent subprocesses** (workspace mode).
 
-**Standard mode (in-process):**
-- Runs in the Longhouse FastAPI process
-- Direct LLM API calls using user's configured keys
-- Fast, suitable for short tasks (<5 min)
-- No container overhead
-
-**Workspace mode (subprocess):**
-- Spawns `hatch` CLI as subprocess
+**How it works:**
+- Spawns `hatch` CLI (wraps Claude Code / Codex / Gemini CLI) as subprocess
 - Isolated git workspace per job
 - Long-running tasks (up to 1 hour)
 - Changes captured as git diff
+- Session JSONL ingested into agent timeline on completion
+
+**Standard mode (in-process) is deprecated.** The legacy in-process ReAct loop with custom tools is being removed. See "No Custom Agent Harness" above.
 
 **What's containerized vs not:**
 - ✅ Containerized: Longhouse backend (per-user isolation in hosted mode)
@@ -969,23 +979,28 @@ This maximizes prefix cache hits for providers that support prompt caching.
 
 ## Life Hub Integration (David-specific)
 
+Life Hub is David's personal data platform (health, finance, etc.). It is NOT part of Longhouse and Longhouse has zero concept of Life Hub in its codebase.
+
 Life Hub becomes a dashboard consumer, not the data owner.
 
-**API contract:**
+**Migration plan (David-specific):**
+1. Longhouse already ingests Claude Code sessions via shipper — same raw data Life Hub has.
+2. Add semantic search to Longhouse (embeddings on ingest) to replace Life Hub MCP `recall`/`search_agent_logs`.
+3. One-time backfill: script pulls historical sessions from Life Hub API → pushes to Longhouse `/api/agents/ingest`.
+4. Once Longhouse search is sufficient, stop using Life Hub for agent memory. Life Hub reads from Longhouse if it wants agent data.
+
+**No bridge adapter, no `AGENTS_BACKEND` config, no Life Hub code inside Longhouse.**
+
+**API contract (future):**
 - Life Hub calls Longhouse's `/api/agents/sessions` endpoint
 - Authenticated via service token (not user OAuth)
 - Read-only access to session metadata and events
 
-**What Life Hub displays:**
-- Agent session timeline alongside health, finance, etc.
-- Cross-project analytics (sessions per day, tool usage)
-- Does NOT modify Longhouse data
-
 **Configuration:**
 ```env
-# In Life Hub
-ZERG_API_URL=https://longhouse.ai/api
-ZERG_SERVICE_TOKEN=xxx
+# In Life Hub (not in Longhouse)
+LONGHOUSE_API_URL=https://david.longhouse.ai/api
+LONGHOUSE_SERVICE_TOKEN=xxx
 ```
 
 This is David's personal integration. OSS users don't need Life Hub at all.
