@@ -598,12 +598,14 @@ def mock_langchain_openai():
 @pytest.fixture(autouse=True)
 def _cleanup_tool_registry():
     """Clear runtime-registered tools before & after each test."""
-    from zerg.tools import ToolRegistry
+    from zerg.tools import ToolRegistry, reset_registry
 
     reg = ToolRegistry()
     reg.clear_runtime_tools()
+    reset_registry()
     yield
     reg.clear_runtime_tools()
+    reset_registry()
 
 
 # ---------------------------------------------------------------------------
