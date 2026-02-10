@@ -258,20 +258,6 @@
   align-items: start;
 }
 
-.ops-dashboard .admin-card .btn-danger {
-  background: var(--error);
-  color: white;
-  border: none;
-  padding: 8px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.ops-dashboard .admin-card .btn-danger[aria-busy="true"] {
-  opacity: 0.7;
-  pointer-events: none;
-}
-
 .ops-dashboard .ops-reset-summary,
 .ops-dashboard pre.ops-reset-summary {
   background: var(--bg-dark);

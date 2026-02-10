@@ -777,8 +777,6 @@
     cursor: not-allowed;
   }
 
-  /* .btn-danger now inherits from buttons.css - no need for duplicate definition */
-
   /* Admin Page Confirmation Modal - scoped to admin page only */
   .admin-page .modal-overlay {
     position: fixed;
