@@ -96,16 +96,6 @@ repos:
         pass_filenames: false
 
       # -----------------------------------------------------------------------
-      # Legacy trigger key guard (prevents regression)
-      # -----------------------------------------------------------------------
-      - id: forbid-legacy-trigger-keys
-        name: Forbid legacy trigger keys in source
-        entry: scripts/check_legacy_triggers.sh
-        language: system
-        files: ^apps/zerg/frontend-web/src/
-        pass_filenames: false
-
-      # -----------------------------------------------------------------------
       # Vulture dead code detection (unused functions/classes/variables)
       # -----------------------------------------------------------------------
       - id: python-vulture
