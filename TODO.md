@@ -13,7 +13,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ---
 
-## Validation Summary (2026-02-11, rev 10)
+## Validation Summary (2026-02-11, rev 11)
 
 ### Done / Verified
 | Section | Status | Notes |
@@ -44,6 +44,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | HN Blocker Scan | DONE | No secrets, no stale branding, no broken links in user-facing surfaces |
 | Auto-Token Connect Flow | DONE | `longhouse connect` auto-creates device tokens; password login + localhost auto-auth (commits `a7c11f96`, `0435639d`) |
 | UI Smoke WS Filter | DONE | WebSocket connection errors excluded from visual smoke test (commit `112a697e`) |
+| UI Smoke Baselines | DONE | All 4 smoke tests pass; baselines regenerated for app, public, mobile pages (commits `fdad1dc2`, `2aacf872`) |
 
 ### In Progress
 | Section | Status | Notes |
@@ -63,8 +64,8 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ## What's Next (Priority Order)
 
-1. **HN Launch Prep** — Landing page done; E2E infra-smoke fixed; remaining: video walkthrough (optional), E2E chat-send streaming fix. [Details](#launch-hn-launch-readiness--remaining-4)
-2. **Public Launch Checklist** — UI smoke snapshots remaining; shipper smoke test done. [Details](#launch-public-launch-checklist-6)
+1. **HN Launch Prep** — Landing page done; E2E infra-smoke fixed; chat-send E2E fix in progress; video walkthrough (optional). [Details](#launch-hn-launch-readiness--remaining-4)
+2. **Public Launch Checklist** — ✅ Complete. All items done including UI smoke snapshots. [Details](#launch-public-launch-checklist-6)
 3. **Control Plane: OAuth + Stripe (Phases 1-2)** — Add Google OAuth at control plane level and Stripe checkout/webhooks for hosted beta signup flow. [Details](#infra-control-plane--hosted-beta-8)
 
 ---
@@ -401,7 +402,7 @@ Ensure launch readiness without relying on scattered docs.
 - [x] Add basic metrics — tool count, turn count, duration shown in header badges (commit `8c7db355`)
 - [x] Add event role filters (All/Messages/Tools) in detail view (commit `8c7db355`).
 - [x] Search within detail view — event text search added (commit `70acdc73`).
-- [ ] Core UI smoke snapshots pass (`make qa-ui-smoke`).
+- [x] Core UI smoke snapshots pass (`make qa-ui-smoke`). — Baselines regenerated, all 4 tests pass (commit `fdad1dc2`).
 - [x] Shipper smoke test passes — smoke test added (commit 08dbd87b).
 - [x] Add packaging smoke test for future install.sh/brew path (if shipped). — packaging smoke test added (commit c27c9aed)
 
