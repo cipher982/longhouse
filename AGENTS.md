@@ -153,7 +153,8 @@ Do not maintain a second feature catalog in this file. Keep AGENTS focused on ex
 - Runner daemon docs: `apps/runner/README.md`
 - Control plane docs: `apps/control-plane/README.md`
 - Shipper internals: `apps/zerg/backend/zerg/services/shipper/`
-- Demo/video tooling: `scripts/capture_demo_video.py`, `scripts/video-scenarios/`, `scripts/capture_marketing.py`
+- Video production: `apps/video/` (Remotion studio — canonical video pipeline)
+- Marketing screenshots: `scripts/capture_marketing.py`, `scripts/screenshots.yaml`
 
 ## Jobs: Builtin vs External
 

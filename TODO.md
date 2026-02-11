@@ -59,7 +59,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 1. **Landing Page Visual Assets (Phase 6)** — Capture timeline screenshots for landing page and README. [Details](#product-landing-page-redesign--full-6)
 2. **Control Plane: OAuth + Stripe (Phases 1-2)** — Add Google OAuth at control plane level and Stripe checkout/webhooks for hosted beta signup flow. [Details](#infra-control-plane--hosted-beta-8)
-3. **HN Launch Prep** — Video walkthrough wired to `/videos/timeline-demo.mp4`; run `make video-all SCENARIO=timeline-demo` to generate. [Details](#launch-hn-launch-readiness--remaining-4)
+3. **HN Launch Prep** — Video walkthrough wired to `/videos/timeline-demo.mp4`; run `make video-remotion-web` to generate via Remotion. [Details](#launch-hn-launch-readiness--remaining-4)
 4. **Public Launch Checklist** — UI smoke snapshots remaining; shipper smoke test done. [Details](#launch-public-launch-checklist-6)
 
 ---
@@ -294,9 +294,9 @@ Update screenshots to show Timeline, not old dashboard.
   - ~~Link to personal Twitter/GitHub for credibility~~
 
 - [ ] **Video walkthrough** (optional, 2 hours)
-  - Video capture tooling + scenario scripts done (commit b1bc43c3)
+  - Remotion video studio at `apps/video/` — canonical video production pipeline
   - Landing page wired up — `DEMO_VIDEO_URL` points to `/videos/timeline-demo.mp4` with 404 fallback to placeholder
-  - Remaining: run `make video-all SCENARIO=timeline-demo` to generate the mp4, then add to README
+  - Remaining: run `make video-remotion-web` to render via Remotion, then add to README
 
 ---
 

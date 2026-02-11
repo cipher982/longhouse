@@ -16,7 +16,7 @@ import yaml
 from mutagen.mp3 import MP3
 from openai import OpenAI
 
-SCENARIO_DIR = Path(__file__).parent / "video-scenarios"
+SCENARIO_DIR = Path(__file__).parent.parent / "apps" / "video" / "scenarios"
 
 
 def load_scenario(name: str) -> dict:

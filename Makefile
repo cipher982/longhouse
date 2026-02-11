@@ -519,50 +519,16 @@ marketing-list: ## List available marketing screenshots
 	@uv run --with pyyaml scripts/capture_marketing.py --list
 
 # ---------------------------------------------------------------------------
-# Video Generation (Audio-First Pipeline)
-# Usage: make video-all SCENARIO=timeline-demo
+# Video Generation (Remotion)
+# Canonical pipeline: make video-remotion-web
 # ---------------------------------------------------------------------------
 SCENARIO ?= product-demo
-.PHONY: video-audio video-record video-process video-all video-clean video-list
+.PHONY: video-audio video-studio video-remotion video-remotion-web video-remotion-preview
 
-video-audio: ## Generate voiceover audio (RUN FIRST). Override: SCENARIO=timeline-demo
+video-audio: ## Generate voiceover audio. Override: SCENARIO=timeline-demo
 	@echo "🎙️  Generating voiceover audio for $(SCENARIO)..."
 	@uv run --with openai --with mutagen --with pyyaml scripts/generate_voiceover.py $(SCENARIO)
 	@echo "✅ Audio generated. Check videos/$(SCENARIO)/audio/"
-
-video-record: ## Record video scenes (headless, requires audio + dev stack)
-	@echo "📹 Recording video scenes for $(SCENARIO) (headless)..."
-	@if [ ! -f videos/$(SCENARIO)/audio/durations.json ]; then \
-		echo "❌ Audio not found. Run 'make video-audio SCENARIO=$(SCENARIO)' first"; \
-		exit 1; \
-	fi
-	@if curl -sf http://localhost:30080/api/health >/dev/null 2>&1; then \
-		VIDEO_BASE_URL=http://localhost:30080; \
-	elif curl -sf http://localhost:47200 >/dev/null 2>&1; then \
-		VIDEO_BASE_URL=http://localhost:47200; \
-	else \
-		echo "❌ Dev stack not running. Start with 'make dev' or 'make dev-demo'"; \
-		exit 1; \
-	fi; \
-	echo "  Using $$VIDEO_BASE_URL"; \
-	REPLAY_MODE_ENABLED=true VIDEO_BASE_URL=$$VIDEO_BASE_URL \
-		uv run --with playwright --with pyyaml scripts/capture_demo_video.py $(SCENARIO) --headless
-
-video-process: ## Post-process (combine, add audio, compress)
-	@echo "🎬 Processing $(SCENARIO)..."
-	@bash scripts/process_video.sh $(SCENARIO)
-
-video-all: video-audio video-record video-process ## Full video pipeline (audio → record → process)
-	@echo "✅ Video generation complete!"
-	@echo "   Output: apps/zerg/frontend-web/public/videos/$(SCENARIO).mp4"
-
-video-clean: ## Remove generated video files
-	@echo "🧹 Cleaning $(SCENARIO) video files..."
-	@rm -rf videos/$(SCENARIO)
-	@echo "✅ Cleaned"
-
-video-list: ## List available video scenarios
-	@uv run --with pyyaml scripts/capture_demo_video.py --list
 
 video-studio: ## Open Remotion Studio for video editing
 	@cd apps/video && bunx remotion studio
