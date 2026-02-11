@@ -61,7 +61,7 @@ make test-full     # Full suite (unit + full E2E + evals + visual baselines)
 - **Backend**: FastAPI + Pydantic, `apps/zerg/backend/zerg/`
 - **Frontend**: React + React Query, `apps/zerg/frontend-web/`
 - **Package managers**: Bun (JS), uv (Python) — never npm/pip
-- **Generated code** (don't edit): `src/generated/`, `zerg/generated/`
+- **Generated code** (don't edit): `backend/zerg/generated/`, `backend/zerg/tools/generated/`, `frontend-web/src/generated/`
 - **Tests**: Always use `make test*` targets, never direct pytest/playwright
 - **Tool contracts**: Edit `schemas/tools.yml`, then run `scripts/generate_tool_types.py` — never edit generated files directly
 - **Oikos tools**: Registration is centralized in `oikos_tools.py`; `OIKOS_TOOL_NAMES` + `OIKOS_UTILITY_TOOLS` define the tool subset; `get_oikos_allowed_tools()` is the single source of truth
@@ -93,33 +93,39 @@ Import from `../components/ui`. **Check here before building custom UI.**
 4. **Auth disabled in dev** — `AUTH_DISABLED=1` set by dev.sh.
 5. **Coolify env var changes need redeploy** — restart doesn't pick up new vars.
 6. **Master task list:** `TODO.md` — update before/after work.
-7. **Backend README required** — pyproject.toml needs it; create minimal if missing.
+7. **Backend README required** — pyproject.toml needs it; don't delete `apps/zerg/backend/README.md`.
 
 ## Pushing Changes
 
-**Two things get deployed — both live on the `zerg` server:**
+**Three things get deployed — all on the `zerg` server:**
 
-| What | URL | How | Container |
-|------|-----|-----|-----------|
-| Marketing site | https://longhouse.ai | Coolify app `longhouse-demo` (UUID: `t0kggkcs044sws0o8wwg8kkk`) | Coolify-managed |
-| User instance | https://david.longhouse.ai | Manual Docker container from GHCR image | `longhouse-david` |
-| Control plane | https://control.longhouse.ai | Coolify app `longhouse-control-plane` (UUID: `jkkcgcoo8wws0csocs40sokc`) | Coolify-managed |
+| What | URL | How |
+|------|-----|-----|
+| Marketing site | https://longhouse.ai | Coolify app `longhouse-demo` |
+| User instance | https://david.longhouse.ai | Manual Docker container `longhouse-david` |
+| Control plane | https://control.longhouse.ai | Coolify app `longhouse-control-plane` |
 
 ### Before Push
 ```bash
 make test              # Unit tests (required)
-make test-e2e          # Core E2E + a11y - must pass 100%
+make test-e2e          # Core E2E + a11y — must pass 100%
 ```
 
 ### After Push
-Push to main triggers `runtime-image.yml` which builds `ghcr.io/cipher982/longhouse-runtime:latest`. **This does NOT auto-deploy.** You must update both:
+Push to main triggers `runtime-image.yml` **if backend/frontend/dockerfile changed** (has path filters — docs-only pushes skip it). Builds `ghcr.io/cipher982/longhouse-runtime:latest`. **Does NOT auto-deploy.** Update all three:
 
 **1. Marketing site (Coolify):**
 ```bash
-~/git/me/mytech/scripts/coolify-deploy.sh t0kggkcs044sws0o8wwg8kkk
+coolify deploy name longhouse-demo
+# Or with wait: ~/git/me/mytech/scripts/coolify-deploy.sh longhouse-demo
 ```
 
-**2. User instance (manual Docker):**
+**2. Control plane (Coolify):**
+```bash
+coolify deploy name longhouse-control-plane
+```
+
+**3. User instance (manual Docker):**
 ```bash
 ssh zerg 'docker pull ghcr.io/cipher982/longhouse-runtime:latest'
 ssh zerg 'docker stop longhouse-david && docker rm longhouse-david'
@@ -130,23 +136,25 @@ ssh zerg 'docker stop longhouse-david && docker rm longhouse-david'
 
 ### Verify Deploy
 ```bash
-make verify-prod       # Full validation: API + browser
-curl -s https://longhouse.ai | grep '<title>'  # Verify marketing site
+make verify-prod                                       # API + browser validation
+curl -s https://longhouse.ai | grep '<title>'          # Marketing site content
 ```
 
 ### If Something Breaks
 ```bash
-ssh zerg 'docker logs longhouse-david --tail 50'      # User instance
-coolify app logs t0kggkcs044sws0o8wwg8kkk              # Marketing site
+ssh zerg 'docker logs longhouse-david --tail 50'       # User instance
+coolify app logs longhouse-demo                        # Marketing site
+coolify app logs longhouse-control-plane               # Control plane
 ```
 
 ### Checklist for Agents
-1. ✅ `make test` passes locally
-2. ✅ Push to main (triggers GHCR image build)
-3. ✅ Deploy marketing site: `coolify-deploy.sh t0kggkcs044sws0o8wwg8kkk`
-4. ✅ Pull + recreate `longhouse-david` container on zerg
-5. ✅ Verify both: `make verify-prod` + check `longhouse.ai` title
-6. ✅ Report result to user
+1. `make test` + `make test-e2e` pass locally
+2. Push to main (triggers GHCR build if code changed)
+3. Deploy marketing site: `coolify deploy name longhouse-demo`
+4. Deploy control plane: `coolify deploy name longhouse-control-plane`
+5. Pull + recreate `longhouse-david` container on zerg
+6. Verify: `make verify-prod` + check `longhouse.ai` title
+7. Report result to user
 
 ## apps/sauron - Scheduler (Folded In)
 
