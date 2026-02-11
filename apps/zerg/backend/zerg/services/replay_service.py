@@ -7,7 +7,7 @@ responses without hitting the real LLM.
 
 Usage:
     1. Set REPLAY_MODE_ENABLED=true in environment
-    2. Create scenario YAML files in scripts/video-scenarios/
+    2. Create scenario YAML files in apps/video/scenarios/
     3. Pass ?replay=scenario-name in the chat URL
     4. Frontend passes replay scenario to backend via request body
 """
@@ -59,12 +59,12 @@ class ReplayService:
     def _load_scenario(self, name: str) -> dict:
         """Load scenario YAML file.
 
-        Looks for scenarios in scripts/video-scenarios/ relative to repo root.
+        Looks for scenarios in apps/video/scenarios/ relative to repo root.
         """
         # Navigate from apps/zerg/backend/zerg/services/ to repo root
         # parents: [0]=services, [1]=zerg, [2]=backend, [3]=zerg, [4]=apps, [5]=repo_root
         repo_root = Path(__file__).parents[5]
-        path = repo_root / "scripts" / "video-scenarios" / f"{name}.yaml"
+        path = repo_root / "apps" / "video" / "scenarios" / f"{name}.yaml"
 
         if not path.exists():
             raise FileNotFoundError(f"Scenario not found: {path}")
