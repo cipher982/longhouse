@@ -23,8 +23,8 @@ const faqs: FAQ[] = [
     answer: "No. Your conversations and data are never used to train any AI models. Your data is yours alone."
   },
   {
-    question: "What LLM do you use?",
-    answer: "Longhouse currently uses OpenAI models (default: GPT-5.2). You bring your own API keys and can pick from the available models depending on your quality/cost needs."
+    question: "What AI coding agents do you support?",
+    answer: "Claude Code, Codex CLI, and Gemini CLI are fully supported today, with Cursor coming soon. Longhouse reads the session files these tools already produce — no plugins or config changes needed."
   }
 ];
 

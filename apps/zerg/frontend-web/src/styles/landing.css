@@ -1171,96 +1171,6 @@
   }
 
   /* --------------------------------------------------------
-   DEPLOYMENT COMPARISON (Self-Hosted vs Hosted at-a-glance)
-   -------------------------------------------------------- */
-
-  .landing-deployment-comparison {
-    padding: 0 0 var(--space-16);
-    text-align: center;
-  }
-
-  .deployment-comparison-heading {
-    font-family: var(--font-family-display);
-    font-size: var(--font-size-xl);
-    font-weight: var(--font-weight-semibold);
-    color: var(--color-text-secondary);
-    margin-bottom: var(--space-6);
-  }
-
-  .deployment-comparison-table {
-    width: 100%;
-    max-width: 600px;
-    margin: 0 auto;
-    border-collapse: separate;
-    border-spacing: 0;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: var(--radius-xl);
-    overflow: hidden;
-  }
-
-  .deployment-comparison-table thead {
-    background: rgba(255, 255, 255, 0.04);
-  }
-
-  .deployment-comparison-feature-header {
-    width: 40%;
-  }
-
-  .deployment-comparison-col-header {
-    padding: var(--space-4) var(--space-5);
-    font-size: var(--font-size-sm);
-    font-weight: var(--font-weight-semibold);
-    color: var(--color-text-secondary);
-    text-align: center;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-    white-space: nowrap;
-  }
-
-  .deployment-comparison-col-header--highlighted {
-    color: var(--color-text-primary);
-    background: rgba(99, 102, 241, 0.08);
-  }
-
-  .deployment-comparison-label {
-    padding: var(--space-3) var(--space-5);
-    text-align: left;
-    font-size: var(--font-size-sm);
-    font-weight: var(--font-weight-medium);
-    color: var(--color-text-primary);
-  }
-
-  .deployment-comparison-value {
-    padding: var(--space-3) var(--space-5);
-    text-align: center;
-    font-size: var(--font-size-sm);
-    color: var(--color-text-secondary);
-  }
-
-  .deployment-comparison-value--highlighted {
-    background: rgba(99, 102, 241, 0.06);
-    color: var(--color-text-primary);
-    font-weight: var(--font-weight-medium);
-  }
-
-  .deployment-comparison-table tbody tr {
-    transition: background var(--motion-duration-fast) var(--motion-easing-standard);
-  }
-
-  .deployment-comparison-table tbody tr:hover {
-    background: rgba(255, 255, 255, 0.03);
-  }
-
-  .deployment-comparison-table tbody tr:hover .deployment-comparison-value--highlighted {
-    background: rgba(99, 102, 241, 0.10);
-  }
-
-  .deployment-comparison-table tbody tr:not(:last-child) td,
-  .deployment-comparison-table tbody tr:not(:last-child) th {
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  }
-
-  /* --------------------------------------------------------
    PRICING SECTION
    -------------------------------------------------------- */
 
@@ -2329,10 +2239,6 @@
     .landing-hero-enterprise-link {
       display: block;
       text-align: center;
-    }
-
-    .deployment-comparison-table {
-      min-width: 360px;
     }
 
     .comparison-table {

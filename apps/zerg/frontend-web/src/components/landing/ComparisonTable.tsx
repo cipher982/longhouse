@@ -65,7 +65,7 @@ const features: Feature[] = [
     noTracking: { type: "no" },
     grepJsonl: { type: "no" },
     claudeHistory: { type: "partial", label: "Built-in" },
-    longhouse: { type: "yes", label: "Timeline + Forum" },
+    longhouse: { type: "yes", label: "One-click resume" },
   },
   {
     name: "Self-hosted",
