@@ -27,9 +27,14 @@ from uuid import uuid4
 
 import httpx
 
+# Import claude provider to trigger auto-registration in global registry
+import zerg.services.shipper.providers.claude  # noqa: F401
 from zerg.services.shipper.parser import ParsedEvent
 from zerg.services.shipper.parser import extract_session_metadata
 from zerg.services.shipper.parser import parse_session_file
+from zerg.services.shipper.providers import SessionProvider
+from zerg.services.shipper.providers import registry as provider_registry
+from zerg.services.shipper.providers.claude import ClaudeProvider
 from zerg.services.shipper.spool import OfflineSpool
 from zerg.services.shipper.state import ShipperState
 
@@ -114,8 +119,31 @@ class SessionShipper:
         self.state = state or ShipperState(claude_config_dir=self.config.claude_config_dir)
         self.spool = spool or OfflineSpool(claude_config_dir=self.config.claude_config_dir)
 
+    def _get_providers(self) -> list[SessionProvider]:
+        """Build the list of providers to scan.
+
+        Uses a ClaudeProvider scoped to self.config.claude_config_dir
+        (respecting test overrides), plus any non-claude providers from
+        the global registry.
+        """
+        providers: list[SessionProvider] = []
+
+        # Claude provider scoped to this shipper's config
+        providers.append(ClaudeProvider(config_dir=self.config.claude_config_dir))
+
+        # Add non-claude providers from global registry
+        for p in provider_registry.all():
+            if p.name != "claude":
+                providers.append(p)
+
+        return providers
+
     def _find_session_files(self) -> list[Path]:
-        """Find all JSONL session files in projects directory."""
+        """Find all JSONL session files in projects directory.
+
+        Legacy method kept for backward compatibility (used by watcher).
+        For multi-provider discovery, see _find_all_session_files().
+        """
         projects_dir = self.config.projects_dir
 
         if not projects_dir.exists():
@@ -130,6 +158,26 @@ class SessionShipper:
 
         return files
 
+    def _find_all_session_files(self) -> list[tuple[Path, str]]:
+        """Find session files across all providers.
+
+        Uses _get_providers() which respects config overrides for Claude
+        and includes additional providers from the global registry.
+
+        Returns list of (path, provider_name) tuples, newest first.
+        """
+        results: list[tuple[Path, float, str]] = []
+        for provider in self._get_providers():
+            for path in provider.discover_files():
+                try:
+                    mtime = path.stat().st_mtime
+                    results.append((path, mtime, provider.name))
+                except OSError:
+                    continue
+        # Sort by mtime descending
+        results.sort(key=lambda x: x[1], reverse=True)
+        return [(path, name) for path, _, name in results]
+
     def _has_new_content(self, path: Path) -> bool:
         """Check if a session file has new content since last ship."""
         try:
@@ -142,25 +190,27 @@ class SessionShipper:
     async def scan_and_ship(self) -> ShipResult:
         """One-shot scan of all projects, ship new events.
 
+        Iterates all providers to discover session files.
+
         Returns:
             ShipResult with counts and any errors
         """
         result = ShipResult()
 
-        # Find all session files
-        session_files = self._find_session_files()
+        # Find all session files across all providers
+        session_files = self._find_all_session_files()
         result.sessions_scanned = len(session_files)
 
         logger.info(f"Found {len(session_files)} session files")
 
         # Filter to files with new content
-        files_to_ship = [f for f in session_files if self._has_new_content(f)]
+        files_to_ship = [(f, pname) for f, pname in session_files if self._has_new_content(f)]
         logger.info(f"{len(files_to_ship)} files have new content")
 
         # Ship each file
-        for path in files_to_ship:
+        for path, provider_name in files_to_ship:
             try:
-                ship_result = await self.ship_session(path)
+                ship_result = await self.ship_session(path, provider_name=provider_name)
                 if ship_result["events_inserted"] > 0 or ship_result["events_skipped"] > 0 or ship_result["events_spooled"] > 0:
                     result.sessions_shipped += 1
                     result.events_shipped += ship_result["events_inserted"]
@@ -173,11 +223,12 @@ class SessionShipper:
 
         return result
 
-    async def ship_session(self, session_file: Path) -> dict:
+    async def ship_session(self, session_file: Path, *, provider_name: str = "claude") -> dict:
         """Ship events from a session file.
 
         Args:
             session_file: Path to the JSONL session file
+            provider_name: Name of the provider that owns this file (default: "claude")
 
         Returns:
             Dict with events_inserted, events_skipped, events_spooled, new_offset
@@ -185,8 +236,12 @@ class SessionShipper:
         file_path_str = str(session_file)
         last_offset = self.state.get_offset(file_path_str)
 
-        # Parse new events from file
-        events = list(parse_session_file(session_file, offset=last_offset))
+        # Use provider if available, otherwise fall back to direct parser calls
+        provider = provider_registry.get(provider_name)
+        if provider:
+            events = list(provider.parse_file(session_file, offset=last_offset))
+        else:
+            events = list(parse_session_file(session_file, offset=last_offset))
 
         if not events:
             # No new events, but update offset to current file size
@@ -207,7 +262,10 @@ class SessionShipper:
             }
 
         # Extract session metadata
-        metadata = extract_session_metadata(session_file)
+        if provider:
+            metadata = provider.extract_metadata(session_file)
+        else:
+            metadata = extract_session_metadata(session_file)
 
         # Get or create session ID
         existing = self.state.get_session(file_path_str)
@@ -222,6 +280,7 @@ class SessionShipper:
             events=events,
             metadata=metadata,
             source_path=file_path_str,
+            provider_name=provider_name,
         )
 
         # Try to ship to Zerg
@@ -338,6 +397,7 @@ class SessionShipper:
         events: list[ParsedEvent],
         metadata: Any,
         source_path: str,
+        provider_name: str = "claude",
     ) -> dict:
         """Build the ingest API payload."""
         # Convert events to API format
@@ -350,7 +410,7 @@ class SessionShipper:
 
         return {
             "id": session_id,
-            "provider": "claude",
+            "provider": provider_name,
             "environment": "production",
             "project": metadata.project,
             "device_id": f"shipper-{os.uname().nodename}",
