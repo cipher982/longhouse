@@ -23,14 +23,14 @@ const tabs: TabConfig[] = [
     id: "timeline",
     label: "Timeline",
     description: "All your AI coding sessions in one place. See when, what, and how long.",
-    image: "/images/landing/dashboard-preview.png",
+    image: "/images/landing/timeline-preview.png",
     alt: "Session timeline showing Claude Code sessions with timestamps and summaries",
   },
   {
     id: "session",
     label: "Session Detail",
     description: "Expand any session to see every tool call, file edit, and conversation turn.",
-    image: "/images/landing/chat-preview.png",
+    image: "/images/landing/session-detail-preview.png",
     alt: "Detailed session view showing tool calls and conversation",
   },
 ];
