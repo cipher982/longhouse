@@ -2,7 +2,7 @@
 
 Never lose an AI coding conversation.
 
-Claude Code now; Codex/Cursor/Gemini in progress. Hosted or self-hosted.
+Search and browse every Claude Code, Codex CLI, and Gemini CLI session. Self-host or hosted.
 
 ## Demo
 
@@ -201,7 +201,7 @@ Each session is a log in your timeline.
 
 ## Status
 
-**Alpha** - Actively developed, expect changes. Claude Code works today; hosted beta and more providers are in progress.
+**Alpha** - Actively developed, expect changes. Claude Code, Codex CLI, and Gemini CLI sessions ship today; hosted beta in progress.
 
 ## Author
 
