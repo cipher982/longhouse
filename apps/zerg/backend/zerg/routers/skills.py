@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/skills", tags=["skills"])
 
 # Default workspace base path (same as workspace_manager.py)
-DEFAULT_WORKSPACE_PATH = "/var/oikos/workspaces"
+DEFAULT_WORKSPACE_PATH = str(Path.home() / ".longhouse" / "workspaces")
 
 
 # ---------------------------------------------------------------------------

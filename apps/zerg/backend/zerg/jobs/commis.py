@@ -231,6 +231,9 @@ async def _run_job(queue_job: QueueJob, owner: QueueOwner) -> None:
     # Extend lease before execution
     if not await extend_lease(queue_job.id, owner, lease_seconds):
         logger.error("Lost lease before execution for %s (%s)", queue_job.job_id, queue_job.id)
+        # Attempt to reschedule so the job doesn't stay stuck in 'claimed'
+        retry_at = datetime.now(UTC) + timedelta(seconds=_retry_delay(queue_job.attempts))
+        await reschedule_job(queue_job.id, retry_at, "Lost lease before execution", owner=owner)
         return
 
     stop_heartbeat = asyncio.Event()

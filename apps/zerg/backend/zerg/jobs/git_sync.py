@@ -34,7 +34,7 @@ class GitSyncService:
     """
     Manages git clone and sync for job scripts.
 
-    Thread-safety: Uses file lock for sync operations.
+    Concurrency-safety: Uses file lock for sync operations.
     Single-process assumption: Lock is per-process, not distributed.
     """
 
@@ -71,6 +71,10 @@ class GitSyncService:
     def _get_auth_url(self) -> str:
         """Build authenticated git URL. Token is NOT logged."""
         if self.token:
+            # Token auth only works with HTTPS URLs, not SSH
+            if self.repo_url.startswith("git@") or self.repo_url.startswith("ssh://"):
+                logger.warning("Token auth ignored for SSH repo URL; use ssh_key_path instead")
+                return self.repo_url
             # https://token@github.com/user/repo.git
             parsed = urlparse(self.repo_url)
             authed = parsed._replace(netloc=f"{self.token}@{parsed.netloc}")
