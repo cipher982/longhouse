@@ -176,6 +176,52 @@ __pycache__/
     return result
 
 
+def install_jobs_deps(data_dir: str | Path) -> dict[str, Any]:
+    """Install job dependencies from /data/jobs/requirements.txt if present.
+
+    Jobs packs can ship a requirements.txt with their own deps (asyncpg, pymongo, etc.).
+    This runs pip install into the current venv at startup, before the manifest loads.
+    Skips if no requirements.txt exists (OSS default — no extra deps needed).
+
+    Args:
+        data_dir: Base data directory (e.g., /data)
+
+    Returns:
+        Dict with install results:
+        - installed: bool - True if pip install ran successfully
+        - skipped: bool - True if no requirements.txt found
+        - error: str | None - Error message if failed
+    """
+    data_path = Path(data_dir)
+    requirements_path = data_path / "jobs" / "requirements.txt"
+
+    if not requirements_path.exists():
+        return {"installed": False, "skipped": True, "error": None}
+
+    try:
+        result = subprocess.run(
+            ["pip", "install", "--quiet", "--disable-pip-version-check", "-r", str(requirements_path)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode == 0:
+            logger.info("Installed job dependencies from %s", requirements_path)
+            return {"installed": True, "skipped": False, "error": None}
+        else:
+            error_msg = f"pip install failed: {result.stderr.strip()}"
+            logger.error(error_msg)
+            return {"installed": False, "skipped": False, "error": error_msg}
+    except subprocess.TimeoutExpired:
+        error_msg = "pip install timed out (120s)"
+        logger.error(error_msg)
+        return {"installed": False, "skipped": False, "error": error_msg}
+    except Exception as e:
+        error_msg = f"Failed to install job deps: {e}"
+        logger.exception(error_msg)
+        return {"installed": False, "skipped": False, "error": error_msg}
+
+
 def get_repo_status(data_dir: str | Path) -> dict[str, Any]:
     """Get the status of the jobs repository.
 
@@ -406,6 +452,7 @@ def sync_jobs_repo() -> dict[str, Any]:
 
 __all__ = [
     "bootstrap_jobs_repo",
+    "install_jobs_deps",
     "get_repo_status",
     "commit_changes",
     "auto_commit_if_dirty",
