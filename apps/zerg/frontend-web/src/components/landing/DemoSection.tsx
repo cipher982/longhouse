@@ -1,11 +1,19 @@
 /**
  * DemoSection
  *
- * Product showcase section with tabbed screenshots.
- * Shows Timeline and Session Detail views.
+ * Product showcase section with tabbed screenshots and video walkthrough.
+ * Shows Timeline and Session Detail views, plus a demo video placeholder.
  */
 
 import { ProductShowcase } from "./ProductShowcase";
+import { DemoVideoPlaceholder } from "./DemoVideoPlaceholder";
+
+/**
+ * Video walkthrough URL.
+ * Replace with a Loom or YouTube URL once the recording is ready.
+ * When set, the placeholder will render an actual video player.
+ */
+const DEMO_VIDEO_URL: string | undefined = undefined;
 
 export function DemoSection() {
   return (
@@ -18,6 +26,8 @@ export function DemoSection() {
         </p>
 
         <ProductShowcase />
+
+        <DemoVideoPlaceholder videoUrl={DEMO_VIDEO_URL} />
       </div>
     </section>
   );
