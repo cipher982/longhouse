@@ -1,8 +1,11 @@
-"""Claude Code hook installation for Longhouse.
+"""Claude Code hook installation and MCP server registration for Longhouse.
 
 Installs hook scripts and injects hook configuration into
 ~/.claude/settings.json so that Claude Code automatically ships
 sessions and displays recent session context.
+
+Also provides MCP server registration for both Claude Code (~/.claude.json)
+and Codex CLI (~/.codex/config.toml).
 
 Two hooks are installed:
 
@@ -25,7 +28,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import stat
+import tomllib
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -196,7 +201,7 @@ def _read_settings(settings_path: Path) -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Failed to parse {settings_path}: {exc}. " "Fix or remove the file manually before installing hooks.") from exc
+        raise RuntimeError(f"Failed to parse {settings_path}: {exc}. Fix or remove the file manually before installing hooks.") from exc
 
 
 def _write_settings(settings_path: Path, data: dict) -> None:
@@ -358,4 +363,85 @@ def install_mcp_server(claude_dir: str | None = None) -> list[str]:
     actions.append(f"Updated {claude_json_path} with mcpServers.longhouse")
 
     logger.info("Registered Longhouse MCP server in %s", claude_json_path)
+    return actions
+
+
+# ---------------------------------------------------------------------------
+# TOML writing helpers (no external dependency needed)
+# ---------------------------------------------------------------------------
+
+# Regex matching the [mcp_servers.longhouse] section in TOML.
+# Captures from the header through all key=value lines until the next
+# section header or end-of-file.
+_CODEX_MCP_SECTION_RE = re.compile(
+    r"^\[mcp_servers\.longhouse\]\s*\n(?:(?!\[)[^\n]*\n?)*",
+    re.MULTILINE,
+)
+
+
+def _build_codex_mcp_section() -> str:
+    """Build the TOML snippet for the Longhouse MCP server entry."""
+    return "[mcp_servers.longhouse]\n" 'command = "longhouse"\n' 'args = ["mcp-server"]\n'
+
+
+def install_codex_mcp_server(codex_dir: str | None = None) -> list[str]:
+    """Register the Longhouse MCP server in Codex CLI ``config.toml``.
+
+    Codex CLI reads MCP server configuration from
+    ``~/.codex/config.toml`` using ``[mcp_servers.<name>]`` sections.
+
+    This function is idempotent — it adds or updates the
+    ``[mcp_servers.longhouse]`` section while preserving all other
+    configuration.
+
+    Args:
+        codex_dir: Override for Codex config directory (default:
+                   ``~/.codex``). Used for testing.
+
+    Returns:
+        List of human-readable action strings describing what was done.
+    """
+    actions: list[str] = []
+
+    if codex_dir:
+        config_path = Path(codex_dir).expanduser() / "config.toml"
+    else:
+        config_path = Path.home() / ".codex" / "config.toml"
+
+    # ------------------------------------------------------------------
+    # 1. Read existing config
+    # ------------------------------------------------------------------
+    existing_text = ""
+    if config_path.exists():
+        existing_text = config_path.read_text(encoding="utf-8")
+        # Validate it parses (catch corruption early)
+        if existing_text.strip():
+            try:
+                tomllib.loads(existing_text)
+            except tomllib.TOMLDecodeError as exc:
+                raise RuntimeError(
+                    f"Failed to parse {config_path}: {exc}. " "Fix or remove the file manually before registering MCP server."
+                ) from exc
+
+    # ------------------------------------------------------------------
+    # 2. Add/update [mcp_servers.longhouse] section
+    # ------------------------------------------------------------------
+    new_section = _build_codex_mcp_section()
+
+    if _CODEX_MCP_SECTION_RE.search(existing_text):
+        # Replace existing section in-place
+        updated_text = _CODEX_MCP_SECTION_RE.sub(new_section, existing_text)
+    else:
+        # Append new section (with blank line separator)
+        separator = "\n" if existing_text and not existing_text.endswith("\n") else ""
+        updated_text = existing_text + separator + new_section
+
+    # ------------------------------------------------------------------
+    # 3. Write back
+    # ------------------------------------------------------------------
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(updated_text, encoding="utf-8")
+    actions.append(f"Updated {config_path} with [mcp_servers.longhouse]")
+
+    logger.info("Registered Longhouse MCP server in %s", config_path)
     return actions

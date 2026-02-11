@@ -4,8 +4,10 @@ import json
 from pathlib import Path
 
 import pytest
+import tomllib
 
 from zerg.services.workspace_manager import inject_agents_md
+from zerg.services.workspace_manager import inject_codex_mcp_settings
 from zerg.services.workspace_manager import inject_mcp_settings
 
 
@@ -257,3 +259,102 @@ class TestInjectMcpSettings:
 
         settings = json.loads(result.read_text(encoding="utf-8"))
         assert "longhouse" in settings["mcpServers"]
+
+
+# --- inject_codex_mcp_settings tests ---
+
+
+class TestInjectCodexMcpSettings:
+    """Tests for Codex MCP server config injection into .codex/config.toml."""
+
+    def test_creates_file(self, workspace: Path) -> None:
+        """Creates .codex/config.toml with MCP config from scratch."""
+        result = inject_codex_mcp_settings(workspace)
+        assert result is not None
+        assert result.exists()
+        assert result.name == "config.toml"
+        assert result.parent.name == ".codex"
+
+        config = tomllib.loads(result.read_text(encoding="utf-8"))
+        assert "mcp_servers" in config
+        assert "longhouse" in config["mcp_servers"]
+
+        lh = config["mcp_servers"]["longhouse"]
+        assert lh["command"] == "longhouse"
+        assert lh["args"] == ["mcp-server"]
+
+    def test_preserves_existing_config(self, workspace: Path) -> None:
+        """Existing config.toml content is preserved when injecting MCP config."""
+        codex_dir = workspace / ".codex"
+        codex_dir.mkdir(parents=True)
+        existing = (
+            'model = "gpt-5.2-codex"\n'
+            "\n"
+            "[mcp_servers.other-server]\n"
+            'command = "other"\n'
+            'args = ["serve"]\n'
+        )
+        (codex_dir / "config.toml").write_text(existing, encoding="utf-8")
+
+        result = inject_codex_mcp_settings(workspace)
+        assert result is not None
+
+        config = tomllib.loads(result.read_text(encoding="utf-8"))
+        # Existing keys preserved
+        assert config["model"] == "gpt-5.2-codex"
+        assert "other-server" in config["mcp_servers"]
+        # Longhouse added
+        assert "longhouse" in config["mcp_servers"]
+        assert config["mcp_servers"]["longhouse"]["command"] == "longhouse"
+
+    def test_with_api_url(self, workspace: Path) -> None:
+        """api_url is included in args when provided."""
+        result = inject_codex_mcp_settings(workspace, api_url="https://david.longhouse.ai")
+        assert result is not None
+
+        config = tomllib.loads(result.read_text(encoding="utf-8"))
+        lh = config["mcp_servers"]["longhouse"]
+        assert lh["args"] == ["mcp-server", "--url", "https://david.longhouse.ai"]
+
+    def test_overwrites_stale_longhouse_entry(self, workspace: Path) -> None:
+        """Existing longhouse MCP entry is replaced with fresh config."""
+        codex_dir = workspace / ".codex"
+        codex_dir.mkdir(parents=True)
+        stale = (
+            "[mcp_servers.longhouse]\n"
+            'command = "old-longhouse"\n'
+            'args = ["mcp-server", "--url", "http://old-url:9999"]\n'
+        )
+        (codex_dir / "config.toml").write_text(stale, encoding="utf-8")
+
+        result = inject_codex_mcp_settings(workspace)
+        assert result is not None
+
+        config = tomllib.loads(result.read_text(encoding="utf-8"))
+        lh = config["mcp_servers"]["longhouse"]
+        assert lh["command"] == "longhouse"
+        assert lh["args"] == ["mcp-server"]
+        text = result.read_text(encoding="utf-8")
+        assert "old-longhouse" not in text
+        assert "old-url" not in text
+
+    def test_without_api_url(self, workspace: Path) -> None:
+        """No --url arg when api_url is None."""
+        result = inject_codex_mcp_settings(workspace, api_url=None)
+        assert result is not None
+
+        config = tomllib.loads(result.read_text(encoding="utf-8"))
+        lh = config["mcp_servers"]["longhouse"]
+        assert lh["args"] == ["mcp-server"]
+
+    def test_handles_corrupt_toml(self, workspace: Path) -> None:
+        """Corrupt config.toml is overwritten cleanly."""
+        codex_dir = workspace / ".codex"
+        codex_dir.mkdir(parents=True)
+        (codex_dir / "config.toml").write_text("[broken\nnot valid toml", encoding="utf-8")
+
+        result = inject_codex_mcp_settings(workspace)
+        assert result is not None
+
+        config = tomllib.loads(result.read_text(encoding="utf-8"))
+        assert "longhouse" in config["mcp_servers"]

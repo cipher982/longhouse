@@ -25,6 +25,7 @@ Usage:
     status = get_service_status()  # "running", "stopped", "not-installed"
 """
 
+from zerg.services.shipper.hooks import install_codex_mcp_server
 from zerg.services.shipper.hooks import install_hooks
 from zerg.services.shipper.hooks import install_mcp_server
 from zerg.services.shipper.parser import ParsedEvent
@@ -56,6 +57,7 @@ __all__ = [
     "get_service_status",
     "get_token_path",
     "get_zerg_url",
+    "install_codex_mcp_server",
     "install_hooks",
     "install_mcp_server",
     "install_service",

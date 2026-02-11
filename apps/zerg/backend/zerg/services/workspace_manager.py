@@ -743,4 +743,73 @@ def inject_mcp_settings(workspace_path: Path, api_url: str | None = None) -> Pat
         return None
 
 
-__all__ = ["WorkspaceManager", "Workspace", "inject_agents_md", "inject_mcp_settings"]
+def inject_codex_mcp_settings(workspace_path: Path, api_url: str | None = None) -> Path | None:
+    """Inject Longhouse MCP server config into workspace .codex/config.toml.
+
+    This allows Codex-backend commis (Codex CLI subprocesses) to access
+    Longhouse's session search, memory, and notification tools mid-task.
+
+    Parameters
+    ----------
+    workspace_path
+        Root path of the workspace directory
+    api_url
+        Longhouse API URL for the MCP server to connect to (currently
+        unused in TOML config but reserved for future ``--url`` arg support)
+
+    Returns
+    -------
+    Path | None
+        Path to the created/updated config.toml, or None on failure
+    """
+    import tomllib
+
+    workspace_path = Path(workspace_path)
+    codex_dir = workspace_path / ".codex"
+    codex_dir.mkdir(parents=True, exist_ok=True)
+    config_path = codex_dir / "config.toml"
+
+    # Build MCP args
+    mcp_args = '["mcp-server"]'
+    if api_url:
+        mcp_args = f'["mcp-server", "--url", "{api_url}"]'
+
+    new_section = "[mcp_servers.longhouse]\n" f'command = "longhouse"\n' f"args = {mcp_args}\n"
+
+    # Section regex for replacement
+    section_re = re.compile(
+        r"^\[mcp_servers\.longhouse\]\s*\n(?:(?!\[)[^\n]*\n?)*",
+        re.MULTILINE,
+    )
+
+    existing_text = ""
+    if config_path.exists():
+        try:
+            existing_text = config_path.read_text(encoding="utf-8")
+            if existing_text.strip():
+                tomllib.loads(existing_text)  # validate
+        except (tomllib.TOMLDecodeError, OSError):
+            existing_text = ""  # start fresh on corrupt files
+
+    if section_re.search(existing_text):
+        updated_text = section_re.sub(new_section, existing_text)
+    else:
+        separator = "\n" if existing_text and not existing_text.endswith("\n") else ""
+        updated_text = existing_text + separator + new_section
+
+    try:
+        config_path.write_text(updated_text, encoding="utf-8")
+        logger.info("Injected Codex MCP settings into %s", config_path)
+        return config_path
+    except OSError as e:
+        logger.warning("Failed to write Codex MCP settings to %s: %s", config_path, e)
+        return None
+
+
+__all__ = [
+    "WorkspaceManager",
+    "Workspace",
+    "inject_agents_md",
+    "inject_codex_mcp_settings",
+    "inject_mcp_settings",
+]
