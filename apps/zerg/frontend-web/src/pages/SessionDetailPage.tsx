@@ -334,8 +334,12 @@ export default function SessionDetailPage() {
   useEffect(() => {
     if (!sessionLoading && !eventsLoading) {
       document.body.setAttribute("data-ready", "true");
+      document.body.setAttribute("data-screenshot-ready", "true");
     }
-    return () => document.body.removeAttribute("data-ready");
+    return () => {
+      document.body.removeAttribute("data-ready");
+      document.body.removeAttribute("data-screenshot-ready");
+    };
   }, [sessionLoading, eventsLoading]);
 
   // Scroll to matched event when arriving from search results
