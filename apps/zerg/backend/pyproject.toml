@@ -41,6 +41,7 @@ dependencies = [
     "watchdog>=6.0.0",
     "tiktoken>=0.7.0",
     "mcp>=1.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
