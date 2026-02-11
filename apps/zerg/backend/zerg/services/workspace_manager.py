@@ -832,6 +832,11 @@ def inject_commis_hooks(
         heuristic is used: ``make test`` if a ``Makefile`` exists in the
         workspace, otherwise the verify hook is skipped entirely.
 
+        **Trust boundary:** This parameter is always set by the backend
+        (from ``job_config["verify_command"]``), never directly from user
+        web input.  Defence-in-depth validation rejects shell metacharacters
+        that could chain arbitrary commands.
+
     Returns
     -------
     Path | None
@@ -840,7 +845,14 @@ def inject_commis_hooks(
     import json
 
     workspace_path = Path(workspace_path)
-    claude_dir = workspace_path / ".claude"
+
+    # Security: resolve .claude dir and verify it stays under workspace root
+    # to prevent symlink escape attacks.
+    claude_dir = (workspace_path / ".claude").resolve()
+    workspace_resolved = workspace_path.resolve()
+    if not str(claude_dir).startswith(str(workspace_resolved)):
+        raise ValueError(f"Symlink escape detected: .claude resolves to {claude_dir}, outside workspace {workspace_resolved}")
+
     claude_dir.mkdir(parents=True, exist_ok=True)
     settings_path = claude_dir / "settings.json"
 
@@ -848,15 +860,33 @@ def inject_commis_hooks(
     settings: dict = {}
     if settings_path.exists():
         try:
-            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            data = json.loads(settings_path.read_text(encoding="utf-8"))
+            # Defensive: only accept dict at top level (not list, str, etc.)
+            if isinstance(data, dict):
+                settings = data
         except (json.JSONDecodeError, OSError):
             pass
 
     # Determine verify command
     if verify_command is None:
         if (workspace_path / "Makefile").exists():
-            verify_command = "make test 2>&1 | tail -20"
+            # Use pipefail so that a failing `make test` is not masked by `tail`
+            # exiting 0.  Without this, the hook always reports success.
+            verify_command = "bash -c 'set -o pipefail; make test 2>&1 | tail -20'"
         # else: no Makefile, skip verify hook
+
+    # Defence-in-depth: reject shell metacharacters in verify_command.
+    # The value comes from the backend (job_config), not user web input,
+    # but we still guard against injection via chained commands.
+    if verify_command is not None:
+        _dangerous = re.compile(r"[;`]|\$\(|&&|\|\|")
+        # Allow the pipe in our own default command (pipefail pattern)
+        cmd_to_check = verify_command
+        if cmd_to_check.startswith("bash -c 'set -o pipefail;"):
+            # This is our known-safe default — skip metachar check
+            pass
+        elif _dangerous.search(cmd_to_check):
+            raise ValueError(f"verify_command contains disallowed shell metacharacters: {verify_command!r}")
 
     # Build Stop hooks list
     stop_hooks: list[dict] = []
@@ -864,7 +894,6 @@ def inject_commis_hooks(
     if verify_command:
         stop_hooks.append(
             {
-                "matcher": "",
                 "hooks": [
                     {
                         "type": "command",
@@ -876,11 +905,11 @@ def inject_commis_hooks(
         )
 
     # Notification hook — always added so Oikos knows the commis finished.
-    # Uses longhouse MCP notify_oikos via a lightweight curl/script.
-    # For v1, we use a simple command that calls the MCP tool via the CLI.
+    # PLACEHOLDER: Currently just prints to stderr.  Will be replaced with an
+    # actual MCP ``notify_oikos`` call once the Claude Code hook protocol
+    # supports MCP tool invocation from hooks (tracked in TODO.md).
     stop_hooks.append(
         {
-            "matcher": "",
             "hooks": [
                 {
                     "type": "command",
@@ -892,8 +921,9 @@ def inject_commis_hooks(
         }
     )
 
-    # Merge into settings — preserve existing hooks for other events
-    if "hooks" not in settings:
+    # Merge into settings — preserve existing hooks for other events.
+    # Defensive: ensure "hooks" is a dict (could be a list from a bad edit).
+    if not isinstance(settings.get("hooks"), dict):
         settings["hooks"] = {}
     settings["hooks"]["Stop"] = stop_hooks
 

@@ -368,7 +368,7 @@ class TestInjectCommisHooks:
     """Tests for quality-gate hook injection into .claude/settings.json."""
 
     def test_creates_hooks_with_makefile(self, workspace: Path) -> None:
-        """When Makefile exists, Stop hook runs 'make test'."""
+        """When Makefile exists, Stop hook runs 'make test' with pipefail."""
         (workspace / "Makefile").write_text("test:\n\tpytest\n", encoding="utf-8")
 
         result = inject_commis_hooks(workspace)
@@ -383,12 +383,14 @@ class TestInjectCommisHooks:
         # Should have verify hook + notification hook
         assert len(stop_hooks) == 2
 
-        # First hook: verify command
+        # First hook: verify command (no matcher field)
         verify_entry = stop_hooks[0]
-        assert verify_entry["matcher"] == ""
+        assert "matcher" not in verify_entry
         assert len(verify_entry["hooks"]) == 1
         assert verify_entry["hooks"][0]["type"] == "command"
         assert "make test" in verify_entry["hooks"][0]["command"]
+        # Verify pipefail is used to preserve exit code through pipe
+        assert "pipefail" in verify_entry["hooks"][0]["command"]
         assert verify_entry["hooks"][0]["timeout"] == 300
 
     def test_skips_verify_without_makefile(self, workspace: Path) -> None:
@@ -400,6 +402,7 @@ class TestInjectCommisHooks:
         stop_hooks = settings["hooks"]["Stop"]
         # Only notification hook, no verify
         assert len(stop_hooks) == 1
+        assert "matcher" not in stop_hooks[0]
         assert "notify" in stop_hooks[0]["hooks"][0]["command"].lower() or "Oikos" in stop_hooks[0]["hooks"][0]["command"]
 
     def test_custom_verify_command(self, workspace: Path) -> None:
@@ -502,3 +505,69 @@ class TestInjectCommisHooks:
         stop_hooks = settings["hooks"]["Stop"]
         assert stop_hooks[0]["hooks"][0]["command"] == "new-verify"
         assert "old-verify" not in json.dumps(settings)
+
+    def test_symlink_escape_raises(self, workspace: Path, tmp_path: Path) -> None:
+        """Symlink pointing .claude outside workspace is rejected."""
+        outside_dir = tmp_path / "evil"
+        outside_dir.mkdir()
+        symlink_target = workspace / ".claude"
+        symlink_target.symlink_to(outside_dir)
+
+        with pytest.raises(ValueError, match="Symlink escape detected"):
+            inject_commis_hooks(workspace, verify_command="make test")
+
+    def test_settings_json_top_level_list_handled(self, workspace: Path) -> None:
+        """settings.json containing a top-level list is treated as empty dict."""
+        claude_dir = workspace / ".claude"
+        claude_dir.mkdir(parents=True)
+        (claude_dir / "settings.json").write_text("[1, 2, 3]", encoding="utf-8")
+
+        result = inject_commis_hooks(workspace, verify_command="pytest")
+        assert result is not None
+
+        settings = json.loads(result.read_text(encoding="utf-8"))
+        assert isinstance(settings, dict)
+        assert "hooks" in settings
+        assert "Stop" in settings["hooks"]
+
+    def test_hooks_key_as_list_handled(self, workspace: Path) -> None:
+        """settings.json where 'hooks' is a list instead of dict is reset."""
+        claude_dir = workspace / ".claude"
+        claude_dir.mkdir(parents=True)
+        bad_settings = {"hooks": ["not", "a", "dict"]}
+        (claude_dir / "settings.json").write_text(json.dumps(bad_settings), encoding="utf-8")
+
+        result = inject_commis_hooks(workspace)
+        assert result is not None
+
+        settings = json.loads(result.read_text(encoding="utf-8"))
+        assert isinstance(settings["hooks"], dict)
+        assert "Stop" in settings["hooks"]
+
+    def test_verify_command_rejects_shell_metacharacters(self, workspace: Path) -> None:
+        """verify_command with shell metacharacters is rejected."""
+        with pytest.raises(ValueError, match="disallowed shell metacharacters"):
+            inject_commis_hooks(workspace, verify_command="make test; rm -rf /")
+
+        with pytest.raises(ValueError, match="disallowed shell metacharacters"):
+            inject_commis_hooks(workspace, verify_command="make test && echo pwned")
+
+        with pytest.raises(ValueError, match="disallowed shell metacharacters"):
+            inject_commis_hooks(workspace, verify_command="make test || true")
+
+        with pytest.raises(ValueError, match="disallowed shell metacharacters"):
+            inject_commis_hooks(workspace, verify_command="`whoami`")
+
+        with pytest.raises(ValueError, match="disallowed shell metacharacters"):
+            inject_commis_hooks(workspace, verify_command="$(id)")
+
+    def test_no_matcher_fields_in_hooks(self, workspace: Path) -> None:
+        """Stop hooks should not contain unnecessary matcher fields."""
+        (workspace / "Makefile").write_text("test:\n\tpytest\n", encoding="utf-8")
+
+        result = inject_commis_hooks(workspace)
+        assert result is not None
+
+        settings = json.loads(result.read_text(encoding="utf-8"))
+        for hook_entry in settings["hooks"]["Stop"]:
+            assert "matcher" not in hook_entry, f"Unexpected matcher field in hook: {hook_entry}"
