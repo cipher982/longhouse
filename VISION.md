@@ -128,9 +128,10 @@ This is the product. Everything else supports it.
 
 **Target:** Longhouse does not build its own LLM execution loop. Claude Code, Codex CLI, and Gemini CLI are agent harnesses built by teams of hundreds. Longhouse should not compete with them.
 
-**Current State (as of 2026-02-10):**
+**Current State (as of 2026-02-11):**
 - Commis uses CLI subprocess execution (workspace mode) and ingests resulting sessions into timeline storage.
-- Oikos still runs through legacy in-process loop/runtime code (`fiche_runner` + `oikos_react_engine`) while Slim Oikos (Phase 3) is in progress.
+- Slim Oikos (Phase 3) complete: loop simplified, tools flattened, services decoupled, memory consolidated, skills progressive disclosure, MCP server, quality gates, multi-provider research.
+- Oikos in-process loop (`fiche_runner` + `oikos_react_engine`) still runs but is significantly slimmed; deferred items (dispatch contract, compaction API) tracked in TODO.
 
 **Target end-state:**
 
@@ -1706,7 +1707,7 @@ Measured via `bun run build` (Vite 5.4, production mode, gzip sizes reported by 
 - `marked` + `react-markdown` are both bundled; consolidate to one markdown renderer
 - Consider extracting `react-dom` into a shared vendor chunk for better caching
 - [x] Shipper: bundled (single `pip install longhouse` ships sessions out-of-the-box)
-- [ ] Auth for remote access: auto-token flow in `longhouse connect` (tracked in TODO)
+- [x] Auth for remote access: auto-token flow in `longhouse connect` (commits `a7c11f96`, `0435639d`)
 - [x] HTTPS: no built-in; recommend Caddy/nginx reverse proxy
 
 ---
