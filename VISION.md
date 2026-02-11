@@ -1,6 +1,6 @@
 # Longhouse Vision (2026)
 
-Longhouse is an AI agent orchestration platform where AI does the work and humans manage the system. The product must feel instant, always-on, and magical: your Claude Code sessions appear as a clean, queryable timeline inside Longhouse with zero friction (Codex/Cursor/Gemini in progress).
+Longhouse is an AI agent orchestration platform where AI does the work and humans manage the system. The product must feel instant, always-on, and magical: your Claude Code sessions appear as a clean, queryable timeline inside Longhouse with zero friction (Codex and Gemini shipping; Cursor in progress).
 
 This is a living vision doc. It captures both the direction and the reasoning that got us here, so we can make fast decisions without re-litigating the fundamentals.
 
@@ -53,7 +53,7 @@ This is a living vision doc. It captures both the direction and the reasoning th
 
 Three promises to users:
 
-1. **Never lose a conversation** — Claude Code sessions appear in one timeline today; Codex/Cursor/Gemini are in progress. No more grepping JSONL.
+1. **Never lose a conversation** — Claude Code, Codex, and Gemini sessions appear in one timeline today; Cursor is in progress. No more grepping JSONL.
 
 2. **Find where you solved it** — Search by keyword, project, date. Instant results. FTS5-backed for sub-10ms discovery; Oikos handles deeper queries.
 
@@ -182,7 +182,7 @@ CLI agents (Claude Code, Codex, Gemini) can call back into Longhouse's toolbox v
 - Commis spawned via `hatch` automatically get the Longhouse MCP server configured
 - A hatch-spawned agent can search "how did we implement retry logic?" against the Longhouse archive mid-task
 
-**Current State (as of 2026-02-10):** Target architecture. Not yet implemented. See TODO Phase 3f.
+**Current State (as of 2026-02-10):** MCP server implemented with stdio and HTTP transport. 5 tools exposed: `search_sessions`, `get_session_detail`, `memory_read`, `memory_write`, `notify_oikos`. Auto-registered via `longhouse connect --install`. Remaining: auto-configure for commis workspaces, Codex config.toml registration.
 
 ### Multi-Provider Backend Integration
 
@@ -295,7 +295,7 @@ longhouse serve
 Laptop
   ├─ Longhouse (UI + API)
   ├─ SQLite only (default and core)
-  └─ Shipper watches ~/.claude/...
+  └─ Shipper watches ~/.claude/, ~/.codex/, ~/.gemini/...
 ```
 
 ### Hosted (paid, always-on)
@@ -620,9 +620,10 @@ The shipper daemon for providers without hook support (Codex, Gemini, Cursor):
 
 **Current State (as of 2026-02-10):**
 - `longhouse connect` runs in foreground (watch mode by default; polling with `--poll` or custom `--interval`).
-- `longhouse connect --install` installs/starts the background service.
+- `longhouse connect --install` installs/starts the background service + Claude Code hooks + MCP server.
 - `longhouse auth` handles device-token setup; `connect` then uses the stored token.
-- Hook-based push is target architecture; not yet implemented.
+- Hook-based push implemented: Stop hook ships session on Claude Code response completion; SessionStart hook shows recent sessions.
+- Watcher daemon watches Claude, Codex, and Gemini session directories for real-time sync.
 
 **Magic moment:** user types in Claude Code -> hook fires on stop -> session appears in Longhouse before they switch tabs.
 
