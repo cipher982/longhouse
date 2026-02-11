@@ -625,7 +625,11 @@ class CommisJobProcessor:
             except Exception as mcp_error:
                 logger.warning(f"Failed to inject MCP settings for job {job_id}: {mcp_error}")
 
-            # 4c. Inject quality-gate hooks (Stop hook runs verify command before session ends)
+            # 4c. Inject quality-gate hooks (Stop hook runs verify command before session ends).
+            # Best-effort by design: if hook injection fails, the commis still runs
+            # but without quality gates.  This is acceptable because a failed gate
+            # injection should not block work — the commis output/diff is still useful
+            # and can be reviewed manually.
             try:
                 from zerg.services.workspace_manager import inject_commis_hooks
 
@@ -634,7 +638,7 @@ class CommisJobProcessor:
                     verify_command=job_config.get("verify_command"),
                 )
             except Exception as hooks_error:
-                logger.warning(f"Failed to inject commis hooks for job {job_id}: {hooks_error}")
+                logger.warning(f"Failed to inject commis hooks for job {job_id} (commis={commis_id}): {hooks_error}")
 
             # 5. Emit commis_started event for UI (before long-running execution)
             if oikos_run_id:
