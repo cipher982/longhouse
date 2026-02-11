@@ -55,7 +55,7 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
               </Button>
             ) : (
               <Button variant="secondary" size="lg" onClick={handleHostedBeta}>
-                Hosted Beta &rarr;
+                Join Waitlist &rarr;
               </Button>
             )}
           </div>

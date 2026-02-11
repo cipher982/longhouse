@@ -45,7 +45,7 @@ export function DeploymentOptions() {
         "Works offline, data stays local",
         "Open source (Apache 2.0)",
       ],
-      ctaText: "Install CLI",
+      ctaText: "Self-Host Now",
       ctaAction: handleInstallCLI,
       ctaVariant: "primary",
       highlighted: true,
