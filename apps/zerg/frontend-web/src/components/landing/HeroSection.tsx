@@ -42,7 +42,7 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
           </p>
 
           <p className="landing-hero-note">
-            Hosted beta + self-hosted. Cursor support in progress.
+            Local-first. Self-host anytime. Hosted beta waitlist open.
           </p>
 
           <div className="landing-hero-ctas">

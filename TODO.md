@@ -38,7 +38,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | Section | Status | Notes |
 |---------|--------|-------|
 | Harness Phase 3f-3h | ~60% | MCP server done (3f ~80%); quality gates + research pending (3g-3h 0%) |
-| Landing Page Redesign | ~80% | Phase 5 copy polish + Phase 6 visual assets remaining |
+| Landing Page Redesign | ~90% | Phase 5 copy/sections done; Phase 6 visual assets + Oikos move remaining |
 | Control Plane | ~45% | Scaffold + provisioner + CI gate done; OAuth/billing/runtime image pending |
 | Shipper Multi-Provider | DONE | Provider abstraction + Claude/Codex/Gemini parsers + review fixes |
 | Install/Onboarding | ~70% | install.sh + doctor + connect + hooks + MCP server done; fresh-shell verify remaining |
@@ -227,18 +227,18 @@ Current copy is a mix of both stories. Align to dual-path parity.
 Update copy to match VISION.md value prop: Timeline + Search + Resume.
 
 **Hero copy:**
-- [ ] Headline: "Never lose an AI coding conversation" (or similar)
-- [ ] Subhead: "Claude Code, Codex, and Gemini sessions in one searchable timeline." (multi-provider now ships — parsers landed 2026-02-10)
-- [ ] Note: "Local-first. Self-host anytime. Hosted beta waitlist."
+- [x] Headline: "Never lose an AI coding conversation" (or similar)
+- [x] Subhead: "Claude Code, Codex, and Gemini sessions in one searchable timeline." (multi-provider now ships — parsers landed 2026-02-10)
+- [x] Note: "Local-first. Self-host anytime. Hosted beta waitlist."
 
 **How It Works:**
-- [ ] Step 1: "Install" → Ships sessions from Claude Code, Codex CLI, and Gemini CLI
-- [ ] Step 2: "Search" → Keyword search now (FTS5-powered)
-- [ ] Step 3: "Resume" → Forum resume is Claude-only; Timeline resume planned
+- [x] Step 1: "Install" → Ships sessions from Claude Code, Codex CLI, and Gemini CLI
+- [x] Step 2: "Search" → Keyword search now (FTS5-powered)
+- [x] Step 3: "Resume" → Forum resume is Claude-only; Timeline resume planned
 
 **Cut/minimize:**
-- [ ] IntegrationsSection (wrong story — we're not about connecting apps)
-- [ ] SkillsSection (power user feature, not hero)
+- [x] IntegrationsSection — kept as "Session Sources" (provider sync status is core story); moved up after HowItWorks
+- [x] SkillsSection — collapsed to compact single-line mention; moved below Pricing
 - [ ] Move Oikos chat to "Features" section, not hero
 
 **Files:** `HeroSection.tsx`, `HowItWorksSection.tsx`, `IntegrationsSection.tsx`, `SkillsSection.tsx`
