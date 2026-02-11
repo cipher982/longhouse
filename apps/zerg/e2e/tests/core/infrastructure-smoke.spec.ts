@@ -25,11 +25,11 @@ test.describe('Infrastructure - Core', () => {
   test('frontend loads successfully', async ({ page }) => {
     await page.goto('/');
 
-    // Root should redirect to timeline in auth-disabled E2E mode.
-    await expect(page).toHaveURL(/\/timeline/);
+    // Root serves the landing page (no redirect).
+    await expect(page).toHaveURL(/\/$/);
 
-    // Wait for layout to mount.
-    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
+    // Wait for landing page to mount.
+    await expect(page.locator('.landing-page')).toBeVisible({ timeout: 15000 });
 
     // Verify page has a title
     const title = await page.title();
