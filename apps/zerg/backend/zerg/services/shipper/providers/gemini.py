@@ -18,6 +18,7 @@ from typing import Iterator
 
 from zerg.services.shipper.parser import ParsedEvent
 from zerg.services.shipper.parser import ParsedSession
+from zerg.services.shipper.providers import registry
 
 logger = logging.getLogger(__name__)
 
@@ -132,9 +133,9 @@ class GeminiProvider:
         if isinstance(data, list):
             return data
         if isinstance(data, dict):
-            if "messages" in data:
+            if "messages" in data and isinstance(data["messages"], list):
                 return data["messages"]
-            if "history" in data:
+            if "history" in data and isinstance(data["history"], list):
                 return data["history"]
         return []
 
@@ -306,3 +307,7 @@ class GeminiProvider:
                             return str(p.parent)
                         return str(p)
         return None
+
+
+# Auto-register
+registry.register(GeminiProvider())

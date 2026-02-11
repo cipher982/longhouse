@@ -20,6 +20,7 @@ from typing import Iterator
 
 from zerg.services.shipper.parser import ParsedEvent
 from zerg.services.shipper.parser import ParsedSession
+from zerg.services.shipper.providers import registry
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,8 @@ def _parse_tool_output(raw_output: str) -> str | None:
     try:
         parsed = json.loads(raw_output)
         if isinstance(parsed, dict):
-            return parsed.get("output", raw_output)
+            output = parsed.get("output", raw_output)
+            return str(output) if not isinstance(output, str) else output
         return str(parsed)
     except (json.JSONDecodeError, TypeError):
         return raw_output
@@ -298,3 +300,7 @@ class CodexProvider:
         if len(parts) >= 7:
             return parts[6]
         return stem
+
+
+# Auto-register
+registry.register(CodexProvider())

@@ -27,8 +27,10 @@ from uuid import uuid4
 
 import httpx
 
-# Import claude provider to trigger auto-registration in global registry
+# Import providers to trigger auto-registration in global registry
 import zerg.services.shipper.providers.claude  # noqa: F401
+import zerg.services.shipper.providers.codex  # noqa: F401
+import zerg.services.shipper.providers.gemini  # noqa: F401
 from zerg.services.shipper.parser import ParsedEvent
 from zerg.services.shipper.parser import extract_session_metadata
 from zerg.services.shipper.parser import parse_session_file
@@ -178,8 +180,31 @@ class SessionShipper:
         results.sort(key=lambda x: x[1], reverse=True)
         return [(path, name) for path, _, name in results]
 
+    @staticmethod
+    def _new_offset_for(session_file: Path) -> int:
+        """Compute the state offset to store after shipping a file.
+
+        For JSON files (non-appendable), stores mtime as int so that
+        _has_new_content can detect rewrites.  For JSONL files, stores
+        the byte size for incremental reads.
+        """
+        stat = session_file.stat()
+        if session_file.suffix == ".json":
+            return int(stat.st_mtime)
+        return stat.st_size
+
     def _has_new_content(self, path: Path) -> bool:
         """Check if a session file has new content since last ship."""
+        # JSON-based providers (non-appendable) — use mtime comparison
+        if path.suffix == ".json":
+            try:
+                file_mtime = path.stat().st_mtime
+                last_mtime = self.state.get_offset(str(path))
+                # offset field stores mtime (as int) for JSON files
+                return file_mtime > last_mtime or last_mtime == 0
+            except (OSError, IOError):
+                return False
+        # JSONL-based providers — use byte offset comparison
         try:
             file_size = path.stat().st_size
             last_offset = self.state.get_offset(str(path))
@@ -245,7 +270,7 @@ class SessionShipper:
 
         if not events:
             # No new events, but update offset to current file size
-            new_offset = session_file.stat().st_size
+            new_offset = self._new_offset_for(session_file)
             existing = self.state.get_session(file_path_str)
             if existing:
                 self.state.set_offset(
@@ -288,7 +313,7 @@ class SessionShipper:
             api_result = await self._post_ingest(payload)
 
             # Update state with new offset (use file size to ensure we don't reparse)
-            new_offset = session_file.stat().st_size
+            new_offset = self._new_offset_for(session_file)
 
             self.state.set_offset(
                 file_path_str,
@@ -310,7 +335,7 @@ class SessionShipper:
             self.spool.enqueue(payload)
 
             # Still update offset so we don't re-parse these events
-            new_offset = session_file.stat().st_size
+            new_offset = self._new_offset_for(session_file)
             self.state.set_offset(
                 file_path_str,
                 new_offset,
@@ -331,7 +356,7 @@ class SessionShipper:
             self.spool.enqueue(payload)
 
             # Still update offset so we don't re-parse these events
-            new_offset = session_file.stat().st_size
+            new_offset = self._new_offset_for(session_file)
             self.state.set_offset(
                 file_path_str,
                 new_offset,
@@ -359,7 +384,7 @@ class SessionShipper:
                 logger.warning(f"Server error ({status_code}), spooling {len(events)} events: {e}")
                 self.spool.enqueue(payload)
 
-                new_offset = session_file.stat().st_size
+                new_offset = self._new_offset_for(session_file)
                 self.state.set_offset(
                     file_path_str,
                     new_offset,
@@ -376,7 +401,7 @@ class SessionShipper:
 
             # Other 4xx errors - log and skip (bad payload, won't retry)
             logger.warning(f"Client error ({status_code}), skipping {len(events)} events: {e}")
-            new_offset = session_file.stat().st_size
+            new_offset = self._new_offset_for(session_file)
             self.state.set_offset(
                 file_path_str,
                 new_offset,
