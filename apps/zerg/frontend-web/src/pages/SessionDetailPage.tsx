@@ -260,6 +260,15 @@ export default function SessionDetailPage() {
   // Event role filter
   const [eventFilter, setEventFilter] = useState<'all' | 'messages' | 'tools'>('all');
 
+  // Text search with debounce
+  const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchQuery), 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
   // Expanded state for tool calls
   const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
   const [highlightedEventId, setHighlightedEventId] = useState<number | null>(null);
@@ -292,13 +301,25 @@ export default function SessionDetailPage() {
     }
   };
 
-  // Client-side event filter
+  // Client-side event filter + text search
   const filteredEvents = useMemo(() => {
-    if (eventFilter === 'all') return events;
-    if (eventFilter === 'messages') return events.filter(e => e.role === 'user' || e.role === 'assistant');
-    // tools
-    return events.filter(e => e.role === 'tool' || e.tool_name);
-  }, [events, eventFilter]);
+    let result = events;
+    if (eventFilter === 'messages') result = result.filter(e => e.role === 'user' || e.role === 'assistant');
+    else if (eventFilter === 'tools') result = result.filter(e => e.role === 'tool' || e.tool_name);
+
+    if (debouncedSearch.trim()) {
+      const q = debouncedSearch.toLowerCase();
+      result = result.filter(e => {
+        if (e.content_text?.toLowerCase().includes(q)) return true;
+        if (e.tool_name?.toLowerCase().includes(q)) return true;
+        if (e.tool_output_text?.toLowerCase().includes(q)) return true;
+        if (e.tool_input_json && JSON.stringify(e.tool_input_json).toLowerCase().includes(q)) return true;
+        return false;
+      });
+    }
+
+    return result;
+  }, [events, eventFilter, debouncedSearch]);
 
   const messageCount = useMemo(
     () => events.filter(e => e.role === 'user' || e.role === 'assistant').length,
@@ -516,27 +537,49 @@ export default function SessionDetailPage() {
             <span className="timeline-count">{events.length} events</span>
           </div>
 
-          {/* Event role filter */}
+          {/* Event role filter + search */}
           {events.length > 0 && (
             <div className="session-detail-filters">
-              {(['all', 'messages', 'tools'] as const).map(filter => (
-                <button
-                  key={filter}
-                  className={`filter-btn ${eventFilter === filter ? 'active' : ''}`}
-                  onClick={() => setEventFilter(filter)}
-                >
-                  {filter === 'all' ? `All (${events.length})` :
-                   filter === 'messages' ? `Messages (${messageCount})` :
-                   `Tools (${toolCount})`}
-                </button>
-              ))}
+              <div className="filter-btn-group">
+                {(['all', 'messages', 'tools'] as const).map(filter => (
+                  <button
+                    key={filter}
+                    className={`filter-btn ${eventFilter === filter ? 'active' : ''}`}
+                    onClick={() => setEventFilter(filter)}
+                  >
+                    {filter === 'all' ? `All (${events.length})` :
+                     filter === 'messages' ? `Messages (${messageCount})` :
+                     `Tools (${toolCount})`}
+                  </button>
+                ))}
+              </div>
+              <div className="event-search-wrapper">
+                <input
+                  type="text"
+                  className="event-search-input"
+                  placeholder="Search events..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                />
+                {debouncedSearch.trim() && (
+                  <span className="event-search-count">
+                    {filteredEvents.length} match{filteredEvents.length !== 1 ? "es" : ""}
+                  </span>
+                )}
+              </div>
             </div>
           )}
 
           {filteredEvents.length === 0 ? (
             <EmptyState
               title="No events"
-              description={eventFilter !== 'all' ? "No events match the selected filter." : "This session has no recorded events."}
+              description={
+                debouncedSearch.trim()
+                  ? `No events match "${debouncedSearch}".`
+                  : eventFilter !== 'all'
+                    ? "No events match the selected filter."
+                    : "This session has no recorded events."
+              }
             />
           ) : (
             <div className="timeline-events">
