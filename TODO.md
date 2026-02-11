@@ -386,7 +386,7 @@ Update screenshots to show Timeline, not old dashboard.
 Ensure launch readiness without relying on scattered docs.
 
 - [x] Rewrite README to center Timeline value and 3 install paths (FTS5 + resume/provider copy aligned).
-- [ ] Add CTA from Chat to "View session trace" after a run.
+- [x] Add CTA from Chat to "View session trace" after a run.
 - [x] Improve Timeline detail header — status badge (completed/in-progress), environment badge, provider dot (commit `8c7db355`)
 - [x] Add basic metrics — tool count, turn count, duration shown in header badges (commit `8c7db355`)
 - [x] Add event role filters (All/Messages/Tools) in detail view (commit `8c7db355`).
