@@ -626,43 +626,43 @@ class TestBriefingEndpoint:
 
 
 # =====================================================================
-# _safe_parse_json (internal helper)
+# safe_parse_json (internal helper)
 # =====================================================================
 
 
 class TestSafeParseJson:
     def test_valid_json(self):
-        from zerg.services.session_processing.summarize import _safe_parse_json
+        from zerg.services.session_processing.summarize import safe_parse_json
 
-        result = _safe_parse_json('{"title": "Test", "summary": "OK."}')
+        result = safe_parse_json('{"title": "Test", "summary": "OK."}')
         assert result == {"title": "Test", "summary": "OK."}
 
     def test_markdown_fenced_json(self):
-        from zerg.services.session_processing.summarize import _safe_parse_json
+        from zerg.services.session_processing.summarize import safe_parse_json
 
-        result = _safe_parse_json('```json\n{"title": "Test"}\n```')
+        result = safe_parse_json('```json\n{"title": "Test"}\n```')
         assert result == {"title": "Test"}
 
     def test_json_with_prefix_text(self):
-        from zerg.services.session_processing.summarize import _safe_parse_json
+        from zerg.services.session_processing.summarize import safe_parse_json
 
-        result = _safe_parse_json('Here is the JSON: {"title": "Test"}')
+        result = safe_parse_json('Here is the JSON: {"title": "Test"}')
         assert result == {"title": "Test"}
 
     def test_invalid_json(self):
-        from zerg.services.session_processing.summarize import _safe_parse_json
+        from zerg.services.session_processing.summarize import safe_parse_json
 
-        result = _safe_parse_json("Not JSON at all")
+        result = safe_parse_json("Not JSON at all")
         assert result is None
 
     def test_empty_string(self):
-        from zerg.services.session_processing.summarize import _safe_parse_json
+        from zerg.services.session_processing.summarize import safe_parse_json
 
-        result = _safe_parse_json("")
+        result = safe_parse_json("")
         assert result is None
 
     def test_none(self):
-        from zerg.services.session_processing.summarize import _safe_parse_json
+        from zerg.services.session_processing.summarize import safe_parse_json
 
-        result = _safe_parse_json(None)
+        result = safe_parse_json(None)
         assert result is None

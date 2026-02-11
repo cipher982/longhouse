@@ -17,6 +17,7 @@ from .content import strip_noise
 from .summarize import SessionSummary
 from .summarize import batch_summarize
 from .summarize import quick_summary
+from .summarize import safe_parse_json
 from .summarize import structured_summary
 from .tokens import count_tokens
 from .tokens import truncate
@@ -45,4 +46,5 @@ __all__ = [
     "quick_summary",
     "structured_summary",
     "batch_summarize",
+    "safe_parse_json",
 ]

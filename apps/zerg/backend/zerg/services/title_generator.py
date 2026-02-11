@@ -8,13 +8,13 @@ Replaces the oikos-server proxy layer.
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
 
 import httpx
 
 from zerg.config import get_settings
+from zerg.services.session_processing import safe_parse_json
 
 # System prompt for title generation
 TITLE_SYSTEM_PROMPT = (
@@ -91,25 +91,6 @@ def _extract_output_text(response_json: dict[str, Any] | None) -> str | None:
     return None
 
 
-def _safe_parse_json_object(text: str | None) -> dict[str, Any] | None:
-    """Safely parse JSON, attempting recovery if malformed."""
-    if not isinstance(text, str):
-        return None
-
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        # Try to recover a JSON object substring
-        start = text.find("{")
-        end = text.rfind("}")
-        if start >= 0 and end > start:
-            try:
-                return json.loads(text[start : end + 1])
-            except json.JSONDecodeError:
-                return None
-        return None
-
-
 async def generate_conversation_title(messages: list[dict[str, Any]]) -> str | None:
     """Generate a short conversation title from messages.
 
@@ -179,7 +160,7 @@ async def generate_conversation_title(messages: list[dict[str, Any]]) -> str | N
         output_text = _extract_output_text(result)
 
         # Parse the JSON output
-        parsed = _safe_parse_json_object(output_text)
+        parsed = safe_parse_json(output_text)
         if parsed and isinstance(parsed.get("title"), str):
             return parsed["title"].strip() or None
 

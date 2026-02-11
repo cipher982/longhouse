@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import re
 from datetime import datetime
@@ -16,6 +15,7 @@ from zerg.config import get_settings
 from zerg.crud import memory_crud
 from zerg.database import get_session_factory
 from zerg.services import memory_embeddings
+from zerg.services.session_processing import safe_parse_json
 
 SUMMARY_SYSTEM_PROMPT = (
     "You are a summarizer that writes durable memory for a personal AI assistant. "
@@ -27,22 +27,6 @@ SUMMARY_SYSTEM_PROMPT = (
     "- summary_bullets: 3-6 short bullets\n"
     "- tags: 3-6 lowercase tags (no spaces)\n"
 )
-
-
-def _safe_parse_json(text: str | None) -> dict[str, Any] | None:
-    if not isinstance(text, str):
-        return None
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start >= 0 and end > start:
-            try:
-                return json.loads(text[start : end + 1])
-            except json.JSONDecodeError:
-                return None
-        return None
 
 
 def _extract_output_text(response: Any) -> str | None:
@@ -117,7 +101,7 @@ async def _generate_summary(task: str, result_text: str) -> dict[str, Any] | Non
     )
 
     output_text = _extract_output_text(response)
-    return _safe_parse_json(output_text)
+    return safe_parse_json(output_text)
 
 
 def _build_markdown(
