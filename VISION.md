@@ -629,6 +629,8 @@ The shipper daemon for providers without hook support (Codex, Gemini, Cursor):
 - Hook-based push implemented: Stop hook ships session on Claude Code response completion; SessionStart hook shows recent sessions.
 - Watcher daemon watches Claude, Codex, and Gemini session directories for real-time sync.
 
+**Testing:** Shipper smoke test (`make test-shipper-smoke`) validates the end-to-end ingest path: file parse → API post → session appears in timeline. Added 2026-02-11.
+
 **Magic moment:** user types in Claude Code -> hook fires on stop -> session appears in Longhouse before they switch tabs.
 
 ---
