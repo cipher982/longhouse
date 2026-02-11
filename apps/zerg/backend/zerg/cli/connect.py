@@ -88,30 +88,32 @@ def _is_localhost(url: str) -> bool:
 def _auto_create_token(url: str, device_name: str | None = None) -> str | None:
     """Try to auto-create a device token. Returns plain token or None.
 
-    For localhost (dev mode with AUTH_DISABLED): creates token without auth.
-    For remote URLs: prompts for password, uses cli-login + device token creation.
+    Strategy (works for both localhost and remote):
+    1. Try unauthenticated token creation (works when AUTH_DISABLED=1)
+    2. If that fails, prompt for password and use cli-login flow
+    3. If both fail, return None (caller falls back to manual flow)
     """
     device_name = device_name or socket.gethostname()
 
-    if _is_localhost(url):
-        # Dev mode: try creating token without auth (AUTH_DISABLED=1)
-        try:
-            with httpx.Client(timeout=10) as client:
-                resp = client.post(
-                    f"{url.rstrip('/')}/api/devices/tokens",
-                    json={"device_id": device_name},
-                )
-                if resp.status_code in (200, 201):
-                    return resp.json().get("token")
-        except Exception:
-            pass
-        return None
+    # Step 1: Try unauthenticated token creation (AUTH_DISABLED mode)
+    try:
+        with httpx.Client(timeout=10) as client:
+            resp = client.post(
+                f"{url.rstrip('/')}/api/devices/tokens",
+                json={"device_id": device_name},
+            )
+            if resp.status_code in (200, 201):
+                return resp.json().get("token")
+    except Exception:
+        pass
 
-    # Remote: prompt for password
+    # Step 2: Try password login
+    if url.startswith("http://"):
+        typer.echo("\u26a0 Warning: Sending password over unencrypted HTTP. Use HTTPS for production.")
+
     typer.echo("")
     password = typer.prompt("Password", hide_input=True)
 
-    # Step 1: Login to get short-lived JWT
     try:
         with httpx.Client(timeout=10) as client:
             login_resp = client.post(
@@ -143,7 +145,7 @@ def _auto_create_token(url: str, device_name: str | None = None) -> str | None:
         typer.secho("Login response missing token.", fg=typer.colors.RED)
         return None
 
-    # Step 2: Create device token using short-lived JWT
+    # Step 3: Create device token using short-lived JWT
     try:
         with httpx.Client(timeout=10) as client:
             token_resp = client.post(
