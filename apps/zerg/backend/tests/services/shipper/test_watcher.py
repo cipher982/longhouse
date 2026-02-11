@@ -462,10 +462,10 @@ class TestWatcherMultiProvider:
         # Wait for debounce + processing
         await asyncio.sleep(0.3)
 
-        # ship_session should have been called
-        if multi_provider_shipper.ship_session.call_count >= 1:
-            call_kwargs = multi_provider_shipper.ship_session.call_args
-            assert call_kwargs[1]["provider_name"] == "gemini"
+        # ship_session should have been called with gemini provider
+        assert multi_provider_shipper.ship_session.call_count >= 1
+        call_kwargs = multi_provider_shipper.ship_session.call_args
+        assert call_kwargs[1]["provider_name"] == "gemini"
 
         await watcher.stop()
 

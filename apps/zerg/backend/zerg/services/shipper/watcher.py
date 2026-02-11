@@ -295,7 +295,10 @@ class SessionWatcher:
                 logger.info(f"Shipping session: {path.name}")
 
                 try:
-                    provider_name = self._provider_for_path(path) or "claude"
+                    provider_name = self._provider_for_path(path)
+                    if provider_name is None:
+                        logger.warning("Could not determine provider for path %s, falling back to claude", path)
+                        provider_name = "claude"
                     result = await self.shipper.ship_session(path, provider_name=provider_name)
                     if result["events_inserted"] > 0:
                         logger.info(f"Shipped {result['events_inserted']} events " f"(skipped {result['events_skipped']} duplicates)")
@@ -321,6 +324,21 @@ class SessionWatcher:
 
                 if result.events_shipped > 0:
                     logger.info(f"Fallback scan: shipped {result.events_shipped} events from {result.sessions_shipped} sessions")
+
+                # Check for new provider directories to watch (late installs)
+                if self._observer and self._observer.is_alive():
+                    for provider in self.shipper._get_providers():
+                        watch_dir = self._get_watch_dir(provider)
+                        if watch_dir and watch_dir.exists():
+                            resolved = str(watch_dir.resolve())
+                            if resolved not in self._watch_dirs:
+                                try:
+                                    handler = SessionFileHandler(on_change=self._queue_ship)
+                                    self._observer.schedule(handler, str(watch_dir), recursive=True)
+                                    self._watch_dirs[resolved] = provider.name
+                                    logger.info("Late-discovered provider directory: %s (%s)", watch_dir, provider.name)
+                                except Exception as e:
+                                    logger.warning("Failed to watch late directory %s: %s", watch_dir, e)
 
             except asyncio.CancelledError:
                 break
