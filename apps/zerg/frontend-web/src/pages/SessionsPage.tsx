@@ -473,7 +473,7 @@ export default function SessionsPage() {
       <div className="sessions-page">
         <SectionHeader
           title="Timeline"
-          description="A unified view of your AI coding sessions across providers."
+          description="A unified view of your AI coding sessions."
         />
 
         {/* Filter Bar */}

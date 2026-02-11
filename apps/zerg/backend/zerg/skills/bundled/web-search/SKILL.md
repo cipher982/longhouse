@@ -1,8 +1,11 @@
 ---
 name: web-search
-description: "Search the web for information using various search providers."
+description: "Search the web for information using Tavily."
 emoji: "🔍"
-always: true
+primary_env: "TAVILY_API_KEY"
+requires:
+  env:
+    - TAVILY_API_KEY
 ---
 
 # Web Search Skill

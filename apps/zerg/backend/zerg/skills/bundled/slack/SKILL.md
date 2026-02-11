@@ -1,41 +1,38 @@
 ---
 name: slack
-description: "Send messages to Slack channels and users."
+description: "Send messages to Slack channels via incoming webhook."
 emoji: "💬"
-primary_env: "SLACK_BOT_TOKEN"
-requires:
-  env:
-    - SLACK_BOT_TOKEN
 ---
 
 # Slack Skill
 
-Send messages to Slack workspaces using the Slack API.
+Send messages to Slack channels via incoming webhooks.
 
 ## Available Tools
 
-- `slack_send_message` - Send a message to a channel or user
+- `send_slack_webhook` - Send a message to a Slack channel via webhook
 
 ## Configuration
 
-Requires a Slack Bot Token with the following scopes:
+Requires a Slack Incoming Webhook URL. Create one at https://api.slack.com/messaging/webhooks
 
-- `chat:write` - Send messages
-- `channels:read` - List channels (optional)
-
-Set `SLACK_BOT_TOKEN` in environment or configure in Fiche Settings.
+Configure the webhook URL in Settings > Connectors > Slack, or provide it directly via the `webhook_url` parameter.
 
 ## Example
 
 ```python
-slack_send_message(
-    channel="#general",
-    message="Hello from Zerg! :robot_face:"
+send_slack_webhook(
+    text="Hello from Longhouse!"
 )
 ```
 
-## Channel Formats
+## Rich Formatting
 
-- `#channel-name` - Public channel
-- `@username` - Direct message
-- Channel ID (C01234567) - Any channel by ID
+Supports Slack Block Kit for rich messages:
+
+```python
+send_slack_webhook(
+    text="Deployment completed",
+    blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": "*Status:* Success"}}]
+)
+```
