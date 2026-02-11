@@ -21,19 +21,19 @@ const steps: Step[] = [
     icon: <DownloadIcon width={32} height={32} />,
     number: "1",
     title: "Install",
-    description: "Self-host in under 2 minutes, or sign up for hosted beta. Ships Claude Code, Codex, and Gemini sessions. Cursor in progress."
+    description: "Self-host in under 2 minutes, or join the hosted beta. Ships sessions from Claude Code, Codex CLI, and Gemini CLI automatically."
   },
   {
     icon: <SearchIcon width={32} height={32} />,
     number: "2",
     title: "Search",
-    description: "Find where you solved it. FTS5-powered instant search across all sessions (launch requirement)."
+    description: "Find where you solved it. Instant full-text search across every session, tool call, and code snippet."
   },
   {
     icon: <SmartphoneIcon width={32} height={32} />,
     number: "3",
     title: "Resume",
-    description: "Continue any conversation from any device. Hosted keeps agents always-on."
+    description: "Pick up where you left off. Jump back into any session with full context — no more re-explaining."
   }
 ];
 

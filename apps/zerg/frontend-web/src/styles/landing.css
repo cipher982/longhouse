@@ -999,113 +999,46 @@
     }
   }
 
-  /* Skills Section */
-  .landing-skills {
-    padding: var(--space-20) 0;
-  }
-
-  .landing-skills-header {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: var(--space-3);
-    margin-bottom: var(--space-2);
+  /* Skills Section (compact) */
+  .landing-skills.landing-skills-compact {
+    padding: var(--space-10) 0;
+    border-top: 1px solid var(--color-border-secondary);
   }
 
   .landing-skills-header-icon {
     color: var(--color-brand-primary);
+    flex-shrink: 0;
   }
 
-  .landing-skills-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-    gap: var(--space-4);
-    max-width: 800px;
-    margin: var(--space-10) auto;
-  }
-
-  .landing-skill-card {
+  .landing-skills-compact-row {
     display: flex;
     align-items: flex-start;
-    gap: var(--space-3);
-    padding: var(--space-4);
-    background: var(--color-bg-elevated);
-    border: 1px solid var(--color-border-secondary);
-    border-radius: var(--radius-lg);
-    transition: border-color 0.2s, transform 0.2s;
-  }
-
-  .landing-skill-card:hover {
-    border-color: var(--color-brand-primary);
-    transform: translateY(-2px);
-  }
-
-  .landing-skill-icon {
-    flex-shrink: 0;
-    color: var(--color-brand-primary);
-    margin-top: 2px;
-  }
-
-  .landing-skill-info {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-  }
-
-  .landing-skill-info strong {
-    font-size: var(--font-size-base);
-    font-weight: var(--font-weight-semibold);
-    color: var(--color-text-primary);
-  }
-
-  .landing-skill-info span {
-    font-size: var(--font-size-sm);
-    color: var(--color-text-secondary);
-  }
-
-  .landing-skills-custom {
+    gap: var(--space-4);
     max-width: 600px;
-    margin: var(--space-10) auto 0;
-    text-align: center;
+    margin: 0 auto;
+    text-align: left;
   }
 
-  .landing-skills-custom h3 {
+  .landing-skills-compact-title {
     font-size: var(--font-size-lg);
     font-weight: var(--font-weight-semibold);
     color: var(--color-text-primary);
-    margin-bottom: var(--space-2);
+    margin-bottom: var(--space-1);
   }
 
-  .landing-skills-custom p {
+  .landing-skills-compact-desc {
+    font-size: var(--font-size-sm);
     color: var(--color-text-secondary);
-    margin-bottom: var(--space-4);
+    line-height: 1.6;
   }
 
-  .landing-skills-custom code {
+  .landing-skills-compact-desc code {
     background: var(--color-bg-tertiary);
     padding: var(--space-0-5) var(--space-2);
     border-radius: var(--radius-sm);
     font-family: var(--font-family-mono);
-    font-size: var(--font-size-sm);
+    font-size: var(--font-size-xs);
     color: var(--color-brand-secondary);
-  }
-
-  .landing-skills-code {
-    text-align: left;
-    background: var(--color-bg-tertiary);
-    border: 1px solid var(--color-border-secondary);
-    border-radius: var(--radius-lg);
-    padding: var(--space-4);
-    overflow-x: auto;
-  }
-
-  .landing-skills-code code {
-    background: none;
-    padding: 0;
-    font-family: var(--font-family-mono);
-    font-size: var(--font-size-sm);
-    color: var(--color-text-secondary);
-    white-space: pre;
   }
 
   /* Trust badges in Integrations */
