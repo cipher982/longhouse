@@ -41,7 +41,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 ### In Progress
 | Section | Status | Notes |
 |---------|--------|-------|
-| Landing Page Redesign | ~99% | Phase 2+5 complete, CTA checklist done (commit 62108045); Phase 5 fully verified; Phase 6 visual assets remaining |
+| Landing Page Redesign | 100% | All phases done. Screenshots captured, section order optimized, meta tags fixed, dead CSS removed. |
 | Control Plane | ~45% | Scaffold + provisioner + CI gate done; OAuth/billing/runtime image pending |
 
 ### Not Started
@@ -57,10 +57,9 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ## What's Next (Priority Order)
 
-1. **Landing Page Visual Assets (Phase 6)** — Capture timeline screenshots for landing page and README. [Details](#product-landing-page-redesign--full-6)
-2. **Control Plane: OAuth + Stripe (Phases 1-2)** — Add Google OAuth at control plane level and Stripe checkout/webhooks for hosted beta signup flow. [Details](#infra-control-plane--hosted-beta-8)
-3. **HN Launch Prep** — Video walkthrough wired to `/videos/timeline-demo.mp4`; run `make video-remotion-web` to generate via Remotion. [Details](#launch-hn-launch-readiness--remaining-4)
-4. **Public Launch Checklist** — UI smoke snapshots remaining; shipper smoke test done. [Details](#launch-public-launch-checklist-6)
+1. **Control Plane: OAuth + Stripe (Phases 1-2)** — Add Google OAuth at control plane level and Stripe checkout/webhooks for hosted beta signup flow. [Details](#infra-control-plane--hosted-beta-8)
+2. **HN Launch Prep** — Landing page ready; video walkthrough wired to `/videos/timeline-demo.mp4`. [Details](#launch-hn-launch-readiness--remaining-4)
+3. **Public Launch Checklist** — UI smoke snapshots remaining; shipper smoke test done. [Details](#launch-public-launch-checklist-6)
 
 ---
 
@@ -248,8 +247,13 @@ Update screenshots to show Timeline, not old dashboard.
 
 - [x] Update screenshot manifest (`scripts/screenshots.yaml`) for timeline/search/session-detail
 - [x] Update landing components to reference new image filenames (`timeline-preview.png`, `session-detail-preview.png`)
-- [ ] Generate screenshots: `make dev-demo && make marketing-capture`
-- [ ] Add provider logos inline (Claude, Codex, Cursor, Gemini)
+- [x] Generate screenshots with dynamic session IDs (commits b208cd61, f8b52e60)
+- [x] Add Search as 3rd tab in ProductShowcase (commit e9be2bf5)
+- [x] Reorder sections: product demo immediately after hero (commit 21681dd6)
+- [x] Remove redundant DeploymentComparison section (commit 9a8cf1cc)
+- [x] Fix meta tags/OG for HN sharing — was still "Swarmlet" branding (commit b446744a)
+- [x] Remove 3.7MB dead images + 13 dead CSS rules (commits e9be2bf5, 5c637695)
+- [ ] Add provider logos inline (Claude, Codex, Cursor, Gemini) — nice-to-have
 
 **Files:** `scripts/screenshots.yaml`, `public/images/landing/`, `HeroSection.tsx`, `ProductShowcase.tsx`
 
