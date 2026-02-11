@@ -46,6 +46,23 @@ from zerg.services.shipper import uninstall_service
 
 app = typer.Typer(help="Ship Claude Code sessions to Longhouse")
 
+
+def _verify_and_warn_path() -> None:
+    """Run fresh-shell PATH verification and print warnings if any."""
+    try:
+        from zerg.cli.onboard import verify_shell_path
+
+        warnings = verify_shell_path()
+        if warnings:
+            typer.echo("")
+            typer.secho("  PATH check:", fg=typer.colors.YELLOW, bold=True)
+            for warning in warnings:
+                typer.secho(f"  {warning}", fg=typer.colors.YELLOW)
+    except Exception:
+        # Non-critical — don't fail the install if verification errors
+        pass
+
+
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
@@ -688,6 +705,9 @@ def _handle_hooks_only(
     except Exception as e:
         typer.secho(f"  [WARN] Codex MCP server registration failed: {e}", fg=typer.colors.YELLOW)
 
+    # Verify PATH in a fresh shell
+    _verify_and_warn_path()
+
     typer.echo("")
     typer.echo("Hooks installed. Claude Code will ship sessions on each Stop event")
     typer.echo("and show recent sessions on SessionStart.")
@@ -746,6 +766,9 @@ def _handle_install(
             typer.secho(f"  [OK] {action}", fg=typer.colors.GREEN)
     except Exception as e:
         typer.secho(f"  [WARN] Codex MCP server registration failed: {e}", fg=typer.colors.YELLOW)
+
+    # Verify PATH in a fresh shell
+    _verify_and_warn_path()
 
     typer.echo("")
     typer.echo("To check status: longhouse connect --status")
