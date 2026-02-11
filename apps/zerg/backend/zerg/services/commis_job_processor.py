@@ -602,7 +602,18 @@ class CommisJobProcessor:
                     logger.warning(f"Failed to prepare session for resume: {resume_error}")
                     # Continue without resume - treat as new session
 
-            # 4. Emit commis_started event for UI (before long-running execution)
+            # 4. Inject AGENTS.md instruction chain into workspace (best-effort)
+            try:
+                from zerg.services.workspace_manager import inject_agents_md
+
+                inject_agents_md(
+                    workspace.path,
+                    project_name=job_config.get("project"),
+                )
+            except Exception as agents_md_error:
+                logger.warning(f"Failed to inject AGENTS.md for job {job_id}: {agents_md_error}")
+
+            # 5. Emit commis_started event for UI (before long-running execution)
             if oikos_run_id:
                 try:
                     from zerg.services.event_store import append_run_event
@@ -619,7 +630,7 @@ class CommisJobProcessor:
                 except Exception as started_error:
                     logger.warning(f"Failed to emit commis_started event for job {job_id}: {started_error}")
 
-            # 5. Run commis in workspace (LONG-RUNNING - no DB session held!)
+            # 6. Run commis in workspace (LONG-RUNNING - no DB session held!)
             logger.info(f"Running workspace commis for job {job_id} in {workspace.path}")
             hook_env = _build_hook_env(job_id)
             result = await cloud_executor.run_commis(
@@ -630,7 +641,7 @@ class CommisJobProcessor:
                 env_vars=hook_env,
             )
 
-            # 6. Capture git diff (best-effort, don't fail job on diff errors)
+            # 7. Capture git diff (best-effort, don't fail job on diff errors)
             try:
                 diff = await workspace_manager.capture_diff(workspace)
                 if diff:
@@ -641,7 +652,7 @@ class CommisJobProcessor:
                 logger.warning(f"Failed to capture diff for job {job_id}: {diff_error}")
                 diff = ""  # Ensure diff is empty on error
 
-            # 7. Ingest session JSONL into agent timeline (best-effort)
+            # 8. Ingest session JSONL into agent timeline (best-effort)
             if result and result.status == "success":
                 try:
                     _ingest_workspace_session(
@@ -663,7 +674,7 @@ class CommisJobProcessor:
                 except Exception:
                     pass
 
-        # 7. Open NEW short-lived session to update final job status
+        # 9. Open NEW short-lived session to update final job status
         with db_session() as update_db:
             update_job = update_db.query(crud.CommisJob).filter(crud.CommisJob.id == job_id).first()
             if not update_job:
@@ -695,7 +706,7 @@ class CommisJobProcessor:
                 final_error = update_job.error if update_job.status == "failed" else None
                 update_db.commit()
 
-        # 8. Save artifacts (best-effort - failures should NOT change job status)
+        # 10. Save artifacts (best-effort - failures should NOT change job status)
         # For cancelled jobs, still save partial results if available
         if result and artifact_store:
             try:
@@ -712,7 +723,7 @@ class CommisJobProcessor:
             except Exception as complete_error:
                 logger.warning(f"Failed to complete artifact commis for job {job_id}: {complete_error}")
 
-        # 9. Emit completion event for SSE (if oikos run exists)
+        # 11. Emit completion event for SSE (if oikos run exists)
         # IMPORTANT: These are best-effort operations. Failures here should NOT
         # change the job status - the job already succeeded/failed above.
         if oikos_run_id:
