@@ -1,127 +1,124 @@
-"""Tests for the tool registry and built-in tools."""
+"""Tests for the ImmutableToolRegistry and runtime tool helpers."""
 
 import pytest
 
-from zerg.tools import ToolRegistry
-from zerg.tools import register_tool
+from zerg.tools import ImmutableToolRegistry, add_runtime_tool, clear_runtime_tools, get_registry, reset_registry
 from zerg.types.tools import Tool as ZergTool
 
 
-class TestToolRegistry:
-    """Test the ToolRegistry functionality."""
+class TestImmutableToolRegistry:
+    """Test ImmutableToolRegistry functionality (replaces legacy mutable ToolRegistry tests)."""
 
-    def test_singleton_pattern(self):
-        """Test that ToolRegistry follows singleton pattern."""
-        registry1 = ToolRegistry()
-        registry2 = ToolRegistry()
-        assert registry1 is registry2
+    def test_build_and_lookup(self):
+        """Build a registry from a tool list and look up by name."""
+        tool = ZergTool.from_function(func=lambda: "ok", name="my_tool", description="desc")
+        reg = ImmutableToolRegistry.build([[tool]])
 
-    def test_register_tool_decorator(self):
-        """Test the @register_tool decorator."""
-        # Get registry but don't clear it (to avoid affecting other tests)
-        registry = ToolRegistry()
+        assert reg.get("my_tool") is tool
+        assert reg.get("missing") is None
 
-        @register_tool(name="test_tool", description="A test tool")
-        def my_test_tool(x: int) -> int:
-            """Double the input."""
-            return x * 2
+    def test_duplicate_names_raise(self):
+        """Duplicate tool names across sources must raise ValueError."""
+        tool_a = ZergTool.from_function(func=lambda: "a", name="dup", description="A")
+        tool_b = ZergTool.from_function(func=lambda: "b", name="dup", description="B")
 
-        # Check tool was registered
-        tool = registry.get_tool("test_tool")
-        assert tool is not None
-        assert isinstance(tool, ZergTool)
-        assert tool.name == "test_tool"
-        assert tool.description == "A test tool"
+        with pytest.raises(ValueError, match="Duplicate tool name"):
+            ImmutableToolRegistry.build([[tool_a, tool_b]])
 
-        # Test tool execution
-        result = tool.invoke({"x": 5})
-        assert result == 10
+    def test_filter_by_allowlist_exact(self):
+        """Exact names in the allowlist are returned."""
+        tool_a = ZergTool.from_function(func=lambda: "a", name="http_request", description="A")
+        tool_b = ZergTool.from_function(func=lambda: "b", name="http_post", description="B")
+        tool_c = ZergTool.from_function(func=lambda: "c", name="math_eval", description="C")
 
-    def test_get_all_tools(self):
-        """Test getting all registered tools."""
-        # Create a new registry instance for this test
-        test_registry = ToolRegistry()
-        test_registry._tools = {}  # Clear it
+        reg = ImmutableToolRegistry.build([[tool_a, tool_b, tool_c]])
 
-        # Create tools directly as ZergTool instances
-        tool1 = ZergTool.from_function(func=lambda: "tool1", name="tool1", description="Tool 1")
-        tool2 = ZergTool.from_function(func=lambda: "tool2", name="tool2", description="Tool 2")
+        filtered = reg.filter_by_allowlist(["http_request", "math_eval"])
+        names = [t.name for t in filtered]
+        assert sorted(names) == ["http_request", "math_eval"]
 
-        test_registry.register(tool1)
-        test_registry.register(tool2)
+    def test_filter_by_allowlist_wildcard(self):
+        """Wildcard patterns match tool name prefixes."""
+        tool_a = ZergTool.from_function(func=lambda: "a", name="http_request", description="A")
+        tool_b = ZergTool.from_function(func=lambda: "b", name="http_post", description="B")
+        tool_c = ZergTool.from_function(func=lambda: "c", name="math_eval", description="C")
 
-        tools = test_registry.get_all_tools()
-        assert len(tools) == 2
-        tool_names = [t.name for t in tools]
-        assert "tool1" in tool_names
-        assert "tool2" in tool_names
+        reg = ImmutableToolRegistry.build([[tool_a, tool_b, tool_c]])
 
-    def test_filter_tools_by_allowlist(self):
-        """Test filtering tools by allowlist."""
-        # Create a new registry instance for this test
-        test_registry = ToolRegistry()
-        test_registry._tools = {}  # Clear it
+        filtered = reg.filter_by_allowlist(["http_*"])
+        names = [t.name for t in filtered]
+        assert sorted(names) == ["http_post", "http_request"]
 
-        # Create tools directly as ZergTool instances
-        http_request_tool = ZergTool.from_function(
-            func=lambda: "http_request", name="http_request", description="HTTP Request"
-        )
-        http_post_tool = ZergTool.from_function(
-            func=lambda: "http_post", name="http_post", description="HTTP POST"
-        )
-        math_eval_tool = ZergTool.from_function(
-            func=lambda: "math_eval", name="math_eval", description="Math eval"
-        )
+    def test_filter_by_allowlist_empty_returns_all(self):
+        """Empty or None allowlist returns all tools."""
+        tool = ZergTool.from_function(func=lambda: "a", name="tool_a", description="A")
+        reg = ImmutableToolRegistry.build([[tool]])
 
-        test_registry.register(http_request_tool)
-        test_registry.register(http_post_tool)
-        test_registry.register(math_eval_tool)
+        assert len(reg.filter_by_allowlist([])) == 1
+        assert len(reg.filter_by_allowlist(None)) == 1
 
-        # Test with specific allowlist
-        tools = test_registry.filter_tools_by_allowlist(["http_request", "math_eval"])
-        tool_names = [t.name for t in tools]
-        assert len(tools) == 2
-        assert "http_request" in tool_names
-        assert "math_eval" in tool_names
-        assert "http_post" not in tool_names
+    def test_list_names_and_all_tools(self):
+        """list_names / all_tools / get_all_tools return correct counts."""
+        tools = [
+            ZergTool.from_function(func=lambda: "1", name="tool1", description="T1"),
+            ZergTool.from_function(func=lambda: "2", name="tool2", description="T2"),
+        ]
+        reg = ImmutableToolRegistry.build([tools])
 
-        # Test with wildcard
-        tools = test_registry.filter_tools_by_allowlist(["http_*"])
-        tool_names = [t.name for t in tools]
-        assert len(tools) == 2
-        assert "http_request" in tool_names
-        assert "http_post" in tool_names
-        assert "math_eval" not in tool_names
+        assert sorted(reg.list_names()) == ["tool1", "tool2"]
+        assert len(reg.all_tools()) == 2
+        assert len(reg.get_all_tools()) == 2
 
-        # Test with empty allowlist (all tools allowed)
-        tools = test_registry.filter_tools_by_allowlist([])
-        assert len(tools) == 3
+    def test_has_tool(self):
+        tool = ZergTool.from_function(func=lambda: "x", name="exists", description="E")
+        reg = ImmutableToolRegistry.build([[tool]])
 
-        # Test with None allowlist (all tools allowed)
-        tools = test_registry.filter_tools_by_allowlist(None)
-        assert len(tools) == 3
+        assert reg.has_tool("exists")
+        assert not reg.has_tool("missing")
+
+
+class TestRuntimeTools:
+    """Test the module-level runtime tool helpers."""
+
+    def test_add_and_clear_runtime_tools(self):
+        """add_runtime_tool stores tools; clear_runtime_tools empties the list."""
+        tool = ZergTool.from_function(func=lambda: "rt", name="runtime_tool", description="RT")
+        add_runtime_tool(tool)
+
+        # The runtime tool should appear in a freshly built production registry.
+        reset_registry()
+        reg = get_registry()
+        assert reg.has_tool("runtime_tool")
+
+        # After clearing, a rebuild should not include it.
+        clear_runtime_tools()
+        reset_registry()
+        reg = get_registry()
+        assert not reg.has_tool("runtime_tool")
+
+    def test_duplicate_runtime_tool_raises(self):
+        tool = ZergTool.from_function(func=lambda: "rt", name="dup_rt", description="RT")
+        add_runtime_tool(tool)
+        with pytest.raises(ValueError, match="already registered"):
+            add_runtime_tool(tool)
 
 
 class TestBuiltinTools:
     """Test the built-in tools."""
 
-    def test_builtin_tools_registered(self):
-        """Test that built-in tools are registered when imported."""
-        # Import builtin tools to trigger registration
-        import zerg.tools.builtin  # noqa: F401
+    def test_builtin_tools_in_registry(self):
+        """Built-in tools are present in the production registry."""
+        reset_registry()
+        reg = get_registry()
 
-        registry = ToolRegistry()
-
-        # Check that expected tools are registered
         expected_tools = [
             "get_current_time",
             "datetime_diff",
             "http_request",
         ]
-
-        registered_names = registry.list_tool_names()
+        names = reg.get_tool_names()
         for tool_name in expected_tools:
-            assert tool_name in registered_names
+            assert tool_name in names
 
     def test_get_current_time(self):
         """Test the get_current_time tool."""
@@ -129,35 +126,22 @@ class TestBuiltinTools:
 
         result = get_current_time()
         assert isinstance(result, str)
-        # Should be ISO format
         assert "T" in result
 
     def test_datetime_diff(self):
         """Test the datetime_diff tool."""
         from zerg.tools.builtin.datetime_tools import datetime_diff
 
-        # Test basic difference
         start = "2025-01-01T00:00:00"
         end = "2025-01-01T01:00:00"
 
-        # Test seconds (default)
-        diff = datetime_diff(start, end)
-        assert diff == 3600.0
+        assert datetime_diff(start, end) == 3600.0
+        assert datetime_diff(start, end, "minutes") == 60.0
+        assert datetime_diff(start, end, "hours") == 1.0
 
-        # Test minutes
-        diff = datetime_diff(start, end, "minutes")
-        assert diff == 60.0
-
-        # Test hours
-        diff = datetime_diff(start, end, "hours")
-        assert diff == 1.0
-
-        # Test days
         start = "2025-01-01T00:00:00"
         end = "2025-01-02T00:00:00"
-        diff = datetime_diff(start, end, "days")
-        assert diff == 1.0
+        assert datetime_diff(start, end, "days") == 1.0
 
-        # Test invalid unit
         with pytest.raises(ValueError, match="Invalid unit"):
             datetime_diff(start, end, "invalid")

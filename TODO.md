@@ -747,15 +747,15 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 - ~~[Docs vs code] `jobs/git_sync.py` class docstring says "Thread-safety: Uses file lock," but the implementation is async with asyncio + `asynccontextmanager` and `asyncio.to_thread`; it's concurrency-safety, not thread-safety.~~ ✅ Fixed (2026-02-10)
 - ~~[Bug] `jobs/commis.py` `_run_job` returns early if `extend_lease` fails before execution, leaving the job in `claimed` state until lease expiry (no reschedule/mark-dead handling).~~ ✅ Fixed (2026-02-10)
 - ~~[Bug] `GitSyncService._get_auth_url()` mangles SSH-style repo URLs when `token` is set (e.g., `git@github.com:user/repo.git` → malformed `@@` URL); should reject token auth for SSH URLs or handle separately.~~ ✅ Fixed (2026-02-10)
-- [Docs vs code] Slack skill doc is wrong: `apps/zerg/backend/zerg/skills/bundled/slack/SKILL.md` references `slack_send_message` and `SLACK_BOT_TOKEN`, but the actual tool is `send_slack_webhook` and it uses incoming webhook URLs (connector/env), not a bot token.
+- ~~[Docs vs code] Slack skill doc is wrong: `apps/zerg/backend/zerg/skills/bundled/slack/SKILL.md` references `slack_send_message` and `SLACK_BOT_TOKEN`, but the actual tool is `send_slack_webhook` and it uses incoming webhook URLs (connector/env), not a bot token.~~ ✅ Fixed (2026-02-10)
 - ~~[Docs vs code] `services/shipper/spool.py` docstring claims replay uses idempotency keys, but the shipper does not send idempotency keys (dedupe relies on DB unique constraints).~~ ✅ Fixed (2026-02-10)
-- [Docs vs code] GitHub skill doc says `GITHUB_TOKEN` env var works; `github_tools` only resolves tokens from connectors or explicit parameters (no env fallback).
-- [Docs vs code] Web search skill docs omit required `TAVILY_API_KEY`: `web_search` errors when the env var is missing, but `apps/zerg/backend/zerg/skills/bundled/web-search/SKILL.md` has no env requirement and is marked `always: true`.
+- ~~[Docs vs code] GitHub skill doc says `GITHUB_TOKEN` env var works; `github_tools` only resolves tokens from connectors or explicit parameters (no env fallback).~~ ✅ Fixed (2026-02-10)
+- ~~[Docs vs code] Web search skill docs omit required `TAVILY_API_KEY`: `web_search` errors when the env var is missing, but `apps/zerg/backend/zerg/skills/bundled/web-search/SKILL.md` has no env requirement and is marked `always: true`.~~ ✅ Fixed (2026-02-10)
 - [Docs vs infra] VISION Life Hub config uses `ZERG_API_URL=https://longhouse.ai/api`, but `https://longhouse.ai/api/*` returns 502; the working API host is `https://api.longhouse.ai`.
 - ~~[Docs vs UI] Backend notifications use `https://longhouse.ai/runs/{run.id}` (see `oikos_service.py`), but the frontend has no `/runs/:id` route; unknown paths redirect to LandingPage/Timeline, so run links are broken.~~ ✅ Fixed — URLs now point to /timeline (2026-02-10)
 - ~~[Docs vs code] CLI docs in `zerg/cli/__init__.py` and `zerg/cli/main.py` say `longhouse connect` is "continuous polling," but the CLI defaults to watch mode (polling only with `--poll`/`--interval`).~~ ✅ Fixed (2026-02-10)
 - [Docs vs code] `scripts/install.sh` only documents `LONGHOUSE_API_URL`; CLI reads it, but `longhouse connect` fallback still uses 47300 (docs imply 8080).
-- [Docs vs reality] Timeline page copy says "across providers," but real ingest only supports Claude Code; other providers are demo-only.
+- ~~[Docs vs reality] Timeline page copy says "across providers," but real ingest only supports Claude Code; other providers are demo-only.~~ ✅ Fixed (2026-02-10)
 - ~~[Docs vs reality] Public info pages (`PricingPage.tsx`, `SecurityPage.tsx`, `PrivacyPage.tsx`) still describe fiches/workflows, Google-only OAuth auth, and dashboard account management, which don't match the current timeline-first OSS flow.~~ ✅ Fixed (2026-02-10)
 - ~~[Docs vs code] DocsPage skills section says to add `SKILL.md` to `workspace/skills`; default loader path for OSS is `~/.longhouse/skills` unless a workspace path is configured.~~ ✅ Fixed (2026-02-10)
 - ~~[Docs vs code] Landing SkillsSection says Slack skill can "manage channels," but Slack tool is webhook-only (send message); no channel management/listing tools exist.~~ ✅ Fixed (2026-02-10)
@@ -774,10 +774,10 @@ Best → worst. Run scripts from the repo root.
 
 ### Legacy Tool Registry + Deprecated Code
 
-19. [ID 19] Remove mutable ToolRegistry singleton once tests updated.
+19. ~~[ID 19] Remove mutable ToolRegistry singleton once tests updated.~~ ✅ Done (2026-02-10)
 Evidence: `ideas/evidence/39_evidence_tool_registry_mutable_singleton.sh`
 
-20. [ID 20] Remove legacy ToolRegistry wiring in builtin tools init.
+20. ~~[ID 20] Remove legacy ToolRegistry wiring in builtin tools init.~~ ✅ Done (2026-02-10)
 Evidence: `ideas/evidence/80_evidence_builtin_init_legacy_registry.sh`
 
 21. ~~[ID 21] Drop non-lazy binder compatibility path.~~ ✅ Done (2026-02-10)

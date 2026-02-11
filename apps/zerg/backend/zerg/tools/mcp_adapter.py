@@ -126,10 +126,10 @@ class MCPToolAdapter:
                     # Create a wrapper function for this tool
                     wrapper_fn = self._create_tool_wrapper(tool_name, tool_spec)
 
-                    # Register with mutable runtime registry so callers can rebuild
-                    # the immutable production registry to include these tools.
+                    # Register as a runtime tool so the next immutable registry
+                    # rebuild (via refresh_registry) includes it.
                     try:
-                        from zerg.tools import ToolRegistry
+                        from zerg.tools import add_runtime_tool
                         from zerg.types.tools import Tool as StructuredTool
 
                         tool = StructuredTool.from_function(
@@ -137,7 +137,7 @@ class MCPToolAdapter:
                             name=f"{self.tool_prefix}{tool_name}",
                             description=tool_spec.get("description", f"MCP tool {tool_name}"),
                         )
-                        ToolRegistry().register(tool)
+                        add_runtime_tool(tool)
                         logger.info("Registered MCP tool: %s", f"{self.tool_prefix}{tool_name}")
                     except Exception as reg_err:  # noqa: BLE001
                         logger.error("Failed to register MCP tool %s: %s", tool_name, reg_err)
