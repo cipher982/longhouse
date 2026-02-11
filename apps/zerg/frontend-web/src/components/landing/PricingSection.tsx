@@ -49,7 +49,7 @@ export function PricingSection() {
       features: [
         "Full timeline and search",
         "SQLite database on your machine",
-        "Claude Code sync",
+        "Claude Code + Codex + Gemini sync",
         "Open source (Apache 2.0)",
       ],
       ctaText: "Get Started",

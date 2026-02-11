@@ -17,7 +17,7 @@ import { TrustSection } from "../components/landing/TrustSection";
 import { SocialProof } from "../components/landing/SocialProof";
 import { DeploymentOptions } from "../components/landing/DeploymentOptions";
 import { ComparisonTable } from "../components/landing/ComparisonTable";
-import { DeploymentComparison } from "../components/landing/DeploymentComparison";
+
 import { FooterCTA } from "../components/landing/FooterCTA";
 
 type LandingFxName = "particles" | "hero";
@@ -217,7 +217,6 @@ export default function LandingPage() {
         <IntegrationsSection />
         <ComparisonTable />
         <DeploymentOptions />
-        <DeploymentComparison />
         <PricingSection />
         <TrustSection />
         <SocialProof />
