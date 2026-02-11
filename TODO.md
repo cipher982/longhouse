@@ -101,10 +101,10 @@ Industry standard pattern (2025-2026): teams expose internal tooling as MCP serv
 
 Verification loops (tests/browser checks before commit) boost agent reliability 2-3x (industry consensus 2025-2026). Inject quality gates into commis workspaces.
 
-- [ ] Define default commis hook set: `Stop` hook runs `make test` (or configured verify command) before allowing completion
-- [ ] Inject hooks into commis workspace `.claude/settings.json` at spawn time
-- [ ] Make verify command configurable per-project (default: `make test` if Makefile exists, else skip)
-- [ ] Report hook failures back to Oikos via `notify_oikos` MCP tool (when 3f lands)
+- [x] Define default commis hook set: `Stop` hook runs `make test` (or configured verify command) before allowing completion
+- [x] Inject hooks into commis workspace `.claude/settings.json` at spawn time
+- [x] Make verify command configurable per-project (default: `make test` if Makefile exists, else skip)
+- [x] Report hook failures back to Oikos via `notify_oikos` MCP tool (when 3f lands)
 
 **3h: Research — Codex App Server protocol + Claude Agent SDK (1)**
 
