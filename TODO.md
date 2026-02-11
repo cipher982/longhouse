@@ -37,11 +37,13 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | Shipper Multi-Provider | DONE | Provider abstraction + Claude/Codex/Gemini parsers + review fixes |
 | Install/Onboarding | 100% | All items complete: installer, doctor, connect, hooks, MCP, PATH verify, install guide docs (commit 5757d63b) |
 | OSS First-Run UX | 100% | Auto-seed on first run + guided empty state + multi-CLI detection + "No CLI" guidance all complete |
+| Landing Page Redesign | 100% | All phases + meta/OG tags + docs/pricing rewrite + dead CSS removed |
+| AGENTS.md Accuracy Audit | DONE | Deploy section, generated paths, gotchas, checklist all verified |
+| OSS Packaging Decisions | ~66% | Shipper bundled (done), no built-in HTTPS (done), auto-token UX pending |
 
 ### In Progress
 | Section | Status | Notes |
 |---------|--------|-------|
-| Landing Page Redesign | 100% | All phases done. Screenshots captured, section order optimized, meta tags fixed, dead CSS removed. |
 | Control Plane | ~45% | Scaffold + provisioner + CI gate done; OAuth/billing/runtime image pending |
 
 ### Not Started
@@ -57,9 +59,9 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ## What's Next (Priority Order)
 
-1. **Control Plane: OAuth + Stripe (Phases 1-2)** — Add Google OAuth at control plane level and Stripe checkout/webhooks for hosted beta signup flow. [Details](#infra-control-plane--hosted-beta-8)
-2. **HN Launch Prep** — Landing page ready; video walkthrough wired to `/videos/timeline-demo.mp4`. [Details](#launch-hn-launch-readiness--remaining-4)
-3. **Public Launch Checklist** — UI smoke snapshots remaining; shipper smoke test done. [Details](#launch-public-launch-checklist-6)
+1. **HN Launch Prep** — Landing page done; E2E infra-smoke fixed; remaining: video walkthrough (optional), E2E chat-send streaming fix. [Details](#launch-hn-launch-readiness--remaining-4)
+2. **Public Launch Checklist** — UI smoke snapshots remaining; shipper smoke test done. [Details](#launch-public-launch-checklist-6)
+3. **Control Plane: OAuth + Stripe (Phases 1-2)** — Add Google OAuth at control plane level and Stripe checkout/webhooks for hosted beta signup flow. [Details](#infra-control-plane--hosted-beta-8)
 
 ---
 
