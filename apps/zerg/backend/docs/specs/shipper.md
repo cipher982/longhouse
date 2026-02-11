@@ -2,13 +2,13 @@
 
 **Status:** Phase 5 complete (ALL PHASES DONE)
 **Protocol:** SDP-1
-**Vision:** VISION.md lines 320-361
+**Vision:** VISION.md § "Shipper (Real-Time Sync)"
 
 ## Executive Summary
 
-The shipper syncs Claude Code (and other CLI agent) sessions to Zerg in real-time. It's the bridge between local dev and the unified session timeline.
+The shipper syncs Claude Code (and other CLI agent) sessions to Longhouse in real-time. It's the bridge between local dev and the unified session timeline.
 
-**Magic moment:** User types in Claude Code → shipper fires → session appears in Zerg before they switch tabs.
+**Magic moment:** User types in Claude Code → shipper fires → session appears in Longhouse before they switch tabs.
 
 ---
 
@@ -114,7 +114,7 @@ Time-based expiry can be added in a future phase if needed.
 ---
 
 ### Phase 4: Ingest Protocol Hardening ✅ COMPLETE
-Per VISION.md lines 339-361:
+Per VISION.md § "Ingest Protocol":
 
 - [x] Batch events (handled via 500ms debouncing at file level)
 - [x] Gzip compress payloads (configurable, on by default)
@@ -130,11 +130,11 @@ Per VISION.md lines 339-361:
 ---
 
 ### Phase 5: OSS Packaging ✅ COMPLETE
-Per VISION.md lines 421-467:
+Per VISION.md § "OSS Packaging":
 
 - [x] `longhouse ship` one-time manual sync
 - [x] `longhouse connect <url>` for remote instances
-- [x] Local auto-detect (default: localhost:47300)
+- [x] Local auto-detect (default: localhost:8080)
 - [ ] Homebrew formula (future release task)
 
 **Note:** Homebrew formula is a packaging/release infrastructure task that depends on

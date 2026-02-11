@@ -845,6 +845,8 @@ Hosted users authenticate via control plane, then get redirected to their instan
 - Instances validate via shared secret or JWKS URL
 - Tokens are one-time use (nonce stored server-side)
 
+**Current State (as of 2026-02-10):** `POST /api/auth/accept-token` validates the JWT and sets a session cookie but does not enforce one-time use (no nonce/server-side tracking). One-time enforcement is a target improvement.
+
 **Instance auth state:**
 - Instance trusts tokens signed by control plane
 - Instance maintains its own session (httpOnly cookie)
@@ -1172,10 +1174,10 @@ These are the concrete mismatches between today’s codebase and the SQLite-only
 - Lite test suite expanded (SQLite boot, agents ingest/models, GUID round-trips, db_is_sqlite detection, version check).
 
 ✅ **Phases 4–7 complete (2026-02-01):**
-- Job claiming uses dialect-aware `commis_job_queue.py`: Postgres uses `FOR UPDATE SKIP LOCKED`, SQLite uses `UPDATE ... RETURNING` with atomic claiming.
+- Job claiming uses SQLite-specific `commis_job_queue.py`: `UPDATE ... RETURNING` with atomic claiming (Postgres `FOR UPDATE SKIP LOCKED` path was removed during SQLite-only pivot).
 - Heartbeat + stale job reclaim implemented for both dialects.
 - Checkpoints are durable on SQLite via `langgraph-checkpoint-sqlite` (`SqliteSaver`).
-- CLI has `zerg serve` command (`cli/serve.py`) with lite mode defaults.
+- CLI has `longhouse serve` command (`cli/serve.py`) with lite mode defaults.
 - README defaults to SQLite for OSS quick start.
 
 **Status: SQLite pivot is complete.** The `pip install longhouse && longhouse serve` flow is functional.

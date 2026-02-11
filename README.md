@@ -44,7 +44,7 @@ longhouse serve --demo  # Try with sample data
 
 ### 3. Docker
 ```bash
-docker compose up
+docker compose -f docker/docker-compose.dev.yml up
 ```
 
 ### 4. From source
