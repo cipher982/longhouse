@@ -390,8 +390,8 @@ Update screenshots to show Timeline, not old dashboard.
 - [x] Create SQLite volume per user at `/var/lib/docker/data/longhouse/{subdomain}`
 - [x] Implement deprovision (stop + remove container)
 - [ ] Add health check polling after provision (method exists, not wired in routes/UI)
-- [ ] Build and push runtime image (`docker/runtime.dockerfile`) to ghcr.io
-- [ ] Update CONTROL_PLANE_IMAGE to use runtime image (currently uses backend-only)
+- [x] Build and push runtime image (`docker/runtime.dockerfile`) to ghcr.io — auto-builds on push via `runtime-image.yml`, publishes to `ghcr.io/cipher982/longhouse-runtime:latest`
+- [x] Update CONTROL_PLANE_IMAGE to use runtime image — default now `ghcr.io/cipher982/longhouse-runtime:latest`
 
 ### Phase 3.5: Provisioning E2E Gate ✅
 
