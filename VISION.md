@@ -164,7 +164,37 @@ Delegation modes should be explicit:
 
 **What Longhouse owns:** orchestration, job queue, workspace isolation, timeline, search, resume, always-on infrastructure, runner coordination, modular toolbox (integrations, memory, communication).
 
-**What CLI agents own:** the agent loop, tool execution, file editing, bash, MCP servers, context management, streaming. (CLI agents can also call back into Longhouse's toolbox via MCP — stretch goal.)
+**What CLI agents own:** the agent loop, tool execution, file editing, bash, MCP servers, context management, streaming.
+
+### Longhouse MCP Server (CLI Agent Integration)
+
+CLI agents (Claude Code, Codex, Gemini) can call back into Longhouse's toolbox via MCP. This is the standard industry pattern — teams expose internal tooling as MCP servers so agents can access shared context mid-task.
+
+**Longhouse exposes as MCP tools:**
+- `search_sessions` — find past solutions in the session archive
+- `get_session_detail` — retrieve specific session content/events
+- `memory_read` / `memory_write` — persistent memory across commis runs
+- `notify_oikos` — commis reports status back to Oikos coordinator
+
+**How it works:**
+- Longhouse runs an MCP server (stdio transport for local, streamable HTTP for remote)
+- `longhouse connect --install` registers the MCP server in Claude Code's `.claude/settings.json`
+- Commis spawned via `hatch` automatically get the Longhouse MCP server configured
+- A hatch-spawned agent can search "how did we implement retry logic?" against the Longhouse archive mid-task
+
+**Current State (as of 2026-02-10):** Target architecture. Not yet implemented. See TODO Phase 3f.
+
+### Multi-Provider Backend Integration
+
+Each CLI agent backend has different integration depths:
+
+| Backend | Commis Execution | Event Streaming | Hooks Support | MCP Support |
+|---------|-----------------|----------------|---------------|-------------|
+| Claude Code | `hatch` subprocess | JSONL file parse | Yes (Stop, SessionStart, etc.) | Yes (native) |
+| Codex | `hatch -b codex` | JSONL + App Server protocol (JSON-RPC) | No (rules system instead) | Yes (config.toml) |
+| Gemini | `hatch -b gemini` | JSONL file parse | No | Yes |
+
+**Codex App Server protocol:** Codex exposes a stable harness API (bidirectional JSON-RPC over stdio) with Thread/Turn/Item primitives and approval requests. For Codex-backend commis, this gives structured event streaming and approval routing through Oikos. Evaluate as alternative to raw JSONL parsing.
 
 ---
 
@@ -556,7 +586,30 @@ This enables the "multiple agents adding features to the same codebase" pattern.
 
 **Target:** real-time sync is default and feels instant.
 
-The shipper:
+### Two shipping paths (preferred → fallback)
+
+**Path 1: Hook-based push (preferred for Claude Code)**
+
+Claude Code hooks fire on lifecycle events (`Stop`, `SessionStart`, etc.). A `Stop` hook can push the session to Longhouse immediately when Claude Code finishes — no daemon, no file-watching, zero latency:
+
+```json
+// .claude/settings.json (injected by `longhouse connect --install`)
+{"hooks": {"Stop": [{"command": "longhouse ship --session $SESSION_ID"}]}}
+```
+
+Benefits:
+- Zero-config after install (no background service to manage)
+- Instant push (faster than file-watching debounce)
+- Works on any OS without launchd/systemd
+- `longhouse connect --install` auto-injects the hook + verifies it works
+
+Limitations:
+- Only works for providers with hook support (Claude Code today)
+- Requires Claude Code settings access
+
+**Path 2: Watcher daemon (fallback / multi-provider)**
+
+The shipper daemon for providers without hook support (Codex, Gemini, Cursor):
 
 - Watches local provider session files via OS file watching (FSEvents/inotify)
 - Debounces rapid writes (Claude streams to file)
@@ -569,8 +622,9 @@ The shipper:
 - `longhouse connect` runs in foreground (watch mode by default; polling with `--poll` or custom `--interval`).
 - `longhouse connect --install` installs/starts the background service.
 - `longhouse auth` handles device-token setup; `connect` then uses the stored token.
+- Hook-based push is target architecture; not yet implemented.
 
-**Magic moment:** user types in Claude Code -> shipper fires -> session appears in Longhouse before they switch tabs.
+**Magic moment:** user types in Claude Code -> hook fires on stop -> session appears in Longhouse before they switch tabs.
 
 ---
 

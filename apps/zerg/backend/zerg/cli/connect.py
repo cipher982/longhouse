@@ -210,6 +210,12 @@ def ship(
         envvar="AGENTS_API_TOKEN",
         help="API token (uses stored token if not specified)",
     ),
+    file: str = typer.Option(
+        None,
+        "--file",
+        "-f",
+        help="Ship a single session JSONL file (used by hooks)",
+    ),
     claude_dir: str = typer.Option(
         None,
         "--claude-dir",
@@ -222,8 +228,17 @@ def ship(
         "-v",
         help="Enable verbose output",
     ),
+    quiet: bool = typer.Option(
+        False,
+        "--quiet",
+        "-q",
+        help="Suppress output (for hook usage)",
+    ),
 ) -> None:
-    """One-shot: ship all new Claude Code sessions to Longhouse."""
+    """One-shot: ship all new Claude Code sessions to Longhouse.
+
+    Use --file to ship a single session file (designed for Claude Code hook integration).
+    """
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
@@ -241,24 +256,52 @@ def ship(
         api_token=token,
     )
 
-    typer.echo(f"Shipping sessions to {url}...")
-    typer.echo(f"Claude config: {config.claude_config_dir}")
+    # Single-file mode (for hook integration)
+    if file:
+        file_path = Path(file)
+        if not file_path.exists():
+            if not quiet:
+                typer.secho(f"File not found: {file}", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+
+        result = asyncio.run(_ship_file(config, file_path))
+
+        if not quiet:
+            inserted = result.get("events_inserted", 0)
+            skipped = result.get("events_skipped", 0)
+            spooled = result.get("events_spooled", 0)
+            if inserted > 0:
+                typer.echo(f"Shipped {inserted} events from {file_path.name}")
+            elif spooled > 0:
+                typer.echo(f"Spooled {spooled} events (API unreachable)")
+            elif skipped > 0:
+                typer.echo(f"No new events ({skipped} duplicates)")
+            else:
+                typer.echo("No new events")
+        return
+
+    # Full scan mode
+    if not quiet:
+        typer.echo(f"Shipping sessions to {url}...")
+        typer.echo(f"Claude config: {config.claude_config_dir}")
 
     result = asyncio.run(_ship_once(config))
 
-    typer.echo("")
-    typer.echo(f"Sessions scanned: {result.sessions_scanned}")
-    typer.echo(f"Sessions shipped: {result.sessions_shipped}")
-    typer.echo(f"Events shipped: {result.events_shipped}")
-    typer.echo(f"Events skipped (duplicates): {result.events_skipped}")
+    if not quiet:
+        typer.echo("")
+        typer.echo(f"Sessions scanned: {result.sessions_scanned}")
+        typer.echo(f"Sessions shipped: {result.sessions_shipped}")
+        typer.echo(f"Events shipped: {result.events_shipped}")
+        typer.echo(f"Events skipped (duplicates): {result.events_skipped}")
 
     if result.errors:
-        typer.echo("")
-        typer.secho(f"Errors ({len(result.errors)}):", fg=typer.colors.RED)
-        for error in result.errors:
-            typer.echo(f"  - {error}")
+        if not quiet:
+            typer.echo("")
+            typer.secho(f"Errors ({len(result.errors)}):", fg=typer.colors.RED)
+            for error in result.errors:
+                typer.echo(f"  - {error}")
         raise typer.Exit(code=1)
-    else:
+    elif not quiet:
         typer.secho("✓ Done", fg=typer.colors.GREEN)
 
 
@@ -453,6 +496,12 @@ def _handle_install(
     except RuntimeError as e:
         typer.secho(f"[ERROR] {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
+
+
+async def _ship_file(config: ShipperConfig, file_path: Path) -> dict:
+    """Ship a single session file (incremental from last offset)."""
+    shipper = SessionShipper(config=config)
+    return await shipper.ship_session(file_path)
 
 
 async def _ship_once(config: ShipperConfig) -> ShipResult:
