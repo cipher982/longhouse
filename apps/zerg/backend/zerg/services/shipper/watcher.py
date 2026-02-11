@@ -333,7 +333,7 @@ class SessionWatcher:
                             resolved = str(watch_dir.resolve())
                             if resolved not in self._watch_dirs:
                                 try:
-                                    handler = SessionFileHandler(on_change=self._queue_ship)
+                                    handler = SessionFileHandler(on_change=self._queue_ship, debounce_seconds=self.debounce_seconds)
                                     self._observer.schedule(handler, str(watch_dir), recursive=True)
                                     self._watch_dirs[resolved] = provider.name
                                     logger.info("Late-discovered provider directory: %s (%s)", watch_dir, provider.name)
