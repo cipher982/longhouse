@@ -139,6 +139,14 @@ def _parse_openai_response(response) -> ChatResponse:
                     "reasoning_tokens": details.reasoning_tokens or 0,
                 }
 
+        # Extract prompt cache info if available (OpenAI prompt_tokens_details.cached_tokens)
+        if hasattr(response.usage, "prompt_tokens_details"):
+            prompt_details = response.usage.prompt_tokens_details
+            if prompt_details and hasattr(prompt_details, "cached_tokens"):
+                cached = prompt_details.cached_tokens or 0
+                if cached > 0:
+                    usage["prompt_tokens_details"] = {"cached_tokens": cached}
+
     # Store usage in message for compatibility
     ai_message.usage_metadata = {
         "input_tokens": usage.get("prompt_tokens", 0),
@@ -147,6 +155,7 @@ def _parse_openai_response(response) -> ChatResponse:
         "output_token_details": {
             "reasoning": usage.get("completion_tokens_details", {}).get("reasoning_tokens", 0),
         },
+        "cache_read_input_tokens": usage.get("prompt_tokens_details", {}).get("cached_tokens", 0),
     }
 
     return ChatResponse(
@@ -317,6 +326,13 @@ class OpenAIChat:
                             "completion_tokens": chunk.usage.completion_tokens,
                             "total_tokens": chunk.usage.total_tokens,
                         }
+                        # Extract prompt cache info from streaming usage
+                        if hasattr(chunk.usage, "prompt_tokens_details"):
+                            prompt_details = chunk.usage.prompt_tokens_details
+                            if prompt_details and hasattr(prompt_details, "cached_tokens"):
+                                cached = prompt_details.cached_tokens or 0
+                                if cached > 0:
+                                    usage["prompt_tokens_details"] = {"cached_tokens": cached}
                     continue
 
                 delta = chunk.choices[0].delta
@@ -384,6 +400,7 @@ class OpenAIChat:
             "input_tokens": usage.get("prompt_tokens", 0),
             "output_tokens": usage.get("completion_tokens", 0),
             "total_tokens": usage.get("total_tokens", 0),
+            "cache_read_input_tokens": usage.get("prompt_tokens_details", {}).get("cached_tokens", 0),
         }
 
         return ai_message

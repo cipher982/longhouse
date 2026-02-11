@@ -280,6 +280,21 @@ async def _call_llm(
                 }
             )
 
+            # Log prompt cache metrics
+            input_tokens = usage_meta.get("input_tokens", 0)
+            cache_read = usage_meta.get("cache_read_input_tokens", 0)
+            if input_tokens > 0:
+                cache_pct = round(cache_read / input_tokens * 100, 1) if cache_read else 0.0
+                logger.info(
+                    "LLM cache metrics: phase=%s model=%s input=%d cached=%d ratio=%.1f%% duration=%dms",
+                    phase,
+                    model,
+                    input_tokens,
+                    cache_read,
+                    cache_pct,
+                    duration_ms,
+                )
+
     return result
 
 

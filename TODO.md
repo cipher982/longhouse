@@ -495,7 +495,7 @@ Close the remaining open questions from VISION.md.
 
 > Archived -- 4/5 items complete. Layout is system->conversation->dynamic, timestamps minute-level, keys sorted, dynamic split.
 
-- [ ] Add cache hit logging/metrics
+- [x] Add cache hit logging/metrics
 
 ---
 
