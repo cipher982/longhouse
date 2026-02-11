@@ -99,10 +99,10 @@ class TestZergExecutable:
             assert "run" in result
             assert "zerg" in result
 
-    def test_default_zerg(self):
-        """Default to 'zerg' when nothing found."""
+    def test_default_longhouse(self):
+        """Default to 'longhouse' when nothing found."""
         with patch("shutil.which", return_value=None):
-            assert get_zerg_executable() == "zerg"
+            assert get_zerg_executable() == "longhouse"
 
 
 class TestServicePaths:
@@ -211,7 +211,7 @@ class TestSystemdUnitGeneration:
         assert "[Unit]" in unit
         assert "[Service]" in unit
         assert "[Install]" in unit
-        assert "Description=Zerg Shipper" in unit
+        assert "Description=Longhouse Shipper" in unit
         assert "ExecStart=/usr/local/bin/zerg connect --url http://localhost:47300" in unit
         assert "Restart=on-failure" in unit
         assert "WantedBy=default.target" in unit
