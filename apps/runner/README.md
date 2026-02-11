@@ -18,7 +18,7 @@ bun run --filter @longhouse/runner start
 docker build -t longhouse/runner:latest apps/runner
 
 docker run -d --name longhouse-runner \
-  -e LONGHOUSE_URL=http://localhost:30080 \
+  -e LONGHOUSE_URL=http://localhost:8080 \
   -e RUNNER_NAME=my-runner \
   -e RUNNER_SECRET=your_secret_here \
   longhouse/runner:latest
