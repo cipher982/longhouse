@@ -207,7 +207,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             role="assistant",
             content_text="Hitting the health endpoint...",
             tool_name="Bash",
-            tool_input_json={"command": "curl -v http://localhost:47300/api/health"},
+            tool_input_json={"command": "curl -v http://localhost:8080/api/health"},
             timestamp=t4 + timedelta(minutes=3),
         ),
         EventIngest(
@@ -250,7 +250,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             role="assistant",
             content_text="Verifying the fix...",
             tool_name="Bash",
-            tool_input_json={"command": "curl -s http://localhost:47300/api/health | jq ."},
+            tool_input_json={"command": "curl -s http://localhost:8080/api/health | jq ."},
             timestamp=t4 + timedelta(minutes=6),
         ),
         EventIngest(

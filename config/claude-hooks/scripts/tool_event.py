@@ -5,7 +5,7 @@ This script runs as a Claude Code hook (PreToolUse, PostToolUse, PostToolUseFail
 and POSTs tool events to Longhouse for real-time visibility.
 
 Environment variables:
-  LONGHOUSE_CALLBACK_URL: Base URL for Longhouse API (e.g., http://localhost:47300)
+  LONGHOUSE_CALLBACK_URL: Base URL for Longhouse API (e.g., http://localhost:8080)
   COMMIS_JOB_ID: The commis job ID for correlation
   COMMIS_CALLBACK_TOKEN: Optional internal auth token for the callback
 
