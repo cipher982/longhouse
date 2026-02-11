@@ -1674,7 +1674,35 @@ openai_api_key = "sk-..."
 ### Open Questions
 
 - [x] Package name: `longhouse` available on PyPI? → **Yes, published as `longhouse` v0.1.1**
-- [ ] Frontend bundle size? (target budget TBD)
+- [x] Frontend bundle size? → **Measured 2026-02-11. See below.**
+
+#### Frontend Bundle Size Baseline (2026-02-11)
+
+Measured via `bun run build` (Vite 5.4, production mode, gzip sizes reported by Vite).
+
+| Chunk | Raw | Gzipped | Notes |
+|-------|-----|---------|-------|
+| `index.js` (main) | 581 KB | 163 KB | React, router, query, shared UI |
+| `OikosChatPage.js` | 287 KB | 81 KB | Oikos chat (markdown, syntax highlight) |
+| `ChatPage.js` | 256 KB | 78 KB | Chat page (marked, DOMPurify) |
+| `ForumPage.js` | 15 KB | 5 KB | Forum |
+| `SwarmOpsPage.js` | 10 KB | 3 KB | Swarm ops |
+| `index.css` (main) | 305 KB | 45 KB | Design tokens + all component styles |
+| Route CSS (3 files) | 36 KB | 7 KB | Page-specific styles |
+| **JS total** | **1,152 KB** | **332 KB** | |
+| **CSS total** | **341 KB** | **53 KB** | |
+| **Grand total** | **1,493 KB** | **385 KB** | |
+
+**Target budget:**
+- JS gzipped: **<400 KB** (current: 332 KB -- 17% headroom)
+- CSS gzipped: **<60 KB** (current: 53 KB -- 12% headroom)
+- Total gzipped: **<500 KB** (current: 385 KB -- 23% headroom)
+- Largest single JS chunk: **<200 KB gzipped** (current: 163 KB)
+
+**Improvement opportunities (if budget pressure increases):**
+- `react-syntax-highlighter` ships all Prism languages; lazy-load or switch to a lighter highlighter
+- `marked` + `react-markdown` are both bundled; consolidate to one markdown renderer
+- Consider extracting `react-dom` into a shared vendor chunk for better caching
 - [ ] Shipper: bundled or separate package?
 - [ ] Auth for remote access: API key? OAuth?
 - [ ] HTTPS: built-in or "use Caddy/nginx"?
