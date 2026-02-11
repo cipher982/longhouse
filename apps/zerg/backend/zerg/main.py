@@ -791,6 +791,13 @@ app.add_middleware(TestCommisContextMiddleware)
 # Mount /static for avatars (and any future assets served by the backend)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+# Prevent browser caching of static frontend assets (JS/CSS/images).
+# StaticFiles doesn't support custom headers, so this middleware injects
+# Cache-Control: no-store on /assets, /frontend-static, /static paths.
+from zerg.middleware.no_cache_static import NoCacheStaticMiddleware
+
+app.add_middleware(NoCacheStaticMiddleware)
+
 # ---------------------------------------------------------------------------
 # SafeErrorResponseMiddleware - MUST be added LAST to be the outermost wrapper.
 # In Starlette, add_middleware() inserts at the START of the list, so the last
@@ -1078,7 +1085,10 @@ if FRONTEND_DIST_DIR is not None:
         try:
             static_file = (_frontend_dist_resolved / path).resolve()
             if static_file.is_relative_to(_frontend_dist_resolved) and static_file.is_file():
-                return FileResponse(static_file)
+                return FileResponse(
+                    static_file,
+                    headers={"Cache-Control": "no-store"},
+                )
         except (ValueError, OSError):
             pass
 

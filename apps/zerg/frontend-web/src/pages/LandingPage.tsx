@@ -15,7 +15,6 @@ import { IntegrationsSection } from "../components/landing/IntegrationsSection";
 import { PricingSection } from "../components/landing/PricingSection";
 import { TrustSection } from "../components/landing/TrustSection";
 import { SocialProof } from "../components/landing/SocialProof";
-import { DeploymentOptions } from "../components/landing/DeploymentOptions";
 import { ComparisonTable } from "../components/landing/ComparisonTable";
 
 import { FooterCTA } from "../components/landing/FooterCTA";
@@ -191,7 +190,7 @@ export default function LandingPage() {
   };
 
   const scrollToDeployment = () => {
-    document.getElementById("deployment-options")?.scrollIntoView({ behavior: "smooth" });
+    document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
   };
 
   const handleSignIn = () => {
@@ -216,7 +215,6 @@ export default function LandingPage() {
         <HowItWorksSection />
         <IntegrationsSection />
         <ComparisonTable />
-        <DeploymentOptions />
         <PricingSection />
         <TrustSection />
         <SocialProof />
