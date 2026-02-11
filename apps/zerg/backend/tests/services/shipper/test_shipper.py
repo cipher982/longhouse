@@ -76,7 +76,7 @@ class TestShipperConfig:
     def test_default_config(self):
         """Default config uses ~/.claude."""
         config = ShipperConfig()
-        assert config.api_url == "http://localhost:47300"
+        assert config.api_url == "http://localhost:8080"
         assert config.scan_interval_seconds == 30
         assert config.batch_size == 100
 

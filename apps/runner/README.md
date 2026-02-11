@@ -6,7 +6,7 @@ Daemon that executes commands for a Longhouse instance over WebSocket.
 
 ```bash
 bun install
-export LONGHOUSE_URL=http://localhost:30080
+export LONGHOUSE_URL=http://localhost:8080
 export RUNNER_NAME=my-runner
 export RUNNER_SECRET=your_secret_here
 bun run --filter @longhouse/runner start

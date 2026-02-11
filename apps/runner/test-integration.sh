@@ -10,7 +10,7 @@ echo "======================================"
 echo ""
 
 # Configuration
-API_URL=${API_URL:-"http://localhost:47300"}
+API_URL=${API_URL:-"http://localhost:8080"}
 AUTH_HEADER="Authorization: Bearer test-token-user1"
 
 # Check if backend is running

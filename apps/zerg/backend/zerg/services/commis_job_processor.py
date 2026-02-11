@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 # Summary max length
 _SUMMARY_MAX_LENGTH = 150
-_DEFAULT_CALLBACK_PORT = 47300
+_DEFAULT_CALLBACK_PORT = 8080
 
 
 def _extract_summary_from_output(
