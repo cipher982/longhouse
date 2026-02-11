@@ -20,6 +20,8 @@ import {
   PageShell,
   Spinner,
 } from "../components/ui";
+import { SessionChat } from "../components/SessionChat";
+import type { ActiveSession } from "../hooks/useActiveSessions";
 import "../styles/sessions.css";
 
 // ---------------------------------------------------------------------------
@@ -252,6 +254,9 @@ export default function SessionDetailPage() {
 
   const events = eventsData?.events || [];
 
+  // Resume chat state
+  const [showResume, setShowResume] = useState(false);
+
   // Expanded state for tool calls
   const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
   const [highlightedEventId, setHighlightedEventId] = useState<number | null>(null);
@@ -351,14 +356,66 @@ export default function SessionDetailPage() {
   const title = session.project || session.git_branch || "Session";
   const turnCount = session.user_messages + session.assistant_messages;
 
+  // Resume is available for Claude-provider sessions (they support --resume)
+  const canResume = session.provider === "claude";
+
+  // Adapt AgentSession to ActiveSession shape for SessionChat
+  const activeSessionForChat: ActiveSession | null = canResume
+    ? {
+        id: session.id,
+        project: session.project,
+        provider: session.provider,
+        cwd: session.cwd,
+        git_repo: session.git_repo,
+        git_branch: session.git_branch,
+        started_at: session.started_at,
+        ended_at: session.ended_at,
+        last_activity_at: session.ended_at || session.started_at,
+        status: session.ended_at ? "completed" : "active",
+        attention: "auto",
+        duration_minutes: 0,
+        last_user_message: null,
+        last_assistant_message: null,
+        message_count: session.user_messages + session.assistant_messages,
+        tool_calls: session.tool_calls,
+      }
+    : null;
+
+  // Show resume chat overlay
+  if (showResume && activeSessionForChat) {
+    return (
+      <PageShell size="wide" className="sessions-page-container">
+        <div className="session-detail-page">
+          <div className="session-resume-container">
+            <SessionChat
+              session={activeSessionForChat}
+              onClose={() => setShowResume(false)}
+            />
+          </div>
+        </div>
+      </PageShell>
+    );
+  }
+
   return (
     <PageShell size="wide" className="sessions-page-container">
       <div className="session-detail-page">
         {/* Header */}
         <div className="session-detail-header">
-          <Button variant="ghost" onClick={handleBack} className="back-button">
-            &larr; Back
-          </Button>
+          <div className="session-detail-nav">
+            <Button variant="ghost" onClick={handleBack} className="back-button">
+              &larr; Back
+            </Button>
+            {canResume && (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => setShowResume(true)}
+              >
+                Resume Session
+              </Button>
+            )}
+          </div>
           <SectionHeader
             title={title}
             description={session.cwd ? truncatePath(session.cwd, 80) : undefined}
