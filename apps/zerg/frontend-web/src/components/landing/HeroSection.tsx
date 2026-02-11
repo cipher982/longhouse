@@ -76,6 +76,13 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
               See How It Works <span className="landing-cta-arrow">↓</span>
             </Button>
           </div>
+
+          <a
+            href="mailto:hello@longhouse.ai?subject=Enterprise%20inquiry"
+            className="landing-hero-enterprise-link"
+          >
+            Enterprise? Contact us &rarr;
+          </a>
         </div>
 
         {/* Right: Product screenshot */}

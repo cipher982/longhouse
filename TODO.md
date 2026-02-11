@@ -38,7 +38,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | Section | Status | Notes |
 |---------|--------|-------|
 | Harness Phase 3f-3h | 100% | 3f (MCP server + commis injection + Codex config.toml); 3g (quality gates + hooks); 3h (research: Codex App Server + Claude Agent SDK evaluation) |
-| Landing Page Redesign | ~95% | Phase 5 complete (copy, sections, reorder); Phase 6 visual assets remaining |
+| Landing Page Redesign | ~98% | Phase 2+5 complete (comparison, enterprise link, scroll padding, copy); Phase 6 visual assets remaining |
 | Control Plane | ~45% | Scaffold + provisioner + CI gate done; OAuth/billing/runtime image pending |
 | Shipper Multi-Provider | DONE | Provider abstraction + Claude/Codex/Gemini parsers + review fixes |
 | Install/Onboarding | ~70% | install.sh + doctor + connect + hooks + MCP server done; fresh-shell verify remaining |
@@ -218,8 +218,8 @@ Current copy is a mix of both stories. Align to dual-path parity.
 > Archived -- all complete. Sticky header, dual-path CTAs, DeploymentOptions, WCAG contrast fixes, hero restructure. See git history.
 
 **Remaining Phase 2 items:**
-- [ ] Tertiary link: "Enterprise -->" below hero
-- [ ] Add comparison table: who runs it, data residency, support, upgrade path
+- [x] Tertiary link: "Enterprise -->" below hero
+- [x] Add comparison table: who runs it, data residency, support, upgrade path
 
 ### Phase 5: Story Alignment (2 hours)
 
@@ -256,12 +256,12 @@ Update screenshots to show Timeline, not old dashboard.
 
 ### Checklist (dev-tool landing page best practices 2025-26)
 
-- [ ] Above fold: Self-host primary, hosted beta secondary
-- [ ] Header: Docs + Pricing reachable in 1 click
+- [x] Above fold: Self-host primary, hosted beta secondary
+- [x] Header: Docs + Pricing reachable in 1 click
 - [ ] CTAs: hero + header + mid-page + footer; labels match next step
 - [x] Dark theme: text ≥ 4.5:1, UI components ≥ 3:1 (Phase 3 done; focus indicators still TODO)
-- [ ] Sticky header doesn't obscure focus / anchors
-- [ ] Self-host responsibilities spelled out
+- [x] Sticky header doesn't obscure focus / anchors
+- [x] Self-host responsibilities spelled out
 
 ---
 
