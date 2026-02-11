@@ -13,7 +13,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ---
 
-## Validation Summary (2026-02-10, rev 5)
+## Validation Summary (2026-02-11, rev 6)
 
 ### Done / Verified
 | Section | Status | Notes |
@@ -39,7 +39,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 ### In Progress
 | Section | Status | Notes |
 |---------|--------|-------|
-| Landing Page Redesign | ~98% | Phase 2+5 complete (comparison, enterprise link, scroll padding, copy); Phase 6 visual assets remaining |
+| Landing Page Redesign | ~99% | Phase 2+5 complete, CTA checklist done (commit 62108045); Phase 6 visual assets remaining |
 | Control Plane | ~45% | Scaffold + provisioner + CI gate done; OAuth/billing/runtime image pending |
 | Install/Onboarding | ~90% | install.sh + doctor + connect + hooks + MCP server + fresh-shell PATH verify done; canonical install path docs + onboard wizard docs remaining |
 | OSS First-Run UX | ~90% | Auto-seed on first run + guided empty state done; "No Claude Code" guidance remaining |
@@ -258,7 +258,7 @@ Update screenshots to show Timeline, not old dashboard.
 
 - [x] Above fold: Self-host primary, hosted beta secondary
 - [x] Header: Docs + Pricing reachable in 1 click
-- [ ] CTAs: hero + header + mid-page + footer; labels match next step
+- [x] CTAs: hero + header + mid-page + footer; labels match next step — normalized (commit 62108045)
 - [x] Dark theme: text ≥ 4.5:1, UI components ≥ 3:1 (Phase 3 done; focus indicators still TODO)
 - [x] Sticky header doesn't obscure focus / anchors
 - [x] Self-host responsibilities spelled out
@@ -289,10 +289,10 @@ Update screenshots to show Timeline, not old dashboard.
 - [x] **Comparison table** — enhanced for HN launch (commit `f8496f4b`)
   - Shows how Longhouse compares to grep JSONL, Claude Code built-in history, and not tracking
 
-- [ ] **Social proof** (if available)
-  - Add testimonial or "Built by X" to README
-  - Show usage stats if you have any early users
-  - Link to personal Twitter/GitHub for credibility
+- [x] **Social proof** — Author section in README (commit fd6848cb)
+  - ~~Add testimonial or "Built by X" to README~~
+  - ~~Show usage stats if you have any early users~~
+  - ~~Link to personal Twitter/GitHub for credibility~~
 
 - [ ] **Video walkthrough** (optional, 2 hours)
   - 60-90 second Loom showing install → timeline → search
