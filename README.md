@@ -35,6 +35,8 @@ curl -fsSL https://get.longhouse.ai/install.sh | bash
 longhouse serve --demo  # Try with sample data
 ```
 
+See [Install Guide](docs/install-guide.md) for what the installer does, onboarding wizard details, and manual install options.
+
 ### 2. pip install (Alternate)
 ```bash
 pip install longhouse
@@ -140,6 +142,8 @@ longhouse doctor   # verify
 ```
 
 ## Documentation
+
+See the [Install Guide](docs/install-guide.md) for detailed setup instructions, onboarding wizard walkthrough, and troubleshooting.
 
 This README is the canonical user guide. Product direction lives in `VISION.md`, and the execution roadmap lives in `TODO.md`.
 
