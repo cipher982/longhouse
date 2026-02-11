@@ -12,7 +12,6 @@ import { HeroSection } from "../components/landing/HeroSection";
 import { HowItWorksSection } from "../components/landing/HowItWorksSection";
 import { DemoSection } from "../components/landing/DemoSection";
 import { IntegrationsSection } from "../components/landing/IntegrationsSection";
-import { SkillsSection } from "../components/landing/SkillsSection";
 import { PricingSection } from "../components/landing/PricingSection";
 import { TrustSection } from "../components/landing/TrustSection";
 import { SocialProof } from "../components/landing/SocialProof";
@@ -213,14 +212,13 @@ export default function LandingPage() {
 
       <main className="landing-main">
         <HeroSection onScrollToHowItWorks={scrollToHowItWorks} heroAnimationsEnabled={heroAnimationsEnabled} />
+        <DemoSection />
         <HowItWorksSection />
         <IntegrationsSection />
+        <ComparisonTable />
         <DeploymentOptions />
         <DeploymentComparison />
-        <ComparisonTable />
-        <DemoSection />
         <PricingSection />
-        <SkillsSection />
         <TrustSection />
         <SocialProof />
         <FooterCTA />
