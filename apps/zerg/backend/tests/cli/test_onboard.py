@@ -1,6 +1,7 @@
 """Tests for CLI onboarding wizard."""
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -326,3 +327,212 @@ class TestVerifyShellPath:
         # longhouse should be fine, claude should warn
         assert any("claude" in w and "won't be on PATH" in w for w in result)
         assert not any("longhouse" in w and "won't be on PATH" in w for w in result)
+
+
+class TestResolveShellBin:
+    """Tests for _resolve_shell_bin — absolute shell path resolution."""
+
+    def test_uses_absolute_shell_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Should return the absolute $SHELL path when it is an allowed shell."""
+        from zerg.cli.onboard import _resolve_shell_bin
+
+        monkeypatch.setenv("SHELL", "/opt/homebrew/bin/zsh")
+        monkeypatch.setattr("os.path.isfile", lambda p: p == "/opt/homebrew/bin/zsh")
+
+        result = _resolve_shell_bin()
+        assert result == ("/opt/homebrew/bin/zsh", "zsh")
+
+    def test_homebrew_fish(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Should resolve Homebrew fish correctly."""
+        from zerg.cli.onboard import _resolve_shell_bin
+
+        monkeypatch.setenv("SHELL", "/opt/homebrew/bin/fish")
+        monkeypatch.setattr("os.path.isfile", lambda p: p == "/opt/homebrew/bin/fish")
+
+        result = _resolve_shell_bin()
+        assert result == ("/opt/homebrew/bin/fish", "fish")
+
+    def test_fallback_when_shell_unknown(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Should fall back to /bin/zsh or /bin/bash when $SHELL is not allowed."""
+        from zerg.cli.onboard import _resolve_shell_bin
+
+        monkeypatch.setenv("SHELL", "/bin/csh")
+        monkeypatch.setattr("os.path.isfile", lambda p: p == "/bin/zsh")
+
+        result = _resolve_shell_bin()
+        assert result == ("/bin/zsh", "zsh")
+
+    def test_fallback_to_bash_when_no_zsh(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Should fall back to /bin/bash when /bin/zsh doesn't exist."""
+        from zerg.cli.onboard import _resolve_shell_bin
+
+        monkeypatch.setenv("SHELL", "/bin/csh")
+        monkeypatch.setattr("os.path.isfile", lambda p: p == "/bin/bash")
+
+        result = _resolve_shell_bin()
+        assert result == ("/bin/bash", "bash")
+
+    def test_returns_none_when_no_usable_shell(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Should return None when no usable shell can be found."""
+        from zerg.cli.onboard import _resolve_shell_bin
+
+        monkeypatch.setenv("SHELL", "/bin/csh")
+        monkeypatch.setattr("os.path.isfile", lambda p: False)
+
+        result = _resolve_shell_bin()
+        assert result is None
+
+    def test_returns_none_when_shell_env_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Should fall back when $SHELL is unset."""
+        from zerg.cli.onboard import _resolve_shell_bin
+
+        monkeypatch.delenv("SHELL", raising=False)
+        monkeypatch.setattr("os.path.isfile", lambda p: p == "/bin/bash")
+
+        result = _resolve_shell_bin()
+        assert result == ("/bin/bash", "bash")
+
+
+class TestExtractPathMarker:
+    """Tests for marker-based PATH extraction and source failure gating."""
+
+    def test_marker_parsing_ignores_noisy_output(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Should extract PATH only from the marker line, ignoring other stdout."""
+        from zerg.cli.onboard import _PATH_MARKER
+        from zerg.cli.onboard import _extract_path_from_profile
+
+        fake_profile = Path("/tmp/fake_profile_exists")
+
+        monkeypatch.setattr("zerg.cli.onboard._resolve_shell_bin", lambda: ("/bin/zsh", "zsh"))
+        monkeypatch.setattr(Path, "exists", lambda self: True)
+
+        # Simulate subprocess returning noisy output plus the marker line
+        noisy_stdout = (
+            "Welcome to my shell!\n"
+            "Loading plugins...\n"
+            f"{_PATH_MARKER}=/usr/local/bin:/usr/bin:/bin\n"
+            "More noise after marker\n"
+        )
+        fake_result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=noisy_stdout, stderr=""
+        )
+        monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: fake_result)
+
+        result = _extract_path_from_profile(fake_profile)
+        assert result == "/usr/local/bin:/usr/bin:/bin"
+
+    def test_returns_none_when_source_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Should return None when the subshell exits with non-zero (source failed)."""
+        from zerg.cli.onboard import _extract_path_from_profile
+
+        fake_profile = Path("/tmp/fake_profile_exists")
+
+        monkeypatch.setattr("zerg.cli.onboard._resolve_shell_bin", lambda: ("/bin/bash", "bash"))
+        monkeypatch.setattr(Path, "exists", lambda self: True)
+
+        # source failed → returncode=1, no marker line
+        fake_result = subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="source error"
+        )
+        monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: fake_result)
+
+        result = _extract_path_from_profile(fake_profile)
+        assert result is None
+
+    def test_returns_none_when_no_marker_in_output(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Should return None when stdout contains no marker line."""
+        from zerg.cli.onboard import _extract_path_from_profile
+
+        fake_profile = Path("/tmp/fake_profile_exists")
+
+        monkeypatch.setattr("zerg.cli.onboard._resolve_shell_bin", lambda: ("/bin/zsh", "zsh"))
+        monkeypatch.setattr(Path, "exists", lambda self: True)
+
+        # returncode=0 but profile only printed noise, no marker
+        fake_result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="some noise\nmore noise\n", stderr=""
+        )
+        monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: fake_result)
+
+        result = _extract_path_from_profile(fake_profile)
+        assert result is None
+
+    def test_returns_none_when_profile_missing(self, tmp_path: Path) -> None:
+        """Should return None when the profile file does not exist."""
+        from zerg.cli.onboard import _extract_path_from_profile
+
+        result = _extract_path_from_profile(tmp_path / "nonexistent_profile")
+        assert result is None
+
+    def test_returns_none_when_no_shell_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Should return None when _resolve_shell_bin returns None."""
+        from zerg.cli.onboard import _extract_path_from_profile
+
+        fake_profile = Path("/tmp/fake_profile_exists")
+
+        monkeypatch.setattr("zerg.cli.onboard._resolve_shell_bin", lambda: None)
+        monkeypatch.setattr(Path, "exists", lambda self: True)
+
+        result = _extract_path_from_profile(fake_profile)
+        assert result is None
+
+    def test_positional_arg_not_interpolated(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Profile path should be passed as positional arg, not interpolated in -c."""
+        from zerg.cli.onboard import _extract_path_from_profile
+        from zerg.cli.onboard import _PATH_MARKER
+
+        fake_profile = Path("/tmp/path with spaces/my profile")
+
+        monkeypatch.setattr("zerg.cli.onboard._resolve_shell_bin", lambda: ("/bin/bash", "bash"))
+        monkeypatch.setattr(Path, "exists", lambda self: True)
+
+        captured_args: list = []
+
+        def capture_run(*args, **kwargs):
+            captured_args.append(args[0])
+            return subprocess.CompletedProcess(
+                args=args[0],
+                returncode=0,
+                stdout=f"{_PATH_MARKER}=/usr/bin:/bin\n",
+                stderr="",
+            )
+
+        monkeypatch.setattr("subprocess.run", capture_run)
+
+        _extract_path_from_profile(fake_profile)
+
+        # The profile path should appear as the last positional arg,
+        # NOT interpolated inside the -c command string.
+        assert len(captured_args) == 1
+        cmd_list = captured_args[0]
+        # Profile path is the last element
+        assert cmd_list[-1] == str(fake_profile)
+        # The -c command string should NOT contain the profile path
+        c_flag_idx = cmd_list.index("-c")
+        c_command = cmd_list[c_flag_idx + 1]
+        assert str(fake_profile) not in c_command
+
+    def test_fish_path_extraction(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Should handle fish shell PATH extraction with marker."""
+        from zerg.cli.onboard import _extract_path_from_profile
+        from zerg.cli.onboard import _PATH_MARKER
+
+        fake_profile = Path("/tmp/fish_config")
+
+        monkeypatch.setattr(
+            "zerg.cli.onboard._resolve_shell_bin",
+            lambda: ("/opt/homebrew/bin/fish", "fish"),
+        )
+        monkeypatch.setattr(Path, "exists", lambda self: True)
+
+        # Fish PATH uses spaces instead of colons
+        fake_result = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=f"{_PATH_MARKER}=/usr/local/bin /usr/bin /bin\n",
+            stderr="",
+        )
+        monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: fake_result)
+
+        result = _extract_path_from_profile(fake_profile)
+        assert result == "/usr/local/bin /usr/bin /bin"
