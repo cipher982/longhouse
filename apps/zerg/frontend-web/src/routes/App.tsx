@@ -12,6 +12,7 @@ import ProfilePage from "../pages/ProfilePage";
 import SettingsPage from "../pages/SettingsPage";
 import IntegrationsPage from "../pages/IntegrationsPage";
 import ContactsPage from "../pages/ContactsPage";
+import DevicesPage from "../pages/DevicesPage";
 import KnowledgeSourcesPage from "../pages/KnowledgeSourcesPage";
 import AdminPage from "../pages/AdminPage";
 import RunnersPage from "../pages/RunnersPage";
@@ -302,6 +303,14 @@ export default function App() {
           element: (
             <ErrorBoundary>
               <ContactsPage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/settings/devices",
+          element: (
+            <ErrorBoundary>
+              <DevicesPage />
             </ErrorBoundary>
           )
         },

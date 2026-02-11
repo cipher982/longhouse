@@ -150,13 +150,13 @@ def auth(
     # Interactive auth flow
     typer.echo("")
     typer.echo("To create a device token:")
-    typer.echo(f"1. Open: {url.rstrip('/')}/dashboard/settings/devices")
+    typer.echo(f"1. Open: {url.rstrip('/')}/settings/devices")
     typer.echo(f"2. Create a new token for device: {device_name}")
     typer.echo("3. Copy the token and paste it below")
     typer.echo("")
 
     # Try to open browser
-    dashboard_url = f"{url.rstrip('/')}/dashboard/settings/devices"
+    dashboard_url = f"{url.rstrip('/')}/settings/devices"
     try:
         if typer.confirm("Open browser to create token?", default=True):
             webbrowser.open(dashboard_url)
