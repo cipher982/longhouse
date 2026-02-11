@@ -75,6 +75,10 @@ class AgentSession(AgentsBase):
     # Provider-specific session ID (e.g., Claude Code session UUID from filename)
     provider_session_id = Column(String(255), nullable=True, index=True)
 
+    # Pre-computed summary (generated async after ingest)
+    summary = Column(Text, nullable=True)  # 2-4 sentence quick summary
+    summary_title = Column(String(200), nullable=True)  # Short title for briefing
+
     # Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
