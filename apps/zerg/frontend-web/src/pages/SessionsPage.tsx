@@ -528,20 +528,32 @@ export default function SessionsPage() {
 
         {/* Timeline List */}
         {showGuidedEmptyState ? (
-          <EmptyState
-            title="No sessions yet"
-            description="Sessions sync from Claude Code. Run 'longhouse ship' to sync now, or load sample data to explore the timeline."
-            action={
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={handleSeedDemo}
-                disabled={demoLoading}
-              >
-                {demoLoading ? "Loading..." : "Load demo data"}
-              </Button>
-            }
-          />
+          <div className="sessions-guided-empty">
+            <EmptyState
+              title="Welcome to Longhouse"
+              description="Your AI coding sessions from Claude Code, Codex, and Gemini will appear here as a searchable timeline."
+              action={
+                <div className="sessions-guided-actions">
+                  <Button
+                    variant="primary"
+                    size="md"
+                    onClick={handleSeedDemo}
+                    disabled={demoLoading}
+                  >
+                    {demoLoading ? "Loading..." : "Load demo sessions"}
+                  </Button>
+                </div>
+              }
+            />
+            <div className="sessions-guided-steps">
+              <p className="sessions-guided-steps-label">To start shipping your own sessions:</p>
+              <ol className="sessions-guided-steps-list">
+                <li><code>longhouse connect</code> &mdash; link your CLI tools</li>
+                <li>Use Claude Code, Codex, or Gemini as normal</li>
+                <li>Sessions appear here automatically</li>
+              </ol>
+            </div>
+          </div>
         ) : sessions.length === 0 ? (
           <EmptyState
             title="No timeline sessions found"
