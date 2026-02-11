@@ -13,7 +13,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ---
 
-## Validation Summary (2026-02-11, rev 9)
+## Validation Summary (2026-02-11, rev 10)
 
 ### Done / Verified
 | Section | Status | Notes |
@@ -39,9 +39,11 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | OSS First-Run UX | 100% | Auto-seed on first run + guided empty state + multi-CLI detection + "No CLI" guidance all complete |
 | Landing Page Redesign | 100% | All phases + meta/OG tags + docs/pricing rewrite + dead CSS removed |
 | AGENTS.md Accuracy Audit | DONE | Deploy section, generated paths, gotchas, checklist all verified |
-| OSS Packaging Decisions | ~66% | Shipper bundled (done), no built-in HTTPS (done), auto-token UX pending |
+| OSS Packaging Decisions | 100% | Shipper bundled, no built-in HTTPS, auto-token flow, bundle budget — all done |
 | Package Metadata Cleanup | DONE | pyproject.toml + backend README product descriptions updated (commit `4bb7f478`) |
 | HN Blocker Scan | DONE | No secrets, no stale branding, no broken links in user-facing surfaces |
+| Auto-Token Connect Flow | DONE | `longhouse connect` auto-creates device tokens; password login + localhost auto-auth (commits `a7c11f96`, `0435639d`) |
+| UI Smoke WS Filter | DONE | WebSocket connection errors excluded from visual smoke test (commit `112a697e`) |
 
 ### In Progress
 | Section | Status | Notes |
@@ -475,11 +477,7 @@ Close the gap between VISION, README, docs, and the live installer.
 Close the remaining open questions from VISION.md.
 
 - [x] Decide whether the shipper is bundled with the CLI or shipped as a separate package. **Decision: bundled.** Already part of the main package (`pyproject.toml` includes `watchdog`, CLI exposes `connect`/`ship`). Single `pip install longhouse` ships sessions out-of-the-box.
-- [ ] Decide shipper auth UX for `longhouse connect` (device token flow).
-  - Current: `longhouse auth` → opens `/settings/devices` page → user creates token → pastes into CLI
-  - VISION target: `longhouse connect` issues token automatically (CLI-side login + auto-create)
-  - Note: This is separate from web UI auth (password/OAuth) — shipper needs device tokens
-  > **Recommendation (2026-02-11):** Implement auto-token flow in `longhouse connect` — user runs `longhouse connect --url <url>`, CLI authenticates via password (or localhost auto-auth), and auto-creates a device token server-side. Keep the current manual `longhouse auth` flow as a fallback for headless/scripted setups. This eliminates the copy-paste step that breaks the "Fast to Fun" < 2 min goal.
+- [x] Decide shipper auth UX for `longhouse connect` (device token flow). **Decision: auto-token.** `longhouse connect` now auto-creates device tokens — tries unauthenticated first (AUTH_DISABLED), falls back to password login (`POST /api/auth/cli-login` → short-lived JWT → create token). Manual `longhouse auth` kept as fallback. Commits `a7c11f96`, `0435639d`.
 - [x] Decide HTTPS story for local OSS (`longhouse serve`) — built-in vs reverse proxy guidance. **Decision: no built-in HTTPS.** HTTP on localhost is fine. For remote access, recommend Caddy or nginx reverse proxy (matches Grafana/Jupyter/Datasette pattern).
 - [x] Capture current frontend bundle size and set a target budget. (2026-02-11: measured, budget set in VISION.md § "Frontend Bundle Size Baseline")
 
