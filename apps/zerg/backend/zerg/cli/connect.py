@@ -23,6 +23,7 @@ import socket
 import webbrowser
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 import typer
@@ -72,6 +73,95 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Auto-token helpers
+# ---------------------------------------------------------------------------
+
+
+def _is_localhost(url: str) -> bool:
+    """Return True if the URL points to a loopback address."""
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    return host in ("127.0.0.1", "localhost", "::1", "0.0.0.0")
+
+
+def _auto_create_token(url: str, device_name: str | None = None) -> str | None:
+    """Try to auto-create a device token. Returns plain token or None.
+
+    For localhost (dev mode with AUTH_DISABLED): creates token without auth.
+    For remote URLs: prompts for password, uses cli-login + device token creation.
+    """
+    device_name = device_name or socket.gethostname()
+
+    if _is_localhost(url):
+        # Dev mode: try creating token without auth (AUTH_DISABLED=1)
+        try:
+            with httpx.Client(timeout=10) as client:
+                resp = client.post(
+                    f"{url.rstrip('/')}/api/devices/tokens",
+                    json={"device_id": device_name},
+                )
+                if resp.status_code in (200, 201):
+                    return resp.json().get("token")
+        except Exception:
+            pass
+        return None
+
+    # Remote: prompt for password
+    typer.echo("")
+    password = typer.prompt("Password", hide_input=True)
+
+    # Step 1: Login to get short-lived JWT
+    try:
+        with httpx.Client(timeout=10) as client:
+            login_resp = client.post(
+                f"{url.rstrip('/')}/api/auth/cli-login",
+                json={"password": password},
+            )
+    except httpx.ConnectError:
+        typer.secho(f"Could not connect to {url}", fg=typer.colors.RED)
+        return None
+    except Exception as e:
+        typer.secho(f"Login error: {e}", fg=typer.colors.RED)
+        return None
+
+    if login_resp.status_code == 401:
+        typer.secho("Invalid password.", fg=typer.colors.RED)
+        return None
+    if login_resp.status_code == 400:
+        typer.secho("Password auth not configured on this instance.", fg=typer.colors.RED)
+        return None
+    if login_resp.status_code == 429:
+        typer.secho("Too many attempts. Try again later.", fg=typer.colors.RED)
+        return None
+    if login_resp.status_code != 200:
+        typer.secho(f"Login failed (HTTP {login_resp.status_code}).", fg=typer.colors.RED)
+        return None
+
+    jwt_token = login_resp.json().get("token")
+    if not jwt_token:
+        typer.secho("Login response missing token.", fg=typer.colors.RED)
+        return None
+
+    # Step 2: Create device token using short-lived JWT
+    try:
+        with httpx.Client(timeout=10) as client:
+            token_resp = client.post(
+                f"{url.rstrip('/')}/api/devices/tokens",
+                json={"device_id": device_name},
+                headers={"Authorization": f"Bearer {jwt_token}"},
+            )
+    except Exception as e:
+        typer.secho(f"Token creation error: {e}", fg=typer.colors.RED)
+        return None
+
+    if token_resp.status_code in (200, 201):
+        return token_resp.json().get("token")
+
+    typer.secho(f"Failed to create device token (HTTP {token_resp.status_code}).", fg=typer.colors.RED)
+    return None
+
+
 @app.command()
 def auth(
     url: str = typer.Option(
@@ -113,9 +203,10 @@ def auth(
 
     The token is stored locally and used for all subsequent ship/connect commands.
 
-    Authentication methods:
-    1. Browser-based: Opens Longhouse web UI to create a token interactively
-    2. Direct token: Use --token to provide an existing device token
+    Authentication methods (tried in order):
+    1. Direct token: Use --token to provide an existing device token
+    2. Auto-login: Prompts for password and creates token automatically
+    3. Browser fallback: Opens web UI if auto-login is unavailable
 
     Examples:
         longhouse auth --url https://api.longhouse.ai
@@ -170,28 +261,36 @@ def auth(
             raise typer.Exit(code=1)
         return
 
-    # Interactive auth flow
-    typer.echo("")
-    typer.echo("To create a device token:")
-    typer.echo(f"1. Open: {url.rstrip('/')}/settings/devices")
-    typer.echo(f"2. Create a new token for device: {device_name}")
-    typer.echo("3. Copy the token and paste it below")
-    typer.echo("")
+    # Try auto-authenticate first (password-based, no browser needed)
+    typer.echo(f"Authenticating with {url}...")
+    auto_token = _auto_create_token(url, device_name)
 
-    # Try to open browser
-    dashboard_url = f"{url.rstrip('/')}/settings/devices"
-    try:
-        if typer.confirm("Open browser to create token?", default=True):
-            webbrowser.open(dashboard_url)
-    except Exception:
-        pass
+    if auto_token:
+        token = auto_token
+        typer.secho(f"Device token created for {device_name}", fg=typer.colors.GREEN)
+    else:
+        # Fall back to manual browser-based flow
+        typer.echo("")
+        typer.echo("Auto-login not available. Falling back to manual token creation:")
+        typer.echo(f"1. Open: {url.rstrip('/')}/settings/devices")
+        typer.echo(f"2. Create a new token for device: {device_name}")
+        typer.echo("3. Copy the token and paste it below")
+        typer.echo("")
 
-    # Prompt for token
-    token = typer.prompt("Device token")
+        # Try to open browser
+        dashboard_url = f"{url.rstrip('/')}/settings/devices"
+        try:
+            if typer.confirm("Open browser to create token?", default=True):
+                webbrowser.open(dashboard_url)
+        except Exception:
+            pass
 
-    if not token:
-        typer.secho("No token provided", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
+        # Prompt for token
+        token = typer.prompt("Device token")
+
+        if not token:
+            typer.secho("No token provided", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
 
     # Validate and store
     if _validate_token(url, token):
@@ -425,6 +524,22 @@ def connect(
         url = get_zerg_url(config_dir) or "http://localhost:8080"
     if not token:
         token = load_token(config_dir)
+
+    # Auto-authenticate if no token exists
+    if not token:
+        typer.echo("No device token found. Attempting auto-authentication...")
+        auto_token = _auto_create_token(url)
+        if auto_token:
+            save_token(auto_token, config_dir)
+            save_zerg_url(url, config_dir)
+            token = auto_token
+            typer.secho("Authenticated successfully.", fg=typer.colors.GREEN)
+        else:
+            typer.secho(
+                "Could not auto-authenticate. Run 'longhouse auth --token <token>' to authenticate manually.",
+                fg=typer.colors.YELLOW,
+            )
+            raise typer.Exit(code=1)
 
     if hooks_only:
         _handle_hooks_only(url=url, token=token, claude_dir=claude_dir)
