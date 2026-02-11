@@ -1072,105 +1072,6 @@
   }
 
   /* --------------------------------------------------------
-   DEPLOYMENT OPTIONS SECTION
-   -------------------------------------------------------- */
-
-  .landing-deployment {
-    padding: var(--space-16) 0;
-    text-align: center;
-  }
-
-  .landing-deployment-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: var(--space-6);
-    max-width: 800px;
-    margin: 0 auto;
-  }
-
-  .landing-deployment-card {
-    /* Bumped from surface-card (0.03) to 0.06 for visible elevation */
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.10);
-    border-radius: var(--radius-xl);
-    padding: var(--space-8);
-    text-align: left;
-    display: flex;
-    flex-direction: column;
-    position: relative;
-    transition: all var(--motion-duration-normal) var(--motion-easing-standard);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.05) inset;
-  }
-
-  .landing-deployment-card:hover {
-    transform: translateY(-4px);
-    box-shadow: var(--shadow-lg), 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
-  }
-
-  .landing-deployment-card.highlighted {
-    border-color: var(--color-brand-primary);
-    box-shadow: 0 0 32px rgb(99 102 241 / 15%), 0 4px 16px rgba(0, 0, 0, 0.3);
-  }
-
-  .landing-deployment-badge {
-    position: absolute;
-    top: var(--space-4);
-    right: var(--space-4);
-    background: rgba(255, 255, 255, 0.08);
-    /* Bumped from muted to secondary for WCAG AA at xs uppercase */
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-semibold);
-    padding: var(--space-1) var(--space-3);
-    border-radius: var(--radius-full);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-  }
-
-  .landing-deployment-header {
-    margin-bottom: var(--space-6);
-  }
-
-  .landing-deployment-name {
-    font-family: var(--font-family-display);
-    font-size: var(--font-size-xl);
-    font-weight: var(--font-weight-semibold);
-    margin-bottom: var(--space-2);
-  }
-
-  .landing-deployment-promise {
-    font-size: var(--font-size-sm);
-    color: var(--color-text-secondary);
-    margin: 0;
-  }
-
-  .landing-deployment-features {
-    list-style: none;
-    padding: 0;
-    margin: 0 0 var(--space-6);
-    flex: 1;
-  }
-
-  .landing-deployment-features li {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-2) 0;
-    font-size: var(--font-size-sm);
-    color: var(--color-text-secondary);
-  }
-
-  .landing-deployment-check {
-    color: var(--color-intent-success);
-    flex-shrink: 0;
-  }
-
-  .landing-deployment-cta {
-    width: 100%;
-  }
-
-  /* --------------------------------------------------------
    PRICING SECTION
    -------------------------------------------------------- */
 
@@ -2196,10 +2097,6 @@
     }
 
     .landing-steps-row {
-      grid-template-columns: 1fr;
-    }
-
-    .landing-deployment-grid {
       grid-template-columns: 1fr;
     }
 

@@ -47,6 +47,10 @@ export default defineConfig(({ mode }) => {
     server: {
       host: "0.0.0.0",
       port: frontendPort,
+      // Disable browser caching in dev — stale modules cause ghost UI bugs
+      headers: {
+        "Cache-Control": "no-store",
+      },
       // Enable file watching with polling for Docker volumes
       watch: {
         usePolling: true,

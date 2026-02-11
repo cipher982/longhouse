@@ -2,9 +2,7 @@
  * PricingSection
  *
  * Simple 2-tier pricing: Self-hosted (free) + Hosted (coming soon).
- *
- * Focuses on the WHAT — features and cost.
- * DeploymentOptions covers the HOW — infrastructure and setup.
+ * Covers both deployment model and pricing in one section.
  */
 
 import { useState } from "react";
@@ -45,11 +43,12 @@ export function PricingSection() {
       name: "Self-Hosted",
       price: "Free",
       period: "forever",
-      description: "Full features, your machine",
+      description: "One command, your machine",
       features: [
         "Full timeline and search",
-        "SQLite database on your machine",
+        "SQLite — no external services",
         "Claude Code + Codex + Gemini sync",
+        "Works offline, data stays local",
         "Open source (Apache 2.0)",
       ],
       ctaText: "Get Started",
@@ -60,12 +59,13 @@ export function PricingSection() {
       name: "Hosted",
       price: "$5",
       period: "/month",
-      description: "Always-on, any device",
+      description: "We run it, you use it",
       features: [
         "Everything in self-hosted",
         "Always-on — agents work while you sleep",
         "Access from any device",
-        "Priority support",
+        "Automatic updates and backups",
+        "Your own subdomain",
       ],
       ctaText: "Join Waitlist",
       ctaAction: handleJoinWaitlist,

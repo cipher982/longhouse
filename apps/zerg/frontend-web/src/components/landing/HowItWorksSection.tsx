@@ -38,7 +38,7 @@ const steps: Step[] = [
 
 export function HowItWorksSection() {
   const handleGetStarted = () => {
-    document.getElementById("deployment-options")?.scrollIntoView({ behavior: "smooth" });
+    document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
   };
 
   return (
