@@ -61,15 +61,12 @@ def mcp_server(
     if transport == "stdio":
         server.run()
     elif transport == "http":
-        # FastMCP.run() doesn't accept a port argument; use uvicorn directly.
+        # FastMCP.run() doesn't accept a port argument; use uvicorn directly
+        # with the streamable-http ASGI app.
         import uvicorn
 
-        try:
-            app = server.sse_app()
-        except AttributeError:
-            # Newer mcp SDK versions expose streamable-http via ASGI
-            app = server.streamable_http_app()
-        uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
+        http_app = server.streamable_http_app()
+        uvicorn.run(http_app, host="127.0.0.1", port=port, log_level="info")
     else:
         typer.secho(f"Unknown transport: {transport}. Use 'stdio' or 'http'.", fg=typer.colors.RED)
         raise typer.Exit(code=1)
