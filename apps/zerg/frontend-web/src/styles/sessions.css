@@ -623,6 +623,83 @@
   }
 
   /* ---------------------------------------------------------------------------
+   * Session Detail Filters
+   * ---------------------------------------------------------------------------*/
+
+  .session-detail-filters {
+    display: flex;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--border-glass-1);
+  }
+
+  .filter-btn {
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-glass-1);
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .filter-btn:hover {
+    border-color: var(--color-text-secondary);
+  }
+
+  .filter-btn.active {
+    background: var(--color-brand-primary);
+    border-color: var(--color-brand-primary);
+    color: var(--color-text-inverse);
+  }
+
+  /* ---------------------------------------------------------------------------
+   * Session Status Badge
+   * ---------------------------------------------------------------------------*/
+
+  .session-status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+  }
+
+  .session-status-badge.completed {
+    background: color-mix(in srgb, var(--color-intent-success) 10%, transparent);
+    color: var(--color-intent-success);
+  }
+
+  .session-status-badge.in-progress {
+    background: color-mix(in srgb, var(--color-brand-primary) 10%, transparent);
+    color: var(--color-brand-primary);
+  }
+
+  .status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: var(--radius-full);
+    flex-shrink: 0;
+  }
+
+  .status-dot.completed {
+    background: var(--color-intent-success);
+  }
+
+  .status-dot.in-progress {
+    background: var(--color-brand-primary);
+    animation: pulse-dot 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  /* ---------------------------------------------------------------------------
    * Responsive
    * ---------------------------------------------------------------------------*/
 

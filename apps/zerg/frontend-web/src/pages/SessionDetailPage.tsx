@@ -252,10 +252,13 @@ export default function SessionDetailPage() {
     limit: 1000,
   });
 
-  const events = eventsData?.events || [];
+  const events = useMemo(() => eventsData?.events || [], [eventsData]);
 
   // Resume chat state
   const [showResume, setShowResume] = useState(false);
+
+  // Event role filter
+  const [eventFilter, setEventFilter] = useState<'all' | 'messages' | 'tools'>('all');
 
   // Expanded state for tool calls
   const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
@@ -288,6 +291,23 @@ export default function SessionDetailPage() {
       setExpandedTools(new Set(toolEvents.map((e) => e.id)));
     }
   };
+
+  // Client-side event filter
+  const filteredEvents = useMemo(() => {
+    if (eventFilter === 'all') return events;
+    if (eventFilter === 'messages') return events.filter(e => e.role === 'user' || e.role === 'assistant');
+    // tools
+    return events.filter(e => e.role === 'tool' || e.tool_name);
+  }, [events, eventFilter]);
+
+  const messageCount = useMemo(
+    () => events.filter(e => e.role === 'user' || e.role === 'assistant').length,
+    [events]
+  );
+  const toolCount = useMemo(
+    () => events.filter(e => e.role === 'tool' || e.tool_name).length,
+    [events]
+  );
 
   // Ready signal for E2E
   useEffect(() => {
@@ -452,6 +472,23 @@ export default function SessionDetailPage() {
           </div>
           <span className="meta-separator">&middot;</span>
           <div className="meta-item">
+            <span className={`session-status-badge ${session.ended_at ? 'completed' : 'in-progress'}`}>
+              <span className={`status-dot ${session.ended_at ? 'completed' : 'in-progress'}`} />
+              {session.ended_at ? 'Completed' : 'In Progress'}
+            </span>
+          </div>
+          {session.environment && session.environment !== 'production' && (
+            <>
+              <span className="meta-separator">&middot;</span>
+              <div className="meta-item">
+                <span className={`environment-badge environment-badge--${session.environment}`}>
+                  {session.environment}
+                </span>
+              </div>
+            </>
+          )}
+          <span className="meta-separator">&middot;</span>
+          <div className="meta-item">
             <Badge variant="neutral">{turnCount} turns</Badge>
             <Badge variant="neutral">{session.tool_calls} tools</Badge>
           </div>
@@ -479,14 +516,31 @@ export default function SessionDetailPage() {
             <span className="timeline-count">{events.length} events</span>
           </div>
 
-          {events.length === 0 ? (
+          {/* Event role filter */}
+          {events.length > 0 && (
+            <div className="session-detail-filters">
+              {(['all', 'messages', 'tools'] as const).map(filter => (
+                <button
+                  key={filter}
+                  className={`filter-btn ${eventFilter === filter ? 'active' : ''}`}
+                  onClick={() => setEventFilter(filter)}
+                >
+                  {filter === 'all' ? `All (${events.length})` :
+                   filter === 'messages' ? `Messages (${messageCount})` :
+                   `Tools (${toolCount})`}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {filteredEvents.length === 0 ? (
             <EmptyState
               title="No events"
-              description="This session has no recorded events."
+              description={eventFilter !== 'all' ? "No events match the selected filter." : "This session has no recorded events."}
             />
           ) : (
             <div className="timeline-events">
-              {events.map((event) => {
+              {filteredEvents.map((event) => {
                 const isHighlighted = highlightedEventId === event.id;
                 if (event.role === "user") {
                   return <UserMessage key={event.id} event={event} isHighlighted={isHighlighted} />;
