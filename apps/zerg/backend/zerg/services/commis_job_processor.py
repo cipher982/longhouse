@@ -613,6 +613,16 @@ class CommisJobProcessor:
             except Exception as agents_md_error:
                 logger.warning(f"Failed to inject AGENTS.md for job {job_id}: {agents_md_error}")
 
+            # 4b. Inject MCP server config so commis can access Longhouse tools (best-effort)
+            try:
+                from zerg.services.workspace_manager import inject_mcp_settings
+
+                settings = get_settings()
+                api_url = settings.public_site_url or f"http://localhost:{_DEFAULT_CALLBACK_PORT}"
+                inject_mcp_settings(workspace.path, api_url=api_url)
+            except Exception as mcp_error:
+                logger.warning(f"Failed to inject MCP settings for job {job_id}: {mcp_error}")
+
             # 5. Emit commis_started event for UI (before long-running execution)
             if oikos_run_id:
                 try:

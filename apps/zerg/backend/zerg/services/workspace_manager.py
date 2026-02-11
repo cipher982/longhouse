@@ -61,7 +61,7 @@ def validate_git_repo_url(repo_url: str) -> None:
 
     # Check for allowed schemes
     if not any(repo_url.startswith(scheme) for scheme in ALLOWED_GIT_SCHEMES):
-        raise ValueError(f"Repository URL must use one of: {', '.join(ALLOWED_GIT_SCHEMES)}. " f"Got: {repo_url[:50]}...")
+        raise ValueError(f"Repository URL must use one of: {', '.join(ALLOWED_GIT_SCHEMES)}. Got: {repo_url[:50]}...")
 
     # Prevent SSH option injection via host or user portion
     # The '--' in git clone only protects git's CLI parsing, not SSH's argument parsing
@@ -166,7 +166,7 @@ def validate_run_id(run_id: str) -> None:
         raise ValueError("run_id cannot be empty")
 
     if not _VALID_RUN_ID_PATTERN.match(run_id):
-        raise ValueError(f"Invalid run_id: {run_id}. " "Must contain only alphanumeric characters, hyphens, and underscores.")
+        raise ValueError(f"Invalid run_id: {run_id}. Must contain only alphanumeric characters, hyphens, and underscores.")
 
 
 # Default workspace base path (overridable via OIKOS_WORKSPACE_PATH env var)
@@ -645,9 +645,7 @@ def inject_agents_md(
         [
             "",
             "This workspace was provisioned by Longhouse for commis (background agent) execution.",
-            "Memory tools are available via the Longhouse API if configured.",
-            "",
-            "> MCP server integration coming in 3f.",
+            "Longhouse MCP tools (session search, memory, notifications) are auto-configured in .claude/settings.json.",
         ]
     )
     sections.append("\n".join(longhouse_lines))
@@ -687,4 +685,62 @@ def inject_agents_md(
         return None
 
 
-__all__ = ["WorkspaceManager", "Workspace", "inject_agents_md"]
+def inject_mcp_settings(workspace_path: Path, api_url: str | None = None) -> Path | None:
+    """Inject Longhouse MCP server config into workspace .claude/settings.json.
+
+    This allows commis (Claude Code subprocesses) to access Longhouse's
+    session search, memory, and notification tools mid-task.
+
+    Parameters
+    ----------
+    workspace_path
+        Root path of the workspace directory
+    api_url
+        Longhouse API URL for the MCP server to connect to
+
+    Returns
+    -------
+    Path | None
+        Path to the created/updated settings.json, or None on failure
+    """
+    import json
+
+    workspace_path = Path(workspace_path)
+    claude_dir = workspace_path / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    settings_path = claude_dir / "settings.json"
+
+    # Load existing settings if present
+    settings: dict = {}
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Build MCP server config
+    mcp_args = ["mcp-server"]
+    if api_url:
+        mcp_args.extend(["--url", api_url])
+
+    mcp_config = {
+        "type": "stdio",
+        "command": "longhouse",
+        "args": mcp_args,
+    }
+
+    # Inject into settings
+    if "mcpServers" not in settings:
+        settings["mcpServers"] = {}
+    settings["mcpServers"]["longhouse"] = mcp_config
+
+    try:
+        settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+        logger.info("Injected MCP settings into %s", settings_path)
+        return settings_path
+    except OSError as e:
+        logger.warning("Failed to write MCP settings to %s: %s", settings_path, e)
+        return None
+
+
+__all__ = ["WorkspaceManager", "Workspace", "inject_agents_md", "inject_mcp_settings"]
