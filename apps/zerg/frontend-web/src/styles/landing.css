@@ -1024,48 +1024,6 @@
     }
   }
 
-  /* Skills Section (compact) */
-  .landing-skills.landing-skills-compact {
-    padding: var(--space-10) 0;
-    border-top: 1px solid var(--color-border-secondary);
-  }
-
-  .landing-skills-header-icon {
-    color: var(--color-brand-primary);
-    flex-shrink: 0;
-  }
-
-  .landing-skills-compact-row {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--space-4);
-    max-width: 600px;
-    margin: 0 auto;
-    text-align: left;
-  }
-
-  .landing-skills-compact-title {
-    font-size: var(--font-size-lg);
-    font-weight: var(--font-weight-semibold);
-    color: var(--color-text-primary);
-    margin-bottom: var(--space-1);
-  }
-
-  .landing-skills-compact-desc {
-    font-size: var(--font-size-sm);
-    color: var(--color-text-secondary);
-    line-height: 1.6;
-  }
-
-  .landing-skills-compact-desc code {
-    background: var(--color-bg-tertiary);
-    padding: var(--space-0-5) var(--space-2);
-    border-radius: var(--radius-sm);
-    font-family: var(--font-family-mono);
-    font-size: var(--font-size-xs);
-    color: var(--color-brand-secondary);
-  }
-
   /* Trust badges in Integrations */
   .landing-trust-badges {
     display: flex;
@@ -2267,68 +2225,6 @@
 
   .social-proof-badge svg {
     flex-shrink: 0;
-  }
-
-  /* Video walkthrough placeholder / embed */
-  .social-proof-video {
-    max-width: 640px;
-    margin: 0 auto;
-  }
-
-  .social-proof-video-frame {
-    border-radius: var(--radius-xl);
-    overflow: hidden;
-    border: 1px solid rgba(255, 255, 255, 0.10);
-    background: rgba(255, 255, 255, 0.03);
-  }
-
-  .social-proof-video-iframe {
-    width: 100%;
-    aspect-ratio: 16 / 9;
-    border: none;
-    display: block;
-  }
-
-  .social-proof-video-placeholder {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: var(--space-3);
-    padding: var(--space-10) var(--space-6);
-    aspect-ratio: 16 / 9;
-    cursor: default;
-  }
-
-  .social-proof-video-play {
-    width: 48px;
-    height: 48px;
-    border-radius: 50%;
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--color-text-secondary);
-  }
-
-  .social-proof-video-label {
-    font-size: var(--font-size-base);
-    font-weight: var(--font-weight-medium);
-    color: var(--color-text-secondary);
-    margin: 0;
-  }
-
-  .social-proof-video-sub {
-    font-size: var(--font-size-sm);
-    color: var(--color-text-muted);
-    margin: 0;
-  }
-
-  @media (width <= 480px) {
-    .social-proof-video {
-      max-width: 100%;
-    }
   }
 
   /* --------------------------------------------------------
