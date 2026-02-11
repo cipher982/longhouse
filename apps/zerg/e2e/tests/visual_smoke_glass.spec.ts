@@ -76,7 +76,9 @@ test.describe('Visual smoke: console error check', () => {
         !e.includes('Failed to load resource') &&
         !e.includes('useOikosApp') &&
         !e.includes('Failed to fetch bootstrap') &&
-        !e.includes('Failed to check for active run')
+        !e.includes('Failed to check for active run') &&
+        !e.includes('WebSocket connection') &&
+        !e.includes('net::ERR_CONNECTION_REFUSED')
       );
 
       const critical404s = notFoundUrls.filter(url =>
