@@ -37,7 +37,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 ### In Progress
 | Section | Status | Notes |
 |---------|--------|-------|
-| Harness Phase 3f-3h | ~90% | 3f 100% (MCP server + commis injection + Codex config.toml); 3g 100% (quality gates + hooks); only 3h (research) remaining |
+| Harness Phase 3f-3h | 100% | 3f (MCP server + commis injection + Codex config.toml); 3g (quality gates + hooks); 3h (research: Codex App Server + Claude Agent SDK evaluation) |
 | Landing Page Redesign | ~95% | Phase 5 complete (copy, sections, reorder); Phase 6 visual assets remaining |
 | Control Plane | ~45% | Scaffold + provisioner + CI gate done; OAuth/billing/runtime image pending |
 | Shipper Multi-Provider | DONE | Provider abstraction + Claude/Codex/Gemini parsers + review fixes |
@@ -109,9 +109,9 @@ Verification loops (tests/browser checks before commit) boost agent reliability 
 
 Evaluate newer integration paths for tighter commis control vs. current hatch subprocess approach.
 
-- [ ] Evaluate Codex App Server (JSON-RPC over stdio) for structured event streaming from Codex-backend commis — Thread/Turn/Item primitives + approval routing
-- [ ] Evaluate Claude Agent SDK (TypeScript) as alternative to `hatch` subprocess for Claude-backend commis — real-time streaming, programmatic tool injection, better lifecycle control
-- [ ] Document trade-offs and recommend path forward (subprocess vs SDK vs protocol)
+- [x] Evaluate Codex App Server (JSON-RPC over stdio) for structured event streaming from Codex-backend commis — Thread/Turn/Item primitives + approval routing
+- [x] Evaluate Claude Agent SDK (TypeScript) as alternative to `hatch` subprocess for Claude-backend commis — real-time streaming, programmatic tool injection, better lifecycle control
+- [x] Document trade-offs and recommend path forward (subprocess vs SDK vs protocol) — see `docs/specs/3h-research-commis-integration.md`
 
 ### Phase 4: Semantic Search (4)
 - [ ] Choose embedding approach: sqlite-vec vs API-call-on-ingest
