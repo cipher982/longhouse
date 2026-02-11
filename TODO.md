@@ -37,7 +37,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 ### In Progress
 | Section | Status | Notes |
 |---------|--------|-------|
-| Harness Phase 3f-3h | ~70% | 3f complete (MCP server + commis injection); 3g-3h 0% |
+| Harness Phase 3f-3h | ~75% | 3f 100% (MCP server + commis injection + Codex config.toml); 3g-3h 0% |
 | Landing Page Redesign | ~95% | Phase 5 complete (copy, sections, reorder); Phase 6 visual assets remaining |
 | Control Plane | ~45% | Scaffold + provisioner + CI gate done; OAuth/billing/runtime image pending |
 | Shipper Multi-Provider | DONE | Provider abstraction + Claude/Codex/Gemini parsers + review fixes |
@@ -95,7 +95,7 @@ Industry standard pattern (2025-2026): teams expose internal tooling as MCP serv
 - [x] Support stdio transport (for local hatch subprocesses) and streamable HTTP (for remote/runner agents) (commit `e1207ef2`)
 - [x] Auto-register MCP server in Claude Code settings during `longhouse connect --install` (commit `e1207ef2`)
 - [x] Auto-configure MCP server for commis spawned via `hatch` (inject into workspace `.claude/settings.json`) (commit `d849ec8d`)
-- [ ] Add Codex `config.toml` MCP registration path for Codex-backend commis
+- [x] Add Codex `config.toml` MCP registration path for Codex-backend commis
 
 **3g: Commis quality gates via hooks (2)**
 
@@ -278,7 +278,7 @@ Update screenshots to show Timeline, not old dashboard.
 - [x] **Password-only config bug** — `_validate_required()` now skips Google OAuth validation when password auth is configured
   - File: `apps/zerg/backend/zerg/config/__init__.py:512`
   - Fixed: Skip Google OAuth validation if `LONGHOUSE_PASSWORD` or `LONGHOUSE_PASSWORD_HASH` is set
-- [ ] **Landing page CTAs** — Copy/flow not dual-path; some CTAs route to sign-in modal instead of install/waitlist
+- [x] **Landing page CTAs** — Copy/flow not dual-path; some CTAs route to sign-in modal instead of install/waitlist
 
 ### High Priority
 

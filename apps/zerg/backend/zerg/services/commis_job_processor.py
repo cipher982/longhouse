@@ -615,11 +615,13 @@ class CommisJobProcessor:
 
             # 4b. Inject MCP server config so commis can access Longhouse tools (best-effort)
             try:
+                from zerg.services.workspace_manager import inject_codex_mcp_settings
                 from zerg.services.workspace_manager import inject_mcp_settings
 
                 settings = get_settings()
                 api_url = settings.public_site_url or f"http://localhost:{_DEFAULT_CALLBACK_PORT}"
                 inject_mcp_settings(workspace.path, api_url=api_url)
+                inject_codex_mcp_settings(workspace.path, api_url=api_url)
             except Exception as mcp_error:
                 logger.warning(f"Failed to inject MCP settings for job {job_id}: {mcp_error}")
 
