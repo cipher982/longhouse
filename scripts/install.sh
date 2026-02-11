@@ -379,7 +379,7 @@ verify_fresh_shell_path() {
 
     # Check longhouse — exact segment matching with delimiters
     local longhouse_path
-    longhouse_path=$(which longhouse 2>/dev/null)
+    longhouse_path=$(which longhouse 2>/dev/null) || true
     if [[ -n "$longhouse_path" ]]; then
         local longhouse_dir
         longhouse_dir=$(dirname "$longhouse_path")
@@ -392,7 +392,7 @@ verify_fresh_shell_path() {
 
     # Check claude (optional) — exact segment matching with delimiters
     local claude_path
-    claude_path=$(which claude 2>/dev/null)
+    claude_path=$(which claude 2>/dev/null) || true
     if [[ -n "$claude_path" ]]; then
         local claude_dir
         claude_dir=$(dirname "$claude_path")
