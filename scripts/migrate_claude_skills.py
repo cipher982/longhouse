@@ -29,7 +29,7 @@ def migrate_skill(src_dir: Path, dst_root: Path, dry_run: bool) -> bool:
     else:
         # Wrap with minimal frontmatter
         first_line = content.strip().split("\n")[0].lstrip("# ").strip()
-        desc = first_line[:80] if first_line else ""
+        desc = first_line[:80].replace('"', '\\"') if first_line else ""
         header = f"---\nname: {skill_name}\ndescription: \"{desc}\"\n---\n\n"
         content = header + content
 

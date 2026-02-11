@@ -587,8 +587,9 @@ def inject_agents_md(
 ) -> Path | None:
     """Compose and inject a .claude/CLAUDE.md instruction chain into a workspace.
 
-    Loads instructions from multiple levels (global user, repo-level, subdir-level)
-    and composes them into a single .claude/CLAUDE.md file with clear section headers.
+    Loads instructions from two levels (global user, repo-level) and composes
+    them into a single .claude/CLAUDE.md file with clear section headers.
+    Subdir-level override support is planned but not yet implemented.
 
     If .claude/CLAUDE.md already exists in the workspace, appends a Longhouse Context
     section rather than overwriting.

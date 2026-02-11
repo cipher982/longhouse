@@ -675,21 +675,23 @@ def accept_token(response: Response, body: dict[str, str], db: Session = Depends
         )
 
     # Resolve the user from the token's sub claim.
-    # sub is a numeric user_id (instance-issued or control-plane-issued).
-    # Legacy control-plane tokens may have sub=email (no "email" claim).
+    # Control-plane tokens: sub=cp_user_id + email claim → resolve by email
+    # (never match sub against local user IDs — they're different ID spaces).
+    # Instance-issued tokens: sub=local_user_id, no email claim → resolve by ID.
     sub_raw = payload.get("sub")
+    has_email_claim = "email" in payload
     user = None
 
-    # Try numeric user_id first (instance-issued tokens use local user_id)
-    try:
-        user_id = int(sub_raw)
-        user = crud.get_user(db, user_id)
-    except (TypeError, ValueError):
-        pass
+    # Instance-issued tokens (no email claim): look up by local user_id
+    if not has_email_claim:
+        try:
+            user_id = int(sub_raw)
+            user = crud.get_user(db, user_id)
+        except (TypeError, ValueError):
+            pass
 
-    # If numeric lookup failed or returned no user, resolve by email.
-    # Prefer explicit "email" claim (control-plane tokens set this),
-    # falling back to sub itself (legacy tokens with sub=email).
+    # Control-plane tokens (has email claim) or fallback: resolve by email.
+    # Prefer explicit "email" claim, fall back to sub itself (legacy sub=email).
     if user is None:
         email = payload.get("email") or (str(sub_raw) if sub_raw else None)
         if not email or "@" not in str(email):
