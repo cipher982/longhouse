@@ -640,7 +640,7 @@ def accept_token(response: Response, body: dict[str, str], db: Session = Depends
 
     Tokens may come from:
     1. The instance itself (sub=numeric user_id, signed with JWT_SECRET)
-    2. The control plane (sub=email, signed with CONTROL_PLANE_JWT_SECRET)
+    2. The control plane (sub=numeric cp user_id + email claim, signed with CONTROL_PLANE_JWT_SECRET)
 
     Expected JSON body: `{ "token": "<JWT>" }`.
     """
@@ -675,20 +675,23 @@ def accept_token(response: Response, body: dict[str, str], db: Session = Depends
         )
 
     # Resolve the user from the token's sub claim.
-    # sub may be a numeric user_id (instance-issued) or an email (control-plane-issued).
+    # sub is a numeric user_id (instance-issued or control-plane-issued).
+    # Legacy control-plane tokens may have sub=email (no "email" claim).
     sub_raw = payload.get("sub")
     user = None
 
-    # Try numeric user_id first (backwards compat with instance-issued tokens)
+    # Try numeric user_id first (instance-issued tokens use local user_id)
     try:
         user_id = int(sub_raw)
         user = crud.get_user(db, user_id)
     except (TypeError, ValueError):
         pass
 
-    # If numeric lookup failed or returned no user, treat sub as email
+    # If numeric lookup failed or returned no user, resolve by email.
+    # Prefer explicit "email" claim (control-plane tokens set this),
+    # falling back to sub itself (legacy tokens with sub=email).
     if user is None:
-        email = str(sub_raw) if sub_raw else payload.get("email")
+        email = payload.get("email") or (str(sub_raw) if sub_raw else None)
         if not email or "@" not in str(email):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

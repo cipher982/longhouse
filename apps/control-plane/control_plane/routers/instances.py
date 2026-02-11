@@ -243,7 +243,8 @@ def issue_login_token(instance_id: int, db: Session = Depends(get_db)):
 
     expires_in = 5 * 60
     payload = {
-        "sub": user.email,
+        "sub": str(user.id),
+        "email": user.email,
         "instance": inst.subdomain,
         "exp": int(time.time()) + expires_in,
     }
