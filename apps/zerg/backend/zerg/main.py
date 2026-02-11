@@ -424,8 +424,17 @@ async def lifespan(app: FastAPI):
 
         # OSS first-run UX: auto-seed demo sessions when timeline is empty
         # This gives new users something to see immediately after `longhouse serve`.
-        # Skipped when: testing, demo_mode (handled above), or SKIP_DEMO_SEED=1.
-        if not _settings.testing and not _settings.demo_mode and not _settings.skip_demo_seed:
+        # Skipped when: testing, demo_mode (handled above), SKIP_DEMO_SEED=1,
+        # or production mode (only seeds in DEV/DEMO).
+        from zerg.config import AppMode
+
+        _should_seed = (
+            not _settings.testing
+            and not _settings.demo_mode
+            and not _settings.skip_demo_seed
+            and _settings.app_mode in (AppMode.DEV, AppMode.DEMO)
+        )
+        if _should_seed:
             try:
                 from sqlalchemy import text
 
@@ -435,6 +444,9 @@ async def lifespan(app: FastAPI):
 
                 session_factory = get_session_factory()
                 with session_factory() as db:
+                    # BEGIN IMMEDIATE acquires a write lock upfront, preventing
+                    # concurrent processes from racing past the COUNT check.
+                    db.execute(text("BEGIN IMMEDIATE"))
                     session_count = db.execute(text("SELECT COUNT(*) FROM sessions")).scalar()
                     if session_count == 0:
                         demo_sessions = build_demo_agent_sessions()
@@ -442,11 +454,16 @@ async def lifespan(app: FastAPI):
                         for session in demo_sessions:
                             store.ingest_session(session)
                         store.rebuild_fts()
+                        # Single commit after the full loop — if any ingest
+                        # fails the entire batch rolls back atomically.
                         db.commit()
                         logger.info(
                             "First-run: seeded %d demo sessions (set SKIP_DEMO_SEED=1 to disable)",
                             len(demo_sessions),
                         )
+                    else:
+                        # Release the IMMEDIATE lock without changes.
+                        db.rollback()
             except Exception as e:
                 logger.warning(f"First-run demo seed failed (non-fatal): {e}")
 

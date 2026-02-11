@@ -12,6 +12,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate, useSearchParams, useLocation } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAgentSessions, useAgentFilters } from "../hooks/useAgentSessions";
 import {
   type AgentSession,
@@ -421,19 +422,24 @@ export default function SessionsPage() {
 
 
   // Demo seeding state
+  const queryClient = useQueryClient();
   const [demoLoading, setDemoLoading] = useState(false);
+  const [seedError, setSeedError] = useState<string | null>(null);
 
   const handleSeedDemo = useCallback(async () => {
     setDemoLoading(true);
+    setSeedError(null);
     try {
       await seedDemoSessions();
-      refetch();
+      // Invalidate both sessions and filter options so new demo data appears
+      queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
+      queryClient.invalidateQueries({ queryKey: ["agent-session-filters"] });
     } catch {
-      // Silently fail - the empty state remains visible
+      setSeedError("Failed to load demo sessions. Please try again.");
     } finally {
       setDemoLoading(false);
     }
-  }, [refetch]);
+  }, [queryClient]);
 
   const hasFilters = project || provider || environment || daysBack !== 14 || searchQuery;
   const showGuidedEmptyState = sessions.length === 0 && !hasFilters;
@@ -542,6 +548,11 @@ export default function SessionsPage() {
                   >
                     {demoLoading ? "Loading..." : "Load demo sessions"}
                   </Button>
+                  {seedError && (
+                    <p style={{ color: "var(--color-intent-error)", marginTop: "0.5rem", fontSize: "0.875rem" }}>
+                      {seedError}
+                    </p>
+                  )}
                 </div>
               }
             />
