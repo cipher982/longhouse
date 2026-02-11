@@ -1,11 +1,8 @@
 """SQLite-backed offline spool for shipper resilience.
 
 When the Zerg API is unreachable, events are queued locally and
-replayed when connectivity is restored.
-
-From VISION.md:
-> "Local SQLite spool when Zerg unreachable, replay on reconnect
->  with idempotency keys"
+replayed when connectivity is restored. Deduplication relies on
+DB unique constraints on the server, not client-side idempotency keys.
 """
 
 from __future__ import annotations

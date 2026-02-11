@@ -1,7 +1,8 @@
 """LangGraph-free ReAct engine for oikos fiches.
 
 Pure async ReAct loop: messages in, messages + usage out. No checkpointer,
-no interrupt() — spawn_commis raises FicheInterrupted directly.
+no interrupt(). spawn_commis uses two-phase commit in parallel execution
+(returns ToolMessages + interrupt_value); single-tool calls raise FicheInterrupted.
 """
 
 from __future__ import annotations

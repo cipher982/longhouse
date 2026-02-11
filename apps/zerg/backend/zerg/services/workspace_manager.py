@@ -169,8 +169,8 @@ def validate_run_id(run_id: str) -> None:
         raise ValueError(f"Invalid run_id: {run_id}. " "Must contain only alphanumeric characters, hyphens, and underscores.")
 
 
-# Default workspace base path (overridable via env var)
-DEFAULT_WORKSPACE_PATH = "/var/oikos/workspaces"
+# Default workspace base path (overridable via OIKOS_WORKSPACE_PATH env var)
+DEFAULT_WORKSPACE_PATH = str(Path.home() / ".longhouse" / "workspaces")
 
 
 @dataclass
@@ -200,7 +200,7 @@ class WorkspaceManager:
         ----------
         base_path
             Base directory for workspaces. Defaults to OIKOS_WORKSPACE_PATH env var
-            or /var/oikos/workspaces.
+            or ~/.longhouse/workspaces.
         """
         if base_path is None:
             base_path = os.getenv("OIKOS_WORKSPACE_PATH", DEFAULT_WORKSPACE_PATH)
