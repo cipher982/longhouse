@@ -1,15 +1,12 @@
 """Tests for MCP stdio transport functionality."""
 
 import asyncio
-import json
 from unittest.mock import AsyncMock
-from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
 
 from zerg.tools.mcp_config_schema import normalize_config
-from zerg.tools.mcp_exceptions import MCPConfigurationError
 from zerg.tools.mcp_exceptions import MCPConnectionError
 from zerg.tools.mcp_transport import HTTPTransport
 from zerg.tools.mcp_transport import MCPServerConfig

@@ -1,10 +1,8 @@
 import pytest
 
-from zerg.services.workspace_manager import (
-    validate_branch_name,
-    validate_git_repo_url,
-    validate_run_id,
-)
+from zerg.services.workspace_manager import validate_branch_name
+from zerg.services.workspace_manager import validate_git_repo_url
+from zerg.services.workspace_manager import validate_run_id
 
 
 @pytest.mark.parametrize(

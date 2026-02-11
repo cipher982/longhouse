@@ -6,12 +6,10 @@ from langchain_core.messages import HumanMessage
 from langchain_core.messages import SystemMessage
 from langchain_core.messages import ToolMessage
 
-from zerg.testing.scripted_llm import (
-    ScriptedChatLLM,
-    detect_role_from_messages,
-    find_matching_scenario,
-    get_scenario_evidence_keyword,
-)
+from zerg.testing.scripted_llm import ScriptedChatLLM
+from zerg.testing.scripted_llm import detect_role_from_messages
+from zerg.testing.scripted_llm import find_matching_scenario
+from zerg.testing.scripted_llm import get_scenario_evidence_keyword
 
 
 class TestFindMatchingScenario:
@@ -43,9 +41,7 @@ class TestFindMatchingScenario:
         assert scenario.get("name") == "disk_space_parallel_oikos"
 
     def test_commis_matches_disk_task(self):
-        scenario = find_matching_scenario(
-            "Check disk space on cube server using df -h command", "commis"
-        )
+        scenario = find_matching_scenario("Check disk space on cube server using df -h command", "commis")
         assert scenario is not None
         assert scenario.get("role") == "commis"
 
@@ -277,7 +273,9 @@ class TestSequencedResponses:
                     "call_number": 1,
                     "response": AIMessage(
                         content="",
-                        tool_calls=[{"id": "call-second", "name": "spawn_commis", "args": {"task": "Check disk usage"}}],
+                        tool_calls=[
+                            {"id": "call-second", "name": "spawn_commis", "args": {"task": "Check disk usage"}}
+                        ],
                     ),
                 },
             ]

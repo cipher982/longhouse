@@ -6,8 +6,8 @@ to prompt composition in fiches.
 
 import pytest
 
-from zerg.prompts.composer import build_oikos_prompt
 from zerg.prompts.composer import build_commis_prompt
+from zerg.prompts.composer import build_oikos_prompt
 
 # ---------------------------------------------------------------------------
 # Test fixtures
@@ -377,7 +377,7 @@ class TestContextEdgeCases:
         """Test that large but valid context works."""
         # Create context near 64KB limit
         large_servers = [
-            {"name": f"server-{i}", "ip": f"10.0.{i//255}.{i%255}", "purpose": f"Purpose {i}"} for i in range(100)
+            {"name": f"server-{i}", "ip": f"10.0.{i // 255}.{i % 255}", "purpose": f"Purpose {i}"} for i in range(100)
         ]
 
         context = {"context": {"servers": large_servers, "display_name": "Large Context User"}}

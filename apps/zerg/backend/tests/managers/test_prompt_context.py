@@ -9,16 +9,14 @@ Tests cover:
 from unittest.mock import MagicMock
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage
+from langchain_core.messages import HumanMessage
 
 from tests.conftest import TEST_COMMIS_MODEL
 from zerg.crud import crud
-from zerg.managers.message_builder import (
-    derive_memory_query,
-    find_parent_assistant_id,
-    get_or_create_tool_message,
-)
-
+from zerg.managers.message_builder import derive_memory_query
+from zerg.managers.message_builder import find_parent_assistant_id
+from zerg.managers.message_builder import get_or_create_tool_message
 
 # ---------------------------------------------------------------------------
 # Fixtures

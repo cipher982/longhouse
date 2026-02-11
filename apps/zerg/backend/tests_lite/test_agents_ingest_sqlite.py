@@ -1,7 +1,6 @@
 from datetime import datetime
 from datetime import timezone
 
-import pytest
 from sqlalchemy.orm import sessionmaker
 
 from zerg.database import make_engine

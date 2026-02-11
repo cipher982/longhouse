@@ -1,14 +1,8 @@
 """Tests for the Claude Code session parser."""
 
 import json
-import tempfile
-from datetime import datetime
-from datetime import timezone
 from pathlib import Path
 
-import pytest
-
-from zerg.services.shipper.parser import ParsedEvent
 from zerg.services.shipper.parser import extract_session_metadata
 from zerg.services.shipper.parser import parse_session_file
 

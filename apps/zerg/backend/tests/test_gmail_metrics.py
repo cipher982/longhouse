@@ -11,11 +11,11 @@ import pytest
 async def test_gmail_connector_history_metric_updates(db_session, test_user, monkeypatch):
     """Processing a connector should update the history_id gauge."""
 
+    import zerg.metrics as metrics_mod
+    import zerg.services.gmail_api as gmail_api_mod
     from zerg.crud import crud
     from zerg.email.providers import GmailProvider
     from zerg.utils import crypto
-    import zerg.metrics as metrics_mod
-    import zerg.services.gmail_api as gmail_api_mod
 
     conn = crud.create_connector(
         db_session,

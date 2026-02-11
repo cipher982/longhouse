@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 
-import pytest
-
 from zerg.services.shipper.providers.gemini import GeminiProvider
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -45,9 +43,7 @@ STANDARD_SESSION = {
                         {
                             "functionResponse": {
                                 "name": "list_directory",
-                                "response": {
-                                    "output": "src/\ntests/\nREADME.md"
-                                },
+                                "response": {"output": "src/\ntests/\nREADME.md"},
                             }
                         }
                     ],
@@ -100,9 +96,7 @@ class TestDiscoverFiles:
 
     def test_discover_files_finds_fallback(self, tmp_path: Path) -> None:
         """Fallback path: <hash>/session-*.json (no chats subdir)."""
-        _write_session(
-            tmp_path, STANDARD_SESSION, in_chats=False, filename="session-002.json"
-        )
+        _write_session(tmp_path, STANDARD_SESSION, in_chats=False, filename="session-002.json")
         provider = GeminiProvider(config_dir=tmp_path)
         files = provider.discover_files()
         assert len(files) == 1
@@ -176,11 +170,7 @@ class TestParseMessages:
         provider = GeminiProvider(config_dir=tmp_path)
         events = list(provider.parse_file(fp))
 
-        assistant_text = [
-            e
-            for e in events
-            if e.role == "assistant" and e.content_text is not None
-        ]
+        assistant_text = [e for e in events if e.role == "assistant" and e.content_text is not None]
         assert len(assistant_text) == 1
         assert assistant_text[0].content_text == "Here are the files:"
         assert assistant_text[0].raw_type == "gemini-gemini"
@@ -234,15 +224,11 @@ class TestParseToolCalls:
         provider = GeminiProvider(config_dir=tmp_path)
         events = list(provider.parse_file(fp))
 
-        tool_events = [
-            e for e in events if e.raw_type == "gemini-tool_call"
-        ]
+        tool_events = [e for e in events if e.raw_type == "gemini-tool_call"]
         assert len(tool_events) == 1
         assert tool_events[0].role == "assistant"
         assert tool_events[0].tool_name == "List Directory"
-        assert tool_events[0].tool_input_json == {
-            "path": "/Users/test/project"
-        }
+        assert tool_events[0].tool_input_json == {"path": "/Users/test/project"}
 
     def test_parse_tool_results(self, tmp_path: Path) -> None:
         """functionResponse.response.output extracted as tool result."""
@@ -250,16 +236,12 @@ class TestParseToolCalls:
         provider = GeminiProvider(config_dir=tmp_path)
         events = list(provider.parse_file(fp))
 
-        result_events = [
-            e for e in events if e.raw_type == "gemini-tool_result"
-        ]
+        result_events = [e for e in events if e.raw_type == "gemini-tool_result"]
         assert len(result_events) == 1
         assert result_events[0].role == "tool"
         assert result_events[0].tool_output_text == "src/\ntests/\nREADME.md"
 
-    def test_tool_call_uses_name_when_no_displayname(
-        self, tmp_path: Path
-    ) -> None:
+    def test_tool_call_uses_name_when_no_displayname(self, tmp_path: Path) -> None:
         """Falls back to name when displayName is missing."""
         data = {
             "sessionId": "s1",
@@ -285,9 +267,7 @@ class TestParseToolCalls:
         provider = GeminiProvider(config_dir=tmp_path)
         events = list(provider.parse_file(fp))
 
-        tool_events = [
-            e for e in events if e.raw_type == "gemini-tool_call"
-        ]
+        tool_events = [e for e in events if e.raw_type == "gemini-tool_call"]
         assert len(tool_events) == 1
         assert tool_events[0].tool_name == "read_file"
 
@@ -370,16 +350,10 @@ class TestExtractMetadata:
         meta = provider.extract_metadata(fp)
 
         assert meta.session_id == "test-session-1"
-        assert meta.started_at == datetime(
-            2026, 1, 8, 21, 12, 0, tzinfo=timezone.utc
-        )
-        assert meta.ended_at == datetime(
-            2026, 1, 8, 22, 0, 0, tzinfo=timezone.utc
-        )
+        assert meta.started_at == datetime(2026, 1, 8, 21, 12, 0, tzinfo=timezone.utc)
+        assert meta.ended_at == datetime(2026, 1, 8, 22, 0, 0, tzinfo=timezone.utc)
 
-    def test_extract_metadata_falls_back_to_message_timestamps(
-        self, tmp_path: Path
-    ) -> None:
+    def test_extract_metadata_falls_back_to_message_timestamps(self, tmp_path: Path) -> None:
         """When top-level timestamps missing, infer from messages."""
         data = {
             "sessionId": "s1",
@@ -402,12 +376,8 @@ class TestExtractMetadata:
         provider = GeminiProvider(config_dir=tmp_path)
         meta = provider.extract_metadata(fp)
 
-        assert meta.started_at == datetime(
-            2026, 1, 8, 10, 0, 0, tzinfo=timezone.utc
-        )
-        assert meta.ended_at == datetime(
-            2026, 1, 8, 11, 0, 0, tzinfo=timezone.utc
-        )
+        assert meta.started_at == datetime(2026, 1, 8, 10, 0, 0, tzinfo=timezone.utc)
+        assert meta.ended_at == datetime(2026, 1, 8, 11, 0, 0, tzinfo=timezone.utc)
 
     def test_extract_metadata_infers_cwd(self, tmp_path: Path) -> None:
         """CWD inferred from tool call args containing absolute paths."""
@@ -428,11 +398,7 @@ class TestExtractMetadata:
                         {
                             "id": "tc-1",
                             "name": "read_file",
-                            "args": {
-                                "file_path": str(
-                                    project_dir / "src" / "main.py"
-                                )
-                            },
+                            "args": {"file_path": str(project_dir / "src" / "main.py")},
                             "result": [],
                         }
                     ],
@@ -457,14 +423,10 @@ class TestExtractMetadata:
         meta = provider.extract_metadata(fp)
         assert meta.session_id == "session-bad"
 
-    def test_extract_metadata_filename_as_session_id(
-        self, tmp_path: Path
-    ) -> None:
+    def test_extract_metadata_filename_as_session_id(self, tmp_path: Path) -> None:
         """When sessionId missing from JSON, uses filename stem."""
         data = {"messages": []}
-        fp = _write_session(
-            tmp_path, data, filename="session-my-custom-name.json"
-        )
+        fp = _write_session(tmp_path, data, filename="session-my-custom-name.json")
         provider = GeminiProvider(config_dir=tmp_path)
         meta = provider.extract_metadata(fp)
         assert meta.session_id == "session-my-custom-name"

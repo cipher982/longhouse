@@ -31,11 +31,7 @@ def _format_bucket(bucket: dict) -> str:
 
 
 def _failures(buckets: list[dict], min_percent: float) -> list[dict]:
-    return [
-        bucket
-        for bucket in buckets
-        if not bucket.get("empty") and bucket.get("pct", 0.0) < min_percent
-    ]
+    return [bucket for bucket in buckets if not bucket.get("empty") and bucket.get("pct", 0.0) < min_percent]
 
 
 def main() -> int:

@@ -1,6 +1,4 @@
 import asyncio
-from datetime import datetime
-from datetime import timezone
 
 import pytest
 
@@ -9,11 +7,10 @@ from tests.conftest import TEST_COMMIS_MODEL
 from zerg.events import EventType
 from zerg.events import event_bus
 from zerg.models.models import CommisJob
+from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.services.roundabout_monitor import DecisionContext
 from zerg.services.roundabout_monitor import RoundaboutDecision
 from zerg.services.roundabout_monitor import RoundaboutMonitor
-from zerg.services.roundabout_monitor import ToolActivity
-from zerg.services.commis_artifact_store import CommisArtifactStore
 
 
 @pytest.mark.asyncio

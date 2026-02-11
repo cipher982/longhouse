@@ -111,9 +111,7 @@ class TestWebSocketIntegration:
         """Test sending a message to a thread"""
         # First subscribe to thread
         logger.info(f"Subscribing to thread: {test_thread.id}")
-        ws_client.send_json(
-            _envelope("subscribe_thread", {"thread_id": test_thread.id}, "test-sub-3")
-        )
+        ws_client.send_json(_envelope("subscribe_thread", {"thread_id": test_thread.id}, "test-sub-3"))
         history = ws_client.receive_json()  # Consume history
         logger.info(f"Received history: {history}")
 
@@ -155,9 +153,7 @@ class TestWebSocketIntegration:
             logger.info(f"Subscribing both clients to thread: {test_thread.id}")
             # Subscribe both clients to the same thread
             for i, ws in enumerate(clients):
-                ws.send_json(
-                    _envelope("subscribe_thread", {"thread_id": test_thread.id}, f"test-sub-{i}")
-                )
+                ws.send_json(_envelope("subscribe_thread", {"thread_id": test_thread.id}, f"test-sub-{i}"))
                 history = ws.receive_json()  # Consume history
                 logger.info(f"Client {i} received history: {history}")
 

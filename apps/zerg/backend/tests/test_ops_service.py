@@ -247,9 +247,9 @@ def test_timeseries_database_compatibility_regression(db_session):
     # Verify the timeseries endpoints work correctly with database-agnostic queries
     assert runs_by_hour[5] >= 1, f"Expected runs at hour 5, got: {runs_by_hour[5]}"
     assert runs_by_hour[10] >= 2, f"Expected 2+ runs at hour 10, got: {runs_by_hour[10]}"  # 1 success + 1 failed
-    assert (
-        runs_by_hour[14] >= 2
-    ), f"Expected 2+ runs at hour 14, got: {runs_by_hour[14]}"  # 1 failed + 1 success both started at 14
+    assert runs_by_hour[14] >= 2, (
+        f"Expected 2+ runs at hour 14, got: {runs_by_hour[14]}"
+    )  # 1 failed + 1 success both started at 14
 
     # Test errors_by_hour: Should work with func.extract('hour', finished_at)
     errors_series = get_timeseries(db_session, metric="errors_by_hour", window="today")

@@ -18,10 +18,10 @@ from unittest.mock import patch
 
 import pytest
 
+from zerg.events import CommisEmitter
 from zerg.events import EventEmitter
 from zerg.events import NullEmitter
 from zerg.events import OikosEmitter
-from zerg.events import CommisEmitter
 from zerg.events import get_emitter
 from zerg.events import reset_emitter
 from zerg.events import set_emitter

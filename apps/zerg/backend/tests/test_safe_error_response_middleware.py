@@ -67,9 +67,7 @@ async def test_exception_before_response_includes_cors_headers() -> None:
     async def receive():
         return {"type": "http.request", "body": b""}
 
-    middleware = SafeErrorResponseMiddleware(
-        failing_app, cors_origins=["http://localhost:3000", "http://example.com"]
-    )
+    middleware = SafeErrorResponseMiddleware(failing_app, cors_origins=["http://localhost:3000", "http://example.com"])
     scope = {
         "type": "http",
         "headers": [(b"origin", b"http://example.com")],

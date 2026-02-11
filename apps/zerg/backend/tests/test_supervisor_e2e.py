@@ -253,6 +253,7 @@ class TestCommisSpawning:
         finally:
             set_credential_resolver(None)
 
+
 class TestOikosMemoryE2E:
     """End-to-end memory tool flow via OikosService + scripted model."""
 

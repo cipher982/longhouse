@@ -13,12 +13,12 @@ from unittest.mock import patch
 import pytest
 from langchain_core.messages import ToolMessage
 
+from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.services.evidence_mounting_llm import EVIDENCE_MARKER_PATTERN
 from zerg.services.evidence_mounting_llm import EvidenceMountingLLM
 from zerg.services.roundabout_monitor import RoundaboutResult
 from zerg.services.roundabout_monitor import ToolIndexEntry
 from zerg.services.roundabout_monitor import format_roundabout_result
-from zerg.services.commis_artifact_store import CommisArtifactStore
 
 
 @pytest.fixture
@@ -41,8 +41,12 @@ class TestSpawnCommisReturnFormat:
             duration_seconds=10.5,
             summary="Commis completed task",
             tool_index=[
-                ToolIndexEntry(sequence=1, tool_name="ssh_exec", exit_code=0, duration_ms=234, output_bytes=1847, failed=False),
-                ToolIndexEntry(sequence=2, tool_name="ssh_exec", exit_code=1, duration_ms=156, output_bytes=523, failed=True),
+                ToolIndexEntry(
+                    sequence=1, tool_name="ssh_exec", exit_code=0, duration_ms=234, output_bytes=1847, failed=False
+                ),
+                ToolIndexEntry(
+                    sequence=2, tool_name="ssh_exec", exit_code=1, duration_ms=156, output_bytes=523, failed=True
+                ),
             ],
             run_id=48,
         )
@@ -142,7 +146,6 @@ class TestEvidenceMountingIntegration:
     async def test_evidence_expansion_with_mock_compiler(self):
         """Test that evidence markers trigger expansion via EvidenceCompiler."""
         from unittest.mock import AsyncMock
-        from unittest.mock import MagicMock
 
         # Create LLM wrapper with mocked compiler
         mock_base_llm = AsyncMock()
@@ -231,7 +234,6 @@ class TestEvidencePersistence:
         expanded evidence (which can be 32KB+) is NOT saved to the database.
         """
         from unittest.mock import AsyncMock
-        from unittest.mock import MagicMock
 
         # Create wrapper with mocked compiler
         mock_db = MagicMock()
@@ -253,7 +255,9 @@ class TestEvidencePersistence:
 
         # Mock compiler to return large evidence
         with patch.object(wrapper.compiler, "compile") as mock_compile:
-            large_evidence = "--- Evidence for Commis 123 ---\n" + ("Tool output line\n" * 1000) + "--- End Evidence ---"
+            large_evidence = (
+                "--- Evidence for Commis 123 ---\n" + ("Tool output line\n" * 1000) + "--- End Evidence ---"
+            )
             mock_compile.return_value = {123: large_evidence}
 
             # Call LLM (expands evidence internally)
@@ -287,8 +291,10 @@ class TestNonStreamingPath:
     @pytest.mark.asyncio
     async def test_evidence_mounting_with_streaming_disabled(self, monkeypatch):
         """Test that evidence mounting works when enable_token_stream=False."""
-        from unittest.mock import AsyncMock, MagicMock
+        from unittest.mock import AsyncMock
+
         from langchain_core.messages import ToolMessage
+
         from zerg.services.evidence_mounting_llm import EvidenceMountingLLM
 
         # Disable streaming
@@ -309,10 +315,9 @@ class TestNonStreamingPath:
 
         # Mock compiler to return evidence
         from unittest.mock import patch
+
         with patch.object(wrapper.compiler, "compile") as mock_compile:
-            mock_compile.return_value = {
-                123: "--- Evidence for Commis 123 ---\nTool output here\n--- End ---"
-            }
+            mock_compile.return_value = {123: "--- Evidence for Commis 123 ---\nTool output here\n--- End ---"}
 
             # Create message with evidence marker
             messages = [
@@ -355,14 +360,15 @@ class TestCriticalScenario:
         3. EvidenceCompiler should still provide ssh_exec output
         4. Oikos should receive expanded evidence with tool outputs
         """
-        from unittest.mock import AsyncMock
         import json
-        from sqlalchemy.orm import Session
-        from zerg.models.models import Run, CommisJob
-        from zerg.models.enums import RunStatus, RunTrigger
+        from unittest.mock import AsyncMock
+
         from zerg.crud import create_thread
+        from zerg.models.enums import RunStatus
+        from zerg.models.enums import RunTrigger
+        from zerg.models.models import CommisJob
+        from zerg.models.models import Run
         from zerg.services.evidence_compiler import EvidenceCompiler
-        from zerg.services.commis_artifact_store import CommisArtifactStore
 
         # Create oikos run
         thread = create_thread(db_session, fiche_id=sample_fiche.id, title="Test Run")
@@ -387,17 +393,19 @@ class TestCriticalScenario:
         )
 
         # Add successful ssh_exec output
-        ssh_output = json.dumps({
-            "ok": True,
-            "data": {
-                "host": "clifford",
-                "command": "df -h",
-                "exit_code": 0,
-                "stdout": "Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1       100G   45G   55G  45% /\n/dev/sdb1       500G  200G  300G  40% /data",
-                "stderr": "",
-                "duration_ms": 234,
+        ssh_output = json.dumps(
+            {
+                "ok": True,
+                "data": {
+                    "host": "clifford",
+                    "command": "df -h",
+                    "exit_code": 0,
+                    "stdout": "Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1       100G   45G   55G  45% /\n/dev/sdb1       500G  200G  300G  40% /data",
+                    "stderr": "",
+                    "duration_ms": 234,
+                },
             }
-        })
+        )
         artifact_store.save_tool_output(commis_id, "ssh_exec", ssh_output, sequence=1)
 
         # Save empty result.txt (the problem case!)
@@ -428,7 +436,7 @@ class TestCriticalScenario:
                     exit_code=0,
                     duration_ms=234,
                     output_bytes=len(ssh_output),
-                    failed=False
+                    failed=False,
                 ),
             ],
             run_id=oikos_run.id,
@@ -481,11 +489,13 @@ class TestCriticalScenario:
     def test_multiple_tools_failed_tool_prioritized(self, db_session, sample_fiche, temp_artifact_path):
         """Test that failed tools are prioritized even with empty result.txt."""
         import json
-        from zerg.services.evidence_compiler import EvidenceCompiler
-        from zerg.services.commis_artifact_store import CommisArtifactStore
-        from zerg.models.models import Run, CommisJob
-        from zerg.models.enums import RunStatus, RunTrigger
+
         from zerg.crud import create_thread
+        from zerg.models.enums import RunStatus
+        from zerg.models.enums import RunTrigger
+        from zerg.models.models import CommisJob
+        from zerg.models.models import Run
+        from zerg.services.evidence_compiler import EvidenceCompiler
 
         # Create oikos run
         thread = create_thread(db_session, fiche_id=sample_fiche.id, title="Test Run")
@@ -508,31 +518,35 @@ class TestCriticalScenario:
         )
 
         # Add successful tool
-        success_output = json.dumps({
-            "ok": True,
-            "data": {
-                "host": "clifford",
-                "command": "uptime",
-                "exit_code": 0,
-                "stdout": "up 45 days",
-                "stderr": "",
-                "duration_ms": 100,
+        success_output = json.dumps(
+            {
+                "ok": True,
+                "data": {
+                    "host": "clifford",
+                    "command": "uptime",
+                    "exit_code": 0,
+                    "stdout": "up 45 days",
+                    "stderr": "",
+                    "duration_ms": 100,
+                },
             }
-        })
+        )
         artifact_store.save_tool_output(commis_id, "ssh_exec", success_output, sequence=1)
 
         # Add failed tool (should be prioritized)
-        failed_output = json.dumps({
-            "ok": True,
-            "data": {
-                "host": "clifford",
-                "command": "bad-command",
-                "exit_code": 127,
-                "stdout": "",
-                "stderr": "bash: bad-command: command not found",
-                "duration_ms": 50,
+        failed_output = json.dumps(
+            {
+                "ok": True,
+                "data": {
+                    "host": "clifford",
+                    "command": "bad-command",
+                    "exit_code": 127,
+                    "stdout": "",
+                    "stderr": "bash: bad-command: command not found",
+                    "duration_ms": 50,
+                },
             }
-        })
+        )
         artifact_store.save_tool_output(commis_id, "ssh_exec", failed_output, sequence=2)
 
         # Empty result.txt
@@ -572,11 +586,13 @@ class TestCriticalScenario:
     def test_large_tool_output_truncation(self, db_session, sample_fiche, temp_artifact_path):
         """Test that large tool outputs are truncated with head+tail."""
         import json
-        from zerg.services.evidence_compiler import EvidenceCompiler
-        from zerg.services.commis_artifact_store import CommisArtifactStore
-        from zerg.models.models import Run, CommisJob
-        from zerg.models.enums import RunStatus, RunTrigger
+
         from zerg.crud import create_thread
+        from zerg.models.enums import RunStatus
+        from zerg.models.enums import RunTrigger
+        from zerg.models.models import CommisJob
+        from zerg.models.models import Run
+        from zerg.services.evidence_compiler import EvidenceCompiler
 
         # Create oikos run
         thread = create_thread(db_session, fiche_id=sample_fiche.id, title="Test Run")
@@ -600,17 +616,19 @@ class TestCriticalScenario:
 
         # Add very large output (50KB+)
         large_log = "LOG LINE " * 10000  # ~100KB
-        large_output = json.dumps({
-            "ok": True,
-            "data": {
-                "host": "clifford",
-                "command": "cat /var/log/syslog",
-                "exit_code": 0,
-                "stdout": large_log,
-                "stderr": "",
-                "duration_ms": 500,
+        large_output = json.dumps(
+            {
+                "ok": True,
+                "data": {
+                    "host": "clifford",
+                    "command": "cat /var/log/syslog",
+                    "exit_code": 0,
+                    "stdout": large_log,
+                    "stderr": "",
+                    "duration_ms": 500,
+                },
             }
-        })
+        )
         artifact_store.save_tool_output(commis_id, "ssh_exec", large_output, sequence=1)
 
         # Empty result.txt

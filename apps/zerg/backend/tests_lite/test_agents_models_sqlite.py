@@ -1,13 +1,12 @@
 from datetime import datetime
 from datetime import timezone
 
-import pytest
 from sqlalchemy.orm import sessionmaker
 
 from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
-from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentsBase
+from zerg.models.agents import AgentSession
 
 
 def test_agents_models_roundtrip_sqlite(tmp_path):

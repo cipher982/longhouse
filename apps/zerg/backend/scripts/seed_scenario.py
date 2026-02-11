@@ -58,9 +58,13 @@ def main() -> int:
     parser.add_argument("--list", action="store_true", help="List available scenarios")
     parser.add_argument("--owner-email", default="dev@local", help="Owner email for seeded runs")
     parser.add_argument("--target", default="dev", help="Target identifier (e.g., dev, test, demo_db)")
-    parser.add_argument("--namespace", default="test", help="Namespace for categorization (e.g., demo, test, marketing)")
+    parser.add_argument(
+        "--namespace", default="test", help="Namespace for categorization (e.g., demo, test, marketing)"
+    )
     parser.add_argument("--db", help="Custom SQLite database path (overrides default)")
-    parser.add_argument("--clean", action="store_true", help="Delete existing scenario data before seeding (breaks idempotency)")
+    parser.add_argument(
+        "--clean", action="store_true", help="Delete existing scenario data before seeding (breaks idempotency)"
+    )
 
     args = parser.parse_args()
 
@@ -89,6 +93,7 @@ def main() -> int:
 
         # Create tables if they don't exist
         from zerg.database import Base
+
         Base.metadata.create_all(bind=engine)
     else:
         session_factory = get_session_factory()
@@ -104,8 +109,12 @@ def main() -> int:
             namespace=args.namespace,
             clean=args.clean,
         )
-        print(f"Seeded scenario '{result['scenario']}' to target '{result['target']}' (namespace={result['namespace']})")
-        print(f"  runs={result['runs']}, messages={result['messages']}, events={result['events']}, skipped={result.get('skipped', 0)}")
+        print(
+            f"Seeded scenario '{result['scenario']}' to target '{result['target']}' (namespace={result['namespace']})"
+        )
+        print(
+            f"  runs={result['runs']}, messages={result['messages']}, events={result['events']}, skipped={result.get('skipped', 0)}"
+        )
     except ScenarioError as exc:
         print(f"Scenario error: {exc}")
         return 2

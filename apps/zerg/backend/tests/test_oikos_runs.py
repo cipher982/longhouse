@@ -6,7 +6,6 @@ from fastapi import status
 from zerg.models.enums import RunStatus
 from zerg.models.enums import RunTrigger
 from zerg.models.models import Run
-from zerg.models.models import Thread
 from zerg.models.models import ThreadMessage
 from zerg.services.oikos_service import OikosService
 
@@ -359,7 +358,8 @@ class TestAttachToRunStream:
 
         # Mark run as complete
         run.status = RunStatus.SUCCESS
-        from datetime import datetime, timezone
+        from datetime import datetime
+        from datetime import timezone
 
         run.finished_at = datetime.now(timezone.utc)
         db_session.commit()
@@ -380,7 +380,10 @@ class TestGetRunTimeline:
     @pytest.fixture
     def run_with_events(self, db_session, test_user):
         """Create a run with sample timeline events."""
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime
+        from datetime import timedelta
+        from datetime import timezone
+
         from zerg.models.run_event import RunEvent
 
         service = OikosService(db_session)
@@ -579,7 +582,10 @@ class TestGetRunTimeline:
 
     def test_get_timeline_partial_flow(self, client, db_session, test_user):
         """Test timeline with partial flow (oikos only, no commis)."""
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime
+        from datetime import timedelta
+        from datetime import timezone
+
         from zerg.models.run_event import RunEvent
 
         service = OikosService(db_session)

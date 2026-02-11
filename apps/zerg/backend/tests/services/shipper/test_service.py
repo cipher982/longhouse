@@ -1,6 +1,5 @@
 """Tests for shipper service installation."""
 
-import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -8,24 +7,22 @@ from unittest.mock import patch
 
 import pytest
 
-from zerg.services.shipper.service import (
-    LAUNCHD_LABEL,
-    SYSTEMD_UNIT,
-    Platform,
-    ServiceConfig,
-    _generate_launchd_plist,
-    _generate_systemd_unit,
-    _get_launchd_plist_path,
-    _get_launchd_status,
-    _get_systemd_status,
-    _get_systemd_unit_path,
-    detect_platform,
-    get_service_info,
-    get_service_status,
-    get_zerg_executable,
-    install_service,
-    uninstall_service,
-)
+from zerg.services.shipper.service import LAUNCHD_LABEL
+from zerg.services.shipper.service import SYSTEMD_UNIT
+from zerg.services.shipper.service import Platform
+from zerg.services.shipper.service import ServiceConfig
+from zerg.services.shipper.service import _generate_launchd_plist
+from zerg.services.shipper.service import _generate_systemd_unit
+from zerg.services.shipper.service import _get_launchd_plist_path
+from zerg.services.shipper.service import _get_launchd_status
+from zerg.services.shipper.service import _get_systemd_status
+from zerg.services.shipper.service import _get_systemd_unit_path
+from zerg.services.shipper.service import detect_platform
+from zerg.services.shipper.service import get_service_info
+from zerg.services.shipper.service import get_service_status
+from zerg.services.shipper.service import get_zerg_executable
+from zerg.services.shipper.service import install_service
+from zerg.services.shipper.service import uninstall_service
 
 
 class TestPlatformDetection:
@@ -262,7 +259,9 @@ class TestLaunchdStatus:
 
     def test_not_installed(self, tmp_path: Path):
         """Status is not-installed when plist doesn't exist."""
-        with patch("zerg.services.shipper.service._get_launchd_plist_path", return_value=tmp_path / "nonexistent.plist"):
+        with patch(
+            "zerg.services.shipper.service._get_launchd_plist_path", return_value=tmp_path / "nonexistent.plist"
+        ):
             assert _get_launchd_status() == "not-installed"
 
     def test_running(self, tmp_path: Path):
@@ -337,7 +336,9 @@ class TestSystemdStatus:
 
     def test_not_installed(self, tmp_path: Path):
         """Status is not-installed when unit doesn't exist."""
-        with patch("zerg.services.shipper.service._get_systemd_unit_path", return_value=tmp_path / "nonexistent.service"):
+        with patch(
+            "zerg.services.shipper.service._get_systemd_unit_path", return_value=tmp_path / "nonexistent.service"
+        ):
             assert _get_systemd_status() == "not-installed"
 
     def test_running(self, tmp_path: Path):

@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import json
 import tempfile
-from unittest.mock import AsyncMock
 from unittest.mock import patch
 
 import pytest
@@ -27,8 +26,8 @@ from zerg.connectors.resolver import CredentialResolver
 from zerg.managers.fiche_runner import FicheInterrupted
 from zerg.models.enums import RunStatus
 from zerg.models.enums import RunTrigger
-from zerg.models.models import Run
 from zerg.models.models import CommisJob
+from zerg.models.models import Run
 from zerg.routers.oikos_sse import stream_run_events
 from zerg.services.event_store import emit_run_event
 from zerg.services.oikos_context import set_oikos_context
@@ -402,8 +401,8 @@ async def test_different_tasks_create_separate_commis(
     import json
     import os
 
-    from zerg.services.oikos_context import reset_oikos_context
     from zerg.services.commis_artifact_store import CommisArtifactStore
+    from zerg.services.oikos_context import reset_oikos_context
     from zerg.tools.builtin.oikos_tools import spawn_commis_async
 
     # Set up oikos fiche/thread

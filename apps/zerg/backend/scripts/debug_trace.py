@@ -55,8 +55,8 @@ class TimelineEvent:
 def get_trace_data(db, trace_id: uuid.UUID) -> dict:
     """Query all tables for a given trace_id."""
     from zerg.models.llm_audit import LLMAuditLog
-    from zerg.models.models import Run
     from zerg.models.models import CommisJob
+    from zerg.models.models import Run
 
     # Get all runs with this trace
     runs = db.query(Run).filter(Run.trace_id == trace_id).all()
@@ -121,7 +121,11 @@ def build_timeline(data: dict) -> list[TimelineEvent]:
     for commis in data["commis"]:
         # Commis created/queued
         if commis.created_at:
-            ts = commis.created_at.replace(tzinfo=timezone.utc) if commis.created_at.tzinfo is None else commis.created_at
+            ts = (
+                commis.created_at.replace(tzinfo=timezone.utc)
+                if commis.created_at.tzinfo is None
+                else commis.created_at
+            )
             events.append(
                 TimelineEvent(
                     timestamp=ts,
@@ -138,7 +142,11 @@ def build_timeline(data: dict) -> list[TimelineEvent]:
 
         # Commis started
         if commis.started_at:
-            ts = commis.started_at.replace(tzinfo=timezone.utc) if commis.started_at.tzinfo is None else commis.started_at
+            ts = (
+                commis.started_at.replace(tzinfo=timezone.utc)
+                if commis.started_at.tzinfo is None
+                else commis.started_at
+            )
             events.append(
                 TimelineEvent(
                     timestamp=ts,
@@ -153,7 +161,11 @@ def build_timeline(data: dict) -> list[TimelineEvent]:
 
         # Commis completed
         if commis.finished_at:
-            ts = commis.finished_at.replace(tzinfo=timezone.utc) if commis.finished_at.tzinfo is None else commis.finished_at
+            ts = (
+                commis.finished_at.replace(tzinfo=timezone.utc)
+                if commis.finished_at.tzinfo is None
+                else commis.finished_at
+            )
             is_error = commis.status in ("failed", "error")
             # Compute duration from timestamps (CommisJob doesn't have duration_ms column)
             duration_ms = None
@@ -229,7 +241,7 @@ def detect_anomalies(data: dict, events: list[TimelineEvent]) -> list[str]:
     # Check for very long LLM calls (>60s)
     for log in data["llm_logs"]:
         if log.duration_ms and log.duration_ms > 60000:
-            anomalies.append(f"Slow LLM call: {log.phase} took {log.duration_ms/1000:.1f}s")
+            anomalies.append(f"Slow LLM call: {log.phase} took {log.duration_ms / 1000:.1f}s")
 
     return anomalies
 
@@ -317,13 +329,7 @@ def show_recent_traces(db, limit: int = 20) -> None:
     from zerg.models.models import Run
 
     # Get recent runs with trace_id set
-    runs = (
-        db.query(Run)
-        .filter(Run.trace_id.isnot(None))
-        .order_by(Run.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+    runs = db.query(Run).filter(Run.trace_id.isnot(None)).order_by(Run.created_at.desc()).limit(limit).all()
 
     print(f"Recent traces (last {limit}):")
     print("-" * 100)

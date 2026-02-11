@@ -228,7 +228,7 @@ def _load_stub_config() -> Optional[tuple[Callable[[str, Dict], Any], Set[str]]]
 
     settings = get_settings()
     if not settings.testing:
-        logger.error("LONGHOUSE_TOOL_STUBS_PATH is set but TESTING=1 is not. " "Refusing to load stubs.")
+        logger.error("LONGHOUSE_TOOL_STUBS_PATH is set but TESTING=1 is not. Refusing to load stubs.")
         return None
 
     from zerg.testing.tool_stubs import get_tool_stubs

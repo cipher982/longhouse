@@ -2,7 +2,11 @@
 
 import pytest
 
-from zerg.tools import ImmutableToolRegistry, add_runtime_tool, clear_runtime_tools, get_registry, reset_registry
+from zerg.tools import ImmutableToolRegistry
+from zerg.tools import add_runtime_tool
+from zerg.tools import clear_runtime_tools
+from zerg.tools import get_registry
+from zerg.tools import reset_registry
 from zerg.types.tools import Tool as ZergTool
 
 

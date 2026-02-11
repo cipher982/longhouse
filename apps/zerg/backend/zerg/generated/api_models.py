@@ -1,10 +1,12 @@
-
 # AUTO-GENERATED - DO NOT EDIT
 # Generated from api-schema.yml
 
-from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
 from datetime import datetime
+from typing import Any
+from typing import Dict
+from typing import Optional
+
+from pydantic import BaseModel
 
 
 class Fiche(BaseModel):

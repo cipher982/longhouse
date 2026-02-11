@@ -6,6 +6,7 @@ Tests the full path from runner exec_chunk (WebSocket) -> OutputBuffer -> EventB
 import asyncio
 import time
 import uuid
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -13,9 +14,9 @@ from sqlalchemy.orm import Session
 from zerg.crud import runner_crud
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
+from zerg.models.models import CommisJob
 from zerg.models.models import Runner
 from zerg.models.models import User
-from zerg.models.models import CommisJob
 from zerg.services.commis_output_buffer import get_commis_output_buffer
 from zerg.tools.builtin.oikos_tools import peek_commis_output
 
@@ -82,21 +83,25 @@ async def test_live_output_flow_ws_to_sse(client: TestClient, db: Session, test_
     try:
         with client.websocket_connect("/api/runners/ws") as ws:
             # 1. Hello
-            ws.send_json({
-                "type": "hello",
-                "runner_id": runner.id,
-                "secret": secret,
-            })
+            ws.send_json(
+                {
+                    "type": "hello",
+                    "runner_id": runner.id,
+                    "secret": secret,
+                }
+            )
             await asyncio.sleep(0.1)
 
             # 2. Send chunk
             chunk_data = "hello world from runner"
-            ws.send_json({
-                "type": "exec_chunk",
-                "job_id": str(runner_job.id),
-                "stream": "stdout",
-                "data": chunk_data,
-            })
+            ws.send_json(
+                {
+                    "type": "exec_chunk",
+                    "job_id": str(runner_job.id),
+                    "stream": "stdout",
+                    "data": chunk_data,
+                }
+            )
             await _wait_for(lambda: chunk_data in get_commis_output_buffer().get_tail(commis_id))
 
             # 3. Verify buffer
@@ -115,8 +120,9 @@ async def test_live_output_flow_ws_to_sse(client: TestClient, db: Session, test_
 
             # 5. Verify peek tool works (using the job ID)
             # Need to mock credential context for peek_commis_output
+            from zerg.connectors.context import reset_credential_resolver
+            from zerg.connectors.context import set_credential_resolver
             from zerg.connectors.resolver import CredentialResolver
-            from zerg.connectors.context import set_credential_resolver, reset_credential_resolver
 
             resolver = CredentialResolver(fiche_id=1, db=db, owner_id=runner.owner_id)
             token = set_credential_resolver(resolver)
@@ -149,6 +155,7 @@ async def test_live_output_chunk_truncation_sse(client: TestClient, db: Session,
     )
 
     received_sse = []
+
     async def sse_listener(payload):
         received_sse.append(payload)
 
@@ -161,12 +168,14 @@ async def test_live_output_chunk_truncation_sse(client: TestClient, db: Session,
 
             # Send 5000 chars (over 4000 limit)
             large_data = "A" * 5000
-            ws.send_json({
-                "type": "exec_chunk",
-                "job_id": str(runner_job.id),
-                "stream": "stdout",
-                "data": large_data,
-            })
+            ws.send_json(
+                {
+                    "type": "exec_chunk",
+                    "job_id": str(runner_job.id),
+                    "stream": "stdout",
+                    "data": large_data,
+                }
+            )
             await _wait_for(lambda: len(get_commis_output_buffer().get_tail(commis_id)) >= 5000)
 
             # Buffer should have full 5000

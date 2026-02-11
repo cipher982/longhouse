@@ -1,6 +1,5 @@
 """Tests for CLI config file support."""
 
-import os
 from pathlib import Path
 
 import pytest

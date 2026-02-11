@@ -71,7 +71,7 @@ class ChannelRegistry:
             raise ChannelRegistryError("Channel must have an 'id' in meta")
 
         if channel_id in self._channels and not replace:
-            raise ChannelRegistryError(f"Channel '{channel_id}' is already registered. " f"Use replace=True to override.")
+            raise ChannelRegistryError(f"Channel '{channel_id}' is already registered. Use replace=True to override.")
 
         self._channels[channel_id] = channel
 

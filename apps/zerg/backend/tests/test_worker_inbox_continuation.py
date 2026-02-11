@@ -12,21 +12,19 @@ Key behaviors tested:
 - Edge cases: Races, chains, and existing continuations
 """
 
-import asyncio
 import uuid
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
-from langchain_core.messages import AIMessage
 
 from zerg.crud import crud
 from zerg.models.enums import RunStatus
 from zerg.models.enums import RunTrigger
+from zerg.models.models import CommisJob
 from zerg.models.models import Run
 from zerg.models.models import ThreadMessage
-from zerg.models.models import CommisJob
 from zerg.services.oikos_service import OikosService
 
 
@@ -78,9 +76,7 @@ class TestCommisInboxTrigger:
         mock_result.status = "success"
         mock_result.result = "Disk is at 39%"
 
-        with patch.object(
-            OikosService, "run_oikos", new=AsyncMock(return_value=mock_result)
-        ):
+        with patch.object(OikosService, "run_oikos", new=AsyncMock(return_value=mock_result)):
             result = await trigger_commis_inbox_run(
                 db=db_session,
                 original_run_id=original_run.id,
@@ -94,11 +90,7 @@ class TestCommisInboxTrigger:
         assert "continuation_run_id" in result
 
         # Verify continuation run was created
-        continuation = (
-            db_session.query(Run)
-            .filter(Run.continuation_of_run_id == original_run.id)
-            .first()
-        )
+        continuation = db_session.query(Run).filter(Run.continuation_of_run_id == original_run.id).first()
         assert continuation is not None
         assert continuation.trigger == RunTrigger.CONTINUATION
         assert continuation.model == original_run.model
@@ -201,9 +193,7 @@ class TestCommisInboxTrigger:
             captured_task = task
             return mock_result
 
-        with patch.object(
-            OikosService, "run_oikos", side_effect=capture_run_oikos
-        ):
+        with patch.object(OikosService, "run_oikos", side_effect=capture_run_oikos):
             result = await trigger_commis_inbox_run(
                 db=db_session,
                 original_run_id=original_run.id,
@@ -265,9 +255,7 @@ class TestCommisInboxTrigger:
         mock_result = MagicMock()
         mock_result.status = "success"
 
-        with patch.object(
-            OikosService, "run_oikos", new=AsyncMock(return_value=mock_result)
-        ):
+        with patch.object(OikosService, "run_oikos", new=AsyncMock(return_value=mock_result)):
             result = await trigger_commis_inbox_run(
                 db=db_session,
                 original_run_id=original_run.id,
@@ -337,9 +325,7 @@ class TestMultipleCommissContinuation:
         mock_result = MagicMock()
         mock_result.status = "success"
 
-        with patch.object(
-            OikosService, "run_oikos", new=AsyncMock(return_value=mock_result)
-        ):
+        with patch.object(OikosService, "run_oikos", new=AsyncMock(return_value=mock_result)):
             # First commis completes - should create continuation
             result1 = await trigger_commis_inbox_run(
                 db=db_session,
@@ -358,9 +344,7 @@ class TestMultipleCommissContinuation:
         db_session.commit()
 
         # Second commis completes - should create chain continuation
-        with patch.object(
-            OikosService, "run_oikos", new=AsyncMock(return_value=mock_result)
-        ):
+        with patch.object(OikosService, "run_oikos", new=AsyncMock(return_value=mock_result)):
             result2 = await trigger_commis_inbox_run(
                 db=db_session,
                 original_run_id=original_run.id,
@@ -507,9 +491,7 @@ class TestCommisInboxIntegration:
         mock_result = MagicMock()
         mock_result.status = "success"
 
-        with patch.object(
-            OikosService, "run_oikos", new=AsyncMock(return_value=mock_result)
-        ):
+        with patch.object(OikosService, "run_oikos", new=AsyncMock(return_value=mock_result)):
             result = await trigger_commis_inbox_run(
                 db=db_session,
                 original_run_id=original_run.id,
@@ -569,11 +551,7 @@ class TestSSEEventAliasing:
         assert continuation.continuation_of_run_id == original_run.id
 
         # Verify the lookup that SSE aliasing performs
-        loaded_continuation = (
-            db_session.query(Run)
-            .filter(Run.continuation_of_run_id == original_run.id)
-            .first()
-        )
+        loaded_continuation = db_session.query(Run).filter(Run.continuation_of_run_id == original_run.id).first()
         assert loaded_continuation is not None
         assert loaded_continuation.id == continuation.id
 
@@ -641,9 +619,7 @@ class TestIdempotencyAndRaces:
         mock_result = MagicMock()
         mock_result.status = "success"
 
-        with patch.object(
-            OikosService, "run_oikos", new=AsyncMock(return_value=mock_result)
-        ):
+        with patch.object(OikosService, "run_oikos", new=AsyncMock(return_value=mock_result)):
             result = await trigger_commis_inbox_run(
                 db=db_session,
                 original_run_id=original_run.id,
@@ -700,9 +676,7 @@ class TestIdempotencyAndRaces:
         mock_result = MagicMock()
         mock_result.status = "success"
 
-        with patch.object(
-            OikosService, "run_oikos", new=AsyncMock(return_value=mock_result)
-        ):
+        with patch.object(OikosService, "run_oikos", new=AsyncMock(return_value=mock_result)):
             result1 = await trigger_commis_inbox_run(
                 db=db_session,
                 original_run_id=original_run.id,
@@ -733,9 +707,7 @@ class TestIdempotencyAndRaces:
         db_session.commit()
         db_session.refresh(job2)
 
-        with patch.object(
-            OikosService, "run_oikos", new=AsyncMock(return_value=mock_result)
-        ):
+        with patch.object(OikosService, "run_oikos", new=AsyncMock(return_value=mock_result)):
             result2 = await trigger_commis_inbox_run(
                 db=db_session,
                 original_run_id=original_run.id,
@@ -839,9 +811,5 @@ class TestIdempotencyAndRaces:
 
         assert followup_result is not None
         assert followup_result["status"] == "triggered"
-        new_continuation = (
-            db_session.query(Run)
-            .filter(Run.continuation_of_run_id == running_continuation.id)
-            .first()
-        )
+        new_continuation = db_session.query(Run).filter(Run.continuation_of_run_id == running_continuation.id).first()
         assert new_continuation is not None

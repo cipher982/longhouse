@@ -7,16 +7,22 @@ These tests verify the race condition handling in the parallel-first architectur
 - Batch re-interrupt barrier reset (reusing barriers)
 """
 
-import asyncio
-from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
 
 from zerg.crud import crud
-from zerg.models.enums import RunStatus, RunTrigger
-from zerg.models.models import Run, CommisJob
-from zerg.models.commis_barrier import CommisBarrierJob, CommisBarrier
+from zerg.models.commis_barrier import CommisBarrier
+from zerg.models.commis_barrier import CommisBarrierJob
+from zerg.models.enums import RunStatus
+from zerg.models.enums import RunTrigger
+from zerg.models.models import CommisJob
+from zerg.models.models import Run
 
 
 @pytest.fixture
@@ -46,7 +52,7 @@ def sample_barrier_setup(db_session, sample_fiche):
     jobs = []
     for i in range(3):
         job = CommisJob(
-            task=f"Task {i+1}",
+            task=f"Task {i + 1}",
             status="queued",
             oikos_run_id=run.id,
             owner_id=sample_fiche.owner_id,
@@ -71,7 +77,7 @@ def sample_barrier_setup(db_session, sample_fiche):
         barrier_job = CommisBarrierJob(
             barrier_id=barrier.id,
             job_id=job.id,
-            tool_call_id=f"tool_call_{i+1}",
+            tool_call_id=f"tool_call_{i + 1}",
             status="queued",
         )
         db_session.add(barrier_job)
@@ -100,11 +106,7 @@ class TestDoubleResumePrevention:
 
         # Complete first two commis (leaving one)
         for job in jobs[:2]:
-            barrier_job = (
-                db_session.query(CommisBarrierJob)
-                .filter(CommisBarrierJob.job_id == job.id)
-                .first()
-            )
+            barrier_job = db_session.query(CommisBarrierJob).filter(CommisBarrierJob.job_id == job.id).first()
             barrier_job.status = "completed"
             barrier_job.result = f"Result for {job.task}"
 
@@ -195,11 +197,7 @@ class TestTwoPhaseCommit:
         assert retrieved.status == "created"
 
         # Commis should NOT pick up 'created' jobs (only 'queued')
-        queued_jobs = (
-            db_session.query(CommisJob)
-            .filter(CommisJob.status == "queued")
-            .all()
-        )
+        queued_jobs = db_session.query(CommisJob).filter(CommisJob.status == "queued").all()
         assert len(queued_jobs) == 0  # No queued jobs yet
 
         # After barrier exists, flip to 'queued'
@@ -207,11 +205,7 @@ class TestTwoPhaseCommit:
         db_session.commit()
 
         # Now commis can pick it up
-        queued_jobs = (
-            db_session.query(CommisJob)
-            .filter(CommisJob.status == "queued")
-            .all()
-        )
+        queued_jobs = db_session.query(CommisJob).filter(CommisJob.status == "queued").all()
         assert len(queued_jobs) == 1
 
 
@@ -289,15 +283,13 @@ class TestBarrierErrorHandling:
         db_session.commit()
 
         commis_results = [
-            {"tool_call_id": f"tool_call_{i+1}", "result": f"Result {i+1}", "error": None, "status": "completed"}
+            {"tool_call_id": f"tool_call_{i + 1}", "result": f"Result {i + 1}", "error": None, "status": "completed"}
             for i in range(3)
         ]
 
         # Mock to force an exception
         with patch("zerg.managers.fiche_runner.FicheRunner") as mock_runner:
-            mock_runner.return_value.run_batch_continuation = AsyncMock(
-                side_effect=Exception("Simulated failure")
-            )
+            mock_runner.return_value.run_batch_continuation = AsyncMock(side_effect=Exception("Simulated failure"))
 
             result = await resume_oikos_batch(
                 db=db_session,
@@ -336,7 +328,7 @@ class TestBatchReinterrupt:
         db_session.commit()
 
         commis_results = [
-            {"tool_call_id": f"tool_call_{i+1}", "result": f"Result {i+1}", "error": None, "status": "completed"}
+            {"tool_call_id": f"tool_call_{i + 1}", "result": f"Result {i + 1}", "error": None, "status": "completed"}
             for i in range(3)
         ]
 
@@ -344,7 +336,7 @@ class TestBatchReinterrupt:
         new_jobs = []
         for i in range(2):
             job = CommisJob(
-                task=f"New task {i+1}",
+                task=f"New task {i + 1}",
                 status="created",
                 oikos_run_id=run.id,
                 owner_id=run.fiche.owner_id,
@@ -363,9 +355,7 @@ class TestBatchReinterrupt:
 
         with patch("zerg.managers.fiche_runner.FicheRunner") as mock_runner:
             mock_instance = MagicMock()
-            mock_instance.run_batch_continuation = AsyncMock(
-                side_effect=FicheInterrupted(interrupt_value)
-            )
+            mock_instance.run_batch_continuation = AsyncMock(side_effect=FicheInterrupted(interrupt_value))
             mock_instance.usage_total_tokens = 100
             mock_runner.return_value = mock_instance
 

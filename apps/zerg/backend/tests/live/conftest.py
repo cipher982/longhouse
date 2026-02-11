@@ -29,9 +29,7 @@ class OikosClient:
 
     def dispatch(self, task: str) -> int:
         """Dispatches a task and returns the run_id."""
-        resp = requests.post(
-            f"{self.base_url}/api/oikos/run", json={"task": task}, headers=self.headers, timeout=10
-        )
+        resp = requests.post(f"{self.base_url}/api/oikos/run", json={"task": task}, headers=self.headers, timeout=10)
         try:
             resp.raise_for_status()
         except requests.exceptions.HTTPError:

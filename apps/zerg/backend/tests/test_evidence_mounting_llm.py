@@ -3,13 +3,14 @@
 Tests the Phase 2 evidence mounting logic that expands markers before LLM calls.
 """
 
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from unittest.mock import patch
+
 import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 from langchain_core.messages import ToolMessage
-from unittest.mock import AsyncMock
-from unittest.mock import MagicMock
-from unittest.mock import patch
 
 from zerg.services.evidence_mounting_llm import EVIDENCE_MARKER_PATTERN
 from zerg.services.evidence_mounting_llm import EvidenceMountingLLM
@@ -187,9 +188,7 @@ class TestEvidenceMountingLLM:
     async def test_handles_missing_evidence_gracefully(self, mock_base_llm, mock_compiler):
         """Test handling when evidence is not found for a commis."""
         # Mock compiler returns evidence for job 123 but not 999
-        mock_compiler.compile.return_value = {
-            123: "--- Evidence for Commis 123 ---\nData here\n--- End Evidence ---"
-        }
+        mock_compiler.compile.return_value = {123: "--- Evidence for Commis 123 ---\nData here\n--- End Evidence ---"}
 
         mock_db = MagicMock()
         wrapper = EvidenceMountingLLM(base_llm=mock_base_llm, run_id=48, owner_id=100, db=mock_db)

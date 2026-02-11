@@ -5,14 +5,11 @@ from __future__ import annotations
 import json
 import sqlite3
 import tempfile
-import time
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
-from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
-from unittest.mock import patch
 
 import httpx
 import pytest
@@ -40,9 +37,7 @@ class TestOfflineSpool:
         # Verify table structure
         conn = sqlite3.connect(str(temp_spool.db_path))
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='spool'"
-        )
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='spool'")
         assert cursor.fetchone() is not None
         conn.close()
 
@@ -68,9 +63,7 @@ class TestOfflineSpool:
     def test_dequeue_batch_returns_pending(self, temp_spool):
         """dequeue_batch should return pending items in order."""
         # Enqueue several payloads
-        payloads = [
-            {"id": f"session-{i}", "events": []} for i in range(5)
-        ]
+        payloads = [{"id": f"session-{i}", "events": []} for i in range(5)]
         spool_ids = [temp_spool.enqueue(p) for p in payloads]
 
         # Dequeue batch

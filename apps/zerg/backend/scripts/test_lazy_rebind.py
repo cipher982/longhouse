@@ -20,7 +20,6 @@ async def test_rebind_mechanism():
     from langchain_core.messages import ToolMessage
 
     from zerg.tools import get_registry
-    from zerg.tools.lazy_binder import CORE_TOOLS
     from zerg.tools.lazy_binder import LazyToolBinder
 
     print("=" * 70)
@@ -31,16 +30,16 @@ async def test_rebind_mechanism():
     registry = get_registry()
     binder = LazyToolBinder(registry, allowed_tools=None)
 
-    print(f"\n1. Initial state:")
+    print("\n1. Initial state:")
     print(f"   Core tools bound: {len(binder.get_bound_tools())}")
     print(f"   Core tools: {sorted(binder.loaded_tool_names)}")
 
     # Verify get_current_location is NOT loaded
     assert not binder.is_loaded("get_current_location"), "get_current_location should not be pre-loaded"
-    print(f"   ✓ get_current_location is NOT loaded (correct)")
+    print("   ✓ get_current_location is NOT loaded (correct)")
 
     # Simulate search_tools result
-    print(f"\n2. Simulating search_tools result:")
+    print("\n2. Simulating search_tools result:")
     search_result = {
         "tools": [
             {"name": "get_current_location", "summary": "Get GPS location"},
@@ -58,7 +57,7 @@ async def test_rebind_mechanism():
     )
 
     # Parse tool names (same logic as _maybe_rebind_after_tool_search)
-    print(f"\n3. Parsing and loading tools:")
+    print("\n3. Parsing and loading tools:")
     names = []
     payload = json.loads(tool_message.content)
     for entry in payload.get("tools") or []:
@@ -74,7 +73,7 @@ async def test_rebind_mechanism():
     print(f"   needs_rebind(): {binder.needs_rebind()}")
 
     # Check results
-    print(f"\n4. Final state:")
+    print("\n4. Final state:")
     print(f"   Total tools bound: {len(binder.get_bound_tools())}")
     print(f"   get_current_location loaded: {binder.is_loaded('get_current_location')}")
     print(f"   get_whoop_data loaded: {binder.is_loaded('get_whoop_data')}")
@@ -84,7 +83,7 @@ async def test_rebind_mechanism():
     assert binder.is_loaded("get_whoop_data"), "get_whoop_data should be loaded"
     assert binder.needs_rebind(), "Binder should need rebind after loading new tools"
 
-    print(f"\n" + "=" * 70)
+    print("\n" + "=" * 70)
     print("✓ SUCCESS: Rebind mechanism works correctly!")
     print("=" * 70)
     print("\nThe mechanism is correct:")

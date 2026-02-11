@@ -11,12 +11,14 @@ Usage:
 
 import asyncio
 import sys
-from datetime import UTC, datetime
+from datetime import UTC
+from datetime import datetime
 
 # Add parent to path for imports
 sys.path.insert(0, ".")
 
-from zerg.events.event_bus import EventType, event_bus
+from zerg.events.event_bus import EventType
+from zerg.events.event_bus import event_bus
 
 
 async def simulate_tool_events():
@@ -130,7 +132,7 @@ async def simulate_tool_events():
     print("\n" + "=" * 60)
     print("Results")
     print("=" * 60)
-    print(f"Events emitted: 4")
+    print("Events emitted: 4")
     print(f"Events received: {len(received_events)}")
 
     if len(received_events) == 4:

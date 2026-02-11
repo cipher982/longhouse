@@ -1,11 +1,8 @@
 """Tests for shipper state tracking."""
 
-import json
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
-
-import pytest
 
 from zerg.services.shipper.state import ShippedSession
 from zerg.services.shipper.state import ShipperState

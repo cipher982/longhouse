@@ -24,7 +24,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from zerg.database import get_db
-from zerg.prompts.composer import build_oikos_prompt, build_commis_prompt
+from zerg.prompts.composer import build_commis_prompt
+from zerg.prompts.composer import build_oikos_prompt
 from zerg.prompts.connector_protocols import get_connector_protocols
 
 

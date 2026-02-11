@@ -2,7 +2,7 @@
 
 Uses in-memory SQLite with per-worker isolation for pytest-xdist.
 """
-import atexit
+
 import os
 from pathlib import Path
 
@@ -141,7 +141,6 @@ if _eval_mode_early != "live":
     sys.modules["openai.OpenAI"] = mock_openai
 
 import langchain_openai
-
 from langchain_core.messages import AIMessage
 
 
@@ -269,6 +268,7 @@ def cleanup_global_resources(request):
         print(f"Error during topic_manager unsubscribe: {e}")
 
     try:
+
         async def _stop_scheduler():
             await scheduler_service.stop()
 
@@ -292,10 +292,10 @@ def cleanup_global_resources(request):
 # Database schema management - create tables at session start
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="session")
 def _db_schema():
     """Create database tables once for the entire test session."""
-    from sqlalchemy import text
 
     # Import agents models
     from zerg.models.agents import AgentsBase
@@ -598,7 +598,8 @@ def mock_langchain_openai():
 @pytest.fixture(autouse=True)
 def _cleanup_tool_registry():
     """Clear runtime-registered tools before & after each test."""
-    from zerg.tools import clear_runtime_tools, reset_registry
+    from zerg.tools import clear_runtime_tools
+    from zerg.tools import reset_registry
 
     clear_runtime_tools()
     reset_registry()

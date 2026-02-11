@@ -177,9 +177,7 @@ def analyze_session_logs(logs: list[dict], test_case: TestCase) -> dict[str, Any
         return results
 
     # Count tool iterations
-    tool_iterations = sum(
-        1 for log in logs if "tool_iteration" in log.get("phase", "")
-    )
+    tool_iterations = sum(1 for log in logs if "tool_iteration" in log.get("phase", ""))
     results["metrics"]["tool_iterations"] = tool_iterations
 
     # Count total tokens
@@ -195,35 +193,23 @@ def analyze_session_logs(logs: list[dict], test_case: TestCase) -> dict[str, Any
 
     if "max_tool_calls" in expected:
         if tool_iterations <= expected["max_tool_calls"]:
-            results["passed"].append(
-                f"Tool calls: {tool_iterations} <= {expected['max_tool_calls']}"
-            )
+            results["passed"].append(f"Tool calls: {tool_iterations} <= {expected['max_tool_calls']}")
         else:
-            results["failed"].append(
-                f"Tool calls: {tool_iterations} > {expected['max_tool_calls']} (too many)"
-            )
+            results["failed"].append(f"Tool calls: {tool_iterations} > {expected['max_tool_calls']} (too many)")
 
     if "max_tokens" in expected:
         if total_tokens <= expected["max_tokens"]:
-            results["passed"].append(
-                f"Tokens: {total_tokens:,} <= {expected['max_tokens']:,}"
-            )
+            results["passed"].append(f"Tokens: {total_tokens:,} <= {expected['max_tokens']:,}")
         else:
-            results["failed"].append(
-                f"Tokens: {total_tokens:,} > {expected['max_tokens']:,} (inefficient)"
-            )
+            results["failed"].append(f"Tokens: {total_tokens:,} > {expected['max_tokens']:,} (inefficient)")
 
     # Check if commis was spawned
     if "should_spawn_commis" in expected:
         commis_spawned = any(log.get("commis_id") for log in logs)
         if commis_spawned == expected["should_spawn_commis"]:
-            results["passed"].append(
-                f"Commis spawned: {commis_spawned} (expected: {expected['should_spawn_commis']})"
-            )
+            results["passed"].append(f"Commis spawned: {commis_spawned} (expected: {expected['should_spawn_commis']})")
         else:
-            results["failed"].append(
-                f"Commis spawned: {commis_spawned} (expected: {expected['should_spawn_commis']})"
-            )
+            results["failed"].append(f"Commis spawned: {commis_spawned} (expected: {expected['should_spawn_commis']})")
 
     # Check for over-specification in oikos's task delegation
     if "max_task_length" in expected:
@@ -236,9 +222,7 @@ def analyze_session_logs(logs: list[dict], test_case: TestCase) -> dict[str, Any
                         task = msg.get("content", "")
                         task_len = len(task)
                         if task_len <= expected["max_task_length"]:
-                            results["passed"].append(
-                                f"Task concise: {task_len} chars <= {expected['max_task_length']}"
-                            )
+                            results["passed"].append(f"Task concise: {task_len} chars <= {expected['max_task_length']}")
                         else:
                             results["failed"].append(
                                 f"Task too long: {task_len} chars > {expected['max_task_length']} (over-specified)"
@@ -248,9 +232,7 @@ def analyze_session_logs(logs: list[dict], test_case: TestCase) -> dict[str, Any
                         if "task_should_not_contain" in expected:
                             for forbidden in expected["task_should_not_contain"]:
                                 if forbidden.lower() in task.lower():
-                                    results["failed"].append(
-                                        f"Task over-specified: contains '{forbidden}'"
-                                    )
+                                    results["failed"].append(f"Task over-specified: contains '{forbidden}'")
 
     return results
 
@@ -271,34 +253,24 @@ def detect_anti_patterns(logs: list[dict]) -> list[str]:
                 if msg.get("role") == "human":
                     task = msg.get("content", "")
                     # Check for command-level detail
-                    if any(
-                        cmd in task.lower()
-                        for cmd in ["df -h", "du -", "docker system", "sudo"]
-                    ):
-                        patterns.append(
-                            f"Over-specification: Oikos told commis exact commands: {task[:100]}..."
-                        )
+                    if any(cmd in task.lower() for cmd in ["df -h", "du -", "docker system", "sudo"]):
+                        patterns.append(f"Over-specification: Oikos told commis exact commands: {task[:100]}...")
 
     # Pattern 2: Excessive tool iterations for simple tasks
     simple_keywords = ["disk space", "memory", "list containers"]
     for log in logs:
         messages = log.get("messages", [])
         has_simple_request = any(
-            any(kw in msg.get("content", "").lower() for kw in simple_keywords)
-            for msg in messages
+            any(kw in msg.get("content", "").lower() for kw in simple_keywords) for msg in messages
         )
         if has_simple_request:
             commis_id = log.get("commis_id")
             if commis_id:
                 # Count tool iterations for this commis
                 commis_logs = [l for l in logs if l.get("commis_id") == commis_id]
-                tool_iters = sum(
-                    1 for l in commis_logs if "tool_iteration" in l.get("phase", "")
-                )
+                tool_iters = sum(1 for l in commis_logs if "tool_iteration" in l.get("phase", ""))
                 if tool_iters > 2:
-                    patterns.append(
-                        f"Excessive iterations: Simple task took {tool_iters} tool calls"
-                    )
+                    patterns.append(f"Excessive iterations: Simple task took {tool_iters} tool calls")
 
     # Pattern 3: Oikos doing commis tasks
     for log in logs:
@@ -310,9 +282,7 @@ def detect_anti_patterns(logs: list[dict]) -> list[str]:
                     tool_calls = msg.get("tool_calls", [])
                     for tc in tool_calls:
                         if tc.get("name") in ["ssh_exec", "runner_exec"]:
-                            patterns.append(
-                                "Oikos used execution tool directly (should spawn commis)"
-                            )
+                            patterns.append("Oikos used execution tool directly (should spawn commis)")
 
     # Pattern 4: Token bloat in system prompts
     for log in logs:
@@ -321,9 +291,7 @@ def detect_anti_patterns(logs: list[dict]) -> list[str]:
             if msg.get("role") == "system":
                 content_len = len(msg.get("content", ""))
                 if content_len > 15000:  # ~3750 tokens
-                    patterns.append(
-                        f"Bloated system prompt: {content_len:,} chars (~{content_len // 4:,} tokens)"
-                    )
+                    patterns.append(f"Bloated system prompt: {content_len:,} chars (~{content_len // 4:,} tokens)")
 
     return patterns
 
@@ -354,7 +322,7 @@ def run_evaluation(log_dir: Path, test_cases: list[TestCase]) -> dict[str, Any]:
         logs = load_logged_session(log_dir, test_case.user_query)
 
         if not logs:
-            print(f"  ⚠️  No logs found - test skipped")
+            print("  ⚠️  No logs found - test skipped")
             continue
 
         # Analyze logs
@@ -370,12 +338,12 @@ def run_evaluation(log_dir: Path, test_cases: list[TestCase]) -> dict[str, Any]:
         print(f"  Failed: {len(result['failed'])}")
 
         if result["failed"]:
-            print(f"  ❌ Failures:")
+            print("  ❌ Failures:")
             for failure in result["failed"]:
                 print(f"     - {failure}")
 
         if patterns:
-            print(f"  ⚠️  Anti-patterns detected:")
+            print("  ⚠️  Anti-patterns detected:")
             for pattern in patterns:
                 print(f"     - {pattern}")
 
@@ -384,12 +352,8 @@ def run_evaluation(log_dir: Path, test_cases: list[TestCase]) -> dict[str, Any]:
 
     # Calculate overall score
     total_tests = len(report["test_results"])
-    passed_tests = sum(
-        1 for r in report["test_results"] if len(r["failed"]) == 0
-    )
-    report["overall_score"] = (
-        (passed_tests / total_tests * 100) if total_tests > 0 else 0
-    )
+    passed_tests = sum(1 for r in report["test_results"] if len(r["failed"]) == 0)
+    report["overall_score"] = (passed_tests / total_tests * 100) if total_tests > 0 else 0
 
     # Generate recommendations
     report["recommendations"] = generate_recommendations(report)

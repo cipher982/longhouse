@@ -53,7 +53,7 @@ def test_oikos_tools_in_core_tools():
     This test guards against someone breaking the import relationship.
     """
     missing = sorted(OIKOS_TOOL_NAMES - CORE_TOOLS)
-    assert not missing, f"Oikos tools missing from CORE_TOOLS: {missing}. " "CORE_TOOLS should import OIKOS_TOOL_NAMES from oikos_tools.py"
+    assert not missing, f"Oikos tools missing from CORE_TOOLS: {missing}. CORE_TOOLS should import OIKOS_TOOL_NAMES from oikos_tools.py"
 
 
 def test_utility_tools_exist_in_builtin():

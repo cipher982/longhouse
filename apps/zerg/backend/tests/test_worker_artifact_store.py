@@ -419,7 +419,6 @@ def test_index_persistence(temp_store):
 def test_index_updates_are_atomic_under_concurrency(temp_store, monkeypatch):
     """Test that concurrent index updates don't clobber each other."""
     import threading
-    import time
 
     original_read = temp_store._read_index
     original_write = temp_store._write_index

@@ -11,17 +11,17 @@ from sqlalchemy.orm import Session
 
 from zerg.crud.crud import create_fiche
 from zerg.models.enums import RunStatus
+from zerg.models.models import CommisJob
 from zerg.models.models import Fiche
 from zerg.models.models import Run
 from zerg.models.models import RunnerJob
 from zerg.models.models import Thread
-from zerg.models.models import CommisJob
 from zerg.services.fiche_state_recovery import check_postgresql_advisory_lock_support
 from zerg.services.fiche_state_recovery import initialize_fiche_state_system
+from zerg.services.fiche_state_recovery import perform_startup_commis_job_recovery
 from zerg.services.fiche_state_recovery import perform_startup_fiche_recovery
 from zerg.services.fiche_state_recovery import perform_startup_run_recovery
 from zerg.services.fiche_state_recovery import perform_startup_runner_job_recovery
-from zerg.services.fiche_state_recovery import perform_startup_commis_job_recovery
 
 
 class TestFicheStateRecovery:

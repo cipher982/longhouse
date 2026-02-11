@@ -10,16 +10,21 @@ Tests cover:
 - Golden equivalence (builder output matches legacy code)
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
-from zerg.types.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from tests.conftest import TEST_COMMIS_MODEL
 from zerg.connectors.status_builder import FicheContextParts
 from zerg.crud import crud
 from zerg.managers.fiche_runner import RuntimeView
-from zerg.managers.message_builder import MessageArrayBuilder, MessageArrayResult
+from zerg.managers.message_builder import MessageArrayBuilder
+from zerg.managers.message_builder import MessageArrayResult
+from zerg.types.messages import AIMessage
+from zerg.types.messages import HumanMessage
+from zerg.types.messages import SystemMessage
+from zerg.types.messages import ToolMessage
 
 
 def _mock_fiche_context_parts(**kwargs):
@@ -201,9 +206,7 @@ class TestConversationLoading:
         ]
 
         result = (
-            builder.with_system_prompt(test_fiche)
-            .with_conversation_messages(conversation, filter_system=True)
-            .build()
+            builder.with_system_prompt(test_fiche).with_conversation_messages(conversation, filter_system=True).build()
         )
 
         # System prompt + human + AI (stale system filtered)
@@ -538,7 +541,10 @@ class TestMemoryContext:
 
         with (
             patch("zerg.connectors.status_builder.build_fiche_context_parts", side_effect=_mock_fiche_context_parts),
-            patch("zerg.services.memory_search.search_memory_files", return_value=[{"path": "memory.txt", "snippets": ["Note"]}]) as mock_search,
+            patch(
+                "zerg.services.memory_search.search_memory_files",
+                return_value=[{"path": "memory.txt", "snippets": ["Note"]}],
+            ) as mock_search,
             patch("zerg.crud.knowledge_crud.search_knowledge_documents", return_value=[]),
             patch("zerg.services.memory_embeddings.embeddings_enabled", return_value=False),
         ):
@@ -566,7 +572,10 @@ class TestMemoryContext:
 
         with (
             patch("zerg.connectors.status_builder.build_fiche_context_parts", side_effect=_mock_fiche_context_parts),
-            patch("zerg.services.memory_search.search_memory_files", return_value=[{"path": "memory.txt", "snippets": ["Note"]}]) as mock_search,
+            patch(
+                "zerg.services.memory_search.search_memory_files",
+                return_value=[{"path": "memory.txt", "snippets": ["Note"]}],
+            ) as mock_search,
             patch("zerg.crud.knowledge_crud.search_knowledge_documents", return_value=[]),
             patch("zerg.services.memory_embeddings.embeddings_enabled", return_value=False),
         ):
@@ -590,7 +599,9 @@ class TestMemoryContext:
 
         with (
             patch("zerg.connectors.status_builder.build_fiche_context_parts", side_effect=_mock_fiche_context_parts),
-            patch("zerg.services.memory_search.search_memory_files", return_value=[{"path": "m.txt", "snippets": ["hit"]}]),
+            patch(
+                "zerg.services.memory_search.search_memory_files", return_value=[{"path": "m.txt", "snippets": ["hit"]}]
+            ),
             patch("zerg.crud.knowledge_crud.search_knowledge_documents", return_value=[]),
             patch("zerg.services.memory_embeddings.embeddings_enabled", return_value=False),
         ):
@@ -602,6 +613,7 @@ class TestMemoryContext:
         assert "<connector_status" in result.messages[1].content
         assert "[MEMORY CONTEXT]" in result.messages[2].content
         assert "<current_time>" in result.messages[3].content
+
 
 # ---------------------------------------------------------------------------
 # Golden equivalence tests (builder matches legacy run_thread output)

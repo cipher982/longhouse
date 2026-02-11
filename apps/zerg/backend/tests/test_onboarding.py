@@ -10,17 +10,14 @@ The tests here are designed to work independently of the main conftest.py which
 sets up Postgres/testcontainers. Use the standalone test function directly.
 """
 
-import os
-import tempfile
-from pathlib import Path
 
 import pytest
 
-
 # Mark all tests in this module as onboarding tests
-pytestmark = [pytest.mark.onboarding, pytest.mark.skip(
-    reason="Run via make onboarding-sqlite or test_onboarding_smoke_standalone"
-)]
+pytestmark = [
+    pytest.mark.onboarding,
+    pytest.mark.skip(reason="Run via make onboarding-sqlite or test_onboarding_smoke_standalone"),
+]
 
 
 def test_onboarding_smoke_standalone():
@@ -34,7 +31,9 @@ def test_onboarding_smoke_standalone():
 
     Can be run independently: pytest tests/test_onboarding.py::test_onboarding_smoke_standalone -v
     """
-    pytest.skip("Run via: cd apps/zerg/backend && DATABASE_URL=sqlite:///test.db uv run pytest tests/test_onboarding.py::test_onboarding_smoke_standalone -v --no-header")
+    pytest.skip(
+        "Run via: cd apps/zerg/backend && DATABASE_URL=sqlite:///test.db uv run pytest tests/test_onboarding.py::test_onboarding_smoke_standalone -v --no-header"
+    )
 
 
 # The actual implementation lives in tests_lite/test_onboarding_sqlite.py

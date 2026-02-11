@@ -274,7 +274,12 @@ class TopicConnectionManager:
 
             self.topic_subscriptions[topic].add(client_id)
             self.client_topics[client_id].add(topic)
-        logger.info("✅ Client %s subscribed to topic %s (total subscribers: %d)", client_id, topic, len(self.topic_subscriptions[topic]))
+        logger.info(
+            "✅ Client %s subscribed to topic %s (total subscribers: %d)",
+            client_id,
+            topic,
+            len(self.topic_subscriptions[topic]),
+        )
 
     async def unsubscribe_from_topic(self, client_id: str, topic: str) -> None:
         """Unsubscribe a client from a topic.

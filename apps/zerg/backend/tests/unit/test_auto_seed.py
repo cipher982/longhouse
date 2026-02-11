@@ -4,16 +4,14 @@ Tests the automatic seeding of user context and credentials on startup.
 """
 
 import json
-import pytest
-from pathlib import Path
-from unittest.mock import MagicMock, patch, mock_open
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
-from zerg.services.auto_seed import (
-    _find_config_file,
-    _seed_user_context,
-    run_auto_seed,
-    USER_CONTEXT_PATHS,
-)
+import pytest
+
+from zerg.services.auto_seed import _find_config_file
+from zerg.services.auto_seed import _seed_user_context
+from zerg.services.auto_seed import run_auto_seed
 
 
 class TestFindConfigFile:
@@ -90,9 +88,7 @@ class TestSeedUserContext:
 
     def test_skips_when_no_config_file(self):
         """Returns True (success) when no config file exists."""
-        with patch(
-            "zerg.services.auto_seed._find_config_file", return_value=None
-        ):
+        with patch("zerg.services.auto_seed._find_config_file", return_value=None):
             result = _seed_user_context()
             assert result is True
 
@@ -106,10 +102,9 @@ class TestSeedUserContext:
         mock_query.filter.return_value.all.return_value = []
         mock_db.query.return_value = mock_query
 
-        with patch(
-            "zerg.services.auto_seed._find_config_file", return_value=config_file
-        ), patch(
-            "zerg.services.auto_seed.default_session_factory", return_value=mock_db
+        with (
+            patch("zerg.services.auto_seed._find_config_file", return_value=config_file),
+            patch("zerg.services.auto_seed.default_session_factory", return_value=mock_db),
         ):
             result = _seed_user_context()
             assert result is True
@@ -128,10 +123,9 @@ class TestSeedUserContext:
         mock_query.filter.return_value.all.return_value = [mock_user]
         mock_db.query.return_value = mock_query
 
-        with patch(
-            "zerg.services.auto_seed._find_config_file", return_value=config_file
-        ), patch(
-            "zerg.services.auto_seed.default_session_factory", return_value=mock_db
+        with (
+            patch("zerg.services.auto_seed._find_config_file", return_value=config_file),
+            patch("zerg.services.auto_seed.default_session_factory", return_value=mock_db),
         ):
             result = _seed_user_context()
             assert result is True
@@ -152,10 +146,9 @@ class TestSeedUserContext:
         mock_query.filter.return_value.all.return_value = [mock_user]
         mock_db.query.return_value = mock_query
 
-        with patch(
-            "zerg.services.auto_seed._find_config_file", return_value=config_file
-        ), patch(
-            "zerg.services.auto_seed.default_session_factory", return_value=mock_db
+        with (
+            patch("zerg.services.auto_seed._find_config_file", return_value=config_file),
+            patch("zerg.services.auto_seed.default_session_factory", return_value=mock_db),
         ):
             result = _seed_user_context()
             assert result is True
@@ -176,10 +169,9 @@ class TestSeedUserContext:
         mock_query.filter.return_value.all.return_value = [mock_user]
         mock_db.query.return_value = mock_query
 
-        with patch(
-            "zerg.services.auto_seed._find_config_file", return_value=config_file
-        ), patch(
-            "zerg.services.auto_seed.default_session_factory", return_value=mock_db
+        with (
+            patch("zerg.services.auto_seed._find_config_file", return_value=config_file),
+            patch("zerg.services.auto_seed.default_session_factory", return_value=mock_db),
         ):
             result = _seed_user_context()
             assert result is True
@@ -190,9 +182,7 @@ class TestSeedUserContext:
         config_file = tmp_path / "context.json"
         config_file.write_text("not valid json {{{")
 
-        with patch(
-            "zerg.services.auto_seed._find_config_file", return_value=config_file
-        ):
+        with patch("zerg.services.auto_seed._find_config_file", return_value=config_file):
             result = _seed_user_context()
             assert result is False
 
@@ -204,10 +194,9 @@ class TestSeedUserContext:
         mock_db = MagicMock()
         mock_db.query.side_effect = Exception("DB connection failed")
 
-        with patch(
-            "zerg.services.auto_seed._find_config_file", return_value=config_file
-        ), patch(
-            "zerg.services.auto_seed.default_session_factory", return_value=mock_db
+        with (
+            patch("zerg.services.auto_seed._find_config_file", return_value=config_file),
+            patch("zerg.services.auto_seed.default_session_factory", return_value=mock_db),
         ):
             result = _seed_user_context()
             assert result is False
@@ -220,12 +209,10 @@ class TestRunAutoSeed:
 
     def test_returns_results_dict(self):
         """Returns dict with seeding results."""
-        with patch(
-            "zerg.services.auto_seed._seed_user_context", return_value=True
-        ), patch(
-            "zerg.services.auto_seed._seed_personal_credentials", return_value=True
-        ), patch(
-            "zerg.services.auto_seed._find_config_file", return_value=None
+        with (
+            patch("zerg.services.auto_seed._seed_user_context", return_value=True),
+            patch("zerg.services.auto_seed._seed_personal_credentials", return_value=True),
+            patch("zerg.services.auto_seed._find_config_file", return_value=None),
         ):
             result = run_auto_seed()
 
@@ -238,19 +225,18 @@ class TestRunAutoSeed:
         config_file = tmp_path / "user_context.local.json"
         config_file.write_text('{"display_name": "Test"}')
 
-        with patch(
-            "zerg.services.auto_seed._seed_user_context", return_value=True
-        ), patch(
-            "zerg.services.auto_seed._seed_personal_credentials", return_value=True
-        ), patch(
-            "zerg.services.auto_seed._seed_runners", return_value=True
-        ), patch(
-            "zerg.services.auto_seed._find_config_file",
-            side_effect=[
-                config_file,  # user context
-                None,  # credentials
-                None,  # runners
-            ],
+        with (
+            patch("zerg.services.auto_seed._seed_user_context", return_value=True),
+            patch("zerg.services.auto_seed._seed_personal_credentials", return_value=True),
+            patch("zerg.services.auto_seed._seed_runners", return_value=True),
+            patch(
+                "zerg.services.auto_seed._find_config_file",
+                side_effect=[
+                    config_file,  # user context
+                    None,  # credentials
+                    None,  # runners
+                ],
+            ),
         ):
             result = run_auto_seed()
 
@@ -258,12 +244,10 @@ class TestRunAutoSeed:
 
     def test_reports_failure(self):
         """Reports failure when seeding fails."""
-        with patch(
-            "zerg.services.auto_seed._seed_user_context", return_value=False
-        ), patch(
-            "zerg.services.auto_seed._seed_personal_credentials", return_value=True
-        ), patch(
-            "zerg.services.auto_seed._find_config_file", return_value=None
+        with (
+            patch("zerg.services.auto_seed._seed_user_context", return_value=False),
+            patch("zerg.services.auto_seed._seed_personal_credentials", return_value=True),
+            patch("zerg.services.auto_seed._find_config_file", return_value=None),
         ):
             result = run_auto_seed()
 
@@ -271,12 +255,10 @@ class TestRunAutoSeed:
 
     def test_reports_skipped_when_no_config(self):
         """Reports skipped when no config file exists."""
-        with patch(
-            "zerg.services.auto_seed._seed_user_context", return_value=True
-        ), patch(
-            "zerg.services.auto_seed._seed_personal_credentials", return_value=True
-        ), patch(
-            "zerg.services.auto_seed._find_config_file", return_value=None
+        with (
+            patch("zerg.services.auto_seed._seed_user_context", return_value=True),
+            patch("zerg.services.auto_seed._seed_personal_credentials", return_value=True),
+            patch("zerg.services.auto_seed._find_config_file", return_value=None),
         ):
             result = run_auto_seed()
 
@@ -303,10 +285,9 @@ class TestIdempotency:
         mock_query.filter.return_value.all.return_value = [mock_user]
         mock_db.query.return_value = mock_query
 
-        with patch(
-            "zerg.services.auto_seed._find_config_file", return_value=config_file
-        ), patch(
-            "zerg.services.auto_seed.default_session_factory", return_value=mock_db
+        with (
+            patch("zerg.services.auto_seed._find_config_file", return_value=config_file),
+            patch("zerg.services.auto_seed.default_session_factory", return_value=mock_db),
         ):
             # First call - should seed
             result1 = _seed_user_context()

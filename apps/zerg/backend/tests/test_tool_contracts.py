@@ -2,8 +2,8 @@
 
 import pytest
 
-from zerg.tools.builtin import BUILTIN_TOOLS
 from zerg.tools.builtin import _PERSONAL_TOOLS_ENABLED
+from zerg.tools.builtin import BUILTIN_TOOLS
 from zerg.tools.generated.tool_definitions import TOOL_SERVER_MAPPING
 from zerg.tools.generated.tool_definitions import ServerName
 from zerg.tools.generated.tool_definitions import ToolName
@@ -89,8 +89,8 @@ class TestContractBreakageDetection:
         """Test that tools are in expected server modules."""
         from zerg.tools.builtin.datetime_tools import TOOLS as DATETIME_TOOLS
         from zerg.tools.builtin.http_tools import TOOLS as HTTP_TOOLS
-        from zerg.tools.builtin.personal_tools import TOOLS as PERSONAL_TOOLS
         from zerg.tools.builtin.oikos_tools import TOOLS as OIKOS_TOOLS
+        from zerg.tools.builtin.personal_tools import TOOLS as PERSONAL_TOOLS
 
         # Build actual tool-to-server mapping from module structure
         actual_mapping = {}
@@ -106,6 +106,6 @@ class TestContractBreakageDetection:
         # Verify against contract
         for tool_name, expected_server in actual_mapping.items():
             contract_server = get_expected_server(tool_name)
-            assert (
-                contract_server == expected_server
-            ), f"Tool {tool_name}: contract expects {contract_server}, actually in {expected_server}"
+            assert contract_server == expected_server, (
+                f"Tool {tool_name}: contract expects {contract_server}, actually in {expected_server}"
+            )

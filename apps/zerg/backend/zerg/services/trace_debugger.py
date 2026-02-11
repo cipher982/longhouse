@@ -242,7 +242,7 @@ class TraceDebugger:
         # Check for very long LLM calls (>60s)
         for log in data["llm_logs"]:
             if log.duration_ms and log.duration_ms > 60000:
-                anomalies.append(f"Slow LLM call: {log.phase} took {log.duration_ms/1000:.1f}s")
+                anomalies.append(f"Slow LLM call: {log.phase} took {log.duration_ms / 1000:.1f}s")
 
         return anomalies
 

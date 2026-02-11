@@ -108,10 +108,7 @@ def test_simple_memory_check_efficiency(oikos_client):
     # Ensure we actually measured something (prevents false pass if SSE parsing fails)
     assert tool_calls >= 1, f"Expected at least 1 tool call but measured {tool_calls}. SSE parsing may be broken."
 
-    assert tool_calls <= 2, (
-        f"Simple memory check used {tool_calls} tool calls (expected ≤2). "
-        f"Run ID: {run_id}"
-    )
+    assert tool_calls <= 2, f"Simple memory check used {tool_calls} tool calls (expected ≤2). Run ID: {run_id}"
 
 
 @pytest.mark.live
@@ -134,7 +131,4 @@ def test_container_list_efficiency(oikos_client):
     # Ensure we actually measured something (prevents false pass if SSE parsing fails)
     assert tool_calls >= 1, f"Expected at least 1 tool call but measured {tool_calls}. SSE parsing may be broken."
 
-    assert tool_calls <= 2, (
-        f"Container list used {tool_calls} tool calls (expected ≤2). "
-        f"Run ID: {run_id}"
-    )
+    assert tool_calls <= 2, f"Container list used {tool_calls} tool calls (expected ≤2). Run ID: {run_id}"

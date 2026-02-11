@@ -50,7 +50,7 @@ def compare_results(baseline_file: str, variant_file: str) -> None:
     variant = load_result(variant_file)
 
     print("\n" + "=" * 80)
-    print(f"📊 Eval Comparison Report")
+    print("📊 Eval Comparison Report")
     print("=" * 80)
     print(f"\nBaseline: {baseline.run_id}")
     print(f"  Commit:  {baseline.commit}")
@@ -67,15 +67,15 @@ def compare_results(baseline_file: str, variant_file: str) -> None:
 
     # Pass rate
     pass_rate_delta = (variant.summary.pass_rate - baseline.summary.pass_rate) * 100
-    print(f"\nPass Rate:")
-    print(f"  Baseline: {baseline.summary.pass_rate*100:.1f}% ({baseline.summary.passed}/{baseline.summary.total})")
-    print(f"  Variant:  {variant.summary.pass_rate*100:.1f}% ({variant.summary.passed}/{variant.summary.total})")
+    print("\nPass Rate:")
+    print(f"  Baseline: {baseline.summary.pass_rate * 100:.1f}% ({baseline.summary.passed}/{baseline.summary.total})")
+    print(f"  Variant:  {variant.summary.pass_rate * 100:.1f}% ({variant.summary.passed}/{variant.summary.total})")
     print(f"  Delta:    {format_delta(pass_rate_delta, is_percentage=True)}")
 
     # Latency
     latency_delta = variant.summary.avg_latency_ms - baseline.summary.avg_latency_ms
     latency_pct = (latency_delta / baseline.summary.avg_latency_ms * 100) if baseline.summary.avg_latency_ms > 0 else 0
-    print(f"\nAvg Latency:")
+    print("\nAvg Latency:")
     print(f"  Baseline: {baseline.summary.avg_latency_ms}ms")
     print(f"  Variant:  {variant.summary.avg_latency_ms}ms")
     print(f"  Delta:    {format_delta(latency_delta)}ms ({format_delta(latency_pct, is_percentage=True)})")
@@ -83,14 +83,14 @@ def compare_results(baseline_file: str, variant_file: str) -> None:
     # Token usage
     token_delta = variant.summary.total_tokens - baseline.summary.total_tokens
     token_pct = (token_delta / baseline.summary.total_tokens * 100) if baseline.summary.total_tokens > 0 else 0
-    print(f"\nTotal Tokens:")
+    print("\nTotal Tokens:")
     print(f"  Baseline: {baseline.summary.total_tokens:,}")
     print(f"  Variant:  {variant.summary.total_tokens:,}")
     print(f"  Delta:    {format_delta(token_delta)} ({format_delta(token_pct, is_percentage=True)})")
 
     # Cost
     cost_delta = variant.summary.total_cost_usd - baseline.summary.total_cost_usd
-    print(f"\nEstimated Cost:")
+    print("\nEstimated Cost:")
     print(f"  Baseline: ${baseline.summary.total_cost_usd:.4f}")
     print(f"  Variant:  ${variant.summary.total_cost_usd:.4f}")
     print(f"  Delta:    ${cost_delta:+.4f}")
@@ -147,7 +147,7 @@ def compare_results(baseline_file: str, variant_file: str) -> None:
         print("\n  No improvements (all baseline cases already passing)")
 
     # Summary counts
-    print(f"\n📊 Status Summary:")
+    print("\n📊 Status Summary:")
     print(f"  Regressions:     {len(regressions)}")
     print(f"  Improvements:    {len(improvements)}")
     print(f"  Unchanged (pass): {len(unchanged_pass)}")

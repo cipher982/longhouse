@@ -17,8 +17,8 @@ from tests.conftest import TEST_COMMIS_MODEL
 from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
 from zerg.models.enums import RunStatus
-from zerg.models.models import Run
 from zerg.models.models import CommisJob
+from zerg.models.models import Run
 from zerg.services.oikos_context import reset_oikos_context
 from zerg.services.oikos_context import set_oikos_context
 from zerg.tools.builtin.oikos_tools import spawn_commis_async
@@ -79,11 +79,7 @@ class TestSpawnCommisIdempotency:
             assert "queued successfully" in result2
 
             # Assert: still only ONE job for this run
-            jobs = (
-                db_session.query(CommisJob)
-                .filter(CommisJob.oikos_run_id == oikos_run.id)
-                .all()
-            )
+            jobs = db_session.query(CommisJob).filter(CommisJob.oikos_run_id == oikos_run.id).all()
             assert len(jobs) == 1, f"Expected 1 job, got {len(jobs)} - duplicate spawned on replay"
         finally:
             reset_oikos_context(token)
@@ -109,11 +105,7 @@ class TestSpawnCommisIdempotency:
             assert "queued successfully" in result2
 
             # Assert: TWO jobs since tasks are different
-            jobs = (
-                db_session.query(CommisJob)
-                .filter(CommisJob.oikos_run_id == oikos_run.id)
-                .all()
-            )
+            jobs = db_session.query(CommisJob).filter(CommisJob.oikos_run_id == oikos_run.id).all()
             assert len(jobs) == 2, f"Expected 2 jobs for different tasks, got {len(jobs)}"
         finally:
             reset_oikos_context(token)
@@ -178,11 +170,7 @@ class TestSpawnCommisIdempotency:
             assert "Disk is at 45%" in result or "45%" in result
 
             # Verify no new job was created
-            jobs = (
-                db_session.query(CommisJob)
-                .filter(CommisJob.oikos_run_id == oikos_run.id)
-                .all()
-            )
+            jobs = db_session.query(CommisJob).filter(CommisJob.oikos_run_id == oikos_run.id).all()
             assert len(jobs) == 1, f"Expected 1 job (cached), got {len(jobs)}"
         finally:
             reset_oikos_context(token)
@@ -244,19 +232,13 @@ class TestSpawnCommisIdempotency:
 
             # Query with a similar but different task
             # Since we only match EXACT tasks, this should create a new job
-            result = await spawn_commis_async(
-                "Check disk space on cube server - new request", model=TEST_COMMIS_MODEL
-            )
+            result = await spawn_commis_async("Check disk space on cube server - new request", model=TEST_COMMIS_MODEL)
 
             # Should create a new job (task doesn't match exactly)
             assert "queued successfully" in result
 
             # Verify we now have 3 jobs (2 completed + 1 new queued)
-            jobs = (
-                db_session.query(CommisJob)
-                .filter(CommisJob.oikos_run_id == oikos_run.id)
-                .all()
-            )
+            jobs = db_session.query(CommisJob).filter(CommisJob.oikos_run_id == oikos_run.id).all()
             assert len(jobs) == 3, f"Expected 3 jobs (2 completed + 1 new), got {len(jobs)}"
         finally:
             reset_oikos_context(token)

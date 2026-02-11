@@ -36,7 +36,7 @@ def test_sqlite_onboarding_complete():
         db_path = Path(tmp_dir) / "zerg_smoke.db"
 
         # Script reads DATABASE_URL from environment (set below)
-        script = '''
+        script = """
 import os
 import json
 
@@ -91,7 +91,7 @@ if db_url.startswith("sqlite:///"):
 
 print("")
 print("SUCCESS: All SQLite onboarding tests passed")
-'''
+"""
 
         # Build environment with safe path handling
         env = os.environ.copy()

@@ -67,9 +67,9 @@ def format_message(msg, index: int) -> str:
 
 def dump_messages(messages: list, label: str) -> None:
     """Pretty print messages for debugging."""
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print(f"LLM INPUT: {label}")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
     print(f"Total messages: {len(messages)}")
     print()
 
@@ -80,11 +80,14 @@ def dump_messages(messages: list, label: str) -> None:
 
 async def simulate_bug_scenario():
     """Simulate the exact bug scenario from the logs."""
-    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+    from langchain_core.messages import AIMessage
+    from langchain_core.messages import HumanMessage
+    from langchain_core.messages import SystemMessage
+    from langchain_core.messages import ToolMessage
 
-    print("="*80)
+    print("=" * 80)
     print("SIMULATING: The exact bug scenario from 2026-01-13 01:58")
-    print("="*80)
+    print("=" * 80)
 
     # This is what the LLM SHOULD see after commis completes:
     print("\n--- EXPECTED message history (after commis completes) ---")
@@ -107,11 +110,7 @@ the task is DONE. You should summarize the result for the user, NOT spawn anothe
     # The AI's first response - called spawn_commis
     first_ai_response = AIMessage(
         content="",
-        tool_calls=[{
-            "id": "call_abc123",
-            "name": "spawn_commis",
-            "args": {"task": "Check disk space on cube"}
-        }]
+        tool_calls=[{"id": "call_abc123", "name": "spawn_commis", "args": {"task": "Check disk space on cube"}}],
     )
 
     # The tool result from spawn_commis AFTER commis completed
@@ -128,7 +127,7 @@ Details:
   - /home: 42GB
   - /var/log: 8GB""",
         tool_call_id="call_abc123",
-        name="spawn_commis"
+        name="spawn_commis",
     )
 
     # This is what the LLM should see on resume
@@ -141,9 +140,9 @@ Details:
 
     dump_messages(messages_on_resume, "What LLM SHOULD see after resume")
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("ANALYSIS: What might cause the LLM to spawn again?")
-    print("="*80)
+    print("=" * 80)
     print("""
 Possible causes for the double-spawn bug:
 
@@ -178,7 +177,8 @@ async def analyze_run(run_id: int):
     from sqlalchemy.orm import sessionmaker
 
     from zerg.config import settings
-    from zerg.models.models import Run, CommisJob
+    from zerg.models.models import CommisJob
+    from zerg.models.models import Run
     from zerg.services.thread_service import ThreadService
 
     engine = create_engine(settings.database_url)
@@ -191,18 +191,16 @@ async def analyze_run(run_id: int):
             print(f"Run {run_id} not found")
             return
 
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print(f"ANALYZING: Run {run_id}")
-        print(f"{'='*80}")
+        print(f"{'=' * 80}")
         print(f"Status: {run.status}")
         print(f"Thread ID: {run.thread_id}")
         print(f"Started: {run.started_at}")
         print(f"Finished: {run.finished_at}")
 
         # Get commis for this run
-        commis = db.query(CommisJob).filter(
-            CommisJob.oikos_run_id == run_id
-        ).order_by(CommisJob.created_at).all()
+        commis = db.query(CommisJob).filter(CommisJob.oikos_run_id == run_id).order_by(CommisJob.created_at).all()
 
         print(f"\nCommis spawned: {len(commis)}")
         for w in commis:
@@ -224,7 +222,7 @@ async def check_llm_logs():
     if not log_dir.exists():
         print("No local LLM logs found (data/llm_requests/ doesn't exist)")
         print("\nTo check production logs:")
-        print("  ssh zerg \"ls ~/data/llm_requests/2026-01-13T01-58* 2>/dev/null\"")
+        print('  ssh zerg "ls ~/data/llm_requests/2026-01-13T01-58* 2>/dev/null"')
         return
 
     # Look for logs from Jan 13 around the bug time

@@ -12,10 +12,10 @@ import pytest
 async def test_watch_renewal_updates_connector(db_session, test_user, monkeypatch):
     """Expiring connector watches should be renewed and persisted."""
 
+    import zerg.config as config_mod
     from zerg.crud import crud
     from zerg.services import watch_renewal_service as wrs
     from zerg.utils import crypto
-    import zerg.config as config_mod
 
     now = time.time()
     enc_token = crypto.encrypt("refresh_token")

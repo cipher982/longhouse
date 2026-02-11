@@ -6,8 +6,8 @@ from base templates and user context.
 
 from unittest.mock import patch
 
-from zerg.prompts.composer import build_oikos_prompt
 from zerg.prompts.composer import build_commis_prompt
+from zerg.prompts.composer import build_oikos_prompt
 from zerg.prompts.composer import format_integrations
 from zerg.prompts.composer import format_server_names
 from zerg.prompts.composer import format_servers
@@ -212,15 +212,17 @@ class TestFormatServers:
         This was a bug where 'elif' was used instead of 'if', causing the concrete
         details to be suppressed when an alias was present.
         """
-        servers = [{
-            "name": "cube",
-            "ip": "100.70.237.79",
-            "purpose": "GPU workloads",
-            "ssh_alias": "cube",
-            "ssh_user": "drose",
-            "ssh_host": "100.104.187.47",
-            "ssh_port": "2222",
-        }]
+        servers = [
+            {
+                "name": "cube",
+                "ip": "100.70.237.79",
+                "purpose": "GPU workloads",
+                "ssh_alias": "cube",
+                "ssh_user": "drose",
+                "ssh_host": "100.104.187.47",
+                "ssh_port": "2222",
+            }
+        ]
 
         result = format_servers(servers)
 

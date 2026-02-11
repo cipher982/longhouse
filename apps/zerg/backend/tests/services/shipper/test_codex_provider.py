@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import json
-import time
-from datetime import datetime, timezone
 from pathlib import Path
-
-import pytest
 
 from zerg.services.shipper.providers.codex import CodexProvider
 
-
 # --- Fixture helpers ---
+
 
 def _write_jsonl(path: Path, lines: list[dict]) -> None:
     """Write a list of dicts as JSONL to a file."""
@@ -55,9 +51,7 @@ def _user_message(text: str = "list files", ts: str = "2026-02-03T15:36:00Z") ->
     }
 
 
-def _assistant_message(
-    text: str = "Here are the files:", ts: str = "2026-02-03T15:36:05Z"
-) -> dict:
+def _assistant_message(text: str = "Here are the files:", ts: str = "2026-02-03T15:36:05Z") -> dict:
     return {
         "timestamp": ts,
         "type": "response_item",
@@ -69,9 +63,7 @@ def _assistant_message(
     }
 
 
-def _developer_message(
-    text: str = "You are a helpful assistant.", ts: str = "2026-02-03T15:35:57Z"
-) -> dict:
+def _developer_message(text: str = "You are a helpful assistant.", ts: str = "2026-02-03T15:35:57Z") -> dict:
     return {
         "timestamp": ts,
         "type": "response_item",
@@ -224,9 +216,7 @@ class TestParseFile:
     def test_parse_function_call_output_double_json(self, tmp_path: Path) -> None:
         """Double-JSON-encoded tool output is parsed correctly."""
         # The output field is a JSON string containing {"output": "actual text"}
-        double_encoded = json.dumps(
-            {"output": "total 42\ndrwxr-xr-x  5 user  staff  160 Feb  3 15:35 src"}
-        )
+        double_encoded = json.dumps({"output": "total 42\ndrwxr-xr-x  5 user  staff  160 Feb  3 15:35 src"})
         path = tmp_path / "session.jsonl"
         _write_jsonl(
             path,

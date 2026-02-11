@@ -1,4 +1,3 @@
-import pytest
 from sqlalchemy import inspect
 
 from zerg.database import initialize_database

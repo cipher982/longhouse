@@ -7,12 +7,12 @@ import pytest
 from sqlalchemy.orm import Session
 
 from zerg.crud.crud import create_user
+from zerg.models.models import CommisJob
 from zerg.models.models import Run
 from zerg.models.models import User
-from zerg.models.models import CommisJob
+from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.services.evidence_compiler import EvidenceCompiler
 from zerg.services.evidence_compiler import ToolArtifact
-from zerg.services.commis_artifact_store import CommisArtifactStore
 
 
 @pytest.fixture
@@ -467,9 +467,20 @@ class TestEvidenceCompiler:
         """Test artifact prioritization logic."""
         # Create artifacts with different properties
         artifacts = [
-            ToolArtifact(sequence=1, filename="001_ssh_exec.txt", tool_name="ssh_exec", size_bytes=100, exit_code=0, failed=False),
-            ToolArtifact(sequence=2, filename="002_ssh_exec.txt", tool_name="ssh_exec", size_bytes=200, exit_code=127, failed=True),
-            ToolArtifact(sequence=3, filename="003_ssh_exec.txt", tool_name="ssh_exec", size_bytes=150, exit_code=0, failed=False),
+            ToolArtifact(
+                sequence=1, filename="001_ssh_exec.txt", tool_name="ssh_exec", size_bytes=100, exit_code=0, failed=False
+            ),
+            ToolArtifact(
+                sequence=2,
+                filename="002_ssh_exec.txt",
+                tool_name="ssh_exec",
+                size_bytes=200,
+                exit_code=127,
+                failed=True,
+            ),
+            ToolArtifact(
+                sequence=3, filename="003_ssh_exec.txt", tool_name="ssh_exec", size_bytes=150, exit_code=0, failed=False
+            ),
         ]
 
         compiler = EvidenceCompiler(artifact_store=temp_artifact_store)

@@ -4,8 +4,8 @@ import tempfile
 
 import pytest
 
-from tests.conftest import TEST_MODEL
 from tests.conftest import TEST_COMMIS_MODEL
+from tests.conftest import TEST_MODEL
 from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
 from zerg.crud import crud

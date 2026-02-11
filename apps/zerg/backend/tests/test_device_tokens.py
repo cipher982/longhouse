@@ -2,12 +2,10 @@
 
 import uuid
 
-import pytest
 from fastapi.testclient import TestClient
 
-from zerg.models.device_token import DeviceToken
-from zerg.routers.device_tokens import hash_token
 from zerg.routers.device_tokens import generate_device_token
+from zerg.routers.device_tokens import hash_token
 
 
 class TestDeviceTokenHelpers:
@@ -178,6 +176,7 @@ class TestDeviceTokenValidation:
         """Valid device token grants access to agents API."""
         # Patch the module-level _settings to disable auth bypass
         import zerg.routers.agents as agents_mod
+
         monkeypatch.setattr(agents_mod._settings, "auth_disabled", False)
 
         # Create a device token
@@ -198,6 +197,7 @@ class TestDeviceTokenValidation:
     def test_revoked_token_denied(self, client: TestClient, monkeypatch):
         """Revoked device token is denied."""
         import zerg.routers.agents as agents_mod
+
         monkeypatch.setattr(agents_mod._settings, "auth_disabled", False)
 
         # Create and revoke a token
@@ -217,6 +217,7 @@ class TestDeviceTokenValidation:
     def test_invalid_token_denied(self, client: TestClient, monkeypatch):
         """Invalid device token is denied."""
         import zerg.routers.agents as agents_mod
+
         monkeypatch.setattr(agents_mod._settings, "auth_disabled", False)
         # Clear legacy token
         monkeypatch.setattr(agents_mod._settings, "agents_api_token", None)

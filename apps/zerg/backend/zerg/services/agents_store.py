@@ -367,7 +367,7 @@ class AgentsStore:
 
         self.db.commit()
 
-        logger.info(f"Ingested session {session_id}: {events_inserted} inserted, " f"{events_skipped} skipped (duplicates)")
+        logger.info(f"Ingested session {session_id}: {events_inserted} inserted, {events_skipped} skipped (duplicates)")
 
         return IngestResult(
             session_id=session_id,

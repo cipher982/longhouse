@@ -3,8 +3,8 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from tests.conftest import TEST_MODEL
 from tests.conftest import TEST_COMMIS_MODEL
+from tests.conftest import TEST_MODEL
 from zerg.models.models import Fiche
 
 

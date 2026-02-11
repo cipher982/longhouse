@@ -20,9 +20,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from sqlalchemy import select
+
 from zerg.database import default_session_factory
 from zerg.models.models import User
-
 
 # Default locations to look for context file (in order)
 DEFAULT_CONTEXT_PATHS = [

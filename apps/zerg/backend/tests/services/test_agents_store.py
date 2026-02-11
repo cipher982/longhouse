@@ -10,7 +10,6 @@ from sqlalchemy import text
 
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.models.agents import AGENTS_SCHEMA
 from zerg.models.agents import agents_metadata
 from zerg.services.agents_store import AgentsStore
 
@@ -69,23 +68,25 @@ class TestExportSessionJsonl:
         db.add(session)
 
         # Original JSONL line with text + tool_use
-        original_line = json.dumps({
-            "type": "assistant",
-            "uuid": "msg-mixed",
-            "timestamp": "2026-01-28T10:04:00Z",
-            "message": {
-                "role": "assistant",
-                "content": [
-                    {"type": "text", "text": "Let me read that file."},
-                    {
-                        "type": "tool_use",
-                        "id": "tool-xyz",
-                        "name": "Read",
-                        "input": {"file_path": "/test.py"},
-                    },
-                ],
-            },
-        })
+        original_line = json.dumps(
+            {
+                "type": "assistant",
+                "uuid": "msg-mixed",
+                "timestamp": "2026-01-28T10:04:00Z",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Let me read that file."},
+                        {
+                            "type": "tool_use",
+                            "id": "tool-xyz",
+                            "name": "Read",
+                            "input": {"file_path": "/test.py"},
+                        },
+                    ],
+                },
+            }
+        )
 
         source_path = "/test/session.jsonl"
         source_offset = 100  # Both events from same line

@@ -174,9 +174,9 @@ class TestTopicBasedWebSocket:
 
         # Verify the topic subscription was removed
         topic = f"thread:{sample_thread.id}"
-        assert (
-            topic not in topic_manager.topic_subscriptions or not topic_manager.topic_subscriptions[topic]
-        ), "Topic should have no subscribers after unsubscribe"
+        assert topic not in topic_manager.topic_subscriptions or not topic_manager.topic_subscriptions[topic], (
+            "Topic should have no subscribers after unsubscribe"
+        )
 
     async def test_invalid_topic_format(self, ws_client):
         """Test handling of invalid topic formats."""
