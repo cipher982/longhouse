@@ -19,8 +19,10 @@ WORKDIR /app
 COPY bun.lock ./
 COPY apps/zerg/frontend-web/package.json ./
 
-# Install dependencies (frozen-lockfile works now that we have the real lockfile)
-RUN bun install --frozen-lockfile
+# Install dependencies (no --frozen-lockfile: root lockfile covers all workspaces
+# but Docker only has this one package.json, causing a mismatch. Lockfile still
+# guides version resolution without strict mode.)
+RUN bun install
 
 # Copy frontend source
 COPY apps/zerg/frontend-web/ ./

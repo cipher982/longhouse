@@ -364,7 +364,7 @@ Update screenshots to show Timeline, not old dashboard.
 - [x] Wildcard DNS `*.longhouse.ai` resolves via Cloudflare (verified 2026-02-05)
 - [ ] Routing layer: Caddy (existing coolify-proxy) with caddy-docker-proxy labels (needs live verify)
 - [ ] Manual provision smoke test: test2/test3 instances provisioned + routed (needs rerun)
-- [ ] Add control-plane → instance auth bridge endpoint (login-token exists but payload/secret mismatch with instance)
+- [x] Add control-plane → instance auth bridge endpoint — dual-secret validation + email-based user resolution (commits `a2709611`, `d911d500`)
 
 ### Phase 1: Scaffold + Auth ⚠️ PARTIAL
 
