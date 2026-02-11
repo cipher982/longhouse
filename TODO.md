@@ -13,7 +13,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ---
 
-## Validation Summary (2026-02-11, rev 6)
+## Validation Summary (2026-02-11, rev 7)
 
 ### Done / Verified
 | Section | Status | Notes |
@@ -35,14 +35,14 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | Skill Format Docs | DONE | Migration scripts for Claude Code + Cursor (commit `5cae78af`) |
 | Harness Phase 3f-3h | 100% | 3f (MCP server + commis injection + Codex config.toml); 3g (quality gates + hooks + review fixes); 3h (research doc) |
 | Shipper Multi-Provider | DONE | Provider abstraction + Claude/Codex/Gemini parsers + review fixes |
+| Install/Onboarding | 100% | All items complete: installer, doctor, connect, hooks, MCP, PATH verify, install guide docs (commit 5757d63b) |
+| OSS First-Run UX | 100% | Auto-seed on first run + guided empty state + multi-CLI detection + "No CLI" guidance all complete |
 
 ### In Progress
 | Section | Status | Notes |
 |---------|--------|-------|
-| Landing Page Redesign | ~99% | Phase 2+5 complete, CTA checklist done (commit 62108045); Phase 6 visual assets remaining |
+| Landing Page Redesign | ~99% | Phase 2+5 complete, CTA checklist done (commit 62108045); Phase 5 fully verified; Phase 6 visual assets remaining |
 | Control Plane | ~45% | Scaffold + provisioner + CI gate done; OAuth/billing/runtime image pending |
-| Install/Onboarding | ~90% | install.sh + doctor + connect + hooks + MCP server + fresh-shell PATH verify done; canonical install path docs + onboard wizard docs remaining |
-| OSS First-Run UX | DONE | Auto-seed on first run + guided empty state + "No Claude Code" guidance all complete |
 
 ### Not Started
 | Section | Status | Notes |
@@ -61,8 +61,6 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 2. **Control Plane: OAuth + Stripe (Phases 1-2)** — Add Google OAuth at control plane level and Stripe checkout/webhooks for hosted beta signup flow. [Details](#infra-control-plane--hosted-beta-8)
 3. **HN Launch Prep** — Video walkthrough, social proof (comparison table done). [Details](#launch-hn-launch-readiness--remaining-4)
 4. **Public Launch Checklist** — UI smoke snapshots, shipper smoke test. [Details](#launch-public-launch-checklist-6)
-5. **Install/Onboarding Polish** — Remaining: canonical install path docs, onboard wizard docs. Fresh-shell verify + hooks done. [Details](#launch-install--onboarding-alignment-4)
-6. **OSS First-Run UX** — DONE. Auto-seed + guided empty state + "No Claude Code" guidance all complete. [Details](#product-oss-first-run-ux-polish-5)
 
 ---
 
@@ -238,7 +236,7 @@ Update copy to match VISION.md value prop: Timeline + Search + Resume.
 **Cut/minimize:**
 - [x] IntegrationsSection — kept as "Session Sources" (provider sync status is core story); moved up after HowItWorks
 - [x] SkillsSection — collapsed to compact single-line mention; moved below Pricing
-- [x] Move Oikos chat to "Features" section, not hero — verified: Oikos is not mentioned anywhere on landing page; hero correctly focuses on Timeline + Search + Resume
+- [x] Move Oikos chat to "Features" section, not hero — verified: Oikos is not mentioned anywhere on landing page; hero correctly focuses on Timeline + Search + Resume (commit 98f7a45b)
 
 **Files:** `HeroSection.tsx`, `HowItWorksSection.tsx`, `IntegrationsSection.tsx`, `SkillsSection.tsx`
 
@@ -452,8 +450,8 @@ Eliminate the "empty timeline" anticlimactic moment and improve discovery for us
 
 Close the gap between VISION, README, docs, and the live installer.
 
-- [ ] **Canonical install path**: `install.sh` is primary (README aligned; landing still needs dual-path CTA)
-- [ ] **Document onboarding wizard** (steps, troubleshooting, service install) and link it from README + landing page
+- [x] **Canonical install path**: install.sh primary, README aligned, install guide created (commit 5757d63b)
+- [x] **Document onboarding wizard**: `docs/install-guide.md` with wizard steps + troubleshooting + manual install (commit 5757d63b)
 - [x] **Add `longhouse doctor`** (self-diagnosis for server health, shipper status, config validity); run after install/upgrade and recommend in docs
 - [x] **Fix `longhouse connect` default URL** — `connect` + `ship` fallback changed from 47300 to 8080 (commit `426f8c9b`)
 - [x] **Installer polish:** verify Claude shim + PATH in a *fresh* shell and print an exact fix line when it fails (commit `1600b094`)
