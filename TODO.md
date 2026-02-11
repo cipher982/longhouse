@@ -13,7 +13,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ---
 
-## Validation Summary (2026-02-11, rev 8)
+## Validation Summary (2026-02-11, rev 9)
 
 ### Done / Verified
 | Section | Status | Notes |
@@ -40,6 +40,8 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | Landing Page Redesign | 100% | All phases + meta/OG tags + docs/pricing rewrite + dead CSS removed |
 | AGENTS.md Accuracy Audit | DONE | Deploy section, generated paths, gotchas, checklist all verified |
 | OSS Packaging Decisions | ~66% | Shipper bundled (done), no built-in HTTPS (done), auto-token UX pending |
+| Package Metadata Cleanup | DONE | pyproject.toml + backend README product descriptions updated (commit `4bb7f478`) |
+| HN Blocker Scan | DONE | No secrets, no stale branding, no broken links in user-facing surfaces |
 
 ### In Progress
 | Section | Status | Notes |
