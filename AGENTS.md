@@ -94,6 +94,7 @@ Import from `../components/ui`. **Check here before building custom UI.**
 5. **Coolify env var changes need redeploy** — restart doesn't pick up new vars.
 6. **Master task list:** `TODO.md` — update before/after work.
 7. **Backend README required** — pyproject.toml needs it; don't delete `apps/zerg/backend/README.md`.
+8. **Coolify container names are random hashes** — Don't `docker ps --filter name=X` to find Coolify apps. Use `docker ps` and check labels: `coolify.serviceName` has the logical name (e.g., `longhouse-control-plane`). Or use `coolify app status <name>`.
 
 ## Pushing Changes
 

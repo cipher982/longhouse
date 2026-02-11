@@ -13,7 +13,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ---
 
-## Validation Summary (2026-02-11, rev 12)
+## Validation Summary (2026-02-11, rev 13)
 
 ### Done / Verified
 | Section | Status | Notes |
@@ -50,7 +50,8 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 ### In Progress
 | Section | Status | Notes |
 |---------|--------|-------|
-| Control Plane | ~45% | Scaffold + provisioner + CI gate done; OAuth/billing/runtime image pending |
+| Session Processing (3.5) | ~90% | Core module + summarize + briefing + hook + integration tests done; consumer migration pending (Phase 3) |
+| Control Plane | ~50% | Scaffold + provisioner + CI gate + runtime image + routing done; OAuth/billing pending |
 
 ### Not Started
 | Section | Status | Notes |
@@ -130,17 +131,17 @@ Evaluate newer integration paths for tighter commis control vs. current hatch su
 **Discovery (2026-02-11):** The SessionStart hook (`~/.claude/hooks/longhouse-session-start.sh`) uses `systemMessage` (human-only display). The AI receives nothing. Fix: use `hookSpecificOutput.additionalContext`.
 
 **Phase 1 — Core module + hook fix:**
-- [ ] Fix SessionStart hook: add `additionalContext` alongside `systemMessage` in `longhouse-session-start.sh` line 57
-- [ ] Create `zerg/services/session_processing/` module: `content.py`, `tokens.py`, `transcript.py`
-- [ ] Golden tests: verify noise stripping + redaction match current `daily_digest.py` behavior
-- [ ] Add `summarize.py` with `quick_summary()` (z.ai / configurable model)
+- [x] Fix SessionStart hook: add `additionalContext` alongside `systemMessage` in `longhouse-session-start.sh` (commit `ac64e0c`)
+- [x] Create `zerg/services/session_processing/` module: `content.py`, `tokens.py`, `transcript.py` (commit `355abaab`)
+- [x] Golden tests: 112 tests covering noise stripping, redaction, token counting, transcript building (commits `355abaab`, `d6b038fa`)
+- [x] Add `summarize.py` with `quick_summary()` + `structured_summary()` + `batch_summarize()` (commit `fb728619`)
 
 **Phase 2 — Briefing pipeline:**
-- [ ] Add `summary` + `summary_title` columns to `AgentSession`
-- [ ] Wire async summary generation into ingest path (after `POST /api/agents/ingest`)
-- [ ] Add `GET /api/agents/briefing?project=X` endpoint (reads cached summaries, <50ms)
-- [ ] Update SessionStart hook to call briefing endpoint, format as adaptive-depth context
-- [ ] Sanitize injected content (label as untrusted historical notes)
+- [x] Add `summary` + `summary_title` columns to `AgentSession` (commit `fb728619`)
+- [x] Wire async summary generation into ingest path via `BackgroundTasks` (commit `fb728619`)
+- [x] Add `GET /api/agents/briefing?project=X` endpoint with `BriefingResponse` model (commit `fb728619`)
+- [x] Update SessionStart hook to call briefing endpoint with fallback to raw sessions list (commit `ac64e0c`)
+- [x] Sanitize injected content — safety labels in `format_briefing_context()` (commit `fb728619`)
 
 **Phase 3 — Refactor existing consumers:**
 - [ ] Migrate `daily_digest.py` to use `session_processing.transcript` + `session_processing.summarize`
@@ -416,12 +417,13 @@ Update screenshots to show Timeline, not old dashboard.
 
 **Files:** `apps/control-plane/`, `docker/runtime.dockerfile`
 
-**Infra status (needs live verify unless noted):**
-- ⚠️ Caddy (coolify-proxy) on zerg handles subdomain routing via caddy-docker-proxy labels
+**Infra status (verified 2026-02-11):**
+- ✅ Control plane deployed via Coolify (`longhouse-control-plane`), healthy at `control.longhouse.ai/health`
+- ✅ Caddy (coolify-proxy) on zerg handles subdomain routing via caddy-docker-proxy labels
 - ✅ Wildcard DNS `*.longhouse.ai` resolves (verified 2026-02-05)
-- ⚠️ Docker socket access from control plane container
+- ⚠️ Docker socket access from control plane container (needs verify)
 - ⚠️ Postgres for control plane DB (separate container via docker-compose)
-- ⏳ Runtime image needs build + push to ghcr.io
+- ✅ Runtime image auto-builds on push via `runtime-image.yml` → `ghcr.io/cipher982/longhouse-runtime:latest`
 
 ---
 

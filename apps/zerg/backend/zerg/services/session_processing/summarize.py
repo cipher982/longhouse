@@ -159,7 +159,7 @@ async def quick_summary(
     raw = response.choices[0].message.content or ""
     parsed = _safe_parse_json(raw)
 
-    if parsed:
+    if isinstance(parsed, dict):
         return SessionSummary(
             session_id=transcript.session_id,
             title=parsed.get("title", "Untitled Session"),
@@ -202,7 +202,7 @@ async def structured_summary(
     raw = response.choices[0].message.content or ""
     parsed = _safe_parse_json(raw)
 
-    if parsed:
+    if isinstance(parsed, dict):
         bullets = parsed.get("bullets")
         if isinstance(bullets, list):
             bullets = [str(b) for b in bullets]
@@ -245,11 +245,16 @@ async def batch_summarize(
         transcripts: List of session transcripts.
         client: Async OpenAI-compatible client.
         model: Model identifier.
-        max_concurrent: Max concurrent LLM calls (semaphore limit).
+        max_concurrent: Max concurrent LLM calls (semaphore limit). Must be >= 1.
 
     Returns:
         List of :class:`SessionSummary` (one per transcript, failed ones skipped).
+
+    Raises:
+        ValueError: If max_concurrent < 1 (would deadlock the semaphore).
     """
+    if max_concurrent < 1:
+        raise ValueError("max_concurrent must be >= 1")
     semaphore = asyncio.Semaphore(max_concurrent)
     results: list[SessionSummary] = []
 
