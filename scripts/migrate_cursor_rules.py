@@ -27,7 +27,8 @@ def migrate_rule(rule_file: Path, dst_root: Path, dry_run: bool) -> bool:
     first_line = content.split("\n")[0].lstrip("# ").strip()
     desc = first_line[:80] if first_line else ""
 
-    skill_content = f'---\nname: {skill_name}\ndescription: "{desc}"\n---\n\n{content}\n'
+    safe_desc = desc.replace('"', '\\"')
+    skill_content = f'---\nname: {skill_name}\ndescription: "{safe_desc}"\n---\n\n{content}\n'
 
     dst_dir = dst_root / skill_name
     dst_file = dst_dir / "SKILL.md"

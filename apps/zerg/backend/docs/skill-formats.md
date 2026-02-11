@@ -62,9 +62,9 @@ Claude Code stores skills in `~/.claude/skills/*/`. Each directory may contain a
 To migrate, use the included script:
 
 ```bash
-python scripts/migrate_claude_skills.py          # migrate to ~/.longhouse/skills/
-python scripts/migrate_claude_skills.py --dry-run # preview without writing
-python scripts/migrate_claude_skills.py -o ./my-skills  # custom output path
+uv run scripts/migrate_claude_skills.py          # migrate to ~/.longhouse/skills/
+uv run scripts/migrate_claude_skills.py --dry-run # preview without writing
+uv run scripts/migrate_claude_skills.py -o ./my-skills  # custom output path
 ```
 
 The script reads each `.md` file, preserves existing frontmatter fields, and writes a Longhouse-compatible `SKILL.md`. If Claude Code frontmatter includes `name`, `description`, or `emoji`, those are carried over.
@@ -74,9 +74,9 @@ The script reads each `.md` file, preserves existing frontmatter fields, and wri
 Cursor stores rules in `~/.cursor/rules/` as standalone files (`.md`, `.mdc`, or plain text). These typically have no frontmatter.
 
 ```bash
-python scripts/migrate_cursor_rules.py           # migrate to ~/.longhouse/skills/
-python scripts/migrate_cursor_rules.py --dry-run  # preview without writing
-python scripts/migrate_cursor_rules.py -o ./my-skills   # custom output path
+uv run scripts/migrate_cursor_rules.py           # migrate to ~/.longhouse/skills/
+uv run scripts/migrate_cursor_rules.py --dry-run  # preview without writing
+uv run scripts/migrate_cursor_rules.py -o ./my-skills   # custom output path
 ```
 
 Each rule file becomes a skill directory with a `SKILL.md` containing a minimal frontmatter header (name derived from filename, description from the first line of content).
