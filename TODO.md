@@ -13,7 +13,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ---
 
-## Validation Summary (2026-02-11, rev 11)
+## Validation Summary (2026-02-11, rev 12)
 
 ### Done / Verified
 | Section | Status | Notes |
@@ -45,6 +45,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | Auto-Token Connect Flow | DONE | `longhouse connect` auto-creates device tokens; password login + localhost auto-auth (commits `a7c11f96`, `0435639d`) |
 | UI Smoke WS Filter | DONE | WebSocket connection errors excluded from visual smoke test (commit `112a697e`) |
 | UI Smoke Baselines | DONE | All 4 smoke tests pass; baselines regenerated for app, public, mobile pages (commits `fdad1dc2`, `2aacf872`) |
+| E2E Chat-Send Streaming | DONE | Root cause: APP_PUBLIC_URL leak → WS wrong port. Fixed env + added WS wait guard (commit `61bf95c9`) |
 
 ### In Progress
 | Section | Status | Notes |
@@ -64,7 +65,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ## What's Next (Priority Order)
 
-1. **HN Launch Prep** — Landing page done; E2E infra-smoke fixed; chat-send E2E fix in progress; video walkthrough (optional). [Details](#launch-hn-launch-readiness--remaining-4)
+1. **HN Launch Prep** — ✅ All blockers resolved. Landing page done; E2E infra-smoke + chat-send streaming fixed; video walkthrough optional. [Details](#launch-hn-launch-readiness--remaining-4)
 2. **Public Launch Checklist** — ✅ Complete. All items done including UI smoke snapshots. [Details](#launch-public-launch-checklist-6)
 3. **Control Plane: OAuth + Stripe (Phases 1-2)** — Add Google OAuth at control plane level and Stripe checkout/webhooks for hosted beta signup flow. [Details](#infra-control-plane--hosted-beta-8)
 
