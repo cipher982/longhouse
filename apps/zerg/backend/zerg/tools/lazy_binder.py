@@ -21,6 +21,10 @@ Usage in oikos:
         tools = binder.get_bound_tools()
         llm = llm.bind_tools(tools)
         binder.clear_rebind_flag()
+
+Usage for commis:
+    from zerg.tools.builtin.oikos_tools import COMMIS_TOOL_NAMES
+    binder = LazyToolBinder(registry, core_tools=COMMIS_CORE_TOOLS)
 """
 
 from __future__ import annotations
@@ -29,7 +33,8 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-# Import oikos tool names from the single source of truth
+# Import tool subsets from the single source of truth
+from zerg.tools.builtin.oikos_tools import COMMIS_TOOL_NAMES
 from zerg.tools.builtin.oikos_tools import OIKOS_TOOL_NAMES
 
 if TYPE_CHECKING:
@@ -38,7 +43,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Core tools - always loaded with full schemas.
+# Core tools for Oikos - always loaded with full schemas.
 # Includes all oikos tools + common utilities.
 # search_tools/list_tools are NOT in BUILTIN_TOOLS; they are registered
 # dynamically and loaded on demand via the lazy loading mechanism.
@@ -49,6 +54,10 @@ CORE_TOOLS: frozenset[str] = OIKOS_TOOL_NAMES | frozenset(
         "http_request",
     ]
 )
+
+# Core tools for Commis - execution-focused tools, pre-loaded.
+# Commis agents don't get coordinator tools (spawn_commis, etc.)
+COMMIS_CORE_TOOLS: frozenset[str] = COMMIS_TOOL_NAMES
 
 
 class LazyToolBinder:
