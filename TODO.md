@@ -37,8 +37,8 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 ### In Progress
 | Section | Status | Notes |
 |---------|--------|-------|
-| Harness Phase 3f-3h | ~60% | MCP server done (3f ~80%); quality gates + research pending (3g-3h 0%) |
-| Landing Page Redesign | ~90% | Phase 5 copy/sections done; Phase 6 visual assets + Oikos move remaining |
+| Harness Phase 3f-3h | ~70% | 3f complete (MCP server + commis injection); 3g-3h 0% |
+| Landing Page Redesign | ~95% | Phase 5 complete (copy, sections, reorder); Phase 6 visual assets remaining |
 | Control Plane | ~45% | Scaffold + provisioner + CI gate done; OAuth/billing/runtime image pending |
 | Shipper Multi-Provider | DONE | Provider abstraction + Claude/Codex/Gemini parsers + review fixes |
 | Install/Onboarding | ~70% | install.sh + doctor + connect + hooks + MCP server done; fresh-shell verify remaining |
@@ -57,13 +57,13 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ## What's Next (Priority Order)
 
-1. **Longhouse MCP Server (Phase 3f)** — Expose session search, memory, and notify tools to CLI agents via MCP stdio/HTTP. Enables commis to read Longhouse context mid-task. [Details](#product--harness-simplification--commis-to-timeline-8)
-2. **Landing Page Copy + Visuals (Phases 5-6)** — Align hero/story copy to current product reality; capture timeline screenshots for landing page and README. [Details](#product-landing-page-redesign--full-6)
-3. **Control Plane: OAuth + Stripe (Phases 1-2)** — Add Google OAuth at control plane level and Stripe checkout/webhooks for hosted beta signup flow. [Details](#infra-control-plane--hosted-beta-8)
-4. **Install/Onboarding Polish** — Verify Claude shim + PATH in fresh shell; wire `longhouse connect --install` to auto-inject hooks. [Details](#launch-install--onboarding-alignment-4)
-5. **OSS First-Run UX** — Auto-seed demo data on first `longhouse onboard`; add guided empty state with "Load demo" CTA. [Details](#product-oss-first-run-ux-polish-5)
-6. **Commis Quality Gates (Phase 3g)** — Inject verification hooks (test runner) into commis workspaces before commit. [Details](#product--harness-simplification--commis-to-timeline-8)
-7. **HN Launch Prep** — Comparison table, video walkthrough, social proof. [Details](#launch-hn-launch-readiness--remaining-4)
+1. **Landing Page Visual Assets (Phase 6)** — Capture timeline screenshots for landing page and README. [Details](#product-landing-page-redesign--full-6)
+2. **Control Plane: OAuth + Stripe (Phases 1-2)** — Add Google OAuth at control plane level and Stripe checkout/webhooks for hosted beta signup flow. [Details](#infra-control-plane--hosted-beta-8)
+3. **Install/Onboarding Polish** — Verify Claude shim + PATH in fresh shell; `longhouse connect --install` already injects hooks. [Details](#launch-install--onboarding-alignment-4)
+4. **OSS First-Run UX** — Auto-seed demo data on first `longhouse onboard`; add guided empty state with "Load demo" CTA. [Details](#product-oss-first-run-ux-polish-5)
+5. **Commis Quality Gates (Phase 3g)** — Inject verification hooks (test runner) into commis workspaces before commit. [Details](#product--harness-simplification--commis-to-timeline-8)
+6. **HN Launch Prep** — Comparison table (done), video walkthrough, social proof. [Details](#launch-hn-launch-readiness--remaining-4)
+7. **Public Launch Checklist** — CTA from Chat to session trace, detail view search. [Details](#launch-public-launch-checklist-6)
 
 ---
 
@@ -94,7 +94,7 @@ Industry standard pattern (2025-2026): teams expose internal tooling as MCP serv
 - [x] Implement MCP server exposing: `search_sessions`, `get_session_detail`, `memory_read`/`memory_write`, `notify_oikos` (commit `e1207ef2`)
 - [x] Support stdio transport (for local hatch subprocesses) and streamable HTTP (for remote/runner agents) (commit `e1207ef2`)
 - [x] Auto-register MCP server in Claude Code settings during `longhouse connect --install` (commit `e1207ef2`)
-- [ ] Auto-configure MCP server for commis spawned via `hatch` (inject into workspace `.claude/settings.json`)
+- [x] Auto-configure MCP server for commis spawned via `hatch` (inject into workspace `.claude/settings.json`) (commit `d849ec8d`)
 - [ ] Add Codex `config.toml` MCP registration path for Codex-backend commis
 
 **3g: Commis quality gates via hooks (2)**
@@ -392,9 +392,9 @@ Ensure launch readiness without relying on scattered docs.
 
 - [x] Rewrite README to center Timeline value and 3 install paths (FTS5 + resume/provider copy aligned).
 - [ ] Add CTA from Chat to "View session trace" after a run.
-- [ ] Improve Timeline detail header (goal, repo/project, duration, status).
-- [ ] Add basic metrics (tool count, duration, latency if available).
-- [ ] Add filters within detail view (user/assistant/tool) + search.
+- [x] Improve Timeline detail header — status badge (completed/in-progress), environment badge, provider dot (commit `8c7db355`)
+- [x] Add basic metrics — tool count, turn count, duration shown in header badges (commit `8c7db355`)
+- [x] Add event role filters (All/Messages/Tools) in detail view (commit `8c7db355`). Search within detail view still TODO.
 - [ ] Core UI smoke snapshots pass (`make qa-ui-smoke`).
 - [ ] Shipper smoke test passes (if shipper path is enabled).
 - [ ] Add packaging smoke test for future install.sh/brew path (if shipped).
