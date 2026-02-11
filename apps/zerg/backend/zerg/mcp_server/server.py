@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import tempfile
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -39,9 +41,24 @@ def _load_memory() -> dict[str, str]:
 
 
 def _save_memory(data: dict[str, str]) -> None:
-    """Write the local memory KV store to disk."""
+    """Write the local memory KV store to disk atomically.
+
+    Uses write-to-temp + rename so a crash mid-write doesn't corrupt the file.
+    """
     _MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _MEMORY_PATH.write_text(json.dumps(data, indent=2) + "\n")
+    fd, tmp_path = tempfile.mkstemp(dir=_MEMORY_PATH.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        os.replace(tmp_path, _MEMORY_PATH)
+    except BaseException:
+        # Clean up temp file on any failure
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
@@ -116,6 +133,10 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             session_id: UUID of the session to retrieve.
             max_events: Maximum number of events to return (default 50).
         """
+        # Validate session_id to prevent path injection
+        if not _UUID_RE.match(session_id):
+            return json.dumps({"error": "Invalid session_id format. Expected a UUID."})
+
         try:
             # Fetch session metadata
             meta_resp = await client.get(f"/api/agents/sessions/{session_id}")
