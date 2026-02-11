@@ -7,6 +7,7 @@ Commands:
 - connect --install: Install as background service
 - connect --uninstall: Remove background service
 - connect --status: Check service status
+- recall: Search past sessions from the terminal
 
 Watch mode (default): Uses file system events for sub-second sync.
 Polling mode: Falls back to periodic scanning (--poll or --interval).
@@ -15,10 +16,12 @@ Polling mode: Falls back to periodic scanning (--poll or --interval).
 from __future__ import annotations
 
 import asyncio
+import json as json_lib
 import logging
 import signal
 import socket
 import webbrowser
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -32,6 +35,8 @@ from zerg.services.shipper import clear_token
 from zerg.services.shipper import clear_zerg_url
 from zerg.services.shipper import get_service_info
 from zerg.services.shipper import get_zerg_url
+from zerg.services.shipper import install_hooks
+from zerg.services.shipper import install_mcp_server
 from zerg.services.shipper import install_service
 from zerg.services.shipper import load_token
 from zerg.services.shipper import save_token
@@ -352,7 +357,12 @@ def connect(
     install: bool = typer.Option(
         False,
         "--install",
-        help="Install shipper as a background service (auto-starts on boot)",
+        help="Install shipper as a background service + Claude Code hooks",
+    ),
+    hooks_only: bool = typer.Option(
+        False,
+        "--hooks-only",
+        help="Install only Claude Code hooks (no background service)",
     ),
     uninstall: bool = typer.Option(
         False,
@@ -371,9 +381,10 @@ def connect(
     Use --poll or --interval for polling mode.
 
     Service management:
-        --install   Install as background service (auto-starts on boot)
-        --uninstall Stop and remove the background service
-        --status    Check the status of the background service
+        --install    Install background service + Claude Code hooks
+        --hooks-only Install only Claude Code hooks (no daemon)
+        --uninstall  Stop and remove the background service
+        --status     Check the status of the background service
 
     Run 'longhouse auth' first to authenticate with Longhouse.
     """
@@ -396,6 +407,10 @@ def connect(
         url = get_zerg_url(config_dir) or "http://localhost:8080"
     if not token:
         token = load_token(config_dir)
+
+    if hooks_only:
+        _handle_hooks_only(url=url, token=token, claude_dir=claude_dir)
+        return
 
     if install:
         # --interval implies --poll for install mode
@@ -436,6 +451,178 @@ def connect(
         typer.secho("Stopped", fg=typer.colors.YELLOW)
 
 
+@app.command()
+def recall(
+    query: str = typer.Argument(..., help="Search query for session content"),
+    project: str = typer.Option(
+        None,
+        "--project",
+        "-p",
+        help="Filter by project name",
+    ),
+    provider: str = typer.Option(
+        None,
+        "--provider",
+        help="Filter by provider (claude, codex, gemini)",
+    ),
+    days_back: int = typer.Option(
+        14,
+        "--days-back",
+        "-d",
+        help="Days to look back (1-90)",
+    ),
+    limit: int = typer.Option(
+        10,
+        "--limit",
+        "-n",
+        help="Max results to return (1-100)",
+    ),
+    output_json: bool = typer.Option(
+        False,
+        "--json",
+        "-j",
+        help="Output raw JSON response",
+    ),
+    url: str = typer.Option(
+        None,
+        "--url",
+        "-u",
+        help="Longhouse API URL (uses stored URL if not specified)",
+    ),
+    token: str = typer.Option(
+        None,
+        "--token",
+        "-t",
+        envvar="AGENTS_API_TOKEN",
+        help="API token (uses stored token if not specified)",
+    ),
+    claude_dir: str = typer.Option(
+        None,
+        "--claude-dir",
+        help="Claude config directory (default: ~/.claude)",
+    ),
+) -> None:
+    """Search past sessions from the terminal.
+
+    Queries the Longhouse API for sessions matching a text search,
+    and displays results in a readable terminal format.
+
+    Examples:
+        longhouse recall "auth token refresh"
+        longhouse recall "database migration" --project zerg --days-back 30
+        longhouse recall "deploy fix" --json
+    """
+    config_dir = Path(claude_dir) if claude_dir else None
+
+    # Load stored credentials if not provided
+    if not url:
+        url = get_zerg_url(config_dir)
+        if not url:
+            typer.secho("No Longhouse URL configured. Run 'longhouse auth' first.", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+    if not token:
+        token = load_token(config_dir)
+        if not token:
+            typer.secho("No device token found. Run 'longhouse auth' first.", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+
+    # Build query params
+    params: dict = {
+        "query": query,
+        "days_back": days_back,
+        "limit": limit,
+    }
+    if project:
+        params["project"] = project
+    if provider:
+        params["provider"] = provider
+
+    # Make API request
+    try:
+        with httpx.Client(timeout=15) as client:
+            response = client.get(
+                f"{url.rstrip('/')}/api/agents/sessions",
+                headers={"X-Agents-Token": token},
+                params=params,
+            )
+    except httpx.ConnectError:
+        typer.secho(f"Could not connect to {url}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    except httpx.TimeoutException:
+        typer.secho(f"Request timed out connecting to {url}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    if response.status_code == 401:
+        typer.secho("Authentication failed. Run 'longhouse auth' to re-authenticate.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    if response.status_code != 200:
+        typer.secho(f"API error: {response.status_code} {response.text[:200]}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    data = response.json()
+
+    # Raw JSON output mode
+    if output_json:
+        typer.echo(json_lib.dumps(data, indent=2))
+        return
+
+    # Pretty-print results
+    sessions = data.get("sessions", [])
+    total = data.get("total", 0)
+
+    if not sessions:
+        typer.echo(f'No sessions found for "{query}"')
+        return
+
+    typer.echo(f'Found {total} session{"s" if total != 1 else ""} matching "{query}"')
+    typer.echo("")
+
+    for i, s in enumerate(sessions):
+        # Format date
+        started = s.get("started_at", "")
+        try:
+            dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
+            date_str = dt.strftime("%Y-%m-%d %H:%M")
+        except (ValueError, AttributeError):
+            date_str = started[:16] if started else "unknown"
+
+        # Header line: index, date, provider, project
+        proj = s.get("project") or "-"
+        prov = s.get("provider", "?")
+        header = f"  [{i + 1}] {date_str}  {prov}"
+        if proj != "-":
+            header += f"  ({proj})"
+        typer.secho(header, fg=typer.colors.CYAN, bold=True)
+
+        # Stats line
+        user_msgs = s.get("user_messages", 0)
+        asst_msgs = s.get("assistant_messages", 0)
+        tools = s.get("tool_calls", 0)
+        git_branch = s.get("git_branch")
+        stats = f"      {user_msgs}u/{asst_msgs}a msgs, {tools} tool calls"
+        if git_branch:
+            stats += f"  branch:{git_branch}"
+        typer.echo(stats)
+
+        # Snippet line (if search returned a match)
+        snippet = s.get("match_snippet")
+        if snippet:
+            role = s.get("match_role", "")
+            role_prefix = f"[{role}] " if role else ""
+            # Truncate long snippets and normalize whitespace
+            clean = " ".join(snippet.split())
+            if len(clean) > 120:
+                clean = clean[:117] + "..."
+            typer.echo(f"      {role_prefix}{clean}")
+
+        # CWD line
+        cwd = s.get("cwd")
+        if cwd:
+            typer.echo(f"      cwd: {cwd}")
+
+        typer.echo("")
+
+
 def _handle_status() -> None:
     """Handle --status flag."""
     info = get_service_info()
@@ -466,6 +653,37 @@ def _handle_uninstall() -> None:
         raise typer.Exit(code=1)
 
 
+def _handle_hooks_only(
+    url: str,
+    token: str | None,
+    claude_dir: str | None,
+) -> None:
+    """Handle --hooks-only flag: install Claude Code hooks without the daemon."""
+    typer.echo("Installing Claude Code hooks...")
+    typer.echo(f"  URL: {url}")
+
+    try:
+        actions = install_hooks(url=url, token=token, claude_dir=claude_dir)
+        typer.echo("")
+        for action in actions:
+            typer.secho(f"  [OK] {action}", fg=typer.colors.GREEN)
+    except Exception as e:
+        typer.secho(f"[ERROR] Failed to install hooks: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    # Also register the MCP server
+    try:
+        mcp_actions = install_mcp_server(claude_dir=claude_dir)
+        for action in mcp_actions:
+            typer.secho(f"  [OK] {action}", fg=typer.colors.GREEN)
+    except Exception as e:
+        typer.secho(f"  [WARN] MCP server registration failed: {e}", fg=typer.colors.YELLOW)
+
+    typer.echo("")
+    typer.echo("Hooks installed. Claude Code will ship sessions on each Stop event")
+    typer.echo("and show recent sessions on SessionStart.")
+
+
 def _handle_install(
     url: str,
     token: str | None,
@@ -490,12 +708,31 @@ def _handle_install(
         typer.secho(f"[OK] {result['message']}", fg=typer.colors.GREEN)
         typer.echo(f"  Service: {result.get('service', 'N/A')}")
         typer.echo(f"  Config: {result.get('plist_path') or result.get('unit_path', 'N/A')}")
-        typer.echo("")
-        typer.echo("To check status: longhouse connect --status")
-        typer.echo("To stop service: longhouse connect --uninstall")
     except RuntimeError as e:
         typer.secho(f"[ERROR] {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
+
+    # Also install Claude Code hooks
+    typer.echo("")
+    typer.echo("Installing Claude Code hooks...")
+    try:
+        actions = install_hooks(url=url, token=token, claude_dir=claude_dir)
+        for action in actions:
+            typer.secho(f"  [OK] {action}", fg=typer.colors.GREEN)
+    except Exception as e:
+        typer.secho(f"  [WARN] Hook installation failed: {e}", fg=typer.colors.YELLOW)
+
+    # Also register the MCP server
+    try:
+        mcp_actions = install_mcp_server(claude_dir=claude_dir)
+        for action in mcp_actions:
+            typer.secho(f"  [OK] {action}", fg=typer.colors.GREEN)
+    except Exception as e:
+        typer.secho(f"  [WARN] MCP server registration failed: {e}", fg=typer.colors.YELLOW)
+
+    typer.echo("")
+    typer.echo("To check status: longhouse connect --status")
+    typer.echo("To stop service: longhouse connect --uninstall")
 
 
 async def _ship_file(config: ShipperConfig, file_path: Path) -> dict:
@@ -623,9 +860,9 @@ async def _polling_loop(config: ShipperConfig) -> None:
             result = await shipper.scan_and_ship()
 
             if result.events_shipped > 0:
-                logger.info(f"[{iteration}] Shipped {result.events_shipped} events " f"from {result.sessions_shipped} sessions")
+                logger.info(f"[{iteration}] Shipped {result.events_shipped} events from {result.sessions_shipped} sessions")
             elif result.events_spooled > 0:
-                logger.warning(f"[{iteration}] Spooled {result.events_spooled} events " f"(API unreachable)")
+                logger.warning(f"[{iteration}] Spooled {result.events_spooled} events (API unreachable)")
             else:
                 logger.debug(f"[{iteration}] No new events")
 
@@ -639,7 +876,7 @@ async def _polling_loop(config: ShipperConfig) -> None:
                 if pending > 0:
                     replay_result = await shipper.replay_spool()
                     if replay_result["replayed"] > 0:
-                        logger.info(f"[{iteration}] Replayed {replay_result['replayed']} " f"events from spool")
+                        logger.info(f"[{iteration}] Replayed {replay_result['replayed']} events from spool")
 
         except Exception as e:
             logger.error(f"[{iteration}] Error during scan: {e}")
