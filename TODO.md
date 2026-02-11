@@ -238,7 +238,7 @@ Update copy to match VISION.md value prop: Timeline + Search + Resume.
 **Cut/minimize:**
 - [x] IntegrationsSection — kept as "Session Sources" (provider sync status is core story); moved up after HowItWorks
 - [x] SkillsSection — collapsed to compact single-line mention; moved below Pricing
-- [ ] Move Oikos chat to "Features" section, not hero
+- [x] Move Oikos chat to "Features" section, not hero — verified: Oikos is not mentioned anywhere on landing page; hero correctly focuses on Timeline + Search + Resume
 
 **Files:** `HeroSection.tsx`, `HowItWorksSection.tsx`, `IntegrationsSection.tsx`, `SkillsSection.tsx`
 
@@ -443,7 +443,7 @@ Eliminate the "empty timeline" anticlimactic moment and improve discovery for us
 
 - [x] Seed demo session data on first run (auto-seeds on startup when sessions table is empty; `SKIP_DEMO_SEED=1` to disable)
 - [x] Add guided empty state with "Load demo sessions" CTA + connect shipper steps
-- [ ] Improve "No Claude Code" guidance in onboard wizard (link to alternatives, explain what to do next)
+- [x] Improve "No Claude Code" guidance in onboard wizard (link to alternatives, explain what to do next)
 - [x] `longhouse serve --demo` / `--demo-fresh` supported (demo DB)
 
 ---
