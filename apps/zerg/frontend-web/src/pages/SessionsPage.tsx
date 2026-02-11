@@ -448,8 +448,12 @@ export default function SessionsPage() {
   useEffect(() => {
     if (!isLoading) {
       document.body.setAttribute("data-ready", "true");
+      document.body.setAttribute("data-screenshot-ready", "true");
     }
-    return () => document.body.removeAttribute("data-ready");
+    return () => {
+      document.body.removeAttribute("data-ready");
+      document.body.removeAttribute("data-screenshot-ready");
+    };
   }, [isLoading]);
 
   // Loading state
