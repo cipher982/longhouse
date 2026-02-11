@@ -22,4 +22,4 @@ export TESTING=1
 # Always use in-memory SQLite for lite tests — zero disk I/O
 export DATABASE_URL="sqlite://"
 
-uv run pytest tests_lite/ -p no:warnings --tb=short "$@"
+uv run --extra dev pytest tests_lite/ -p no:warnings --tb=short "$@"

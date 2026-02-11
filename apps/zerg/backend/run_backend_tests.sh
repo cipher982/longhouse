@@ -53,6 +53,6 @@ for arg in "$@"; do
 done
 
 # Run tests (excluding live connector tests which require real API credentials)
-# To run live connector tests: uv run pytest tests/integration/test_connectors_live.py -v
+# To run live connector tests: uv run --extra dev pytest tests/integration/test_connectors_live.py -v
 # -n auto: parallel execution using all CPU cores (requires pytest-xdist)
-uv run pytest tests/ --ignore=tests/integration/test_connectors_live.py -n "${PYTEST_XDIST_COMMIS:-auto}" -p no:warnings --tb=short "$@"
+uv run --extra dev pytest tests/ --ignore=tests/integration/test_connectors_live.py -n "${PYTEST_XDIST_COMMIS:-auto}" -p no:warnings --tb=short "$@"
