@@ -117,7 +117,7 @@ Skills are a platform feature shared by Oikos and commis. Match industry pattern
 - [x] Respect character budget for skill index (cap total index tokens, drop lowest-priority skills if over budget)
 - [x] Supporting files in skill directories loaded only when skill is active and references them
 - [x] Document skill format compatibility: users can adapt Claude Code `.claude/skills/` and Cursor `.cursor/rules/` into `~/.longhouse/skills/`
-- [ ] Support Codex-style AGENTS.md instruction chain in commis workspaces (global → repo → subdir, with override files) for cross-agent compatibility
+- [x] Support Codex-style AGENTS.md instruction chain in commis workspaces (global → repo → subdir, with override files) for cross-agent compatibility
 
 **3f: Longhouse MCP Server — expose toolbox to CLI agents (3)**
 
@@ -595,7 +595,7 @@ Close the gap between VISION, README, docs, and the live installer.
 - [x] **Fix `longhouse connect` default URL** — `connect` + `ship` fallback changed from 47300 to 8080 (commit `426f8c9b`)
 - [ ] **Installer polish:** verify Claude shim + PATH in a *fresh* shell and print an exact fix line when it fails (VISION requirement)
 - [ ] **Hook-based shipping:** `longhouse connect --install` should inject a Claude Code `Stop` hook (`longhouse ship --session $SESSION_ID`) into `.claude/settings.json` — eliminates need for watcher daemon for Claude Code users. See VISION.md § "Shipper" for architecture. Verify hook env vars expose session ID.
-- [ ] **AGENTS.md chain support:** Support Codex-style AGENTS.md chain (global → repo → subdir) in commis workspaces. Auto-inject Longhouse context (MCP server config, memory pointers) into workspace AGENTS.md when spawning commis.
+- [x] **AGENTS.md chain support:** Support Codex-style AGENTS.md chain (global → repo → subdir) in commis workspaces. Auto-inject Longhouse context (MCP server config, memory pointers) into workspace AGENTS.md when spawning commis.
 
 ---
 

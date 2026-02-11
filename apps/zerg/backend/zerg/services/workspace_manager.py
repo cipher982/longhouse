@@ -580,4 +580,110 @@ class WorkspaceManager:
         return (await self._run_git(cwd, ["rev-parse", "HEAD"])).strip()
 
 
-__all__ = ["WorkspaceManager", "Workspace"]
+def inject_agents_md(
+    workspace_path: Path,
+    *,
+    project_name: str | None = None,
+) -> Path | None:
+    """Compose and inject a .claude/CLAUDE.md instruction chain into a workspace.
+
+    Loads instructions from multiple levels (global user, repo-level, subdir-level)
+    and composes them into a single .claude/CLAUDE.md file with clear section headers.
+
+    If .claude/CLAUDE.md already exists in the workspace, appends a Longhouse Context
+    section rather than overwriting.
+
+    Parameters
+    ----------
+    workspace_path
+        Root path of the workspace directory
+    project_name
+        Optional project name for Longhouse context section
+
+    Returns
+    -------
+    Path | None
+        Path to the created/updated CLAUDE.md, or None if no content to inject
+    """
+    workspace_path = Path(workspace_path)
+    sections: list[str] = []
+
+    # 1. Global user instructions (~/.longhouse/agents.md)
+    global_instructions = Path.home() / ".longhouse" / "agents.md"
+    if global_instructions.is_file():
+        try:
+            content = global_instructions.read_text(encoding="utf-8").strip()
+            if content:
+                sections.append(f"# Global Instructions\n\n{content}")
+                logger.debug("Loaded global instructions from %s", global_instructions)
+        except OSError as e:
+            logger.warning("Failed to read global instructions %s: %s", global_instructions, e)
+
+    # 2. Repo-level AGENTS.md or CLAUDE.md at workspace root
+    for name in ("AGENTS.md", "CLAUDE.md"):
+        repo_instructions = workspace_path / name
+        if repo_instructions.is_file():
+            try:
+                content = repo_instructions.read_text(encoding="utf-8").strip()
+                if content:
+                    sections.append(f"# Repository Instructions\n\n_Source: {name}_\n\n{content}")
+                    logger.debug("Loaded repo instructions from %s", repo_instructions)
+            except OSError as e:
+                logger.warning("Failed to read repo instructions %s: %s", repo_instructions, e)
+            break  # Use first found (AGENTS.md takes priority)
+
+    # 3. Longhouse auto-context section
+    longhouse_lines = [
+        "# Longhouse Context",
+        "",
+        f"Workspace: `{workspace_path}`",
+    ]
+    if project_name:
+        longhouse_lines.insert(2, f"Project: {project_name}")
+    longhouse_lines.extend(
+        [
+            "",
+            "This workspace was provisioned by Longhouse for commis (background agent) execution.",
+            "Memory tools are available via the Longhouse API if configured.",
+            "",
+            "> MCP server integration coming in 3f.",
+        ]
+    )
+    sections.append("\n".join(longhouse_lines))
+
+    if not sections:
+        return None
+
+    composed = "\n\n---\n\n".join(sections) + "\n"
+
+    # Write to .claude/CLAUDE.md
+    claude_dir = workspace_path / ".claude"
+    claude_md = claude_dir / "CLAUDE.md"
+
+    try:
+        claude_dir.mkdir(parents=True, exist_ok=True)
+
+        if claude_md.is_file():
+            # Append Longhouse context if CLAUDE.md already exists
+            existing = claude_md.read_text(encoding="utf-8")
+            if "# Longhouse Context" not in existing:
+                longhouse_section = "\n".join(longhouse_lines)
+                claude_md.write_text(
+                    existing.rstrip() + "\n\n---\n\n" + longhouse_section + "\n",
+                    encoding="utf-8",
+                )
+                logger.info("Appended Longhouse context to existing %s", claude_md)
+            else:
+                logger.debug("Longhouse context already present in %s, skipping", claude_md)
+        else:
+            claude_md.write_text(composed, encoding="utf-8")
+            logger.info("Created instruction chain at %s (%d bytes)", claude_md, len(composed))
+
+        return claude_md
+
+    except OSError as e:
+        logger.warning("Failed to write instruction chain to %s: %s", claude_md, e)
+        return None
+
+
+__all__ = ["WorkspaceManager", "Workspace", "inject_agents_md"]
