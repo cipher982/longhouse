@@ -133,6 +133,11 @@ const backend = spawn('uv', [
         LONGHOUSE_TOOL_STUBS_PATH: toolStubsPath,
         // Suppress Python logging noise for E2E tests
         LOG_LEVEL: 'ERROR',
+        // Clear APP_PUBLIC_URL so backend /config.js returns empty WS_BASE_URL.
+        // This lets the frontend fall through to VITE_WS_BASE_URL (set by Playwright)
+        // which points to the correct E2E backend port.
+        APP_PUBLIC_URL: '',
+        PUBLIC_SITE_URL: '',
     },
     cwd: join(__dirname, '..', 'backend'),
     // Inherit stdio so Playwright can detect startup and we can see errors

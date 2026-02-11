@@ -458,12 +458,15 @@ export function ConnectionStatusIndicator({
   };
 
   return (
-    <span style={{
-      display: 'flex',
-      alignItems: 'center',
-      gap: '6px',
-      fontSize: '0.875rem',
-    }}>
+    <span
+      data-ws-status={status}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        fontSize: '0.875rem',
+      }}
+    >
       <span
         style={{
           width: '8px',
