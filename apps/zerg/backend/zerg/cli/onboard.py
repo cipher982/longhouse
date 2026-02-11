@@ -130,41 +130,98 @@ def _get_shell_profile_path() -> Path | None:
     return None
 
 
+_ALLOWED_SHELLS = {"bash", "zsh", "fish"}
+
+# Unique marker to isolate PATH from noisy profile output
+_PATH_MARKER = "__LH_PATH__"
+
+
+def _resolve_shell_bin() -> tuple[str, str] | None:
+    """Return (absolute_shell_path, shell_basename) for the user's $SHELL.
+
+    Uses the absolute path from ``$SHELL`` after allowlisting the basename.
+    Falls back to ``/bin/zsh`` then ``/bin/bash`` when ``$SHELL`` is unknown.
+    Returns ``None`` when no usable shell can be found.
+    """
+    shell_env = os.environ.get("SHELL", "")
+    basename = os.path.basename(shell_env)
+
+    if basename in _ALLOWED_SHELLS and os.path.isfile(shell_env):
+        return (shell_env, basename)
+
+    # Fallback: try common system shells
+    for fallback in ("/bin/zsh", "/bin/bash"):
+        if os.path.isfile(fallback):
+            return (fallback, os.path.basename(fallback))
+
+    return None
+
+
 def _extract_path_from_profile(profile_path: Path) -> str | None:
     """Source a shell profile in a subshell and return the resulting PATH.
 
     This simulates what a fresh interactive terminal would see, without
     inheriting the current process' PATH modifications.
 
+    Robustness measures:
+    - Uses the absolute shell path from ``$SHELL`` (handles Homebrew shells).
+    - Passes the profile path as a positional argument to avoid injection.
+    - Uses ``-i`` (interactive) mode so rc files don't early-return.
+    - Prints a unique marker line and parses only that (avoids stdout noise).
+    - Gates the marker print on successful sourcing.
+
     Returns ``None`` when the subshell exits with an error or times out.
     """
-    shell_name = os.path.basename(os.environ.get("SHELL", ""))
     if not profile_path.exists():
         return None
 
+    resolved = _resolve_shell_bin()
+    if resolved is None:
+        return None
+    shell_bin, shell_name = resolved
+
     try:
         if shell_name == "fish":
-            # Fish uses a different syntax
+            # Fish: pass profile as $argv[1], gate on source success,
+            # use unique marker to avoid stdout contamination.
             result = subprocess.run(
-                ["fish", "-c", f"source {profile_path}; echo $PATH"],
+                [
+                    shell_bin,
+                    "-c",
+                    'source $argv[1] 2>/dev/null; and echo "' + _PATH_MARKER + '=$PATH"',
+                    "--",
+                    str(profile_path),
+                ],
                 capture_output=True,
                 text=True,
                 timeout=5,
                 env={"HOME": str(Path.home()), "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
             )
         else:
-            # bash/zsh: source the profile in a non-interactive login shell
-            shell_bin = "zsh" if shell_name == "zsh" else "bash"
+            # bash/zsh: use -i for interactive mode so .zshrc/.bashrc don't
+            # early-return.  Profile path passed as $1 (positional arg).
             result = subprocess.run(
-                [shell_bin, "-c", f'source "{profile_path}" 2>/dev/null; echo "$PATH"'],
+                [
+                    shell_bin,
+                    "-i",
+                    "-c",
+                    'source "$1" 2>/dev/null && echo "' + _PATH_MARKER + '=$PATH" || exit 1',
+                    "_",  # $0 placeholder
+                    str(profile_path),
+                ],
                 capture_output=True,
                 text=True,
                 timeout=5,
                 env={"HOME": str(Path.home()), "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
             )
 
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
+        if result.returncode == 0:
+            # Parse only the marker line from stdout
+            for line in result.stdout.splitlines():
+                if line.startswith(_PATH_MARKER + "="):
+                    path_value = line[len(_PATH_MARKER) + 1 :]
+                    if path_value:
+                        return path_value
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
         logger.debug("Failed to extract PATH from %s: %s", profile_path, exc)
 
@@ -532,4 +589,4 @@ def onboard(
 
 
 # Export for main.py registration
-__all__ = ["onboard", "verify_shell_path"]
+__all__ = ["onboard", "verify_shell_path", "_resolve_shell_bin", "_PATH_MARKER"]

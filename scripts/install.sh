@@ -305,8 +305,32 @@ verify_installation() {
 
 # Verify that longhouse and claude are on PATH in a fresh shell
 verify_fresh_shell_path() {
-    local shell_name profile fresh_path
+    local shell_name shell_bin profile fresh_path marker_line
     shell_name=$(basename "$SHELL")
+
+    # Resolve absolute shell path from $SHELL (handles Homebrew shells);
+    # fall back to /bin/zsh or /bin/bash when $SHELL is unknown.
+    case "$shell_name" in
+        bash|zsh|fish)
+            if [[ -x "$SHELL" ]]; then
+                shell_bin="$SHELL"
+            elif [[ -x "/bin/$shell_name" ]]; then
+                shell_bin="/bin/$shell_name"
+            else
+                return 0
+            fi
+            ;;
+        *)
+            # Unknown shell — try common fallbacks
+            if [[ -x /bin/zsh ]]; then
+                shell_bin="/bin/zsh"; shell_name="zsh"
+            elif [[ -x /bin/bash ]]; then
+                shell_bin="/bin/bash"; shell_name="bash"
+            else
+                return 0
+            fi
+            ;;
+    esac
 
     case "$shell_name" in
         bash)
@@ -319,43 +343,60 @@ verify_fresh_shell_path() {
         fish)
             profile="$HOME/.config/fish/config.fish"
             ;;
-        *)
-            return 0  # unknown shell, skip
-            ;;
     esac
 
     [[ ! -f "$profile" ]] && return 0
 
-    # Source the profile in a subshell with minimal PATH to simulate fresh terminal
+    local lh_marker="__LH_PATH__"
+
+    # Source the profile in a subshell with minimal PATH to simulate a fresh terminal.
+    # - Profile path passed as positional arg ($1 / $argv[1]) to avoid injection.
+    # - Interactive mode (-i) so rc files don't early-return for non-interactive shells.
+    # - Marker line isolates PATH from noisy profile output.
+    # - Source failure gates the marker print.
     if [[ "$shell_name" == "fish" ]]; then
-        fresh_path=$(HOME="$HOME" PATH="/usr/bin:/bin:/usr/sbin:/sbin" fish -c "source $profile; echo \$PATH" 2>/dev/null) || return 0
+        marker_line=$(HOME="$HOME" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+            "$shell_bin" -c \
+            'source $argv[1] 2>/dev/null; and echo "'"$lh_marker"'=$PATH"' \
+            -- "$profile" 2>/dev/null) || return 0
     else
-        local shell_bin="$shell_name"
-        fresh_path=$(HOME="$HOME" PATH="/usr/bin:/bin:/usr/sbin:/sbin" "$shell_bin" -c "source \"$profile\" 2>/dev/null; echo \"\$PATH\"" 2>/dev/null) || return 0
+        marker_line=$(HOME="$HOME" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+            "$shell_bin" -i -c \
+            'source "$1" 2>/dev/null && echo "'"$lh_marker"'=$PATH" || exit 1' \
+            _ "$profile" 2>/dev/null) || return 0
     fi
+
+    # Extract the PATH value from the marker line (ignore any other output)
+    fresh_path=""
+    while IFS= read -r line; do
+        if [[ "$line" == "${lh_marker}="* ]]; then
+            fresh_path="${line#"${lh_marker}="}"
+            break
+        fi
+    done <<< "$marker_line"
 
     [[ -z "$fresh_path" ]] && return 0
 
-    # Check longhouse
+    # Check longhouse — exact segment matching with delimiters
     local longhouse_path
     longhouse_path=$(which longhouse 2>/dev/null)
     if [[ -n "$longhouse_path" ]]; then
         local longhouse_dir
         longhouse_dir=$(dirname "$longhouse_path")
-        if ! echo "$fresh_path" | grep -q "$longhouse_dir"; then
+        if ! grep -qF ":${longhouse_dir}:" <<< ":${fresh_path}:"; then
             warn "'longhouse' won't be on PATH in a new terminal"
             warn "  Fix: echo 'export PATH=\"$longhouse_dir:\$PATH\"' >> $profile"
             warn "  Then: source $profile"
         fi
     fi
 
-    # Check claude (optional)
+    # Check claude (optional) — exact segment matching with delimiters
     local claude_path
     claude_path=$(which claude 2>/dev/null)
     if [[ -n "$claude_path" ]]; then
         local claude_dir
         claude_dir=$(dirname "$claude_path")
-        if ! echo "$fresh_path" | grep -q "$claude_dir"; then
+        if ! grep -qF ":${claude_dir}:" <<< ":${fresh_path}:"; then
             warn "'claude' won't be on PATH in a new terminal"
             warn "  Fix: echo 'export PATH=\"$claude_dir:\$PATH\"' >> $profile"
             warn "  Then: source $profile"
