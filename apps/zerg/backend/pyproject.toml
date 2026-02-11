@@ -1,4 +1,3 @@
-# Cache bust: 2026-01-26-sauron-jobs-deps
 [project]
 name = "longhouse"
 version = "0.1.2"
@@ -10,24 +9,16 @@ requires-python = ">=3.12"
 readme = "README.md"
 license = {text = "Apache-2.0"}
 
+# Core dependencies — what every Longhouse user needs
 dependencies = [
     "python-dotenv>=1.0.0",
-    "black",
-    "ruff",
-    "pytest",
-    "pexpect>=4.9", # For interactive CLI testing
     "fastapi>=0.110.0",
     "uvicorn>=0.24.0",
     "websockets>=12.0",
     "openai>=2.14.0",
     "sqlalchemy>=2.0.38",
     "requests>=2.32.3",
-    "pytest-xdist>=3.6.1",
-    "pytest-timeout>=2.3.1",
-    "pytest-asyncio>=0.25.3",
     "apscheduler>=3.11.0",
-    "langchain-openai>=1.1.6",
-    "langchain-core>=1.2.5",
     "python-multipart>=0.0.20",
     "prometheus-client>=0.19.0",
     "cryptography>=44.0.3",
@@ -44,25 +35,27 @@ dependencies = [
     "boto3>=1.35.0",
     "numpy>=2.4.1",
     "anthropic>=0.40.0",
-    # Text-to-speech for Oikos voice responses
     "edge-tts>=7.0.0",
-    # Hatch CLI for workspace execution (runs coding agents headlessly)
-    # NOTE: hatch-agent removed for PyPI publish - add back when published separately
-    # Telegram Bot API integration for channel plugins
     "python-telegram-bot>=21.0",
-    # External job dependencies (sauron-jobs migration)
-    "pymongo>=4.6.0",
-    "motor>=3.3.0",
-    "google-ads>=26.0.0",
-    "minio>=7.2.0",
-    # CLI for session shipping
     "typer>=0.9.0",
     "watchdog>=6.0.0",
-    # Dead code detection
-    "vulture>=2.11",
-    # Token counting for digest jobs
     "tiktoken>=0.7.0",
     "mcp>=1.0",
+]
+
+[project.optional-dependencies]
+# Dev/test tools — not shipped in production images
+dev = [
+    "black",
+    "ruff",
+    "pytest",
+    "pytest-xdist>=3.6.1",
+    "pytest-timeout>=2.3.1",
+    "pytest-asyncio>=0.25.3",
+    "pexpect>=4.9",
+    "vulture>=2.11",
+    "langchain-openai>=1.1.6",
+    "langchain-core>=1.2.5",
 ]
 
 [project.scripts]
