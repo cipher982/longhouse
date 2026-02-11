@@ -21,7 +21,7 @@ const steps: Step[] = [
     icon: <DownloadIcon width={32} height={32} />,
     number: "1",
     title: "Install",
-    description: "Self-host in under 2 minutes, or sign up for hosted beta. Claude Code syncs today; Codex/Cursor/Gemini in progress."
+    description: "Self-host in under 2 minutes, or sign up for hosted beta. Ships Claude Code, Codex, and Gemini sessions. Cursor in progress."
   },
   {
     icon: <SearchIcon width={32} height={32} />,

@@ -26,7 +26,7 @@ export function IntegrationsSection() {
     {
       name: "Codex",
       icon: <CodeIcon width={40} height={40} />,
-      status: "coming",
+      status: "syncing",
       description: "OpenAI coding agent sessions",
     },
     {
@@ -38,7 +38,7 @@ export function IntegrationsSection() {
     {
       name: "Gemini CLI",
       icon: <SparklesIcon width={40} height={40} />,
-      status: "coming",
+      status: "syncing",
       description: "Google AI coding sessions",
     },
   ];
