@@ -189,10 +189,9 @@ def is_critical_tool_error(
 
     This intentionally errs on the side of *not* failing fast so the fiche can:
     - correct bad arguments (validation errors)
-    - try alternate tools (e.g. runner_exec -> ssh_exec)
+    - try alternate tools
     """
-    # runner_exec has a natural fallback (ssh_exec) for single-user/dev setups.
-    # Treat runner failures as non-critical so the model can attempt alternatives.
+    # runner_exec failures are non-critical so the model can retry or report.
     if tool_name == "runner_exec":
         return False
 

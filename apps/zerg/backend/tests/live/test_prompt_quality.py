@@ -60,7 +60,7 @@ def test_simple_disk_check_efficiency(oikos_client):
     Expected: 1 tool call (df -h)
     Acceptable: 2 tool calls (connection check + df)
     """
-    task = "Check disk space on localhost using runner_exec or ssh_exec"
+    task = "Check disk space on localhost using runner_exec"
 
     # Dispatch and collect events
     run_id = oikos_client.dispatch(task)
@@ -91,7 +91,7 @@ def test_simple_disk_check_efficiency(oikos_client):
 @pytest.mark.live
 def test_simple_memory_check_efficiency(oikos_client):
     """Simple memory check should use ≤2 tool calls."""
-    task = "Check memory usage on localhost using runner_exec or ssh_exec"
+    task = "Check memory usage on localhost using runner_exec"
 
     run_id = oikos_client.dispatch(task)
     events = oikos_client.collect_events(run_id, timeout=90)

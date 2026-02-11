@@ -251,7 +251,7 @@ def runner_exec(
                 error_message,
             )
 
-        # Transform result to match ssh_exec envelope
+        # Transform result to standard tool envelope
         data = result.get("data", {})
         return tool_success(
             {

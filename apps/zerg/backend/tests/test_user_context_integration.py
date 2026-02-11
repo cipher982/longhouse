@@ -196,7 +196,7 @@ class TestCommisPromptIntegration:
 
         # Verify base commis template is present (now uses Commis terminology)
         assert "Commis" in commis_prompt
-        assert "ssh_exec" in commis_prompt
+        assert "runner_exec" in commis_prompt
 
 
 # ---------------------------------------------------------------------------

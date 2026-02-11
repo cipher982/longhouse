@@ -78,7 +78,6 @@ class ToolName(str, Enum):
     SPAWN_COMMIS = "spawn_commis"
     SPAWN_WORKSPACE_COMMIS = "spawn_workspace_commis"
     WAIT_FOR_COMMIS = "wait_for_commis"
-    SSH_EXEC = "ssh_exec"
     TASK_CREATE = "task_create"
     TASK_DELETE = "task_delete"
     TASK_LIST = "task_list"
@@ -112,7 +111,6 @@ class ServerName(str, Enum):
     RUNNER_SETUP = "runner_setup"
     SLACK = "slack"
     SMS = "sms"
-    SSH = "ssh"
     OIKOS = "oikos"
     TASK = "task"
     TOOL_DISCOVERY = "tool_discovery"
@@ -192,7 +190,6 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.SPAWN_COMMIS: ServerName.OIKOS,
     ToolName.SPAWN_WORKSPACE_COMMIS: ServerName.OIKOS,
     ToolName.WAIT_FOR_COMMIS: ServerName.OIKOS,
-    ToolName.SSH_EXEC: ServerName.SSH,
     ToolName.TASK_CREATE: ServerName.TASK,
     ToolName.TASK_DELETE: ServerName.TASK,
     ToolName.TASK_LIST: ServerName.TASK,

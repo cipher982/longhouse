@@ -813,7 +813,7 @@ Evidence: `ideas/evidence/55_evidence_llm_decider_deprecated_modes.sh`
 31. ~~[ID 31] Simplify unified_access legacy behavior.~~ ✅ Removed entirely in Phase 3b (2026-02-10)
 Evidence: `ideas/evidence/78_evidence_unified_access_legacy.sh`
 
-32. [ID 32] Move or remove legacy ssh_tools from core.
+32. ~~[ID 32] Move or remove legacy ssh_tools from core.~~ ✅ Removed entirely (2026-02-10)
 Evidence: `ideas/evidence/77_evidence_ssh_tools_legacy.sh`
 
 33. ~~[ID 33] Update Swarmlet user-agent branding in web_fetch tool.~~ ✅ Already done (2026-02-10)

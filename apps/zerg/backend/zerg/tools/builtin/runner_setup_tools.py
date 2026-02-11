@@ -5,7 +5,7 @@ They enable a chat-first onboarding flow where Oikos can:
 - list existing runners
 - generate a short-lived enrollment token and show install commands
 
-Runners are the multi-tenant-safe replacement for ssh_exec key-mounting.
+Runners are the multi-tenant-safe way to execute commands on user infrastructure.
 """
 
 from __future__ import annotations

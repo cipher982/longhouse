@@ -1,15 +1,15 @@
 """Test-only tool stubbing mechanism for deterministic E2E tests.
 
-This module provides a way to stub tool outputs (like ssh_exec, runner_exec)
+This module provides a way to stub tool outputs (like runner_exec)
 in tests without requiring real servers or external dependencies.
 
 Usage:
     1. Set env var: LONGHOUSE_TOOL_STUBS_PATH=/path/to/stubs.json
     2. Create stubs file with format:
         {
-            "ssh_exec": [
+            "runner_exec": [
                 {
-                    "match": {"host": "cube", "command_contains": "df"},
+                    "match": {"target": "cube", "command_contains": "df"},
                     "result": {"ok": true, "data": {"stdout": "...", "exit_code": 0}}
                 }
             ]
@@ -76,7 +76,7 @@ def match_stub(tool_name: str, args: dict[str, Any]) -> dict[str, Any] | None:
     """Find a matching stub for a tool call.
 
     Args:
-        tool_name: Name of the tool being called (e.g., "ssh_exec", "runner_exec")
+        tool_name: Name of the tool being called (e.g., "runner_exec")
         args: Arguments passed to the tool
 
     Returns:
