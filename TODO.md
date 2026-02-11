@@ -49,7 +49,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | Semantic Search (Phase 4) | 0% | No embeddings, no sqlite-vec |
 | Forum Discovery UX | 0% | No presence events, no bucket UI |
 | Stripe Integration | 0% | Control plane Phase 2 |
-| OSS First-Run UX | ~40% | `--demo/--demo-fresh` works; no auto-seed, no guided empty state |
+| OSS First-Run UX | ~90% | Auto-seed on first run + guided empty state done; "No Claude Code" guidance remaining |
 
 > Changelogs archived. See git log for session details.
 
@@ -441,8 +441,8 @@ Make the Forum the canonical discovery UI for sessions, with **explicit** state 
 
 Eliminate the "empty timeline" anticlimactic moment and improve discovery for users without Claude Code.
 
-- [ ] Seed demo session data on first `longhouse onboard` run (shows what the timeline looks like)
-- [ ] Add guided empty state with "Load demo" CTA + connect shipper steps (VISION)
+- [x] Seed demo session data on first run (auto-seeds on startup when sessions table is empty; `SKIP_DEMO_SEED=1` to disable)
+- [x] Add guided empty state with "Load demo sessions" CTA + connect shipper steps
 - [ ] Improve "No Claude Code" guidance in onboard wizard (link to alternatives, explain what to do next)
 - [x] `longhouse serve --demo` / `--demo-fresh` supported (demo DB)
 
@@ -534,7 +534,7 @@ Close the remaining open questions from VISION.md.
 - [Docs vs release] PyPI version likely lags repo; verify `longhouse` version on PyPI before making release claims.
 - [Docs vs UI] Timeline resume only in Forum Drop-In (Claude-only), not on `/timeline`. **Tracked** in "Public Launch Checklist."
 - [Docs vs code] Installer lacks PATH-based Claude shim + fresh-shell verification. **Tracked** in "Install + Onboarding Alignment."
-- [Docs vs UI] Timeline empty state has no "Load demo" CTA. **Tracked** in "OSS First-Run UX Polish."
+- ~~[Docs vs UI] Timeline empty state has no "Load demo" CTA.~~ **FIXED** — guided empty state with "Load demo sessions" button + connect steps.
 
 ---
 

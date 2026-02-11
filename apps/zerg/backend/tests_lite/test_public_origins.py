@@ -76,6 +76,7 @@ def _make_settings(**overrides):
         roundabout_routing_model=None,
         roundabout_llm_timeout=1.5,
         bootstrap_token=None,
+        skip_demo_seed=False,
         oikos_tool_output_max_chars=8000,
         oikos_tool_output_preview_chars=1200,
     )

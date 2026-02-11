@@ -303,6 +303,64 @@
   }
 
   /* ---------------------------------------------------------------------------
+   * Guided Empty State (First-Run UX)
+   * ---------------------------------------------------------------------------*/
+
+  .sessions-guided-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-8);
+    padding: var(--space-8) var(--space-4);
+  }
+
+  .sessions-guided-actions {
+    display: flex;
+    gap: var(--space-3);
+    align-items: center;
+  }
+
+  .sessions-guided-steps {
+    max-width: 420px;
+    padding: var(--space-5);
+    background: var(--surface-glass-1);
+    border: 1px solid var(--border-glass-1);
+    border-radius: var(--radius-lg);
+  }
+
+  .sessions-guided-steps-label {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-secondary);
+    margin-bottom: var(--space-3);
+  }
+
+  .sessions-guided-steps-list {
+    list-style-position: inside;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .sessions-guided-steps-list li {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    line-height: var(--font-line-height-relaxed);
+  }
+
+  .sessions-guided-steps-list code {
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-xs);
+    padding: 2px 6px;
+    background: var(--surface-glass-2);
+    border: 1px solid var(--border-glass-1);
+    border-radius: var(--radius-sm);
+    color: var(--color-brand-primary);
+  }
+
+  /* ---------------------------------------------------------------------------
    * Session Detail Page
    * ---------------------------------------------------------------------------*/
 

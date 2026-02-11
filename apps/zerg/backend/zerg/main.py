@@ -422,6 +422,34 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"Demo mode auto-seed failed (non-fatal): {e}")
 
+        # OSS first-run UX: auto-seed demo sessions when timeline is empty
+        # This gives new users something to see immediately after `longhouse serve`.
+        # Skipped when: testing, demo_mode (handled above), or SKIP_DEMO_SEED=1.
+        if not _settings.testing and not _settings.demo_mode and not _settings.skip_demo_seed:
+            try:
+                from sqlalchemy import text
+
+                from zerg.database import get_session_factory
+                from zerg.services.agents_store import AgentsStore
+                from zerg.services.demo_sessions import build_demo_agent_sessions
+
+                session_factory = get_session_factory()
+                with session_factory() as db:
+                    session_count = db.execute(text("SELECT COUNT(*) FROM sessions")).scalar()
+                    if session_count == 0:
+                        demo_sessions = build_demo_agent_sessions()
+                        store = AgentsStore(db)
+                        for session in demo_sessions:
+                            store.ingest_session(session)
+                        store.rebuild_fts()
+                        db.commit()
+                        logger.info(
+                            "First-run: seeded %d demo sessions (set SKIP_DEMO_SEED=1 to disable)",
+                            len(demo_sessions),
+                        )
+            except Exception as e:
+                logger.warning(f"First-run demo seed failed (non-fatal): {e}")
+
         # Bootstrap jobs repository (creates /data/jobs/ with git versioning)
         # Non-fatal: dev mode may not have /data mounted
         if not _settings.testing:

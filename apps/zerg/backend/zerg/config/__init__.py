@@ -185,6 +185,9 @@ class Settings:  # noqa: D401 – simple data container
     # Bootstrap API settings -------------------------------------------
     bootstrap_token: str | None  # Token for CLI-based bootstrap API auth
 
+    # OSS first-run UX ------------------------------------------------
+    skip_demo_seed: bool  # SKIP_DEMO_SEED=1 suppresses auto-seeding on first run
+
     # Oikos tool output storage -----------------------------------
     oikos_tool_output_max_chars: int  # Max tool output chars before storing (0 = disabled)
     oikos_tool_output_preview_chars: int  # Preview size for stored tool outputs
@@ -491,6 +494,8 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         roundabout_llm_timeout=float(os.getenv("ROUNDABOUT_LLM_TIMEOUT", "1.5")),
         # Bootstrap API settings
         bootstrap_token=os.getenv("BOOTSTRAP_TOKEN"),
+        # OSS first-run UX
+        skip_demo_seed=_truthy(os.getenv("SKIP_DEMO_SEED")),
         # Oikos tool output storage
         oikos_tool_output_max_chars=int(os.getenv("OIKOS_TOOL_OUTPUT_MAX_CHARS", "8000")),
         oikos_tool_output_preview_chars=int(os.getenv("OIKOS_TOOL_OUTPUT_PREVIEW_CHARS", "1200")),
