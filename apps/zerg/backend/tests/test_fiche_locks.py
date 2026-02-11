@@ -161,17 +161,13 @@ class TestFicheLockManager:
         explicit_holder = "test-holder-12356"
 
         # First acquisition with explicit holder
-        acquired1, holder1 = FicheLockManager.acquire_fiche_lock(
-            db_session, fiche_id, holder_id=explicit_holder
-        )
+        acquired1, holder1 = FicheLockManager.acquire_fiche_lock(db_session, fiche_id, holder_id=explicit_holder)
         assert acquired1 is True
         assert holder1 == explicit_holder
 
         # Same holder can "reacquire" (this is SQLite behavior - updates heartbeat)
         # For Postgres this will return False due to re-entrancy guard
-        acquired2, holder2 = FicheLockManager.acquire_fiche_lock(
-            db_session, fiche_id, holder_id=explicit_holder
-        )
+        acquired2, holder2 = FicheLockManager.acquire_fiche_lock(db_session, fiche_id, holder_id=explicit_holder)
         # Result depends on dialect, but holder should match
         assert holder2 == explicit_holder
 

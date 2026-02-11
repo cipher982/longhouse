@@ -67,9 +67,9 @@ def test_oikos_dispatch(base_url: str, headers: dict, task: str) -> dict:
     Returns:
         Response data with run_id, thread_id, stream_url
     """
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"DISPATCHING TASK: {task}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     response = requests.post(
         f"{base_url}/api/oikos/run",
@@ -103,9 +103,9 @@ def test_oikos_events(base_url: str, headers: dict, run_id: int, timeout: int = 
     Returns:
         List of events received
     """
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"LISTENING TO SSE EVENTS (run_id={run_id})")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     events = []
     start_time = time.time()
@@ -176,9 +176,9 @@ def test_cancel(base_url: str, headers: dict, run_id: int) -> dict:
     Returns:
         Response data
     """
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"TESTING CANCEL (run_id={run_id})")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     response = requests.post(
         f"{base_url}/api/oikos/run/{run_id}/cancel",
@@ -216,9 +216,9 @@ def run_disk_health_check(base_url: str, headers: dict) -> None:
     events = test_oikos_events(base_url, headers, dispatch_data["run_id"], timeout=120)
 
     # Summary
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("SUMMARY")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"Total events received: {len(events)}")
 
     event_types = [e["event"] for e in events]

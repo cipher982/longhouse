@@ -11,7 +11,6 @@ Run with: make test-install
 
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest

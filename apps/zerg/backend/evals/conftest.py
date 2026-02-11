@@ -14,8 +14,9 @@ from pathlib import Path
 
 import pytest
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy.orm import Session
+from pydantic import BaseModel
+from pydantic import ConfigDict
+from pydantic import Field
 
 # Import fixtures from the main conftest.py
 # Add parent dir to path so we can import from tests/
@@ -192,8 +193,9 @@ def eval_runner(db_session, test_user, request, eval_case):
     If a variant is specified via --variant flag, it will be applied.
     """
     from evals.runner import EvalRunner
+    from zerg.services.auto_seed import _seed_server_knowledge
+    from zerg.services.auto_seed import _seed_user_context
     from zerg.services.oikos_service import OikosService
-    from zerg.services.auto_seed import _seed_server_knowledge, _seed_user_context
 
     # Evals should reflect a real "dev@local" environment. In tests we create the
     # dev user deterministically, but user context (servers/integrations) is not
@@ -263,7 +265,9 @@ def pytest_sessionfinish(session, exitstatus):
         return
 
     # Only merge if we have temp files (tests actually ran)
-    from evals.results_store import cleanup_temp_results, get_temp_results_dir, merge_results
+    from evals.results_store import cleanup_temp_results
+    from evals.results_store import get_temp_results_dir
+    from evals.results_store import merge_results
 
     temp_dir = get_temp_results_dir()
     temp_files = list(temp_dir.glob("*.jsonl"))

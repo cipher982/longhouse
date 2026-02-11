@@ -1,14 +1,17 @@
 """Tests for event store service (Resumable SSE v1 Phase 1)."""
 
-import pytest
 from datetime import datetime
+
+import pytest
 from sqlalchemy.orm import Session
 
 from zerg.crud import crud as _crud
-from zerg.models.run_event import RunEvent
+from zerg.models.enums import RunStatus
+from zerg.models.enums import RunTrigger
 from zerg.models.run import Run
-from zerg.models.enums import RunStatus, RunTrigger
-from zerg.services.event_store import emit_run_event, EventStore
+from zerg.models.run_event import RunEvent
+from zerg.services.event_store import EventStore
+from zerg.services.event_store import emit_run_event
 
 
 @pytest.fixture
@@ -109,9 +112,7 @@ async def test_event_ids_are_monotonic(db_session: Session, test_run: Run):
         event_ids.append(event_id)
 
     # Query all events and verify IDs are monotonically increasing
-    events = db_session.query(RunEvent).filter(
-        RunEvent.run_id == test_run.id
-    ).order_by(RunEvent.id).all()
+    events = db_session.query(RunEvent).filter(RunEvent.run_id == test_run.id).order_by(RunEvent.id).all()
 
     assert len(events) == 4
     for i, event in enumerate(events):
@@ -125,12 +126,11 @@ async def test_event_ids_are_monotonic(db_session: Session, test_run: Run):
 @pytest.mark.asyncio
 async def test_invalid_payload_raises_valueerror(db_session: Session, test_run: Run):
     """Test that non-JSON-serializable payloads raise ValueError."""
-    import json
 
     # Create an object that jsonable_encoder can't handle
     # Use a circular reference which causes RecursionError in jsonable_encoder
     circular = {}
-    circular['self'] = circular
+    circular["self"] = circular
 
     payload = {
         "event_type": "oikos_started",
@@ -228,9 +228,7 @@ async def test_cascade_delete_works(db_session: Session, test_run: Run):
         )
 
     # Verify events exist
-    events_before = db_session.query(RunEvent).filter(
-        RunEvent.run_id == run_id
-    ).count()
+    events_before = db_session.query(RunEvent).filter(RunEvent.run_id == run_id).count()
     assert events_before == 3
 
     # Delete events first (manual cascade for SQLite reliability)
@@ -240,9 +238,7 @@ async def test_cascade_delete_works(db_session: Session, test_run: Run):
     db_session.commit()
 
     # Verify events were deleted
-    events_after = db_session.query(RunEvent).filter(
-        RunEvent.run_id == run_id
-    ).count()
+    events_after = db_session.query(RunEvent).filter(RunEvent.run_id == run_id).count()
     assert events_after == 0
 
 
@@ -291,9 +287,7 @@ async def test_delete_events_for_run(db_session: Session, test_run: Run):
         )
 
     # Verify events exist
-    count_before = db_session.query(RunEvent).filter(
-        RunEvent.run_id == test_run.id
-    ).count()
+    count_before = db_session.query(RunEvent).filter(RunEvent.run_id == test_run.id).count()
     assert count_before == 3
 
     # Delete events
@@ -301,9 +295,7 @@ async def test_delete_events_for_run(db_session: Session, test_run: Run):
     assert deleted_count == 3
 
     # Verify events were deleted
-    count_after = db_session.query(RunEvent).filter(
-        RunEvent.run_id == test_run.id
-    ).count()
+    count_after = db_session.query(RunEvent).filter(RunEvent.run_id == test_run.id).count()
     assert count_after == 0
 
 
@@ -345,6 +337,7 @@ async def test_get_events_after_sequence(db_session: Session, test_run: Run):
 async def test_datetime_serialization(db_session: Session, test_run: Run):
     """Test that datetime objects in payloads are serialized correctly."""
     from datetime import timezone
+
     payload = {
         "event_type": "oikos_started",
         "run_id": test_run.id,

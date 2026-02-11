@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
 from fastapi import status
 
 from zerg.config import get_settings
@@ -43,12 +42,7 @@ def _create_run_and_job(db_session, test_user, sample_fiche, sample_thread, *, s
 
 
 def _latest_run_event(db_session, run_id: int) -> RunEvent | None:
-    return (
-        db_session.query(RunEvent)
-        .filter(RunEvent.run_id == run_id)
-        .order_by(RunEvent.id.desc())
-        .first()
-    )
+    return db_session.query(RunEvent).filter(RunEvent.run_id == run_id).order_by(RunEvent.id.desc()).first()
 
 
 def test_commis_tool_event_requires_internal_token(
@@ -123,7 +117,9 @@ def test_commis_tool_event_started_persists_payload(client, db_session, test_use
     assert event.payload.get("tool_args_truncated") is None
 
 
-def test_commis_tool_event_completed_truncates_large_payload(client, db_session, test_user, sample_fiche, sample_thread):
+def test_commis_tool_event_completed_truncates_large_payload(
+    client, db_session, test_user, sample_fiche, sample_thread
+):
     run, job = _create_run_and_job(db_session, test_user, sample_fiche, sample_thread)
 
     huge_response = "x" * 12050

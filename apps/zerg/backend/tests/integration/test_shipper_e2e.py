@@ -19,7 +19,6 @@ from uuid import uuid4
 import httpx
 import pytest
 
-
 pytestmark = pytest.mark.integration
 
 if not os.getenv("SHIPPER_E2E"):

@@ -4,17 +4,15 @@ Tests the credential validation logic for each connector type,
 including proper error handling and metadata extraction.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import httpx
-import pytest
 
-from zerg.connectors.testers import (
-    _test_obsidian,
-    _test_traccar,
-    _test_whoop,
-    test_connector,
-)
+from zerg.connectors.testers import _test_obsidian
+from zerg.connectors.testers import _test_traccar
+from zerg.connectors.testers import _test_whoop
+from zerg.connectors.testers import test_connector
 
 
 class TestTestConnectorDispatch:
@@ -63,11 +61,13 @@ class TestTraccarTester:
         mock_response.json.return_value = {"name": "Admin User", "email": "admin@example.com"}
         mock_post.return_value = mock_response
 
-        result = _test_traccar({
-            "url": "http://traccar.example.com",
-            "username": "admin",
-            "password": "pass",
-        })
+        result = _test_traccar(
+            {
+                "url": "http://traccar.example.com",
+                "username": "admin",
+                "password": "pass",
+            }
+        )
 
         assert result["success"] is True
         assert "Admin User" in result["message"]
@@ -81,11 +81,13 @@ class TestTraccarTester:
         mock_response.status_code = 401
         mock_post.return_value = mock_response
 
-        result = _test_traccar({
-            "url": "http://traccar.example.com",
-            "username": "admin",
-            "password": "wrong",
-        })
+        result = _test_traccar(
+            {
+                "url": "http://traccar.example.com",
+                "username": "admin",
+                "password": "wrong",
+            }
+        )
 
         assert result["success"] is False
         assert "Invalid username or password" in result["message"]
@@ -110,12 +112,14 @@ class TestTraccarTester:
         ]
         mock_get.return_value = mock_devices
 
-        result = _test_traccar({
-            "url": "http://traccar.example.com",
-            "username": "admin",
-            "password": "pass",
-            "device_id": "1",
-        })
+        result = _test_traccar(
+            {
+                "url": "http://traccar.example.com",
+                "username": "admin",
+                "password": "pass",
+                "device_id": "1",
+            }
+        )
 
         assert result["success"] is True
         assert result["metadata"]["device"] == "My Phone"
@@ -135,12 +139,14 @@ class TestTraccarTester:
         mock_devices.json.return_value = [{"id": 1, "name": "My Phone"}]
         mock_get.return_value = mock_devices
 
-        result = _test_traccar({
-            "url": "http://traccar.example.com",
-            "username": "admin",
-            "password": "pass",
-            "device_id": "999",
-        })
+        result = _test_traccar(
+            {
+                "url": "http://traccar.example.com",
+                "username": "admin",
+                "password": "pass",
+                "device_id": "999",
+            }
+        )
 
         assert result["success"] is False
         assert "Device ID 999 not found" in result["message"]
@@ -153,11 +159,13 @@ class TestTraccarTester:
         mock_response.json.return_value = {"name": "Admin"}
         mock_post.return_value = mock_response
 
-        _test_traccar({
-            "url": "http://traccar.example.com/",
-            "username": "admin",
-            "password": "pass",
-        })
+        _test_traccar(
+            {
+                "url": "http://traccar.example.com/",
+                "username": "admin",
+                "password": "pass",
+            }
+        )
 
         # Verify the URL was normalized
         call_args = mock_post.call_args
@@ -247,10 +255,12 @@ class TestObsidianTester:
 
     def test_successful_config(self):
         """Test successful Obsidian configuration."""
-        result = _test_obsidian({
-            "vault_path": "~/obsidian_vault",
-            "runner_name": "macbook",
-        })
+        result = _test_obsidian(
+            {
+                "vault_path": "~/obsidian_vault",
+                "runner_name": "macbook",
+            }
+        )
 
         assert result["success"] is True
         assert "macbook" in result["message"]
@@ -266,11 +276,14 @@ class TestTesterErrorHandling:
         """Test that timeouts are handled gracefully."""
         mock_post.side_effect = httpx.TimeoutException("Connection timed out")
 
-        result = test_connector("traccar", {
-            "url": "http://traccar.example.com",
-            "username": "admin",
-            "password": "pass",
-        })
+        result = test_connector(
+            "traccar",
+            {
+                "url": "http://traccar.example.com",
+                "username": "admin",
+                "password": "pass",
+            },
+        )
 
         assert result["success"] is False
         assert "timed out" in result["message"]
@@ -280,11 +293,14 @@ class TestTesterErrorHandling:
         """Test that connection errors are handled gracefully."""
         mock_post.side_effect = httpx.ConnectError("Failed to connect")
 
-        result = test_connector("traccar", {
-            "url": "http://traccar.example.com",
-            "username": "admin",
-            "password": "pass",
-        })
+        result = test_connector(
+            "traccar",
+            {
+                "url": "http://traccar.example.com",
+                "username": "admin",
+                "password": "pass",
+            },
+        )
 
         assert result["success"] is False
         assert "Failed to connect" in result["message"]

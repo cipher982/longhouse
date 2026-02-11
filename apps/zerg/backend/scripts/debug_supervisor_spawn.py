@@ -9,9 +9,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from zerg.database import default_session_factory
 from zerg.crud import crud
-from zerg.prompts.composer import build_oikos_prompt
+from zerg.database import default_session_factory
 from zerg.services.oikos_service import OikosService
 
 
@@ -62,18 +61,21 @@ def main():
     print("=" * 60)
 
     from sqlalchemy import text
+
     thread_id = 1  # Oikos thread
-    messages = db.execute(text(
-        f"SELECT id, role, LEFT(content, 80), sent_at FROM thread_messages WHERE thread_id = {thread_id} ORDER BY sent_at"
-    )).fetchall()
+    messages = db.execute(
+        text(
+            f"SELECT id, role, LEFT(content, 80), sent_at FROM thread_messages WHERE thread_id = {thread_id} ORDER BY sent_at"
+        )
+    ).fetchall()
 
     print(f"Thread {thread_id} has {len(messages)} messages")
-    system_msgs = [m for m in messages if m[1] == 'system']
+    system_msgs = [m for m in messages if m[1] == "system"]
     print(f"System messages: {len(system_msgs)}")
 
     if len(system_msgs) == 0:
         print("❌ CRITICAL: Thread has NO system message - LLM is running blind!")
-    elif messages[0][1] != 'system':
+    elif messages[0][1] != "system":
         print(f"❌ CRITICAL: First message is {messages[0][1]}, not system!")
         print(f"   System message is at position {[i for i, m in enumerate(messages) if m[1] == 'system'][0]}")
     else:

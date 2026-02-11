@@ -8,7 +8,9 @@ from zerg.tools.builtin.http_tools import http_request
 
 
 class DummyResponse:
-    def __init__(self, status_code: int = 200, url: str = "https://example.com", headers: dict | None = None, body: Any = None):
+    def __init__(
+        self, status_code: int = 200, url: str = "https://example.com", headers: dict | None = None, body: Any = None
+    ):
         self.status_code = status_code
         self._url = url
         self.headers = headers or {"content-type": "application/json"}

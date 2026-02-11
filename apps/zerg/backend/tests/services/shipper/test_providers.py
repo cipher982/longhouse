@@ -1,9 +1,10 @@
 """Tests for multi-provider session parsing."""
 
 import json
-from pathlib import Path
 
-from zerg.services.shipper.providers import ProviderRegistry, SessionProvider, registry
+from zerg.services.shipper.providers import ProviderRegistry
+from zerg.services.shipper.providers import SessionProvider
+from zerg.services.shipper.providers import registry
 from zerg.services.shipper.providers.claude import ClaudeProvider
 
 
@@ -70,12 +71,14 @@ class TestClaudeProvider:
     def test_extract_metadata(self, tmp_path):
         f = tmp_path / "test-session.jsonl"
         lines = [
-            json.dumps({
-                "type": "user",
-                "timestamp": "2026-01-01T12:00:00Z",
-                "cwd": "/home/test/project",
-                "message": {"role": "user", "content": "hi"},
-            }),
+            json.dumps(
+                {
+                    "type": "user",
+                    "timestamp": "2026-01-01T12:00:00Z",
+                    "cwd": "/home/test/project",
+                    "message": {"role": "user", "content": "hi"},
+                }
+            ),
         ]
         f.write_text("\n".join(lines) + "\n")
         p = ClaudeProvider(config_dir=tmp_path)

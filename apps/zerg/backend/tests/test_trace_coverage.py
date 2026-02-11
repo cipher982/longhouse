@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import uuid
 
-from zerg.models.run_event import RunEvent
 from zerg.models.enums import RunStatus
 from zerg.models.enums import RunTrigger
 from zerg.models.llm_audit import LLMAuditLog
-from zerg.models.models import Run
 from zerg.models.models import CommisJob
+from zerg.models.models import Run
+from zerg.models.run_event import RunEvent
 from zerg.models_config import TEST_MODEL_ID
 from zerg.services.trace_coverage import build_trace_coverage_report
 

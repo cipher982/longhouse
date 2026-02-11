@@ -11,8 +11,8 @@ These tests use httpx.AsyncClient with ASGITransport for proper async streaming,
 which is compatible with pytest-xdist parallel execution.
 """
 
-import json
 import asyncio
+import json
 from typing import List
 
 import httpx
@@ -169,8 +169,12 @@ async def test_stream_replay_from_start(db_session, test_run, test_user, auth_he
 async def test_stream_replay_from_event_id(db_session, test_run, test_user, auth_headers):
     """Test replaying events starting from a specific event ID."""
     # Emit historical events
-    event1_id = await emit_run_event(db_session, test_run.id, "oikos_started", {"task": "test", "owner_id": test_user.id})
-    event2_id = await emit_run_event(db_session, test_run.id, "oikos_thinking", {"thought": "thinking", "owner_id": test_user.id})
+    event1_id = await emit_run_event(
+        db_session, test_run.id, "oikos_started", {"task": "test", "owner_id": test_user.id}
+    )
+    event2_id = await emit_run_event(
+        db_session, test_run.id, "oikos_thinking", {"thought": "thinking", "owner_id": test_user.id}
+    )
     await emit_run_event(db_session, test_run.id, "oikos_complete", {"result": "done", "owner_id": test_user.id})
 
     # Mark run as complete
@@ -200,7 +204,9 @@ async def test_stream_replay_from_event_id(db_session, test_run, test_user, auth
 async def test_stream_with_last_event_id_header(db_session, test_run, test_user, auth_headers):
     """Test SSE standard Last-Event-ID header for automatic reconnect."""
     # Emit historical events
-    event1_id = await emit_run_event(db_session, test_run.id, "oikos_started", {"task": "test", "owner_id": test_user.id})
+    event1_id = await emit_run_event(
+        db_session, test_run.id, "oikos_started", {"task": "test", "owner_id": test_user.id}
+    )
     await emit_run_event(db_session, test_run.id, "oikos_thinking", {"thought": "thinking", "owner_id": test_user.id})
     await emit_run_event(db_session, test_run.id, "oikos_complete", {"result": "done", "owner_id": test_user.id})
 
@@ -340,7 +346,9 @@ async def test_stream_resumption_after_reconnect(db_session, test_run, test_user
     """Test that reconnecting with Last-Event-ID doesn't miss events."""
     # Emit several events
     await emit_run_event(db_session, test_run.id, "oikos_started", {"task": "test", "owner_id": test_user.id})
-    event2_id = await emit_run_event(db_session, test_run.id, "oikos_thinking", {"thought": "step1", "owner_id": test_user.id})
+    event2_id = await emit_run_event(
+        db_session, test_run.id, "oikos_thinking", {"thought": "step1", "owner_id": test_user.id}
+    )
     await emit_run_event(db_session, test_run.id, "oikos_thinking", {"thought": "step2", "owner_id": test_user.id})
     await emit_run_event(db_session, test_run.id, "oikos_complete", {"result": "done", "owner_id": test_user.id})
 
@@ -373,7 +381,9 @@ async def test_stream_resumption_after_reconnect(db_session, test_run, test_user
 
 
 @pytest.mark.asyncio
-async def test_stream_keeps_open_for_pending_commiss_and_emits_commis_complete(db_session, test_run, test_user, auth_headers):
+async def test_stream_keeps_open_for_pending_commiss_and_emits_commis_complete(
+    db_session, test_run, test_user, auth_headers
+):
     """Stream should continue after oikos_complete when commiss are pending."""
     from zerg.models.models import CommisJob
 

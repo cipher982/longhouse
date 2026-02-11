@@ -7,7 +7,6 @@ to catch schema-related bugs before E2E tests.
 
 import json
 
-import pytest
 from pydantic import BaseModel
 
 from zerg.tools.builtin import BUILTIN_TOOLS
@@ -127,8 +126,7 @@ class TestToolFunctionIntegrity:
                 invalid_names.append(tool.name)
 
         assert not invalid_names, (
-            f"Tools with invalid names: {invalid_names}. "
-            "Tool names should be valid Python identifiers."
+            f"Tools with invalid names: {invalid_names}. Tool names should be valid Python identifiers."
         )
 
 

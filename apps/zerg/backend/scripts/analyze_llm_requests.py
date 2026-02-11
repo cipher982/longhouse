@@ -192,10 +192,7 @@ def analyze_session(logs: list[dict], verbose: bool = False) -> None:
         print(f"  Responses: {len(responses)}")
 
         # Count tool iterations (prefer JSON body phase field)
-        tool_iterations = sum(
-            1 for c in requests
-            if "tool_iteration" in (c.get("phase") or c["_meta"]["phase"])
-        )
+        tool_iterations = sum(1 for c in requests if "tool_iteration" in (c.get("phase") or c["_meta"]["phase"]))
         if tool_iterations > 0:
             print(f"  Tool iterations: {tool_iterations}")
             if tool_iterations > 2:
@@ -257,10 +254,7 @@ def analyze_session(logs: list[dict], verbose: bool = False) -> None:
 
     for commis_id, calls in commis_calls.items():
         # Prefer JSON body phase field
-        tool_iters = sum(
-            1 for c in calls
-            if "tool_iteration" in (c.get("phase") or c["_meta"]["phase"])
-        )
+        tool_iters = sum(1 for c in calls if "tool_iteration" in (c.get("phase") or c["_meta"]["phase"]))
         if tool_iters > 3:
             warnings.append(f"⚠️  {commis_id}: {tool_iters} tool iterations (expected ≤2 for simple tasks)")
 

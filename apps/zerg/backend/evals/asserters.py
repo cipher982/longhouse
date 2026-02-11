@@ -587,7 +587,6 @@ async def run_assertion(
         raise ValueError(f"Unknown assertion type: {assertion_type}")
 
     # Handle async asserters
-    import asyncio
     import inspect
 
     if inspect.iscoroutinefunction(asserter):

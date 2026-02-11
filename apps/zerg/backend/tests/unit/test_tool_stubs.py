@@ -7,12 +7,10 @@ from unittest.mock import patch
 
 import pytest
 
-from zerg.testing.tool_stubs import (
-    _matches,
-    clear_stubs_cache,
-    get_tool_stubs,
-    match_stub,
-)
+from zerg.testing.tool_stubs import _matches
+from zerg.testing.tool_stubs import clear_stubs_cache
+from zerg.testing.tool_stubs import get_tool_stubs
+from zerg.testing.tool_stubs import match_stub
 
 
 @pytest.fixture(autouse=True)
@@ -74,11 +72,7 @@ class TestGetToolStubs:
             assert get_tool_stubs() is None
 
     def test_valid_file_loads_stubs(self):
-        stubs = {
-            "ssh_exec": [
-                {"match": {"host": "cube"}, "result": {"ok": True, "data": {"stdout": "test"}}}
-            ]
-        }
+        stubs = {"ssh_exec": [{"match": {"host": "cube"}, "result": {"ok": True, "data": {"stdout": "test"}}}]}
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump(stubs, f)
             f.flush()
@@ -164,11 +158,7 @@ class TestStubbingEnabled:
             assert get_tool_stubs() is None
 
     def test_enabled_when_env_var_set(self):
-        stubs = {
-            "ssh_exec": [
-                {"match": {"host": "cube"}, "result": {"ok": True, "data": {"stdout": "test"}}}
-            ]
-        }
+        stubs = {"ssh_exec": [{"match": {"host": "cube"}, "result": {"ok": True, "data": {"stdout": "test"}}}]}
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump(stubs, f)
             f.flush()

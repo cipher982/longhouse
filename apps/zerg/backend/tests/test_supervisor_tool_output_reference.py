@@ -55,11 +55,10 @@ async def test_execute_tool_spawn_commis_no_type_error(monkeypatch, tmp_path, db
     Regression test for bug where _execute_tool passed _skip_interrupt kwarg
     to spawn_commis_async which didn't accept that parameter.
     """
-    from zerg.managers.fiche_runner import FicheInterrupted
-    from zerg.services import oikos_react_engine as engine
     from zerg.connectors.context import set_credential_resolver
     from zerg.connectors.resolver import CredentialResolver
-    from zerg.services.oikos_context import set_oikos_context, reset_oikos_context
+    from zerg.managers.fiche_runner import FicheInterrupted
+    from zerg.services import oikos_react_engine as engine
 
     # Set up credential context (required for spawn_commis)
     resolver = CredentialResolver(fiche_id=1, db=db_session, owner_id=test_user.id)

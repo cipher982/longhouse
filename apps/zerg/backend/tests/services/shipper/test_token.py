@@ -2,8 +2,6 @@
 
 from pathlib import Path
 
-import pytest
-
 from zerg.services.shipper.token import clear_token
 from zerg.services.shipper.token import get_token_path
 from zerg.services.shipper.token import get_zerg_url

@@ -69,10 +69,14 @@ def seed_oikos(user_email: str = None, name: str = "Oikos"):
     print(f"👤 User: {user.email} (ID: {user.id})")
 
     # Check if oikos already exists
-    existing = db.query(Fiche).filter(
-        Fiche.name == name,
-        Fiche.owner_id == user.id,
-    ).first()
+    existing = (
+        db.query(Fiche)
+        .filter(
+            Fiche.name == name,
+            Fiche.owner_id == user.id,
+        )
+        .first()
+    )
 
     # Define oikos configuration
     oikos_config = {
@@ -117,7 +121,7 @@ Be helpful, concise, and transparent about what you're doing."""
 
     if existing:
         print(f"  ⚠️  Oikos already exists: {name} (ID: {existing.id})")
-        print(f"  🔄 Updating configuration...")
+        print("  🔄 Updating configuration...")
 
         # Update existing fiche
         existing.system_instructions = system_prompt
@@ -132,7 +136,7 @@ Be helpful, concise, and transparent about what you're doing."""
         db.commit()
         db.refresh(existing)
 
-        print(f"  ✅ Oikos updated successfully")
+        print("  ✅ Oikos updated successfully")
         fiche = existing
     else:
         print(f"  ✨ Creating new oikos: {name}")
@@ -155,29 +159,27 @@ Be helpful, concise, and transparent about what you're doing."""
 
         print(f"  ✅ Oikos created successfully (ID: {fiche.id})")
 
-    print(f"\n📋 Oikos Configuration:")
+    print("\n📋 Oikos Configuration:")
     print(f"   Name: {fiche.name}")
     print(f"   ID: {fiche.id}")
     print(f"   Owner: {user.email}")
     print(f"   Model: {fiche.model}")
     print(f"   Tools: {len(fiche.allowed_tools)} tools")
-    print(f"     - Oikos: spawn_commis, list_commiss, read_commis_result, etc.")
-    print(f"     - Direct: get_current_time, http_request, send_email")
+    print("     - Oikos: spawn_commis, list_commiss, read_commis_result, etc.")
+    print("     - Direct: get_current_time, http_request, send_email")
 
-    print(f"\n🚀 Oikos is ready!")
-    print(f"   You can now interact with the oikos through:")
-    print(f"   - Chat UI: Create a thread with this fiche")
+    print("\n🚀 Oikos is ready!")
+    print("   You can now interact with the oikos through:")
+    print("   - Chat UI: Create a thread with this fiche")
     print(f"   - API: POST /api/fiches/{fiche.id}/threads")
-    print(f"   - Oikos: Configure voice interaction")
+    print("   - Oikos: Configure voice interaction")
 
     return fiche
 
 
 def main():
     """Main entry point with argument parsing."""
-    parser = argparse.ArgumentParser(
-        description="Seed the Oikos Fiche for oikos/commis architecture"
-    )
+    parser = argparse.ArgumentParser(description="Seed the Oikos Fiche for oikos/commis architecture")
     parser.add_argument(
         "--user-email",
         type=str,
@@ -197,6 +199,7 @@ def main():
     except Exception as e:
         print(f"\n❌ Error seeding oikos: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 

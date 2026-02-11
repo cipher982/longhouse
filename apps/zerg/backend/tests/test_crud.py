@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 
-from tests.conftest import TEST_MODEL
 from tests.conftest import TEST_COMMIS_MODEL
+from tests.conftest import TEST_MODEL
 from zerg.crud.crud import create_fiche
 from zerg.crud.crud import create_fiche_message
 from zerg.crud.crud import create_user

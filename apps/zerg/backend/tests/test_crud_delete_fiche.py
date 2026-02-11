@@ -1,11 +1,11 @@
 from zerg.crud import crud
 from zerg.models.enums import RunStatus
 from zerg.models.enums import RunTrigger
+from zerg.models.models import CommisJob
 from zerg.models.models import Fiche
 from zerg.models.models import Run
 from zerg.models.models import Thread
 from zerg.models.models import ThreadMessage
-from zerg.models.models import CommisJob
 
 
 def test_delete_fiche_deletes_dependents_and_nulls_commis_jobs(db_session):

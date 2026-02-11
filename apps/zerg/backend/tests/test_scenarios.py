@@ -7,16 +7,16 @@ Covers:
 - SeedRegistry prevents duplicates
 """
 
-import pytest
 
-from zerg.models.models import CommisJob, Run, SeedRegistry, Thread, ThreadMessage
+from zerg.models.models import Run
+from zerg.models.models import SeedRegistry
+from zerg.models.models import Thread
+from zerg.models.models import ThreadMessage
 from zerg.models.run_event import RunEvent
-from zerg.scenarios.seed import (
-    cleanup_scenario,
-    check_seed_registry,
-    register_seed,
-    seed_scenario,
-)
+from zerg.scenarios.seed import check_seed_registry
+from zerg.scenarios.seed import cleanup_scenario
+from zerg.scenarios.seed import register_seed
+from zerg.scenarios.seed import seed_scenario
 
 
 class TestScenarioSeeding:
@@ -27,9 +27,7 @@ class TestScenarioSeeding:
         scenario_name = "swarm-mvp"
 
         # First seed
-        result1 = seed_scenario(
-            db_session, scenario_name, owner_id=test_user.id, target="test"
-        )
+        result1 = seed_scenario(db_session, scenario_name, owner_id=test_user.id, target="test")
         assert result1["runs"] == 5
         assert result1["skipped"] == 0
         assert result1["scenario"] == scenario_name
@@ -44,9 +42,7 @@ class TestScenarioSeeding:
         assert registry_count == 5
 
         # Second seed - should skip all runs
-        result2 = seed_scenario(
-            db_session, scenario_name, owner_id=test_user.id, target="test"
-        )
+        result2 = seed_scenario(db_session, scenario_name, owner_id=test_user.id, target="test")
         assert result2["runs"] == 0
         assert result2["skipped"] == 5  # All runs already seeded
 
@@ -60,9 +56,7 @@ class TestScenarioSeeding:
         scenario_name = "swarm-mvp"
 
         # Seed scenario
-        result = seed_scenario(
-            db_session, scenario_name, owner_id=test_user.id, target="test"
-        )
+        result = seed_scenario(db_session, scenario_name, owner_id=test_user.id, target="test")
         assert result["runs"] == 5
 
         # Verify data exists
@@ -96,18 +90,12 @@ class TestScenarioSeeding:
         scenario_name = "swarm-mvp"
 
         # First seed
-        result1 = seed_scenario(
-            db_session, scenario_name, owner_id=test_user.id, target="test"
-        )
+        result1 = seed_scenario(db_session, scenario_name, owner_id=test_user.id, target="test")
         assert result1["runs"] == 5
         assert result1["skipped"] == 0
 
         # Verify registry populated
-        registry_count = (
-            db_session.query(SeedRegistry)
-            .filter(SeedRegistry.seed_key.like(f"{scenario_name}:%"))
-            .count()
-        )
+        registry_count = db_session.query(SeedRegistry).filter(SeedRegistry.seed_key.like(f"{scenario_name}:%")).count()
         assert registry_count == 5
 
         # Cleanup
@@ -116,32 +104,20 @@ class TestScenarioSeeding:
         assert cleanup_result["registry_entries"] == 5  # KEY: registry cleared
 
         # Verify registry cleared
-        registry_count = (
-            db_session.query(SeedRegistry)
-            .filter(SeedRegistry.seed_key.like(f"{scenario_name}:%"))
-            .count()
-        )
+        registry_count = db_session.query(SeedRegistry).filter(SeedRegistry.seed_key.like(f"{scenario_name}:%")).count()
         assert registry_count == 0
 
         # Reseed after cleanup - should NOT skip
-        result2 = seed_scenario(
-            db_session, scenario_name, owner_id=test_user.id, target="test"
-        )
+        result2 = seed_scenario(db_session, scenario_name, owner_id=test_user.id, target="test")
         assert result2["runs"] == 5
         assert result2["skipped"] == 0  # This is the regression test!
 
         # Verify new registry entries created
-        registry_count = (
-            db_session.query(SeedRegistry)
-            .filter(SeedRegistry.seed_key.like(f"{scenario_name}:%"))
-            .count()
-        )
+        registry_count = db_session.query(SeedRegistry).filter(SeedRegistry.seed_key.like(f"{scenario_name}:%")).count()
         assert registry_count == 5
 
         # Reseed again - should skip (idempotency restored)
-        result3 = seed_scenario(
-            db_session, scenario_name, owner_id=test_user.id, target="test"
-        )
+        result3 = seed_scenario(db_session, scenario_name, owner_id=test_user.id, target="test")
         assert result3["runs"] == 0
         assert result3["skipped"] == 5
 
@@ -150,9 +126,7 @@ class TestScenarioSeeding:
         scenario_name = "swarm-mvp"
 
         # First seed
-        result1 = seed_scenario(
-            db_session, scenario_name, owner_id=test_user.id, target="test"
-        )
+        result1 = seed_scenario(db_session, scenario_name, owner_id=test_user.id, target="test")
         assert result1["runs"] == 5
 
         # Second seed with clean=True - should reseed
@@ -173,9 +147,7 @@ class TestScenarioSeeding:
         """Seeding creates threads, runs, messages, events, commis jobs."""
         scenario_name = "swarm-mvp"
 
-        result = seed_scenario(
-            db_session, scenario_name, owner_id=test_user.id, target="test"
-        )
+        result = seed_scenario(db_session, scenario_name, owner_id=test_user.id, target="test")
 
         # Verify entity creation
         assert result["runs"] == 5
@@ -202,16 +174,12 @@ class TestScenarioSeeding:
         scenario_name = "swarm-mvp"
 
         # Seed to target "test"
-        result1 = seed_scenario(
-            db_session, scenario_name, owner_id=test_user.id, target="test"
-        )
+        result1 = seed_scenario(db_session, scenario_name, owner_id=test_user.id, target="test")
         assert result1["runs"] == 5
         assert result1["skipped"] == 0
 
         # Seed to target "demo" - should not skip (different target)
-        result2 = seed_scenario(
-            db_session, scenario_name, owner_id=test_user.id, target="demo"
-        )
+        result2 = seed_scenario(db_session, scenario_name, owner_id=test_user.id, target="demo")
         assert result2["runs"] == 5
         assert result2["skipped"] == 0
 

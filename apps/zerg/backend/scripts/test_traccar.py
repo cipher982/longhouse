@@ -69,7 +69,7 @@ def test_traccar(url: str, username: str, password: str, device_id: str = None):
                 return False
 
             server_info = response.json()
-            print(f"✅ Server reachable")
+            print("✅ Server reachable")
             print(f"   Version: {server_info.get('version')}")
             print(f"   Registration: {server_info.get('registration')}\n")
 
@@ -88,7 +88,7 @@ def test_traccar(url: str, username: str, password: str, device_id: str = None):
                 return False
 
             devices = response.json()
-            print(f"✅ Devices endpoint working")
+            print("✅ Devices endpoint working")
             print(f"   Found {len(devices)} device(s)")
 
             if devices:
@@ -115,7 +115,7 @@ def test_traccar(url: str, username: str, password: str, device_id: str = None):
                 return False
 
             positions = response.json()
-            print(f"✅ Positions endpoint working")
+            print("✅ Positions endpoint working")
 
             if positions:
                 print(f"   Found {len(positions)} position(s)")
@@ -124,7 +124,7 @@ def test_traccar(url: str, username: str, password: str, device_id: str = None):
                     print(f"     Lat: {pos.get('latitude')}, Lon: {pos.get('longitude')}")
                     print(f"     Speed: {pos.get('speed')} knots")
                     print(f"     Time: {pos.get('fixTime')}")
-                    if pos.get('address'):
+                    if pos.get("address"):
                         print(f"     Address: {pos.get('address')}")
             else:
                 print("   ℹ️  No position data available yet")
@@ -135,7 +135,7 @@ def test_traccar(url: str, username: str, password: str, device_id: str = None):
             # Test 4: Check specific device if provided
             if device_id:
                 print(f"4️⃣  Checking device ID {device_id}...")
-                device_ids = [d.get('id') for d in devices]
+                device_ids = [d.get("id") for d in devices]
 
                 if int(device_id) in device_ids:
                     print(f"✅ Device {device_id} found in system")
@@ -160,6 +160,7 @@ def test_traccar(url: str, username: str, password: str, device_id: str = None):
     except Exception as e:
         print(f"❌ Unexpected error: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 

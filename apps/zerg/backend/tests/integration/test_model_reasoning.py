@@ -17,7 +17,6 @@ from langchain_openai import ChatOpenAI
 from zerg.models_config import AVAILABLE_MODELS
 from zerg.models_config import ModelProvider
 
-
 # Skip all tests if no API keys
 pytestmark = pytest.mark.integration
 
@@ -127,7 +126,8 @@ class TestModelValidation:
 
     def test_groq_model_without_api_key_raises_error(self):
         """Groq model without GROQ_API_KEY should raise ValueError."""
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
+        from unittest.mock import patch
 
         from zerg.services.oikos_react_engine import _make_llm
 

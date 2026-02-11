@@ -9,7 +9,6 @@ Tests the complete runner execution flow:
 - Concurrency control
 """
 
-import asyncio
 from unittest.mock import AsyncMock
 from unittest.mock import patch
 
@@ -155,9 +154,9 @@ class TestJobCRUD:
         # Combined output should be truncated to <= 50KB
         # Account for the "[truncated]" suffix
         combined_len = len(job.stdout_trunc or "") + len(job.stderr_trunc or "")
-        assert (
-            combined_len <= 51 * 1024
-        ), f"Combined output {combined_len} exceeds 51KB (50KB + truncation message buffer)"
+        assert combined_len <= 51 * 1024, (
+            f"Combined output {combined_len} exceeds 51KB (50KB + truncation message buffer)"
+        )
 
     def test_update_job_completed_success(self, db: Session, test_user: User, test_runner: tuple[Runner, str]):
         """Test marking job as completed with success."""
@@ -481,7 +480,9 @@ class TestJobDispatcher:
     async def test_complete_job(self):
         """Test completing a pending job."""
         import threading
+
         from zerg.services.runner_job_dispatcher import PendingJob
+
         dispatcher = get_runner_job_dispatcher()
 
         # Create a pending job

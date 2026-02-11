@@ -14,12 +14,14 @@ Or via Make: make eval
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
-from evals.asserters import SkipAssertion, run_assertion
-from evals.results_store import AssertionResult, CaseResult, get_commis_id, save_result_temp
+from evals.asserters import SkipAssertion
+from evals.asserters import run_assertion
+from evals.results_store import AssertionResult
+from evals.results_store import CaseResult
+from evals.results_store import get_commis_id
+from evals.results_store import save_result_temp
 
 
 def pytest_generate_tests(metafunc):
@@ -56,7 +58,7 @@ async def test_eval_case(eval_case, eval_runner):
     """
     dataset_name, case = eval_case
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Running: {case.id}")
     print(f"Category: {case.category}")
     if case.description:
@@ -66,11 +68,11 @@ async def test_eval_case(eval_case, eval_runner):
     if case.messages:
         print(f"Multi-turn conversation ({len(case.messages)} messages):")
         for i, msg in enumerate(case.messages):
-            print(f"  {i+1}. {msg.role}: {msg.content[:80]}...")
+            print(f"  {i + 1}. {msg.role}: {msg.content[:80]}...")
     else:
         print(f"Input: {case.input}")
 
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # Run the case (single-turn or multi-turn)
     if case.messages:
@@ -86,7 +88,7 @@ async def test_eval_case(eval_case, eval_runner):
             timeout=case.timeout,
         )
 
-    print(f"\nResults:")
+    print("\nResults:")
     print(f"  Status: {metrics.status}")
     print(f"  Latency: {metrics.latency_ms}ms")
     print(f"  Tokens: {metrics.total_tokens}")
@@ -96,7 +98,7 @@ async def test_eval_case(eval_case, eval_runner):
         print(f"  Result: {result_preview}")
 
     # Run assertions
-    print(f"\nAssertions:")
+    print("\nAssertions:")
     all_passed = True
     assertion_results: list[AssertionResult] = []
 
@@ -185,7 +187,7 @@ async def test_eval_case(eval_case, eval_runner):
                 )
             )
 
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     # Save result to temp file
     commis_id = get_commis_id()

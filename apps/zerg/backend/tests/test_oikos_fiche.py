@@ -8,13 +8,10 @@ This test suite verifies:
 5. Full delegation flow works end-to-end
 """
 
-from unittest.mock import Mock
 from unittest.mock import patch
 
-import pytest
-
-from tests.conftest import TEST_MODEL
 from tests.conftest import TEST_COMMIS_MODEL
+from tests.conftest import TEST_MODEL
 from zerg.crud import crud
 from zerg.models.enums import FicheStatus
 from zerg.prompts.oikos_prompt import get_oikos_prompt

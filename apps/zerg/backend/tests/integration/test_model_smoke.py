@@ -17,7 +17,6 @@ from langchain_openai import ChatOpenAI
 from zerg.models_config import AVAILABLE_MODELS
 from zerg.models_config import ModelProvider
 
-
 pytestmark = pytest.mark.integration
 
 

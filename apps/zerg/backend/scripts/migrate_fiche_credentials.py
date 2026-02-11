@@ -26,16 +26,21 @@ import argparse
 import logging
 import sys
 from collections import defaultdict
-from typing import Any, Dict, List, NamedTuple
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import NamedTuple
 
-from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 # Add backend to path so we can import app modules
 sys.path.append(".")
 
 from zerg.database import db_session
-from zerg.models.models import AccountConnectorCredential, Fiche, ConnectorCredential, User
+from zerg.models.models import AccountConnectorCredential
+from zerg.models.models import ConnectorCredential
+from zerg.models.models import Fiche
+from zerg.models.models import User
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -94,8 +99,7 @@ def migrate_credentials(db: Session, dry_run: bool = False):
 
             if existing_account_cred:
                 logger.info(
-                    f"  [SKIP] {conn_type}: Account credential already exists. "
-                    f"Keeping {len(items)} fiche overrides."
+                    f"  [SKIP] {conn_type}: Account credential already exists. Keeping {len(items)} fiche overrides."
                 )
                 continue
 
@@ -108,9 +112,7 @@ def migrate_credentials(db: Session, dry_run: bool = False):
 
             best_cred, best_fiche = items[0]
 
-            logger.info(
-                f"  [PROMOTE] {conn_type}: Promoting credential from Fiche {best_fiche.id} ({best_fiche.name})"
-            )
+            logger.info(f"  [PROMOTE] {conn_type}: Promoting credential from Fiche {best_fiche.id} ({best_fiche.name})")
 
             if not dry_run:
                 # Create account credential
@@ -124,7 +126,7 @@ def migrate_credentials(db: Session, dry_run: bool = False):
                     last_tested_at=best_cred.last_tested_at,
                 )
                 db.add(new_account_cred)
-                db.flush() # get ID
+                db.flush()  # get ID
                 total_promoted += 1
 
             # Identify redundant credentials
@@ -174,6 +176,6 @@ if __name__ == "__main__":
     with db_session() as db:
         try:
             migrate_credentials(db, dry_run=args.dry_run)
-        except Exception as e:
+        except Exception:
             logger.exception("Migration failed")
             sys.exit(1)

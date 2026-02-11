@@ -394,7 +394,7 @@ def initialize_database(engine: Engine = None) -> None:
     is_compatible, version_str = check_sqlite_version(target_engine)
     if not is_compatible:
         min_ver = ".".join(str(x) for x in SQLITE_MIN_VERSION)
-        raise RuntimeError(f"SQLite version {version_str} is below minimum {min_ver}. " f"Upgrade SQLite to use this application.")
+        raise RuntimeError(f"SQLite version {version_str} is below minimum {min_ver}. Upgrade SQLite to use this application.")
     logger.debug(f"SQLite version {version_str} meets requirements")
 
     # Strip any schema references for SQLite (which doesn't support schemas)

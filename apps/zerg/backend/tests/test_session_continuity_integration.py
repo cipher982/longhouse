@@ -21,8 +21,10 @@ pytestmark = pytest.mark.skipif(
 
 async def _create_test_session() -> str | None:
     """Create a small test session via the Longhouse ingest API."""
+    from datetime import datetime
+    from datetime import timezone
+
     import httpx
-    from datetime import datetime, timezone
 
     api_url = os.getenv("LONGHOUSE_API_URL", "http://localhost:47300")
     now = datetime.now(timezone.utc)
@@ -104,7 +106,7 @@ class TestPrepareSessionIntegration:
         first_event = json.loads(lines[0])
         assert "role" in first_event or "content" in first_event, f"Unexpected event format: {first_event.keys()}"
 
-        print(f"\n✓ Fetched real session from Longhouse")
+        print("\n✓ Fetched real session from Longhouse")
         print(f"  Longhouse session ID: {session_id}")
         print(f"  Provider session ID: {provider_session_id}")
         print(f"  CWD: {cwd}")
@@ -114,10 +116,8 @@ class TestPrepareSessionIntegration:
     @pytest.mark.asyncio
     async def test_prepare_session_creates_correct_file(self):
         """Full E2E: fetch from Longhouse and write to correct Claude Code path."""
-        from zerg.services.session_continuity import (
-            encode_cwd_for_claude,
-            prepare_session_for_resume,
-        )
+        from zerg.services.session_continuity import encode_cwd_for_claude
+        from zerg.services.session_continuity import prepare_session_for_resume
 
         session_id = await _create_test_session()
         if not session_id:
@@ -172,6 +172,7 @@ class TestPrepareSessionIntegration:
         with pytest.raises((ValueError, Exception)):
             await fetch_session_from_zerg("not-a-valid-uuid")
 
+
 class TestShipSessionIntegration:
     """Integration tests for shipping sessions back to Longhouse."""
 
@@ -196,10 +197,8 @@ class TestShipSessionIntegration:
         This test requires the Zerg API to be running locally (via make dev).
         It tests the full ingest flow, not just mocked behavior.
         """
-        from zerg.services.session_continuity import (
-            encode_cwd_for_claude,
-            ship_session_to_zerg,
-        )
+        from zerg.services.session_continuity import encode_cwd_for_claude
+        from zerg.services.session_continuity import ship_session_to_zerg
 
         with tempfile.TemporaryDirectory() as workspace:
             workspace_path = Path(workspace)
@@ -217,7 +216,8 @@ class TestShipSessionIntegration:
 
                 # Write minimal valid session data with proper timestamp
                 import json
-                from datetime import datetime, timezone
+                from datetime import datetime
+                from datetime import timezone
 
                 now = datetime.now(timezone.utc).isoformat()
                 test_events = [
@@ -292,10 +292,8 @@ class TestEndToEndResumeFlow:
     @pytest.mark.asyncio
     async def test_full_prepare_and_verify_path(self):
         """Complete flow: fetch → prepare → verify path matches Claude Code expectations."""
-        from zerg.services.session_continuity import (
-            encode_cwd_for_claude,
-            prepare_session_for_resume,
-        )
+        from zerg.services.session_continuity import encode_cwd_for_claude
+        from zerg.services.session_continuity import prepare_session_for_resume
 
         # Get a real session
         session_id = await _create_test_session()

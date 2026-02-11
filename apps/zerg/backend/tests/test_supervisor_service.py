@@ -11,8 +11,8 @@ from zerg.models.enums import RunStatus
 from zerg.models.models import Run
 from zerg.services.oikos_context import get_next_seq
 from zerg.services.oikos_context import get_oikos_context
-from zerg.services.oikos_context import reset_seq
 from zerg.services.oikos_context import reset_oikos_context
+from zerg.services.oikos_context import reset_seq
 from zerg.services.oikos_context import set_oikos_context
 from zerg.services.oikos_service import OIKOS_THREAD_TYPE
 from zerg.services.oikos_service import OikosService

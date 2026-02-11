@@ -521,7 +521,8 @@ async def lifespan(app: FastAPI):
 
                         started.append("git_sync")
                         logger.info(
-                            "Git sync service initialized: %s", git_service.current_sha[:8] if git_service.current_sha else "unknown"
+                            "Git sync service initialized: %s",
+                            git_service.current_sha[:8] if git_service.current_sha else "unknown",
                         )
 
                     # Create scheduler for job cron triggers

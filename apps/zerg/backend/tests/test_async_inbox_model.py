@@ -8,12 +8,15 @@ These tests verify the critical bugs fixed in the async inbox model implementati
 
 import tempfile
 import uuid
+from datetime import datetime
+from datetime import timezone
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
-from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock, patch, AsyncMock
 
-from tests.conftest import TEST_MODEL, TEST_COMMIS_MODEL
+from tests.conftest import TEST_COMMIS_MODEL
+from tests.conftest import TEST_MODEL
 
 
 @pytest.fixture
@@ -30,11 +33,11 @@ class TestWaitForCommisInterrupt:
     @pytest.mark.asyncio
     async def test_wait_for_commis_raises_interrupt_for_running_job(self, db_session, test_user):
         """wait_for_commis should raise FicheInterrupted when job is still running."""
-        from zerg.models.models import CommisJob
-        from zerg.managers.fiche_runner import FicheInterrupted
-        from zerg.tools.builtin.oikos_tools import wait_for_commis_async
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
+        from zerg.managers.fiche_runner import FicheInterrupted
+        from zerg.models.models import CommisJob
+        from zerg.tools.builtin.oikos_tools import wait_for_commis_async
 
         # Create a running commis job
         job = CommisJob(
@@ -69,11 +72,11 @@ class TestWaitForCommisInterrupt:
     @pytest.mark.asyncio
     async def test_wait_for_commis_returns_result_for_completed_job(self, db_session, test_user, temp_artifact_path):
         """wait_for_commis should return result immediately for completed jobs."""
-        from zerg.models.models import CommisJob
-        from zerg.tools.builtin.oikos_tools import wait_for_commis_async
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
+        from zerg.models.models import CommisJob
         from zerg.services.commis_artifact_store import CommisArtifactStore
+        from zerg.tools.builtin.oikos_tools import wait_for_commis_async
 
         # Create artifact store and commis
         artifact_store = CommisArtifactStore(base_path=temp_artifact_path)
@@ -116,10 +119,10 @@ class TestWaitForCommisInterrupt:
     @pytest.mark.asyncio
     async def test_wait_for_commis_interrupt_propagates_through_gather(self, db_session, test_user):
         """FicheInterrupted from wait_for_commis should propagate through asyncio.gather."""
-        from zerg.models.models import CommisJob
-        from zerg.managers.fiche_runner import FicheInterrupted
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
+        from zerg.managers.fiche_runner import FicheInterrupted
+        from zerg.models.models import CommisJob
 
         # Create a running commis job
         job = CommisJob(
@@ -139,8 +142,9 @@ class TestWaitForCommisInterrupt:
 
         try:
             # Simulate the tool execution path in oikos_react_engine
-            from zerg.tools.builtin.oikos_tools import wait_for_commis_async
             import asyncio
+
+            from zerg.tools.builtin.oikos_tools import wait_for_commis_async
 
             async def execute_tool():
                 return await wait_for_commis_async(str(job.id), _tool_call_id="gather-test-123")
@@ -167,9 +171,11 @@ class TestPendingToolCallIdResume:
     @pytest.mark.asyncio
     async def test_pending_tool_call_id_takes_priority_over_commis_job(self, db_session, test_user):
         """pending_tool_call_id should be used before CommisJob.tool_call_id lookup."""
-        from zerg.models.models import Run, CommisJob
-        from zerg.models.enums import RunStatus, RunTrigger
         from zerg.crud import crud
+        from zerg.models.enums import RunStatus
+        from zerg.models.enums import RunTrigger
+        from zerg.models.models import CommisJob
+        from zerg.models.models import Run
 
         # Create oikos fiche and thread
         fiche = crud.create_fiche(
@@ -181,6 +187,7 @@ class TestPendingToolCallIdResume:
             task_instructions="",
         )
         from zerg.services.thread_service import ThreadService
+
         thread = ThreadService.create_thread_with_system_message(
             db_session,
             fiche,
@@ -218,7 +225,6 @@ class TestPendingToolCallIdResume:
 
         # Now verify the priority order in commis_resume
         # The pending_tool_call_id should be used, not the CommisJob one
-        from zerg.services.commis_resume import _continue_oikos_langgraph_free
 
         # We can't easily test the full resume flow, but we can check the logic
         # by reading the run and verifying pending_tool_call_id is set
@@ -341,12 +347,12 @@ class TestAsyncInboxModelIntegration:
     @pytest.mark.asyncio
     async def test_spawn_commis_non_blocking(self, db_session, test_user):
         """spawn_commis should return immediately (not raise FicheInterrupted)."""
-        from zerg.models.models import CommisJob
-        from zerg.tools.builtin.oikos_tools import spawn_commis_async
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
-        from zerg.services.oikos_context import set_oikos_context, reset_oikos_context
-        from unittest.mock import MagicMock, patch
+        from zerg.models.models import CommisJob
+        from zerg.services.oikos_context import reset_oikos_context
+        from zerg.services.oikos_context import set_oikos_context
+        from zerg.tools.builtin.oikos_tools import spawn_commis_async
 
         # Set up credential resolver context
         resolver = CredentialResolver(fiche_id=None, db=db_session, owner_id=test_user.id)
@@ -386,9 +392,7 @@ class TestAsyncInboxModelIntegration:
                 assert "queued successfully" in result or "Commis job" in result
 
                 # Job should be created
-                job = db_session.query(CommisJob).filter(
-                    CommisJob.task == "Test async spawn"
-                ).first()
+                job = db_session.query(CommisJob).filter(CommisJob.task == "Test async spawn").first()
                 assert job is not None
                 assert job.status == "queued"
         finally:
@@ -402,10 +406,10 @@ class TestCancelCommis:
     @pytest.mark.asyncio
     async def test_cancel_commis_sets_status_to_cancelled(self, db_session, test_user):
         """cancel_commis should set job status to 'cancelled'."""
-        from zerg.models.models import CommisJob
-        from zerg.tools.builtin.oikos_tools import cancel_commis_async
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
+        from zerg.models.models import CommisJob
+        from zerg.tools.builtin.oikos_tools import cancel_commis_async
 
         # Create a running commis job
         job = CommisJob(
@@ -441,10 +445,10 @@ class TestCancelCommis:
     @pytest.mark.asyncio
     async def test_cancel_already_completed_job_returns_error(self, db_session, test_user):
         """cancel_commis should error for already completed jobs."""
-        from zerg.models.models import CommisJob
-        from zerg.tools.builtin.oikos_tools import cancel_commis_async
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
+        from zerg.models.models import CommisJob
+        from zerg.tools.builtin.oikos_tools import cancel_commis_async
 
         # Create a completed commis job
         job = CommisJob(
@@ -482,10 +486,10 @@ class TestCheckCommisStatus:
     @pytest.mark.asyncio
     async def test_check_commis_status_specific_job(self, db_session, test_user):
         """check_commis_status with job_id should return job details."""
-        from zerg.models.models import CommisJob
-        from zerg.tools.builtin.oikos_tools import check_commis_status_async
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
+        from zerg.models.models import CommisJob
+        from zerg.tools.builtin.oikos_tools import check_commis_status_async
 
         # Create a commis job
         job = CommisJob(
@@ -518,10 +522,10 @@ class TestCheckCommisStatus:
     @pytest.mark.asyncio
     async def test_check_commis_status_list_active(self, db_session, test_user):
         """check_commis_status without job_id should list all active commis."""
-        from zerg.models.models import CommisJob
-        from zerg.tools.builtin.oikos_tools import check_commis_status_async
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
+        from zerg.models.models import CommisJob
+        from zerg.tools.builtin.oikos_tools import check_commis_status_async
 
         # Create multiple jobs with different statuses
         for status in ["running", "queued", "success"]:
@@ -563,13 +567,16 @@ class TestParallelSpawnCommisConfig:
         resume_session_id args when creating CommisJob, causing all commis to run
         as scratch workspaces.
         """
-        from zerg.models.models import CommisJob, Run
-        from zerg.models.enums import RunStatus, RunTrigger
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
-        from zerg.services.oikos_context import set_oikos_context, reset_oikos_context
-        from zerg.services.oikos_react_engine import _execute_tools_parallel
         from zerg.crud import crud
+        from zerg.models.enums import RunStatus
+        from zerg.models.enums import RunTrigger
+        from zerg.models.models import CommisJob
+        from zerg.models.models import Run
+        from zerg.services.oikos_context import reset_oikos_context
+        from zerg.services.oikos_context import set_oikos_context
+        from zerg.services.oikos_react_engine import _execute_tools_parallel
         from zerg.services.thread_service import ThreadService
 
         # Create fiche, thread, and run for the oikos context
@@ -639,11 +646,7 @@ class TestParallelSpawnCommisConfig:
             )
 
             # Find the created CommisJob
-            job = (
-                db_session.query(CommisJob)
-                .filter(CommisJob.tool_call_id == "call_test_git_repo_123")
-                .first()
-            )
+            job = db_session.query(CommisJob).filter(CommisJob.tool_call_id == "call_test_git_repo_123").first()
 
             # Assert the job was created
             assert job is not None, "CommisJob should have been created"
@@ -671,13 +674,16 @@ class TestParallelSpawnCommisConfig:
     @pytest.mark.asyncio
     async def test_parallel_spawn_commis_without_git_repo_has_no_config(self, db_session, test_user):
         """spawn_commis without git_repo should have null config (scratch workspace)."""
-        from zerg.models.models import CommisJob, Run
-        from zerg.models.enums import RunStatus, RunTrigger
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
-        from zerg.services.oikos_context import set_oikos_context, reset_oikos_context
-        from zerg.services.oikos_react_engine import _execute_tools_parallel
         from zerg.crud import crud
+        from zerg.models.enums import RunStatus
+        from zerg.models.enums import RunTrigger
+        from zerg.models.models import CommisJob
+        from zerg.models.models import Run
+        from zerg.services.oikos_context import reset_oikos_context
+        from zerg.services.oikos_context import set_oikos_context
+        from zerg.services.oikos_react_engine import _execute_tools_parallel
         from zerg.services.thread_service import ThreadService
 
         # Create fiche, thread, and run for the oikos context
@@ -745,11 +751,7 @@ class TestParallelSpawnCommisConfig:
             )
 
             # Find the created CommisJob
-            job = (
-                db_session.query(CommisJob)
-                .filter(CommisJob.tool_call_id == "call_no_git_repo_456")
-                .first()
-            )
+            job = db_session.query(CommisJob).filter(CommisJob.tool_call_id == "call_no_git_repo_456").first()
 
             # Assert the job was created
             assert job is not None, "CommisJob should have been created"
@@ -778,13 +780,16 @@ class TestParallelSpawnCommisConfig:
         - job_ids: list of job IDs
         - created_jobs: list of job info dicts for barrier creation
         """
-        from zerg.models.models import CommisJob, Run
-        from zerg.models.enums import RunStatus, RunTrigger
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
-        from zerg.services.oikos_context import set_oikos_context, reset_oikos_context
-        from zerg.services.oikos_react_engine import _execute_tools_parallel
         from zerg.crud import crud
+        from zerg.models.enums import RunStatus
+        from zerg.models.enums import RunTrigger
+        from zerg.models.models import CommisJob
+        from zerg.models.models import Run
+        from zerg.services.oikos_context import reset_oikos_context
+        from zerg.services.oikos_context import set_oikos_context
+        from zerg.services.oikos_react_engine import _execute_tools_parallel
         from zerg.services.thread_service import ThreadService
 
         # Create fiche, thread, and run for the oikos context

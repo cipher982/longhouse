@@ -3,8 +3,8 @@ from unittest.mock import patch
 
 import pytest
 
-from tests.conftest import TEST_MODEL
 from tests.conftest import TEST_COMMIS_MODEL
+from tests.conftest import TEST_MODEL
 from zerg.config import Settings
 from zerg.crud import crud
 from zerg.main import app

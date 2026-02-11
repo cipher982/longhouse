@@ -83,6 +83,7 @@ class TestDurableRunsTimeout:
         event_bus.subscribe(EventType.ERROR, capture_error)
 
         try:
+
             async def slow_run_thread(_self, *_args, **_kwargs):
                 await asyncio.sleep(0.2)
                 return []
@@ -270,6 +271,7 @@ class TestResumeFlow:
         assert result["status"] == "skipped"
         assert "not WAITING" in result["reason"]
 
+
 @pytest.mark.timeout(30)
 class TestHeartbeatCounterReset:
     """Test that heartbeat events reset no-progress counter."""
@@ -279,18 +281,16 @@ class TestHeartbeatCounterReset:
         assert hasattr(EventType, "COMMIS_HEARTBEAT")
 
     @pytest.mark.asyncio
-    async def test_heartbeat_resets_no_progress_counter(
-        self, monkeypatch, db_session, test_user, tmp_path
-    ):
+    async def test_heartbeat_resets_no_progress_counter(self, monkeypatch, db_session, test_user, tmp_path):
         """Test that heartbeat event handler resets the no-progress counter.
 
         This tests the heartbeat handler logic directly without needing
         a full roundabout monitoring loop (which is tested in test_roundabout_monitor.py).
         """
-        from zerg.services.roundabout_monitor import RoundaboutMonitor
-        from zerg.services.commis_artifact_store import CommisArtifactStore
-        from zerg.models.models import CommisJob
         from tests.conftest import TEST_COMMIS_MODEL
+        from zerg.models.models import CommisJob
+        from zerg.services.commis_artifact_store import CommisArtifactStore
+        from zerg.services.roundabout_monitor import RoundaboutMonitor
 
         # Isolate commis artifacts
         monkeypatch.setenv("LONGHOUSE_DATA_PATH", str(tmp_path / "commis"))
@@ -312,9 +312,7 @@ class TestHeartbeatCounterReset:
         db_session.refresh(job)
 
         # Create monitor (but don't start the monitoring loop)
-        monitor = RoundaboutMonitor(
-            db_session, job.id, owner_id=test_user.id, timeout_seconds=3
-        )
+        monitor = RoundaboutMonitor(db_session, job.id, owner_id=test_user.id, timeout_seconds=3)
 
         # Manually set counter to a high value
         monitor._polls_without_progress = 10

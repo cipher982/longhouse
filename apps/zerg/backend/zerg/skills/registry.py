@@ -96,7 +96,7 @@ class SkillRegistry:
         self._entries = {e.name: e for e in entries}
         self._version += 1
 
-        logger.info(f"Loaded {len(self._skills)} skills for workspace " f"{self._workspace_path or 'default'}")
+        logger.info(f"Loaded {len(self._skills)} skills for workspace {self._workspace_path or 'default'}")
 
     def reload(
         self,

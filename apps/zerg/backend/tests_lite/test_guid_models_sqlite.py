@@ -4,8 +4,6 @@ Ensures DeviceToken and Memory models work correctly with SQLite,
 verifying UUID→String(36) conversion is transparent.
 """
 
-from datetime import datetime
-from datetime import timezone
 from uuid import uuid4
 
 from sqlalchemy import text

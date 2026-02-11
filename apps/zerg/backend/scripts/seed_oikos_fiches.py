@@ -15,7 +15,6 @@ from pathlib import Path
 # Add parent directory to path so we can import zerg modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from zerg.config import get_settings
 from zerg.crud import crud
 from zerg.database import get_db
 from zerg.models.enums import FicheStatus
@@ -146,10 +145,14 @@ def seed_fiches():
 
     for fiche_def in OIKOS_FICHES:
         # Check if fiche already exists
-        existing = db.query(Fiche).filter(
-            Fiche.name == fiche_def["name"],
-            Fiche.owner_id == oikos_user.id,
-        ).first()
+        existing = (
+            db.query(Fiche)
+            .filter(
+                Fiche.name == fiche_def["name"],
+                Fiche.owner_id == oikos_user.id,
+            )
+            .first()
+        )
 
         if existing:
             print(f"  ⚠️  Fiche already exists: {fiche_def['name']} (updating...)")
@@ -180,7 +183,7 @@ def seed_fiches():
 
     db.commit()
 
-    print(f"\n✅ Seeding complete!")
+    print("\n✅ Seeding complete!")
     print(f"   Created: {created_count} fiches")
     print(f"   Updated: {updated_count} fiches")
     print(f"   Total: {created_count + updated_count} Oikos fiches")
@@ -194,5 +197,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"❌ Error seeding fiches: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)

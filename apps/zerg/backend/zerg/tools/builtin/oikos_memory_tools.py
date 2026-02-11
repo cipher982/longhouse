@@ -359,7 +359,7 @@ TOOLS: List[StructuredTool] = [
         func=forget_memory,
         coroutine=forget_memory_async,
         name="forget_memory",
-        description="Delete a specific memory by its ID. " "Use to remove outdated or incorrect information.",
+        description="Delete a specific memory by its ID. Use to remove outdated or incorrect information.",
     ),
 ]
 

@@ -6,12 +6,12 @@ from datetime import timezone
 
 import pytest
 
-from zerg.context import CommisContext
-from zerg.context import reset_commis_context
-from zerg.context import set_commis_context
 from zerg.commis_metrics import MetricsCollector
 from zerg.commis_metrics import reset_metrics_collector
 from zerg.commis_metrics import set_metrics_collector
+from zerg.context import CommisContext
+from zerg.context import reset_commis_context
+from zerg.context import set_commis_context
 
 
 @pytest.fixture

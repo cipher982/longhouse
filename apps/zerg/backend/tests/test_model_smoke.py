@@ -11,11 +11,11 @@ Run with: make test (included in regular test suite)
 
 import pytest
 
-from zerg.models_config import AVAILABLE_MODELS
-from zerg.models_config import ModelProvider
 from zerg.models_config import _CONFIG
 from zerg.models_config import _MODELS
 from zerg.models_config import _TIERS
+from zerg.models_config import AVAILABLE_MODELS
+from zerg.models_config import ModelProvider
 from zerg.models_config import get_model_by_id
 
 
@@ -48,9 +48,7 @@ class TestModelConfigSchema:
             if not caps.get("reasoning", False):
                 # If model doesn't support reasoning, reasoningNone should be false or absent
                 reasoning_none = caps.get("reasoningNone", False)
-                assert not reasoning_none, (
-                    f"{model_id} has reasoning=false but reasoningNone=true (inconsistent)"
-                )
+                assert not reasoning_none, f"{model_id} has reasoning=false but reasoningNone=true (inconsistent)"
 
     def test_all_providers_are_valid_enum(self):
         """All provider values must be valid ModelProvider enum members."""
@@ -136,9 +134,7 @@ class TestRealtimeModels:
         realtime_tiers = _CONFIG["realtime"]["tiers"]
         realtime_models = _CONFIG["realtime"]["models"]
         for tier_name, model_id in realtime_tiers.items():
-            assert model_id in realtime_models, (
-                f"Realtime tier {tier_name} references non-existent model '{model_id}'"
-            )
+            assert model_id in realtime_models, f"Realtime tier {tier_name} references non-existent model '{model_id}'"
 
     def test_realtime_aliases_reference_valid_models(self):
         """Realtime aliases should reference existing models."""
@@ -147,27 +143,21 @@ class TestRealtimeModels:
         realtime_aliases = _CONFIG["realtime"]["aliases"]
         realtime_models = _CONFIG["realtime"]["models"]
         for alias, model_id in realtime_aliases.items():
-            assert model_id in realtime_models, (
-                f"Realtime alias '{alias}' references non-existent model '{model_id}'"
-            )
+            assert model_id in realtime_models, f"Realtime alias '{alias}' references non-existent model '{model_id}'"
 
     def test_realtime_defaults_reference_valid_tiers(self):
         """Realtime defaults should reference valid tiers."""
         realtime_defaults = _CONFIG["defaults"].get("realtime", {})
         realtime_tiers = set(_CONFIG["realtime"]["tiers"].keys())
         for context, tier in realtime_defaults.items():
-            assert tier in realtime_tiers, (
-                f"Realtime default '{context}' references invalid tier '{tier}'"
-            )
+            assert tier in realtime_tiers, f"Realtime default '{context}' references invalid tier '{tier}'"
 
     def test_realtime_use_cases_reference_valid_tiers(self):
         """Realtime use cases should reference valid tiers."""
         realtime_use_cases = _CONFIG["useCases"].get("realtime", {})
         realtime_tiers = set(_CONFIG["realtime"]["tiers"].keys())
         for use_case, tier in realtime_use_cases.items():
-            assert tier in realtime_tiers, (
-                f"Realtime use case '{use_case}' references invalid tier '{tier}'"
-            )
+            assert tier in realtime_tiers, f"Realtime use case '{use_case}' references invalid tier '{tier}'"
 
 
 class TestUseCaseMapping:

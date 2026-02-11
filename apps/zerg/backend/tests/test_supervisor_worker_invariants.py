@@ -12,8 +12,8 @@ Key invariants:
 import pytest
 
 from zerg.models.enums import RunStatus
-from zerg.models.models import Run
 from zerg.models.models import CommisJob
+from zerg.models.models import Run
 from zerg.services.commis_resume import resume_oikos_with_commis_result
 
 
@@ -194,26 +194,32 @@ class TestOikosCommisInvariants:
         db_session.commit()
 
         # Verify all jobs are linked to the oikos run
-        linked_jobs = db_session.query(CommisJob).filter(
-            CommisJob.oikos_run_id == run.id
-        ).all()
+        linked_jobs = db_session.query(CommisJob).filter(CommisJob.oikos_run_id == run.id).all()
         assert len(linked_jobs) == 3
 
         # Verify we can check if any commis are still active
-        active_commis = db_session.query(CommisJob).filter(
-            CommisJob.oikos_run_id == run.id,
-            CommisJob.status.in_(["queued", "running"]),
-        ).count()
+        active_commis = (
+            db_session.query(CommisJob)
+            .filter(
+                CommisJob.oikos_run_id == run.id,
+                CommisJob.status.in_(["queued", "running"]),
+            )
+            .count()
+        )
         assert active_commis == 3
 
         # Mark one as complete
         jobs[0].status = "success"
         db_session.commit()
 
-        active_commis = db_session.query(CommisJob).filter(
-            CommisJob.oikos_run_id == run.id,
-            CommisJob.status.in_(["queued", "running"]),
-        ).count()
+        active_commis = (
+            db_session.query(CommisJob)
+            .filter(
+                CommisJob.oikos_run_id == run.id,
+                CommisJob.status.in_(["queued", "running"]),
+            )
+            .count()
+        )
         assert active_commis == 2
 
     @pytest.mark.asyncio

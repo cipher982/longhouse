@@ -7,12 +7,12 @@ from unittest.mock import patch
 
 import pytest
 
-from tests.conftest import TEST_MODEL
 from tests.conftest import TEST_COMMIS_MODEL
+from tests.conftest import TEST_MODEL
 from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
-from zerg.tools.builtin.oikos_tools import get_commis_metadata
 from zerg.tools.builtin.oikos_tools import get_commis_evidence
+from zerg.tools.builtin.oikos_tools import get_commis_metadata
 from zerg.tools.builtin.oikos_tools import get_tool_output
 from zerg.tools.builtin.oikos_tools import grep_commiss
 from zerg.tools.builtin.oikos_tools import list_commiss
@@ -234,9 +234,7 @@ def test_spawn_workspace_commis_ssh_scheme_url(credential_context, temp_artifact
     assert job.config.get("execution_mode") == "workspace"
 
 
-def test_spawn_workspace_commis_rejects_ssh_option_injection(
-    credential_context, temp_artifact_path, db_session
-):
+def test_spawn_workspace_commis_rejects_ssh_option_injection(credential_context, temp_artifact_path, db_session):
     """Test ssh:// URLs with option injection are rejected."""
     before_count = _count_commis_jobs(db_session)
     result = spawn_workspace_commis(
@@ -250,9 +248,7 @@ def test_spawn_workspace_commis_rejects_ssh_option_injection(
     assert _count_commis_jobs(db_session) == before_count
 
 
-def test_spawn_workspace_commis_security_filtering(
-    credential_context, temp_artifact_path, db_session, test_user
-):
+def test_spawn_workspace_commis_security_filtering(credential_context, temp_artifact_path, db_session, test_user):
     """Test that workspace commiss respect owner isolation."""
     from zerg.connectors.resolver import CredentialResolver
     from zerg.crud import crud

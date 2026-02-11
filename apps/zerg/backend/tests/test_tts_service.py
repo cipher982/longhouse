@@ -269,6 +269,7 @@ class TestTTSService:
         with patch("httpx.AsyncClient", return_value=mock_client):
             # Force edge_tts import to fail
             import sys
+
             original_modules = sys.modules.copy()
             sys.modules["edge_tts"] = None
 

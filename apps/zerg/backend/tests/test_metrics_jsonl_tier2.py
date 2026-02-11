@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.commis_metrics import MetricsCollector
 from zerg.commis_metrics import get_metrics_collector
 from zerg.commis_metrics import reset_metrics_collector
 from zerg.commis_metrics import set_metrics_collector
+from zerg.services.commis_artifact_store import CommisArtifactStore
 
 
 @pytest.fixture

@@ -43,8 +43,8 @@ def test_gmail_connector_initialises_watch(client, monkeypatch):
 def test_gmail_connector_stores_email_and_uses_pubsub_topic(client, monkeypatch):
     """Connecting Gmail should store emailAddress and prefer Pub/Sub topic watches."""
 
-    from types import SimpleNamespace
     import sys
+    from types import SimpleNamespace
 
     from zerg.routers import auth as auth_router
     from zerg.services import gmail_api as gmail_api_mod

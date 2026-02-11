@@ -26,11 +26,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from sqlalchemy import select
+
 from zerg.database import default_session_factory
-from zerg.models.models import User, AccountConnectorCredential
+from zerg.models.models import AccountConnectorCredential
+from zerg.models.models import User
 from zerg.utils.crypto import decrypt
 from zerg.utils.crypto import encrypt
-
 
 # Default locations to look for credentials file (in order)
 DEFAULT_CREDS_PATHS = [
@@ -121,10 +122,14 @@ def seed_credential(
         True if credential was created/updated, False if skipped
     """
     # Check for existing credential
-    existing = db.query(AccountConnectorCredential).filter(
-        AccountConnectorCredential.owner_id == user.id,
-        AccountConnectorCredential.connector_type == connector_type,
-    ).first()
+    existing = (
+        db.query(AccountConnectorCredential)
+        .filter(
+            AccountConnectorCredential.owner_id == user.id,
+            AccountConnectorCredential.connector_type == connector_type,
+        )
+        .first()
+    )
 
     if existing and not (force or merge):
         print(f"  SKIP: {connector_type} (already configured, use --force to overwrite)")
@@ -237,6 +242,7 @@ def main():
     except Exception as e:
         print(f"ERROR: {e}")
         import traceback
+
         traceback.print_exc()
         db.rollback()
         return 1

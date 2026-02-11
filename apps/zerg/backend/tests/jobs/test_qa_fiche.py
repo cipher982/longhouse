@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import json
-from datetime import UTC
-from datetime import datetime
-from pathlib import Path
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -22,7 +18,7 @@ class TestParseFicheState:
 
     def test_parse_json_block(self):
         """Should parse JSON from markdown code block."""
-        stdout = '''
+        stdout = """
 Here is my analysis:
 
 ```json
@@ -40,7 +36,7 @@ Here is my analysis:
 ```
 
 Done.
-'''
+"""
         result, parse_ok = _parse_fiche_state(stdout)
 
         assert parse_ok is True
@@ -289,7 +285,6 @@ class TestAgentFailureHandling:
     @pytest.mark.asyncio
     async def test_fiche_failure_preserves_previous_state(self):
         """Fiche failure should preserve previous state, not clear it."""
-        from zerg.jobs.qa.qa_fiche import _default_state
         from zerg.jobs.qa.qa_fiche import run
 
         previous_state = {

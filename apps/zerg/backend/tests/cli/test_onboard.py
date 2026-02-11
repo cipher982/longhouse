@@ -1,6 +1,5 @@
 """Tests for CLI onboarding wizard."""
 
-import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -154,7 +153,6 @@ class TestConfigSaving:
 
     def test_onboard_saves_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that onboard saves config to correct location."""
-        from zerg.cli.config_file import get_config_path
         from zerg.cli.config_file import load_config
         from zerg.cli.config_file import save_config
 

@@ -4,10 +4,7 @@ Ensures config.db_is_sqlite() handles quoted URLs from .env files correctly,
 aligning with database._is_sqlite_url() behavior.
 """
 
-import os
-from unittest.mock import patch
 
-import pytest
 
 
 class TestDbIsSqlite:

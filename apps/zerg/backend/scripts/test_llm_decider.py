@@ -12,18 +12,20 @@ Run: cd apps/zerg/backend && uv run python scripts/test_llm_decider.py
 import asyncio
 import json
 import os
-import time
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 
 # Add the parent directory to the path for imports
 import sys
+import time
+from dataclasses import asdict
+from dataclasses import dataclass
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 @dataclass
 class MockToolActivity:
     """Mock tool activity for testing."""
+
     tool_name: str
     status: str  # started, completed, failed
     duration_ms: int | None = None
@@ -33,6 +35,7 @@ class MockToolActivity:
 @dataclass
 class LLMDecisionPayload:
     """Compact payload for LLM decision making."""
+
     job_id: int
     status: str
     elapsed_seconds: float
@@ -333,13 +336,15 @@ async def run_tests():
         print(f"  {status}")
         print()
 
-        results.append({
-            "name": scenario["name"],
-            "expected": expected,
-            "actual": action,
-            "passed": passed,
-            "response_time_ms": response_time,
-        })
+        results.append(
+            {
+                "name": scenario["name"],
+                "expected": expected,
+                "actual": action,
+                "passed": passed,
+                "response_time_ms": response_time,
+            }
+        )
 
     # Summary
     print("=" * 60)
@@ -349,14 +354,14 @@ async def run_tests():
     total = len(results)
     print(f"Passed: {passed}/{total}")
     print(f"Total LLM time: {total_time:.0f}ms")
-    print(f"Avg response time: {total_time/total:.0f}ms")
+    print(f"Avg response time: {total_time / total:.0f}ms")
 
     # Check timing constraint
     avg_time = total_time / total
     if avg_time > 1500:
         print(f"\n⚠️  WARNING: Average response time {avg_time:.0f}ms exceeds 1500ms target")
     else:
-        print(f"\n✓ Response times within target (<1500ms)")
+        print("\n✓ Response times within target (<1500ms)")
 
     # List failures
     failures = [r for r in results if not r["passed"]]

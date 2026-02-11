@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from zerg.services.oikos_service import OikosService
     from zerg.services.oikos_service import OikosRunResult
+    from zerg.services.oikos_service import OikosService
 
 
 @dataclass
@@ -120,7 +120,8 @@ class EvalRunner:
             ).delete()
 
             # Inject conversation history (all but last message)
-            from datetime import datetime, timezone
+            from datetime import datetime
+            from datetime import timezone
 
             for msg in messages[:-1]:
                 thread_msg = ThreadMessage(
@@ -168,9 +169,7 @@ class EvalRunner:
         # Count commis spawned
         from zerg.models import CommisJob
 
-        commis_spawned = (
-            self.oikos_service.db.query(CommisJob).filter(CommisJob.oikos_run_id == result.run_id).count()
-        )
+        commis_spawned = self.oikos_service.db.query(CommisJob).filter(CommisJob.oikos_run_id == result.run_id).count()
 
         # Collect tools called (from durable run events)
         from zerg.models.run_event import RunEvent
@@ -206,7 +205,6 @@ class EvalRunner:
         Eval tests run in-process without that loop, so we execute queued jobs
         directly to make commis artifacts available for assertions.
         """
-        from datetime import datetime, timezone
 
         from zerg.models import CommisJob
         from zerg.services.commis_artifact_store import CommisArtifactStore

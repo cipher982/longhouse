@@ -527,7 +527,11 @@ async def _execute_tools_parallel(
                 raise
             except Exception as exc:
                 logger.exception(f"Parallel tool error: {tc.get('name')}")
-                return ToolMessage(content=f"<tool-error>{exc}</tool-error>", tool_call_id=tc.get("id", ""), name=tc.get("name", "unknown"))
+                return ToolMessage(
+                    content=f"<tool-error>{exc}</tool-error>",
+                    tool_call_id=tc.get("id", ""),
+                    name=tc.get("name", "unknown"),
+                )
 
         results = await asyncio.gather(*[_exec(tc) for tc in other_calls], return_exceptions=True)
         for tc, result in zip(other_calls, results):
@@ -535,7 +539,11 @@ async def _execute_tools_parallel(
                 raise result
             elif isinstance(result, Exception):
                 tool_results.append(
-                    ToolMessage(content=f"<tool-error>{result}</tool-error>", tool_call_id=tc.get("id", ""), name=tc.get("name", "unknown"))
+                    ToolMessage(
+                        content=f"<tool-error>{result}</tool-error>",
+                        tool_call_id=tc.get("id", ""),
+                        name=tc.get("name", "unknown"),
+                    )
                 )
             else:
                 tool_results.append(result)
@@ -874,7 +882,10 @@ async def run_oikos_loop(
                     if interrupt_value:
                         current_messages.extend(tool_results)
                         return OikosResult(
-                            messages=current_messages, usage=get_llm_usage(), interrupted=True, interrupt_value=interrupt_value
+                            messages=current_messages,
+                            usage=get_llm_usage(),
+                            interrupted=True,
+                            interrupt_value=interrupt_value,
                         )
                     current_messages.extend(tool_results)
                     _maybe_rebind_after_tool_search(tool_results)
@@ -897,7 +908,10 @@ async def run_oikos_loop(
             llm_response = await _call_llm(
                 current_messages,
                 _make_llm(
-                    model=model, tools=bound_tools, reasoning_effort=reasoning_effort, tool_choice="required" if bound_tools else None
+                    model=model,
+                    tools=bound_tools,
+                    reasoning_effort=reasoning_effort,
+                    tool_choice="required" if bound_tools else None,
                 ),
                 phase="empty_retry",
                 **llm_kwargs,

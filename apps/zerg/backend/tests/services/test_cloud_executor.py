@@ -1,14 +1,14 @@
 """Tests for CloudExecutor service."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
 
-from zerg.services.cloud_executor import (
-    CloudExecutor,
-    normalize_model_id,
-)
+from zerg.services.cloud_executor import CloudExecutor
+from zerg.services.cloud_executor import normalize_model_id
 
 
 class TestNormalizeModelId:

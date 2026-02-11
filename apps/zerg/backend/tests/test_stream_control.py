@@ -8,18 +8,16 @@ Tests explicit stream lifecycle control events:
 - error path emissions
 """
 
-import asyncio
-import json
 import time
-from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy.orm import Session
 
-from zerg.events.event_bus import EventBus, EventType
-from zerg.models.enums import RunStatus, RunTrigger
-from zerg.models.models import Run, CommisJob
+from zerg.events.event_bus import EventType
+from zerg.models.enums import RunStatus
+from zerg.models.models import Run
 
 
 @pytest.fixture
@@ -51,9 +49,7 @@ class TestStreamControlEmission:
         with patch("zerg.services.event_store.emit_run_event") as mock_emit:
             mock_emit.return_value = None
 
-            await emit_stream_control(
-                mock_db, mock_run, "close", "all_complete", owner_id=1
-            )
+            await emit_stream_control(mock_db, mock_run, "close", "all_complete", owner_id=1)
 
             mock_emit.assert_called_once()
             call_kwargs = mock_emit.call_args.kwargs
@@ -73,9 +69,7 @@ class TestStreamControlEmission:
         with patch("zerg.services.event_store.emit_run_event") as mock_emit:
             mock_emit.return_value = None
 
-            await emit_stream_control(
-                mock_db, mock_run, "keep_open", "commiss_pending", owner_id=1, ttl_ms=120_000
-            )
+            await emit_stream_control(mock_db, mock_run, "keep_open", "commiss_pending", owner_id=1, ttl_ms=120_000)
 
             mock_emit.assert_called_once()
             call_kwargs = mock_emit.call_args.kwargs
@@ -91,9 +85,7 @@ class TestStreamControlEmission:
         with patch("zerg.services.event_store.emit_run_event") as mock_emit:
             mock_emit.return_value = None
 
-            await emit_stream_control(
-                mock_db, mock_run, "keep_open", "commiss_pending", owner_id=1, ttl_ms=999_999
-            )
+            await emit_stream_control(mock_db, mock_run, "keep_open", "commiss_pending", owner_id=1, ttl_ms=999_999)
 
             call_kwargs = mock_emit.call_args.kwargs
             assert call_kwargs["payload"]["ttl_ms"] == 300_000  # Capped at max
@@ -106,9 +98,7 @@ class TestStreamControlEmission:
         with patch("zerg.services.event_store.emit_run_event") as mock_emit:
             mock_emit.return_value = None
 
-            await emit_stream_control(
-                mock_db, mock_run, "close", "error", owner_id=1
-            )
+            await emit_stream_control(mock_db, mock_run, "close", "error", owner_id=1)
 
             call_kwargs = mock_emit.call_args.kwargs
             assert call_kwargs["payload"]["action"] == "close"
@@ -120,7 +110,6 @@ class TestStreamControlHandling:
 
     def test_apply_event_state_close_sets_marker(self):
         """stream_control:close sets close_event_id without immediately closing."""
-        from zerg.routers.stream import MAX_STREAM_TTL_MS
 
         # Simulating the state machine logic
         close_event_id = None

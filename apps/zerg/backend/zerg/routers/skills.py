@@ -86,7 +86,7 @@ def validate_workspace_path(workspace_path: Optional[str]) -> Optional[Path]:
         resolved.relative_to(workspace_base)
     except ValueError:
         # Path is not relative to workspace base
-        logger.warning(f"Workspace path traversal attempt blocked: {workspace_path} " f"(resolved: {resolved}, base: {workspace_base})")
+        logger.warning(f"Workspace path traversal attempt blocked: {workspace_path} (resolved: {resolved}, base: {workspace_base})")
         raise HTTPException(
             status_code=400,
             detail=f"Workspace path must be within {workspace_base}",

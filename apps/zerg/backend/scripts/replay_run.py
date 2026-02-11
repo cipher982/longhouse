@@ -26,20 +26,20 @@ import asyncio
 import copy
 import logging
 import sys
+from contextlib import ExitStack
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import datetime
 from datetime import timezone
 from difflib import SequenceMatcher
-from contextlib import ExitStack
 from pathlib import Path
 from typing import Callable
 
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
 
 from zerg.crud import crud
 from zerg.database import get_db
@@ -47,11 +47,11 @@ from zerg.managers.fiche_runner import FicheRunner
 from zerg.models.enums import RunStatus
 from zerg.models.enums import RunTrigger
 from zerg.models.enums import ThreadType
+from zerg.models.models import CommisJob
 from zerg.models.models import Run
 from zerg.models.models import ThreadMessage
-from zerg.models.models import CommisJob
-from zerg.services.oikos_service import OikosService
 from zerg.services.commis_artifact_store import CommisArtifactStore
+from zerg.services.oikos_service import OikosService
 from zerg.tools import get_registry
 
 # Configure logging
@@ -626,7 +626,9 @@ async def replay_run(
         )
         if max_context_messages is not None and max_context_messages > 0:
             context_note = (
-                f" (tail {max_context_messages} of {context_count})" if context_count > max_context_messages else f" ({context_count})"
+                f" (tail {max_context_messages} of {context_count})"
+                if context_count > max_context_messages
+                else f" ({context_count})"
             )
         else:
             context_note = f" ({context_count})"

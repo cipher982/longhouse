@@ -7,7 +7,6 @@ These tests lock in the lazy loading contract to prevent silent failures:
 4. Rebind mechanism works correctly after search_tools
 """
 
-import json
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -15,7 +14,6 @@ from unittest.mock import patch
 import pytest
 
 from zerg.tools.lazy_binder import CORE_TOOLS
-
 
 # ---------------------------------------------------------------------------
 # LazyToolBinder Tests
@@ -129,7 +127,6 @@ class TestSearchContext:
     def test_set_and_clear_context(self):
         """set_search_context and clear_search_context should work."""
         from zerg.tools.tool_search import _is_tool_allowed
-        from zerg.tools.tool_search import _search_allowed_tools
         from zerg.tools.tool_search import _search_max_results
         from zerg.tools.tool_search import clear_search_context
         from zerg.tools.tool_search import set_search_context
@@ -193,9 +190,22 @@ class TestSearchToolsFiltering:
 
         # Mock the search index to return predictable results
         mock_results = [
-            (MagicMock(name="github_list_issues", summary="List GitHub issues", category="github", param_hints="repo"), 0.9),
-            (MagicMock(name="jira_list_issues", summary="List Jira issues", category="jira", param_hints="project"), 0.85),
-            (MagicMock(name="linear_list_issues", summary="List Linear issues", category="linear", param_hints="team"), 0.8),
+            (
+                MagicMock(
+                    name="github_list_issues", summary="List GitHub issues", category="github", param_hints="repo"
+                ),
+                0.9,
+            ),
+            (
+                MagicMock(name="jira_list_issues", summary="List Jira issues", category="jira", param_hints="project"),
+                0.85,
+            ),
+            (
+                MagicMock(
+                    name="linear_list_issues", summary="List Linear issues", category="linear", param_hints="team"
+                ),
+                0.8,
+            ),
         ]
         # Set the name attribute properly (MagicMock doesn't set it from constructor)
         for entry, _ in mock_results:

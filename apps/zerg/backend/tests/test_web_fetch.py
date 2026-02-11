@@ -133,7 +133,9 @@ class TestWebFetch:
         """Test handling of exceptions during fetch."""
         # Arrange
         mock_client = MagicMock()
-        mock_client.get.side_effect = httpx.RequestError("Network error", request=httpx.Request("GET", "https://example.com"))
+        mock_client.get.side_effect = httpx.RequestError(
+            "Network error", request=httpx.Request("GET", "https://example.com")
+        )
         mock_client_cls.return_value.__enter__.return_value = mock_client
 
         # Act

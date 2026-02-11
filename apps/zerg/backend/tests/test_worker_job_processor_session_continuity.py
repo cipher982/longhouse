@@ -6,10 +6,6 @@ with session continuity (prepare_session_for_resume) and direct DB ingestion (_i
 
 from __future__ import annotations
 
-import asyncio
-from datetime import datetime
-from datetime import timezone
-from pathlib import Path
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -420,12 +416,13 @@ class TestCommisStartedEventEmission:
         hatch execution begins. It provides the UI with immediate feedback that
         the commis has transitioned from 'spawned' to 'running'.
         """
+        from tests.conftest import TEST_MODEL
         from zerg.crud import crud
-        from zerg.models.enums import RunStatus, RunTrigger
+        from zerg.models.enums import RunStatus
+        from zerg.models.enums import RunTrigger
         from zerg.models.models import Fiche
         from zerg.models.run import Run
         from zerg.models.thread import Thread
-        from tests.conftest import TEST_MODEL
 
         # Create test user
         owner = crud.get_user_by_email(db_session, "dev@local") or crud.create_user(
@@ -504,8 +501,7 @@ class TestCommisStartedEventEmission:
 
         # Find the commis_started call among all append_run_event calls
         commis_started_calls = [
-            call for call in mock_append_run_event.call_args_list
-            if call.kwargs.get("event_type") == "commis_started"
+            call for call in mock_append_run_event.call_args_list if call.kwargs.get("event_type") == "commis_started"
         ]
 
         assert len(commis_started_calls) == 1, "commis_started event should be emitted exactly once"
@@ -563,8 +559,7 @@ class TestCommisStartedEventEmission:
 
         # Should not have emitted commis_started
         commis_started_calls = [
-            call for call in mock_append_run_event.call_args_list
-            if call.kwargs.get("event_type") == "commis_started"
+            call for call in mock_append_run_event.call_args_list if call.kwargs.get("event_type") == "commis_started"
         ]
         assert len(commis_started_calls) == 0, "commis_started should not be emitted without oikos_run_id"
 
@@ -573,12 +568,13 @@ class TestCommisStartedEventEmission:
         self, processor, mock_workspace_manager_class, mock_cloud_executor_class, db_session
     ):
         """Test that failure to emit commis_started does not fail the job."""
+        from tests.conftest import TEST_MODEL
         from zerg.crud import crud
-        from zerg.models.enums import RunStatus, RunTrigger
+        from zerg.models.enums import RunStatus
+        from zerg.models.enums import RunTrigger
         from zerg.models.models import Fiche
         from zerg.models.run import Run
         from zerg.models.thread import Thread
-        from tests.conftest import TEST_MODEL
 
         # Create test user
         owner = crud.get_user_by_email(db_session, "dev@local") or crud.create_user(

@@ -33,10 +33,10 @@ from langchain_core.messages import SystemMessage
 
 async def run_test():
     """Run the lazy loading validation test."""
+    from zerg.services.oikos_react_engine import run_oikos_loop
     from zerg.tools import get_registry
     from zerg.tools.lazy_binder import CORE_TOOLS
     from zerg.tools.tool_search import build_catalog
-    from zerg.services.oikos_react_engine import run_oikos_loop
 
     print("=" * 70)
     print("LAZY LOADING VALIDATION TEST")
@@ -51,7 +51,7 @@ async def run_test():
     # Check if get_current_location exists and is NOT a core tool
     location_tool = next((e for e in catalog if e.name == "get_current_location"), None)
     if location_tool:
-        print(f"\n✓ Found 'get_current_location' in catalog")
+        print("\n✓ Found 'get_current_location' in catalog")
         print(f"  Category: {location_tool.category}")
         print(f"  Is core tool: {location_tool.name in CORE_TOOLS}")
     else:
@@ -89,7 +89,7 @@ async def run_test():
     print("TEST: Running oikos with lazy_loading=True")
     print("-" * 70)
     print(f"User message: '{messages[0].content}'")
-    print(f"Expected: LLM should need 'get_current_location' (non-core tool)")
+    print("Expected: LLM should need 'get_current_location' (non-core tool)")
     print()
 
     try:
@@ -110,14 +110,14 @@ async def run_test():
         # Check what happened
         tool_calls_made = []
         for msg in result.messages:
-            if hasattr(msg, 'tool_calls') and msg.tool_calls:
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
                 for tc in msg.tool_calls:
-                    tool_calls_made.append(tc.get('name', 'unknown'))
+                    tool_calls_made.append(tc.get("name", "unknown"))
                     print(f"Tool call: {tc.get('name')} (args: {tc.get('args', {})})")
 
         # Check final response
         final_msg = result.messages[-1] if result.messages else None
-        if final_msg and hasattr(final_msg, 'content'):
+        if final_msg and hasattr(final_msg, "content"):
             content = final_msg.content[:500] if final_msg.content else ""
             print(f"\nFinal response preview:\n{content}...")
 
@@ -158,6 +158,7 @@ async def run_test():
     except Exception as e:
         print(f"\nERROR during test: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 

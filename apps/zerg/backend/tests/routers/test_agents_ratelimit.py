@@ -11,14 +11,9 @@ import json
 from datetime import datetime
 from datetime import timezone
 
-import pytest
-from fastapi.testclient import TestClient
-
-from zerg.routers.agents import (
-    RATE_LIMIT_EVENTS_PER_MIN,
-    check_rate_limit,
-    reset_rate_limits,
-)
+from zerg.routers.agents import RATE_LIMIT_EVENTS_PER_MIN
+from zerg.routers.agents import check_rate_limit
+from zerg.routers.agents import reset_rate_limits
 
 
 class TestRateLimiting:

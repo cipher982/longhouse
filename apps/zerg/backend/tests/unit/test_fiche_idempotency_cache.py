@@ -1,5 +1,4 @@
 from tests.conftest import TEST_MODEL
-
 from zerg.crud import crud
 from zerg.routers import fiches as agents_router
 
@@ -59,12 +58,12 @@ def test_idempotency_cache_enforces_size_limit(db_session, monkeypatch):
     # Cache should be trimmed to max size (3), keeping the newest entries
     assert len(agents_router.IDEMPOTENCY_CACHE) == 3
     # Oldest entries (key0, key1) should be evicted
-    assert (f"key0", user.id) not in agents_router.IDEMPOTENCY_CACHE
-    assert (f"key1", user.id) not in agents_router.IDEMPOTENCY_CACHE
+    assert ("key0", user.id) not in agents_router.IDEMPOTENCY_CACHE
+    assert ("key1", user.id) not in agents_router.IDEMPOTENCY_CACHE
     # Newest entries should remain
-    assert (f"key2", user.id) in agents_router.IDEMPOTENCY_CACHE
-    assert (f"key3", user.id) in agents_router.IDEMPOTENCY_CACHE
-    assert (f"key4", user.id) in agents_router.IDEMPOTENCY_CACHE
+    assert ("key2", user.id) in agents_router.IDEMPOTENCY_CACHE
+    assert ("key3", user.id) in agents_router.IDEMPOTENCY_CACHE
+    assert ("key4", user.id) in agents_router.IDEMPOTENCY_CACHE
 
     # Restore original max size
     monkeypatch.setattr(agents_router, "IDEMPOTENCY_MAX_SIZE", original_max)

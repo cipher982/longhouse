@@ -7,29 +7,22 @@ and prevents race conditions on both Postgres and SQLite.
 from __future__ import annotations
 
 import asyncio
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
-from unittest.mock import patch
 
 import pytest
-from sqlalchemy import text
 
-from zerg.crud import crud
 from zerg.database import db_session
 from zerg.models.models import CommisJob
 from zerg.models.models import User
-from zerg.services.commis_job_queue import (
-    HEARTBEAT_INTERVAL_SECONDS,
-    STALE_THRESHOLD_SECONDS,
-    claim_jobs,
-    get_worker_id,
-    reclaim_stale_jobs,
-    update_heartbeat,
-)
+from zerg.services.commis_job_queue import STALE_THRESHOLD_SECONDS
+from zerg.services.commis_job_queue import claim_jobs
+from zerg.services.commis_job_queue import get_worker_id
+from zerg.services.commis_job_queue import reclaim_stale_jobs
+from zerg.services.commis_job_queue import update_heartbeat
 
 
 @pytest.fixture
@@ -176,10 +169,7 @@ class TestClaimJobs:
 
         # Run multiple workers concurrently
         with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [
-                executor.submit(try_claim, f"worker-{i}")
-                for i in range(5)
-            ]
+            futures = [executor.submit(try_claim, f"worker-{i}") for i in range(5)]
             for f in futures:
                 f.result()
 

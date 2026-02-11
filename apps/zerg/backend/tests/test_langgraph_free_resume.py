@@ -28,9 +28,9 @@ from langchain_core.messages import ToolMessage
 from zerg.crud import crud
 from zerg.models.enums import RunStatus
 from zerg.models.enums import RunTrigger
+from zerg.models.models import CommisJob
 from zerg.models.models import Run
 from zerg.models.models import ThreadMessage
-from zerg.models.models import CommisJob
 from zerg.services.oikos_service import OikosService
 
 
@@ -500,12 +500,15 @@ class TestRunContinuationIdempotency:
             captured["messages"] = messages
             return OikosResult(messages=messages, usage={}, interrupted=False)
 
-        with patch(
-            "zerg.connectors.status_builder.build_fiche_context",
-            return_value="{}",
-        ), patch(
-            "zerg.services.oikos_react_engine.run_oikos_loop",
-            new=AsyncMock(side_effect=mock_run_oikos_loop),
+        with (
+            patch(
+                "zerg.connectors.status_builder.build_fiche_context",
+                return_value="{}",
+            ),
+            patch(
+                "zerg.services.oikos_react_engine.run_oikos_loop",
+                new=AsyncMock(side_effect=mock_run_oikos_loop),
+            ),
         ):
             runner = FicheRunner(sample_fiche)
             await runner.run_continuation(
@@ -646,7 +649,9 @@ class TestRunContinuationIdempotency:
                 LcSystemMessage(content="system"),
                 LcSystemMessage(content="context"),
                 HumanMessage(content="Run a task"),
-                AIMessage(content="", tool_calls=[{"id": tool_call_id, "name": "spawn_commis", "args": {"task": "test"}}]),
+                AIMessage(
+                    content="", tool_calls=[{"id": tool_call_id, "name": "spawn_commis", "args": {"task": "test"}}]
+                ),
                 ToolMessage(content="Commis completed:\n\ntest result", tool_call_id=tool_call_id, name="spawn_commis"),
                 AIMessage(content="Task completed successfully."),
             ],
@@ -679,10 +684,7 @@ class TestRunContinuationIdempotency:
         assert len(tool_msgs) >= 1, "ToolMessage should be created"
 
         # Verify at least one tool message contains our commis result
-        found_commis_result = any(
-            "Commis completed" in (msg.content or "")
-            for msg in tool_msgs
-        )
+        found_commis_result = any("Commis completed" in (msg.content or "") for msg in tool_msgs)
         assert found_commis_result, "Should find ToolMessage with commis result content"
 
     @pytest.mark.asyncio

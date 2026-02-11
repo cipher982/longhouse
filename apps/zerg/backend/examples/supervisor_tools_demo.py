@@ -18,13 +18,10 @@ from zerg.connectors.resolver import CredentialResolver
 from zerg.database import SessionLocal
 from zerg.models.models import User
 from zerg.models_config import TIER_3  # Use cheapest model for demo
-from zerg.services.commis_artifact_store import CommisArtifactStore
-from zerg.tools.builtin.oikos_tools import (
-    get_commis_metadata,
-    list_commiss,
-    read_commis_result,
-    spawn_commis,
-)
+from zerg.tools.builtin.oikos_tools import get_commis_metadata
+from zerg.tools.builtin.oikos_tools import list_commiss
+from zerg.tools.builtin.oikos_tools import read_commis_result
+from zerg.tools.builtin.oikos_tools import spawn_commis
 
 
 async def main():
@@ -32,6 +29,7 @@ async def main():
     # Set up temporary artifact store
     with tempfile.TemporaryDirectory() as tmpdir:
         import os
+
         os.environ["LONGHOUSE_DATA_PATH"] = tmpdir
 
         # Create database session
@@ -53,10 +51,7 @@ async def main():
 
             # 1. Spawn a commis
             print("\n1. Spawning a commis to calculate 10 + 15...")
-            result = spawn_commis(
-                task="Calculate 10 + 15 and explain the result",
-                model=TIER_3
-            )
+            result = spawn_commis(task="Calculate 10 + 15 and explain the result", model=TIER_3)
             print(result)
 
             # Extract commis_id from the result
@@ -66,10 +61,7 @@ async def main():
 
             # 2. Spawn another commis
             print("\n2. Spawning another commis to write a haiku about AI...")
-            result2 = spawn_commis(
-                task="Write a haiku about artificial intelligence",
-                model=TIER_3
-            )
+            result2 = spawn_commis(task="Write a haiku about artificial intelligence", model=TIER_3)
             print(result2)
 
             # 3. List all commis

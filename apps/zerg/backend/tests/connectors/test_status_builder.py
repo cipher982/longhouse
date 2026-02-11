@@ -13,8 +13,8 @@ import pytest
 from sqlalchemy.orm import Session
 
 from zerg.connectors.registry import ConnectorType
-from zerg.connectors.status_builder import build_fiche_context
 from zerg.connectors.status_builder import build_connector_status
+from zerg.connectors.status_builder import build_fiche_context
 from zerg.connectors.status_builder import get_capabilities_for_connector
 from zerg.connectors.status_builder import get_tools_for_connector
 from zerg.connectors.status_builder import get_unavailable_tools

@@ -8,7 +8,7 @@ import asyncio
 from pathlib import Path
 
 from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 from zerg.crud import crud
 from zerg.models.models import Base
