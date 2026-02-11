@@ -37,10 +37,11 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 ### In Progress
 | Section | Status | Notes |
 |---------|--------|-------|
-| Harness Phase 3f-3h | 0% | MCP server, quality gates, research — see detailed sections |
+| Harness Phase 3f-3h | ~60% | MCP server done (3f ~80%); quality gates + research pending (3g-3h 0%) |
 | Landing Page Redesign | ~80% | Phase 5 copy polish + Phase 6 visual assets remaining |
 | Control Plane | ~45% | Scaffold + provisioner + CI gate done; OAuth/billing/runtime image pending |
-| Install/Onboarding | ~70% | install.sh + doctor + connect + hooks done; fresh-shell verify remaining |
+| Shipper Multi-Provider | DONE | Provider abstraction + Claude/Codex/Gemini parsers + review fixes |
+| Install/Onboarding | ~70% | install.sh + doctor + connect + hooks + MCP server done; fresh-shell verify remaining |
 
 ### Not Started
 | Section | Status | Notes |
@@ -90,9 +91,9 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 Industry standard pattern (2025-2026): teams expose internal tooling as MCP servers so CLI agents access shared context mid-task. See VISION.md § "Longhouse MCP Server" for architecture.
 
-- [ ] Implement MCP server exposing: `search_sessions`, `get_session_detail`, `memory_read`/`memory_write`, `notify_oikos`
-- [ ] Support stdio transport (for local hatch subprocesses) and streamable HTTP (for remote/runner agents)
-- [ ] Auto-register MCP server in Claude Code settings during `longhouse connect --install`
+- [x] Implement MCP server exposing: `search_sessions`, `get_session_detail`, `memory_read`/`memory_write`, `notify_oikos` (commit `e1207ef2`)
+- [x] Support stdio transport (for local hatch subprocesses) and streamable HTTP (for remote/runner agents) (commit `e1207ef2`)
+- [x] Auto-register MCP server in Claude Code settings during `longhouse connect --install` (commit `e1207ef2`)
 - [ ] Auto-configure MCP server for commis spawned via `hatch` (inject into workspace `.claude/settings.json`)
 - [ ] Add Codex `config.toml` MCP registration path for Codex-backend commis
 
@@ -227,11 +228,11 @@ Update copy to match VISION.md value prop: Timeline + Search + Resume.
 
 **Hero copy:**
 - [ ] Headline: "Never lose an AI coding conversation" (or similar)
-- [ ] Subhead: "Claude Code sessions in one searchable timeline. Other providers coming soon."
+- [ ] Subhead: "Claude Code, Codex, and Gemini sessions in one searchable timeline." (multi-provider now ships — parsers landed 2026-02-10)
 - [ ] Note: "Local-first. Self-host anytime. Hosted beta waitlist."
 
 **How It Works:**
-- [ ] Step 1: "Install" → Claude Code sync today (others coming)
+- [ ] Step 1: "Install" → Ships sessions from Claude Code, Codex CLI, and Gemini CLI
 - [ ] Step 2: "Search" → Keyword search now (FTS5-powered)
 - [ ] Step 3: "Resume" → Forum resume is Claude-only; Timeline resume planned
 
@@ -406,8 +407,8 @@ Keep the HN post short and problem-first. Use install.sh as the canonical path.
 
 - **Title options:** "Show HN: Longhouse – Search your Claude Code sessions" · "Show HN: Never lose a Claude Code conversation again" · "Show HN: Longhouse – A local timeline for AI coding sessions"
 - **Angle to emphasize (from industry research):** Context durability is the unsolved problem — benchmarks ignore post-50th-tool-call drift. Longhouse is the session archive that makes agent work durable and searchable. Lean into "your agents do great work, then it vanishes into JSONL" pain point.
-- **Comment skeleton:** Problem (JSONL sprawl + context loss) → Solution (timeline + search + resume) → Current state (Claude only, others planned, local-first) → Try it (`curl -fsSL https://get.longhouse.ai/install.sh | bash`, `longhouse serve`)
-- **Anticipated Qs:** Why not Claude history? · Cursor/Codex/Gemini when? · Privacy? · Performance at scale? · How does this compare to just grepping JSONL?
+- **Comment skeleton:** Problem (JSONL sprawl + context loss) → Solution (timeline + search + resume) → Current state (Claude Code + Codex + Gemini shipping, local-first) → Try it (`curl -fsSL https://get.longhouse.ai/install.sh | bash`, `longhouse serve`)
+- **Anticipated Qs:** Why not Claude history? · Cursor support when? · Privacy? · Performance at scale? · How does this compare to just grepping JSONL?
 - **Timing:** Tue–Thu mornings PT
 
 ---
@@ -624,7 +625,7 @@ Data States
 - Real ingest from JSONL
 
 Providers
-- Claude Code, Codex, Gemini, Cursor (at least schema + ingest tests)
+- Claude Code, Codex, Gemini (parsers shipped 2026-02-10), Cursor (schema + ingest tests only)
 
 #### 2) Tiered Test Gates
 
