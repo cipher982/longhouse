@@ -470,7 +470,7 @@ Close the remaining open questions from VISION.md.
   - VISION target: `longhouse connect` issues token automatically (CLI-side login + auto-create)
   - Note: This is separate from web UI auth (password/OAuth) — shipper needs device tokens
 - [ ] Decide HTTPS story for local OSS (`longhouse serve`) — built-in vs reverse proxy guidance.
-- [ ] Capture current frontend bundle size and set a target budget.
+- [x] Capture current frontend bundle size and set a target budget. (2026-02-11: measured, budget set in VISION.md § "Frontend Bundle Size Baseline")
 
 ---
 
