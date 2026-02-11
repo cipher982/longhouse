@@ -156,6 +156,13 @@ async def quick_summary(
         ],
     )
 
+    if not response.choices:
+        return SessionSummary(
+            session_id=transcript.session_id,
+            title="Untitled Session",
+            summary="No summary generated.",
+        )
+
     raw = response.choices[0].message.content or ""
     parsed = _safe_parse_json(raw)
 
@@ -198,6 +205,13 @@ async def structured_summary(
             {"role": "user", "content": user_prompt},
         ],
     )
+
+    if not response.choices:
+        return SessionSummary(
+            session_id=transcript.session_id,
+            title="Untitled Session",
+            summary="No summary generated.",
+        )
 
     raw = response.choices[0].message.content or ""
     parsed = _safe_parse_json(raw)
