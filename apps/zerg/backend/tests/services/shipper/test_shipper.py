@@ -1,14 +1,11 @@
 """Tests for the session shipper."""
 
 import json
-from datetime import datetime
-from datetime import timezone
 from pathlib import Path
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
-import httpx
 import pytest
 
 from zerg.services.shipper import SessionShipper
@@ -177,6 +174,7 @@ class TestSessionShipper:
             assert event["raw_json"] is not None
             # Verify it's valid JSON
             import json
+
             parsed = json.loads(event["raw_json"])
             assert "type" in parsed
 
@@ -355,6 +353,7 @@ class TestSessionShipper:
             with patch.dict("os.environ", {}, clear=False):
                 # Ensure AGENTS_API_TOKEN is not set in env for this test
                 import os
+
                 orig_token = os.environ.pop("AGENTS_API_TOKEN", None)
                 try:
                     await shipper.scan_and_ship()
