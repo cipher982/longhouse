@@ -362,7 +362,7 @@ Update screenshots to show Timeline, not old dashboard.
 ### Phase 0: Routing + DNS Reality Check ⚠️ PARTIAL
 
 - [x] Wildcard DNS `*.longhouse.ai` resolves via Cloudflare (verified 2026-02-05)
-- [ ] Routing layer: Caddy (existing coolify-proxy) with caddy-docker-proxy labels (needs live verify)
+- [x] Routing layer: Caddy (coolify-proxy) with caddy-docker-proxy labels — verified working on zerg (2026-02-11). Labels `caddy=david.longhouse.ai` + `caddy.reverse_proxy={{upstreams 8000}}` route traffic correctly.
 - [ ] Manual provision smoke test: test2/test3 instances provisioned + routed (needs rerun)
 - [x] Add control-plane → instance auth bridge endpoint — dual-secret validation + email-based user resolution (commits `a2709611`, `d911d500`)
 
