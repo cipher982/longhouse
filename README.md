@@ -187,6 +187,13 @@ Each session is a log in your timeline.
 
 **Alpha** - Actively developed, expect changes. Claude Code works today; hosted beta and more providers are in progress.
 
+## Author
+
+Built by [David Rose](https://github.com/cipher982) -- indie developer building AI agent tools.
+
+- GitHub: https://github.com/cipher982
+- Twitter/X: https://x.com/cipher982
+
 ## License
 
 Apache-2.0 - see LICENSE file
