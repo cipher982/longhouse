@@ -98,7 +98,7 @@ def _build_user_prompt(transcript: SessionTranscript) -> str:
     return "\n\n".join(parts)
 
 
-def _safe_parse_json(text: str | None) -> dict | None:
+def safe_parse_json(text: str | None) -> dict | None:
     """Parse JSON from LLM output, tolerating markdown fences."""
     if not text:
         return None
@@ -164,7 +164,7 @@ async def quick_summary(
         )
 
     raw = response.choices[0].message.content or ""
-    parsed = _safe_parse_json(raw)
+    parsed = safe_parse_json(raw)
 
     if isinstance(parsed, dict):
         return SessionSummary(
@@ -214,7 +214,7 @@ async def structured_summary(
         )
 
     raw = response.choices[0].message.content or ""
-    parsed = _safe_parse_json(raw)
+    parsed = safe_parse_json(raw)
 
     if isinstance(parsed, dict):
         bullets = parsed.get("bullets")

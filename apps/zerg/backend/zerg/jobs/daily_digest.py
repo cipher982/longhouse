@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import UTC
@@ -38,15 +37,14 @@ from zerg.models.connector import Connector
 from zerg.models.user import User
 from zerg.models_config import get_model_for_use_case
 from zerg.services import gmail_api
-from zerg.shared import redact_text
-from zerg.shared import truncate_to_tokens
+from zerg.services.session_processing import build_transcript
+from zerg.services.session_processing import quick_summary
 from zerg.utils import crypto
 
 logger = logging.getLogger(__name__)
 
 # Constants
 SESSION_TOKEN_BUDGET = 8000  # Max tokens per session for summarization
-MESSAGE_TOKEN_LIMIT = 1000  # Max tokens per individual message
 MAX_CONCURRENT_MAPS = 3  # Limit concurrent LLM calls
 
 
@@ -67,16 +65,7 @@ class SessionData:
 
 
 @dataclass
-class Message:
-    """A simplified message for summarization."""
-
-    role: str
-    content: str
-    tool_name: str | None = None
-
-
-@dataclass
-class SessionSummary:
+class DigestSessionSummary:
     """Summary of a single session from the map phase."""
 
     session_id: str
@@ -116,29 +105,6 @@ class UserDigestResult:
     message_id: str | None = None
     error: str | None = None
     usage: Usage = field(default_factory=Usage)
-
-
-# -----------------------------------------------------------------------------
-# Noise stripping patterns
-# -----------------------------------------------------------------------------
-
-NOISE_PATTERNS = [
-    re.compile(r"<system-reminder>[\s\S]*?</system-reminder>", re.IGNORECASE),
-    re.compile(r"<function_results>[\s\S]*?</function_results>", re.IGNORECASE),
-    re.compile(r"<env>[\s\S]*?</env>", re.IGNORECASE),
-    re.compile(r"<claude_background_info>[\s\S]*?</claude_background_info>", re.IGNORECASE),
-]
-
-
-def strip_noise(content: str) -> str:
-    """Remove noise patterns from content."""
-    if not content:
-        return content
-    result = content
-    for pattern in NOISE_PATTERNS:
-        result = pattern.sub("", result)
-    result = re.sub(r"\n{3,}", "\n\n", result)
-    return result.strip()
 
 
 # -----------------------------------------------------------------------------
@@ -182,42 +148,22 @@ def fetch_sessions_for_day(db: Session, target_date: datetime) -> list[SessionDa
     ]
 
 
-def fetch_session_thread(db: Session, session_id: str) -> list[Message]:
-    """Fetch all events for a session as a simplified message thread."""
+def _fetch_events_as_dicts(db: Session, session_id: str) -> list[dict]:
+    """Fetch AgentEvent rows and convert to dicts for build_transcript()."""
     stmt = select(AgentEvent).where(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp)
     events = db.execute(stmt).scalars().all()
 
-    messages = []
-    for event in events:
-        content = event.content_text or ""
-        if event.tool_output_text:
-            content = f"{content}\n\nTool output: {event.tool_output_text[:500]}..."
-        if content.strip():
-            messages.append(Message(role=event.role, content=content, tool_name=event.tool_name))
-
-    return messages
-
-
-# -----------------------------------------------------------------------------
-# Thread preparation
-# -----------------------------------------------------------------------------
-
-
-def prepare_thread(messages: list[Message], budget_tokens: int) -> str:
-    """Prepare a thread for summarization with noise stripping and truncation."""
-    parts = []
-    for msg in messages:
-        role_label = msg.role.upper()
-        if msg.tool_name:
-            role_label = f"{role_label} (tool: {msg.tool_name})"
-        content = strip_noise(msg.content)
-        content = redact_text(content)
-        content, _ = truncate_to_tokens(content, MESSAGE_TOKEN_LIMIT)
-        parts.append(f"[{role_label}]\n{content}")
-
-    thread_text = "\n\n---\n\n".join(parts)
-    thread_text, _ = truncate_to_tokens(thread_text, budget_tokens)
-    return thread_text
+    return [
+        {
+            "role": e.role,
+            "content_text": e.content_text,
+            "tool_name": e.tool_name,
+            "tool_output_text": e.tool_output_text,
+            "timestamp": e.timestamp,
+            "session_id": str(e.session_id),
+        }
+        for e in events
+    ]
 
 
 # -----------------------------------------------------------------------------
@@ -231,58 +177,51 @@ async def map_session(
     client: AsyncOpenAI,
     model: str,
     semaphore: asyncio.Semaphore,
-) -> tuple[SessionSummary | None, Usage]:
-    """Summarize a single session (map phase)."""
+) -> tuple[DigestSessionSummary | None, Usage]:
+    """Summarize a single session (map phase).
+
+    Uses session_processing.build_transcript() for event cleaning/tokenization
+    and session_processing.quick_summary() for LLM summarization.
+    """
     usage = Usage()
 
     async with semaphore:
         try:
-            messages = fetch_session_thread(db, session.id)
-            if not messages:
+            event_dicts = _fetch_events_as_dicts(db, session.id)
+            if not event_dicts:
                 return None, usage
 
-            thread_text = prepare_thread(messages, SESSION_TOKEN_BUDGET)
-            if not thread_text.strip():
-                return None, usage
-
-            context_parts = []
-            if session.project:
-                context_parts.append(f"Project: {session.project}")
-            if session.provider:
-                context_parts.append(f"Provider: {session.provider}")
-            if session.git_branch:
-                context_parts.append(f"Branch: {session.git_branch}")
-            context = ", ".join(context_parts) if context_parts else "Unknown context"
-
-            prompt = f"""Summarize this AI coding session in 2-4 sentences.
-Focus on: what was worked on, what was accomplished, notable outcomes.
-Be specific about files, features, or bugs mentioned.
-
-Context: {context}
-Duration: {session.user_messages} user messages, {session.assistant_messages} assistant messages, {session.tool_calls} tool calls
-
-Session transcript:
-{thread_text}"""
-
-            response = await client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
+            # Build transcript with noise stripping, redaction, and token budget
+            transcript = build_transcript(
+                event_dicts,
+                include_tool_calls=False,
+                strip_noise=True,
+                redact_secrets=True,
+                token_budget=SESSION_TOKEN_BUDGET,
             )
 
-            if response.usage:
-                usage.prompt_tokens = response.usage.prompt_tokens
-                usage.completion_tokens = response.usage.completion_tokens
-                usage.total_tokens = response.usage.total_tokens
+            if not transcript.messages:
+                return None, usage
 
-            summary_text = response.choices[0].message.content or ""
+            # Enrich transcript metadata for the summarizer prompt
+            transcript.metadata = {
+                "project": session.project,
+                "provider": session.provider,
+                "git_branch": session.git_branch,
+                "user_messages": session.user_messages,
+                "assistant_messages": session.assistant_messages,
+                "tool_calls": session.tool_calls,
+            }
+
+            result = await quick_summary(transcript, client, model)
 
             return (
-                SessionSummary(
+                DigestSessionSummary(
                     session_id=session.id,
                     project=session.project,
                     provider=session.provider,
                     started_at=session.started_at,
-                    summary=summary_text.strip(),
+                    summary=result.summary,
                     user_messages=session.user_messages,
                     assistant_messages=session.assistant_messages,
                     tool_calls=session.tool_calls,
@@ -290,17 +229,17 @@ Session transcript:
                 usage,
             )
 
-        except Exception as e:
-            logger.exception("Failed to summarize session %s: %s", session.id, e)
+        except Exception:
+            logger.exception("Failed to summarize session %s", session.id)
             return None, usage
 
 
-def format_plain_text_digest(summaries: list[SessionSummary], target_date: datetime) -> str:
+def format_plain_text_digest(summaries: list[DigestSessionSummary], target_date: datetime) -> str:
     """Generate plain-text digest from summaries (no LLM needed for MVP)."""
     date_str = target_date.strftime("%Y-%m-%d")
 
     # Group by project
-    by_project: dict[str, list[SessionSummary]] = {}
+    by_project: dict[str, list[DigestSessionSummary]] = {}
     for s in summaries:
         project = s.project or "Unspecified"
         by_project.setdefault(project, []).append(s)
@@ -418,9 +357,9 @@ async def send_user_digest(
 
     # MAP phase: summarize sessions
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_MAPS)
-    summaries: list[SessionSummary] = []
+    summaries: list[DigestSessionSummary] = []
 
-    async def process_session(session: SessionData) -> tuple[SessionSummary | None, Usage]:
+    async def process_session(session: SessionData) -> tuple[DigestSessionSummary | None, Usage]:
         with db_session() as db:
             return await map_session(session, db, openai_client, model, semaphore)
 

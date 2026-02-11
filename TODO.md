@@ -50,7 +50,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 ### In Progress
 | Section | Status | Notes |
 |---------|--------|-------|
-| Session Processing (3.5) | ~90% | Core module + summarize + briefing + hook + integration tests done; consumer migration pending (Phase 3) |
+| Session Processing (3.5) | 100% | Core module + summarize + briefing + hook + integration tests + consumer migration all done |
 | Control Plane | ~50% | Scaffold + provisioner + CI gate + runtime image + routing done; OAuth/billing pending |
 
 ### Not Started
@@ -144,9 +144,9 @@ Evaluate newer integration paths for tighter commis control vs. current hatch su
 - [x] Sanitize injected content — safety labels in `format_briefing_context()` (commit `fb728619`)
 
 **Phase 3 — Refactor existing consumers:**
-- [ ] Migrate `daily_digest.py` to use `session_processing.transcript` + `session_processing.summarize`
-- [ ] Migrate `memory_summarizer.py` to use `session_processing.summarize`
-- [ ] Delete duplicate inline logic
+- [x] Migrate `daily_digest.py` to use `session_processing.transcript` + `session_processing.summarize` — replaced inline transcript building, noise stripping, and LLM calls with `build_transcript()` + `quick_summary()`
+- [x] Consolidate `safe_parse_json` — exported from `session_processing`, replaced duplicates in `memory_summarizer.py` and `title_generator.py`
+- [x] Delete duplicate inline logic — removed `_safe_parse_json` from memory_summarizer + title_generator, removed inline message classes and noise patterns from daily_digest
 
 ### Phase 4: Semantic Search + Embeddings (4)
 
