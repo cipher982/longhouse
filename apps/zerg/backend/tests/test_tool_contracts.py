@@ -3,12 +3,17 @@
 import pytest
 
 from zerg.tools.builtin import BUILTIN_TOOLS
+from zerg.tools.builtin import _PERSONAL_TOOLS_ENABLED
 from zerg.tools.generated.tool_definitions import TOOL_SERVER_MAPPING
 from zerg.tools.generated.tool_definitions import ServerName
 from zerg.tools.generated.tool_definitions import ToolName
 from zerg.tools.generated.tool_definitions import get_expected_server
 from zerg.tools.generated.tool_definitions import list_all_tools
 from zerg.tools.generated.tool_definitions import validate_tool_registration
+
+# Personal tools remain in the schema but are gated behind PERSONAL_TOOLS_ENABLED.
+# When disabled, exclude them from contract comparisons.
+_PERSONAL_TOOL_NAMES = {"get_current_location", "get_whoop_data", "search_notes"}
 
 
 def test_all_builtin_tools_in_contract():
@@ -21,7 +26,10 @@ def test_all_builtin_tools_in_contract():
     assert not missing_from_contract, f"Tools missing from contract: {missing_from_contract}"
 
     # Contract should not have extra tools (would indicate stale schema)
+    # When personal tools are disabled, they'll be "extra" in the schema -- that's expected.
     extra_in_contract = contract_tool_names - builtin_tool_names
+    if not _PERSONAL_TOOLS_ENABLED:
+        extra_in_contract -= _PERSONAL_TOOL_NAMES
     if extra_in_contract:
         pytest.warn(f"Extra tools in contract (update schema): {extra_in_contract}")
 
@@ -72,6 +80,9 @@ class TestContractBreakageDetection:
         builtin_tools = {tool.name for tool in BUILTIN_TOOLS}
 
         missing = all_schema_tools - builtin_tools
+        # Personal tools are gated behind PERSONAL_TOOLS_ENABLED -- not a contract violation
+        if not _PERSONAL_TOOLS_ENABLED:
+            missing -= _PERSONAL_TOOL_NAMES
         assert not missing, f"Schema defines tools not in registry: {missing}"
 
     def test_tool_server_consistency(self):

@@ -14,6 +14,7 @@ Commis execution flow (async inbox model):
 """
 
 import logging
+import os
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -1578,37 +1579,44 @@ OIKOS_TOOL_NAMES: frozenset[str] = frozenset(t.name for t in TOOLS)
 # Additional utility tools that oikoss need access to.
 # These are NOT oikos-specific but are commonly used by the oikos agent.
 # Organized by category for clarity.
-OIKOS_UTILITY_TOOLS: frozenset[str] = frozenset(
-    [
-        # Time/scheduling
-        "get_current_time",
-        # Web/HTTP
-        "http_request",
-        "web_search",
-        "web_fetch",
-        # Infrastructure
-        "runner_list",
-        "runner_create_enroll_token",
-        # Communication
-        "send_email",
-        # Knowledge
-        "knowledge_search",
-        # Personal context (v2.1 Phase 4)
-        "get_current_location",
-        "get_whoop_data",
-        "search_notes",
-        # Memory (persistent across sessions)
-        "save_memory",
-        "search_memory",
-        "list_memories",
-        "forget_memory",
-        # Session discovery
-        "search_sessions",
-        "grep_sessions",
-        "filter_sessions",
-        "get_session_detail",
-    ]
-)
+_OIKOS_UTILITY_TOOL_LIST = [
+    # Time/scheduling
+    "get_current_time",
+    # Web/HTTP
+    "http_request",
+    "web_search",
+    "web_fetch",
+    # Infrastructure
+    "runner_list",
+    "runner_create_enroll_token",
+    # Communication
+    "send_email",
+    # Knowledge
+    "knowledge_search",
+    # Memory (persistent across sessions)
+    "save_memory",
+    "search_memory",
+    "list_memories",
+    "forget_memory",
+    # Session discovery
+    "search_sessions",
+    "grep_sessions",
+    "filter_sessions",
+    "get_session_detail",
+]
+
+# Personal context tools are gated behind PERSONAL_TOOLS_ENABLED env var
+# (Traccar/WHOOP/Obsidian are David-specific, not OSS core)
+if os.getenv("PERSONAL_TOOLS_ENABLED", "").lower() in ("1", "true", "yes"):
+    _OIKOS_UTILITY_TOOL_LIST.extend(
+        [
+            "get_current_location",
+            "get_whoop_data",
+            "search_notes",
+        ]
+    )
+
+OIKOS_UTILITY_TOOLS: frozenset[str] = frozenset(_OIKOS_UTILITY_TOOL_LIST)
 
 
 def get_oikos_allowed_tools() -> list[str]:
@@ -1621,3 +1629,103 @@ def get_oikos_allowed_tools() -> list[str]:
         Sorted list of tool names (oikos tools + utility tools)
     """
     return sorted(OIKOS_TOOL_NAMES | OIKOS_UTILITY_TOOLS)
+
+
+# ---------------------------------------------------------------------------
+# Commis tool subset — execution-focused, no coordinator tools
+# ---------------------------------------------------------------------------
+
+# Commis agents get a focused tool set for doing work in a workspace.
+# They do NOT get coordinator tools (spawn_commis, manage commis jobs, etc.)
+# because commis should not spawn other commis or inspect oikos state.
+#
+# Categories:
+#   - Web/HTTP: fetch pages, search, API calls
+#   - Project management: GitHub, Jira, Linear, Notion
+#   - Communication: contact_user (ask questions), email, messaging
+#   - Memory files: read/write workspace-scoped memory
+#   - Knowledge: search knowledge base
+#   - Session discovery: look up past session context
+#   - Tasks: create/manage tasks
+#   - Time: get current time
+#   - Runner: execute commands on infrastructure
+
+COMMIS_TOOL_NAMES: frozenset[str] = frozenset(
+    [
+        # Time
+        "get_current_time",
+        # Web/HTTP
+        "http_request",
+        "web_search",
+        "web_fetch",
+        # Communication
+        "contact_user",
+        "send_email",
+        "send_slack_webhook",
+        "send_discord_webhook",
+        # Project management — GitHub
+        "github_list_repositories",
+        "github_create_issue",
+        "github_list_issues",
+        "github_get_issue",
+        "github_add_comment",
+        "github_list_pull_requests",
+        "github_get_pull_request",
+        # Project management — Jira
+        "jira_create_issue",
+        "jira_list_issues",
+        "jira_get_issue",
+        "jira_add_comment",
+        "jira_transition_issue",
+        "jira_update_issue",
+        # Project management — Linear
+        "linear_create_issue",
+        "linear_list_issues",
+        "linear_get_issue",
+        "linear_update_issue",
+        "linear_add_comment",
+        "linear_list_teams",
+        # Project management — Notion
+        "notion_create_page",
+        "notion_get_page",
+        "notion_update_page",
+        "notion_search",
+        "notion_query_database",
+        "notion_append_blocks",
+        # Memory files (workspace-scoped persistent context)
+        "memory_write",
+        "memory_read",
+        "memory_ls",
+        "memory_search",
+        "memory_delete",
+        # Knowledge
+        "knowledge_search",
+        # Session discovery (look up past work for context)
+        "search_sessions",
+        "grep_sessions",
+        "filter_sessions",
+        "get_session_detail",
+        # Tasks
+        "task_create",
+        "task_list",
+        "task_update",
+        "task_delete",
+        # Runner execution
+        "runner_exec",
+    ]
+)
+
+
+def get_commis_allowed_tools() -> list[str]:
+    """Get the complete list of tools a commis agent should have access to.
+
+    Commis agents are execution-focused workers that operate in git workspaces.
+    They get tools for doing work (web, project management, communication, etc.)
+    but NOT coordinator tools (spawn_commis, manage commis jobs, etc.).
+
+    This is the SINGLE SOURCE OF TRUTH for commis tool allowlists.
+
+    Returns:
+        Sorted list of tool names for commis agents
+    """
+    return sorted(COMMIS_TOOL_NAMES)

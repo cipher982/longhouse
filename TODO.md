@@ -88,7 +88,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 **3b: Flatten tool infrastructure**
 - [x] Remove `catalog.py`, `unified_access.py`; `tool_search.py` absorbed catalog role and retained for embedding-based discovery (~600 LOC net removed)
 - [x] Simplify `lazy_binder.py` (~221 → ~194 LOC): kept allowlist filtering with wildcard support; CORE_TOOLS now derives from OIKOS_TOOL_NAMES
-- [ ] Tool subsets configured per agent type (Oikos gets ~20-30 tools, commis gets different set, user-configurable)
+- [x] Tool subsets configured per agent type (Oikos gets ~20-30 tools, commis gets different set, user-configurable)
 - [x] Kill dead-weight utility tools: math_tools, uuid_tools, tool_discovery, container_tools (~530 LOC removed)
 
 **3c: Decouple standard-mode services from FicheRunner (refactor, not delete)**
@@ -106,7 +106,7 @@ These 9 services are actively used — decouple from FicheRunner so they work wi
 
 **3d: Memory consolidation**
 - [x] Consolidate 3 memory systems: kept Oikos Memory (4 tools) + Memory Files (embeddings); Fiche Memory KV evaluated and retained as lightweight config store
-- [ ] Move David-specific tools (personal_tools: Traccar/WHOOP/Obsidian) to external plugin, not OSS core
+- [x] Move David-specific tools (personal_tools: Traccar/WHOOP/Obsidian) out of OSS core — gated behind `PERSONAL_TOOLS_ENABLED` env var
 
 **3e: Skills progressive disclosure + unified inheritance**
 
