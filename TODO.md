@@ -476,9 +476,9 @@ Close the remaining open questions from VISION.md.
 
 ## [Brand] Longhouse Rebrand — Product/Meta Strings (6)
 
-> Archived -- 12/13 items complete. All user-facing Swarmlet refs removed, OpenAPI regenerated, env vars renamed.
+> Archived -- 13/13 items complete. All user-facing Swarmlet refs removed, OpenAPI regenerated, env vars renamed.
 
-- [ ] Clean up `experiments/shipper-manual-validation.md` (historical, low priority)
+- [x] Clean up `experiments/shipper-manual-validation.md` — file already removed; nothing to rebrand
 
 ---
 
