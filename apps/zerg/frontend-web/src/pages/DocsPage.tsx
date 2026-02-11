@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { SwarmLogo } from "../components/SwarmLogo";
-import { ZapIcon, SettingsIcon, MessageCircleIcon, SparklesIcon } from "../components/icons";
+import { ZapIcon, SearchIcon, SettingsIcon, MessageCircleIcon } from "../components/icons";
 import { usePublicPageScroll } from "../hooks/usePublicPageScroll";
 import "../styles/info-pages.css";
 
@@ -45,95 +45,122 @@ export default function DocsPage() {
           <a href="#quickstart" className="docs-nav-card">
             <ZapIcon width={32} height={32} className="docs-nav-icon" />
             <h3>Quick Start</h3>
-            <p>Get up and running</p>
+            <p>Install and run in 2 minutes</p>
           </a>
-          <a href="#skills" className="docs-nav-card">
-            <SparklesIcon width={32} height={32} className="docs-nav-icon" />
-            <h3>Skills</h3>
-            <p>Extend agent capabilities</p>
+          <a href="#search" className="docs-nav-card">
+            <SearchIcon width={32} height={32} className="docs-nav-icon" />
+            <h3>Search</h3>
+            <p>Find any session instantly</p>
           </a>
-          <a href="#integrations" className="docs-nav-card">
+          <a href="#agents" className="docs-nav-card">
             <SettingsIcon width={32} height={32} className="docs-nav-icon" />
-            <h3>Integrations</h3>
-            <p>Connect your tools</p>
+            <h3>Supported Agents</h3>
+            <p>Claude Code, Codex, Gemini</p>
           </a>
         </nav>
 
         <section id="quickstart" className="docs-section">
           <h2>Quick Start</h2>
 
-          <h3>1. Sign In</h3>
+          <h3>1. Install</h3>
           <p>
-            Click "Start Free" on the homepage to create an account or sign in.
+            Run the installer on macOS, Linux, or WSL:
+          </p>
+          <pre><code>curl -fsSL https://get.longhouse.ai/install.sh | bash</code></pre>
+          <p>
+            Requires Python 3.12+. No sudo needed.
           </p>
 
-          <h3>2. Start a Session</h3>
+          <h3>2. Start the server</h3>
+          <pre><code>longhouse serve</code></pre>
           <p>
-            Once signed in, start a new agent session from the main view. Tell Oikos what you want to do.
+            Opens a local web UI at <code>http://localhost:47300</code>.
+            Data is stored in a SQLite database on your machine.
           </p>
 
-          <h3>3. Search the Timeline</h3>
+          <h3>3. Use your AI coding tools</h3>
           <p>
-            Use the Timeline to search across your sessions, review results, and resume where you left off.
+            Keep using Claude Code, Codex CLI, or Gemini CLI as normal.
+            Longhouse automatically discovers and imports your sessions
+            from their default storage locations.
+          </p>
+
+          <h3>4. Browse and search</h3>
+          <p>
+            Open the timeline to see all your sessions. Use full-text search
+            to find any conversation, tool call, or file edit across all your sessions.
           </p>
         </section>
 
-        <section id="skills" className="docs-section">
-          <h2>Skills</h2>
+        <section id="search" className="docs-section">
+          <h2>Search</h2>
           <p>
-            Skills are reusable capabilities that extend what your agents can do.
-            They provide specialized knowledge, tools, and behaviors that agents can leverage.
+            Longhouse provides full-text search across all your AI coding sessions.
+            Search by keyword, file name, tool name, or any text from your conversations.
           </p>
 
-          <h3>Built-in Skills</h3>
+          <h3>What&apos;s indexed</h3>
           <ul>
-            <li><strong>Web Search</strong> - Search the web for current information</li>
-            <li><strong>GitHub</strong> - Interact with repositories, issues, and PRs</li>
-            <li><strong>Slack</strong> - Send messages and manage channels</li>
-            <li><strong>Quick Search</strong> - Fast web lookup shortcut</li>
+            <li>Conversation messages (user and assistant)</li>
+            <li>Tool calls and their outputs (file edits, bash commands, etc.)</li>
+            <li>Session metadata (project, branch, timestamps)</li>
           </ul>
 
-          <h3>How Skills Work</h3>
-          <p>
-            Skills are automatically loaded and made available to your agents. When an agent
-            needs a capability, it can discover and use the appropriate skill. Skills can:
-          </p>
+          <h3>Tips</h3>
           <ul>
-            <li>Provide specialized tools (e.g., <code>web_search</code>)</li>
-            <li>Add context to the agent's system prompt</li>
-            <li>Define custom behaviors and automations</li>
+            <li>Search for file names to find sessions that touched specific code</li>
+            <li>Search for error messages to find how you solved similar issues</li>
+            <li>Use the timeline filters to narrow by date range or provider</li>
           </ul>
-
-          <h3>Creating Custom Skills</h3>
-          <p>
-            You can create custom skills by adding a <code>SKILL.md</code> file to
-            <code>~/.longhouse/skills/</code>. Each skill has a YAML frontmatter with metadata and
-            markdown content describing the skill's purpose and usage.
-          </p>
-          <pre><code>{`---
-name: my-skill
-description: "What this skill does"
-emoji: "🔧"
-tool_dispatch: tool_name  # Optional: wrap a tool
----
-
-# My Skill
-
-Instructions and context for the agent.`}</code></pre>
         </section>
 
-        <section id="integrations" className="docs-section">
-          <h2>Integrations</h2>
+        <section id="agents" className="docs-section">
+          <h2>Supported Agents</h2>
           <p>
-            Connect Longhouse to your existing tools. Go to Settings &gt; Integrations to set up connections.
+            Longhouse reads the session files that AI coding tools already produce.
+            No plugins or configuration changes needed.
           </p>
 
-          <h3>Available Now</h3>
+          <h3>Fully Supported</h3>
           <ul>
-            <li><strong>Notifications</strong> - Slack, Discord, Email, SMS</li>
-            <li><strong>Project Tools</strong> - GitHub, Jira, Linear, Notion</li>
-            <li><strong>Custom</strong> - Webhooks, MCP servers</li>
+            <li><strong>Claude Code</strong> — Reads from <code>~/.claude/projects/</code></li>
+            <li><strong>Codex CLI</strong> — Reads from <code>~/.codex/</code></li>
+            <li><strong>Gemini CLI</strong> — Reads from <code>~/.gemini/</code></li>
           </ul>
+
+          <h3>Coming Soon</h3>
+          <ul>
+            <li><strong>Cursor</strong> — IDE-integrated AI sessions</li>
+          </ul>
+
+          <h3>How it works</h3>
+          <p>
+            A background shipper watches for new session files and imports them
+            into the local SQLite database. Sessions are deduplicated by ID, so
+            re-importing is safe and idempotent.
+          </p>
+        </section>
+
+        <section id="config" className="docs-section">
+          <h2>Configuration</h2>
+
+          <h3>Authentication</h3>
+          <p>
+            By default, auth is disabled for local use. To add password protection:
+          </p>
+          <pre><code>LONGHOUSE_PASSWORD=your-password longhouse serve</code></pre>
+
+          <h3>Port</h3>
+          <p>
+            Default port is 47300. Override with:
+          </p>
+          <pre><code>longhouse serve --port 8080</code></pre>
+
+          <h3>Data location</h3>
+          <p>
+            The SQLite database is stored at <code>~/.longhouse/longhouse.db</code> by default.
+            Override with the <code>DATABASE_URL</code> environment variable.
+          </p>
         </section>
 
         <section className="docs-section">
