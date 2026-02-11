@@ -13,7 +13,9 @@ Usage:
 """
 
 import argparse
+import json
 import sys
+import urllib.request
 from pathlib import Path
 
 import yaml
@@ -28,6 +30,22 @@ def load_manifest():
         return yaml.safe_load(f)
 
 
+def resolve_url_templates(url: str, base_url: str) -> str:
+    """Replace {first_session_id} and similar placeholders with live API data."""
+    if "{first_session_id}" not in url:
+        return url
+    api_url = base_url.replace("://localhost:47200", "://localhost:47300")
+    api_url = api_url.replace("://localhost:30080", "://localhost:30080")
+    try:
+        resp = urllib.request.urlopen(f"{api_url}/api/agents/sessions?days_back=30&limit=1")
+        data = json.loads(resp.read())
+        session_id = data["sessions"][0]["id"]
+        return url.replace("{first_session_id}", session_id)
+    except Exception as e:
+        print(f"  Warning: Could not resolve session ID: {e}")
+        return url
+
+
 def capture_screenshot(browser, name: str, config: dict, base_url: str):
     """Capture a single screenshot."""
     from playwright.sync_api import TimeoutError as PlaywrightTimeout  # noqa: PLC0415
@@ -36,8 +54,9 @@ def capture_screenshot(browser, name: str, config: dict, base_url: str):
         viewport={"width": config["viewport"]["width"], "height": config["viewport"]["height"]}
     )
 
-    url = f"{base_url}{config['url']}"
-    print(f"  Navigating to {config['url']}")
+    resolved_path = resolve_url_templates(config["url"], base_url)
+    url = f"{base_url}{resolved_path}"
+    print(f"  Navigating to {resolved_path}")
     page.goto(url)
 
     # Wait for app to signal screenshot readiness (content loaded, animations settled)

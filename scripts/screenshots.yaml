@@ -18,14 +18,14 @@ screenshots:
 
   search-preview:
     description: Timeline with search results showing FTS5 matches
-    url: /timeline?q=health+endpoint&marketing=true
+    url: /timeline?query=file&marketing=true
     viewport: { width: 1400, height: 900 }
     output: public/images/landing/search-preview.png
 
   session-detail-preview:
     description: Session detail view with events, tool calls expanded
-    # Uses first demo session (ID 1); demo DB must be seeded first
-    url: /timeline/1?marketing=true
+    # Resolves {first_session_id} via API at capture time
+    url: /timeline/{first_session_id}?marketing=true
     viewport: { width: 1400, height: 900 }
     output: public/images/landing/session-detail-preview.png
 
