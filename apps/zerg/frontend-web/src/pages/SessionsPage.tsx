@@ -563,6 +563,12 @@ export default function SessionsPage() {
                 <li>Use Claude Code, Codex, or Gemini as normal</li>
                 <li>Sessions appear here automatically</li>
               </ol>
+              <p className="sessions-guided-cli-hint">
+                Don&apos;t have a CLI yet? Longhouse supports{" "}
+                <a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank" rel="noopener noreferrer">Claude Code</a>,{" "}
+                <a href="https://github.com/openai/codex" target="_blank" rel="noopener noreferrer">Codex CLI</a>, and{" "}
+                <a href="https://github.com/google-gemini/gemini-cli" target="_blank" rel="noopener noreferrer">Gemini CLI</a>.
+              </p>
             </div>
           </div>
         ) : sessions.length === 0 ? (

@@ -360,6 +360,22 @@
     color: var(--color-brand-primary);
   }
 
+  .sessions-guided-cli-hint {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-tertiary);
+    margin-top: var(--space-3);
+  }
+
+  .sessions-guided-cli-hint a {
+    color: var(--color-brand-primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .sessions-guided-cli-hint a:hover {
+    color: var(--color-brand-accent);
+  }
+
   /* ---------------------------------------------------------------------------
    * Session Detail Page
    * ---------------------------------------------------------------------------*/
