@@ -827,6 +827,63 @@ def password_login(
     return TokenOut(access_token=access_token, expires_in=expires_in)
 
 
+class CLILoginRequest(BaseModel):
+    password: str
+
+
+@router.post("/cli-login")
+def cli_login(
+    request: Request,
+    body: CLILoginRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    """Password login for CLI tools. Returns a short-lived JWT for device token creation.
+
+    This endpoint is used by `longhouse connect` to auto-create a device token
+    without requiring the user to open a browser. The returned JWT is valid for
+    5 minutes -- just long enough to call POST /api/devices/tokens.
+
+    Expected JSON body: `{ "password": "<configured password>" }`.
+    """
+    settings = get_settings()
+    if not settings.longhouse_password and not settings.longhouse_password_hash:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password auth not configured")
+
+    client_ip = _get_client_ip(request)
+    retry_after = _check_password_rate_limit(client_ip)
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many password attempts. Try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    if settings.longhouse_password_hash:
+        password_ok = _verify_password_hash(body.password, settings.longhouse_password_hash)
+    else:
+        password_ok = secrets.compare_digest(body.password, settings.longhouse_password)
+
+    if not password_ok:
+        _record_password_failure(client_ip)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid password")
+
+    _clear_password_failures(client_ip)
+
+    # Get or create default user for password auth
+    user = crud.get_user_by_email(db, "local@longhouse")
+    if not user:
+        user = crud.create_user(db, email="local@longhouse", provider="password")
+
+    # Issue a short-lived token (5 min) -- only for creating a device token
+    access_token = _issue_access_token(
+        user.id,
+        user.email,
+        expires_delta=timedelta(minutes=5),
+    )
+
+    return {"token": access_token}
+
+
 # ---------------------------------------------------------------------------
 # Gmail connection endpoint (Phase-2 Email Triggers)
 # ---------------------------------------------------------------------------
