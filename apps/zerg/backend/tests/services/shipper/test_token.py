@@ -24,7 +24,7 @@ class TestTokenPath:
 
         path = get_token_path()
 
-        assert path == tmp_path / ".claude" / "zerg-device-token"
+        assert path == tmp_path / ".claude" / "longhouse-device-token"
 
     def test_explicit_config_dir(self, tmp_path: Path):
         """Uses explicit config dir when provided."""
@@ -33,7 +33,7 @@ class TestTokenPath:
 
         path = get_token_path(config_dir)
 
-        assert path == config_dir / "zerg-device-token"
+        assert path == config_dir / "longhouse-device-token"
 
     def test_env_var_config_dir(self, tmp_path: Path, monkeypatch):
         """Uses CLAUDE_CONFIG_DIR env var."""
@@ -44,7 +44,7 @@ class TestTokenPath:
 
         path = get_token_path()
 
-        assert path == config_dir / "zerg-device-token"
+        assert path == config_dir / "longhouse-device-token"
 
 
 class TestTokenStorage:
@@ -73,7 +73,7 @@ class TestTokenStorage:
         """Load returns None for empty file."""
         config_dir = tmp_path / "claude"
         config_dir.mkdir()
-        token_path = config_dir / "zerg-device-token"
+        token_path = config_dir / "longhouse-device-token"
         token_path.write_text("")
 
         loaded = load_token(config_dir)

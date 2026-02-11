@@ -33,25 +33,8 @@ def get_token_path(claude_config_dir: Path | None = None) -> Path:
     return claude_config_dir / "longhouse-device-token"
 
 
-def _get_legacy_token_path(claude_config_dir: Path | None = None) -> Path:
-    """Get the path to the legacy device token file (zerg-device-token).
-
-    Used for migration from old installations.
-    """
-    if claude_config_dir is None:
-        config_dir = os.getenv("CLAUDE_CONFIG_DIR")
-        if config_dir:
-            claude_config_dir = Path(config_dir).expanduser()
-        else:
-            claude_config_dir = Path.home() / ".claude"
-
-    return claude_config_dir / "zerg-device-token"
-
-
 def load_token(claude_config_dir: Path | None = None) -> str | None:
     """Load the device token from local storage.
-
-    Checks new path first, falls back to legacy path for migration.
 
     Args:
         claude_config_dir: Optional override for Claude config directory.
@@ -61,23 +44,10 @@ def load_token(claude_config_dir: Path | None = None) -> str | None:
     """
     token_path = get_token_path(claude_config_dir)
 
-    # Try new path first
     if token_path.exists():
         try:
             token = token_path.read_text().strip()
             if token:
-                return token
-        except (OSError, IOError):
-            pass
-
-    # Fall back to legacy path for existing installations
-    legacy_path = _get_legacy_token_path(claude_config_dir)
-    if legacy_path.exists():
-        try:
-            token = legacy_path.read_text().strip()
-            if token:
-                # Migrate to new path
-                save_token(token, claude_config_dir)
                 return token
         except (OSError, IOError):
             pass
@@ -178,8 +148,6 @@ def clear_zerg_url(claude_config_dir: Path | None = None) -> bool:
 def get_zerg_url(claude_config_dir: Path | None = None) -> str | None:
     """Load the configured Longhouse API URL from local storage.
 
-    Checks new path first, falls back to legacy path for migration.
-
     Args:
         claude_config_dir: Optional override for Claude config directory.
 
@@ -188,23 +156,10 @@ def get_zerg_url(claude_config_dir: Path | None = None) -> str | None:
     """
     url_path = _get_url_path(claude_config_dir)
 
-    # Try new path first
     if url_path.exists():
         try:
             url = url_path.read_text().strip()
             if url:
-                return url
-        except (OSError, IOError):
-            pass
-
-    # Fall back to legacy path for existing installations
-    legacy_path = _get_legacy_url_path(claude_config_dir)
-    if legacy_path.exists():
-        try:
-            url = legacy_path.read_text().strip()
-            if url:
-                # Migrate to new path
-                save_zerg_url(url, claude_config_dir)
                 return url
         except (OSError, IOError):
             pass
@@ -265,18 +220,3 @@ def _get_url_path(claude_config_dir: Path | None = None) -> Path:
             claude_config_dir = Path.home() / ".claude"
 
     return claude_config_dir / "longhouse-url"
-
-
-def _get_legacy_url_path(claude_config_dir: Path | None = None) -> Path:
-    """Get the path to the legacy URL file (zerg-url).
-
-    Used for migration from old installations.
-    """
-    if claude_config_dir is None:
-        config_dir = os.getenv("CLAUDE_CONFIG_DIR")
-        if config_dir:
-            claude_config_dir = Path(config_dir).expanduser()
-        else:
-            claude_config_dir = Path.home() / ".claude"
-
-    return claude_config_dir / "zerg-url"

@@ -256,11 +256,8 @@ def _check_shipper() -> list[CheckResult]:
 
     # Device token
     token_path = claude_dir / "longhouse-device-token"
-    legacy_token_path = claude_dir / "zerg-device-token"
     if token_path.exists():
         results.append(CheckResult(PASS, "Device token configured"))
-    elif legacy_token_path.exists():
-        results.append(CheckResult(PASS, "Device token configured (legacy path)"))
     else:
         results.append(CheckResult(FAIL, "Device token not configured", "Run: longhouse auth"))
 
