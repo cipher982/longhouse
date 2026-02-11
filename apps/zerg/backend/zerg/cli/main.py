@@ -6,6 +6,7 @@ Usage:
     longhouse config show   # Show effective configuration
     longhouse ship          # One-shot sync
     longhouse connect       # Watch mode sync (polling with --poll)
+    longhouse recall        # Search past sessions
     longhouse onboard       # Run onboarding wizard
     longhouse doctor        # Self-diagnosis
     longhouse --help        # Show help
@@ -15,6 +16,7 @@ import typer
 
 from zerg.cli.connect import app as connect_app
 from zerg.cli.doctor import doctor
+from zerg.cli.mcp_serve import mcp_server
 from zerg.cli.onboard import onboard
 from zerg.cli.serve import app as serve_app
 from zerg.cli.serve import serve
@@ -77,12 +79,16 @@ _cmd_lookup = {cmd.callback.__name__: cmd.callback for cmd in connect_app.regist
 app.command(name="auth")(_cmd_lookup["auth"])
 app.command(name="ship")(_cmd_lookup["ship"])
 app.command(name="connect")(_cmd_lookup["connect"])
+app.command(name="recall")(_cmd_lookup["recall"])
 
 # Onboarding wizard
 app.command(name="onboard")(onboard)
 
 # Self-diagnosis
 app.command(name="doctor")(doctor)
+
+# MCP server
+app.command(name="mcp-server")(mcp_server)
 
 
 def main():
