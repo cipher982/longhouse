@@ -79,7 +79,6 @@ class TestContractBreakageDetection:
         from zerg.tools.builtin.datetime_tools import TOOLS as DATETIME_TOOLS
         from zerg.tools.builtin.http_tools import TOOLS as HTTP_TOOLS
         from zerg.tools.builtin.personal_tools import TOOLS as PERSONAL_TOOLS
-        from zerg.tools.builtin.ssh_tools import TOOLS as SSH_TOOLS
         from zerg.tools.builtin.oikos_tools import TOOLS as OIKOS_TOOLS
 
         # Build actual tool-to-server mapping from module structure
@@ -88,8 +87,6 @@ class TestContractBreakageDetection:
             actual_mapping[tool.name] = "http"
         for tool in DATETIME_TOOLS:
             actual_mapping[tool.name] = "datetime"
-        for tool in SSH_TOOLS:
-            actual_mapping[tool.name] = "ssh"
         for tool in OIKOS_TOOLS:
             actual_mapping[tool.name] = "oikos"
         for tool in PERSONAL_TOOLS:

@@ -409,7 +409,7 @@ class TestBuildCommisPrompt:
     @patch("zerg.prompts.composer.format_online_runners")
     def test_build_commis_prompt_with_servers(self, mock_runners):
         """Test building prompt with servers configured."""
-        mock_runners.return_value = '**Use runner_exec** for targets: "clifford"\n**ssh_exec as fallback**'
+        mock_runners.return_value = '**Use runner_exec** for targets: "clifford"'
 
         user = MockUser(
             context={
@@ -433,12 +433,12 @@ class TestBuildCommisPrompt:
 
         # Check base template content (now uses Commis terminology)
         assert "Commis" in prompt or "commis" in prompt
-        assert "ssh_exec" in prompt
+        assert "runner_exec" in prompt
 
     @patch("zerg.prompts.composer.format_online_runners")
     def test_build_commis_prompt_empty_context(self, mock_runners):
         """Test building prompt with empty context uses defaults."""
-        mock_runners.return_value = "**No runners online.** Use ssh_exec."
+        mock_runners.return_value = "**No runners currently online.** Enroll a runner daemon first."
 
         user = MockUser(context={})
 

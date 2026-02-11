@@ -123,7 +123,7 @@ def format_online_runners(owner_id: int) -> str:
         owner_id: User ID to get runners for
 
     Returns:
-        Formatted instruction string for runner_exec vs ssh_exec
+        Formatted instruction string for runner_exec usage
     """
     db = next(get_db())
     try:
@@ -134,19 +134,14 @@ def format_online_runners(owner_id: int) -> str:
 
     if runner_names:
         names_str = ", ".join(f'"{n}"' for n in runner_names)
-        return f"""**Use runner_exec first** for these targets (faster, more secure):
+        return f"""**Use runner_exec** for these targets (faster, more secure):
 - Online runners: {names_str}
 - Example: `runner_exec(target="{runner_names[0]}", command="df -h")`
 
-**If runner_exec fails for ANY reason**, immediately try **ssh_exec** once using the
-server's SSH alias or explicit SSH details from **Available Servers** below.
-Do not stop after a runner_exec error—attempt ssh_exec and report results."""
+If runner_exec fails, report the error with details."""
     else:
-        return """**No runners currently online.** Use ssh_exec for command execution:
-- `ssh_exec(host="<server>", command="...")`
-
-If ssh_exec fails, report the error and stop. Runner daemons provide faster,
-more secure execution when available."""
+        return """**No runners currently online.** Enroll a runner daemon first via runner_create_enroll_token,
+then use runner_exec for command execution."""
 
 
 def build_commis_prompt(user) -> str:

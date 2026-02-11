@@ -89,7 +89,6 @@ components:
         - spawn_commis
         - spawn_workspace_commis
         - wait_for_commis
-        - ssh_exec
         - task_create
         - task_delete
         - task_list
@@ -123,7 +122,6 @@ components:
         - runner_setup
         - slack
         - sms
-        - ssh
         - oikos
         - task
         - tool_discovery
@@ -311,8 +309,6 @@ components:
               const: oikos
             wait_for_commis:
               const: oikos
-            ssh_exec:
-              const: ssh
             task_create:
               const: task
             task_delete:
@@ -386,7 +382,6 @@ components:
             - send_sms
             - spawn_commis
             - spawn_workspace_commis
-            - ssh_exec
             - task_create
             - task_delete
             - task_list
