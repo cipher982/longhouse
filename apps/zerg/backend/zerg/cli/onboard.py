@@ -13,6 +13,7 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import socket
@@ -29,6 +30,8 @@ from zerg.cli.config_file import get_config_path
 from zerg.cli.config_file import save_config
 from zerg.cli.serve import _get_longhouse_home
 from zerg.cli.serve import _is_server_running
+
+logger = logging.getLogger(__name__)
 
 
 def _has_command(cmd: str) -> bool:
@@ -105,6 +108,123 @@ def _derive_client_url(host: str, port: int) -> str:
         client_host = host
 
     return f"http://{client_host}:{port}"
+
+
+def _get_shell_profile_path() -> Path | None:
+    """Return the primary shell profile path for the current user's shell.
+
+    Inspects ``$SHELL`` to determine which RC file a fresh interactive
+    shell would source.  Returns ``None`` when the shell is unknown.
+    """
+    shell_name = os.path.basename(os.environ.get("SHELL", ""))
+    home = Path.home()
+
+    if shell_name == "zsh":
+        return home / ".zshrc"
+    elif shell_name == "bash":
+        if sys.platform == "darwin":
+            return home / ".bash_profile"
+        return home / ".bashrc"
+    elif shell_name == "fish":
+        return home / ".config" / "fish" / "config.fish"
+    return None
+
+
+def _extract_path_from_profile(profile_path: Path) -> str | None:
+    """Source a shell profile in a subshell and return the resulting PATH.
+
+    This simulates what a fresh interactive terminal would see, without
+    inheriting the current process' PATH modifications.
+
+    Returns ``None`` when the subshell exits with an error or times out.
+    """
+    shell_name = os.path.basename(os.environ.get("SHELL", ""))
+    if not profile_path.exists():
+        return None
+
+    try:
+        if shell_name == "fish":
+            # Fish uses a different syntax
+            result = subprocess.run(
+                ["fish", "-c", f"source {profile_path}; echo $PATH"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                env={"HOME": str(Path.home()), "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
+            )
+        else:
+            # bash/zsh: source the profile in a non-interactive login shell
+            shell_bin = "zsh" if shell_name == "zsh" else "bash"
+            result = subprocess.run(
+                [shell_bin, "-c", f'source "{profile_path}" 2>/dev/null; echo "$PATH"'],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                env={"HOME": str(Path.home()), "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
+            )
+
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        logger.debug("Failed to extract PATH from %s: %s", profile_path, exc)
+
+    return None
+
+
+def verify_shell_path() -> list[str]:
+    """Verify that ``longhouse`` and ``claude`` are on PATH in a fresh shell.
+
+    Simulates a fresh shell by sourcing the user's profile in a
+    subprocess with a minimal base PATH, then checks whether the
+    ``longhouse`` binary (and optionally ``claude``) would be
+    reachable.
+
+    Returns:
+        A list of warning/fix strings (empty if everything looks good).
+        Each string is a human-readable message suitable for printing.
+    """
+    warnings: list[str] = []
+
+    profile = _get_shell_profile_path()
+    if profile is None:
+        # Unknown shell -- skip the check silently
+        return warnings
+
+    fresh_path = _extract_path_from_profile(profile)
+    if fresh_path is None:
+        # Could not source profile -- skip silently
+        return warnings
+
+    # Split PATH into directories
+    path_dirs = fresh_path.split(":") if ":" in fresh_path else fresh_path.split(" ")
+
+    # --- Check longhouse ---
+    longhouse_bin = shutil.which("longhouse")
+    if longhouse_bin:
+        longhouse_dir = str(Path(longhouse_bin).parent)
+        if longhouse_dir not in path_dirs:
+            shell_name = os.path.basename(os.environ.get("SHELL", ""))
+            warnings.append(f"'longhouse' is installed at {longhouse_bin} but won't be on PATH in a new terminal.")
+            if shell_name == "fish":
+                warnings.append(f"  Fix: fish_add_path {longhouse_dir}")
+            else:
+                warnings.append(f"  Fix: echo 'export PATH=\"{longhouse_dir}:$PATH\"' >> {profile}")
+            warnings.append(f"  Then: source {profile}")
+
+    # --- Check claude ---
+    claude_bin = shutil.which("claude")
+    if claude_bin:
+        claude_dir = str(Path(claude_bin).parent)
+        if claude_dir not in path_dirs:
+            shell_name = os.path.basename(os.environ.get("SHELL", ""))
+            warnings.append(f"'claude' is installed at {claude_bin} but won't be on PATH in a new terminal.")
+            if shell_name == "fish":
+                warnings.append(f"  Fix: fish_add_path {claude_dir}")
+            else:
+                warnings.append(f"  Fix: echo 'export PATH=\"{claude_dir}:$PATH\"' >> {profile}")
+            warnings.append(f"  Then: source {profile}")
+
+    return warnings
 
 
 def _emit_test_event(api_url: str) -> bool:
@@ -370,7 +490,20 @@ def onboard(
 
     typer.echo("")
 
-    # Step 7: Open browser (if GUI available)
+    # Step 7: Verify PATH in a fresh shell
+    typer.secho("Step 7: PATH verification", fg=typer.colors.BLUE, bold=True)
+    typer.echo("")
+
+    path_warnings = verify_shell_path()
+    if path_warnings:
+        for warning in path_warnings:
+            typer.secho(f"  [WARN] {warning}", fg=typer.colors.YELLOW)
+    else:
+        typer.secho("  [OK] PATH looks good for a fresh shell", fg=typer.colors.GREEN)
+
+    typer.echo("")
+
+    # Step 8: Open browser (if GUI available)
     if _has_gui() and _check_server_health(host, port):
         if quick or typer.confirm("Open Longhouse in browser?", default=True):
             typer.echo(f"  Opening {api_url}...")
@@ -399,4 +532,4 @@ def onboard(
 
 
 # Export for main.py registration
-__all__ = ["onboard"]
+__all__ = ["onboard", "verify_shell_path"]

@@ -81,6 +81,64 @@ longhouse status     # Show configuration
 longhouse onboard    # Re-run setup wizard
 ```
 
+## Troubleshooting
+
+### `longhouse: command not found` after install
+
+The installer adds `~/.local/bin` to your shell profile, but the current terminal may not have picked it up yet.
+
+```bash
+# Option 1: reload your shell profile
+source ~/.zshrc   # or ~/.bashrc / ~/.bash_profile
+
+# Option 2: add the path manually
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Run `longhouse doctor` to verify everything is working.
+
+### `claude: command not found` when using hooks
+
+Claude Code must be installed separately. The `longhouse connect --install` command will warn you if `claude` is not on PATH in a fresh shell.
+
+```bash
+# Check if claude is reachable
+which claude
+
+# If installed but not on PATH, add its directory:
+export PATH="/path/to/claude/bin:$PATH"
+```
+
+### Server won't start (port in use)
+
+```bash
+# Find what's using the port
+lsof -i :8080
+
+# Use a different port
+longhouse serve --port 8081
+```
+
+### Hooks not firing / sessions not shipping
+
+```bash
+# Check shipper status
+longhouse connect --status
+
+# Check doctor for full diagnosis
+longhouse doctor
+
+# Manually ship once to test
+longhouse ship --verbose
+```
+
+### Reinstalling or upgrading
+
+```bash
+uv tool upgrade longhouse
+longhouse doctor   # verify
+```
+
 ## Documentation
 
 This README is the canonical user guide. Product direction lives in `VISION.md`, and the execution roadmap lives in `TODO.md`.

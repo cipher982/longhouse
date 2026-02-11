@@ -1,5 +1,6 @@
 """Tests for CLI onboarding wizard."""
 
+import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -174,3 +175,154 @@ class TestConfigSaving:
         assert loaded.server.host == "127.0.0.1"
         assert loaded.server.port == 8080
         assert loaded.shipper.mode == "watch"
+
+
+class TestShellProfilePath:
+    """Tests for _get_shell_profile_path."""
+
+    def test_zsh_profile(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from zerg.cli.onboard import _get_shell_profile_path
+
+        monkeypatch.setenv("SHELL", "/bin/zsh")
+        result = _get_shell_profile_path()
+        assert result is not None
+        assert result.name == ".zshrc"
+
+    def test_bash_profile_macos(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from zerg.cli.onboard import _get_shell_profile_path
+
+        monkeypatch.setenv("SHELL", "/bin/bash")
+        monkeypatch.setattr(sys, "platform", "darwin")
+        result = _get_shell_profile_path()
+        assert result is not None
+        assert result.name == ".bash_profile"
+
+    def test_bash_profile_linux(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from zerg.cli.onboard import _get_shell_profile_path
+
+        monkeypatch.setenv("SHELL", "/bin/bash")
+        monkeypatch.setattr(sys, "platform", "linux")
+        result = _get_shell_profile_path()
+        assert result is not None
+        assert result.name == ".bashrc"
+
+    def test_fish_profile(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from zerg.cli.onboard import _get_shell_profile_path
+
+        monkeypatch.setenv("SHELL", "/usr/bin/fish")
+        result = _get_shell_profile_path()
+        assert result is not None
+        assert result.name == "config.fish"
+
+    def test_unknown_shell(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from zerg.cli.onboard import _get_shell_profile_path
+
+        monkeypatch.setenv("SHELL", "/bin/csh")
+        result = _get_shell_profile_path()
+        assert result is None
+
+    def test_no_shell_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from zerg.cli.onboard import _get_shell_profile_path
+
+        monkeypatch.delenv("SHELL", raising=False)
+        result = _get_shell_profile_path()
+        assert result is None
+
+
+class TestVerifyShellPath:
+    """Tests for verify_shell_path."""
+
+    def test_returns_empty_on_unknown_shell(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Should return no warnings for unknown shells."""
+        from zerg.cli.onboard import verify_shell_path
+
+        monkeypatch.setenv("SHELL", "/bin/csh")
+        result = verify_shell_path()
+        assert result == []
+
+    def test_returns_empty_when_no_profile(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Should return no warnings when profile doesn't exist."""
+        from zerg.cli.onboard import verify_shell_path
+
+        monkeypatch.setenv("SHELL", "/bin/zsh")
+        # Patch Path.home() to a temp dir without .zshrc
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        result = verify_shell_path()
+        assert result == []
+
+    def test_warns_when_longhouse_not_in_fresh_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Should warn when longhouse is on current PATH but not in fresh shell PATH."""
+        from zerg.cli.onboard import verify_shell_path
+
+        monkeypatch.setenv("SHELL", "/bin/zsh")
+
+        # Mock _get_shell_profile_path to return a known path
+        profile = Path("/tmp/test_profile")
+        monkeypatch.setattr("zerg.cli.onboard._get_shell_profile_path", lambda: profile)
+
+        # Mock _extract_path_from_profile to return a PATH without longhouse's dir
+        monkeypatch.setattr(
+            "zerg.cli.onboard._extract_path_from_profile",
+            lambda p: "/usr/bin:/bin",
+        )
+
+        # Mock shutil.which to simulate longhouse being installed at a custom location
+        def mock_which(cmd: str) -> str | None:
+            if cmd == "longhouse":
+                return "/home/user/.local/bin/longhouse"
+            return None
+
+        monkeypatch.setattr("zerg.cli.onboard.shutil.which", mock_which)
+
+        result = verify_shell_path()
+        assert len(result) >= 1
+        assert "longhouse" in result[0]
+        assert "won't be on PATH" in result[0]
+        # Check that a fix line is provided
+        assert any(".local/bin" in w for w in result)
+
+    def test_no_warning_when_longhouse_in_fresh_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Should return no warnings when longhouse dir is in fresh PATH."""
+        from zerg.cli.onboard import verify_shell_path
+
+        monkeypatch.setenv("SHELL", "/bin/zsh")
+        monkeypatch.setattr("zerg.cli.onboard._get_shell_profile_path", lambda: Path("/tmp/test"))
+        monkeypatch.setattr(
+            "zerg.cli.onboard._extract_path_from_profile",
+            lambda p: "/usr/bin:/bin:/home/user/.local/bin",
+        )
+
+        def mock_which(cmd: str) -> str | None:
+            if cmd == "longhouse":
+                return "/home/user/.local/bin/longhouse"
+            return None
+
+        monkeypatch.setattr("zerg.cli.onboard.shutil.which", mock_which)
+
+        result = verify_shell_path()
+        assert result == []
+
+    def test_warns_for_claude_too(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Should also check claude and warn if not in fresh PATH."""
+        from zerg.cli.onboard import verify_shell_path
+
+        monkeypatch.setenv("SHELL", "/bin/zsh")
+        monkeypatch.setattr("zerg.cli.onboard._get_shell_profile_path", lambda: Path("/tmp/test"))
+        monkeypatch.setattr(
+            "zerg.cli.onboard._extract_path_from_profile",
+            lambda p: "/usr/bin:/bin",
+        )
+
+        def mock_which(cmd: str) -> str | None:
+            if cmd == "longhouse":
+                return "/usr/bin/longhouse"  # This dir IS in the fresh PATH
+            if cmd == "claude":
+                return "/opt/special/bin/claude"  # This dir is NOT
+            return None
+
+        monkeypatch.setattr("zerg.cli.onboard.shutil.which", mock_which)
+
+        result = verify_shell_path()
+        # longhouse should be fine, claude should warn
+        assert any("claude" in w and "won't be on PATH" in w for w in result)
+        assert not any("longhouse" in w and "won't be on PATH" in w for w in result)

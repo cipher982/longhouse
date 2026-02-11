@@ -297,7 +297,70 @@ verify_installation() {
         exit 1
     fi
 
+    # Fresh-shell PATH verification
+    verify_fresh_shell_path
+
     success "All checks passed!"
+}
+
+# Verify that longhouse and claude are on PATH in a fresh shell
+verify_fresh_shell_path() {
+    local shell_name profile fresh_path
+    shell_name=$(basename "$SHELL")
+
+    case "$shell_name" in
+        bash)
+            profile="$HOME/.bashrc"
+            [[ "$(uname -s)" == "Darwin" ]] && profile="$HOME/.bash_profile"
+            ;;
+        zsh)
+            profile="$HOME/.zshrc"
+            ;;
+        fish)
+            profile="$HOME/.config/fish/config.fish"
+            ;;
+        *)
+            return 0  # unknown shell, skip
+            ;;
+    esac
+
+    [[ ! -f "$profile" ]] && return 0
+
+    # Source the profile in a subshell with minimal PATH to simulate fresh terminal
+    if [[ "$shell_name" == "fish" ]]; then
+        fresh_path=$(HOME="$HOME" PATH="/usr/bin:/bin:/usr/sbin:/sbin" fish -c "source $profile; echo \$PATH" 2>/dev/null) || return 0
+    else
+        local shell_bin="$shell_name"
+        fresh_path=$(HOME="$HOME" PATH="/usr/bin:/bin:/usr/sbin:/sbin" "$shell_bin" -c "source \"$profile\" 2>/dev/null; echo \"\$PATH\"" 2>/dev/null) || return 0
+    fi
+
+    [[ -z "$fresh_path" ]] && return 0
+
+    # Check longhouse
+    local longhouse_path
+    longhouse_path=$(which longhouse 2>/dev/null)
+    if [[ -n "$longhouse_path" ]]; then
+        local longhouse_dir
+        longhouse_dir=$(dirname "$longhouse_path")
+        if ! echo "$fresh_path" | grep -q "$longhouse_dir"; then
+            warn "'longhouse' won't be on PATH in a new terminal"
+            warn "  Fix: echo 'export PATH=\"$longhouse_dir:\$PATH\"' >> $profile"
+            warn "  Then: source $profile"
+        fi
+    fi
+
+    # Check claude (optional)
+    local claude_path
+    claude_path=$(which claude 2>/dev/null)
+    if [[ -n "$claude_path" ]]; then
+        local claude_dir
+        claude_dir=$(dirname "$claude_path")
+        if ! echo "$fresh_path" | grep -q "$claude_dir"; then
+            warn "'claude' won't be on PATH in a new terminal"
+            warn "  Fix: echo 'export PATH=\"$claude_dir:\$PATH\"' >> $profile"
+            warn "  Then: source $profile"
+        fi
+    fi
 }
 
 # Run onboarding wizard
