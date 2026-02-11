@@ -1,6 +1,6 @@
 # Longhouse Backend
 
-FastAPI backend for Longhouse AI agent platform.
+FastAPI backend for Longhouse — never lose an AI coding conversation.
 
 ## Install
 
