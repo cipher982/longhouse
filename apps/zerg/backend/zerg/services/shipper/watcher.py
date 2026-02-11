@@ -1,7 +1,7 @@
-"""Real-time file watcher for Claude Code sessions.
+"""Real-time file watcher for AI coding session providers.
 
-Watches ~/.claude/projects/ for JSONL file changes and triggers
-shipping with debouncing to handle rapid writes from streaming.
+Watches session directories for Claude, Codex, and Gemini for file
+changes and triggers shipping with debouncing to handle rapid writes.
 
 From VISION.md:
 > "Magic moment: user types in Claude Code -> shipper fires ->
@@ -21,16 +21,21 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 if TYPE_CHECKING:
+    from zerg.services.shipper.providers import SessionProvider
     from zerg.services.shipper.shipper import SessionShipper
 
 logger = logging.getLogger(__name__)
 
+# Session file extensions we care about
+_SESSION_EXTENSIONS = {".jsonl", ".json"}
+
 
 class SessionFileHandler(FileSystemEventHandler):
-    """Handles file system events for session JSONL files.
+    """Handles file system events for session files.
 
     Debounces rapid writes (Claude streams to file) and triggers
-    ship on quiet period.
+    ship on quiet period. Accepts both .jsonl (Claude, Codex) and
+    .json (Gemini) files.
     """
 
     def __init__(
@@ -50,17 +55,25 @@ class SessionFileHandler(FileSystemEventHandler):
         self._pending: dict[str, threading.Timer] = {}
         self._lock = threading.Lock()
 
-    def on_modified(self, event):
-        """Handle file modification events."""
+    def _handle_event(self, event) -> None:
+        """Common handler for file creation and modification events."""
         if event.is_directory:
             return
 
-        # Only handle .jsonl files
+        # Handle both .jsonl (Claude, Codex) and .json (Gemini)
         path = Path(event.src_path)
-        if path.suffix != ".jsonl":
+        if path.suffix not in _SESSION_EXTENSIONS:
             return
 
         self._debounce(path)
+
+    def on_modified(self, event):
+        """Handle file modification events."""
+        self._handle_event(event)
+
+    def on_created(self, event):
+        """Handle file creation events (new session files)."""
+        self._handle_event(event)
 
     def _debounce(self, path: Path) -> None:
         """Debounce file changes, calling on_change after quiet period."""
@@ -104,7 +117,7 @@ class SessionFileHandler(FileSystemEventHandler):
 
 
 class SessionWatcher:
-    """Watches Claude session directories for changes.
+    """Watches session directories across all providers for changes.
 
     Usage:
         watcher = SessionWatcher(shipper)
@@ -136,16 +149,11 @@ class SessionWatcher:
         self._fallback_task: asyncio.Task | None = None
         self._pending_ships: asyncio.Queue[Path] = asyncio.Queue()
         self._ship_task: asyncio.Task | None = None
+        # Maps watch directory string -> provider name for path resolution
+        self._watch_dirs: dict[str, str] = {}
 
     async def start(self) -> None:
-        """Start watching for file changes."""
-        projects_dir = self.shipper.config.projects_dir
-
-        if not projects_dir.exists():
-            logger.warning(f"Projects directory does not exist: {projects_dir}")
-            # Create it so watcher can still function
-            projects_dir.mkdir(parents=True, exist_ok=True)
-
+        """Start watching for file changes across all providers."""
         self._loop = asyncio.get_event_loop()
         self._stop_event = asyncio.Event()
 
@@ -155,16 +163,42 @@ class SessionWatcher:
             debounce_seconds=self.debounce_seconds,
         )
 
-        # Set up file system observer
+        # Set up file system observer with all provider directories
         self._observer = Observer()
-        self._observer.schedule(
-            self._handler,
-            str(projects_dir),
-            recursive=True,
-        )
-        self._observer.start()
+        self._watch_dirs.clear()
 
-        logger.info(f"Watching {projects_dir} for session changes")
+        providers = self.shipper._get_providers()
+        watched_count = 0
+
+        for provider in providers:
+            watch_dir = self._get_watch_dir(provider)
+            if watch_dir is None:
+                logger.debug("Provider %s has no watch directory attribute", provider.name)
+                continue
+
+            if not watch_dir.exists():
+                logger.debug(
+                    "Watch directory does not exist, skipping: %s (%s)",
+                    watch_dir,
+                    provider.name,
+                )
+                continue
+
+            self._observer.schedule(
+                self._handler,
+                str(watch_dir),
+                recursive=True,
+            )
+            # Resolve to canonical path for reliable prefix matching
+            # (macOS: /var -> /private/var via symlink)
+            self._watch_dirs[str(watch_dir.resolve())] = provider.name
+            watched_count += 1
+            logger.info("Watching %s for %s sessions", watch_dir, provider.name)
+
+        if watched_count == 0:
+            logger.warning("No provider directories found to watch")
+
+        self._observer.start()
 
         # Start the async ship processor
         self._ship_task = asyncio.create_task(self._ship_processor())
@@ -178,7 +212,7 @@ class SessionWatcher:
         try:
             result = await self.shipper.scan_and_ship()
             if result.events_shipped > 0:
-                logger.info(f"Initial scan: shipped {result.events_shipped} events " f"from {result.sessions_shipped} sessions")
+                logger.info(f"Initial scan: shipped {result.events_shipped} events from {result.sessions_shipped} sessions")
         except Exception as e:
             logger.error(f"Initial scan failed: {e}")
 
@@ -213,6 +247,32 @@ class SessionWatcher:
 
         logger.info("Watcher stopped")
 
+    @staticmethod
+    def _get_watch_dir(provider: SessionProvider) -> Path | None:
+        """Get the root directory to watch for a provider.
+
+        Each provider uses a different attribute name for its root:
+        - ClaudeProvider.projects_dir
+        - CodexProvider.sessions_dir
+        - GeminiProvider.tmp_dir
+        """
+        for attr in ("projects_dir", "sessions_dir", "tmp_dir"):
+            if hasattr(provider, attr):
+                return getattr(provider, attr)
+        return None
+
+    def _provider_for_path(self, path: Path) -> str | None:
+        """Determine which provider owns a file based on its path.
+
+        Matches the file path against registered watch directories.
+        Resolves to canonical path to handle macOS symlinks (/var -> /private/var).
+        """
+        path_str = str(path.resolve())
+        for watch_dir, provider_name in self._watch_dirs.items():
+            if path_str.startswith(watch_dir):
+                return provider_name
+        return None
+
     def _queue_ship(self, path: Path) -> None:
         """Queue a path for shipping (called from watchdog thread)."""
         if self._loop and not self._loop.is_closed():
@@ -235,7 +295,8 @@ class SessionWatcher:
                 logger.info(f"Shipping session: {path.name}")
 
                 try:
-                    result = await self.shipper.ship_session(path)
+                    provider_name = self._provider_for_path(path) or "claude"
+                    result = await self.shipper.ship_session(path, provider_name=provider_name)
                     if result["events_inserted"] > 0:
                         logger.info(f"Shipped {result['events_inserted']} events " f"(skipped {result['events_skipped']} duplicates)")
                 except Exception as e:
@@ -259,7 +320,7 @@ class SessionWatcher:
                 result = await self.shipper.scan_and_ship()
 
                 if result.events_shipped > 0:
-                    logger.info(f"Fallback scan: shipped {result.events_shipped} events " f"from {result.sessions_shipped} sessions")
+                    logger.info(f"Fallback scan: shipped {result.events_shipped} events from {result.sessions_shipped} sessions")
 
             except asyncio.CancelledError:
                 break
