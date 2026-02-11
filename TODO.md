@@ -246,13 +246,12 @@ Update copy to match VISION.md value prop: Timeline + Search + Resume.
 
 Update screenshots to show Timeline, not old dashboard.
 
-- [ ] Capture Timeline page with demo sessions populated
-- [ ] Capture search results
-- [ ] Capture session detail view with events
-- [ ] Update `dashboard-preview.png` → `timeline-preview.png`
+- [x] Update screenshot manifest (`scripts/screenshots.yaml`) for timeline/search/session-detail
+- [x] Update landing components to reference new image filenames (`timeline-preview.png`, `session-detail-preview.png`)
+- [ ] Generate screenshots: `make dev-demo && make marketing-capture`
 - [ ] Add provider logos inline (Claude, Codex, Cursor, Gemini)
 
-**Files:** `public/images/landing/`, `HeroSection.tsx`
+**Files:** `scripts/screenshots.yaml`, `public/images/landing/`, `HeroSection.tsx`, `ProductShowcase.tsx`
 
 ### Checklist (dev-tool landing page best practices 2025-26)
 

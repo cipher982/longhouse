@@ -3,24 +3,47 @@
 #
 # NOTE: scenario-*.png files are AI-generated illustrations, not screenshots.
 # They live in public/images/landing/ but are NOT captured by this script.
+#
+# Usage: Run `make dev-demo` first to seed demo data, then:
+#   uv run scripts/capture_marketing.py
 
 base_url: http://localhost:30080
 
 screenshots:
-  canvas-preview:
-    description: Full canvas view for nerd section
-    url: /canvas?workflow=inbox&marketing=true
+  timeline-preview:
+    description: Timeline page with sessions from multiple providers
+    url: /timeline?marketing=true
     viewport: { width: 1400, height: 900 }
-    output: public/images/landing/canvas-preview.png
+    output: public/images/landing/timeline-preview.png
 
-  chat-preview:
-    description: Oikos chat conversation
-    url: /chat?thread=marketing&marketing=true
+  search-preview:
+    description: Timeline with search results showing FTS5 matches
+    url: /timeline?q=health+endpoint&marketing=true
     viewport: { width: 1400, height: 900 }
-    output: public/images/landing/chat-preview.png
+    output: public/images/landing/search-preview.png
 
-  dashboard-preview:
-    description: Dashboard with agents
-    url: /dashboard?marketing=true
+  session-detail-preview:
+    description: Session detail view with events, tool calls expanded
+    # Uses first demo session (ID 1); demo DB must be seeded first
+    url: /timeline/1?marketing=true
     viewport: { width: 1400, height: 900 }
-    output: public/images/landing/dashboard-preview.png
+    output: public/images/landing/session-detail-preview.png
+
+# --- Legacy screenshots (pre-timeline pivot) ---
+# canvas-preview:
+#   description: Full canvas view for nerd section
+#   url: /canvas?workflow=inbox&marketing=true
+#   viewport: { width: 1400, height: 900 }
+#   output: public/images/landing/canvas-preview.png
+#
+# chat-preview:
+#   description: Oikos chat conversation
+#   url: /chat?thread=marketing&marketing=true
+#   viewport: { width: 1400, height: 900 }
+#   output: public/images/landing/chat-preview.png
+#
+# dashboard-preview:
+#   description: Dashboard with agents
+#   url: /dashboard?marketing=true
+#   viewport: { width: 1400, height: 900 }
+#   output: public/images/landing/dashboard-preview.png

@@ -88,7 +88,7 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
         {/* Right: Product screenshot */}
         <div className="landing-hero-visual">
           <AppScreenshotFrame
-            src="/images/landing/dashboard-preview.png"
+            src="/images/landing/timeline-preview.png"
             alt="Longhouse session timeline showing Claude Code sessions"
             title="Longhouse"
             aspectRatio="4/3"
