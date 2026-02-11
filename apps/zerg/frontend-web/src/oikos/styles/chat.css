@@ -577,3 +577,85 @@
     opacity: 1;
   }
 }
+
+/* ============================================
+   Trace CTA - "View session trace" link
+   ============================================ */
+
+.oikos-container .trace-cta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  padding: 0 var(--space-4);
+  opacity: 0;
+  animation: trace-cta-fade-in 0.4s ease-out 0.3s forwards;
+}
+
+@keyframes trace-cta-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.oikos-container .trace-cta__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: var(--font-size-xs);
+  font-family: var(--font-family-mono);
+  color: var(--color-neon-cyan);
+  background: rgb(6 182 212 / 8%);
+  border: 1px solid rgb(6 182 212 / 20%);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  letter-spacing: 0.2px;
+  text-decoration: none;
+}
+
+.oikos-container .trace-cta__link:hover {
+  background: rgb(6 182 212 / 15%);
+  border-color: rgb(6 182 212 / 40%);
+  color: var(--color-neon-cyan);
+  text-shadow: 0 0 8px rgb(6 182 212 / 30%);
+}
+
+.oikos-container .trace-cta__icon {
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
+.oikos-container .trace-cta__dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.2s ease;
+}
+
+.oikos-container .trace-cta:hover .trace-cta__dismiss {
+  opacity: 0.6;
+}
+
+.oikos-container .trace-cta__dismiss:hover {
+  opacity: 1 !important;
+  color: var(--color-text-secondary);
+  background: rgb(255 255 255 / 8%);
+}

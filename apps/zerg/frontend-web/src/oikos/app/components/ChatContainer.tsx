@@ -6,9 +6,11 @@
  * Each event renders exactly once - no duplication possible.
  */
 
-import { useEffect, useRef, useMemo, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useMemo, useState, useCallback, useSyncExternalStore } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { renderMarkdown } from '../../lib/markdown-renderer'
 import { oikosToolStore, type OikosToolCall } from '../../lib/oikos-tool-store'
+import { eventBus } from '../../lib/event-bus'
 import { ToolCard } from './ToolCard'
 import { CommisToolCard } from './CommisToolCard'
 import type { ChatMessage } from '../context/types'
@@ -31,6 +33,48 @@ interface ChatContainerProps {
 export function ChatContainer({ messages, userTranscriptPreview }: ChatContainerProps) {
   // Ref on wrapper (scroll container) - scrolling now happens on outer element
   const wrapperRef = useRef<HTMLDivElement>(null)
+  const navigate = useNavigate()
+
+  // Track completed run's traceId for "View trace" CTA
+  const [completedTraceId, setCompletedTraceId] = useState<string | null>(null)
+  const [ctaDismissed, setCtaDismissed] = useState(false)
+
+  // Subscribe to oikos events for trace CTA
+  useEffect(() => {
+    const unsubComplete = eventBus.on('oikos:complete', (data) => {
+      if (data.traceId) {
+        setCompletedTraceId(data.traceId)
+        setCtaDismissed(false)
+      }
+    })
+
+    // Clear CTA when a new run starts or chat is cleared
+    const unsubStarted = eventBus.on('oikos:started', () => {
+      setCompletedTraceId(null)
+      setCtaDismissed(false)
+    })
+
+    const unsubCleared = eventBus.on('oikos:cleared', () => {
+      setCompletedTraceId(null)
+      setCtaDismissed(false)
+    })
+
+    return () => {
+      unsubComplete()
+      unsubStarted()
+      unsubCleared()
+    }
+  }, [])
+
+  const handleViewTrace = useCallback(() => {
+    if (completedTraceId) {
+      navigate(`/traces/${completedTraceId}`)
+    }
+  }, [completedTraceId, navigate])
+
+  const handleDismissCta = useCallback(() => {
+    setCtaDismissed(true)
+  }, [])
 
   // Subscribe to oikos tool store
   const toolState = useSyncExternalStore(
@@ -236,6 +280,25 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
               event.type === 'tool'
                 ? renderTool(event.data)
                 : renderMessage(event.data)
+            )}
+            {/* View trace CTA after run completion */}
+            {completedTraceId && !ctaDismissed && (
+              <div className="trace-cta" data-testid="trace-cta">
+                <button className="trace-cta__link" onClick={handleViewTrace}>
+                  <svg className="trace-cta__icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+                    <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+                  </svg>
+                  View session trace
+                </button>
+                <button
+                  className="trace-cta__dismiss"
+                  onClick={handleDismissCta}
+                  aria-label="Dismiss trace link"
+                >
+                  &times;
+                </button>
+              </div>
             )}
             {/* Show live user voice transcript preview */}
             {userTranscriptPreview && (
