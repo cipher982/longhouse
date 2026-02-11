@@ -4,7 +4,6 @@ This module contains the standard tools that come with the platform.
 All tools in this module are aggregated into a single list for registry construction.
 """
 
-from zerg.tools import ToolRegistry
 from zerg.tools.builtin.connector_tools import TOOLS as CONNECTOR_TOOLS
 from zerg.tools.builtin.contact_user import TOOLS as CONTACT_USER_TOOLS
 from zerg.tools.builtin.datetime_tools import TOOLS as DATETIME_TOOLS
@@ -30,7 +29,6 @@ from zerg.tools.builtin.runner_tools import TOOLS as RUNNER_TOOLS
 from zerg.tools.builtin.session_tools import TOOLS as SESSION_TOOLS
 from zerg.tools.builtin.slack_tools import TOOLS as SLACK_TOOLS
 from zerg.tools.builtin.sms_tools import TOOLS as SMS_TOOLS
-from zerg.tools.builtin.ssh_tools import TOOLS as SSH_TOOLS
 from zerg.tools.builtin.task_tools import TOOLS as TASK_TOOLS
 from zerg.tools.builtin.web_fetch import TOOLS as WEB_FETCH_TOOLS
 from zerg.tools.builtin.web_search import TOOLS as WEB_SEARCH_TOOLS
@@ -56,7 +54,6 @@ BUILTIN_TOOLS = (
     + SLACK_TOOLS
     + SESSION_TOOLS
     + SMS_TOOLS
-    + SSH_TOOLS
     + OIKOS_TOOLS
     + TASK_TOOLS
     + WEB_FETCH_TOOLS
@@ -70,13 +67,3 @@ __all__ = [
     "OIKOS_UTILITY_TOOLS",
     "get_oikos_allowed_tools",
 ]
-
-# ---------------------------------------------------------------------------
-# Automatically register built-in tools with the *mutable* singleton registry
-# so legacy tests (and any runtime code relying on ToolRegistry) see them.
-# ---------------------------------------------------------------------------
-
-_registry = ToolRegistry()
-for _tool in BUILTIN_TOOLS:
-    if _tool.name not in _registry.list_tool_names():  # idempotent
-        _registry.register(_tool)

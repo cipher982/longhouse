@@ -6,7 +6,10 @@ can refresh the registry after registering new tools.
 
 Classes:
     ImmutableToolRegistry - Thread-safe, immutable tool registry (built once at startup).
-    ToolRegistry - Mutable singleton for runtime tool registration (MCP, tests).
+
+Runtime tools (e.g. MCP-discovered) are stored in a plain module-level list
+(_RUNTIME_TOOLS) and folded into the immutable registry on rebuild. No mutable
+singleton needed.
 """
 
 import logging
@@ -101,79 +104,26 @@ class ImmutableToolRegistry:
 
 
 # ---------------------------------------------------------------------------
-# ToolRegistry (mutable singleton for runtime registration)
+# Runtime tools (MCP-discovered, etc.) — plain list, no mutable singleton
 # ---------------------------------------------------------------------------
 
-
-class ToolRegistry:
-    """Mutable tool registry keeping backwards compatibility with v0 API."""
-
-    _instance: "ToolRegistry | None" = None
-
-    def __new__(cls):  # noqa: D401 – singleton pattern
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._tools: Dict[str, StructuredTool] = {}
-        return cls._instance
-
-    def register(self, tool: StructuredTool) -> None:
-        if tool.name in self._tools:
-            raise ValueError(f"Tool '{tool.name}' already registered")
-        self._tools[tool.name] = tool
-
-    def get_tool(self, name: str):  # noqa: D401
-        return self._tools.get(name)
-
-    def get_all_tools(self):  # noqa: D401
-        return list(self._tools.values())
-
-    def filter_tools_by_allowlist(self, allowed):  # noqa: D401
-        if not allowed:
-            return list(self._tools.values())
-
-        result = []
-        for pattern in allowed:
-            if pattern.endswith("*"):
-                prefix = pattern[:-1]
-                result.extend(t for n, t in self._tools.items() if n.startswith(prefix))
-            elif pattern in self._tools:
-                result.append(self._tools[pattern])
-        return result
-
-    def list_tool_names(self):  # noqa: D401
-        from zerg.tools.builtin import BUILTIN_TOOLS
-
-        names = {t.name for t in BUILTIN_TOOLS}
-        names.update(self._tools.keys())
-        return list(names)
-
-    def clear_runtime_tools(self):  # noqa: D401
-        """Clear all runtime-registered tools (for test cleanup)."""
-        self._tools.clear()
-
-    def all_tools(self):  # noqa: D401
-        """Return built-in + runtime-registered tools."""
-        from zerg.tools.builtin import BUILTIN_TOOLS
-
-        combined = {t.name: t for t in BUILTIN_TOOLS}
-        combined.update(self._tools)
-        return list(combined.values())
+_RUNTIME_TOOLS: List[StructuredTool] = []
 
 
-# ---------------------------------------------------------------------------
-# Decorator helper
-# ---------------------------------------------------------------------------
+def add_runtime_tool(tool: StructuredTool) -> None:
+    """Register a dynamically discovered tool (e.g. from an MCP server).
+
+    After adding one or more tools call ``refresh_registry()`` so the
+    immutable production registry is rebuilt with the new entries.
+    """
+    if any(t.name == tool.name for t in _RUNTIME_TOOLS):
+        raise ValueError(f"Runtime tool '{tool.name}' already registered")
+    _RUNTIME_TOOLS.append(tool)
 
 
-def register_tool(*, name: str, description: str):  # noqa: D401
-    """Decorator that registers a function as a StructuredTool instance."""
-
-    def _wrapper(fn):
-        tool = StructuredTool.from_function(fn, name=name, description=description)
-        ToolRegistry().register(tool)
-        return fn
-
-    return _wrapper
+def clear_runtime_tools() -> None:
+    """Remove all runtime-registered tools (for test cleanup)."""
+    _RUNTIME_TOOLS.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -183,27 +133,15 @@ def register_tool(*, name: str, description: str):  # noqa: D401
 _PRODUCTION_REGISTRY: Optional[ImmutableToolRegistry] = None
 
 
-def _get_runtime_tools_unique() -> List:
-    """Return runtime-registered tools excluding duplicates with builtins."""
-    from .builtin import BUILTIN_TOOLS
-
-    runtime_registry = ToolRegistry()
-    runtime_tools = runtime_registry.get_all_tools()
-
-    builtin_names: Set[str] = {t.name for t in BUILTIN_TOOLS}
-    unique_runtime = [t for t in runtime_tools if t.name not in builtin_names]
-    return unique_runtime
-
-
 def create_production_registry() -> ImmutableToolRegistry:
     """Create the production tool registry with all available tools."""
     from .builtin import BUILTIN_TOOLS
 
-    tool_sources = [
-        BUILTIN_TOOLS,
-        _get_runtime_tools_unique(),
-    ]
-    return ImmutableToolRegistry.build(tool_sources)
+    # De-duplicate: runtime tools that share a name with builtins are dropped.
+    builtin_names: Set[str] = {t.name for t in BUILTIN_TOOLS}
+    unique_runtime = [t for t in _RUNTIME_TOOLS if t.name not in builtin_names]
+
+    return ImmutableToolRegistry.build([BUILTIN_TOOLS, unique_runtime])
 
 
 def refresh_registry() -> None:
@@ -235,10 +173,6 @@ def reset_registry() -> None:
     """Reset production registry (for testing). Forces lazy re-init."""
     global _PRODUCTION_REGISTRY
     _PRODUCTION_REGISTRY = None
-
-
-# Backwards-compat alias used by existing callers
-reset_tool_resolver = reset_registry
 
 
 # ---------------------------------------------------------------------------
