@@ -379,9 +379,70 @@ _CODEX_MCP_SECTION_RE = re.compile(
 )
 
 
-def _build_codex_mcp_section() -> str:
-    """Build the TOML snippet for the Longhouse MCP server entry."""
-    return "[mcp_servers.longhouse]\n" 'command = "longhouse"\n' 'args = ["mcp-server"]\n'
+def _toml_escape(value: str) -> str:
+    """Escape a string value for safe embedding in a TOML basic string."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _build_codex_mcp_section(api_url: str | None = None) -> str:
+    """Build the TOML snippet for the Longhouse MCP server entry.
+
+    Args:
+        api_url: Optional Longhouse API URL.  When provided, the MCP
+                 server args include ``--url <api_url>`` so workspace-
+                 scoped Codex sessions connect to the correct instance.
+    """
+    if api_url:
+        safe_url = _toml_escape(api_url)
+        args_line = f'args = ["mcp-server", "--url", "{safe_url}"]'
+    else:
+        args_line = 'args = ["mcp-server"]'
+    return f"[mcp_servers.longhouse]\n" f'command = "longhouse"\n' f"{args_line}\n"
+
+
+def upsert_codex_mcp_toml(
+    config_path: Path,
+    *,
+    api_url: str | None = None,
+    strict: bool = True,
+) -> None:
+    """Add or update the ``[mcp_servers.longhouse]`` section in a Codex config.toml.
+
+    This is the single shared implementation for both user-global
+    (``~/.codex/config.toml``) and workspace-scoped
+    (``.codex/config.toml``) Codex MCP registration.
+
+    Args:
+        config_path: Path to the ``config.toml`` file.
+        api_url: Optional Longhouse API URL to pass via ``--url``.
+        strict: If True (default), raise on corrupt TOML.  If False,
+                start fresh (appropriate for workspace provisioning
+                where best-effort is acceptable).
+    """
+    existing_text = ""
+    if config_path.exists():
+        existing_text = config_path.read_text(encoding="utf-8")
+        if existing_text.strip():
+            try:
+                tomllib.loads(existing_text)
+            except tomllib.TOMLDecodeError as exc:
+                if strict:
+                    raise RuntimeError(
+                        f"Failed to parse {config_path}: {exc}. " "Fix or remove the file manually before registering MCP server."
+                    ) from exc
+                logger.warning("Corrupt TOML in %s, starting fresh: %s", config_path, exc)
+                existing_text = ""
+
+    new_section = _build_codex_mcp_section(api_url=api_url)
+
+    if _CODEX_MCP_SECTION_RE.search(existing_text):
+        updated_text = _CODEX_MCP_SECTION_RE.sub(new_section, existing_text)
+    else:
+        separator = "\n" if existing_text and not existing_text.endswith("\n") else ""
+        updated_text = existing_text + separator + new_section
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(updated_text, encoding="utf-8")
 
 
 def install_codex_mcp_server(codex_dir: str | None = None) -> list[str]:
@@ -408,39 +469,7 @@ def install_codex_mcp_server(codex_dir: str | None = None) -> list[str]:
     else:
         config_path = Path.home() / ".codex" / "config.toml"
 
-    # ------------------------------------------------------------------
-    # 1. Read existing config
-    # ------------------------------------------------------------------
-    existing_text = ""
-    if config_path.exists():
-        existing_text = config_path.read_text(encoding="utf-8")
-        # Validate it parses (catch corruption early)
-        if existing_text.strip():
-            try:
-                tomllib.loads(existing_text)
-            except tomllib.TOMLDecodeError as exc:
-                raise RuntimeError(
-                    f"Failed to parse {config_path}: {exc}. " "Fix or remove the file manually before registering MCP server."
-                ) from exc
-
-    # ------------------------------------------------------------------
-    # 2. Add/update [mcp_servers.longhouse] section
-    # ------------------------------------------------------------------
-    new_section = _build_codex_mcp_section()
-
-    if _CODEX_MCP_SECTION_RE.search(existing_text):
-        # Replace existing section in-place
-        updated_text = _CODEX_MCP_SECTION_RE.sub(new_section, existing_text)
-    else:
-        # Append new section (with blank line separator)
-        separator = "\n" if existing_text and not existing_text.endswith("\n") else ""
-        updated_text = existing_text + separator + new_section
-
-    # ------------------------------------------------------------------
-    # 3. Write back
-    # ------------------------------------------------------------------
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(updated_text, encoding="utf-8")
+    upsert_codex_mcp_toml(config_path, strict=True)
     actions.append(f"Updated {config_path} with [mcp_servers.longhouse]")
 
     logger.info("Registered Longhouse MCP server in %s", config_path)
