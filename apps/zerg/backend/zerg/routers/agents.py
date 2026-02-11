@@ -6,6 +6,7 @@ Provides endpoints for:
 - GET /api/agents/sessions/{id} - Get session details
 - GET /api/agents/sessions/{id}/events - Get session events
 - GET /api/agents/sessions/{id}/export - Export session as JSONL for --resume
+- GET /api/agents/briefing - Pre-computed session summaries for AI context injection
 
 Authentication:
 - When AUTH_DISABLED=1 (dev mode), endpoints are open
@@ -22,6 +23,7 @@ import gzip
 import hashlib
 import hmac
 import logging
+import os
 from collections import defaultdict
 from datetime import datetime
 from datetime import timedelta
@@ -33,6 +35,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter
+from fastapi import BackgroundTasks
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Query
@@ -45,6 +48,7 @@ from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
 from zerg.database import get_db
+from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.device_token import DeviceToken
 from zerg.services.agents_store import AgentsStore
@@ -378,6 +382,157 @@ class DemoSeedResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Briefing helpers
+# ---------------------------------------------------------------------------
+
+
+def _format_age(dt: datetime) -> str:
+    """Format a datetime as human-readable relative time (e.g. '2h ago', 'yesterday')."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    delta = now - dt
+
+    seconds = int(delta.total_seconds())
+    if seconds < 0:
+        return "just now"
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        minutes = seconds // 60
+        return f"{minutes}m ago"
+    if seconds < 86400:
+        hours = seconds // 3600
+        return f"{hours}h ago"
+    days = seconds // 86400
+    if days == 1:
+        return "yesterday"
+    if days < 7:
+        return f"{days}d ago"
+    weeks = days // 7
+    if weeks == 1:
+        return "1w ago"
+    return f"{weeks}w ago"
+
+
+class BriefingResponse(BaseModel):
+    """Response for the briefing endpoint."""
+
+    project: str
+    session_count: int
+    briefing: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Background summary generation
+# ---------------------------------------------------------------------------
+
+
+async def _generate_summary_background(session_id: str) -> None:
+    """Background task: generate and cache summary for a session.
+
+    Queries events from DB, builds transcript, calls LLM for quick summary,
+    and stores the result on the session record.
+
+    Skips if:
+    - Session already has a summary (idempotent)
+    - No LLM API key is configured
+    """
+    from zerg.database import get_session_factory
+    from zerg.services.session_processing import build_transcript
+    from zerg.services.session_processing import quick_summary
+
+    settings = get_settings()
+
+    # Check for available LLM client
+    # Prefer ZAI_API_KEY (flat-rate), fall back to OPENAI_API_KEY
+    zai_key = os.getenv("ZAI_API_KEY")
+    openai_key = settings.openai_api_key
+
+    if not zai_key and not openai_key:
+        logger.debug("No LLM API key configured, skipping summary generation for %s", session_id)
+        return
+
+    if settings.testing or settings.llm_disabled:
+        logger.debug("LLM disabled or testing mode, skipping summary for %s", session_id)
+        return
+
+    session_factory = get_session_factory()
+    db = session_factory()
+    try:
+        # Check idempotency
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        if not session:
+            logger.warning("Session %s not found for summary generation", session_id)
+            return
+        if session.summary:
+            logger.debug("Session %s already has a summary, skipping", session_id)
+            return
+
+        # Fetch events
+        events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
+        if not events:
+            logger.debug("No events for session %s, skipping summary", session_id)
+            return
+
+        # Build transcript (event dicts)
+        event_dicts = [
+            {
+                "role": e.role,
+                "content_text": e.content_text,
+                "tool_name": e.tool_name,
+                "tool_input_json": e.tool_input_json,
+                "tool_output_text": e.tool_output_text,
+                "timestamp": e.timestamp,
+                "session_id": str(e.session_id),
+            }
+            for e in events
+        ]
+
+        transcript = build_transcript(
+            event_dicts,
+            include_tool_calls=False,
+            token_budget=8000,
+        )
+        transcript.metadata = {
+            "project": session.project,
+            "provider": session.provider,
+            "git_branch": session.git_branch,
+        }
+
+        if not transcript.messages:
+            logger.debug("Empty transcript for session %s, skipping summary", session_id)
+            return
+
+        # Create LLM client
+        from openai import AsyncOpenAI
+
+        if zai_key:
+            client = AsyncOpenAI(
+                api_key=zai_key,
+                base_url="https://api.z.ai/v1",
+            )
+            model = "glm-4.7"
+        else:
+            client = AsyncOpenAI(api_key=openai_key)
+            model = "gpt-5-mini"
+
+        summary = await quick_summary(transcript, client, model)
+
+        # Store on session record
+        session.summary = summary.summary
+        session.summary_title = summary.title
+        db.commit()
+        logger.info("Generated summary for session %s: %s", session_id, summary.title)
+
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to generate summary for session %s", session_id)
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -408,6 +563,7 @@ async def decompress_if_gzipped(request: Request) -> bytes:
 @router.post("/ingest", response_model=IngestResponse)
 async def ingest_session(
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
@@ -423,6 +579,7 @@ async def ingest_session(
     Features:
     - Accepts gzip-compressed payloads (Content-Encoding: gzip)
     - Rate limiting: 1000 events/min per device_id (returns 429 if exceeded)
+    - Triggers async background summary generation after successful ingest
     """
     try:
         # Decompress if gzip-encoded
@@ -484,6 +641,13 @@ async def ingest_session(
         store = AgentsStore(db)
         result = store.ingest_session(data)
 
+        # Trigger background summary generation (non-blocking, optional)
+        if result.events_inserted > 0:
+            background_tasks.add_task(
+                _generate_summary_background,
+                str(result.session_id),
+            )
+
         return IngestResponse(
             session_id=str(result.session_id),
             events_inserted=result.events_inserted,
@@ -498,6 +662,54 @@ async def ingest_session(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to ingest session: {e}",
+        )
+
+
+@router.get("/briefing", response_model=BriefingResponse)
+async def get_briefing(
+    project: str = Query(..., description="Project name to get briefing for"),
+    limit: int = Query(5, ge=1, le=20, description="Max sessions to include"),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_read_access),
+    _single: None = Depends(require_single_tenant),
+) -> BriefingResponse:
+    """Pre-computed session summaries formatted for AI context injection.
+
+    Returns a compact briefing of recent sessions for a project, suitable
+    for injection into Claude Code's ``additionalContext`` via the SessionStart hook.
+
+    Only includes sessions that have a pre-computed summary (generated async
+    after ingest).
+    """
+    try:
+        sessions = (
+            db.query(AgentSession)
+            .filter(
+                AgentSession.project == project,
+                AgentSession.summary.isnot(None),
+            )
+            .order_by(AgentSession.started_at.desc())
+            .limit(limit)
+            .all()
+        )
+
+        briefing_lines: list[str] = []
+        for s in sessions:
+            age = _format_age(s.started_at)
+            title = s.summary_title or "Untitled"
+            briefing_lines.append(f"- {age}: {title} -- {s.summary}")
+
+        return BriefingResponse(
+            project=project,
+            session_count=len(sessions),
+            briefing="\n".join(briefing_lines) if briefing_lines else None,
+        )
+
+    except Exception as e:
+        logger.exception("Failed to get briefing")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get briefing: {e}",
         )
 
 
