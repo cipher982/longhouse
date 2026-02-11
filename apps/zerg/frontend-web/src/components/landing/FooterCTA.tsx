@@ -1,11 +1,18 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { SwarmLogo } from "../SwarmLogo";
 import { Button } from "../ui";
-import config from "../../lib/config";
+import { WaitlistModal } from "./WaitlistModal";
 
 export function FooterCTA() {
-  const handleStartFree = () => {
-    document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
+  const [showWaitlist, setShowWaitlist] = useState(false);
+
+  const handleSelfHost = () => {
+    document.querySelector(".install-section")?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  const handleHostedBeta = () => {
+    setShowWaitlist(true);
   };
 
   const currentYear = new Date().getFullYear();
@@ -18,9 +25,14 @@ export function FooterCTA() {
           <blockquote className="landing-footer-quote">
             Hosted or self-hosted — never lose an AI session again.
           </blockquote>
-          <Button variant="primary" size="lg" className="landing-cta-main" onClick={handleStartFree}>
-            See Pricing
-          </Button>
+          <div className="landing-footer-cta-buttons">
+            <Button variant="primary" size="lg" onClick={handleSelfHost}>
+              Self-host Now
+            </Button>
+            <Button variant="secondary" size="lg" onClick={handleHostedBeta}>
+              Join Waitlist
+            </Button>
+          </div>
         </div>
 
         {/* Footer links */}
@@ -57,6 +69,8 @@ export function FooterCTA() {
           <p>© {currentYear} Longhouse. All rights reserved.</p>
         </div>
       </div>
+
+      {showWaitlist && <WaitlistModal onClose={() => setShowWaitlist(false)} source="footer_hosted" />}
     </footer>
   );
 }

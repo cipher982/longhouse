@@ -190,20 +190,19 @@ export default function LandingPage() {
     document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" });
   };
 
-  const scrollToPricing = () => {
-    document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
+  const scrollToDeployment = () => {
+    document.getElementById("deployment-options")?.scrollIntoView({ behavior: "smooth" });
   };
 
   const handleSignIn = () => {
-    // Trigger the sign-in modal via the Get Started button in hero
-    const signInBtn = document.querySelector('.landing-cta-main') as HTMLButtonElement;
-    signInBtn?.click();
+    // In production, navigate to timeline — AuthGuard will show the login screen
+    navigate("/timeline");
   };
 
   return (
     <div className="landing-page" data-fx-hero={heroAnimationsEnabled ? "1" : "0"} data-fx-particles={particlesEnabled ? "1" : "0"}>
       {/* Sticky Header */}
-      <LandingHeader onSignIn={handleSignIn} onGetStarted={scrollToPricing} />
+      <LandingHeader onSignIn={handleSignIn} onGetStarted={scrollToDeployment} />
 
       {/* Particle background */}
       {particlesEnabled && <div className="particle-bg" />}
