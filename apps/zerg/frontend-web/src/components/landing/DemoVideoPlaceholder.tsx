@@ -8,7 +8,12 @@
  * 1. No URL -> placeholder with play icon and "Coming Soon" message
  * 2. Loom/YouTube URL -> responsive iframe embed
  * 3. Direct video URL -> native <video> player
+ *
+ * If a direct video URL returns a 404 (file not yet generated), the component
+ * falls back to the placeholder state automatically.
  */
+
+import { useState } from "react";
 
 interface DemoVideoPlaceholderProps {
   videoUrl?: string;
@@ -37,7 +42,9 @@ export function DemoVideoPlaceholder({
   thumbnailUrl,
   className = "",
 }: DemoVideoPlaceholderProps) {
-  if (!videoUrl) {
+  const [videoError, setVideoError] = useState(false);
+
+  if (!videoUrl || videoError) {
     return (
       <div className={`demo-video-placeholder ${className}`}>
         <div className="demo-video-frame">
@@ -91,6 +98,7 @@ export function DemoVideoPlaceholder({
           poster={thumbnailUrl}
           controls
           className="demo-video-player"
+          onError={() => setVideoError(true)}
         >
           Your browser does not support the video tag.
         </video>
