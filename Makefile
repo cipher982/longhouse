@@ -392,7 +392,7 @@ test-install: ## Test install.sh script (syntax + E2E)
 	@echo "🧪 Testing install.sh..."
 	@bash -n scripts/install.sh
 	@echo "✅ Syntax OK"
-	@cd apps/zerg/backend && uv run pytest tests/cli/test_install_script.py -v --timeout=120
+	@cd apps/zerg/backend && uv run --extra dev pytest tests/cli/test_install_script.py -v --timeout=120
 
 test-provision-e2e: ## Provision an instance via control plane and run smoke checks
 	@./scripts/ci/provision-e2e.sh
@@ -400,14 +400,14 @@ test-provision-e2e: ## Provision an instance via control plane and run smoke che
 test-integration: ## @internal Run integration tests (REAL API calls, requires API keys)
 	@echo "🧪 Running integration tests (real API calls)..."
 	@echo "   Note: Requires OPENAI_API_KEY and/or GROQ_API_KEY"
-	cd apps/zerg/backend && EVAL_MODE=live uv run pytest tests/integration/ -v -m integration
+	cd apps/zerg/backend && EVAL_MODE=live uv run --extra dev pytest tests/integration/ -v -m integration
 
 shipper-e2e-prereqs: ## Shipper E2E prerequisites (migrations + table check)
 	@./scripts/shipper-e2e-prereqs.sh
 
 test-shipper-e2e: ## Run shipper E2E tests (requires backend running)
 	@echo "🧪 Running shipper E2E tests (requires make dev)..."
-	cd apps/zerg/backend && SHIPPER_E2E=1 SHIPPER_E2E_URL=$(SHIPPER_E2E_URL) uv run pytest tests/integration/test_shipper_e2e.py tests/integration/test_shipper_watcher_e2e.py -v -m integration
+	cd apps/zerg/backend && SHIPPER_E2E=1 SHIPPER_E2E_URL=$(SHIPPER_E2E_URL) uv run --extra dev pytest tests/integration/test_shipper_e2e.py tests/integration/test_shipper_watcher_e2e.py -v -m integration
 
 shipper-smoke-test: ## Run shipper live smoke test script (requires backend running)
 	@./scripts/shipper-smoke-test.sh
@@ -428,7 +428,7 @@ test-prompts: ## @internal Run live prompt quality tests (requires backend runni
 	cd apps/zerg/backend && \
 		LLM_REQUEST_LOG=1 \
 		LONGHOUSE_DATA_PATH=$${LONGHOUSE_DATA_PATH:-/tmp/longhouse} \
-		uv run pytest tests/live/test_prompt_quality.py \
+		uv run --extra dev pytest tests/live/test_prompt_quality.py \
 		--live-url http://localhost:30080 \
 		--live-token $(TOKEN) \
 		--timeout=120 \
@@ -445,7 +445,7 @@ eval: ## 🔴 Run AI evals (REAL LLM - costs $$$)
 	@echo "🔴 Running AI evals (REAL OpenAI API calls)..."
 	@echo "   This costs money. Press Ctrl+C to cancel."
 	@sleep 2
-	cd apps/zerg/backend && env EVAL_MODE=live uv run pytest evals/ -v --variant=$(EVAL_VARIANT) --timeout=120
+	cd apps/zerg/backend && env EVAL_MODE=live uv run --extra dev pytest evals/ -v --variant=$(EVAL_VARIANT) --timeout=120
 
 eval-compare: ## @internal Compare two eval result files (usage: make eval-compare BASELINE=file1 VARIANT=file2)
 	@test -n "$(BASELINE)" || (echo "❌ Usage: make eval-compare BASELINE=<file> VARIANT=<file>" && exit 1)
@@ -455,7 +455,7 @@ eval-compare: ## @internal Compare two eval result files (usage: make eval-compa
 
 eval-tool-selection: ## @internal Run tool selection evals (tests tool picking quality)
 	@echo "🎯 Running tool selection evals (REAL LLM)..."
-	cd apps/zerg/backend && env EVAL_MODE=live uv run pytest evals/ -v -k tool_selection --timeout=120
+	cd apps/zerg/backend && env EVAL_MODE=live uv run --extra dev pytest evals/ -v -k tool_selection --timeout=120
 
 # ---------------------------------------------------------------------------
 # SDK & Integration
@@ -761,7 +761,7 @@ onboarding-smoke: ## Quick onboarding smoke (uses current workspace, Docker)
 onboarding-sqlite: ## SQLite-only onboarding smoke test (no Docker)
 	@echo "Testing SQLite-only onboarding..."
 	@cd apps/zerg/backend && \
-	uv run pytest tests_lite/test_onboarding_sqlite.py -v --tb=short -p no:warnings
+	uv run --extra dev pytest tests_lite/test_onboarding_sqlite.py -v --tb=short -p no:warnings
 	@echo "SQLite onboarding smoke test passed"
 
 qa-oss: ## Full OSS QA (isolated clone + UI gate)

@@ -100,7 +100,7 @@ repos:
       # -----------------------------------------------------------------------
       - id: python-vulture
         name: Vulture - detect dead code
-        entry: bash -c 'cd apps/zerg/backend && uv run vulture zerg/ vulture-whitelist.py --min-confidence 80 --exclude "**/tests/**,**/test_*.py"'
+        entry: bash -c 'cd apps/zerg/backend && uv run --extra dev vulture zerg/ vulture-whitelist.py --min-confidence 80 --exclude "**/tests/**,**/test_*.py"'
         language: system
         files: ^apps/zerg/backend/zerg/
         exclude: ^apps/zerg/backend/zerg/generated/
