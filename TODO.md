@@ -594,7 +594,7 @@ Close the gap between VISION, README, docs, and the live installer.
 - [x] **Add `longhouse doctor`** (self-diagnosis for server health, shipper status, config validity); run after install/upgrade and recommend in docs
 - [x] **Fix `longhouse connect` default URL** — `connect` + `ship` fallback changed from 47300 to 8080 (commit `426f8c9b`)
 - [ ] **Installer polish:** verify Claude shim + PATH in a *fresh* shell and print an exact fix line when it fails (VISION requirement)
-- [ ] **Hook-based shipping:** `longhouse connect --install` should inject a Claude Code `Stop` hook (`longhouse ship --session $SESSION_ID`) into `.claude/settings.json` — eliminates need for watcher daemon for Claude Code users. See VISION.md § "Shipper" for architecture. Verify hook env vars expose session ID.
+- [x] **Hook-based shipping:** `longhouse ship --file` flag + Stop hook implemented (commit `17a978df`). Hook reads `transcript_path` from stdin JSON, ships single file incrementally. SessionStart hook shows recent sessions on new session start. Remaining: `longhouse connect --install` should auto-inject hooks into `.claude/settings.json`.
 - [x] **AGENTS.md chain support:** Support Codex-style AGENTS.md chain (global → repo → subdir) in commis workspaces. Auto-inject Longhouse context (MCP server config, memory pointers) into workspace AGENTS.md when spawning commis.
 
 ---
@@ -605,8 +605,8 @@ Close the remaining open questions from VISION.md.
 
 - [ ] Decide whether the shipper is bundled with the CLI or shipped as a separate package.
 - [ ] Decide shipper auth UX for `longhouse connect` (device token flow).
-  - Current: manual token creation in UI + paste into CLI
-  - VISION target: `longhouse connect` issues token automatically
+  - Current: `longhouse auth` → opens `/settings/devices` page → user creates token → pastes into CLI
+  - VISION target: `longhouse connect` issues token automatically (CLI-side login + auto-create)
   - Note: This is separate from web UI auth (password/OAuth) — shipper needs device tokens
 - [ ] Decide HTTPS story for local OSS (`longhouse serve`) — built-in vs reverse proxy guidance.
 - [ ] Capture current frontend bundle size and set a target budget.
