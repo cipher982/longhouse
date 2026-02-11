@@ -37,7 +37,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 ### In Progress
 | Section | Status | Notes |
 |---------|--------|-------|
-| Harness Phase 3f-3h | ~75% | 3f 100% (MCP server + commis injection + Codex config.toml); 3g-3h 0% |
+| Harness Phase 3f-3h | ~90% | 3f 100% (MCP server + commis injection + Codex config.toml); 3g 100% (quality gates + hooks); only 3h (research) remaining |
 | Landing Page Redesign | ~95% | Phase 5 complete (copy, sections, reorder); Phase 6 visual assets remaining |
 | Control Plane | ~45% | Scaffold + provisioner + CI gate done; OAuth/billing/runtime image pending |
 | Shipper Multi-Provider | DONE | Provider abstraction + Claude/Codex/Gemini parsers + review fixes |
@@ -61,9 +61,8 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 2. **Control Plane: OAuth + Stripe (Phases 1-2)** — Add Google OAuth at control plane level and Stripe checkout/webhooks for hosted beta signup flow. [Details](#infra-control-plane--hosted-beta-8)
 3. **Install/Onboarding Polish** — Verify Claude shim + PATH in fresh shell; `longhouse connect --install` already injects hooks. [Details](#launch-install--onboarding-alignment-4)
 4. **OSS First-Run UX** — Auto-seed demo data on first `longhouse onboard`; add guided empty state with "Load demo" CTA. [Details](#product-oss-first-run-ux-polish-5)
-5. **Commis Quality Gates (Phase 3g)** — Inject verification hooks (test runner) into commis workspaces before commit. [Details](#product--harness-simplification--commis-to-timeline-8)
-6. **HN Launch Prep** — Comparison table (done), video walkthrough, social proof. [Details](#launch-hn-launch-readiness--remaining-4)
-7. **Public Launch Checklist** — CTA from Chat to session trace, detail view search. [Details](#launch-public-launch-checklist-6)
+5. **HN Launch Prep** — Video walkthrough, social proof (comparison table done). [Details](#launch-hn-launch-readiness--remaining-4)
+6. **Public Launch Checklist** — CTA from Chat to session trace, UI smoke snapshots. [Details](#launch-public-launch-checklist-6)
 
 ---
 
@@ -287,12 +286,8 @@ Update screenshots to show Timeline, not old dashboard.
 
 ### Medium Priority
 
-- [ ] **Comparison table** (30 min)
-  - Show how Longhouse compares to:
-    - grep through JSONL files (old way)
-    - Claude Code built-in history (limited)
-    - Not tracking at all (disaster)
-  - Table showing: searchable, cross-tool, persistent, visual timeline
+- [x] **Comparison table** — enhanced for HN launch (commit `f8496f4b`)
+  - Shows how Longhouse compares to grep JSONL, Claude Code built-in history, and not tracking
 
 - [ ] **Social proof** (if available)
   - Add testimonial or "Built by X" to README
@@ -394,7 +389,8 @@ Ensure launch readiness without relying on scattered docs.
 - [ ] Add CTA from Chat to "View session trace" after a run.
 - [x] Improve Timeline detail header — status badge (completed/in-progress), environment badge, provider dot (commit `8c7db355`)
 - [x] Add basic metrics — tool count, turn count, duration shown in header badges (commit `8c7db355`)
-- [x] Add event role filters (All/Messages/Tools) in detail view (commit `8c7db355`). Search within detail view still TODO.
+- [x] Add event role filters (All/Messages/Tools) in detail view (commit `8c7db355`).
+- [x] Search within detail view — event text search added (commit `70acdc73`).
 - [ ] Core UI smoke snapshots pass (`make qa-ui-smoke`).
 - [ ] Shipper smoke test passes (if shipper path is enabled).
 - [ ] Add packaging smoke test for future install.sh/brew path (if shipped).
