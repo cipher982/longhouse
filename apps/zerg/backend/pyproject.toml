@@ -2,7 +2,7 @@
 [project]
 name = "longhouse"
 version = "0.1.2"
-description = "Longhouse AI Agent Platform - orchestrate AI agents with voice and text"
+description = "Never lose an AI coding conversation. Search and browse every AI coding session."
 authors = [
     {name = "David Rose", email = "david.github@drose.io"}
 ]
