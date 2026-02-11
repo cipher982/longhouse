@@ -120,11 +120,43 @@ Evaluate newer integration paths for tighter commis control vs. current hatch su
 - [x] Evaluate Claude Agent SDK (TypeScript) as alternative to `hatch` subprocess for Claude-backend commis — real-time streaming, programmatic tool injection, better lifecycle control
 - [x] Document trade-offs and recommend path forward (subprocess vs SDK vs protocol) — see `docs/specs/3h-research-commis-integration.md`
 
-### Phase 4: Semantic Search (4)
-- [ ] Choose embedding approach: sqlite-vec vs API-call-on-ingest
+### Phase 3.5: Session Processing Module + Briefing (5)
+
+**Spec:** `docs/specs/session-processing-module.md`
+**Handoff:** `docs/handoffs/2026-02-11-session-processing-discovery.md`
+
+**Goal:** Pre-computed session summaries injected into Claude Code AI context at startup. No other tool does cross-session context injection — differentiating feature.
+
+**Discovery (2026-02-11):** The SessionStart hook (`~/.claude/hooks/longhouse-session-start.sh`) uses `systemMessage` (human-only display). The AI receives nothing. Fix: use `hookSpecificOutput.additionalContext`.
+
+**Phase 1 — Core module + hook fix:**
+- [ ] Fix SessionStart hook: add `additionalContext` alongside `systemMessage` in `longhouse-session-start.sh` line 57
+- [ ] Create `zerg/services/session_processing/` module: `content.py`, `tokens.py`, `transcript.py`
+- [ ] Golden tests: verify noise stripping + redaction match current `daily_digest.py` behavior
+- [ ] Add `summarize.py` with `quick_summary()` (z.ai / configurable model)
+
+**Phase 2 — Briefing pipeline:**
+- [ ] Add `summary` + `summary_title` columns to `AgentSession`
+- [ ] Wire async summary generation into ingest path (after `POST /api/agents/ingest`)
+- [ ] Add `GET /api/agents/briefing?project=X` endpoint (reads cached summaries, <50ms)
+- [ ] Update SessionStart hook to call briefing endpoint, format as adaptive-depth context
+- [ ] Sanitize injected content (label as untrusted historical notes)
+
+**Phase 3 — Refactor existing consumers:**
+- [ ] Migrate `daily_digest.py` to use `session_processing.transcript` + `session_processing.summarize`
+- [ ] Migrate `memory_summarizer.py` to use `session_processing.summarize`
+- [ ] Delete duplicate inline logic
+
+### Phase 4: Semantic Search + Embeddings (4)
+
+Includes life-hub embedding pipeline migration to Longhouse.
+
+- [ ] Add `session_processing/embeddings.py` (embed client, chunk builder, map-reduce)
+- [ ] Choose embedding storage: sqlite-vec vs brute-force vs API-call-on-ingest
 - [ ] Compute embeddings on session event ingest (background or sync)
 - [ ] Add `semantic_search_sessions` Oikos tool
 - [ ] Make semantic search optional: `pip install longhouse[semantic]`
+- [ ] Semantic briefing enhancement: "you solved a similar problem 2 weeks ago"
 
 ### Phase 5: Historical Backfill (David-specific) (2)
 - [ ] Write one-time script: pull sessions from Life Hub API → Longhouse `/api/agents/ingest`
