@@ -13,7 +13,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ---
 
-## Validation Summary (2026-02-11, rev 7)
+## Validation Summary (2026-02-11, rev 8)
 
 ### Done / Verified
 | Section | Status | Notes |
@@ -23,7 +23,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | OSS Auth | 100% | Password login + rate limiting + hash support |
 | FTS5 Search (Phase 1+2) | 100% | Index + triggers + search + snippets + Oikos tools |
 | CI Stability (E2E) | ~90% | Dynamic ports, per-run DB, artifacts; schedule gate missing |
-| Rebrand (core) | ~95% | Core Swarmlet refs removed; only experiments/evidence docs remain |
+| Rebrand (core) | 100% | 13/13 items complete; all user-facing Swarmlet refs removed, OpenAPI regenerated |
 | Harness Phase 1 (Commis->Timeline) | 100% | Ingest, environment filter, source badges, regression test |
 | Harness Phase 2 (Deprecate Standard) | 100% | Workspace-only default, CommisRunner removed (~2.7K LOC) |
 | Harness Phase 3a-3e (Slim Oikos) | 100% | Loop simplified, tools flattened, services decoupled, memory consolidated, skills progressive disclosure |
@@ -59,8 +59,8 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 1. **Landing Page Visual Assets (Phase 6)** — Capture timeline screenshots for landing page and README. [Details](#product-landing-page-redesign--full-6)
 2. **Control Plane: OAuth + Stripe (Phases 1-2)** — Add Google OAuth at control plane level and Stripe checkout/webhooks for hosted beta signup flow. [Details](#infra-control-plane--hosted-beta-8)
-3. **HN Launch Prep** — Video walkthrough, social proof (comparison table done). [Details](#launch-hn-launch-readiness--remaining-4)
-4. **Public Launch Checklist** — UI smoke snapshots, shipper smoke test. [Details](#launch-public-launch-checklist-6)
+3. **HN Launch Prep** — Video walkthrough placeholder done (commit b1bc43c3); only actual recording remaining. [Details](#launch-hn-launch-readiness--remaining-4)
+4. **Public Launch Checklist** — UI smoke snapshots remaining; shipper smoke test done. [Details](#launch-public-launch-checklist-6)
 
 ---
 
@@ -83,6 +83,8 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 **Remaining 3a items (deferred):**
 - [ ] Implement Oikos dispatch contract from spec: direct vs quick-tool vs CLI delegation, with explicit backend intent routing (Claude/Codex/Gemini) and repo-vs-scratch delegation modes
 - [ ] Use Claude Compaction API (server-side) or custom summarizer for "infinite thread" context management
+
+Research doc: `docs/specs/3a-deferred-research.md` — both items evaluated and deferred (commit 16c531e6)
 
 **3f: Longhouse MCP Server — expose toolbox to CLI agents (3)**
 
@@ -293,7 +295,8 @@ Update screenshots to show Timeline, not old dashboard.
   - ~~Link to personal Twitter/GitHub for credibility~~
 
 - [ ] **Video walkthrough** (optional, 2 hours)
-  - 60-90 second Loom showing install → timeline → search
+  - Video capture tooling + scenario scripts done (commit b1bc43c3)
+  - Remaining: actual 60-90 second recording showing install → timeline → search
   - Add to README + landing page
 
 ---
@@ -390,7 +393,7 @@ Ensure launch readiness without relying on scattered docs.
 - [x] Add event role filters (All/Messages/Tools) in detail view (commit `8c7db355`).
 - [x] Search within detail view — event text search added (commit `70acdc73`).
 - [ ] Core UI smoke snapshots pass (`make qa-ui-smoke`).
-- [ ] Shipper smoke test passes (if shipper path is enabled).
+- [x] Shipper smoke test passes — smoke test added (commit 08dbd87b).
 - [ ] Add packaging smoke test for future install.sh/brew path (if shipped).
 
 ---
