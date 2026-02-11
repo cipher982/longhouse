@@ -38,11 +38,11 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
           </h1>
 
           <p className="landing-hero-subhead">
-            Your Claude Code sessions in one searchable timeline. Hosted unlocks resume anywhere.
+            Claude Code, Codex, and Gemini sessions in one searchable timeline.
           </p>
 
           <p className="landing-hero-note">
-            Hosted beta + self-hosted. Codex, Cursor, Gemini in progress.
+            Hosted beta + self-hosted. Cursor support in progress.
           </p>
 
           <div className="landing-hero-ctas">
