@@ -4,6 +4,18 @@ Never lose an AI coding conversation.
 
 Claude Code now; Codex/Cursor/Gemini in progress. Hosted or self-hosted.
 
+## Demo
+
+<!-- Video: Replace this section with a Loom/YouTube embed once the walkthrough is recorded.
+     Target: 60-90 second tour covering install -> timeline -> search. -->
+
+Video walkthrough coming soon. In the meantime, try it yourself:
+
+```bash
+curl -fsSL https://get.longhouse.ai/install.sh | bash
+longhouse serve --demo
+```
+
 ## Get Started
 
 ### Hosted (beta)

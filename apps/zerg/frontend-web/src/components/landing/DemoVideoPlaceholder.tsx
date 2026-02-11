@@ -3,6 +3,11 @@
  *
  * A placeholder component for product demo video.
  * Shows a styled frame with "Coming Soon" state until video is ready.
+ *
+ * Supports three modes:
+ * 1. No URL -> placeholder with play icon and "Coming Soon" message
+ * 2. Loom/YouTube URL -> responsive iframe embed
+ * 3. Direct video URL -> native <video> player
  */
 
 interface DemoVideoPlaceholderProps {
@@ -11,14 +16,28 @@ interface DemoVideoPlaceholderProps {
   className?: string;
 }
 
+/** Detect embeddable URLs and return the embed src, or null for direct video. */
+function getEmbedUrl(url: string): string | null {
+  // Loom: https://www.loom.com/share/abc123 -> https://www.loom.com/embed/abc123
+  const loomMatch = url.match(/loom\.com\/share\/([a-zA-Z0-9]+)/);
+  if (loomMatch) return `https://www.loom.com/embed/${loomMatch[1]}`;
+
+  // YouTube: various formats -> https://www.youtube.com/embed/VIDEO_ID
+  const ytMatch =
+    url.match(/youtube\.com\/watch\?v=([a-zA-Z0-9_-]+)/) ??
+    url.match(/youtu\.be\/([a-zA-Z0-9_-]+)/) ??
+    url.match(/youtube\.com\/embed\/([a-zA-Z0-9_-]+)/);
+  if (ytMatch) return `https://www.youtube.com/embed/${ytMatch[1]}`;
+
+  return null;
+}
+
 export function DemoVideoPlaceholder({
   videoUrl,
   thumbnailUrl,
   className = "",
 }: DemoVideoPlaceholderProps) {
-  const hasVideo = Boolean(videoUrl);
-
-  if (!hasVideo) {
+  if (!videoUrl) {
     return (
       <div className={`demo-video-placeholder ${className}`}>
         <div className="demo-video-frame">
@@ -28,13 +47,13 @@ export function DemoVideoPlaceholder({
               <span className="dot dot-yellow" />
               <span className="dot dot-green" />
             </div>
-            <div className="demo-video-title">Product Demo</div>
+            <div className="demo-video-title">Quick Tour</div>
           </div>
           <div className="demo-video-content">
-            <div className="demo-video-icon">▶</div>
+            <div className="demo-video-icon">&#9654;</div>
             <div className="demo-video-text">
-              <h3>Demo Video Coming Soon</h3>
-              <p>See Longhouse in action</p>
+              <h3>Video Walkthrough Coming Soon</h3>
+              <p>60-second tour: install, timeline, and search</p>
             </div>
           </div>
         </div>
@@ -42,7 +61,28 @@ export function DemoVideoPlaceholder({
     );
   }
 
-  // Future: actual video player
+  const embedUrl = getEmbedUrl(videoUrl);
+
+  // Embeddable (Loom / YouTube)
+  if (embedUrl) {
+    return (
+      <div className={`demo-video-placeholder ${className}`}>
+        <div className="demo-video-frame">
+          <div className="demo-video-embed-wrap">
+            <iframe
+              src={embedUrl}
+              title="Longhouse demo walkthrough"
+              allowFullScreen
+              allow="autoplay; fullscreen; picture-in-picture"
+              className="demo-video-iframe"
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Direct video file
   return (
     <div className={`demo-video-placeholder ${className}`}>
       <div className="demo-video-frame">
