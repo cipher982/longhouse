@@ -470,15 +470,13 @@ Close the gap between VISION, README, docs, and the live installer.
 
 Close the remaining open questions from VISION.md.
 
-- [ ] Decide whether the shipper is bundled with the CLI or shipped as a separate package.
-  > **Recommendation (2026-02-11):** Keep the shipper bundled in the `longhouse` package. It is already part of the main package (`pyproject.toml` includes `watchdog`, CLI entrypoint exposes `connect`/`ship`), and a single `pip install longhouse` that ships sessions out-of-the-box is simpler UX than asking users to install a second package.
+- [x] Decide whether the shipper is bundled with the CLI or shipped as a separate package. **Decision: bundled.** Already part of the main package (`pyproject.toml` includes `watchdog`, CLI exposes `connect`/`ship`). Single `pip install longhouse` ships sessions out-of-the-box.
 - [ ] Decide shipper auth UX for `longhouse connect` (device token flow).
   - Current: `longhouse auth` → opens `/settings/devices` page → user creates token → pastes into CLI
   - VISION target: `longhouse connect` issues token automatically (CLI-side login + auto-create)
   - Note: This is separate from web UI auth (password/OAuth) — shipper needs device tokens
   > **Recommendation (2026-02-11):** Implement auto-token flow in `longhouse connect` — user runs `longhouse connect --url <url>`, CLI authenticates via password (or localhost auto-auth), and auto-creates a device token server-side. Keep the current manual `longhouse auth` flow as a fallback for headless/scripted setups. This eliminates the copy-paste step that breaks the "Fast to Fun" < 2 min goal.
-- [ ] Decide HTTPS story for local OSS (`longhouse serve`) — built-in vs reverse proxy guidance.
-  > **Recommendation (2026-02-11):** No built-in HTTPS for `longhouse serve`. HTTP on localhost is fine for local dev (browsers trust it, no cert pain). For remote access, add reverse proxy docs recommending Caddy (auto-HTTPS) or nginx. This matches the pattern used by Grafana, Jupyter, Datasette, and similar dev tools — none bundle TLS, all recommend a reverse proxy for production.
+- [x] Decide HTTPS story for local OSS (`longhouse serve`) — built-in vs reverse proxy guidance. **Decision: no built-in HTTPS.** HTTP on localhost is fine. For remote access, recommend Caddy or nginx reverse proxy (matches Grafana/Jupyter/Datasette pattern).
 - [x] Capture current frontend bundle size and set a target budget. (2026-02-11: measured, budget set in VISION.md § "Frontend Bundle Size Baseline")
 
 ---

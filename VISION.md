@@ -1146,7 +1146,7 @@ This is David's personal integration. OSS users don't need Life Hub at all.
 3. Backfill tooling: how to avoid duplicates and ensure fidelity?
 4. How should Oikos conversations map into sessions (provider="oikos")?
 5. Artifact storage: should file diffs, screenshots, patches be stored alongside events or separate?
-6. Runner daemon packaging: separate install or bundle with `longhouse` CLI?
+6. ~~Runner daemon packaging: separate install or bundle with `longhouse` CLI?~~ → Separate install (Bun binary). Shipper is bundled with CLI; runner is separate per-machine daemon.
 7. Secrets for jobs: job-scoped encrypted bundles (age) vs sops vs external secrets manager?
 8. Jobs pack UX: local template by default vs required private repo from day one?
 9. ~~Session discovery: semantic search (embeddings) priority vs FTS5-only for MVP?~~ → FTS5 for MVP (done), embeddings as Phase 4 enhancement. Memory system already has OpenAI embeddings infra.
@@ -1705,9 +1705,9 @@ Measured via `bun run build` (Vite 5.4, production mode, gzip sizes reported by 
 - `react-syntax-highlighter` ships all Prism languages; lazy-load or switch to a lighter highlighter
 - `marked` + `react-markdown` are both bundled; consolidate to one markdown renderer
 - Consider extracting `react-dom` into a shared vendor chunk for better caching
-- [ ] Shipper: bundled or separate package?
-- [ ] Auth for remote access: API key? OAuth?
-- [ ] HTTPS: built-in or "use Caddy/nginx"?
+- [x] Shipper: bundled (single `pip install longhouse` ships sessions out-of-the-box)
+- [ ] Auth for remote access: auto-token flow in `longhouse connect` (tracked in TODO)
+- [x] HTTPS: no built-in; recommend Caddy/nginx reverse proxy
 
 ---
 
