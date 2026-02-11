@@ -28,22 +28,3 @@ screenshots:
     url: /timeline/{first_session_id}?marketing=true
     viewport: { width: 1400, height: 900 }
     output: public/images/landing/session-detail-preview.png
-
-# --- Legacy screenshots (pre-timeline pivot) ---
-# canvas-preview:
-#   description: Full canvas view for nerd section
-#   url: /canvas?workflow=inbox&marketing=true
-#   viewport: { width: 1400, height: 900 }
-#   output: public/images/landing/canvas-preview.png
-#
-# chat-preview:
-#   description: Oikos chat conversation
-#   url: /chat?thread=marketing&marketing=true
-#   viewport: { width: 1400, height: 900 }
-#   output: public/images/landing/chat-preview.png
-#
-# dashboard-preview:
-#   description: Dashboard with agents
-#   url: /dashboard?marketing=true
-#   viewport: { width: 1400, height: 900 }
-#   output: public/images/landing/dashboard-preview.png
