@@ -13,41 +13,56 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ---
 
-## 📊 Validation Summary (2026-02-05, rev 3 — post-work)
+## Validation Summary (2026-02-10, rev 4)
 
-**Full codebase audit + 4 tasks completed this session.**
-
-### ✅ DONE / VERIFIED
+### Done / Verified
 | Section | Status | Notes |
 |---------|--------|-------|
-| P0 Launch Core | ✅ 100% | All 6 items verified (auth, demo, CTAs, README, FTS5, QA script) |
-| Post-GA Follow-ups | ✅ 100% | All five items verified in code |
-| OSS Auth | ✅ 100% | Password login + rate limiting + hash support |
-| FTS5 Search (Phase 1+2) | ✅ 100% | FTS5 index + triggers + search + snippets + Oikos tools all done |
-| CI Stability (E2E isolation) | ✅ ~90% | Dynamic ports, per-run DB, artifact upload done; only schedule gate missing |
-| Rebrand (core) | ✅ ~95% | Core Swarmlet refs removed (commit `888bc5ad`); only experiments/evidence docs remain |
+| P0 Launch Core | 100% | All 6 items (auth, demo, CTAs, README, FTS5, QA script) |
+| Post-GA Follow-ups | 100% | All 5 items |
+| OSS Auth | 100% | Password login + rate limiting + hash support |
+| FTS5 Search (Phase 1+2) | 100% | Index + triggers + search + snippets + Oikos tools |
+| CI Stability (E2E) | ~90% | Dynamic ports, per-run DB, artifacts; schedule gate missing |
+| Rebrand (core) | ~95% | Core Swarmlet refs removed; only experiments/evidence docs remain |
+| Harness Phase 1 (Commis->Timeline) | 100% | Ingest, environment filter, source badges, regression test |
+| Harness Phase 2 (Deprecate Standard) | 100% | Workspace-only default, CommisRunner removed (~2.7K LOC) |
+| Harness Phase 3a-3e (Slim Oikos) | 100% | Loop simplified, tools flattened, services decoupled, memory consolidated, skills progressive disclosure |
+| Tech Debt IDs 19-43 | 100% | All resolved (removed or relabeled as stable abstractions) |
+| Docs/Drift Audit | ~90% | 30+ items fixed; 4 tracked as feature gaps elsewhere |
+| Control Plane Token Bug | FIXED | `sub=numeric_user_id` + explicit email claim (commit `d911d500`) |
+| Timeline Resume UI | DONE | Resume button on session detail + card hints (commit `2c59a77f`) |
+| AGENTS.md Chain | DONE | Global->repo->subdir chain in commis workspaces (commit `81ce535d`) |
+| Skill Format Docs | DONE | Migration scripts for Claude Code + Cursor (commit `5cae78af`) |
 
-### ⚠️ PARTIALLY DONE
+### In Progress
 | Section | Status | Notes |
 |---------|--------|-------|
-| Landing Page Redesign | ~80% | Header ✅ Hero CTAs ✅ DeploymentOptions ✅ Contrast/WCAG ✅ Story ✅; remaining: some Phase 5 copy polish |
-| HN Launch Readiness | ~75% | CTAs fixed; remaining: comparison table, video, social proof |
-| Prompt Cache Optimization | ~70% | Message layout done, timestamp granularity fixed; missing sort_keys, split dynamic |
-| Install/Onboarding | ~65% | install.sh works, 3.12+, connect URL fixed (`426f8c9b`), doctor done; missing fresh-shell verify |
-| Control Plane | ~40% | Scaffold + provisioner + admin UI + CI gate; OAuth/billing/token mismatch pending |
-| OSS First-Run UX | ~40% | `--demo/--demo-fresh` works; no auto-seed on onboard, no guided empty state |
+| Harness Phase 3f-3h | 0% | MCP server, quality gates, research — see detailed sections |
+| Landing Page Redesign | ~80% | Phase 5 copy polish + Phase 6 visual assets remaining |
+| Control Plane | ~45% | Scaffold + provisioner + CI gate done; OAuth/billing/runtime image pending |
+| Install/Onboarding | ~70% | install.sh + doctor + connect + hooks done; fresh-shell verify remaining |
 
-### ❌ NOT STARTED
+### Not Started
 | Section | Status | Notes |
 |---------|--------|-------|
-| FTS5 Phase 3 (Embeddings) | 0% | No semantic search, no sqlite-vec |
-| Forum Discovery UX | 0% | Heuristic status only. No presence events, no bucket UI |
+| Semantic Search (Phase 4) | 0% | No embeddings, no sqlite-vec |
+| Forum Discovery UX | 0% | No presence events, no bucket UI |
+| Stripe Integration | 0% | Control plane Phase 2 |
+| OSS First-Run UX | ~40% | `--demo/--demo-fresh` works; no auto-seed, no guided empty state |
 
-### 🐛 CRITICAL BUG
-- Control plane `accept-token`: `sub=email` in token payload vs `sub=numeric_user_id` expected by instance auth → hosted login will fail
+> Changelogs archived. See git log for session details.
 
-### Session Changes
-> Detailed changelogs archived. See git log for 2026-02-05 and 2026-02-06 sessions.
+---
+
+## What's Next (Priority Order)
+
+1. **Longhouse MCP Server (Phase 3f)** — Expose session search, memory, and notify tools to CLI agents via MCP stdio/HTTP. Enables commis to read Longhouse context mid-task. [Details](#product--harness-simplification--commis-to-timeline-8)
+2. **Landing Page Copy + Visuals (Phases 5-6)** — Align hero/story copy to current product reality; capture timeline screenshots for landing page and README. [Details](#product-landing-page-redesign--full-6)
+3. **Control Plane: OAuth + Stripe (Phases 1-2)** — Add Google OAuth at control plane level and Stripe checkout/webhooks for hosted beta signup flow. [Details](#infra-control-plane--hosted-beta-8)
+4. **Install/Onboarding Polish** — Verify Claude shim + PATH in fresh shell; wire `longhouse connect --install` to auto-inject hooks. [Details](#launch-install--onboarding-alignment-4)
+5. **OSS First-Run UX** — Auto-seed demo data on first `longhouse onboard`; add guided empty state with "Load demo" CTA. [Details](#product-oss-first-run-ux-polish-5)
+6. **Commis Quality Gates (Phase 3g)** — Inject verification hooks (test runner) into commis workspaces before commit. [Details](#product--harness-simplification--commis-to-timeline-8)
+7. **HN Launch Prep** — Comparison table, video walkthrough, social proof. [Details](#launch-hn-launch-readiness--remaining-4)
 
 ---
 
@@ -57,67 +72,19 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 **Spec:** `apps/zerg/backend/docs/specs/unified-memory-bridge.md` (renamed: Harness Simplification)
 
-### Phase 1: Commis → Timeline Unification (3)
-- [x] Verify workspace mode hatch produces session JSONL and find its output path
-- [x] After workspace hatch completes, ingest session JSONL via `AgentsStore.ingest_session()` (`_ingest_workspace_session()` in commis_job_processor.py)
-- [x] Tag commis sessions with metadata (environment=commis, commis_job_id) for filtering
-- [x] Timeline UI: show commis sessions alongside shipped sessions
-- [x] Add filter option in Timeline to show/hide commis vs terminal sessions
-- [x] Expose `environment` filter end-to-end in Timeline UI (`commis|production|development|test|e2e`) and show source badge on session cards.
-- [x] Add regression test: completed workspace commis session appears in `/api/agents/sessions?environment=commis`.
-
-### Phase 2: Deprecate Standard Mode (3)
-- [x] Make workspace mode the default (and only) execution mode for new commis
-- [x] Gate standard mode behind `LEGACY_STANDARD_MODE=1` env var (escape hatch)
-- [x] Update Oikos `spawn_commis` tool to always use workspace mode (deprecated, warns)
-- [x] Update tests that exercise standard mode
-- [x] Remove `commis_runner.py` (in-process runner) — ~1K LOC + 5 test files (~1.7K LOC) deleted
-- [x] Remove 6 skipped tests in mixed files that referenced CommisRunner (test_durable_runs, test_oikos_fiche, test_supervisor_e2e, test_supervisor_tools_integration)
+### Phases 1-2: Commis->Timeline + Deprecate Standard Mode
+> Archived -- 100% complete. Workspace-only mode, timeline ingest, environment filter, source badges, CommisRunner removed (~2.7K LOC). See git history.
 
 ### Phase 3: Slim Oikos (5)
 
-**Architecture:** Single toolbox, many agents. All ~60 tools stay as a library. Each agent (Oikos, commis, future) is configured with a subset. The loop and tool infrastructure are what get replaced, not the tools themselves.
+**Architecture:** Single toolbox, many agents. All ~60 tools stay as a library. Each agent (Oikos, commis, future) is configured with a subset.
 
-**3a: Simplify the loop (refactor, not rewrite)**
-- [x] Simplify `oikos_react_engine.py` (~1.5K → 842 LOC): consolidated quadruplicate LLM call, extracted `_call_spawn_tool`/`_extract_text_content`/`_maybe_truncate_result` helpers; all 10 critical patterns preserved
-- [x] Merge `message_array_builder.py` + `prompt_context.py` into one module (`message_builder.py`, ~540 LOC): cache-optimized layout preserved, phase ceremony removed
-- [x] Simplify `fiche_runner.py` (~974 → ~600 LOC): kept run lifecycle, interrupt-resume, credential injection; stripped boilerplate
+**3a-3e: Archived -- 100% complete.**
+> Loop simplified (oikos_react_engine, message_builder, fiche_runner). Tool infra flattened (catalog/unified_access removed, ~1.1K LOC). 9 services decoupled from FicheRunner. Memory consolidated (3 systems -> 2 + KV). Skills progressive disclosure + AGENTS.md chain + skill format docs. See git history for details.
+
+**Remaining 3a items (deferred):**
 - [ ] Implement Oikos dispatch contract from spec: direct vs quick-tool vs CLI delegation, with explicit backend intent routing (Claude/Codex/Gemini) and repo-vs-scratch delegation modes
 - [ ] Use Claude Compaction API (server-side) or custom summarizer for "infinite thread" context management
-
-**3b: Flatten tool infrastructure**
-- [x] Remove `catalog.py`, `unified_access.py`; `tool_search.py` absorbed catalog role and retained for embedding-based discovery (~600 LOC net removed)
-- [x] Simplify `lazy_binder.py` (~221 → ~194 LOC): kept allowlist filtering with wildcard support; CORE_TOOLS now derives from OIKOS_TOOL_NAMES
-- [x] Tool subsets configured per agent type (Oikos gets ~20-30 tools, commis gets different set, user-configurable)
-- [x] Kill dead-weight utility tools: math_tools, uuid_tools, tool_discovery, container_tools (~530 LOC removed)
-
-**3c: Decouple standard-mode services from FicheRunner (refactor, not delete)**
-
-These 9 services are actively used — decouple from FicheRunner so they work with the simplified loop. Remove only deprecated code paths.
-- [x] `commis_resume.py` — decoupled from FicheRunner, works as generic continuation service
-- [x] `roundabout_monitor.py` — deprecated heuristic path removed (wave 4); monitoring loop + LLM decision preserved
-- [x] `commis_artifact_store.py` — already modular, no changes needed
-- [x] `fiche_state_recovery.py` — already modular, no changes needed
-- [x] `fiche_locks.py` — already modular, no changes needed
-- [x] `commis_output_buffer.py` — already modular, no changes needed
-- [x] `evidence_compiler.py` — decoupled from CommisArtifactStore, Mount phase preserved
-- [x] `llm_decider.py` — already well-decoupled, no changes needed
-- [x] `trace_debugger.py` — already modular, no changes needed
-
-**3d: Memory consolidation**
-- [x] Consolidate 3 memory systems: kept Oikos Memory (4 tools) + Memory Files (embeddings); Fiche Memory KV evaluated and retained as lightweight config store
-- [x] Move David-specific tools (personal_tools: Traccar/WHOOP/Obsidian) out of OSS core — gated behind `PERSONAL_TOOLS_ENABLED` env var
-
-**3e: Skills progressive disclosure + unified inheritance**
-
-Skills are a platform feature shared by Oikos and commis. Match industry pattern (Claude Code, Cursor) for progressive loading.
-- [x] Change `SkillIntegration` to inject **index only** (name + description, one line each) into system prompt by default — not full SKILL.md content
-- [x] Load full skill content into conversation only when: user invokes `/skill-name`, OR Oikos auto-selects based on description matching the request
-- [x] Add `skills` parameter to `spawn_workspace_commis` — pass selected skill content to commis prompt so CLI agents inherit user skills
-- [x] Respect character budget for skill index (cap total index tokens, drop lowest-priority skills if over budget)
-- [x] Supporting files in skill directories loaded only when skill is active and references them
-- [x] Document skill format compatibility: users can adapt Claude Code `.claude/skills/` and Cursor `.cursor/rules/` into `~/.longhouse/skills/`
-- [x] Support Codex-style AGENTS.md instruction chain in commis workspaces (global → repo → subdir, with override files) for cross-agent compatibility
 
 **3f: Longhouse MCP Server — expose toolbox to CLI agents (3)**
 
@@ -209,18 +176,7 @@ See this file for the current launch analysis.
 
 ## [Infra] Domain Split — Marketing vs Personal Instance (4)
 
-**Goal:** longhouse.ai runs in demo mode; david.longhouse.ai is the app (single-tenant).
-
-**Status:** ~~DONE~~ — `marketingOnly` concept removed. Existing `DEMO_MODE=1` env var now resolves to `AppMode.DEMO` via centralized `resolve_app_mode()`. No new env vars needed. Domain split is cosmetic routing to one deployment.
-
-- [x] Add marketing-only frontend flag → **replaced by centralized `AppMode` enum (demo mode via existing `DEMO_MODE=1`)**
-- [x] Update Coolify domains: zerg-web -> david.longhouse.ai, zerg-api -> api-david.longhouse.ai
-- [x] Update zerg-api env: APP_PUBLIC_URL/PUBLIC_SITE_URL to david, CORS to include longhouse.ai + david
-- [x] Add Cloudflare DNS for david.longhouse.ai + api-david.longhouse.ai (and optional wildcard)
-
-**Remaining issues:**
-- [ ] Cross-subdomain OAuth code exists (`/auth/accept-token`) but targets non-existent per-user architecture — needs control plane to work as designed
-- [ ] For now, use password auth on subdomains; Google OAuth only makes sense at control plane (longhouse.ai)
+> Archived -- DNS, Coolify domains, CORS, AppMode enum all done. Remaining: cross-subdomain OAuth needs control plane (tracked in Control Plane section below).
 
 ---
 
@@ -238,16 +194,7 @@ See this file for the current launch analysis.
 
 ## [QA/Test] CI Stability — E2E + Smoke (3)
 
-**Goal:** Stop CI spam and make signal trustworthy (E2E isolation + prod smoke correctness).
-
-- [x] E2E on cube: remove fixed ports, use per-run DB dir, and upload artifacts on failure.
-- [x] Smoke-after-deploy: target canonical `/api/health` and correct app domain(s).
-- [x] Add schedule gate for smoke to prevent spam during known outages.
-- [x] Replace `realtime_websocket_monitoring.spec.ts` timeouts/log-only flow with deterministic assertions (or drop the test).
-- [x] Add core E2E guardrail script/check: fail CI on `waitForTimeout` or `networkidle` in `apps/zerg/e2e/tests/core/**` (allow scripts/visual/perf helpers).
-
-**Notes:**
-- Current prod endpoints returning HTTP 525 (Cloudflare origin handshake); fix infra routing or adjust smoke targets.
+> Archived -- all 5 items complete (dynamic ports, smoke targets, schedule gate, WS test, guardrail script). Note: prod may still return HTTP 525 (Cloudflare origin handshake) -- fix infra routing if needed.
 
 ---
 
@@ -267,93 +214,12 @@ Current copy is a mix of both stories. Align to dual-path parity.
 4. ✅ FIXED: Story copy overpromises cross-provider + FTS5 + resume-anywhere
 5. ✅ FIXED: CTAs now route to pricing/install (sign-in only when explicitly chosen)
 
-### Phase 1: Header + Navigation (done)
+### Phases 1-4: Header, User Paths, Contrast, Hero CTAs
+> Archived -- all complete. Sticky header, dual-path CTAs, DeploymentOptions, WCAG contrast fixes, hero restructure. See git history.
 
-Add a persistent sticky header following dev-tool best practices (Vercel, Supabase, Railway).
-
-- [x] Create `LandingHeader.tsx` component with sticky positioning
-- [x] Left: Logo + "Longhouse" wordmark
-- [x] Center: Product | Docs | Pricing | Enterprise (or Self-host)
-- [x] Right: "Sign In" (secondary) + "Get Started" (primary CTA)
-- [x] Mobile: hamburger menu
-- [x] Add to `LandingPage.tsx` above hero
-
-**Design notes:**
-- Header bg: slightly lighter than page bg (elevation via lightening, not shadows)
-- Use brand accent color for primary CTA (stands out on dark)
-- "Sign In" visible but secondary (ghost or outline variant)
-
-**Files:** `components/landing/LandingHeader.tsx`, `LandingPage.tsx`, `landing.css`
-
-### Phase 2: User Path Differentiation (2 hours)
-
-Make Self-host / Hosted Beta / Enterprise paths explicit with distinct CTAs.
-
-**Option A: Hero with dual path**
-- [x] Primary CTA: "Hosted Beta" → waitlist modal
-- [x] Secondary CTA: "Self-host Now" → install section
-- [ ] Tertiary link: "Enterprise →" below
-
-**Option B: Three-card section below hero**
-- [x] Add `DeploymentOptions.tsx` with 3 cards: Self-hosted | Hosted Beta | Enterprise
-- [x] Each card: 1-line promise, 3 features, dedicated CTA
-- [x] Self-host: "Install CLI" → install section
-- [x] Hosted: "Join Waitlist" → waitlist modal
-- [x] Enterprise: "Contact Us" → mailto or form
-
-**Recommended approach:** Option A for hero simplicity + Option B as separate section
-
-- [x] Update `HeroSection.tsx` CTAs to show dual-path parity (hosted + self-host)
-- [x] Create `DeploymentOptions.tsx` section
+**Remaining Phase 2 items:**
+- [ ] Tertiary link: "Enterprise -->" below hero
 - [ ] Add comparison table: who runs it, data residency, support, upgrade path
-
-**Files:** `HeroSection.tsx`, `components/landing/DeploymentOptions.tsx`, `PricingSection.tsx`
-
-### Phase 3: Color/Contrast Improvements (2 hours) ✅
-
-Fix dark theme accessibility issues. Target WCAG 4.5:1 for text, 3:1 for UI.
-
-**CSS Variable Updates:**
-- [x] Audit `--color-text-secondary` and `--color-text-muted` contrast ratios
-- [x] Increase body text contrast (current ~4.0:1, need 4.5:1+)
-- [x] Add card elevation: cards should be visibly lighter than page bg
-- [x] Improve CTA button contrast: primary should pop (saturated accent on dark)
-- [x] Badge contrast: "Free during beta" badge needs better visibility
-
-**Specific fixes:**
-- [x] `.landing-hero-subhead` — bump from `--color-text-secondary` to higher contrast (#d0d0d6, ~11:1)
-- [x] `.landing-hero-note` — bump from `--color-text-muted` to `--color-text-secondary` (7.9:1)
-- [x] `.landing-step` cards — bumped bg to 0.06, border to rgba(255,255,255,0.10), inset glow
-- [x] `.landing-cta-main` — increased glow radius/opacity + brighter border (#818cf8/70%)
-- [x] `.landing-pricing-card` — bumped bg to 0.06, added box-shadow + inset highlight
-
-**Also fixed:** All small-text muted usages (badges, footer nav headings, provider descriptions, install section, pricing period, dividers, etc.) bumped from muted (#9898a3, 5.3:1) to secondary (#b4b4bc, 7.9:1). Card elevation improved across provider cards, integration items, and trust badges. Remaining muted usages are UI components (close buttons, toggle icons), placeholders, or decorative elements — all meeting 3:1 for non-text.
-
-**Files:** `landing.css` (component-level overrides, no token changes needed)
-
-### Phase 4: Hero CTA Restructure (1 hour)
-
-Move Sign In to header, restructure hero CTAs for clarity.
-
-**Current (bad):**
-```
-[Install section with curl command]
-[See How It Works ↓] [Sign In]  ← ghost buttons, same weight
-```
-
-**Target:**
-```
-[Install (Self-host)] [Hosted waitlist →]  ← clear primary + secondary
-[Works offline • <2min setup • Your data stays local]
-```
-
-- [x] Remove "Sign In" from hero (it's now in header) — login modal also removed
-- [x] Primary CTA: "Self-host Now" (scrolls to install section)
-- [x] Secondary CTA: "Hosted Beta →" (scrolls to pricing/waitlist)
-- [x] Keep install command section but position as "Self-host" path
-- [x] Add friction reducers: "Works offline", "<2min setup", "Your data stays local"
-
-**Files:** `HeroSection.tsx`, `InstallSection.tsx`
 
 ### Phase 5: Story Alignment (2 hours)
 
@@ -615,77 +481,29 @@ Close the remaining open questions from VISION.md.
 
 ## [Brand] Longhouse Rebrand — Product/Meta Strings (6)
 
-User-facing strings, metadata, and package descriptions must stop mentioning Swarmlet/Zerg as a brand.
+> Archived -- 12/13 items complete. All user-facing Swarmlet refs removed, OpenAPI regenerated, env vars renamed.
 
-**Scope (2026-02-05):** ~13 Swarmlet matches in core runtime code, ~50 total incl tests/docs/experiments.
-
-- [x] Replace "Swarmlet" with "Longhouse" in frontend HTML metadata + webmanifest
-- [x] Update `package.json` description to Longhouse naming
-- [x] Update runner README/package metadata to Longhouse (e.g., "Longhouse Runner")
-- [x] Update landing FAQ + marketing copy that still says "PostgreSQL" or "Swarmlet" (`TrustSection.tsx`)
-- [x] Update OpenAPI schema metadata (title/description/servers) to Longhouse
-- [x] Remove deprecated `swarmlet_url` / Swarmlet defaults (RunnerSetupCard + runners API + openapi types)
-- [x] Update shipper defaults/docs still pointing at `api.swarmlet.com`
-- [x] Rename `/tmp/swarmlet/commis` artifact path → `/tmp/longhouse/commis`
-- [x] Rename `SWARMLET_DATA_PATH` env var → `LONGHOUSE_DATA_PATH` (with backwards compat)
-- [x] Remove `swarmlet.com`/`swarmlet.ai` from CORS fallback
-- [x] Clean up tests referencing old Swarmlet names (env vars, URLs, launchd labels)
 - [ ] Clean up `experiments/shipper-manual-validation.md` (historical, low priority)
-- [x] Regenerate OpenAPI types (`src/generated/openapi-types.ts` still has `swarmlet_url`)
 
 ---
 
 ## [Brand] Longhouse Rebrand — CLI / Packages / Images (7)
 
-Package and binary naming so OSS users see Longhouse everywhere.
-
-- [x] Decide npm scope/name for runner: `@longhouse/runner` (package.json already uses this)
-- [x] Update docker image name in README/examples (ghcr.io/.../longhouse)
-- [x] Update installer scripts to new names (install-runner still points at `daverosedavis/zerg`)
-- [x] Update default runner image name (`RUNNER_DOCKER_IMAGE` defaults to `ghcr.io/cipher982/zerg-runner:latest`)
+> Archived -- all 4 items complete. npm scope, docker images, installer scripts, runner image all updated.
 
 ---
 
 ## [Tech Debt] Prompt Cache Optimization (5)
 
-Message layout is already system → conversation → dynamic. Remaining work is cache-busting fixes.
+> Archived -- 4/5 items complete. Layout is system->conversation->dynamic, timestamps minute-level, keys sorted, dynamic split.
 
-**Verified layout:**
-```
-[system] → [conversation] → [dynamic]
- cached      cached         per-turn only
-```
-
-**Remaining cache-busters (from VISION):**
-- ~~Timestamps are too granular (changes every request)~~ → fixed: minute-level
-- Connector status JSON ordering is non-deterministic
-- Memory context varies per query (should be separated or cached)
-
-**Files:** `managers/fiche_runner.py`, `managers/prompt_context.py`
-
-- [x] MessageArrayBuilder layout is system → conversation → dynamic
-- [x] Reduce timestamp granularity in dynamic context (minute-level)
-- [x] Sort connector status keys for deterministic JSON — already done in `status_builder.py:438`
-- [x] Split dynamic context into separate SystemMessages (time / connector / memory)
 - [ ] Add cache hit logging/metrics
 
 ---
 
 ## [Product] Session Discovery — FTS5 Search + Oikos Tools (6)
 
-Make session discovery actually useful. Two tiers: fast search bar for keywords, Oikos for complex discovery.
-
-**Problem:** Timeline cards are just a prettier version of scrolling snippets. Real value is finding "where did I solve X?"
-
-**Architecture:**
-- **Search bar**: SQLite FTS5 over session events. Instant (<10ms), keyword-based.
-- **Oikos**: Agentic multi-tool discovery. Semantic search, grep, filters, cross-referencing.
-
-### Phase 1: FTS5 Search Bar (Timeline)
-> ✅ **Archived** — FTS5 virtual table, search bar UI, snippets, highlights all done. See git history.
-
-### Phase 2: Oikos Session Discovery Tools
-> ✅ **Archived** — 4 session tools (search, grep, filter, get_detail) implemented and registered. See git history.
+> Phases 1-2 archived -- FTS5 search bar + 4 Oikos session tools all done. Remaining: embeddings.
 
 ### Phase 3: Embeddings for Oikos (Optional)
 
@@ -712,144 +530,24 @@ Make session discovery actually useful. Two tiers: fast search bar for keywords,
 
 ## [Docs/Drift] Findings / Drift Audit (2026-02-05)
 
-(Former FOUND.md. Keep this list updated here only. Fixed items stripped — see git history.)
+> 30+ items fixed as of 2026-02-10. Struck-through items archived -- see git history. Open items below.
 
-- [x] [Docs] Clarify `VISION.md` semantics: explicitly mark target architecture vs current implementation snapshots to reduce ambiguity. (2026-02-10)
-- [x] [Docs] Oikos first-principles alignment: codify dispatch contract (direct/quick/delegate), backend keyword routing (Claude/Codex/Gemini), and reconcile `spawn_commis` semantics across VISION/spec/tools docs. (2026-02-10)
-- [x] [Docs] Prune `AGENTS.md` learnings to durable invariants only; convert code-fixable confusion into tracked TODO engineering tasks. (2026-02-10)
-- [x] [Docs] Slim `AGENTS.md` by removing duplicated feature catalog and pointing to canonical `VISION.md` Product Surface + deep-dive docs. (2026-02-10)
-- ~~[Infra/docs] Wildcard DNS is now configured (dig `test-longhouse-audit.longhouse.ai` resolves); VISION still says "needs setup" in Control Plane section.~~ ✅ VISION already says "✅ configured 2026-02-05" (2026-02-10)
+**Open drift items:**
 - [Infra/docs] DB size claim stale; prod DB reset 2026-02-05 (no users). Update docs/launch notes once data exists.
-- ~~[Docs vs code] `longhouse connect` fallback still uses `http://localhost:47300` while `longhouse serve` + README use 8080.~~ ✅ Fixed — all CLI/hook/runner defaults aligned to 8080 (2026-02-10)
-- ~~[Docs vs code] VISION says job claiming is dialect-aware (Postgres `FOR UPDATE SKIP LOCKED`). `commis_job_queue.py` is SQLite-specific (`datetime('now')`, `UPDATE ... RETURNING`) and is imported unconditionally in `commis_job_processor.py`.~~ ✅ Fixed — VISION now accurately describes SQLite-only job claiming (2026-02-10)
-- ~~[Docs vs code] Workspace paths in VISION are `~/.longhouse/workspaces/...` and artifacts in `~/.longhouse/artifacts`, but current defaults are `/var/oikos/workspaces` and `settings.data_dir` (`/data` in Docker or repo `data/`). Session resume temp workspaces default to `/tmp/zerg-session-workspaces`.~~ ✅ Config default now `~/.longhouse/workspaces`; stale docstring example in `cloud_executor.py` also fixed (2026-02-10)
-- ~~[Docs vs infra] VISION control-plane routing assumes Traefik labels; current infra uses Caddy (coolify-proxy with Caddy labels). If Traefik is intended, docs should say so and note migration.~~ ✅ Fixed — VISION already uses Caddy labels (2026-02-10)
 - [Docs vs release] PyPI version likely lags repo; verify `longhouse` version on PyPI before making release claims.
-- ~~[Docs] Launch notes checklist says "README has screenshot (done!)" but README has no image.~~ ✅ N/A — referenced launch notes doc no longer exists; README screenshot is tracked in "Visual Assets" (Phase 6) above (2026-02-10)
-- ~~[Docs] Launch notes say demo data seeds on first run; current behavior requires `--demo/--demo-fresh` or calling the demo seed endpoint.~~ ✅ N/A — referenced launch notes doc no longer exists; auto-seed on first run is tracked in "OSS First-Run UX Polish" above (2026-02-10)
-- ~~[Docs conflict] Launch plan notes suggest provisioning via Coolify API; VISION explicitly says not to use Coolify for dynamic provisioning.~~ ✅ N/A — referenced launch plan doc no longer exists; current VISION and hosted-platform.md correctly describe Docker API provisioning (2026-02-10)
-- ~~[Docs vs code] VISION onboarding-contract example is Docker-centric (`cp .env.example`, `docker compose up`), but README's contract runs bun+uv + `longhouse serve`; VISION's example is stale.~~ ✅ Fixed — VISION onboarding now references `pip install longhouse`/`longhouse serve` (2026-02-10)
-- ~~[Docs vs code] VISION says `longhouse connect <url>` installs and starts the shipper; actual CLI only installs when `--install` is passed (default runs foreground watch/poll).~~ ✅ Fixed — VISION current-state and commands section document `--install` correctly (2026-02-10)
-- ~~[Docs vs code] VISION says device token is issued during `longhouse connect`; actual flow requires manual token creation in UI (`/dashboard/settings/devices`) and paste into CLI.~~ ✅ Fixed — VISION current-state says `longhouse auth` handles device-token setup (2026-02-10)
-- ~~[Docs vs code] VISION specifies shipper batching "1 second or 100 events"; implementation ships per file with no time-window batching (only `batch_size` for spool replay).~~ ✅ VISION now has "Current State" section noting per-file-chunk shipping vs target (2026-02-10)
-- ~~[Docs vs code] VISION says shipper replay uses idempotency keys; shipper does not send idempotency keys/headers (dedupe relies on DB unique index).~~ ✅ VISION now has "Current State" section noting DB dedupe vs target idempotency keys (2026-02-10)
-- [Docs vs UI] "Resume from anywhere / Timeline resume" is not in Timeline UI; resume is only implemented in Forum Drop-In (Claude-only) and not exposed on `/timeline`. **Tracked as feature gap** — see "Timeline Session Resume" section in VISION and "Public Launch Checklist" in TODO.
-- ~~[Docs vs code] VISION says cross-subdomain auth tokens are one-time with nonce stored server-side and validated via control plane/JWKS; current `POST /api/auth/accept-token` just validates JWT and sets cookie (no nonce/one-time guard).~~ ✅ Fixed — VISION now has "Current State" note documenting missing nonce enforcement (2026-02-10)
-- [Docs vs code] VISION requires a PATH-based Claude shim + verification in a fresh shell; current installer only adds a hook unless `~/.longhouse/install-claude-shim.sh` already exists and does not verify in a new shell. **Tracked as feature gap** — see "Install + Onboarding Alignment" in TODO.
-- ~~[Docs] Launch notes claim session files in `~/.codex/sessions/*` etc; current shipper/parser only reads Claude Code (`~/.claude/projects/...`).~~ ✅ N/A — referenced launch notes doc no longer exists; VISION and README correctly state Claude Code only (2026-02-10)
-- ~~[Docs vs UI] `longhouse auth` instructs users to open `/dashboard/settings/devices`, but there is no device-token UI or route; frontend only has `/settings` and no device token page.~~ ✅ Fixed — added `/settings/devices` page + fixed CLI URL (2026-02-10)
-- ~~[Code inconsistency] `WorkspaceManager` defaults to `/var/oikos/workspaces` while settings default `OIKOS_WORKSPACE_PATH` to `~/.longhouse/workspaces`; local OSS may try to write to `/var/oikos` without permission.~~ ✅ Fixed (2026-02-10)
-- [Docs vs UI] VISION describes a 3-step guided empty state with "Load demo" CTA; Timeline empty state is a single sentence ("Run 'longhouse ship'") with no demo button. **Tracked as feature gap** — see "OSS First-Run UX Polish" in TODO.
-- ~~[Docs vs repo] README "Docker" install says `docker compose up`, but there is no root `docker-compose.yml` or `compose.yaml`; Docker configs live under `docker/` (e.g., `docker/docker-compose.dev.yml`).~~ ✅ Fixed — README now uses `docker compose -f docker/docker-compose.dev.yml up` (2026-02-10)
-- ~~[Docs vs code] `apps/runner/README.md` uses `LONGHOUSE_URL=http://localhost:30080` for dev/Docker; runner defaults to `ws://localhost:47300` and `longhouse serve` uses 8080, so the example points at the wrong port/service.~~ ✅ Fixed — runner README now uses 8080 (2026-02-10)
-- ~~[Docs vs code] `apps/zerg/backend/docs/specs/shipper.md` still documents `zerg` commands and `~/.claude/zerg-device-token`; current CLI is `longhouse` and tokens are stored at `~/.claude/longhouse-device-token` (legacy `zerg-` paths are migration-only).~~ ✅ Fixed — shipper.md now says Longhouse; stale VISION line refs replaced with section refs; port default updated (2026-02-10)
-- ~~[Docs vs code] `oikos_react_engine.py` module docstring claims "spawn_commis raises FicheInterrupted directly"; in parallel execution `_execute_tools_parallel` uses two-phase commit and does NOT raise FicheInterrupted (returns ToolMessages + interrupt_value instead).~~ ✅ Fixed (2026-02-10)
-- ~~[Docs vs code] `jobs/git_sync.py` class docstring says "Thread-safety: Uses file lock," but the implementation is async with asyncio + `asynccontextmanager` and `asyncio.to_thread`; it's concurrency-safety, not thread-safety.~~ ✅ Fixed (2026-02-10)
-- ~~[Bug] `jobs/commis.py` `_run_job` returns early if `extend_lease` fails before execution, leaving the job in `claimed` state until lease expiry (no reschedule/mark-dead handling).~~ ✅ Fixed (2026-02-10)
-- ~~[Bug] `GitSyncService._get_auth_url()` mangles SSH-style repo URLs when `token` is set (e.g., `git@github.com:user/repo.git` → malformed `@@` URL); should reject token auth for SSH URLs or handle separately.~~ ✅ Fixed (2026-02-10)
-- ~~[Docs vs code] Slack skill doc is wrong: `apps/zerg/backend/zerg/skills/bundled/slack/SKILL.md` references `slack_send_message` and `SLACK_BOT_TOKEN`, but the actual tool is `send_slack_webhook` and it uses incoming webhook URLs (connector/env), not a bot token.~~ ✅ Fixed (2026-02-10)
-- ~~[Docs vs code] `services/shipper/spool.py` docstring claims replay uses idempotency keys, but the shipper does not send idempotency keys (dedupe relies on DB unique constraints).~~ ✅ Fixed (2026-02-10)
-- ~~[Docs vs code] GitHub skill doc says `GITHUB_TOKEN` env var works; `github_tools` only resolves tokens from connectors or explicit parameters (no env fallback).~~ ✅ Fixed (2026-02-10)
-- ~~[Docs vs code] Web search skill docs omit required `TAVILY_API_KEY`: `web_search` errors when the env var is missing, but `apps/zerg/backend/zerg/skills/bundled/web-search/SKILL.md` has no env requirement and is marked `always: true`.~~ ✅ Fixed (2026-02-10)
-- ~~[Docs vs infra] VISION Life Hub config uses `ZERG_API_URL=https://longhouse.ai/api`, but `https://longhouse.ai/api/*` returns 502; the working API host is `https://api.longhouse.ai`.~~ ✅ VISION now shows `LONGHOUSE_API_URL=https://david.longhouse.ai/api` (per-user instance URL, not bare longhouse.ai) (2026-02-10)
-- ~~[Docs vs UI] Backend notifications use `https://longhouse.ai/runs/{run.id}` (see `oikos_service.py`), but the frontend has no `/runs/:id` route; unknown paths redirect to LandingPage/Timeline, so run links are broken.~~ ✅ Fixed — URLs now point to /timeline (2026-02-10)
-- ~~[Docs vs code] CLI docs in `zerg/cli/__init__.py` and `zerg/cli/main.py` say `longhouse connect` is "continuous polling," but the CLI defaults to watch mode (polling only with `--poll`/`--interval`).~~ ✅ Fixed (2026-02-10)
-- ~~[Docs vs code] `scripts/install.sh` only documents `LONGHOUSE_API_URL`; CLI reads it, but `longhouse connect` fallback still uses 47300 (docs imply 8080).~~ ✅ Fixed — CLI fallbacks already use 8080; commis callback port aligned too (2026-02-10)
-- ~~[Docs vs reality] Timeline page copy says "across providers," but real ingest only supports Claude Code; other providers are demo-only.~~ ✅ Fixed (2026-02-10)
-- ~~[Docs vs reality] Public info pages (`PricingPage.tsx`, `SecurityPage.tsx`, `PrivacyPage.tsx`) still describe fiches/workflows, Google-only OAuth auth, and dashboard account management, which don't match the current timeline-first OSS flow.~~ ✅ Fixed (2026-02-10)
-- ~~[Docs vs code] DocsPage skills section says to add `SKILL.md` to `workspace/skills`; default loader path for OSS is `~/.longhouse/skills` unless a workspace path is configured.~~ ✅ Fixed (2026-02-10)
-- ~~[Docs vs code] Landing SkillsSection says Slack skill can "manage channels," but Slack tool is webhook-only (send message); no channel management/listing tools exist.~~ ✅ Fixed (2026-02-10)
-- ~~[Docs] QA job prompt (`apps/zerg/backend/zerg/jobs/qa/prompt.md`) still brands alerts as "SWARMLET QA"; should be Longhouse (brand drift).~~ ✅ File doesn't exist (2026-02-10)
+- [Docs vs UI] Timeline resume only in Forum Drop-In (Claude-only), not on `/timeline`. **Tracked** in "Public Launch Checklist."
+- [Docs vs code] Installer lacks PATH-based Claude shim + fresh-shell verification. **Tracked** in "Install + Onboarding Alignment."
+- [Docs vs UI] Timeline empty state has no "Load demo" CTA. **Tracked** in "OSS First-Run UX Polish."
 
 ---
 
 ## [Tech Debt] Evidence-Backed Refactor Ideas (Ranked)
 
-(Former IDEAS.md. Each item includes an evidence script under `ideas/evidence/`.)
+> IDs 19-43 resolved (2026-02-10). Postgres cleanup archived (2026-02-05). Evidence scripts in `ideas/evidence/`. Three items relabeled as stable abstractions (not dead code):
 
-Best → worst. Run scripts from the repo root.
-
-### Postgres Cleanup (SQLite-only OSS Pivot)
-(Archived 2026-02-05 — alembic migrations removed; per user request ignore migration cleanup items. See git history or `ideas/evidence/` if needed.)
-
-### Legacy Tool Registry + Deprecated Code
-
-19. ~~[ID 19] Remove mutable ToolRegistry singleton once tests updated.~~ ✅ Done (2026-02-10)
-Evidence: `ideas/evidence/39_evidence_tool_registry_mutable_singleton.sh`
-
-20. ~~[ID 20] Remove legacy ToolRegistry wiring in builtin tools init.~~ ✅ Done (2026-02-10)
-Evidence: `ideas/evidence/80_evidence_builtin_init_legacy_registry.sh`
-
-21. ~~[ID 21] Drop non-lazy binder compatibility path.~~ ✅ Done (2026-02-10)
-Evidence: `ideas/evidence/40_evidence_lazy_binder_compat.sh`
-
-22. ~~[ID 22] Remove deprecated publish_event_safe wrapper.~~ ✅ Already gone (2026-02-10)
-Evidence: `ideas/evidence/41_evidence_events_publisher_deprecated.sh`
-
-23. ~~[ID 23] Require envelope-only WS messages, remove legacy wrapping.~~ ✅ Done (2026-02-10)
-Evidence: `ideas/evidence/42_evidence_websocket_legacy_wrap.sh`
-
-24. ~~[ID 24] Remove legacy admin routes without api prefix.~~ ✅ Done (2026-02-10)
-Evidence: `ideas/evidence/43_evidence_admin_legacy_router.sh`
-
-25. ~~[ID 25] Remove deprecated workflow start route.~~ ✅ Already gone (2026-02-10)
-Evidence: `ideas/evidence/44_evidence_workflow_exec_deprecated_route.sh`
-
-26. ~~[ID 26] Remove deprecated TextChannelController.~~ ✅ Already gone (2026-02-10)
-Evidence: `ideas/evidence/51_evidence_text_channel_controller_deprecated.sh`
-
-27. ~~[ID 27] Remove deprecated session handler API.~~ ✅ Done (2026-02-10)
-Evidence: `ideas/evidence/52_evidence_session_handler_deprecated.sh`
-
-28. [ID 28] ~~Remove~~ Relabel compatibility methods in feedback system — methods are actively called, not dead code.
-Evidence: `ideas/evidence/53_evidence_feedback_system_compat.sh`
-
-29. ~~[ID 29] Remove deprecated heuristic or hybrid decision modes in roundabout monitor.~~ ✅ Done (2026-02-10)
-Evidence: `ideas/evidence/54_evidence_roundabout_monitor_deprecated_modes.sh`
-
-30. ~~[ID 30] Remove HEURISTIC or HYBRID decision modes in LLM decider.~~ ✅ Already gone (2026-02-10)
-Evidence: `ideas/evidence/55_evidence_llm_decider_deprecated_modes.sh`
-
-31. ~~[ID 31] Simplify unified_access legacy behavior.~~ ✅ Removed entirely in Phase 3b (2026-02-10)
-Evidence: `ideas/evidence/78_evidence_unified_access_legacy.sh`
-
-32. ~~[ID 32] Move or remove legacy ssh_tools from core.~~ ✅ Removed entirely (2026-02-10)
-Evidence: `ideas/evidence/77_evidence_ssh_tools_legacy.sh`
-
-33. ~~[ID 33] Update Swarmlet user-agent branding in web_fetch tool.~~ ✅ Already done (2026-02-10)
-Evidence: `ideas/evidence/79_evidence_web_fetch_swarmlet_user_agent.sh`
-
-34. ~~[ID 34] Remove legacy workflow trigger upgrade logic in schemas/workflow.py.~~ ✅ Already gone (2026-02-10)
-Evidence: `ideas/evidence/97_evidence_workflow_schema_legacy_upgrade.sh`
-
-35. ~~[ID 35] Remove deprecated trigger_type field in workflow_schema.py.~~ ✅ Already gone (2026-02-10)
-Evidence: `ideas/evidence/98_evidence_workflow_schema_deprecated_trigger_type.sh`
-
-36. ~~[ID 36] Tighten trigger_config schema by removing extra allow compatibility.~~ ✅ Done (2026-02-10)
-Evidence: `ideas/evidence/99_evidence_trigger_config_extra_allow.sh`
-
-37. ~~[ID 37] Remove legacy trigger key scanner once legacy shapes dropped.~~ ✅ Done (2026-02-10)
-Evidence: `ideas/evidence/96_evidence_legacy_trigger_check_script.sh`
-
-### Frontend Legacy CSS + Test Signals
-
-38. ~~[ID 38] Remove __APP_READY__ legacy test signal once tests updated.~~ ✅ Done (2026-02-10)
-Evidence: `ideas/evidence/45_evidence_app_ready_legacy_signal.sh`
-
-39. ~~[ID 39] Drop legacy React Flow selectors in CSS after test update.~~ ✅ Already gone (2026-02-10)
-Evidence: `ideas/evidence/46_evidence_canvas_react_legacy_selectors.sh`
-
-40. ~~[ID 40] Remove legacy buttons.css compatibility layer.~~ ✅ Done (2026-02-10)
-Evidence: `ideas/evidence/47_evidence_buttons_css_legacy.sh`
-
-41. [ID 41] ~~Remove~~ Relabel legacy modal pattern CSS — actively used by 8+ components; not dead code, would be a refactor.
-Evidence: `ideas/evidence/48_evidence_modal_css_legacy.sh`
-
-42. ~~[ID 42] Remove legacy util margin helpers once migrated.~~ ✅ Done (2026-02-10)
-Evidence: `ideas/evidence/49_evidence_util_css_legacy.sh`
-
-43. [ID 43] ~~Remove~~ Relabel legacy token aliases — 95+ active CSS refs; stable abstraction, not harmful to keep. Schedule with broader CSS refactor.
-Evidence: `ideas/evidence/50_evidence_tokens_css_legacy_aliases.sh`
+- [ID 28] Relabel feedback system compat methods -- actively called, not dead code. Evidence: `ideas/evidence/53_evidence_feedback_system_compat.sh`
+- [ID 41] Relabel legacy modal pattern CSS -- actively used by 8+ components; refactor later. Evidence: `ideas/evidence/48_evidence_modal_css_legacy.sh`
+- [ID 43] Relabel legacy token aliases -- 95+ active CSS refs; stable abstraction. Schedule with broader CSS refactor. Evidence: `ideas/evidence/50_evidence_tokens_css_legacy_aliases.sh`
 
 ---
 
